@@ -1,0 +1,15 @@
+# SeedCore default configuration
+seedcore:
+  telemetry_port: 8088
+  grpc_port: 50055
+  organs:
+    - cognitive
+    - actuator
+    - utility
+  entropy_floor: 0.2
+  weights:
+    w_pair: 1.0
+    w_hyper: 1.0
+    alpha: 0.5
+    lambda_reg: 0.01
+    beta_mem: 0.2

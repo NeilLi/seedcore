@@ -1,0 +1,9 @@
+ray>=2.10
+dgl>=2.1
+numpy
+pydantic>=2
+fastapi
+uvicorn
+grpcio
+protobuf
+pyyaml

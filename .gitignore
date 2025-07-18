@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.build/
+dist/
+build/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+
+# Local config
+local_*.yaml

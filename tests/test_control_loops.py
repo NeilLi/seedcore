@@ -1,0 +1,248 @@
+"""
+Tests for control loop functionality including slow loop and memory loop.
+"""
+
+from seedcore.control.slow_loop import slow_loop_update_roles, slow_loop_update_roles_simple, get_role_performance_metrics
+from seedcore.control.mem_loop import adaptive_mem_update, estimate_memory_gradient, get_memory_metrics
+from seedcore.organs.base import Organ
+from seedcore.organs.registry import OrganRegistry
+from seedcore.agents.base import Agent
+from seedcore.energy.ledger import EnergyLedger
+
+def test_slow_loop_update_roles_with_organs():
+    """Test that slow loop updates agent roles based on energy state when given organs."""
+    # Create test organ and agents
+    organ = Organ(organ_id="test_organ")
+    agent1 = Agent(agent_id="test_agent_1")
+    agent2 = Agent(agent_id="test_agent_2")
+    organ.register(agent1)
+    organ.register(agent2)
+    
+    # Store initial role probabilities
+    initial_roles1 = agent1.role_probs.copy()
+    initial_roles2 = agent2.role_probs.copy()
+    
+    # Run slow loop update with organs
+    slow_loop_update_roles([organ])
+    
+    # Verify that role probabilities have changed
+    assert agent1.role_probs != initial_roles1
+    assert agent2.role_probs != initial_roles2
+    
+    # Verify probabilities still sum to 1.0
+    assert abs(sum(agent1.role_probs.values()) - 1.0) < 0.001
+    assert abs(sum(agent2.role_probs.values()) - 1.0) < 0.001
+
+def test_slow_loop_update_roles_with_agents():
+    """Test that slow loop updates agent roles based on energy state when given agents directly."""
+    # Create test agents
+    agent1 = Agent(agent_id="test_agent_1")
+    agent2 = Agent(agent_id="test_agent_2")
+    
+    # Store initial role probabilities
+    initial_roles1 = agent1.role_probs.copy()
+    initial_roles2 = agent2.role_probs.copy()
+    
+    # Run slow loop update with agents directly
+    slow_loop_update_roles([agent1, agent2])
+    
+    # Verify that role probabilities have changed
+    assert agent1.role_probs != initial_roles1
+    assert agent2.role_probs != initial_roles2
+    
+    # Verify probabilities still sum to 1.0
+    assert abs(sum(agent1.role_probs.values()) - 1.0) < 0.001
+    assert abs(sum(agent2.role_probs.values()) - 1.0) < 0.001
+
+def test_slow_loop_update_roles_simple():
+    """Test that simple slow loop updates agent roles by strengthening dominant roles."""
+    # Create test agents
+    agent1 = Agent(agent_id="test_agent_1")
+    agent2 = Agent(agent_id="test_agent_2")
+    
+    # Store initial role probabilities
+    initial_roles1 = agent1.role_probs.copy()
+    initial_roles2 = agent2.role_probs.copy()
+    
+    # Run simple slow loop update
+    slow_loop_update_roles_simple([agent1, agent2])
+    
+    # Verify that role probabilities have changed
+    assert agent1.role_probs != initial_roles1
+    assert agent2.role_probs != initial_roles2
+    
+    # Verify probabilities still sum to 1.0
+    assert abs(sum(agent1.role_probs.values()) - 1.0) < 0.001
+    assert abs(sum(agent2.role_probs.values()) - 1.0) < 0.001
+    
+    # Verify that dominant roles have been strengthened
+    dominant_role1 = max(initial_roles1, key=initial_roles1.get)
+    dominant_role2 = max(initial_roles2, key=initial_roles2.get)
+    
+    assert agent1.role_probs[dominant_role1] >= initial_roles1[dominant_role1]
+    assert agent2.role_probs[dominant_role2] >= initial_roles2[dominant_role2]
+
+def test_get_role_performance_metrics():
+    """Test role performance metrics calculation."""
+    # Create test organ and agents with known capabilities
+    organ = Organ(organ_id="test_organ")
+    agent1 = Agent(agent_id="test_agent_1", capability=0.8)
+    agent2 = Agent(agent_id="test_agent_2", capability=0.6)
+    organ.register(agent1)
+    organ.register(agent2)
+    
+    # Set specific role probabilities
+    agent1.role_probs = {'E': 0.7, 'S': 0.2, 'O': 0.1}
+    agent2.role_probs = {'E': 0.3, 'S': 0.6, 'O': 0.1}
+    
+    # Get performance metrics
+    metrics = get_role_performance_metrics([organ])
+    
+    # Verify metrics are calculated correctly
+    assert 'E' in metrics
+    assert 'S' in metrics
+    assert 'O' in metrics
+    
+    # E performance should be: (0.8 * 0.7 + 0.6 * 0.3) / 2 = 0.37
+    expected_E = (0.8 * 0.7 + 0.6 * 0.3) / 2
+    assert abs(metrics['E'] - expected_E) < 0.001
+
+def test_adaptive_mem_update():
+    """Test adaptive memory update functionality."""
+    # Create test organ and agents
+    organ = Organ(organ_id="test_organ")
+    agent1 = Agent(agent_id="test_agent_1", mem_util=0.5)
+    agent2 = Agent(agent_id="test_agent_2", mem_util=0.3)
+    organ.register(agent1)
+    organ.register(agent2)
+    
+    # Store initial memory utilization
+    initial_mem_util1 = agent1.mem_util
+    initial_mem_util2 = agent2.mem_util
+    
+    # Run memory update
+    compression_knob = 0.5
+    new_compression = adaptive_mem_update([organ], compression_knob)
+    
+    # Verify compression knob may have changed
+    assert isinstance(new_compression, float)
+    assert 0.0 <= new_compression <= 1.0
+    
+    # Verify memory utilization may have changed
+    assert agent1.mem_util != initial_mem_util1 or agent2.mem_util != initial_mem_util2
+
+def test_get_memory_metrics():
+    """Test memory metrics calculation."""
+    # Create test organ and agents
+    organ = Organ(organ_id="test_organ")
+    agent1 = Agent(agent_id="test_agent_1", mem_util=0.6)
+    agent2 = Agent(agent_id="test_agent_2", mem_util=0.4)
+    organ.register(agent1)
+    organ.register(agent2)
+    
+    # Get memory metrics
+    metrics = get_memory_metrics([organ])
+    
+    # Verify expected metrics
+    assert "average_memory_utilization" in metrics
+    assert "total_agents" in metrics
+    assert "current_memory_energy" in metrics
+    assert "memory_efficiency" in metrics
+    
+    # Verify average memory utilization calculation
+    expected_avg = (0.6 + 0.4) / 2
+    assert abs(metrics["average_memory_utilization"] - expected_avg) < 0.001
+    assert metrics["total_agents"] == 2
+
+def test_estimate_memory_gradient():
+    """Test memory gradient estimation."""
+    # Create test organ and agents
+    organ = Organ(organ_id="test_organ")
+    agent1 = Agent(agent_id="test_agent_1", capability=0.7)
+    agent2 = Agent(agent_id="test_agent_2", capability=0.5)
+    organ.register(agent1)
+    organ.register(agent2)
+    
+    # Estimate gradient
+    gradient = estimate_memory_gradient([organ])
+    
+    # Verify gradient is a number
+    assert isinstance(gradient, float)
+
+def test_control_loop_integration():
+    """Test integration of multiple control loops."""
+    # Create test organ and agents
+    organ = Organ(organ_id="test_organ")
+    agent1 = Agent(agent_id="test_agent_1", capability=0.8, mem_util=0.5)
+    agent2 = Agent(agent_id="test_agent_2", capability=0.6, mem_util=0.3)
+    organ.register(agent1)
+    organ.register(agent2)
+    
+    # Store initial states
+    initial_roles1 = agent1.role_probs.copy()
+    initial_mem_util1 = agent1.mem_util
+    initial_capability1 = agent1.capability
+    
+    # Run slow loop
+    slow_loop_update_roles([organ])
+    
+    # Run memory loop
+    compression_knob = 0.5
+    adaptive_mem_update([organ], compression_knob)
+    
+    # Verify changes occurred
+    assert agent1.role_probs != initial_roles1
+    assert agent1.mem_util != initial_mem_util1
+    assert agent1.capability != initial_capability1
+    
+    # Verify probabilities still sum to 1.0
+    assert abs(sum(agent1.role_probs.values()) - 1.0) < 0.001
+    assert abs(sum(agent2.role_probs.values()) - 1.0) < 0.001
+
+def test_learning_rate_parameter():
+    """Test that learning rate parameter affects role adjustment speed."""
+    # Create test agents
+    agent1 = Agent(agent_id="test_agent_1")
+    agent2 = Agent(agent_id="test_agent_2")
+    
+    # Store initial role probabilities
+    initial_roles1 = agent1.role_probs.copy()
+    
+    # Run with high learning rate
+    slow_loop_update_roles_simple([agent1], learning_rate=0.2)
+    high_lr_change = abs(agent1.role_probs[max(agent1.role_probs, key=agent1.role_probs.get)] - 
+                        initial_roles1[max(initial_roles1, key=initial_roles1.get)])
+    
+    # Reset and run with low learning rate
+    agent1.role_probs = initial_roles1.copy()
+    slow_loop_update_roles_simple([agent1], learning_rate=0.01)
+    low_lr_change = abs(agent1.role_probs[max(agent1.role_probs, key=agent1.role_probs.get)] - 
+                       initial_roles1[max(initial_roles1, key=initial_roles1.get)])
+    
+    # Higher learning rate should cause larger changes
+    assert high_lr_change > low_lr_change
+
+def test_organ_registry_integration():
+    """Test integration with OrganRegistry."""
+    # Create registry and organ
+    registry = OrganRegistry()
+    organ = Organ(organ_id="test_organ")
+    
+    # Create and register agents
+    agent1 = Agent(agent_id="test_agent_1", role_probs={'E': 0.6, 'S': 0.3, 'O': 0.1})
+    agent2 = Agent(agent_id="test_agent_2", role_probs={'E': 0.2, 'S': 0.7, 'O': 0.1})
+    
+    organ.register(agent1)
+    organ.register(agent2)
+    registry.add(organ)
+    
+    # Test registry operations
+    assert len(registry.all()) == 1
+    assert registry.get("test_organ") == organ
+    
+    # Test slow loop with registry
+    slow_loop_update_roles(registry.all())
+    
+    # Verify agents were updated
+    assert agent1.role_probs != {'E': 0.6, 'S': 0.3, 'O': 0.1}
+    assert agent2.role_probs != {'E': 0.2, 'S': 0.7, 'O': 0.1} 
