@@ -4,11 +4,27 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "seedcore"
-version = "0.1.0"
-description = "Minimal Viable Cognitive Core (SeedCore) - unified energy substrate for COA organisms."
-authors = [{name = "Neil Li", email = "example@example.com"}]
+version = "1.0.0"
+description = "Dynamic Cognitive Architecture - Energy-governed, organ-aware, hierarchical-memory substrate for agent swarms."
+authors = [{name = "SeedCore Contributors", email = "contributors@seedcore.ai"}]
 readme = "README.md"
+license = {text = "Apache-2.0"}
 requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+keywords = ["cognitive-architecture", "multi-agent-system", "energy-based-ai", "adaptive-learning"]
 dependencies = [
     "ray>=2.10",
     "dgl>=2.1",
@@ -23,6 +39,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "ruff", "mypy", "ipykernel"]
+
+[project.urls]
+Homepage = "https://github.com/NeilLi/seedcore"
+Repository = "https://github.com/NeilLi/seedcore"
+Documentation = "https://github.com/NeilLi/seedcore#readme"
+"Bug Tracker" = "https://github.com/NeilLi/seedcore/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
