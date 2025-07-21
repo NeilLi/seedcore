@@ -1,6 +1,6 @@
 # SeedCore: Dynamic Cognitive Architecture
 
-A stateful, interactive cognitive architecture system with persistent organs, agents, and energy-based control loops.
+A stateful, interactive cognitive architecture system with persistent organs, agents, and energy-based control loops featuring realistic agent collaboration learning.
 
 ## Features
 
@@ -9,6 +9,12 @@ A stateful, interactive cognitive architecture system with persistent organs, ag
 - **Persistent Organs & Agents**: System maintains state across API calls
 - **Energy Ledger**: Multi-term energy accounting (pair, hyper, entropy, reg, mem)
 - **Role Evolution**: Dynamic agent role probability adjustment
+
+### 🤖 Agent Personality System
+- **Personality Vectors**: Each agent has an 8-dimensional personality embedding (`h`)
+- **Cosine Similarity**: Calculates compatibility between agent personalities
+- **Collaboration Learning**: Tracks historical success rates between agent pairs
+- **Adaptive Weights**: Learns which agent combinations work best together
 
 ### 🔄 Control Loops
 - **Fast Loop**: Real-time agent selection and task execution
@@ -19,6 +25,7 @@ A stateful, interactive cognitive architecture system with persistent organs, ag
 - Energy gradient monitoring
 - Role performance metrics
 - Memory utilization tracking
+- Pair collaboration statistics
 - System status endpoints
 
 ## Quick Start
@@ -41,15 +48,13 @@ uvicorn src.seedcore.telemetry.server:app --reload --host 0.0.0.0 --port 8000
 # Check current energy state
 curl http://localhost:8000/energy/gradient
 
+# Run a realistic two-agent task (NEW!)
+curl -X POST http://localhost:8000/actions/run_two_agent_task
+
 # Run a simulation step (legacy)
 curl http://localhost:8000/run_simulation_step
 
-# Run fast loop (new)
-curl -X POST http://localhost:8000/actions/run_fast_loop
-
-# Reset energy ledger
-curl http://localhost:8000/reset_energy
-# or
+# Reset energy ledger and pair statistics
 curl -X POST http://localhost:8000/actions/reset
 ```
 
@@ -72,21 +77,24 @@ curl http://localhost:8000/run_all_loops
 
 #### System Monitoring
 ```bash
-# Get system status
+# Get system status (includes pair statistics)
 curl http://localhost:8000/system/status
 
-# Get agent states
+# Get agent states (includes personality vectors)
 curl http://localhost:8000/agents/state
+
+# Get pair collaboration statistics
+curl http://localhost:8000/pair_stats
 ```
 
 ## API Endpoints
 
 ### Energy Management
 - `GET /energy/gradient` - Get current energy state
+- `POST /actions/run_two_agent_task` - **NEW**: Run realistic two-agent collaboration
 - `GET /run_simulation_step` - Legacy: Execute one simulation step
-- `POST /actions/run_fast_loop` - New: Execute fast loop with agent selection
 - `GET /reset_energy` - Legacy: Reset energy ledger
-- `POST /actions/reset` - New: Reset energy ledger
+- `POST /actions/reset` - New: Reset energy ledger and pair statistics
 
 ### Control Loops
 - `GET /run_slow_loop` - Legacy: Energy-aware role evolution
@@ -97,9 +105,37 @@ curl http://localhost:8000/agents/state
 
 ### System Status
 - `GET /system/status` - Get comprehensive system state
-- `GET /agents/state` - Get detailed agent states
+- `GET /agents/state` - Get detailed agent states (includes personality vectors)
+- `GET /pair_stats` - **NEW**: Get pair collaboration statistics
 
 ## Architecture Components
+
+### Agent Personality System
+Each agent has a personality vector that influences collaboration:
+
+```python
+# Agent with personality vector
+agent = Agent(
+    agent_id="agent_alpha",
+    h=np.array([0.8, 0.6, 0.4, 0.2, 0.1, 0.3, 0.5, 0.7])  # 8D personality
+)
+
+# Calculate similarity between agents
+similarity = cosine_similarity(agent1.h, agent2.h)
+```
+
+### Pair Statistics Tracking
+The system learns which agent pairs work best together:
+
+```python
+# Track collaboration success
+pair_stats = PAIR_TRACKER.get_pair("agent1", "agent2")
+pair_stats.update_weight(success=True, learning_rate=0.1)
+
+# Get historical performance
+stats = PAIR_TRACKER.get_all_stats()
+# Returns: {"agent1-agent2": {"weight": 0.85, "success_rate": 0.75, ...}}
+```
 
 ### Organ Registry
 The system uses a centralized `OrganRegistry` for state management:
@@ -118,7 +154,7 @@ all_organs = registry.all()
 
 ### Energy Ledger
 The system tracks five energy terms:
-- **pair**: Pairwise interaction energy
+- **pair**: Pairwise interaction energy (now with realistic learning)
 - **hyper**: Complexity-precision tradeoff energy
 - **entropy**: Choice availability and uncertainty energy
 - **reg**: Regularization and model complexity energy
@@ -141,15 +177,163 @@ The system tracks five energy terms:
 - **Flexible**: Works with both organ lists and agent lists
 
 #### Memory Loop
-- Adaptive compression control via dE/dCostVQ estimation
-- Memory utilization optimization
-- Compression knob adjustment based on memory efficiency
+- **Comprehensive Tiered Memory System**: Implements working memory (Mw) and long-term memory (Mlt)
+- **Dynamic Memory Utility**: Calculates agent mem_util based on actual memory interactions
+- **CostVQ Calculation**: Trade-off between memory usage, reconstruction loss, and staleness
+- **Adaptive Compression Control**: Gradient-based optimization of compression knob
+- **Memory Activity Simulation**: Realistic write/read cycles with feedback loops
 
 ### Agent Roles
 Each agent has three role types with probabilities:
 - **E (Explorer)**: Seeks new solutions and opportunities
 - **S (Specialist)**: Focuses on specific tasks and optimization
 - **O (Optimizer)**: Balances exploration and exploitation
+
+## Realistic Simulation Features
+
+### Two-Agent Task Simulation
+The new `/actions/run_two_agent_task` endpoint provides realistic collaboration:
+
+1. **Random Agent Selection**: Picks two agents randomly
+2. **Personality Compatibility**: Calculates cosine similarity between personality vectors
+3. **Historical Learning**: Uses past collaboration success rates
+4. **Capability Integration**: Combines agent capabilities with historical weights
+5. **Energy Calculation**: Updates pair energy based on `-w_effective * similarity`
+6. **Success Simulation**: Task success probability based on similarity
+7. **Learning Update**: Updates pair statistics for future collaborations
+
+### Example Task Response
+```json
+{
+  "message": "Two-agent task completed between agent_alpha and agent_beta",
+  "agents": {
+    "agent1": {
+      "id": "agent_alpha",
+      "capability": 0.5,
+      "personality": [0.8, 0.6, 0.4, 0.2, 0.1, 0.3, 0.5, 0.7]
+    },
+    "agent2": {
+      "id": "agent_beta", 
+      "capability": 0.5,
+      "personality": [0.7, 0.5, 0.3, 0.1, 0.2, 0.4, 0.6, 0.8]
+    }
+  },
+  "calculations": {
+    "cosine_similarity": 0.92,
+    "historical_weight": 1.0,
+    "effective_weight": 0.25,
+    "energy_delta": -0.23
+  },
+  "task_result": {
+    "successful": true,
+    "success_probability": 0.92
+  },
+  "new_energy_state": {...},
+  "pair_stats": {...}
+}
+```
+
+## Comprehensive Memory System
+
+### Tiered Memory Architecture
+The system implements a sophisticated tiered memory structure as described in the energy validation document:
+
+#### Memory Tiers
+- **Mw (Working Memory)**: Fast, small-capacity memory for active processing
+- **Mlt (Long-term Memory)**: Slower, large-capacity memory for persistent storage
+
+#### Memory Operations
+```python
+# Write data to memory
+success = MEMORY_SYSTEM.write(agent, "data_id", "Mw", data_size=10)
+
+# Read data from memory (searches Mw first, then Mlt)
+author_id = MEMORY_SYSTEM.read(reader_agent, "data_id")
+
+# Log salient events
+MEMORY_SYSTEM.log_salient_event(agent)
+```
+
+### Dynamic Memory Utility Calculation
+Agent memory utility is now calculated based on actual memory interactions:
+
+```python
+# Calculate mem_util based on memory interactions
+mem_util = calculate_dynamic_mem_util(agent, weights={
+    'w_hit': 0.6,      # Weight for memory hits on writes
+    'w_salience': 0.4   # Weight for salient events
+})
+
+# Formula: (w_hit * memory_hits_on_writes + w_salience * salient_events_logged) / memory_writes
+```
+
+### CostVQ Energy Calculation
+The memory energy term is calculated using the CostVQ function:
+
+```python
+cost_vq_data = calculate_cost_vq(memory_system, compression_knob)
+
+# Components:
+# - bytes_used: Total memory usage across tiers
+# - recon_loss: Information loss due to compression (1.0 - compression_knob)
+# - staleness: Based on hit rate (1.0 / (1.0 + hit_rate))
+# - cost_vq: Weighted sum of components
+```
+
+### Memory Loop Operation
+The comprehensive memory loop performs these steps:
+
+1. **Write Phase**: Randomly select agents to write data to memory tiers
+2. **Read Phase**: Simulate agents reading data, creating feedback loops
+3. **Utility Calculation**: Calculate dynamic mem_util for all agents
+4. **Energy Update**: Calculate and update memory energy using CostVQ
+5. **Compression Optimization**: Update compression knob using gradient descent
+6. **Metrics Collection**: Gather comprehensive memory statistics
+
+### Example Memory Loop Response
+```json
+{
+  "message": "Comprehensive memory loop completed successfully!",
+  "compression_knob": 0.65,
+  "average_mem_util": 0.42,
+  "individual_mem_utils": {
+    "agent_alpha": 0.38,
+    "agent_beta": 0.45,
+    "agent_gamma": 0.43
+  },
+  "memory_metrics": {
+    "average_mem_util": 0.42,
+    "total_memory_writes": 15,
+    "total_memory_hits": 8,
+    "total_salient_events": 3
+  },
+  "cost_vq_breakdown": {
+    "cost_vq": 0.23,
+    "bytes_used": 150,
+    "recon_loss": 0.35,
+    "staleness": 0.12,
+    "hit_rate": 0.53
+  },
+  "memory_energy": 0.23,
+  "memory_system_stats": {
+    "Mw": {"bytes_used": 50, "hit_count": 5, "data_count": 3},
+    "Mlt": {"bytes_used": 100, "hit_count": 3, "data_count": 7}
+  }
+}
+```
+
+### Agent Memory Tracking
+Each agent now tracks detailed memory interactions:
+
+```python
+agent = Agent(agent_id="test_agent")
+# Memory interaction fields:
+agent.memory_writes = 5          # Number of memory writes
+agent.memory_hits_on_writes = 3  # Times this agent's data was read
+agent.salient_events_logged = 2  # Number of salient events
+agent.total_compression_gain = 0.0  # Compression benefits
+agent.mem_util = 0.52           # Calculated memory utility
+```
 
 ## Testing
 
@@ -163,7 +347,12 @@ python -m pytest tests/ -v
 - Energy ledger operations and calculations
 - Control loop functionality (both organ and agent inputs)
 - Role evolution and performance metrics
-- Memory management and compression
+- **NEW**: Comprehensive tiered memory system
+- **NEW**: Dynamic memory utility calculations
+- **NEW**: CostVQ energy calculations
+- **NEW**: Memory activity simulation and feedback loops
+- **NEW**: Pair statistics tracking and learning
+- **NEW**: Agent personality vectors and similarity
 - OrganRegistry integration
 - Integration tests for all components
 
@@ -173,9 +362,10 @@ python -m pytest tests/ -v
 ```
 seedcore/
 ├── src/seedcore/
-│   ├── agents/          # Agent implementations
+│   ├── agents/          # Agent implementations (with personality vectors)
 │   ├── control/         # Control loops (fast, slow, memory)
-│   ├── energy/          # Energy ledger and calculations
+│   ├── energy/          # Energy ledger, calculations, and pair statistics
+│   ├── memory/          # NEW: Tiered memory system and adaptive loops
 │   ├── organs/          # Organ implementations and registry
 │   └── telemetry/       # API server and monitoring
 ├── tests/               # Test suite
@@ -189,13 +379,15 @@ seedcore/
 3. **Agents**: Extend `Agent` base class with new capabilities
 4. **API Endpoints**: Add new routes to `telemetry/server.py`
 5. **Registry**: Use `OrganRegistry` for state management
+6. **Personality**: Extend personality vectors or add new similarity metrics
 
 ## Energy Calculation Examples
 
-### Pair Energy
+### Pair Energy (Enhanced)
 ```python
-# Pair energy increases with interaction weight and similarity
-ledger.add_pair_delta(weight=2.0, similarity=1.5)  # Adds 3.0 to pair energy
+# Pair energy with realistic learning
+# -w_effective * similarity where w_effective = w_historical * capability1 * capability2
+ledger.add_pair_delta(w_effective=0.25, similarity=0.92)  # Adds -0.23 to pair energy
 ```
 
 ### Hyper Energy
@@ -222,10 +414,10 @@ The system now supports both legacy and new API endpoints:
 
 | Legacy | New | Description |
 |--------|-----|-------------|
-| `GET /run_simulation_step` | `POST /actions/run_fast_loop` | Fast loop execution |
+| `GET /run_simulation_step` | `POST /actions/run_two_agent_task` | **NEW**: Realistic two-agent collaboration |
 | `GET /run_slow_loop` | `POST /actions/run_slow_loop` | Slow loop execution |
-| `GET /reset_energy` | `POST /actions/reset` | Reset energy ledger |
-| `GET /system_status` | `GET /system/status` | System status |
+| `GET /reset_energy` | `POST /actions/reset` | Reset energy ledger and pair stats |
+| `GET /system_status` | `GET /system/status` | System status (includes pair stats) |
 
 ## Next Steps
 
@@ -237,6 +429,8 @@ This implementation provides a solid foundation for a dynamic cognitive architec
 4. **External Integrations**: Connect with external AI services and databases
 5. **Visualization**: Real-time system state visualization
 6. **Performance Optimization**: Caching and parallel processing
+7. **Advanced Personality Models**: More sophisticated personality representations
+8. **Team Formation**: Automatic team composition based on personality compatibility
 
 ## Contributing
 

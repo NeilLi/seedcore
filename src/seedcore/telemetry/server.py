@@ -17,32 +17,58 @@
 """
 Simple FastAPI/uvicorn server that exposes simulation controls and telemetry.
 """
+import numpy as np
+import random
 from fastapi import FastAPI
 from typing import List, Dict
 
 # Import our system components
 from ..energy.api import energy_gradient_payload, _ledger
+from ..energy.pair_stats import PairStatsTracker
 from ..control.fast_loop import fast_loop_select_agent
 from ..control.slow_loop import slow_loop_update_roles, slow_loop_update_roles_simple, get_role_performance_metrics
 from ..control.mem_loop import adaptive_mem_update, estimate_memory_gradient, get_memory_metrics
 from ..organs.base import Organ
 from ..organs.registry import OrganRegistry
 from ..agents.base import Agent
+from ..memory.system import SharedMemorySystem
+from ..memory.adaptive_loop import (
+    calculate_dynamic_mem_util, 
+    calculate_cost_vq, 
+    adaptive_mem_update as new_adaptive_mem_update,
+    get_memory_metrics as new_get_memory_metrics,
+    estimate_memory_gradient as new_estimate_memory_gradient
+)
 
 # --- Persistent State ---
 # Create a single, persistent registry when the server starts.
 # This holds the state of our simulation.
 print("Initializing persistent simulation state...")
 SIMULATION_REGISTRY = OrganRegistry()
+PAIR_TRACKER = PairStatsTracker()
+MEMORY_SYSTEM = SharedMemorySystem()  # Persistent memory system
 
 # Create a main organ
 main_organ = Organ(organ_id="cognitive_organ_1")
 
-# Create a few agents with different initial role probabilities
+# Create a few agents with different initial role probabilities and personality vectors
+# Some vectors are similar, some are dissimilar to test the logic
 agents_to_create = [
-    Agent(agent_id="agent_alpha", role_probs={'E': 0.6, 'S': 0.3, 'O': 0.1}),
-    Agent(agent_id="agent_beta", role_probs={'E': 0.2, 'S': 0.7, 'O': 0.1}),
-    Agent(agent_id="agent_gamma", role_probs={'E': 0.3, 'S': 0.3, 'O': 0.4}),
+    Agent(
+        agent_id="agent_alpha", 
+        role_probs={'E': 0.6, 'S': 0.3, 'O': 0.1},
+        h=np.array([0.8, 0.6, 0.4, 0.2, 0.1, 0.3, 0.5, 0.7])  # Similar to beta
+    ),
+    Agent(
+        agent_id="agent_beta", 
+        role_probs={'E': 0.2, 'S': 0.7, 'O': 0.1},
+        h=np.array([0.7, 0.5, 0.3, 0.1, 0.2, 0.4, 0.6, 0.8])  # Similar to alpha
+    ),
+    Agent(
+        agent_id="agent_gamma", 
+        role_probs={'E': 0.3, 'S': 0.3, 'O': 0.4},
+        h=np.array([0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.6])  # Different from alpha/beta
+    ),
 ]
 
 # Register the agents with the organ, and the organ with the registry
@@ -56,6 +82,17 @@ compression_knob = 0.5
 # --- End Persistent State ---
 
 app = FastAPI()
+
+def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
+    """Calculate cosine similarity between two vectors."""
+    dot_product = np.dot(v1, v2)
+    norm_v1 = np.linalg.norm(v1)
+    norm_v2 = np.linalg.norm(v2)
+    
+    if norm_v1 == 0 or norm_v2 == 0:
+        return 0.0
+    
+    return dot_product / (norm_v1 * norm_v2)
 
 @app.get('/energy/gradient')
 def energy_gradient():
@@ -72,7 +109,12 @@ def get_agents_state() -> List[Dict]:
                 "id": agent.agent_id,
                 "capability": agent.capability,
                 "mem_util": agent.mem_util,
-                "role_probs": agent.role_probs
+                "role_probs": agent.role_probs,
+                "personality_vector": agent.h.tolist(),
+                "memory_writes": agent.memory_writes,
+                "memory_hits_on_writes": agent.memory_hits_on_writes,
+                "salient_events_logged": agent.salient_events_logged,
+                "total_compression_gain": agent.total_compression_gain
             })
     return all_agents
 
@@ -86,26 +128,77 @@ def system_status():
         "organs": [{"id": organ.organ_id, "agent_count": len(organ.agents)} for organ in organs],
         "total_agents": total_agents,
         "energy_state": energy_gradient_payload(),
-        "compression_knob": compression_knob
+        "compression_knob": compression_knob,
+        "pair_stats": PAIR_TRACKER.get_all_stats(),
+        "memory_system": MEMORY_SYSTEM.get_memory_stats()
     }
 
-# --- Fast Loop Endpoints ---
-@app.post('/actions/run_fast_loop')
-def run_fast_loop_endpoint(task: str = "analyze_data"):
+@app.post('/actions/run_two_agent_task')
+def run_two_agent_task():
     """
-    Runs a single fast loop step, selecting an agent and updating energy.
+    Runs a realistic two-agent task simulation with learning.
     """
+    # Get the main organ
     organ = SIMULATION_REGISTRY.get("cognitive_organ_1")
-    selected_agent = fast_loop_select_agent(organ, task=task)
+    
+    if len(organ.agents) < 2:
+        return {
+            "error": "Need at least 2 agents to run a two-agent task",
+            "available_agents": len(organ.agents)
+        }
+    
+    # Randomly select two agents
+    selected_agents = random.sample(organ.agents, 2)
+    agent1, agent2 = selected_agents
+    
+    # Calculate cosine similarity between their personality vectors
+    sim = cosine_similarity(agent1.h, agent2.h)
+    
+    # Get historical collaboration weight for this pair
+    pair_stats = PAIR_TRACKER.get_pair(agent1.agent_id, agent2.agent_id)
+    w_historical = pair_stats.w
+    
+    # Calculate effective weight by multiplying historical weight with agent capabilities
+    w_effective = w_historical * agent1.capability * agent2.capability
+    
+    # Calculate energy delta: -w_effective * sim (negative because higher similarity should lower energy)
+    energy_delta = -w_effective * sim
+    
+    # Update the energy ledger
+    _ledger.add_pair_delta(energy_delta)
+    
+    # Simulate task success based on similarity
+    task_was_successful = random.random() < sim
+    
+    # Update pair statistics for future collaborations
+    PAIR_TRACKER.update_on_task_complete(agent1.agent_id, agent2.agent_id, task_was_successful)
     
     return {
-        "message": f"Fast loop selected agent '{selected_agent.agent_id}' for task '{task}'.",
-        "selected_agent": {
-            "id": selected_agent.agent_id,
-            "capability": selected_agent.capability,
-            "role_probs": selected_agent.role_probs
+        "message": f"Two-agent task completed between {agent1.agent_id} and {agent2.agent_id}",
+        "agents": {
+            "agent1": {
+                "id": agent1.agent_id,
+                "capability": agent1.capability,
+                "personality": agent1.h.tolist()
+            },
+            "agent2": {
+                "id": agent2.agent_id,
+                "capability": agent2.capability,
+                "personality": agent2.h.tolist()
+            }
         },
-        "new_energy_state": energy_gradient_payload()
+        "calculations": {
+            "cosine_similarity": sim,
+            "historical_weight": w_historical,
+            "effective_weight": w_effective,
+            "energy_delta": energy_delta
+        },
+        "task_result": {
+            "successful": bool(task_was_successful),
+            "success_probability": sim
+        },
+        "new_energy_state": energy_gradient_payload(),
+        "pair_stats": PAIR_TRACKER.get_all_stats()
     }
 
 @app.get('/run_simulation_step')
@@ -174,24 +267,91 @@ def run_slow_loop_simple():
 @app.get('/run_memory_loop')
 def run_memory_loop():
     """
-    Runs the adaptive memory loop to adjust compression and memory utilization.
+    Runs the comprehensive adaptive memory loop with tiered memory system.
     """
     global compression_knob
     
-    # Run the memory loop update
-    compression_knob = adaptive_mem_update(SIMULATION_REGISTRY.all(), compression_knob)
+    # 1. Simulate Activity (The "Write" Phase)
+    organs = SIMULATION_REGISTRY.all()
+    all_agents = [agent for organ in organs for agent in organ.agents]
     
-    # Get memory metrics
-    memory_metrics = get_memory_metrics(SIMULATION_REGISTRY.all())
+    if len(all_agents) >= 2:
+        # Randomly select agents to write data
+        writers = random.sample(all_agents, min(3, len(all_agents)))
+        written_data_ids = []
+        
+        for writer in writers:
+            # Randomly choose tier (Mw or Mlt)
+            tier = random.choice(['Mw', 'Mlt'])
+            data_size = random.randint(5, 20)
+            
+            success = MEMORY_SYSTEM.write(writer, tier_name=tier, data_size=data_size)
+            if success:
+                # Get the data_id that was written (we'll need to track this)
+                # For now, we'll use a simple approach
+                written_data_ids.append(f"data_{writer.agent_id}_{len(written_data_ids)}")
+        
+        # Randomly select an agent to log a salient event
+        salient_agent = random.choice(all_agents)
+        MEMORY_SYSTEM.log_salient_event(salient_agent)
+        
+        # 2. Simulate Activity (The "Read" Phase)
+        if written_data_ids:
+            readers = random.sample(all_agents, min(2, len(all_agents)))
+            for reader in readers:
+                # Try to read some of the written data
+                for data_id in random.sample(written_data_ids, min(1, len(written_data_ids))):
+                    author_id = MEMORY_SYSTEM.read(reader, data_id)
+                    if author_id:
+                        # Find the author agent and increment their hits_on_writes
+                        for agent in all_agents:
+                            if agent.agent_id == author_id:
+                                agent.memory_hits_on_writes += 1
+                                break
     
-    # Estimate memory gradient
-    gradient = estimate_memory_gradient(SIMULATION_REGISTRY.all())
+    # 3. Calculate mem_util for all Agents
+    mem_util_scores = {}
+    total_mem_util = 0.0
+    
+    for agent in all_agents:
+        mem_util = calculate_dynamic_mem_util(agent)
+        mem_util_scores[agent.agent_id] = mem_util
+        total_mem_util += mem_util
+        agent.mem_util = mem_util  # Update the agent's mem_util field
+    
+    average_mem_util = total_mem_util / len(all_agents) if all_agents else 0.0
+    
+    # 4. Calculate Global Memory Energy
+    cost_vq_data = calculate_cost_vq(MEMORY_SYSTEM, compression_knob)
+    beta_mem = 1.0  # Weight for memory energy term
+    mem_energy = beta_mem * cost_vq_data['cost_vq']
+    
+    # Update the energy ledger with the new memory energy
+    _ledger.mem = mem_energy
+    
+    # 5. Calculate the Gradient and Update Compression Knob
+    new_compression_knob = new_adaptive_mem_update(
+        SIMULATION_REGISTRY.all(), 
+        compression_knob, 
+        MEMORY_SYSTEM, 
+        beta_mem
+    )
+    compression_knob = new_compression_knob
+    
+    # 6. Get comprehensive metrics
+    memory_metrics = new_get_memory_metrics(SIMULATION_REGISTRY.all())
+    gradient = new_estimate_memory_gradient(SIMULATION_REGISTRY.all())
     
     return {
-        "message": "Memory loop completed successfully!",
+        "message": "Comprehensive memory loop completed successfully!",
         "compression_knob": compression_knob,
+        "average_mem_util": average_mem_util,
+        "individual_mem_utils": mem_util_scores,
         "memory_metrics": memory_metrics,
         "memory_gradient": gradient,
+        "cost_vq_breakdown": cost_vq_data,
+        "memory_energy": mem_energy,
+        "memory_system_stats": MEMORY_SYSTEM.get_memory_stats(),
         "energy_state": energy_gradient_payload()
     }
 
@@ -231,13 +391,38 @@ def run_all_loops():
 # --- Reset Operations ---
 @app.post('/actions/reset')
 def reset_simulation():
-    """Resets the energy ledger back to zero."""
+    """Resets the energy ledger, pair statistics, and memory system back to zero."""
+    global PAIR_TRACKER, MEMORY_SYSTEM
     _ledger.reset()
-    return {"message": "Energy ledger has been reset."}
+    PAIR_TRACKER = PairStatsTracker()  # Create new instance to reset
+    MEMORY_SYSTEM = SharedMemorySystem()  # Create new memory system to reset
+    
+    # Reset agent memory tracking fields
+    for organ in SIMULATION_REGISTRY.all():
+        for agent in organ.agents:
+            agent.memory_writes = 0
+            agent.memory_hits_on_writes = 0
+            agent.salient_events_logged = 0
+            agent.total_compression_gain = 0.0
+            agent.mem_util = 0.0
+    
+    return {
+        "message": "Energy ledger, pair statistics, and memory system have been reset.",
+        "pair_stats": PAIR_TRACKER.get_all_stats(),
+        "memory_system_stats": MEMORY_SYSTEM.get_memory_stats()
+    }
 
 @app.get('/reset_energy')
 def reset_energy():
     """Legacy endpoint: Resets the energy ledger back to zero."""
     _ledger.reset()
     return {"message": "Energy ledger has been reset."}
+
+@app.get('/pair_stats')
+def get_pair_stats():
+    """Get all pair collaboration statistics."""
+    return {
+        "pair_statistics": PAIR_TRACKER.get_all_stats(),
+        "total_pairs": len(PAIR_TRACKER.pair_stats)
+    }
 

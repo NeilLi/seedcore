@@ -31,8 +31,8 @@ def test_ledger_reset():
 def test_add_pair_delta():
     e = EnergyLedger()
     initial_pair = e.pair
-    e.add_pair_delta(2.0, 1.5)
-    assert abs(e.pair - (initial_pair + 3.0)) < 0.001  # 2.0 * 1.5 = 3.0
+    e.add_pair_delta(3.0)  # Pre-calculated delta: 2.0 * 1.5 = 3.0
+    assert abs(e.pair - (initial_pair + 3.0)) < 0.001
 
 def test_add_hyper_delta():
     e = EnergyLedger()
@@ -60,7 +60,7 @@ def test_add_mem_delta():
 
 def test_multiple_energy_terms():
     e = EnergyLedger()
-    e.add_pair_delta(1.0, 1.0)
+    e.add_pair_delta(1.0)  # Pre-calculated delta: 1.0 * 1.0 = 1.0
     e.add_hyper_delta(0.5, 0.2)
     e.add_entropy_delta(3, 0.4)
     e.add_reg_delta(0.3, 1.5)

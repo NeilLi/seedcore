@@ -1,0 +1,28 @@
+feat: Instrument COA-compliant memory/energy metrics & control knobs
+
+- Added per-agent memory counters (memory_writes, memory_hits_on_writes, salient_events_logged, total_compression_gain)
+  - Fully covers mem util (ui) as specified by COA; enables lifecycle hooks that use both capability and memory utility.
+- Implemented two-tier memory model (Mw, Mlt)
+  - Matches COA's Holon stack; Ma (per-agent scratch) and Mfb (flashbulb) tiers are stubbed for future freshness/salience work.
+- Introduced `calculate_cost_vq()` as bytes + recon_loss + staleness, weighted by β_mem
+  - Formula matches spec and exposes compression knob for adaptive control.
+- Adaptive memory loop: `/run_memory_loop` now sweeps compression threshold k and measures dE/dk.
+- Telemetry endpoint returns unified `/energy/gradient` JSON, with per-term breakdown, cost_vq_breakdown, and per-agent memory utility.
+
+Analysis of first experimental run:
+- Compression knob k: 0.54 (mid-range), writes: 3, hits: 0 (high write/zero retrieval so staleness=1)
+- Only agent_alpha has nonzero mem util (0.4); others at 0
+- CostVQ: bytes=0.0128, recon_loss=0.2, staleness=0.2; memory energy dominated by recon/stale, bytes minor at 32B
+- dE/dk: +1 (positive slope; need more compression to reach minimum energy)
+
+Actionable next steps:
+- After every write, trigger a read to increase hit rate (and lower staleness)
+- Log hit_rate directly in JSON output
+- Automate a sweep over compression k (0.2 to 0.9), plot CostVQ vs k (expect U-shape per Exp D)
+- Begin wiring up ci and ui per agent for role transition dynamics
+- Stub Ma and Mfb tiers to enable salience/flashbulb tracking
+- Dashboard: plot all energy terms and CostVQ stack breakdowns
+- Add config clamp for β_mem and enforce entropy floor for stability
+
+Verdict: Memory/energy system now closely follows the COA spec; telemetry and gradient outputs are ready for live validation and dashboarding. Next phase focuses on retrieval traffic and adaptive compression for CostVQ minimization.
+

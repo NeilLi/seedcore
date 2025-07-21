@@ -1,0 +1,32 @@
+version: '3.8'
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.pgvector
+    container_name: pgvector
+    environment:
+      POSTGRES_DB: vectordb
+      POSTGRES_USER: vectoruser
+      POSTGRES_PASSWORD: vectorpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+
+  neo4j:
+    image: neo4j:5
+    container_name: neo4j
+    environment:
+      NEO4J_AUTH: neo4j/neo4jpass
+      NEO4J_ACCEPT_LICENSE_AGREEMENT: 'yes'
+    ports:
+      - "7474:7474"   # Browser
+      - "7687:7687"   # Bolt
+    volumes:
+      - neo4j_data:/data
+
+volumes:
+  pgvector_data:
+  neo4j_data:
+

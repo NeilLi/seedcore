@@ -39,10 +39,9 @@ class EnergyLedger:
     def reset(self):
         self.pair = self.hyper = self.entropy = self.reg = self.mem = 0.0
     
-    def add_pair_delta(self, w: float, sim: float) -> None:
-        """Increment pair term by -w*sim (energy drops)."""
-        delta = w * sim
-        self.pair += delta
+    def add_pair_delta(self, delta: float) -> None:
+        """Adds a pre-calculated delta to the pair energy term."""
+        self.pair += delta  # The delta can be positive or negative
         print(f"Updated pair energy by {delta}. New total: {self.pair}")
     
     def add_hyper_delta(self, complexity: float, precision: float) -> None:
