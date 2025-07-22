@@ -19,8 +19,11 @@ Simple FastAPI/uvicorn server that exposes simulation controls and telemetry.
 """
 import numpy as np
 import random
-from fastapi import FastAPI
+import uuid
+from fastapi import FastAPI, Depends, HTTPException
 from typing import List, Dict
+import time
+from seedcore.telemetry.stats import StatsCollector
 
 # Import our system components
 from ..energy.api import energy_gradient_payload, _ledger
@@ -39,6 +42,14 @@ from ..memory.adaptive_loop import (
     get_memory_metrics as new_get_memory_metrics,
     estimate_memory_gradient as new_estimate_memory_gradient
 )
+from seedcore.examples.experiment_pgvector_neo4j import run_memory_loop_experiment
+
+# Import Holon Fabric components
+from ..memory.holon_fabric import HolonFabric
+from ..memory.backends.pgvector_backend import PgVectorStore, Holon
+from ..memory.backends.neo4j_graph import Neo4jGraph
+
+import ray
 
 # --- Persistent State ---
 # Create a single, persistent registry when the server starts.
@@ -79,9 +90,52 @@ print(f"State initialized with 1 organ and {len(agents_to_create)} agents.")
 
 # Global compression knob for memory control
 compression_knob = 0.5
+
+# Global Holon Fabric instance
+holon_fabric = None
 # --- End Persistent State ---
 
+# In-memory Tier-1 cache (Mw) for demonstration
+mw_cache = {}  # This should be updated by your memory system as needed
+
 app = FastAPI()
+
+@app.on_event("startup")
+async def build_memory():
+    """Initialize the Holon Fabric on server startup"""
+    global holon_fabric
+    import os
+    
+    # Get connection details from environment variables
+    pg_dsn = os.getenv("PG_DSN", "postgresql://postgres:password@localhost:5432/postgres")
+    neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+    neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+    
+    # Initialize backends
+    vec_store = PgVectorStore(pg_dsn)
+    graph = Neo4jGraph(neo4j_uri, (neo4j_user, neo4j_password))
+    
+    # Create Holon Fabric
+    holon_fabric = HolonFabric(vec_store, graph)
+    app.state.mem = holon_fabric
+    
+    # Attach StatsCollector to app state
+    app.state.stats = StatsCollector(
+        pg_dsn=pg_dsn,
+        neo_uri=neo4j_uri,
+        neo_auth=(neo4j_user, neo4j_password),
+        mw_ref=mw_cache,
+    )
+    
+    print(f"Holon Fabric initialized with PG_DSN={pg_dsn}, NEO4J_URI={neo4j_uri}")
+
+@app.on_event("shutdown")
+async def cleanup_memory():
+    """Cleanup connections on server shutdown"""
+    global holon_fabric
+    if holon_fabric and holon_fabric.graph:
+        holon_fabric.graph.close()
 
 def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     """Calculate cosine similarity between two vectors."""
@@ -355,6 +409,13 @@ def run_memory_loop():
         "energy_state": energy_gradient_payload()
     }
 
+@app.get('/run_pgvector_neo4j_experiment')
+def run_pgvector_neo4j_experiment():
+    """
+    Runs the PGVector + Neo4j memory loop experiment and returns the results.
+    """
+    return run_memory_loop_experiment()
+
 # --- Combined Operations ---
 @app.get('/run_all_loops')
 def run_all_loops():
@@ -425,4 +486,151 @@ def get_pair_stats():
         "pair_statistics": PAIR_TRACKER.get_all_stats(),
         "total_pairs": len(PAIR_TRACKER.pair_stats)
     }
+
+# --- Holon Fabric Endpoints ---
+@app.post('/rag')
+async def rag_endpoint(q: dict):
+    """RAG endpoint for fuzzy search with holon expansion"""
+    global holon_fabric
+    if not holon_fabric:
+        return {"error": "Holon Fabric not initialized"}
+    
+    embedding = np.array(q.get("embedding", []))
+    k = q.get("k", 10)
+    
+    if len(embedding) == 0:
+        return {"error": "No embedding provided"}
+    
+    # Pad or truncate to 768 dimensions
+    if len(embedding) < 768:
+        embedding = np.pad(embedding, (0, 768 - len(embedding)), mode='constant')
+    else:
+        embedding = embedding[:768]
+    
+    holons = await holon_fabric.query_fuzzy(embedding, k=k)
+    return {"holons": holons}
+
+@app.post('/holon/insert')
+async def insert_holon(holon_data: dict):
+    """Insert a new holon into the fabric"""
+    global holon_fabric
+    if not holon_fabric:
+        return {"error": "Holon Fabric not initialized"}
+    
+    try:
+        embedding = np.array(holon_data["embedding"])
+        # Pad or truncate to 768 dimensions
+        if len(embedding) < 768:
+            embedding = np.pad(embedding, (0, 768 - len(embedding)), mode='constant')
+        else:
+            embedding = embedding[:768]
+            
+        holon = Holon(
+            uuid=holon_data.get("uuid", str(uuid.uuid4())),
+            embedding=embedding,
+            meta=holon_data.get("meta", {})
+        )
+        await holon_fabric.insert_holon(holon)
+        return {"message": "Holon inserted successfully", "uuid": holon.uuid}
+    except Exception as e:
+        return {"error": f"Failed to insert holon: {str(e)}"}
+
+@app.get('/holon/stats')
+async def holon_stats():
+    sc = app.state.stats
+    errors = {}
+    # Mw stats
+    try:
+        mw = sc.mw_stats()
+    except Exception as e:
+        mw = {"error": str(e)}
+        errors["Mw"] = str(e)
+    # PGVector (Mlt) stats
+    try:
+        mlt = await sc.mlt_stats()
+    except Exception as e:
+        mlt = {"error": str(e)}
+        errors["Mlt"] = str(e)
+    # Neo4j relationship stats
+    try:
+        rel = sc.rel_stats()
+    except Exception as e:
+        rel = {"error": str(e)}
+        errors["Neo4j"] = str(e)
+    # Prometheus energy stats
+    try:
+        energy = sc.energy_stats()
+    except Exception as e:
+        energy = {"error": str(e)}
+        errors["Prometheus"] = str(e)
+    # Compose response
+    body = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "tiers": {
+            "Mw": mw,
+            "Mlt": mlt
+        },
+        "vector_dimensions": getattr(sc, "EMB_DIM", 768),
+        "energy": energy,
+        "status": "healthy" if not errors else "unhealthy"
+    }
+    if isinstance(rel, dict):
+        body.update(rel)
+    if errors:
+        body["errors"] = errors
+    # simple rule: status=unhealthy if Mw staleness > 3 s or PG query slow
+    if isinstance(mw, dict) and mw.get("avg_staleness_s", 0) > 3:
+        body["status"] = "unhealthy"
+    return body
+
+@app.get('/holon/{uuid}')
+async def get_holon(uuid: str):
+    """Get a specific holon by UUID"""
+    global holon_fabric
+    if not holon_fabric:
+        return {"error": "Holon Fabric not initialized"}
+    
+    result = await holon_fabric.query_exact(uuid)
+    if result:
+        return result
+    else:
+        return {"error": "Holon not found"}
+
+@app.post('/holon/relationship')
+async def create_relationship(rel_data: dict):
+    """Create a relationship between two holons"""
+    global holon_fabric
+    if not holon_fabric:
+        return {"error": "Holon Fabric not initialized"}
+    
+    src_uuid = rel_data.get("src_uuid")
+    rel = rel_data.get("rel")
+    dst_uuid = rel_data.get("dst_uuid")
+    
+    if not all([src_uuid, rel, dst_uuid]):
+        return {"error": "Missing required fields: src_uuid, rel, dst_uuid"}
+    
+    await holon_fabric.create_relationship(src_uuid, rel, dst_uuid)
+    return {"message": "Relationship created successfully"}
+
+import os
+from seedcore.memory.consolidation_task import consolidation_worker
+@app.post("/admin/consolidate_once")
+async def consolidate_once(batch: int = 10, tau: float = 0.3):
+    mw = dict(list(app.state.stats.mw.items())[:batch])   # freeze a snapshot
+    n  = ray.get(
+        consolidation_worker.remote(
+            os.getenv("PG_DSN"),
+            "bolt://seedcore-neo4j:7687",
+            ("neo4j", os.getenv("NEO4J_PASSWORD")),
+            mw, tau, batch)
+    )
+    return {"consolidated": n}
+
+@app.post("/admin/write_to_mw", include_in_schema=False)
+def write_to_mw():
+    import time, uuid
+    mw = app.state.stats.mw
+    mw[str(uuid.uuid4())] = {"blob": b"hello world", "ts": time.time()}
+    return {"status": "ok", "message": "Wrote one item to Mw."}
 

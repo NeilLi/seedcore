@@ -1,32 +1,83 @@
-version: '3.8'
 services:
+  # PostgreSQL with PGVector extension
   postgres:
-    build:
-      context: .
-      dockerfile: Dockerfile.pgvector
-    container_name: pgvector
+    image: pgvector/pgvector:pg16
+    container_name: seedcore-postgres
     environment:
-      POSTGRES_DB: vectordb
-      POSTGRES_USER: vectoruser
-      POSTGRES_PASSWORD: vectorpass
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
     ports:
       - "5432:5432"
     volumes:
-      - pgvector_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - ./setup/init_pgvector.sql:/docker-entrypoint-initdb.d/init_pgvector.sql
+    networks:
+      - seedcore-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # Neo4j Graph Database
   neo4j:
-    image: neo4j:5
-    container_name: neo4j
+    image: neo4j:5.15
+    container_name: seedcore-neo4j
     environment:
-      NEO4J_AUTH: neo4j/neo4jpass
-      NEO4J_ACCEPT_LICENSE_AGREEMENT: 'yes'
+      NEO4J_AUTH: neo4j/password
+      NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*,gds.*
+      NEO4J_dbms_memory_heap_initial__size: 512m
+      NEO4J_dbms_memory_heap_max__size: 1G
     ports:
-      - "7474:7474"   # Browser
-      - "7687:7687"   # Bolt
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
     volumes:
       - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+    networks:
+      - seedcore-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # SeedCore API Server
+  seedcore-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: seedcore-api
+    environment:
+      - PG_DSN=postgresql://postgres:password@postgres:5432/postgres
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    networks:
+      - seedcore-network
+    volumes:
+      - ../src:/app/src
+    command: ["uvicorn", "src.seedcore.telemetry.server:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 volumes:
-  pgvector_data:
+  postgres_data:
   neo4j_data:
+  neo4j_logs:
+  neo4j_import:
+  neo4j_plugins:
+
+networks:
+  seedcore-network:
+    driver: bridge
 

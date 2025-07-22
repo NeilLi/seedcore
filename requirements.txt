@@ -7,3 +7,10 @@ uvicorn
 grpcio
 protobuf
 pyyaml
+psycopg2-binary
+pgvector
+neo4j-driver
+asyncpg
+tqdm
+aiohttp
+prometheus_client

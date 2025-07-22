@@ -1,0 +1,44 @@
+import asyncpg
+import numpy as np
+from pydantic import BaseModel, ConfigDict
+from typing import List
+import json
+
+class Holon(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    uuid: str
+    embedding: np.ndarray
+    meta: dict
+
+class PgVectorStore:
+    def __init__(self, dsn: str):
+        self.dsn = dsn
+
+    async def _conn(self):
+        return await asyncpg.connect(self.dsn)
+
+    async def upsert(self, holon: Holon):
+        q = """INSERT INTO holons (uuid, embedding, meta)
+               VALUES ($1, $2::vector, $3)
+               ON CONFLICT (uuid) DO UPDATE
+               SET embedding = $2, meta = $3"""
+        conn = await self._conn()
+        try:
+            # Convert numpy array to string format for PGVector
+            vec_str = '[' + ','.join(str(x) for x in holon.embedding.tolist()) + ']'
+            await conn.execute(q, holon.uuid, vec_str, json.dumps(holon.meta))
+        finally:
+            await conn.close()
+
+    async def search(self, emb: np.ndarray, k: int = 10):
+        q = """SELECT uuid, meta, embedding <-> $1::vector AS dist
+               FROM holons ORDER BY dist LIMIT $2"""
+        conn = await self._conn()
+        try:
+            # Convert numpy array to string format for PGVector
+            vec_str = '[' + ','.join(str(x) for x in emb.tolist()) + ']'
+            rows = await conn.fetch(q, vec_str, k)
+            return rows
+        finally:
+            await conn.close() 
