@@ -68,7 +68,7 @@ services:
       - seedcore-network
     volumes:
       - ../src:/app/src
-    command: ["uvicorn", "src.seedcore.telemetry.server:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "src.seedcore.telemetry.server:app", "--host", "0.0.0.0", "--port", "8000"]
 
 volumes:
   postgres_data:

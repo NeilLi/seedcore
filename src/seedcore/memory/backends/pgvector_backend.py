@@ -1,13 +1,14 @@
 import asyncpg
 import numpy as np
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List
 import json
+from uuid import uuid4
 
 class Holon(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
-    uuid: str
+    uuid: str = Field(default_factory=lambda: str(uuid4()))
     embedding: np.ndarray
     meta: dict
 
@@ -19,13 +20,12 @@ class PgVectorStore:
         return await asyncpg.connect(self.dsn)
 
     async def upsert(self, holon: Holon):
+        import json
         q = """INSERT INTO holons (uuid, embedding, meta)
-               VALUES ($1, $2::vector, $3)
-               ON CONFLICT (uuid) DO UPDATE
-               SET embedding = $2, meta = $3"""
+               VALUES ($1,$2::vector,$3)
+               ON CONFLICT (uuid) DO UPDATE SET embedding=$2, meta=$3"""
         conn = await self._conn()
         try:
-            # Convert numpy array to string format for PGVector
             vec_str = '[' + ','.join(str(x) for x in holon.embedding.tolist()) + ']'
             await conn.execute(q, holon.uuid, vec_str, json.dumps(holon.meta))
         finally:

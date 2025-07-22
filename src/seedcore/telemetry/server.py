@@ -20,7 +20,7 @@ Simple FastAPI/uvicorn server that exposes simulation controls and telemetry.
 import numpy as np
 import random
 import uuid
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from typing import List, Dict
 import time
 from seedcore.telemetry.stats import StatsCollector
@@ -50,6 +50,15 @@ from ..memory.backends.pgvector_backend import PgVectorStore, Holon
 from ..memory.backends.neo4j_graph import Neo4jGraph
 
 import ray
+from seedcore.memory.consolidation_logic import consolidate_batch
+import logging, os
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from fastapi import Response
+from seedcore.telemetry.metrics import COSTVQ, ENERGY_SLOPE, MEM_WRITES
+from src.seedcore.control.memory.meta_controller import adjust
+import redis.asyncio as aioredis
 
 # --- Persistent State ---
 # Create a single, persistent registry when the server starts.
@@ -100,6 +109,17 @@ mw_cache = {}  # This should be updated by your memory system as needed
 
 app = FastAPI()
 
+class _Ctl:
+    tau: float = 0.3
+    gamma: float = 2.0
+    kappa: float = 0.5  # TD-priority knob
+app.state.controller = _Ctl()
+
+@app.on_event("startup")
+async def build_redis():
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    app.state.redis = aioredis.from_url(redis_url, decode_responses=True)
+
 @app.on_event("startup")
 async def build_memory():
     """Initialize the Holon Fabric on server startup"""
@@ -130,6 +150,46 @@ async def build_memory():
     
     print(f"Holon Fabric initialized with PG_DSN={pg_dsn}, NEO4J_URI={neo4j_uri}")
 
+@app.on_event("startup")
+async def start_consolidator():
+    import asyncio, time
+    async def loop():
+        tick = 0
+        while True:
+            logging.warning("⚙ consolidator tick at %.0f", time.time())
+            try:
+                n = await consolidate_batch(
+                    app.state.mem,
+                    app.state.stats.mw,
+                    tau=app.state.controller.tau,
+                    batch=128,
+                    kappa=app.state.controller.kappa,
+                    redis=app.state.redis
+                )
+                logging.info("✓ consolidated %d", n)
+                tick += 1
+                if tick % 10 == 0:
+                    await adjust(app.state.controller, ENERGY_SLOPE._value.get())
+            except Exception:
+                logging.exception("consolidator crashed")
+            await asyncio.sleep(app.state.controller.gamma)
+    print("⇢ CONSOLIDATOR TASK SCHEDULED")
+    asyncio.create_task(loop())
+
+@app.on_event("startup")
+async def sync_counters():
+    import asyncpg
+    pg_dsn = os.getenv("PG_DSN", "postgresql://postgres:password@localhost:5432/postgres")
+    c = await asyncpg.connect(pg_dsn)
+    try:
+        total, = await c.fetchrow("SELECT COUNT(*) FROM holons;")
+        MEM_WRITES.labels(tier="Mlt").inc(total)
+        avg_cost, = await c.fetchrow("SELECT AVG((meta->>'stored_bytes')::float / GREATEST((meta->>'raw_bytes')::int,1)) FROM holons")
+        from seedcore.telemetry.metrics import COSTVQ
+        COSTVQ.set(avg_cost or 0)
+    finally:
+        await c.close()
+
 @app.on_event("shutdown")
 async def cleanup_memory():
     """Cleanup connections on server shutdown"""
@@ -149,9 +209,11 @@ def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     return dot_product / (norm_v1 * norm_v2)
 
 @app.get('/energy/gradient')
-def energy_gradient():
-    """Returns the current state of the energy ledger."""
-    return energy_gradient_payload()
+async def energy_gradient():
+    return {
+        "CostVQ": COSTVQ._value.get(),
+        "deltaE_last": ENERGY_SLOPE._value.get()
+    }
 
 @app.get('/agents/state')
 def get_agents_state() -> List[Dict]:
@@ -633,4 +695,69 @@ def write_to_mw():
     mw = app.state.stats.mw
     mw[str(uuid.uuid4())] = {"blob": b"hello world", "ts": time.time()}
     return {"status": "ok", "message": "Wrote one item to Mw."}
+
+@app.get("/admin/mw_len", include_in_schema=False)
+async def mw_len():
+    from src.seedcore.telemetry.server import mw_cache
+    return {"mw_len": len(mw_cache)}
+
+@app.get("/admin/debug_ids", include_in_schema=False)
+async def debug_ids():
+    from src.seedcore.telemetry.server import mw_cache
+    return {
+        "mw_writer": id(mw_cache),
+        "mw_stats": id(app.state.stats.mw)
+    }
+
+@app.get("/admin/metric_ids", include_in_schema=False)
+async def metric_ids():
+    return {
+        "route_COSTVQ": id(COSTVQ),
+        "route_MEM": id(MEM_WRITES),
+    }
+
+@app.get("/metrics")
+async def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+@app.get("/health")
+async def health():
+    import time
+    from seedcore.telemetry.stats import StatsCollector
+    from seedcore.telemetry.metrics import ENERGY_SLOPE
+    mw_staleness = app.state.stats.mw_stats().get("avg_staleness_s", 0)
+    energy_slope = ENERGY_SLOPE._value.get()
+    # Track how long energy_slope has been positive
+    if not hasattr(app.state, "_slope_positive_since"):
+        app.state._slope_positive_since = None
+    now = time.time()
+    if energy_slope > 0:
+        if app.state._slope_positive_since is None:
+            app.state._slope_positive_since = now
+    else:
+        app.state._slope_positive_since = None
+    slope_positive_duration = (now - app.state._slope_positive_since) if app.state._slope_positive_since else 0
+    warnings = []
+    if mw_staleness > 3:
+        warnings.append(f"Mw staleness high: {mw_staleness:.2f}s")
+    if slope_positive_duration > 300:
+        warnings.append(f"energy_delta_last positive for {slope_positive_duration:.0f}s")
+    return {
+        "ok": not warnings,
+        "warnings": warnings,
+        "mw_staleness": mw_staleness,
+        "energy_delta_last": energy_slope,
+        "slope_positive_duration": slope_positive_duration
+    }
+
+@app.get("/admin/kappa", include_in_schema=False)
+async def get_kappa():
+    return {"kappa": app.state.controller.kappa}
+
+@app.post("/admin/kappa", include_in_schema=False)
+async def set_kappa(request: Request):
+    data = await request.json()
+    kappa = float(data.get("kappa", app.state.controller.kappa))
+    app.state.controller.kappa = max(0.0, min(1.0, kappa))
+    return {"kappa": app.state.controller.kappa, "status": "updated"}
 
