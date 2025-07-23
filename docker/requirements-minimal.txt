@@ -1,0 +1,27 @@
+# Core API dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# Database drivers
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.0
+pgvector>=0.2.0
+neo4j-driver>=5.0.0
+
+# HTTP and networking
+aiohttp>=3.9.0
+grpcio>=1.59.0
+protobuf>=4.25.0
+
+# Utilities
+pyyaml>=6.0.0
+tqdm>=4.66.0
+prometheus_client>=0.19.0
+redis>=4.2.0
+
+# Core data processing (much smaller than full ML stack)
+numpy>=1.24.0
+
+# Distributed computing (required for consolidation worker)
+ray>=2.10.0 

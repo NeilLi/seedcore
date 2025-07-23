@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.git
+venv/
+node_modules/
+models/
+logs/
+data/
+*.ipynb
+*.egg-info/ 
