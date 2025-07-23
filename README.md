@@ -356,6 +356,62 @@ python -m pytest tests/ -v
 - OrganRegistry integration
 - Integration tests for all components
 
+## Docker & Deployment Improvements (2024)
+
+### Optimized Docker Image
+- **Multi-stage Dockerfile**: Now uses a multi-stage build for smaller, more secure images.
+- **Minimal requirements**: Production images use `requirements-minimal.txt` (excludes unused ML libraries like DGL).
+- **.dockerignore**: Now excludes dev, data, and build artifacts for smaller build context.
+- **Alpine variant**: Optional `Dockerfile.alpine` for ultra-small images (experimental).
+- **Image size reduced**: From 1.7GB to 749MB for the API server.
+
+### Usage
+
+**Build optimized image:**
+```bash
+docker build -f docker/Dockerfile -t seedcore-api:optimized .
+```
+
+**(Optional) Build Alpine image:**
+```bash
+docker build -f docker/Dockerfile.alpine -t seedcore-api:alpine .
+```
+
+**Run:**
+```bash
+docker run --rm -p 8000:8000 seedcore-api:optimized
+```
+
+**For development:**  
+- Use the standard image and `requirements.txt` for full-featured dev environment.
+- Use volume mounts in `docker-compose.yml` for live code reload.
+
+**For production:**  
+- Use the optimized image and `requirements-minimal.txt` for fast, secure deployment.
+
+### Image Analysis
+A new script is provided to analyze image size and bloat:
+```bash
+bash docker/analyze-image.sh
+```
+
+### Development Workflow
+- **Development:** Use the normal image for rapid iteration, debugging, and testing.
+- **Release:** Use the optimized image for deployment to minimize size and attack surface.
+
+### Other Notable Changes
+- **Redis, Prometheus, asyncpg, Ray**: All dependencies are now managed for both dev and prod.
+- **Improved error handling and logging** in the API server and memory consolidation logic.
+- **Runtime tuning endpoints** and health checks added.
+- **Docker Compose**: Now references the correct Dockerfile and context for builds.
+
+### Quick Migration
+- If you want to use the new optimized image in Compose, set:
+  ```yaml
+  image: seedcore-api:optimized
+  ```
+  Or keep the build section with the correct context and Dockerfile path.
+
 ## Development
 
 ### Project Structure
