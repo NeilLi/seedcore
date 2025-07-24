@@ -34,6 +34,7 @@ from ..control.mem_loop import adaptive_mem_update, estimate_memory_gradient, ge
 from ..organs.base import Organ
 from ..organs.registry import OrganRegistry
 from ..agents.base import Agent
+from ..agents import RayAgent, Tier0MemoryManager, tier0_manager
 from ..memory.system import SharedMemorySystem
 from ..memory.adaptive_loop import (
     calculate_dynamic_mem_util, 
@@ -857,4 +858,121 @@ async def ray_connect(request: dict):
             
     except Exception as e:
         return {"error": str(e)}
+
+# --- Tier 0 (Ma) Memory Endpoints ---
+
+@app.post("/tier0/agents/create")
+async def create_ray_agent(request: dict):
+    """Create a new Ray agent actor."""
+    try:
+        agent_id = request.get('agent_id')
+        role_probs = request.get('role_probs')
+        
+        if not agent_id:
+            return {"success": False, "message": "agent_id is required"}
+        
+        created_id = tier0_manager.create_agent(agent_id, role_probs)
+        return {"success": True, "agent_id": created_id, "message": f"Agent {created_id} created"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/tier0/agents/create_batch")
+async def create_ray_agents_batch(request: dict):
+    """Create multiple Ray agent actors in batch."""
+    try:
+        agent_configs = request.get('agent_configs', [])
+        
+        if not agent_configs:
+            return {"success": False, "message": "agent_configs list is required"}
+        
+        created_ids = tier0_manager.create_agents_batch(agent_configs)
+        return {"success": True, "agent_ids": created_ids, "message": f"Created {len(created_ids)} agents"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.get("/tier0/agents")
+async def list_ray_agents():
+    """List all Ray agent IDs."""
+    try:
+        agents = tier0_manager.list_agents()
+        return {"success": True, "agents": agents, "count": len(agents)}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/tier0/agents/{agent_id}/execute")
+async def execute_task_on_agent(agent_id: str, request: dict):
+    """Execute a task on a specific agent."""
+    try:
+        task_data = request.get('task_data', {})
+        result = tier0_manager.execute_task_on_agent(agent_id, task_data)
+        
+        if result:
+            return {"success": True, "result": result}
+        else:
+            return {"success": False, "message": f"Agent {agent_id} not found or task failed"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/tier0/agents/execute_random")
+async def execute_task_on_random_agent(request: dict):
+    """Execute a task on a randomly selected agent."""
+    try:
+        task_data = request.get('task_data', {})
+        result = tier0_manager.execute_task_on_random_agent(task_data)
+        
+        if result:
+            return {"success": True, "result": result}
+        else:
+            return {"success": False, "message": "No agents available"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.get("/tier0/agents/{agent_id}/heartbeat")
+async def get_agent_heartbeat(agent_id: str):
+    """Get the latest heartbeat for a specific agent."""
+    try:
+        heartbeat = tier0_manager.get_agent_heartbeat(agent_id)
+        
+        if heartbeat:
+            return {"success": True, "heartbeat": heartbeat}
+        else:
+            return {"success": False, "message": f"Agent {agent_id} not found"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.get("/tier0/agents/heartbeats")
+async def get_all_agent_heartbeats():
+    """Get heartbeats from all agents."""
+    try:
+        heartbeats = tier0_manager.get_all_heartbeats()
+        return {"success": True, "heartbeats": heartbeats, "count": len(heartbeats)}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.get("/tier0/summary")
+async def get_tier0_summary():
+    """Get a summary of the Tier 0 memory system."""
+    try:
+        summary = tier0_manager.get_system_summary()
+        return {"success": True, "summary": summary}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/tier0/agents/{agent_id}/reset")
+async def reset_agent_metrics(agent_id: str):
+    """Reset metrics for a specific agent."""
+    try:
+        success = tier0_manager.reset_agent_metrics(agent_id)
+        return {"success": success, "message": f"Agent {agent_id} metrics reset" if success else f"Agent {agent_id} not found"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/tier0/agents/shutdown")
+async def shutdown_tier0_agents():
+    """Shutdown all Tier 0 agents."""
+    try:
+        tier0_manager.shutdown_agents()
+        return {"success": True, "message": "All agents shut down"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
