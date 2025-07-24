@@ -19,6 +19,8 @@ FROM python:3.12-slim
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y \
     libpq5 \
+    netcat-openbsd \
+    curl \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
