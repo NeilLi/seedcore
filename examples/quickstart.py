@@ -19,6 +19,7 @@ from seedcore.control.fast_loop import fast_loop_select_agent
 from seedcore.organs.base import Organ
 from seedcore.agents.base import Agent
 from seedcore.energy.api import read_energy
+import os
 
 def main():
     """
@@ -54,7 +55,9 @@ def main():
     print(f"Energy after running loop: {final_energy}")
 
     print("\n--- Simulation Complete ---")
-    print("Check the API endpoint at http://127.0.0.1:8000/energy/gradient to see the updated value.")
+    # Get API endpoint from environment variable
+    API_BASE_URL = os.getenv('SEEDCORE_API_URL', 'http://localhost:8000')
+    print(f"Check the API endpoint at {API_BASE_URL}/energy/gradient to see the updated value.")
 
 
 if __name__ == '__main__':

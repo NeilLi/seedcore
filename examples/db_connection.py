@@ -1,17 +1,16 @@
 import chromadb
 import uuid
+import os
 
-# 1. Connect to the ChromaDB instance running in Docker
-try:
-    client = chromadb.HttpClient(host='localhost', port=8000)
-    # A successful client object creation means we can likely connect.
-    # Let's test the connection by trying to use it.
-    print("✅ ChromaDB client initialized.")
+# Get ChromaDB connection from environment variables
+CHROMA_HOST = os.getenv('CHROMA_HOST', 'localhost')
+CHROMA_PORT = int(os.getenv('CHROMA_PORT', '8000'))
 
-except Exception as e:
-    print(f"❌ Failed to initialize ChromaDB client: {e}")
-    print("Please ensure your Docker container 'chroma_db' is running.")
-    exit()
+client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
+
+# A successful client object creation means we can likely connect.
+# Let's test the connection by trying to use it.
+print("✅ ChromaDB client initialized.")
 
 try:
     # 2. Create or get a collection

@@ -6,7 +6,7 @@ import time
 # Replace with your actual API Key from the RAGFlow UI
 API_KEY = "your-ragflow-api-key-goes-here"
 # This is the default address for the RAGFlow service you started in Docker
-RAGFLOW_API_BASE = "http://127.0.0.1:9380"
+RAGFLOW_API_BASE = os.getenv('RAGFLOW_API_URL', 'http://localhost:9380')
 
 # Check if the API key has been replaced
 if "your-ragflow-api-key" in API_KEY:

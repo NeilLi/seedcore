@@ -42,7 +42,7 @@ from ..memory.adaptive_loop import (
     get_memory_metrics as new_get_memory_metrics,
     estimate_memory_gradient as new_estimate_memory_gradient
 )
-from seedcore.examples.experiment_pgvector_neo4j import run_memory_loop_experiment
+# from seedcore.examples.experiment_pgvector_neo4j import run_memory_loop_experiment
 
 # Import Holon Fabric components
 from ..memory.holon_fabric import HolonFabric
@@ -50,7 +50,8 @@ from ..memory.backends.pgvector_backend import PgVectorStore, Holon
 from ..memory.backends.neo4j_graph import Neo4jGraph
 
 import ray
-from seedcore.memory.consolidation_logic import consolidate_batch
+from seedcore.utils.ray_utils import init_ray, is_ray_available, get_ray_cluster_info
+from seedcore.config.ray_config import get_ray_config
 import logging, os
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
@@ -58,6 +59,7 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi import Response
 from seedcore.telemetry.metrics import COSTVQ, ENERGY_SLOPE, MEM_WRITES
 from src.seedcore.control.memory.meta_controller import adjust
+from seedcore.memory.consolidation_logic import consolidate_batch
 import redis.asyncio as aioredis
 
 # --- Persistent State ---
@@ -116,9 +118,48 @@ class _Ctl:
 app.state.controller = _Ctl()
 
 @app.on_event("startup")
-async def build_redis():
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    app.state.redis = aioredis.from_url(redis_url, decode_responses=True)
+async def startup_event():
+    """Initialize services on startup."""
+    global mw_cache, MEMORY_SYSTEM
+    
+    # Initialize memory system
+    MEMORY_SYSTEM = SharedMemorySystem()
+    app.state.mem = MEMORY_SYSTEM
+    
+    # Initialize Redis client if configured
+    redis_url = os.getenv('REDIS_URL')
+    if redis_url:
+        try:
+            app.state.redis = redis.from_url(redis_url)
+            logging.info(f"Redis client initialized: {redis_url}")
+        except Exception as e:
+            logging.error(f"Failed to initialize Redis: {e}")
+            app.state.redis = None
+    else:
+        app.state.redis = None
+        logging.info("Redis not configured, running without Redis")
+    
+    # Initialize Ray with flexible configuration
+    try:
+        ray_config = get_ray_config()
+        if ray_config.is_configured():
+            logging.info(f"Initializing Ray with configuration: {ray_config}")
+            success = init_ray()
+            if success:
+                logging.info("Ray initialization successful")
+                cluster_info = get_ray_cluster_info()
+                logging.info(f"Ray cluster info: {cluster_info}")
+            else:
+                logging.warning("Ray initialization failed, continuing without Ray")
+        else:
+            logging.info("Ray not configured, skipping Ray initialization")
+    except Exception as e:
+        logging.error(f"Error during Ray initialization: {e}")
+    
+    # Start consolidator loop
+    import asyncio
+    asyncio.create_task(start_consolidator())
+    logging.info("Consolidator loop started")
 
 @app.on_event("startup")
 async def build_memory():
@@ -127,10 +168,20 @@ async def build_memory():
     import os
     
     # Get connection details from environment variables
-    pg_dsn = os.getenv("PG_DSN", "postgresql://postgres:password@localhost:5432/postgres")
-    neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-    neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
+    pg_dsn = os.getenv("PG_DSN")
+    neo4j_uri = os.getenv("NEO4J_URI")
+    neo4j_user = os.getenv("NEO4J_USER")
+    neo4j_password = os.getenv("NEO4J_PASSWORD")
+    
+    # Validate required environment variables
+    if not pg_dsn:
+        raise ValueError("PG_DSN environment variable is required")
+    if not neo4j_uri:
+        raise ValueError("NEO4J_URI environment variable is required")
+    if not neo4j_user:
+        raise ValueError("NEO4J_USER environment variable is required")
+    if not neo4j_password:
+        raise ValueError("NEO4J_PASSWORD environment variable is required")
     
     # Initialize backends
     vec_store = PgVectorStore(pg_dsn)
@@ -179,7 +230,10 @@ async def start_consolidator():
 @app.on_event("startup")
 async def sync_counters():
     import asyncpg
-    pg_dsn = os.getenv("PG_DSN", "postgresql://postgres:password@localhost:5432/postgres")
+    pg_dsn = os.getenv("PG_DSN")
+    if not pg_dsn:
+        logging.warning("PG_DSN not configured, skipping counter sync")
+        return
     c = await asyncpg.connect(pg_dsn)
     try:
         total, = await c.fetchrow("SELECT COUNT(*) FROM holons;")
@@ -760,4 +814,47 @@ async def set_kappa(request: Request):
     kappa = float(data.get("kappa", app.state.controller.kappa))
     app.state.controller.kappa = max(0.0, min(1.0, kappa))
     return {"kappa": app.state.controller.kappa, "status": "updated"}
+
+@app.get("/ray/status")
+async def ray_status():
+    """Get Ray cluster status and configuration."""
+    try:
+        config = get_ray_config()
+        cluster_info = get_ray_cluster_info()
+        
+        return {
+            "ray_configured": config.is_configured(),
+            "ray_available": is_ray_available(),
+            "config": str(config),
+            "cluster_info": cluster_info
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/ray/connect")
+async def ray_connect(request: dict):
+    """Connect to Ray cluster with specified configuration."""
+    try:
+        host = request.get('host')
+        port = request.get('port', 10001)
+        password = request.get('password')
+        
+        if not host:
+            return {"error": "Host is required"}
+        
+        from seedcore.config.ray_config import configure_ray_remote
+        configure_ray_remote(host, port, password)
+        
+        success = init_ray(force_reinit=True)
+        if success:
+            return {
+                "success": True,
+                "message": f"Connected to Ray at {host}:{port}",
+                "cluster_info": get_ray_cluster_info()
+            }
+        else:
+            return {"error": "Failed to connect to Ray cluster"}
+            
+    except Exception as e:
+        return {"error": str(e)}
 
