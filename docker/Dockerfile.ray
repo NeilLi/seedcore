@@ -1,0 +1,10 @@
+# docker/Dockerfile.ray
+FROM rayproject/ray:latest-cpu
+
+RUN conda install -c conda-forge python=3.12 -y
+RUN pip install "ray[default]"
+RUN pip install numpy pandas scipy scikit-learn matplotlib seaborn jupyter
+
+ENV PATH=/opt/conda/envs/ray/bin:$PATH
+
+RUN python --version && pip --version && python -c "import numpy; print(f'NumPy version: {numpy.__version__}')" 
