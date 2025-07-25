@@ -8,6 +8,8 @@ asyncpg>=0.29.0
 psycopg2-binary>=2.9.0
 pgvector>=0.2.0
 neo4j-driver>=5.0.0
+sqlalchemy
+mysql-connector-python>=8.0.0
 
 # HTTP and networking
 aiohttp>=3.9.0

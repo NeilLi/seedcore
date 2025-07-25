@@ -17,6 +17,9 @@
 """
 Simple FastAPI/uvicorn server that exposes simulation controls and telemetry.
 """
+import logging
+import redis.asyncio as redis
+import os
 import numpy as np
 import random
 import uuid
@@ -24,8 +27,6 @@ from fastapi import FastAPI, Depends, HTTPException, Request
 from typing import List, Dict
 import time
 from seedcore.telemetry.stats import StatsCollector
-
-# Import our system components
 from ..energy.api import energy_gradient_payload, _ledger
 from ..energy.pair_stats import PairStatsTracker
 from ..control.fast_loop import fast_loop_select_agent
@@ -43,25 +44,18 @@ from ..memory.adaptive_loop import (
     get_memory_metrics as new_get_memory_metrics,
     estimate_memory_gradient as new_estimate_memory_gradient
 )
-# from seedcore.examples.experiment_pgvector_neo4j import run_memory_loop_experiment
-
-# Import Holon Fabric components
+from ..memory.working_memory import WorkingMemoryManager
+from ..memory.long_term_memory import LongTermMemoryManager
 from ..memory.holon_fabric import HolonFabric
 from ..memory.backends.pgvector_backend import PgVectorStore, Holon
 from ..memory.backends.neo4j_graph import Neo4jGraph
-
-import ray
-from seedcore.utils.ray_utils import init_ray, is_ray_available, get_ray_cluster_info
-from seedcore.config.ray_config import get_ray_config
-import logging, os
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
-
+from seedcore.memory.consolidation_logic import consolidate_batch
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi import Response
 from seedcore.telemetry.metrics import COSTVQ, ENERGY_SLOPE, MEM_WRITES
 from src.seedcore.control.memory.meta_controller import adjust
-from seedcore.memory.consolidation_logic import consolidate_batch
-import redis.asyncio as aioredis
+import asyncio
+from ..api.routers.mfb_router import mfb_router
 
 # --- Persistent State ---
 # Create a single, persistent registry when the server starts.
@@ -111,6 +105,7 @@ holon_fabric = None
 mw_cache = {}  # This should be updated by your memory system as needed
 
 app = FastAPI()
+app.include_router(mfb_router)
 
 class _Ctl:
     tau: float = 0.3
@@ -250,7 +245,9 @@ async def cleanup_memory():
     """Cleanup connections on server shutdown"""
     global holon_fabric
     if holon_fabric and holon_fabric.graph:
-        holon_fabric.graph.close()
+        close_method = getattr(holon_fabric.graph, "close", None)
+        if callable(close_method):
+            holon_fabric.graph.close()
 
 def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     """Calculate cosine similarity between two vectors."""
@@ -931,12 +928,13 @@ async def execute_task_on_random_agent(request: dict):
 async def get_agent_heartbeat(agent_id: str):
     """Get the latest heartbeat for a specific agent."""
     try:
+        # Force a heartbeat collection before returning
+        await tier0_manager.collect_heartbeats()
         heartbeat = tier0_manager.get_agent_heartbeat(agent_id)
-        
         if heartbeat:
             return {"success": True, "heartbeat": heartbeat}
         else:
-            return {"success": False, "message": f"Agent {agent_id} not found"}
+            return {"success": False, "message": f"Heartbeat for agent {agent_id} not yet collected"}
     except Exception as e:
         return {"success": False, "message": str(e)}
 
@@ -975,4 +973,40 @@ async def shutdown_tier0_agents():
         return {"success": True, "message": "All agents shut down"}
     except Exception as e:
         return {"success": False, "message": str(e)}
+
+# --- Tier 1 (Mw) Working Memory Endpoints ---
+
+@app.post('/mw/{organ_id}/set')
+def mw_set_item(organ_id: str, request: dict):
+    """Set a working memory item for an organ."""
+    item_id = request.get('item_id')
+    value = request.get('value')
+    if not item_id or value is None:
+        return {"success": False, "message": "item_id and value are required"}
+    mw = WorkingMemoryManager(organ_id)
+    mw.set_item(item_id, value)
+    return {"success": True, "message": f"Item {item_id} set for organ {organ_id}"}
+
+@app.get('/mw/{organ_id}/get/{item_id}')
+def mw_get_item(organ_id: str, item_id: str):
+    """Get a working memory item for an organ."""
+    mw = WorkingMemoryManager(organ_id)
+    value = mw.get_item(item_id)
+    return {"success": value is not None, "value": value}
+
+@app.get('/mw/{organ_id}/metrics')
+def mw_metrics(organ_id: str):
+    """Get working memory metrics for an organ."""
+    mw = WorkingMemoryManager(organ_id)
+    return mw.get_metrics()
+
+# --- Tier 2 (Mlt) Long-Term Memory Endpoints ---
+
+ltm_manager = LongTermMemoryManager()
+
+@app.post('/mlt/insert_holon')
+async def mlt_insert_holon(request: dict):
+    """Insert a holon into long-term memory (PgVector + Neo4j, saga pattern)."""
+    result = await ltm_manager.insert_holon(request)
+    return {"success": result}
 
