@@ -2,15 +2,37 @@
 
 ## Current Status Summary
 
-✅ **Completed (100%)**:
-- **Tier 0 (Ma)**: Ray actor-based agents with 128-dim state vectors
-- **Tier 1 (Mw)**: Working memory with capacity management
-- **Tier 2 (Mlt)**: Long-term memory with compression
-- **Tier 3 (Mfb)**: MySQL-backed flashbulb memory
-- **Infrastructure**: Complete Docker setup with all databases
-- **API Layer**: RESTful endpoints for all tiers
-- **Testing**: Basic functionality verified
-- **Scenarios**: Collaborative Task with Knowledge Gap scenario implemented and tested
+### ✅ Completed Features
+
+**Core Infrastructure**:
+- Multi-service Docker environment with Ray, Redis, PostgreSQL, Neo4j, MySQL
+- FastAPI server with comprehensive telemetry and control endpoints
+- Ray-based distributed agent system (Tier 0 - Ma)
+- Multi-tier memory system (Mw, Mlt, Mfb) with proper backends
+
+**Memory System**:
+- Working Memory (Mw) with Redis backend and TTL management
+- Long-Term Memory (Mlt) with PgVector and Neo4j integration
+- Flashbulb Memory (Mfb) with MySQL backend for incident storage
+- Memory consolidation and adaptive management
+
+**Scenarios and Validation**:
+- **Scenario 1: Collaborative Task with Knowledge Gap** ✅ Complete
+  - Demonstrates Mw → Mlt escalation and caching behavior
+  - Validates multi-tier memory system functionality
+  - Includes comprehensive error handling and debugging
+  
+- **Scenario 2: Critical Failure and Flashbulb Incident** ✅ Complete
+  - Demonstrates automatic incident detection and logging
+  - Validates Flashbulb Memory (Mfb) functionality
+  - Includes salience score calculation and threshold-based logging
+  - Full state capture and permanent storage in MySQL
+
+**Documentation**:
+- Comprehensive API reference with endpoint documentation
+- Quick reference guide with troubleshooting tips
+- Detailed scenario documentation with technical implementation details
+- Project structure and architecture overview
 
 ## Immediate Next Steps (Next 1-2 Weeks)
 

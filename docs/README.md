@@ -118,22 +118,50 @@ seedcore/
 
 ## Scenarios and Examples
 
-### Scenario 1: Collaborative Task with Knowledge Gap ✅
+### Scenario 1: Collaborative Task with Knowledge Gap
 
-**Purpose**: Demonstrates the multi-tier memory system's ability to handle cache misses and knowledge retrieval across memory tiers.
+**Purpose**: Tests how agents collaborate, identify knowledge gaps, and use the memory hierarchy to fill them.
 
-**Objective**: Two agents collaborate on a task requiring knowledge that is initially missing from fast-access memory, demonstrating the Mw → Mlt escalation pattern.
+**Flow**:
+1. Two agents are assigned a collaborative task
+2. Agent A has partial knowledge, Agent B needs missing information
+3. Agent B queries Mw (Working Memory) first - gets cache miss
+4. Agent B escalates query to Mlt (Long-Term Memory) - finds the information
+5. Agent B caches the information in Mw for future use
+6. Both agents complete the task successfully
 
-#### Scenario Flow
+**Validation**: Demonstrates Mw → Mlt escalation and caching behavior.
 
-1. **Task Assignment**: A collaborative task is assigned requiring two agents
-2. **Knowledge Gap**: Agent B needs information (`fact_X_uuid`) not in its local memory
-3. **Cache Miss**: Agent B queries Mw (Working Memory) but gets a cache miss
-4. **Memory Escalation**: The query escalates to Mlt (Long-Term Memory)
-5. **Knowledge Retrieval**: Agent B successfully finds the required information in Mlt
-6. **Cache Population**: The retrieved knowledge is cached in Mw for future use
-7. **Task Completion**: Both agents successfully complete the collaborative task
-8. **Performance Update**: Agents update their internal Ma with performance metrics
+**Running**: `docker-compose exec seedcore-api python -m scripts.scenario_1_knowledge_gap`
+
+### Scenario 2: Critical Failure and Flashbulb Incident
+
+**Purpose**: Tests how agents handle high-stakes task failures and trigger flashbulb memory incidents.
+
+**Flow**:
+1. Agent is assigned a high-risk task (e.g., nuclear core coolant system check)
+2. Task fails with a critical error (external API timeout)
+3. Agent calculates salience score based on task risk and failure severity
+4. If salience score exceeds threshold (0.7), incident is logged to Flashbulb Memory (Mfb)
+5. Full agent state, task details, and error context are captured
+6. Incident is permanently stored in MySQL database
+
+**Validation**: Demonstrates automatic incident detection and permanent storage of critical events.
+
+**Running**: `docker-compose exec seedcore-api python -m scripts.scenario_2_flashbulb`
+
+**Expected Output**:
+```
+✅ VALIDATION SUCCEEDED: A high-salience incident was correctly identified and logged.
+Check the 'seedcore-api' container logs for confirmation of the write to MySQL.
+```
+
+**Technical Implementation**:
+- FlashbulbClient for HTTP communication with API
+- Salience score calculation (risk × severity)
+- Automatic threshold-based incident logging
+- Full state capture including agent heartbeat data
+- MySQL backend for permanent storage
 
 #### What It Validates
 

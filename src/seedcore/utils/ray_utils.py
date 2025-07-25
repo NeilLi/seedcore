@@ -6,7 +6,7 @@ Provides flexible Ray initialization and connection management.
 import ray
 import logging
 from typing import Optional
-from seedcore.config.ray_config import get_ray_config, configure_ray_remote, configure_ray_local
+from ..config.ray_config import get_ray_config, configure_ray_remote, configure_ray_local
 
 logger = logging.getLogger(__name__)
 

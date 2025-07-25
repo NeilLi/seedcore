@@ -16,3 +16,4 @@ aiohttp
 prometheus_client
 redis>=4.2
 sqlalchemy
+requests

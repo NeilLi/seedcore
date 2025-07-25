@@ -275,6 +275,41 @@ docker-compose exec seedcore-api python -c "from src.seedcore.memory.mw_manager 
 docker-compose restart ray-head ray-worker
 ```
 
+### Scenario 2: Critical Failure and Flashbulb Incident
+
+**Purpose**: Demonstrates incident detection and logging to Flashbulb Memory.
+
+```bash
+# 1. Check service status
+docker-compose ps
+
+# 2. Pre-populate Long-Term Memory (if needed)
+docker-compose exec seedcore-api python scripts/populate_mlt.py
+
+# 3. Run the scenario
+docker-compose exec seedcore-api python -m scripts.scenario_2_flashbulb
+
+# 4. View scenario logs
+docker-compose logs ray-head ray-worker | grep -E "(Agent|Incident|Logged)"
+```
+
+**Expected Behavior**:
+- Phase 1: Incident detection and salience scoring
+- Phase 2: Incident logging to Flashbulb Memory
+- Phase 3: Incident retrieval and response
+
+**Troubleshooting**:
+```bash
+# Check Ray agent initialization
+docker-compose exec ray-head python -c "import redis, asyncpg, neo4j; print('Dependencies OK')"
+
+# Test memory manager connections
+docker-compose exec seedcore-api python -c "from src.seedcore.memory.mw_manager import MwManager; print('MwManager OK')"
+
+# Restart Ray services if needed
+docker-compose restart ray-head ray-worker
+```
+
 ## 📈 Performance Benchmarks
 
 ### Expected Performance
