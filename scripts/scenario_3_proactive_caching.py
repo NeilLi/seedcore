@@ -1,23 +1,27 @@
 import ray
 import time
 import os
+import asyncio
 import json
 from src.seedcore.agents.ray_actor import RayAgent
 from src.seedcore.agents.observer_agent import ObserverAgent
 from src.seedcore.utils.ray_utils import init_ray
 
-UUID_FILE_PATH = os.path.join(os.path.dirname(__file__), 'fact_uuids.json')
+# --- MODIFIED: Load the correct UUID from the artifacts directory ---
+UUID_FILE_PATH = '/app/docker/artifacts/fact_uuids.json'  # Mounted volume from docker-compose
 try:
     with open(UUID_FILE_PATH, 'r') as f:
         FACT_TO_FIND = json.load(f)["fact_Y"]
 except (FileNotFoundError, KeyError):
-    print(f"ERROR: Could not load fact_Y UUID from {UUID_FILE_PATH}. Please run populate_mlt.py first.")
+    print(f"ERROR: Could not load fact_Y UUID from {UUID_FILE_PATH}.")
+    print("This usually means the db-seed service hasn't run yet.")
+    print("Please ensure you've run 'docker-compose up -d --build' to seed the database.")
     exit(1)
 
 NUM_WORKER_AGENTS = 5
 NUM_REQUESTS_PER_AGENT = 3
 
-def run_scenario():
+async def run_scenario():
     print("--- Running Scenario 3: Pattern Recognition and Proactive Caching ---")
     init_ray()
 
@@ -26,8 +30,8 @@ def run_scenario():
     observer = ObserverAgent.remote()
     print(f"✅ Created {len(workers)} worker agents and 1 observer agent.")
 
-    # 2. Start the observer's monitoring loop in the background.
-    observer.start_monitoring_loop.remote(interval_seconds=5)
+    # 2. Observer monitoring loop starts automatically when created
+    await asyncio.sleep(2)  # Give the observer time to start
     print("✅ Observer agent monitoring loop started.")
 
     # --- PHASE 1: Generate Cache Misses ---
@@ -37,12 +41,30 @@ def run_scenario():
         for _ in range(NUM_REQUESTS_PER_AGENT):
             phase1_tasks.append(worker.find_knowledge.remote(FACT_TO_FIND))
     
-    ray.get(phase1_tasks) # Wait for all requests to complete
+    # Use asyncio.gather instead of ray.get for non-blocking execution
+    await asyncio.gather(*phase1_tasks)
     print("✅ Phase 1 complete. All workers have requested the fact, generating misses.")
+    
+    # Debug: Check hot items tracking
+    print(f"Debug: Checking hot items tracking...")
+    try:
+        from src.seedcore.memory.working_memory import _miss_counts
+        print(f"Debug: Current miss counts: {dict(_miss_counts)}")
+    except Exception as e:
+        print(f"Debug: Could not check miss counts: {e}")
+
+    # Debug: Manually trigger observer's proactive caching
+    print(f"Debug: Manually triggering observer's proactive caching...")
+    try:
+        # Call the observer's proactive caching method directly
+        result = ray.get(observer.run_proactive_caching_sync.remote())
+        print(f"Debug: Observer proactive caching result: {result}")
+    except Exception as e:
+        print(f"Debug: Error triggering observer: {e}")
 
     # --- Wait for the observer to act ---
     print("\n--- Waiting for 6 seconds to allow the Observer to detect the pattern and act... ---")
-    time.sleep(6)
+    await asyncio.sleep(6)
 
     # --- PHASE 2: Expect Cache Hits ---
     print("\n--- Phase 2: Requesting the same fact, expecting cache hits ---")
@@ -50,7 +72,8 @@ def run_scenario():
     for worker in workers:
         phase2_tasks.append(worker.find_knowledge.remote(FACT_TO_FIND))
         
-    ray.get(phase2_tasks) # Wait for all requests to complete
+    # Use asyncio.gather instead of ray.get for non-blocking execution
+    await asyncio.gather(*phase2_tasks)
     print("✅ Phase 2 complete.")
     print("\nValidation: Check the logs. The first phase should show 'Mw MISS' from workers.")
     print("The observer should log 'Hot item detected' and 'Proactively caching'.")
@@ -59,4 +82,4 @@ def run_scenario():
     print("\n--- Scenario Complete ---")
 
 if __name__ == "__main__":
-    run_scenario() 
+    asyncio.run(run_scenario()) 

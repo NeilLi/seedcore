@@ -8,15 +8,20 @@ import json
 from src.seedcore.agents.ray_actor import RayAgent
 from src.seedcore.utils.ray_utils import init_ray
 
-def load_holon_uuid(description):
-    with open("holon_ids.jsonl") as f:
-        for line in f:
-            entry = json.loads(line)
-            if entry["description"] == description:
-                return entry["uuid"]
-    raise ValueError(f"No UUID found for {description}")
+def load_holon_uuid():
+    """Load fact_X UUID from the artifacts directory."""
+    uuid_file_path = '/app/docker/artifacts/fact_uuids.json'  # Mounted volume from docker-compose
+    try:
+        with open(uuid_file_path, 'r') as f:
+            data = json.load(f)
+            return data["fact_X"]
+    except (FileNotFoundError, KeyError) as e:
+        print(f"ERROR: Could not load fact_X UUID from {uuid_file_path}.")
+        print("This usually means the db-seed service hasn't run yet.")
+        print("Please ensure you've run 'docker-compose up -d --build' to seed the database.")
+        raise e
 
-FACT_TO_FIND = load_holon_uuid("fact_X")
+FACT_TO_FIND = load_holon_uuid()
 
 RAY_ADDRESS = os.getenv("RAY_ADDRESS", "ray://ray-head:10001")
 
