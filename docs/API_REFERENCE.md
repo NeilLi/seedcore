@@ -409,77 +409,65 @@ Currently, no rate limiting is implemented. Consider implementing rate limiting 
 
 ### Scenario 1: Collaborative Task with Knowledge Gap
 
-This scenario demonstrates the multi-tier memory system's ability to handle cache misses and knowledge retrieval across memory tiers.
+**Prerequisites**:
+- Mlt (Long-Term Memory) pre-populated with test data
+- Mw (Working Memory) cache operational
+- Ray agents with memory manager integration
 
-#### Prerequisites
+**Memory Manager Endpoints**:
+- `GET /mw/{organ_id}/get/{item_id}` - Query Working Memory
+- `POST /mlt/insert_holon` - Insert data into Long-Term Memory
 
-1. **Services Running**: Ensure all Docker services are healthy
-2. **Memory Population**: Pre-populate Long-Term Memory with test data
-3. **Ray Cluster**: Verify Ray head and worker nodes are operational
+**Agent Memory Integration**:
+- `find_knowledge(fact_id)` - Implements Mw → Mlt escalation
+- `execute_collaborative_task(task_info)` - Orchestrates collaborative execution
 
-#### Memory Manager Endpoints
+**Memory Interaction Flow**:
+1. Agent queries Mw for knowledge
+2. On cache miss, escalates to Mlt
+3. Retrieves and caches knowledge in Mw
+4. Completes task with retrieved information
 
-The scenario utilizes the following memory management components:
+**Performance Metrics**:
+- Cache hit/miss ratios
+- Memory access latency
+- Task completion success rates
 
-**Working Memory (Mw)**
-- **Backend**: Redis
-- **Purpose**: Fast-access cache for active data
-- **TTL**: 45 seconds (configurable)
-- **Capacity**: Limited by Redis memory
+### Scenario 2: Critical Failure and Flashbulb Incident
 
-**Long-Term Memory (Mlt)**
-- **Backend**: PostgreSQL (PgVector) + Neo4j
-- **Purpose**: Persistent storage for knowledge retrieval
-- **Query Types**: Vector similarity + graph relationships
-- **Capacity**: Limited by database storage
+**Prerequisites**:
+- Flashbulb Memory (Mfb) MySQL table configured
+- API endpoint `/mfb/incidents` operational
+- Ray agents with FlashbulbClient integration
 
-#### Agent Memory Integration
+**Memory Manager Endpoints**:
+- `POST /mfb/incidents` - Log flashbulb incident
+- `GET /mfb/incidents/{incident_id}` - Retrieve specific incident
+- `GET /mfb/incidents` - List incidents with filtering
 
-**RayAgent Memory Methods**:
-```python
-# Knowledge retrieval with automatic escalation
-def find_knowledge(self, fact_id: str) -> Optional[Dict[str, Any]]:
-    # 1. Query Mw first (fast access)
-    # 2. On cache miss, escalate to Mlt
-    # 3. Cache retrieved knowledge in Mw
-    # 4. Return knowledge to agent
+**Agent Memory Integration**:
+- `execute_high_stakes_task(task_info)` - Simulates critical task failure
+- `FlashbulbClient.log_incident()` - HTTP client for incident logging
+- Salience score calculation and threshold checking
 
-# Collaborative task execution
-def execute_collaborative_task(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
-    # 1. Extract required knowledge from task
-    # 2. Retrieve knowledge using find_knowledge()
-    # 3. Execute task with retrieved knowledge
-    # 4. Update performance metrics in Ma
-    # 5. Return task results
-```
+**Memory Interaction Flow**:
+1. Agent executes high-stakes task
+2. Task fails with critical error
+3. Agent calculates salience score (risk × severity)
+4. If score ≥ threshold (0.7), logs incident to Mfb
+5. Full agent state and error context captured
 
-#### Memory Interaction Flow
+**Performance Metrics**:
+- Incident detection accuracy
+- Salience score calculation precision
+- Flashbulb memory write latency
+- Incident retrieval performance
 
-```
-Task Request
-    ↓
-Agent Memory Check (Ma)
-    ↓
-Working Memory Query (Mw)
-    ↓
-Cache Hit? → Yes → Use Cached Data
-    ↓ No
-Long-Term Memory Query (Mlt)
-    ↓
-Knowledge Found? → Yes → Cache in Mw → Use Data
-    ↓ No
-Task Failure (Knowledge Not Available)
-```
-
-#### Performance Metrics
-
-The scenario tracks the following metrics:
-
-- **Cache Hit Rate**: Percentage of Mw queries that result in hits
-- **Escalation Rate**: Percentage of queries that escalate to Mlt
-- **Retrieval Success Rate**: Percentage of Mlt queries that find knowledge
-- **Task Success Rate**: Percentage of tasks completed successfully
-- **Response Time**: Time from task request to completion
+**Monitoring and Debugging**:
+- Check MySQL `flashbulb_incidents` table for logged incidents
+- Monitor API logs for HTTP request details
+- Verify salience score calculations in agent logs
+- Test incident retrieval via API endpoints
 
 #### Monitoring and Debugging
 

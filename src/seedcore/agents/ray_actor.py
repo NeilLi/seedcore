@@ -28,6 +28,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# NEW: Import the FlashbulbClient
+from ..memory.flashbulb_client import FlashbulbClient
+
 @ray.remote
 class RayAgent:
     """
@@ -96,6 +99,14 @@ class RayAgent:
             logger.error(f"❌ Failed to initialize memory managers for {self.agent_id}: {e}")
             self.mw_manager = None
             self.mlt_manager = None
+        
+        # --- Add Flashbulb Client to the agent's tools ---
+        try:
+            self.mfb_client = FlashbulbClient()
+            logger.info(f"✅ Agent {self.agent_id} initialized with FlashbulbClient")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize FlashbulbClient for {self.agent_id}: {e}")
+            self.mfb_client = None
         
         logger.info(f"✅ RayAgent {self.agent_id} created with initial state")
     
@@ -401,6 +412,61 @@ class RayAgent:
             "mem_util": self.mem_util,
             "knowledge_found": knowledge is not None,
             "knowledge_content": knowledge.get('content', None) if knowledge else None
+        }
+
+    def execute_high_stakes_task(self, task_info: dict) -> dict:
+        """
+        Simulates a high-stakes task that fails, potentially triggering a
+        flashbulb memory incident.
+        """
+        logger.info(f"[{self.agent_id}] Attempting high-stakes task: {task_info.get('name')}")
+        
+        # --- 1. Simulate an unexpected failure ---
+        success = False
+        error_context = {"reason": "External API timeout", "code": 504}
+        logger.warning(f"[{self.agent_id}] Task failed! Reason: {error_context['reason']}")
+        
+        # --- 2. Calculate Salience Score ---
+        # A simple calculation based on task risk and failure severity
+        risk = task_info.get('risk', 0.5)
+        severity = 1.0 # Max severity for this type of failure
+        salience_score = risk * severity  # This will be between 0 and 1
+        logger.info(f"[{self.agent_id}] Calculated salience score: {salience_score:.2f}")
+
+        # --- 3. Trigger Flashbulb Logging if threshold is met ---
+        SALIENCE_THRESHOLD = 0.7  # Changed from 7.0 to 0.7
+        incident_logged = False
+        
+        if salience_score >= SALIENCE_THRESHOLD:
+            logger.warning(f"[{self.agent_id}] Salience threshold met! Logging to Flashbulb Memory (Mfb)...")
+            
+            if self.mfb_client:
+                # Prepare the full event data payload
+                incident_data = {
+                    "agent_state": self.get_heartbeat(), # Capture agent's full state (Ma)
+                    "failed_task": task_info,
+                    "error_context": error_context
+                }
+                
+                # Log the incident using the client
+                incident_logged = self.mfb_client.log_incident(incident_data, salience_score)
+                
+                if incident_logged:
+                    logger.info(f"[{self.agent_id}] ✅ Incident successfully logged to Flashbulb Memory")
+                else:
+                    logger.error(f"[{self.agent_id}] ❌ Failed to log incident to Flashbulb Memory")
+            else:
+                logger.error(f"[{self.agent_id}] ❌ FlashbulbClient not available")
+        
+        # Update agent's internal performance metrics
+        self.update_performance(success=False, quality=0.0, task_metadata=task_info)
+        
+        return {
+            "agent_id": self.agent_id,
+            "success": success,
+            "salience_score": salience_score,
+            "incident_logged": incident_logged,
+            "error_context": error_context
         }
     
     async def start_heartbeat_loop(self, interval_seconds: int = 10):

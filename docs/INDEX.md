@@ -106,6 +106,7 @@ curl -X POST http://localhost/tier0/agents/create \
 | Scenario | Purpose | Status | Documentation |
 |----------|---------|--------|---------------|
 | **Scenario 1: Collaborative Task with Knowledge Gap** | Demonstrates multi-tier memory cache miss handling | ✅ **Complete** | [README.md](README.md#scenario-1-collaborative-task-with-knowledge-gap-) |
+| **Scenario 2: Critical Failure and Flashbulb Incident** | Incident detection and logging | ✅ **Complete** | [README.md](README.md#scenario-2-critical-failure-and-flashbulb-incident) |
 
 ### Running Scenarios
 
