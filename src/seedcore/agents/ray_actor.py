@@ -86,12 +86,12 @@ class RayAgent:
         # --- NEW: Memory Managers for Mw and Mlt access ---
         # Initialize memory managers within the actor
         try:
-            from ..memory.working_memory import WorkingMemoryManager
+            from ..memory.working_memory import MwManager
             from ..memory.long_term_memory import LongTermMemoryManager
             
             # Create organ_id for this agent (you might want to make this configurable)
             organ_id = f"organ_for_{agent_id}"
-            self.mw_manager = WorkingMemoryManager(organ_id=organ_id)
+            self.mw_manager = MwManager(organ_id=organ_id)
             self.mlt_manager = LongTermMemoryManager()
             
             logger.info(f"✅ Agent {self.agent_id} initialized with memory managers")
@@ -303,7 +303,7 @@ class RayAgent:
         }
     
     # --- NEW: Knowledge Finding Method for Scenario 1 ---
-    def find_knowledge(self, fact_id: str) -> Optional[Dict[str, Any]]:
+    async def find_knowledge(self, fact_id: str) -> Optional[Dict[str, Any]]:
         """
         Attempts to find a piece of knowledge, implementing the Mw -> Mlt escalation.
         This is a synchronous method.
@@ -362,7 +362,7 @@ class RayAgent:
         logger.warning(f"[{self.agent_id}] 🚨 Could not find '{fact_id}' in any memory tier.")
         return None
 
-    def execute_collaborative_task(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_collaborative_task(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
         """
         Simulates executing a collaborative task that may require finding knowledge.
         This method implements the core logic for Scenario 1.
@@ -381,7 +381,7 @@ class RayAgent:
         knowledge = None
         if required_fact:
             logger.info(f"[{self.agent_id}] 📚 Task requires fact: {required_fact}")
-            knowledge = self.find_knowledge(required_fact)  # No await needed
+            knowledge = await self.find_knowledge(required_fact)  # No await needed
         
         # Determine task success based on knowledge availability
         if required_fact and not knowledge:

@@ -266,7 +266,7 @@ docker-compose logs ray-head ray-worker | grep -E "(Agent|Querying|Found)"
 **Troubleshooting**:
 ```bash
 # Check Ray agent initialization
-docker-compose exec ray-head python -c "import redis, asyncpg, neo4j; print('Dependencies OK')"
+docker-compose exec ray-head python -c "import asyncpg, neo4j; print('Dependencies OK')"
 
 # Test memory manager connections
 docker-compose exec seedcore-api python -c "from src.seedcore.memory.mw_manager import MwManager; print('MwManager OK')"
@@ -301,7 +301,7 @@ docker-compose logs ray-head ray-worker | grep -E "(Agent|Incident|Logged)"
 **Troubleshooting**:
 ```bash
 # Check Ray agent initialization
-docker-compose exec ray-head python -c "import redis, asyncpg, neo4j; print('Dependencies OK')"
+docker-compose exec ray-head python -c "import asyncpg, neo4j; print('Dependencies OK')"
 
 # Test memory manager connections
 docker-compose exec seedcore-api python -c "from src.seedcore.memory.mw_manager import MwManager; print('MwManager OK')"
