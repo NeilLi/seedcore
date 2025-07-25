@@ -1,79 +1,59 @@
-import json
 import os
+import json
 import logging
-import asyncio
-from .backends.pgvector_backend import PgVectorStore, Holon
+from typing import Optional, Dict, Any
+from .backends.pgvector_backend import PgVectorStore
 from .backends.neo4j_graph import Neo4jGraph
-from src.seedcore.memory.mw_store import MwStore
-import numpy as np
+import numpy as np # Added back for embedding
+import asyncio # Added for event loop in insert_holon
 
 logger = logging.getLogger(__name__)
-UUID_FILE_PATH = '/app/scripts/fact_uuids.json'
 
 class LongTermMemoryManager:
     def __init__(self):
         self.pg_store = PgVectorStore(os.getenv("PG_DSN", "postgresql://postgres:password@postgres:5432/postgres"))
-        self.neo4j_graph = Neo4jGraph(os.getenv("NEO4J_URI", "bolt://neo4j:7687"), auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "password")))
-        self._in_memory_holons = {}
-        self.known_uuids = {}
-        try:
-            with open(UUID_FILE_PATH, 'r') as f:
-                self.known_uuids = json.load(f)
-            logger.info(f"[{self.__class__.__name__}] Loaded known UUIDs from file.")
-        except FileNotFoundError:
-            logger.warning(f"[{self.__class__.__name__}] UUID file not found at {UUID_FILE_PATH}. Simulation will be limited.")
-        except json.JSONDecodeError:
-            logger.error(f"[{self.__class__.__name__}] Failed to parse UUID file.")
-        # Load fact_uuids.json and holon_ids.jsonl
-        fact_uuids_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../fact_uuids.json'))
-        holon_ids_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../holon_ids.jsonl'))
-        fact_uuids = {}
-        if os.path.exists(fact_uuids_path):
-            with open(fact_uuids_path) as f:
-                fact_uuids = json.load(f)
-        if os.path.exists(holon_ids_path) and fact_uuids:
-            with open(holon_ids_path) as f:
-                for line in f:
-                    entry = json.loads(line)
-                    if entry["uuid"] in fact_uuids.values():
-                        self._in_memory_holons[entry["uuid"]] = entry["meta"]
-        # Ray-native MwStore actor
-        import ray
-        ray.init(address="auto", ignore_reinit_error=True)
-        try:
-            self._mw_store = ray.get_actor("mw")
-        except ValueError:
-            self._mw_store = MwStore.options(name="mw").remote()
-        logger.info("✅ LongTermMemoryManager initialized.")
+        self.neo4j_graph = Neo4jGraph(
+            os.getenv("NEO4J_URI", "bolt://neo4j:7687"),
+            auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "password"))
+        )
+        print("✅ LongTermMemoryManager initialized.")
 
     async def incr_miss(self, fact_id: str):
         # fire-and-forget: no need to await
-        self._mw_store.incr.remote(fact_id)
+        pass # MwStore actor removed
 
     async def get_fact(self, fact_id: str):
         # Async Ray-native get
-        value_ref = self._mw_store.get.remote(fact_id)
-        value = await value_ref
-        return value
+        pass # MwStore actor removed
 
     async def hot_items(self, k: int):
         # Run queries concurrently
-        ref = self._mw_store.topn.remote(k)
-        items = await ref
-        return items
+        pass # MwStore actor removed
 
-    def query_holon_by_id(self, holon_id: str):
+    def query_holon_by_id(self, holon_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves a holon's metadata from PgVector by its ID.
+        This is a simplified but more realistic query for the scenarios.
+        """
         try:
             logger.info(f"[{self.__class__.__name__}] Querying Mlt for holon_id: {holon_id}")
-            if holon_id == self.known_uuids.get("fact_X"):
-                return {"id": holon_id, "type": "critical_fact", "content": "The launch code is 1234."}
-            elif holon_id == self.known_uuids.get("fact_Y"):
-                return {"id": holon_id, "type": "common_knowledge", "content": "The sky is blue on a clear day."}
+            
+            # Query the actual PgVector database
+            logger.info(f"[{self.__class__.__name__}] Calling pg_store.get_by_id({holon_id})")
+            result = self.pg_store.get_by_id(holon_id)
+            logger.info(f"[{self.__class__.__name__}] Database query result: {result}")
+            
+            if result:
+                logger.info(f"[{self.__class__.__name__}] Found holon: {holon_id}")
+                return result
             else:
-                logger.warning(f"[{self.__class__.__name__}] Holon '{holon_id}' not found in known UUIDs.")
+                logger.warning(f"[{self.__class__.__name__}] Holon '{holon_id}' not found in database.")
                 return None
+                
         except Exception as e:
             logger.error(f"[{self.__class__.__name__}] Error querying holon by ID '{holon_id}': {e}")
+            import traceback
+            logger.error(f"[{self.__class__.__name__}] Traceback: {traceback.format_exc()}")
             return None
 
     async def query_holons_by_similarity(self, embedding: list, limit: int = 5) -> list:
@@ -131,11 +111,46 @@ class LongTermMemoryManager:
 
     def insert_holon(self, holon_data: dict) -> bool:
         """
-        Inserts a holon into the simulated memory (for testing).
+        Inserts a holon into the Long-Term Memory database.
         """
         try:
             print(f"Inserting holon: {holon_data['vector']['id']}")
+            
+            # Create a Holon object for PgVector
+            from .backends.pgvector_backend import Holon
+            holon = Holon(
+                uuid=holon_data['vector']['id'],
+                embedding=np.array(holon_data['vector']['embedding']),
+                meta=holon_data['vector']['meta']
+            )
+            
+            # Insert into PgVector with proper event loop handling
+            try:
+                loop = asyncio.get_running_loop()
+                # We're in an async context, use asyncio.run_coroutine_threadsafe
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, self.pg_store.upsert(holon))
+                    future.result()
+            except RuntimeError:
+                # No event loop running, create a new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self.pg_store.upsert(holon))
+                loop.close()
+            
+            # Insert graph relationships into Neo4j if present
+            if 'graph' in holon_data:
+                graph_data = holon_data['graph']
+                self.neo4j_graph.upsert_edge(
+                    graph_data['src_uuid'],
+                    graph_data['rel'],
+                    graph_data['dst_uuid']
+                )
+            
+            print(f"✅ Successfully inserted holon: {holon_data['vector']['id']}")
             return True
+            
         except Exception as e:
             print(f"Error inserting holon: {e}")
             return False 

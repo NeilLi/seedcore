@@ -2,11 +2,17 @@ import ray
 import time
 import logging
 import json
+import os
 from ..memory.working_memory import MwManager
 from ..memory.long_term_memory import LongTermMemoryManager
 import asyncio
+import traceback
+import sys
 
 logger = logging.getLogger(__name__)
+
+def _fmt(exc):
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
 @ray.remote
 class ObserverAgent:
@@ -19,42 +25,81 @@ class ObserverAgent:
         # The observer still needs its own MwManager to read the miss logs
         self.mw_manager = MwManager(organ_id="system_observer")
         self.mlt_manager = LongTermMemoryManager()
-        logger.info(f"✅ {self.agent_id} initialized.")
-
-    async def run_proactive_caching(self):
-        """
-        The core logic for the observer. It finds hot items and caches them.
-        """
-        logger.info(f"[{self.agent_id}] --- Running proactive caching cycle ---")
+        # Lower threshold for testing
+        self.MISS_THRESHOLD = int(os.getenv("MISS_THRESHOLD", 2))  # was 10, now 2 for testing
+        logger.info(f"✅ {self.agent_id} initialized with MISS_THRESHOLD={self.MISS_THRESHOLD}.")
         
-        # 1. Detect hot items from Mw miss logs
-        hot_items = self.mw_manager.get_hot_items(top_n=1)
-        if not hot_items:
-            logger.info(f"[{self.agent_id}] No hot items detected in this cycle.")
-            return
+        # Start the monitoring loop automatically
+        self._start_monitoring_loop()
 
-        hot_item_id, miss_count = hot_items[0]
-        logger.warning(f"[{self.agent_id}] Hot item detected: '{hot_item_id}' with {miss_count} misses.")
-        # Debug: print the hot_item_id to ensure it's a real UUID
-        logger.info(f"[{self.agent_id}] Using hot_item_id for query: {hot_item_id}")
+    def _start_monitoring_loop(self):
+        """Start the monitoring loop in a background thread."""
+        import threading
+        import time
+        
+        def run_loop():
+            logger.info(f"[{self.agent_id}] Starting monitoring loop in background thread.")
+            cycle_count = 0
+            while True:
+                try:
+                    cycle_count += 1
+                    logger.info(f"[{self.agent_id}] Monitoring cycle #{cycle_count} starting...")
+                    # Run the proactive caching logic synchronously
+                    self.run_proactive_caching_sync()
+                    logger.info(f"[{self.agent_id}] Monitoring cycle #{cycle_count} completed, sleeping for 5s...")
+                    time.sleep(5)
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] Error in monitoring loop: {e}")
+                    time.sleep(5)
+        
+        # Start the monitoring loop in a background thread
+        thread = threading.Thread(target=run_loop, daemon=True)
+        thread.start()
+        logger.info(f"[{self.agent_id}] Monitoring loop started in background thread.")
 
-        # 2. Retrieve the full data for the hot item from Mlt
-        item_data = self.mlt_manager.query_holon_by_id(hot_item_id)
-        logger.info(f"[{self.agent_id}] Retrieved item_data for '{hot_item_id}': {item_data}")
-
-        if item_data:
-            # 3. Proactively write the item back to Mw to keep it "warm"
-            logger.info(f"[{self.agent_id}] Proactively caching '{hot_item_id}' to GLOBAL Mw...")
-            self.mw_manager.set_global_item(hot_item_id, json.dumps(item_data))
-            logger.info(f"[{self.agent_id}] ✅ Successfully cached '{hot_item_id}' to global cache.")
-        else:
-            logger.error(f"[{self.agent_id}] Could not find hot item '{hot_item_id}' in Mlt to cache it.")
-
-    async def start_monitoring_loop(self, interval_seconds: int = 10):
+    def run_proactive_caching_sync(self):
         """
-        A continuous loop that runs the caching logic periodically.
+        Synchronous version of the proactive caching logic.
         """
-        logger.info(f"[{self.agent_id}] Starting monitoring loop. Cycle interval: {interval_seconds}s.")
-        while True:
-            await self.run_proactive_caching()
-            await asyncio.sleep(interval_seconds) 
+        try:
+            logger.info(f"[{self.agent_id}] --- Running proactive caching pass")
+
+            # 1. Detect hot items from Mw miss logs
+            logger.info(f"[{self.agent_id}] Getting hot items from Mw")
+            hot_items = self.mw_manager.get_hot_items(top_n=1)
+            logger.info(f"[{self.agent_id}] Hot items found: {hot_items}")
+            
+            if not hot_items:
+                logger.info(f"[{self.agent_id}] No hot items detected in this cycle.")
+                return
+
+            hot_item_id, miss_count = hot_items[0]
+            logger.info(f"[{self.agent_id}] misses={miss_count} threshold={self.MISS_THRESHOLD}")
+            
+            if miss_count < self.MISS_THRESHOLD:
+                logger.info(f"[{self.agent_id}] Miss count {miss_count} below threshold {self.MISS_THRESHOLD}, skipping.")
+                return
+                
+            logger.warning(f"[{self.agent_id}] Hot item detected: '{hot_item_id}' with {miss_count} misses.")
+            logger.info(f"[{self.agent_id}] Using hot_item_id for query: {hot_item_id}")
+
+            # 2. Retrieve the full data for the hot item from Mlt
+            logger.info(f"[{self.agent_id}] Calling query_holon_by_id({hot_item_id})...")
+            item_data = self.mlt_manager.query_holon_by_id(hot_item_id)
+            logger.info(f"[{self.agent_id}] query_holon_by_id result: {item_data}")
+            logger.debug(f"[{self.agent_id}] DBG holon lookup for {hot_item_id} => {'HIT' if item_data else 'MISS'}")
+
+            if item_data:
+                # 3. Proactively write the item back to Mw to keep it "warm"
+                logger.info(f"[{self.agent_id}] Proactively caching '{hot_item_id}' to GLOBAL Mw...")
+                try:
+                    self.mw_manager.set_global_item(hot_item_id, json.dumps(item_data))
+                    logger.info(f"[{self.agent_id}] ✅ Successfully cached '{hot_item_id}' to global cache.")
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] Failed to cache '{hot_item_id}': {e}")
+            else:
+                logger.warning(f"[{self.agent_id}] Holon {hot_item_id} not found – skip proactive cache")
+
+        except Exception as e:
+            logger.exception(f"[{self.agent_id}] run_proactive_caching_sync crashed")
+            raise 
