@@ -1,12 +1,12 @@
 import numpy as np
 import time
-from seedcore.memory.holon_fabric import Holon
-from seedcore.memory.backends.pgvector_backend import Holon as HolonModel
-from seedcore.memory.backends.pgvector_backend import PgVectorStore
-from seedcore.memory.backends.neo4j_graph import Neo4jGraph
-from seedcore.memory.holon_fabric import HolonFabric
-from seedcore.memory.consolidation_worker import vq_vae_compress
-from seedcore.telemetry.metrics import COSTVQ, MEM_WRITES, ENERGY_SLOPE
+from .holon_fabric import Holon
+from .backends.pgvector_backend import Holon as HolonModel
+from .backends.pgvector_backend import PgVectorStore
+from .backends.neo4j_graph import Neo4jGraph
+from .holon_fabric import HolonFabric
+from .consolidation_worker import vq_vae_compress
+from ..telemetry.metrics import COSTVQ, MEM_WRITES, ENERGY_SLOPE
 
 previous_cost_vq = 0.0
 

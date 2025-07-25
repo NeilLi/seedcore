@@ -21,6 +21,7 @@ import ray
 import numpy as np
 import time
 import asyncio
+import json
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 import logging
@@ -37,6 +38,7 @@ class RayAgent:
     - Performance metrics and capability score
     - Task history and quality scores
     - Memory interaction tracking
+    - Memory managers for Mw and Mlt access
     """
     
     def __init__(self, agent_id: str, initial_role_probs: Optional[Dict[str, float]] = None):
@@ -77,6 +79,23 @@ class RayAgent:
         # 10. Timestamps for tracking
         self.created_at = time.time()
         self.last_heartbeat = time.time()
+        
+        # --- NEW: Memory Managers for Mw and Mlt access ---
+        # Initialize memory managers within the actor
+        try:
+            from ..memory.working_memory import WorkingMemoryManager
+            from ..memory.long_term_memory import LongTermMemoryManager
+            
+            # Create organ_id for this agent (you might want to make this configurable)
+            organ_id = f"organ_for_{agent_id}"
+            self.mw_manager = WorkingMemoryManager(organ_id=organ_id)
+            self.mlt_manager = LongTermMemoryManager()
+            
+            logger.info(f"✅ Agent {self.agent_id} initialized with memory managers")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize memory managers for {self.agent_id}: {e}")
+            self.mw_manager = None
+            self.mlt_manager = None
         
         logger.info(f"✅ RayAgent {self.agent_id} created with initial state")
     
@@ -270,6 +289,118 @@ class RayAgent:
             "avg_quality": sum(self.quality_scores) / len(self.quality_scores) if self.quality_scores else 0,
             "memory_writes": self.memory_writes,
             "peer_interactions_count": len(self.peer_interactions)
+        }
+    
+    # --- NEW: Knowledge Finding Method for Scenario 1 ---
+    def find_knowledge(self, fact_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Attempts to find a piece of knowledge, implementing the Mw -> Mlt escalation.
+        This is a synchronous method.
+        
+        Args:
+            fact_id: The ID of the fact to find
+            
+        Returns:
+            Optional[Dict[str, Any]]: The found knowledge or None if not found
+        """
+        logger.info(f"[{self.agent_id}] 🔍 Searching for '{fact_id}'...")
+
+        # Check if memory managers are available
+        if not self.mw_manager or not self.mlt_manager:
+            logger.error(f"[{self.agent_id}] ❌ Memory managers not available")
+            return None
+
+        # 1. Query Working Memory (Mw) first
+        logger.info(f"[{self.agent_id}] 📋 Querying Working Memory (Mw)...")
+        try:
+            cached_data = self.mw_manager.get_item(fact_id)
+            
+            if cached_data:
+                logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mw (cache hit).")
+                try:
+                    return json.loads(cached_data)  # Deserialize from JSON string
+                except json.JSONDecodeError:
+                    logger.warning(f"[{self.agent_id}] ⚠️ Failed to parse cached data as JSON")
+                    return {"raw_data": cached_data}
+        except Exception as e:
+            logger.error(f"[{self.agent_id}] ❌ Error querying Mw: {e}")
+
+        # 2. On a miss, escalate to Long-Term Memory (Mlt)
+        logger.info(f"[{self.agent_id}] ⚠️ '{fact_id}' not in Mw (cache miss). Escalating to Mlt...")
+        try:
+            long_term_data = self.mlt_manager.query_holon_by_id(fact_id)  # No await needed
+
+            if long_term_data:
+                logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mlt.")
+                
+                # 3. Cache the retrieved data back into Mw for future use
+                logger.info(f"[{self.agent_id}] 💾 Caching '{fact_id}' back to Mw...")
+                try:
+                    self.mw_manager.set_item(fact_id, json.dumps(long_term_data))
+                    logger.info(f"[{self.agent_id}] ✅ Successfully cached to Mw")
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] ❌ Failed to cache to Mw: {e}")
+                
+                return long_term_data
+            else:
+                logger.warning(f"[{self.agent_id}] ❌ '{fact_id}' not found in Mlt either.")
+                
+        except Exception as e:
+            logger.error(f"[{self.agent_id}] ❌ Error querying Mlt: {e}")
+        
+        logger.warning(f"[{self.agent_id}] 🚨 Could not find '{fact_id}' in any memory tier.")
+        return None
+
+    def execute_collaborative_task(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Simulates executing a collaborative task that may require finding knowledge.
+        This method implements the core logic for Scenario 1.
+        
+        Args:
+            task_info: Dictionary containing task information including required_fact
+            
+        Returns:
+            Dict[str, Any]: Task execution result with success status and details
+        """
+        task_name = task_info.get('name', 'Unknown Task')
+        required_fact = task_info.get('required_fact')
+        
+        logger.info(f"[{self.agent_id}] 🚀 Starting collaborative task '{task_name}'...")
+        
+        knowledge = None
+        if required_fact:
+            logger.info(f"[{self.agent_id}] 📚 Task requires fact: {required_fact}")
+            knowledge = self.find_knowledge(required_fact)  # No await needed
+        
+        # Determine task success based on knowledge availability
+        if required_fact and not knowledge:
+            success = False
+            quality = 0.1
+            logger.error(f"[{self.agent_id}] 🚨 Task failed: could not find required fact '{required_fact}'.")
+        else:
+            success = True
+            quality = 0.9 if knowledge else 0.7  # Higher quality if knowledge was found
+            logger.info(f"[{self.agent_id}] ✅ Task completed successfully.")
+            if knowledge:
+                logger.info(f"[{self.agent_id}] 📖 Used knowledge: {knowledge.get('content', 'Unknown content')}")
+        
+        # 4. Update internal performance metrics (Ma)
+        self.update_performance(success=success, quality=quality, task_metadata=task_info)
+        
+        # Update memory utilization based on task complexity
+        task_complexity = task_info.get('complexity', 0.5)
+        self.mem_util = min(1.0, self.mem_util + task_complexity * 0.1)
+        
+        return {
+            "agent_id": self.agent_id,
+            "task_name": task_name,
+            "task_processed": True,
+            "success": success,
+            "quality": quality,
+            "capability_score": self.capability_score,
+            "mem_util": self.mem_util,
+            "knowledge_found": knowledge is not None,
+            "knowledge_content": knowledge.get('content', None) if knowledge else None
         }
     
     async def start_heartbeat_loop(self, interval_seconds: int = 10):

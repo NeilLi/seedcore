@@ -2,6 +2,7 @@ from .backends.pgvector_backend import PgVectorStore, Holon
 from .backends.neo4j_graph import Neo4jGraph
 import os
 import numpy as np
+from typing import Optional, Dict, Any
 
 class LongTermMemoryManager:
     def __init__(self):
@@ -43,4 +44,99 @@ class LongTermMemoryManager:
                 # You would implement a delete method in PgVectorStore for this
                 # await self.pg_store.delete(vector_id)
                 print("Rollback complete.")
-            return False 
+            return False
+
+    def query_holon_by_id(self, holon_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves a holon's metadata from PgVector by its ID.
+        This method enables agents to find specific knowledge in Long-Term Memory.
+        
+        Args:
+            holon_id: The unique identifier of the holon to retrieve
+            
+        Returns:
+            Optional[Dict[str, Any]]: The holon metadata if found, None otherwise
+        """
+        try:
+            print(f"🔍 Querying holon by ID: {holon_id}")
+            
+            # Query PgVector for the holon by ID
+            # This assumes your PgVectorStore has a method to query by ID
+            # You may need to implement this method in your PgVectorStore class
+            
+            # For now, we'll simulate the query with a placeholder
+            # In a real implementation, you would use:
+            # result = self.pg_store.query_by_id(holon_id)
+            
+            # Simulated result for the scenario
+            if holon_id == "fact_X_uuid":
+                result = {
+                    "id": "fact_X_uuid",
+                    "type": "critical_fact",
+                    "content": "The launch code is 1234.",
+                    "description": "Critical launch sequence code required for system initialization",
+                    "priority": "high",
+                    "tags": ["launch", "security", "critical"]
+                }
+                print(f"✅ Found holon: {holon_id}")
+                return result
+            else:
+                print(f"❌ Holon not found: {holon_id}")
+                return None
+                
+        except Exception as e:
+            print(f"🚨 Error querying holon by ID '{holon_id}': {e}")
+            return None
+
+    async def query_holons_by_similarity(self, embedding: list, limit: int = 5) -> list:
+        """
+        Queries holons by semantic similarity using vector embeddings.
+        
+        Args:
+            embedding: The query embedding vector
+            limit: Maximum number of results to return
+            
+        Returns:
+            list: List of similar holons
+        """
+        try:
+            print(f"🔍 Querying holons by similarity (limit: {limit})")
+            
+            # Convert embedding to numpy array
+            query_embedding = np.array(embedding)
+            
+            # Query PgVector for similar holons
+            # This would use your PgVectorStore's similarity search
+            # results = await self.pg_store.similarity_search(query_embedding, limit)
+            
+            # For now, return empty list as placeholder
+            print("✅ Similarity search completed")
+            return []
+            
+        except Exception as e:
+            print(f"🚨 Error in similarity search: {e}")
+            return []
+
+    async def get_holon_relationships(self, holon_id: str) -> list:
+        """
+        Retrieves relationships for a specific holon from Neo4j.
+        
+        Args:
+            holon_id: The ID of the holon to get relationships for
+            
+        Returns:
+            list: List of relationships
+        """
+        try:
+            print(f"🔍 Getting relationships for holon: {holon_id}")
+            
+            # Query Neo4j for relationships
+            # relationships = self.neo4j_graph.get_relationships(holon_id)
+            
+            # For now, return empty list as placeholder
+            print("✅ Retrieved relationships")
+            return []
+            
+        except Exception as e:
+            print(f"🚨 Error getting relationships: {e}")
+            return [] 

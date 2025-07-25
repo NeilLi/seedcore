@@ -1,9 +1,9 @@
 import asyncio, os, time, numpy as np
 import ray
-from seedcore.memory.backends.pgvector_backend import PgVectorStore
-from seedcore.memory.backends.neo4j_graph      import Neo4jGraph
-from seedcore.memory.holon_fabric     import HolonFabric
-from seedcore.memory.consolidation_worker import consolidate_batch
+from .backends.pgvector_backend import PgVectorStore
+from .backends.neo4j_graph      import Neo4jGraph
+from .holon_fabric     import HolonFabric
+from .consolidation_worker import consolidate_batch
 
 @ray.remote
 def consolidation_worker(pg_dsn: str, neo_uri: str, neo_auth: tuple,

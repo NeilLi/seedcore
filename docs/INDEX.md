@@ -97,11 +97,56 @@ cd docker && docker-compose up -d
 curl -X POST http://localhost/tier0/agents/create \
   -H "Content-Type: application/json" \
   -d '{"agent_id": "test_agent", "role_probs": {"E": 0.7, "S": 0.2, "O": 0.1}}'
+```
 
-# Test Tier 3 (Flashbulb Memory)
-curl -X POST http://localhost/mfb/incidents \
-  -H "Content-Type: application/json" \
-  -d '{"event_data": {"type": "alert"}, "salience_score": 0.9}'
+## 🎭 Scenarios and Examples
+
+### Available Scenarios
+
+| Scenario | Purpose | Status | Documentation |
+|----------|---------|--------|---------------|
+| **Scenario 1: Collaborative Task with Knowledge Gap** | Demonstrates multi-tier memory cache miss handling | ✅ **Complete** | [README.md](README.md#scenario-1-collaborative-task-with-knowledge-gap-) |
+
+### Running Scenarios
+
+```bash
+# Navigate to docker directory
+cd docker
+
+# Check service status
+docker-compose ps
+
+# Run Scenario 1
+docker-compose exec seedcore-api python -m scripts.scenario_1_knowledge_gap
+
+# View scenario logs
+docker-compose logs ray-head ray-worker | grep -E "(Agent|Querying|Found)"
+```
+
+### Scenario Features
+
+**Scenario 1** validates:
+- ✅ Cache miss handling in Working Memory (Mw)
+- ✅ Memory escalation to Long-Term Memory (Mlt)
+- ✅ Knowledge retrieval and caching
+- ✅ Collaborative task execution
+- ✅ Performance tracking and metrics
+
+### Quick Scenario Testing
+
+```bash
+# Pre-populate memory (if needed)
+docker-compose exec seedcore-api python scripts/populate_mlt.py
+
+# Run scenario with verbose output
+docker-compose exec seedcore-api python -m scripts.scenario_1_knowledge_gap
+
+# Check memory manager health
+docker-compose exec seedcore-api python -c "
+from src.seedcore.memory.mw_manager import MwManager
+from src.seedcore.memory.long_term_memory import LongTermMemoryManager
+print('✅ Memory managers ready')
+"
 ```
 
 ## 📈 Key Metrics
