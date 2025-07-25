@@ -18,7 +18,6 @@
 Simple FastAPI/uvicorn server that exposes simulation controls and telemetry.
 """
 import logging
-import redis.asyncio as redis
 import os
 import numpy as np
 import random
@@ -44,7 +43,7 @@ from ..memory.adaptive_loop import (
     get_memory_metrics as new_get_memory_metrics,
     estimate_memory_gradient as new_estimate_memory_gradient
 )
-from ..memory.working_memory import WorkingMemoryManager
+from ..memory.working_memory import MwManager
 from ..memory.long_term_memory import LongTermMemoryManager
 from ..memory.holon_fabric import HolonFabric
 from ..memory.backends.pgvector_backend import PgVectorStore, Holon
@@ -981,22 +980,16 @@ def mw_set_item(organ_id: str, request: dict):
     value = request.get('value')
     if not item_id or value is None:
         return {"success": False, "message": "item_id and value are required"}
-    mw = WorkingMemoryManager(organ_id)
+    mw = MwManager(organ_id)
     mw.set_item(item_id, value)
     return {"success": True, "message": f"Item {item_id} set for organ {organ_id}"}
 
 @app.get('/mw/{organ_id}/get/{item_id}')
 def mw_get_item(organ_id: str, item_id: str):
     """Get a working memory item for an organ."""
-    mw = WorkingMemoryManager(organ_id)
+    mw = MwManager(organ_id)
     value = mw.get_item(item_id)
     return {"success": value is not None, "value": value}
-
-@app.get('/mw/{organ_id}/metrics')
-def mw_metrics(organ_id: str):
-    """Get working memory metrics for an organ."""
-    mw = WorkingMemoryManager(organ_id)
-    return mw.get_metrics()
 
 # --- Tier 2 (Mlt) Long-Term Memory Endpoints ---
 

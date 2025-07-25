@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import List
 import json
 from uuid import uuid4
+import asyncio
 
 class Holon(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -40,5 +41,35 @@ class PgVectorStore:
             vec_str = '[' + ','.join(str(x) for x in emb.tolist()) + ']'
             rows = await conn.fetch(q, vec_str, k)
             return rows
+        finally:
+            await conn.close() 
+
+    async def _get_by_id_async(self, holon_id: str):
+        q = "SELECT uuid, embedding, meta FROM holons WHERE uuid = $1"
+        conn = await self._conn()
+        try:
+            row = await conn.fetchrow(q, holon_id)
+            if row:
+                return {
+                    "id": row["uuid"],
+                    "embedding": row["embedding"],
+                    "meta": json.loads(row["meta"]) if isinstance(row["meta"], str) else row["meta"]
+                }
+            return None
+        finally:
+            await conn.close()
+
+    async def get_by_id(self, holon_id: str):
+        q = "SELECT uuid, embedding, meta FROM holons WHERE uuid = $1"
+        conn = await self._conn()
+        try:
+            row = await conn.fetchrow(q, holon_id)
+            if row:
+                return {
+                    "id": row["uuid"],
+                    "embedding": row["embedding"],
+                    "meta": json.loads(row["meta"]) if isinstance(row["meta"], str) else row["meta"]
+                }
+            return None
         finally:
             await conn.close() 

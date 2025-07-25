@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS flashbulb_incidents (
 );
 
 -- Create an index for faster lookups by time
-CREATE INDEX IF NOT EXISTS idx_flashbulb_created_at ON flashbulb_incidents(created_at);
+CREATE INDEX idx_flashbulb_created_at ON flashbulb_incidents(created_at);
 
 -- Ensure the seedcore user has proper permissions
 -- This will be done automatically by MySQL Docker image, but we can add additional grants if needed

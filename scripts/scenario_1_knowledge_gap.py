@@ -6,9 +6,19 @@ import asyncio
 import json
 
 from src.seedcore.agents.ray_actor import RayAgent
+from src.seedcore.utils.ray_utils import init_ray
+
+def load_holon_uuid(description):
+    with open("holon_ids.jsonl") as f:
+        for line in f:
+            entry = json.loads(line)
+            if entry["description"] == description:
+                return entry["uuid"]
+    raise ValueError(f"No UUID found for {description}")
+
+FACT_TO_FIND = load_holon_uuid("fact_X")
 
 RAY_ADDRESS = os.getenv("RAY_ADDRESS", "ray://ray-head:10001")
-FACT_TO_FIND = "fact_X_uuid"
 
 async def run_scenario():
     print("🚀 Starting Scenario 1: Collaborative Task with Knowledge Gap")
