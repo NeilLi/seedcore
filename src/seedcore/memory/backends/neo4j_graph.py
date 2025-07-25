@@ -19,4 +19,8 @@ class Neo4jGraph:
         else:
             q = f"MATCH (a:Holon{{uuid:$u}})-[:{rel}]-(b) RETURN b.uuid AS uuid LIMIT $k"
         with self.driver.session() as s:
-            return [r["uuid"] for r in s.run(q, u=uuid, k=k)] 
+            return [r["uuid"] for r in s.run(q, u=uuid, k=k)]
+
+    def close(self):
+        if hasattr(self, "driver"):
+            self.driver.close() 
