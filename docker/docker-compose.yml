@@ -16,6 +16,29 @@ services:
     networks:
       - seedcore-network
 
+  mysql:
+    image: mysql:8.0
+    container_name: seedcore-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-seedcore}
+      MYSQL_USER: ${MYSQL_USER:-seedcore}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-password}
+      MYSQL_ROOT_HOST: '%'
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./setup/init_mysql.sql:/docker-entrypoint-initdb.d/init_mysql.sql
+    networks:
+      - seedcore-network
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --skip-host-cache
+      --host-cache-size=0
+
   neo4j:
     image: neo4j:5.15
     container_name: seedcore-neo4j
@@ -79,7 +102,7 @@ services:
     env_file:
       - ../.env
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "80:8000"
     depends_on:
       postgres:
         condition: service_started
@@ -89,6 +112,8 @@ services:
         condition: service_started
       ray-head:
         condition: service_started
+      mysql:
+        condition: service_started
     networks:
       - seedcore-network
     volumes:
@@ -97,6 +122,7 @@ services:
 
 volumes:
   postgres_data:
+  mysql_data:
   neo4j_data:
   neo4j_logs:
   neo4j_import:
