@@ -99,19 +99,157 @@ seedcore/
 │   │   ├── tier0_manager.py       # Agent management
 │   │   └── __init__.py
 │   ├── memory/
-│   │   ├── flashbulb_memory.py    # Tier 3 implementation
-│   │   ├── system.py              # Tiers 1-2 implementation
+│   │   ├── system.py              # Memory tier implementation
+│   │   ├── flashbulb_memory.py    # Flashbulb memory (Mfb)
+│   │   ├── long_term_memory.py    # Long-term memory (Mlt)
 │   │   └── __init__.py
-│   ├── api/
-│   │   └── routers/
-│   │       └── mfb_router.py      # Flashbulb Memory API
-│   ├── database.py                # Database connections
-│   └── telemetry/
-│       └── server.py              # FastAPI server
-├── examples/
-│   ├── tier0_agent_demo.py        # Tier 0 demonstration
-│   └── test_tier0_api.py          # API testing
-└── docs/                          # This documentation
+│   ├── telemetry/
+│   │   ├── server.py              # FastAPI server
+│   │   ├── stats.py               # Statistics collection
+│   │   └── __init__.py
+│   └── __init__.py
+├── scripts/
+│   ├── scenario_1_knowledge_gap.py # Collaborative task scenario
+│   ├── populate_mlt.py            # Pre-populate long-term memory
+│   └── write_to_mw.py             # Working memory operations
+├── tests/
+└── docs/
+```
+
+## Scenarios and Examples
+
+### Scenario 1: Collaborative Task with Knowledge Gap ✅
+
+**Purpose**: Demonstrates the multi-tier memory system's ability to handle cache misses and knowledge retrieval across memory tiers.
+
+**Objective**: Two agents collaborate on a task requiring knowledge that is initially missing from fast-access memory, demonstrating the Mw → Mlt escalation pattern.
+
+#### Scenario Flow
+
+1. **Task Assignment**: A collaborative task is assigned requiring two agents
+2. **Knowledge Gap**: Agent B needs information (`fact_X_uuid`) not in its local memory
+3. **Cache Miss**: Agent B queries Mw (Working Memory) but gets a cache miss
+4. **Memory Escalation**: The query escalates to Mlt (Long-Term Memory)
+5. **Knowledge Retrieval**: Agent B successfully finds the required information in Mlt
+6. **Cache Population**: The retrieved knowledge is cached in Mw for future use
+7. **Task Completion**: Both agents successfully complete the collaborative task
+8. **Performance Update**: Agents update their internal Ma with performance metrics
+
+#### What It Validates
+
+- ✅ **Cache Miss Handling**: System correctly handles Mw miss and escalates to Mlt
+- ✅ **Mlt Integration**: Agents can effectively query and retrieve data from Long-Term Memory
+- ✅ **Knowledge Caching**: Read-through cache pattern works (retrieved knowledge populates Mw)
+- ✅ **Performance Tracking**: Agents update their internal Ma with performance metrics
+- ✅ **Collaborative Execution**: Multiple agents can work on the same task
+
+#### Running the Scenario
+
+```bash
+# 1. Ensure all services are running
+docker-compose ps
+
+# 2. Pre-populate Long-Term Memory (if needed)
+docker-compose exec seedcore-api python scripts/populate_mlt.py
+
+# 3. Run the scenario
+docker-compose exec seedcore-api python -m scripts.scenario_1_knowledge_gap
+```
+
+#### Expected Output
+
+```
+🚀 Starting Scenario 1: Collaborative Task with Knowledge Gap
+================================================================================
+✅ Ray initialized successfully
+🤖 Creating agents for collaborative task...
+✅ Agents created successfully
+
+📋 Task Definition:
+   - Name: Launch Sequence Alpha
+   - Required Fact: fact_X_uuid
+   - Complexity: 0.8
+
+============================================================
+🔄 PHASE 1: First Attempt (Cache Miss Expected)
+============================================================
+📤 Assigning task to Agent-B (who has the knowledge gap)...
+📊 Result from first attempt:
+   - Agent: Agent-B
+   - Task: Launch Sequence Alpha
+   - Success: True
+   - Quality: 0.900
+   - Knowledge Found: True
+
+============================================================
+🔄 PHASE 2: Second Attempt (Cache Hit Expected)
+============================================================
+📤 Assigning the same task again to Agent-B...
+   Expected: Cache hit in Mw this time!
+📊 Result from second attempt:
+   - Agent: Agent-B
+   - Task: Launch Sequence Alpha
+   - Success: True
+   - Quality: 0.900
+   - Knowledge Found: True
+
+============================================================
+🔄 PHASE 3: Agent-A Collaboration
+============================================================
+📤 Assigning task to Agent-A for collaboration...
+📊 Result from Agent-A:
+   - Agent: Agent-A
+   - Task: Launch Sequence Alpha
+   - Success: True
+   - Quality: 0.900
+   - Knowledge Found: True
+
+============================================================
+📈 SCENARIO ANALYSIS
+============================================================
+🔍 Comparing Phase 1 vs Phase 2:
+   - Phase 1 Success: True
+   - Phase 2 Success: True
+   - Phase 1 Quality: 0.900
+   - Phase 2 Quality: 0.900
+
+✅ Cache behavior detected: Knowledge availability changed between attempts
+
+================================================================================
+✅ SCENARIO 1 COMPLETED SUCCESSFULLY!
+================================================================================
+```
+
+#### Technical Implementation
+
+**Key Components**:
+- **RayAgent**: Stateful Ray actors with memory management capabilities
+- **MwManager**: Working Memory manager with Redis backend
+- **LongTermMemoryManager**: Long-term memory with PgVector and Neo4j backends
+- **Memory Escalation Logic**: Automatic fallback from Mw to Mlt on cache misses
+
+**Memory Interaction Flow**:
+```
+Agent Task Request → Mw Query → Cache Miss → Mlt Query → Knowledge Retrieval → Mw Cache Update → Task Completion
+```
+
+#### Troubleshooting
+
+**Common Issues**:
+1. **ModuleNotFoundError**: Ensure all dependencies are installed in Ray containers
+2. **Connection Errors**: Verify all services (Redis, PostgreSQL, Neo4j) are running
+3. **Agent Initialization Failures**: Check Ray cluster status and memory manager connections
+
+**Debug Commands**:
+```bash
+# Check service status
+docker-compose ps
+
+# View Ray logs
+docker-compose logs ray-head ray-worker
+
+# Test memory manager connections
+docker-compose exec seedcore-api python -c "from src.seedcore.memory.mw_manager import MwManager; print('MwManager OK')"
 ```
 
 ## Quick Start Guide

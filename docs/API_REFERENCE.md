@@ -405,6 +405,109 @@ Returns overall system health status.
 
 Currently, no rate limiting is implemented. Consider implementing rate limiting for production use.
 
+## Scenarios
+
+### Scenario 1: Collaborative Task with Knowledge Gap
+
+This scenario demonstrates the multi-tier memory system's ability to handle cache misses and knowledge retrieval across memory tiers.
+
+#### Prerequisites
+
+1. **Services Running**: Ensure all Docker services are healthy
+2. **Memory Population**: Pre-populate Long-Term Memory with test data
+3. **Ray Cluster**: Verify Ray head and worker nodes are operational
+
+#### Memory Manager Endpoints
+
+The scenario utilizes the following memory management components:
+
+**Working Memory (Mw)**
+- **Backend**: Redis
+- **Purpose**: Fast-access cache for active data
+- **TTL**: 45 seconds (configurable)
+- **Capacity**: Limited by Redis memory
+
+**Long-Term Memory (Mlt)**
+- **Backend**: PostgreSQL (PgVector) + Neo4j
+- **Purpose**: Persistent storage for knowledge retrieval
+- **Query Types**: Vector similarity + graph relationships
+- **Capacity**: Limited by database storage
+
+#### Agent Memory Integration
+
+**RayAgent Memory Methods**:
+```python
+# Knowledge retrieval with automatic escalation
+def find_knowledge(self, fact_id: str) -> Optional[Dict[str, Any]]:
+    # 1. Query Mw first (fast access)
+    # 2. On cache miss, escalate to Mlt
+    # 3. Cache retrieved knowledge in Mw
+    # 4. Return knowledge to agent
+
+# Collaborative task execution
+def execute_collaborative_task(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
+    # 1. Extract required knowledge from task
+    # 2. Retrieve knowledge using find_knowledge()
+    # 3. Execute task with retrieved knowledge
+    # 4. Update performance metrics in Ma
+    # 5. Return task results
+```
+
+#### Memory Interaction Flow
+
+```
+Task Request
+    ↓
+Agent Memory Check (Ma)
+    ↓
+Working Memory Query (Mw)
+    ↓
+Cache Hit? → Yes → Use Cached Data
+    ↓ No
+Long-Term Memory Query (Mlt)
+    ↓
+Knowledge Found? → Yes → Cache in Mw → Use Data
+    ↓ No
+Task Failure (Knowledge Not Available)
+```
+
+#### Performance Metrics
+
+The scenario tracks the following metrics:
+
+- **Cache Hit Rate**: Percentage of Mw queries that result in hits
+- **Escalation Rate**: Percentage of queries that escalate to Mlt
+- **Retrieval Success Rate**: Percentage of Mlt queries that find knowledge
+- **Task Success Rate**: Percentage of tasks completed successfully
+- **Response Time**: Time from task request to completion
+
+#### Monitoring and Debugging
+
+**Key Log Messages**:
+```
+✅ WorkingMemoryManager for Organ 'organ_for_Agent-X' connected to Redis.
+✅ LongTermMemoryManager initialized.
+🔍 Querying holon by ID: fact_X_uuid
+✅ Found holon: fact_X_uuid
+❌ Failed to initialize memory managers for Agent-X: No module named 'redis'
+```
+
+**Health Check Commands**:
+```bash
+# Check memory manager connections
+docker-compose exec seedcore-api python -c "
+from src.seedcore.memory.mw_manager import MwManager
+from src.seedcore.memory.long_term_memory import LongTermMemoryManager
+print('Memory managers OK')
+"
+
+# Test Ray agent initialization
+docker-compose exec ray-head python -c "
+from src.seedcore.agents.ray_actor import RayAgent
+print('RayAgent OK')
+"
+```
+
 ## Testing Examples
 
 ### Using curl

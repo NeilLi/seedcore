@@ -75,6 +75,11 @@ services:
       dockerfile: Dockerfile.ray
     container_name: ray-head
     shm_size: '2gb'
+    working_dir: /app
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ..:/app  # Mounts the project root into /app in the container
     ports:
       - "8265:8265"
       - "10001:10001"
@@ -88,6 +93,11 @@ services:
       dockerfile: Dockerfile.ray
     container_name: ray-worker
     shm_size: '2gb'
+    working_dir: /app
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ..:/app  # Mounts the project root into /app in the container
     depends_on:
       - ray-head
     networks:
@@ -99,6 +109,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     container_name: seedcore-api
+    working_dir: /app
+    environment:
+      - PYTHONPATH=/app
     env_file:
       - ../.env
     ports:
@@ -117,7 +130,7 @@ services:
     networks:
       - seedcore-network
     volumes:
-      - ../src:/app/src
+      - ..:/app  # Mounts the project root into /app in the container
     command: ["uvicorn", "src.seedcore.telemetry.server:app", "--host", "0.0.0.0", "--port", "8000"]
 
 volumes:

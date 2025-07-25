@@ -26,7 +26,7 @@ import uuid
 from fastapi import FastAPI, Depends, HTTPException, Request
 from typing import List, Dict
 import time
-from seedcore.telemetry.stats import StatsCollector
+from ..telemetry.stats import StatsCollector
 from ..energy.api import energy_gradient_payload, _ledger
 from ..energy.pair_stats import PairStatsTracker
 from ..control.fast_loop import fast_loop_select_agent
@@ -49,11 +49,11 @@ from ..memory.long_term_memory import LongTermMemoryManager
 from ..memory.holon_fabric import HolonFabric
 from ..memory.backends.pgvector_backend import PgVectorStore, Holon
 from ..memory.backends.neo4j_graph import Neo4jGraph
-from seedcore.memory.consolidation_logic import consolidate_batch
+from ..memory.consolidation_logic import consolidate_batch
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi import Response
-from seedcore.telemetry.metrics import COSTVQ, ENERGY_SLOPE, MEM_WRITES
-from src.seedcore.control.memory.meta_controller import adjust
+from ..telemetry.metrics import COSTVQ, ENERGY_SLOPE, MEM_WRITES
+from ..control.memory.meta_controller import adjust
 import asyncio
 from ..api.routers.mfb_router import mfb_router
 
@@ -235,7 +235,7 @@ async def sync_counters():
         total, = await c.fetchrow("SELECT COUNT(*) FROM holons;")
         MEM_WRITES.labels(tier="Mlt").inc(total)
         avg_cost, = await c.fetchrow("SELECT AVG((meta->>'stored_bytes')::float / GREATEST((meta->>'raw_bytes')::int,1)) FROM holons")
-        from seedcore.telemetry.metrics import COSTVQ
+        from ..telemetry.metrics import COSTVQ
         COSTVQ.set(avg_cost or 0)
     finally:
         await c.close()
@@ -728,7 +728,7 @@ async def create_relationship(rel_data: dict):
     return {"message": "Relationship created successfully"}
 
 import os
-from seedcore.memory.consolidation_task import consolidation_worker
+from ..memory.consolidation_task import consolidation_worker
 @app.post("/admin/consolidate_once")
 async def consolidate_once(batch: int = 10, tau: float = 0.3):
     mw = dict(list(app.state.stats.mw.items())[:batch])   # freeze a snapshot
@@ -750,12 +750,10 @@ def write_to_mw():
 
 @app.get("/admin/mw_len", include_in_schema=False)
 async def mw_len():
-    from src.seedcore.telemetry.server import mw_cache
     return {"mw_len": len(mw_cache)}
 
 @app.get("/admin/debug_ids", include_in_schema=False)
 async def debug_ids():
-    from src.seedcore.telemetry.server import mw_cache
     return {
         "mw_writer": id(mw_cache),
         "mw_stats": id(app.state.stats.mw)
@@ -775,8 +773,8 @@ async def metrics():
 @app.get("/health")
 async def health():
     import time
-    from seedcore.telemetry.stats import StatsCollector
-    from seedcore.telemetry.metrics import ENERGY_SLOPE
+    from ..telemetry.stats import StatsCollector
+    from ..telemetry.metrics import ENERGY_SLOPE
     mw_staleness = app.state.stats.mw_stats().get("avg_staleness_s", 0)
     energy_slope = ENERGY_SLOPE._value.get()
     # Track how long energy_slope has been positive
@@ -840,7 +838,7 @@ async def ray_connect(request: dict):
         if not host:
             return {"error": "Host is required"}
         
-        from seedcore.config.ray_config import configure_ray_remote
+        from ..config.ray_config import configure_ray_remote
         configure_ray_remote(host, port, password)
         
         success = init_ray(force_reinit=True)

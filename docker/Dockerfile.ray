@@ -3,7 +3,7 @@ FROM rayproject/ray:latest-cpu
 
 RUN conda install -c conda-forge python=3.12 -y
 RUN pip install "ray[default]"
-RUN pip install numpy pandas scipy scikit-learn matplotlib seaborn jupyter
+RUN pip install numpy pandas scipy scikit-learn matplotlib seaborn jupyter redis asyncpg neo4j
 
 ENV PATH=/opt/conda/envs/ray/bin:$PATH
 

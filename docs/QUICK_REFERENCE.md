@@ -238,6 +238,43 @@ git commit -m "feat: add new feature"
 git push origin main
 ```
 
+## 🎯 Scenarios
+
+### Scenario 1: Collaborative Task with Knowledge Gap
+
+**Purpose**: Demonstrates multi-tier memory system cache miss handling and knowledge retrieval.
+
+```bash
+# 1. Check service status
+docker-compose ps
+
+# 2. Pre-populate Long-Term Memory (if needed)
+docker-compose exec seedcore-api python scripts/populate_mlt.py
+
+# 3. Run the scenario
+docker-compose exec seedcore-api python -m scripts.scenario_1_knowledge_gap
+
+# 4. View scenario logs
+docker-compose logs ray-head ray-worker | grep -E "(Agent|Querying|Found)"
+```
+
+**Expected Behavior**:
+- Phase 1: Cache miss in Mw, escalation to Mlt, knowledge retrieval
+- Phase 2: Cache hit in Mw (knowledge now cached)
+- Phase 3: Collaborative task completion with both agents
+
+**Troubleshooting**:
+```bash
+# Check Ray agent initialization
+docker-compose exec ray-head python -c "import redis, asyncpg, neo4j; print('Dependencies OK')"
+
+# Test memory manager connections
+docker-compose exec seedcore-api python -c "from src.seedcore.memory.mw_manager import MwManager; print('MwManager OK')"
+
+# Restart Ray services if needed
+docker-compose restart ray-head ray-worker
+```
+
 ## 📈 Performance Benchmarks
 
 ### Expected Performance
