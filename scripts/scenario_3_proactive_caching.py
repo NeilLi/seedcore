@@ -8,7 +8,7 @@ from src.seedcore.agents.observer_agent import ObserverAgent
 from src.seedcore.utils.ray_utils import init_ray
 
 # --- MODIFIED: Load the correct UUID from the artifacts directory ---
-UUID_FILE_PATH = '/app/docker/artifacts/fact_uuids.json'  # Mounted volume from docker-compose
+UUID_FILE_PATH = '/data/fact_uuids.json'  # Mounted volume from docker-compose
 try:
     with open(UUID_FILE_PATH, 'r') as f:
         FACT_TO_FIND = json.load(f)["fact_Y"]
@@ -27,12 +27,22 @@ async def run_scenario():
 
     # 1. Create a pool of worker agents and one observer agent
     workers = [RayAgent.remote(agent_id=f"Worker-{i}") for i in range(NUM_WORKER_AGENTS)]
-    observer = ObserverAgent.remote()
+    
+    # Try to get existing observer or create new one with fixed name
+    try:
+        observer = ray.get_actor("observer", namespace="seedcore")
+        print("✅ Using existing observer agent.")
+    except ValueError:
+        # Create new observer with fixed name (no timestamp)
+        observer = ObserverAgent.options(name="observer", namespace="seedcore", lifetime="detached").remote()
+        print("✅ Created new observer agent.")
+    
     print(f"✅ Created {len(workers)} worker agents and 1 observer agent.")
-
-    # 2. Observer monitoring loop starts automatically when created
-    await asyncio.sleep(2)  # Give the observer time to start
-    print("✅ Observer agent monitoring loop started.")
+    
+    # Kick the async bootstrap *once* and wait a second
+    await observer.ready.remote()
+    await asyncio.sleep(1)
+    print("✅ Observer agent ready (monitoring loop starts automatically).")
 
     # --- PHASE 1: Generate Cache Misses ---
     print("\n--- Phase 1: Generating cache misses from all workers ---")
@@ -45,23 +55,6 @@ async def run_scenario():
     await asyncio.gather(*phase1_tasks)
     print("✅ Phase 1 complete. All workers have requested the fact, generating misses.")
     
-    # Debug: Check hot items tracking
-    print(f"Debug: Checking hot items tracking...")
-    try:
-        from src.seedcore.memory.working_memory import _miss_counts
-        print(f"Debug: Current miss counts: {dict(_miss_counts)}")
-    except Exception as e:
-        print(f"Debug: Could not check miss counts: {e}")
-
-    # Debug: Manually trigger observer's proactive caching
-    print(f"Debug: Manually triggering observer's proactive caching...")
-    try:
-        # Call the observer's proactive caching method directly
-        result = ray.get(observer.run_proactive_caching_sync.remote())
-        print(f"Debug: Observer proactive caching result: {result}")
-    except Exception as e:
-        print(f"Debug: Error triggering observer: {e}")
-
     # --- Wait for the observer to act ---
     print("\n--- Waiting for 6 seconds to allow the Observer to detect the pattern and act... ---")
     await asyncio.sleep(6)

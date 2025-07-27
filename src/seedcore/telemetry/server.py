@@ -25,6 +25,7 @@ import uuid
 from fastapi import FastAPI, Depends, HTTPException, Request
 from typing import List, Dict
 import time
+# import redis
 from ..telemetry.stats import StatsCollector
 from ..energy.api import energy_gradient_payload, _ledger
 from ..energy.pair_stats import PairStatsTracker
@@ -55,6 +56,8 @@ from ..telemetry.metrics import COSTVQ, ENERGY_SLOPE, MEM_WRITES
 from ..control.memory.meta_controller import adjust
 import asyncio
 from ..api.routers.mfb_router import mfb_router
+from ..config.ray_config import get_ray_config
+from ..utils.ray_utils import init_ray, get_ray_cluster_info
 
 # --- Persistent State ---
 # Create a single, persistent registry when the server starts.
@@ -120,19 +123,6 @@ async def startup_event():
     # Initialize memory system
     MEMORY_SYSTEM = SharedMemorySystem()
     app.state.mem = MEMORY_SYSTEM
-    
-    # Initialize Redis client if configured
-    redis_url = os.getenv('REDIS_URL')
-    if redis_url:
-        try:
-            app.state.redis = redis.from_url(redis_url)
-            logging.info(f"Redis client initialized: {redis_url}")
-        except Exception as e:
-            logging.error(f"Failed to initialize Redis: {e}")
-            app.state.redis = None
-    else:
-        app.state.redis = None
-        logging.info("Redis not configured, running without Redis")
     
     # Initialize Ray with flexible configuration
     try:
@@ -210,7 +200,6 @@ async def start_consolidator():
                     tau=app.state.controller.tau,
                     batch=128,
                     kappa=app.state.controller.kappa,
-                    redis=app.state.redis
                 )
                 logging.info("✓ consolidated %d", n)
                 tick += 1

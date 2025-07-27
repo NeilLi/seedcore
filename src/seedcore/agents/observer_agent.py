@@ -1,105 +1,124 @@
-import ray
-import time
-import logging
-import json
-import os
-from ..memory.working_memory import MwManager
-from ..memory.long_term_memory import LongTermMemoryManager
+#!/usr/bin/env python3
+"""
+Observer Agent - Monitors memory patterns and performs proactive caching.
+"""
+
 import asyncio
-import traceback
+import json
+import logging
+import os
+import ray
 import sys
+logging.basicConfig(
+    stream=sys.stdout,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    level=logging.INFO,
+    force=True,  # Overwrites Ray’s default handlers (Python ≥3.8)
+)
+
+from ..memory.working_memory import get_miss_tracker, get_shared_cache
+from ..memory.long_term_memory import LongTermMemoryManager
 
 logger = logging.getLogger(__name__)
-
-def _fmt(exc):
-    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
 @ray.remote
 class ObserverAgent:
     """
-    An agent that monitors memory patterns and performs optimizations,
+    A pure-async agent that monitors memory patterns and performs optimizations,
     like proactive caching.
     """
+    
+    # ---------- sync bootstrap ----------
     def __init__(self):
         self.agent_id = "Observer-Agent"
-        # The observer still needs its own MwManager to read the miss logs
-        self.mw_manager = MwManager(organ_id="system_observer")
-        self.mlt_manager = LongTermMemoryManager()
-        # Lower threshold for testing
-        self.MISS_THRESHOLD = int(os.getenv("MISS_THRESHOLD", 2))  # was 10, now 2 for testing
-        logger.info(f"✅ {self.agent_id} initialized with MISS_THRESHOLD={self.MISS_THRESHOLD}.")
-        
-        # Start the monitoring loop automatically
-        self._start_monitoring_loop()
+        self.MISS_THRESHOLD = int(os.getenv("MISS_THRESHOLD", 2))
+        # flag so we do the async part exactly once
+        self._started = False
+        logger.info("🚀 %s created, waiting for event-loop …", self.agent_id)
 
-    def _start_monitoring_loop(self):
-        """Start the monitoring loop in a background thread."""
-        import threading
-        import time
-        
-        def run_loop():
-            logger.info(f"[{self.agent_id}] Starting monitoring loop in background thread.")
-            cycle_count = 0
-            while True:
-                try:
-                    cycle_count += 1
-                    logger.info(f"[{self.agent_id}] Monitoring cycle #{cycle_count} starting...")
-                    # Run the proactive caching logic synchronously
-                    self.run_proactive_caching_sync()
-                    logger.info(f"[{self.agent_id}] Monitoring cycle #{cycle_count} completed, sleeping for 5s...")
-                    time.sleep(5)
-                except Exception as e:
-                    logger.error(f"[{self.agent_id}] Error in monitoring loop: {e}")
-                    time.sleep(5)
-        
-        # Start the monitoring loop in a background thread
-        thread = threading.Thread(target=run_loop, daemon=True)
-        thread.start()
-        logger.info(f"[{self.agent_id}] Monitoring loop started in background thread.")
+    # ---------- one-shot async bootstrap ----------
+    async def _async_init(self):
+        if self._started:              # idempotent
+            logger.info("[%s] _async_init already started, skipping", self.agent_id)
+            return
+        self._started = True
+        logger.info("[%s] Starting _async_init", self.agent_id)
 
-    def run_proactive_caching_sync(self):
-        """
-        Synchronous version of the proactive caching logic.
-        """
+        # singleton actors
+        self.miss_tracker = get_miss_tracker()
+        self.mw           = get_shared_cache()
+
+        # DB client
+        self.ltm_manager  = LongTermMemoryManager()
+        logger.info("✅ %s fully initialised (MISS_THRESHOLD=%s)",
+                    self.agent_id, self.MISS_THRESHOLD)
+
+        # start background task *inside* the actor's loop
+        logger.info("[%s] Starting monitor loop", self.agent_id)
+        asyncio.create_task(self.monitor())
+
+    # ---------- public no-op used only to kick the async init ----------
+    async def ready(self):
+        """Ray call that triggers async bootstrap exactly once."""
+        logger.info("[%s] ready() called", self.agent_id)
+        await self._async_init()
+
+    # ---------- background monitor ----------
+    async def monitor(self):
+        logger.info("[%s] monitor loop started.", self.agent_id)
+        while True:
+            try:
+                logger.info("[%s] About to call _proactive_pass", self.agent_id)
+                await self._proactive_pass()
+                logger.info("[%s] _proactive_pass completed successfully", self.agent_id)
+            except Exception as e:
+                logger.exception("[%s] monitor pass crashed: %s", self.agent_id, e)
+            logger.info("[%s] Sleeping for 2 seconds", self.agent_id)
+            await asyncio.sleep(2)
+
+    async def _proactive_pass(self):
+        logger.info("[%s] Starting _proactive_pass", self.agent_id)
+        
         try:
-            logger.info(f"[{self.agent_id}] --- Running proactive caching pass")
-
-            # 1. Detect hot items from Mw miss logs
-            logger.info(f"[{self.agent_id}] Getting hot items from Mw")
-            hot_items = self.mw_manager.get_hot_items(top_n=1)
-            logger.info(f"[{self.agent_id}] Hot items found: {hot_items}")
-            
-            if not hot_items:
-                logger.info(f"[{self.agent_id}] No hot items detected in this cycle.")
-                return
-
-            hot_item_id, miss_count = hot_items[0]
-            logger.info(f"[{self.agent_id}] misses={miss_count} threshold={self.MISS_THRESHOLD}")
-            
-            if miss_count < self.MISS_THRESHOLD:
-                logger.info(f"[{self.agent_id}] Miss count {miss_count} below threshold {self.MISS_THRESHOLD}, skipping.")
-                return
-                
-            logger.warning(f"[{self.agent_id}] Hot item detected: '{hot_item_id}' with {miss_count} misses.")
-            logger.info(f"[{self.agent_id}] Using hot_item_id for query: {hot_item_id}")
-
-            # 2. Retrieve the full data for the hot item from Mlt
-            logger.info(f"[{self.agent_id}] Calling query_holon_by_id({hot_item_id})...")
-            item_data = self.mlt_manager.query_holon_by_id(hot_item_id)
-            logger.info(f"[{self.agent_id}] query_holon_by_id result: {item_data}")
-            logger.debug(f"[{self.agent_id}] DBG holon lookup for {hot_item_id} => {'HIT' if item_data else 'MISS'}")
-
-            if item_data:
-                # 3. Proactively write the item back to Mw to keep it "warm"
-                logger.info(f"[{self.agent_id}] Proactively caching '{hot_item_id}' to GLOBAL Mw...")
-                try:
-                    self.mw_manager.set_global_item(hot_item_id, json.dumps(item_data))
-                    logger.info(f"[{self.agent_id}] ✅ Successfully cached '{hot_item_id}' to global cache.")
-                except Exception as e:
-                    logger.error(f"[{self.agent_id}] Failed to cache '{hot_item_id}': {e}")
-            else:
-                logger.warning(f"[{self.agent_id}] Holon {hot_item_id} not found – skip proactive cache")
-
+            hot_items = await self.miss_tracker.get_top_n.remote(1)
+            logger.info("[%s] Got hot_items: %s", self.agent_id, hot_items)
         except Exception as e:
-            logger.exception(f"[{self.agent_id}] run_proactive_caching_sync crashed")
-            raise 
+            logger.exception("[%s] Error getting hot items: %s", self.agent_id, e)
+            return
+        
+        if not hot_items:
+            logger.info("[%s] No hot items found", self.agent_id)
+            return
+            
+        uuid, miss_cnt = hot_items[0]
+        logger.info("[%s] Processing item %s with %s misses (threshold: %s)", 
+                   self.agent_id, uuid, miss_cnt, self.MISS_THRESHOLD)
+        
+        if miss_cnt < self.MISS_THRESHOLD:
+            logger.info("[%s] Miss count %s below threshold %s, skipping", 
+                       self.agent_id, miss_cnt, self.MISS_THRESHOLD)
+            return
+
+        logger.warning("[%s] Hot item detected: %s (%s misses)",
+                       self.agent_id, uuid, miss_cnt)
+        
+        # Query the database for the hot item
+        try:
+            logger.info("[%s] Querying LTM for %s", self.agent_id, uuid)
+            data = await self.ltm_manager.query_holon_by_id_async(uuid)
+            logger.info("[%s] LTM query result type: %s, value: %s", 
+                       self.agent_id, type(data), str(data)[:100] if data else "None")
+            
+            if not data:
+                logger.warning("[%s] LTM returned no data for %s", self.agent_id, uuid)
+                return
+
+            # Proactively cache the item using the correct global key format
+            global_key = f"global:item:{uuid}"
+            logger.info("[%s] Attempting to cache with key: %s", self.agent_id, global_key)
+            
+            await self.mw.set.remote(global_key, json.dumps(data))
+            logger.info("[%s] ✅ Proactively cached %s", self.agent_id, uuid)
+            
+        except Exception as e:
+            logger.exception("[%s] Error in _proactive_pass for %s: %s", self.agent_id, uuid, e) 

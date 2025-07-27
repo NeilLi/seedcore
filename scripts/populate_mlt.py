@@ -17,14 +17,17 @@ from src.seedcore.memory.long_term_memory import LongTermMemoryManager
 # Save UUIDs to artifacts directory for inspection
 UUID_FILE_PATH = '/data/fact_uuids.json'  # Mounted volume in docker-compose
 
+# Valid dummy UUID for health check
+DUMMY_UUID = "00000000-0000-0000-0000-000000000000"
+
 def populate_all_facts():
     print("Connecting to Long-Term Memory...")
     mlt = LongTermMemoryManager()
     
     # Check if data already exists to prevent double-seeding
     try:
-        # Simple check: try to query for a known fact
-        test_result = mlt.query_holon_by_id("test_check")
+        # Simple check: try to query for a known fact using valid UUID
+        test_result = mlt.query_holon_by_id(DUMMY_UUID)
         if test_result is not None:
             print("✅ Data already exists in Long-Term Memory. Skipping population.")
             return

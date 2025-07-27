@@ -306,7 +306,7 @@ class RayAgent:
     async def find_knowledge(self, fact_id: str) -> Optional[Dict[str, Any]]:
         """
         Attempts to find a piece of knowledge, implementing the Mw -> Mlt escalation.
-        This is a synchronous method.
+        This is an async method that uses non-blocking calls.
         
         Args:
             fact_id: The ID of the fact to find
@@ -321,10 +321,10 @@ class RayAgent:
             logger.error(f"[{self.agent_id}] ❌ Memory managers not available")
             return None
 
-        # 1. Query Working Memory (Mw) first
+        # 1. Query Working Memory (Mw) first using async method
         logger.info(f"[{self.agent_id}] 📋 Querying Working Memory (Mw)...")
         try:
-            cached_data = self.mw_manager.get_item(fact_id)
+            cached_data = await self.mw_manager.get_item_async(fact_id)
             
             if cached_data:
                 logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mw (cache hit).")
