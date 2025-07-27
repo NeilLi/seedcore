@@ -10,7 +10,7 @@ from src.seedcore.utils.ray_utils import init_ray
 
 def load_holon_uuid():
     """Load fact_X UUID from the artifacts directory."""
-    uuid_file_path = '/app/docker/artifacts/fact_uuids.json'  # Mounted volume from docker-compose
+    uuid_file_path = '/data/fact_uuids.json'  # Mounted volume from docker-compose
     try:
         with open(uuid_file_path, 'r') as f:
             data = json.load(f)

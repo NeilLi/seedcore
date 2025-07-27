@@ -10,7 +10,7 @@ from ..telemetry.metrics import COSTVQ, MEM_WRITES, ENERGY_SLOPE
 
 previous_cost_vq = 0.0
 
-async def consolidate_batch(fabric, mw: dict, tau: float, batch: int = 128, kappa: float = 0.5, redis=None) -> int:
+async def consolidate_batch(fabric, mw: dict, tau: float, batch: int = 128, kappa: float = 0.5) -> int:
     """
     Adaptive consolidation loop:
     - TD-priority sampling (kappa)
@@ -58,9 +58,9 @@ async def consolidate_batch(fabric, mw: dict, tau: float, batch: int = 128, kapp
         mw.pop(k, None)
         n_written += 1
         # Shadow-KV debug text (optional, if redis provided)
-        if redis and 'text' in payload:
-            await redis.lpush('debug:holons', payload['text'][:200])
-            await redis.ltrim('debug:holons', 0, 999)
+        # if redis and 'text' in payload:
+        #     await redis.lpush('debug:holons', payload['text'][:200])
+        #     await redis.ltrim('debug:holons', 0, 999)
     # After batch, update energy slope
     slope = previous_cost_vq - cost_vq
     ENERGY_SLOPE.set(slope)

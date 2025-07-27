@@ -56,6 +56,27 @@ class LongTermMemoryManager:
             logger.error(f"[{self.__class__.__name__}] Traceback: {traceback.format_exc()}")
             return None
 
+    async def query_holon_by_id_async(self, holon_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Async version of query_holon_by_id for use in async code.
+        """
+        try:
+            logger.info(f"[{self.__class__.__name__}] (async) Querying Mlt for holon_id: {holon_id}")
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, self.pg_store.get_by_id, holon_id)
+            logger.info(f"[{self.__class__.__name__}] (async) Database query result: {result}")
+            if result:
+                logger.info(f"[{self.__class__.__name__}] (async) Found holon: {holon_id}")
+                return result
+            else:
+                logger.warning(f"[{self.__class__.__name__}] (async) Holon '{holon_id}' not found in database.")
+                return None
+        except Exception as e:
+            logger.error(f"[{self.__class__.__name__}] (async) Error querying holon by ID '{holon_id}': {e}")
+            import traceback
+            logger.error(f"[{self.__class__.__name__}] (async) Traceback: {traceback.format_exc()}")
+            return None
+
     async def query_holons_by_similarity(self, embedding: list, limit: int = 5) -> list:
         """
         Queries holons by semantic similarity using vector embeddings.
