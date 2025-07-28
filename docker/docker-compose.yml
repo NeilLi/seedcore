@@ -109,10 +109,17 @@ services:
       context: .
       dockerfile: Dockerfile.ray
     container_name: ray-head
-    shm_size: '2gb'
+    shm_size: '4gb'
     working_dir: /app
     environment:
-      - PYTHONPATH=/app
+      - PYTHONPATH=/app:/app/src:${PYTHONPATH}
+      # ── stream every worker's stdout/stderr to the container log ──
+      - RAY_worker_stdout_file=/dev/stdout
+      - RAY_worker_stderr_file=/dev/stderr
+      # ── keep the driver  (seedcore‑api)  log lines too ──
+      - RAY_log_to_driver=1
+      # ── lower Ray's own log level so we still see our INFO lines ──
+      - RAY_BACKEND_LOG_LEVEL=info
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
@@ -125,7 +132,13 @@ services:
         condition: service_completed_successfully
     networks:
       - seedcore-network
-    command: ray start --head --dashboard-host 0.0.0.0 --num-cpus 1 --block
+    command: >
+      ray start --head
+                --dashboard-host 0.0.0.0
+                --dashboard-port 8265
+                --include-dashboard false
+                --num-cpus 1
+                --block
 
   ray-worker:
     build:
@@ -135,7 +148,14 @@ services:
     shm_size: '2gb'
     working_dir: /app
     environment:
-      - PYTHONPATH=/app
+      - PYTHONPATH=/app:/app/src:${PYTHONPATH}
+      # ── stream every worker's stdout/stderr to the container log ──
+      - RAY_worker_stdout_file=/dev/stdout
+      - RAY_worker_stderr_file=/dev/stderr
+      # ── keep the driver  (seedcore‑api)  log lines too ──
+      - RAY_log_to_driver=1
+      # ── lower Ray's own log level so we still see our INFO lines ──
+      - RAY_BACKEND_LOG_LEVEL=info
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
@@ -148,6 +168,20 @@ services:
       - seedcore-network
     command: ray start --address=ray-head:6379 --num-cpus 1 --block
 
+  ray-log-forwarder:
+    image: alpine:latest
+    container_name: ray-log-forwarder
+    volumes:
+      - ray_logs:/tmp/ray:ro
+    command: sh -c "while true; do find /tmp/ray -name '*.out' -type f -exec tail -f {} + 2>/dev/null || sleep 1; done"
+    depends_on:
+      ray-head:
+        condition: service_started
+      ray-worker:
+        condition: service_started
+    networks:
+      - seedcore-network
+
   seedcore-api:
     build:
       context: ..
@@ -155,7 +189,7 @@ services:
     container_name: seedcore-api
     working_dir: /app
     environment:
-      - PYTHONPATH=/app
+      - PYTHONPATH=/app:/app/src:${PYTHONPATH}
     env_file:
       - ../.env
     ports:
@@ -180,6 +214,7 @@ volumes:
   neo4j_import:
   neo4j_plugins:
   redis-data:
+  ray_logs:
 
 networks:
   seedcore-network:
