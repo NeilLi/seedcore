@@ -1,0 +1,9 @@
+fix: resolve 404 errors in Ray dashboard Grafana iframes
+
+- Standardize Grafana URL configuration between docker-compose.yml and ray-workers.yml
+- Use environment variable ${PUBLIC_GRAFANA_URL} instead of hardcoded IPs
+- Add setup script for automated Grafana URL configuration
+- Update env.example with proper documentation
+- Remove hardcoded IP addresses from version control
+
+Fixes Ray dashboard 404 errors in Overview and Cluster status panels 
