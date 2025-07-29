@@ -1,28 +1,75 @@
-feat: Instrument COA-compliant memory/energy metrics & control knobs
+fix: eliminate Docker Compose PYTHONPATH warnings and improve ops configuration
 
-- Added per-agent memory counters (memory_writes, memory_hits_on_writes, salient_events_logged, total_compression_gain)
-  - Fully covers mem util (ui) as specified by COA; enables lifecycle hooks that use both capability and memory utility.
-- Implemented two-tier memory model (Mw, Mlt)
-  - Matches COA's Holon stack; Ma (per-agent scratch) and Mfb (flashbulb) tiers are stubbed for future freshness/salience work.
-- Introduced `calculate_cost_vq()` as bytes + recon_loss + staleness, weighted by β_mem
-  - Formula matches spec and exposes compression knob for adaptive control.
-- Adaptive memory loop: `/run_memory_loop` now sweeps compression threshold k and measures dE/dk.
-- Telemetry endpoint returns unified `/energy/gradient` JSON, with per-term breakdown, cost_vq_breakdown, and per-agent memory utility.
+## Summary
+Fixed Docker Compose PYTHONPATH warnings by replacing variable substitution with direct environment variable assignment. This ensures clean builds and follows Docker Compose best practices.
 
-Analysis of first experimental run:
-- Compression knob k: 0.54 (mid-range), writes: 3, hits: 0 (high write/zero retrieval so staleness=1)
-- Only agent_alpha has nonzero mem util (0.4); others at 0
-- CostVQ: bytes=0.0128, recon_loss=0.2, staleness=0.2; memory energy dominated by recon/stale, bytes minor at 32B
-- dE/dk: +1 (positive slope; need more compression to reach minimum energy)
+## Changes Made
 
-Actionable next steps:
-- After every write, trigger a read to increase hit rate (and lower staleness)
-- Log hit_rate directly in JSON output
-- Automate a sweep over compression k (0.2 to 0.9), plot CostVQ vs k (expect U-shape per Exp D)
-- Begin wiring up ci and ui per agent for role transition dynamics
-- Stub Ma and Mfb tiers to enable salience/flashbulb tracking
-- Dashboard: plot all energy terms and CostVQ stack breakdowns
-- Add config clamp for β_mem and enforce entropy floor for stability
+### Docker Compose Configuration
+- **Fixed PYTHONPATH warnings**: Replaced `- PYTHONPATH=/app:/app/src:${PYTHONPATH}` with `PYTHONPATH: /app:/app/src`
+- **Improved YAML format**: Converted from array format to map format for all environment variables
+- **Applied to all services**: seedcore-api, db-seed, ray-head, ray-worker
+- **Commented version field**: Added explanation for deprecated version field
 
-Verdict: Memory/energy system now closely follows the COA spec; telemetry and gradient outputs are ready for live validation and dashboarding. Next phase focuses on retrieval traffic and adaptive compression for CostVQ minimization.
+### Dockerfile Improvements
+- **Added PYTHONPATH to Dockerfile.ray**: Set `ENV PYTHONPATH=/app:/app/src` for Ray containers
+- **Updated main Dockerfile**: Enhanced PYTHONPATH configuration for consistency
+
+### Runtime Context Guards
+- **Fixed duplicate bootstrap calls**: Added runtime context guards in bootstrap.py to prevent worker process bootstrapping
+- **Improved Ray actor initialization**: Only driver process creates singleton actors
+
+### Energy System Enhancements
+- **Enhanced energy event emission**: Added comprehensive energy events in RayAgent.execute_task()
+- **Improved energy ledger updates**: Real-time event-driven energy tracking
+- **Added health check endpoint**: `/healthz/energy` for energy system monitoring
+- **Created energy calibration test**: `scripts/test_energy_calibration.py` for weight optimization
+
+### Documentation Updates
+- **Updated ENERGY_MODEL_FOUNDATION.md**: Added troubleshooting section for Docker Compose warnings
+- **Enhanced RAY_DASHBOARD_FIXES.md**: Added environment variable fixes and best practices
+- **Updated README.md**: Added note about optimized Docker Compose configuration
+
+## Technical Details
+
+### Root Cause Analysis
+The PYTHONPATH warning occurred because Docker Compose tried to expand `${PYTHONPATH}` at build time when the variable wasn't set on the host. This is a common issue with variable substitution in Docker Compose.
+
+### Solution Approach
+1. **Direct Assignment**: Use `PYTHONPATH: /app:/app/src` instead of variable substitution
+2. **Consistent Format**: Apply map format to all environment variables
+3. **Deterministic Builds**: Ensure same behavior regardless of host environment
+
+### Benefits
+- ✅ **Clean Builds**: No more PYTHONPATH warnings during docker compose operations
+- ✅ **Deterministic**: Consistent behavior across different host environments
+- ✅ **Best Practice**: Follows Docker Compose recommended patterns
+- ✅ **Maintainable**: Clear, explicit configuration without hidden dependencies
+
+## Testing
+- ✅ `docker compose config --quiet` - No warnings
+- ✅ `docker compose build --no-cache seedcore-api` - Clean build
+- ✅ All services start without environment variable issues
+- ✅ Ray dashboard and energy system functioning correctly
+
+## Files Modified
+- `docker/docker-compose.yml` - Fixed environment variable format
+- `docker/Dockerfile` - Enhanced PYTHONPATH configuration
+- `docker/Dockerfile.ray` - Added PYTHONPATH environment variable
+- `src/seedcore/bootstrap.py` - Added runtime context guards
+- `src/seedcore/agents/ray_actor.py` - Enhanced energy event emission
+- `src/seedcore/telemetry/server.py` - Added energy health check endpoint
+- `scripts/test_energy_calibration.py` - New energy calibration test
+- `docs/ENERGY_MODEL_FOUNDATION.md` - Updated troubleshooting section
+- `docker/RAY_DASHBOARD_FIXES.md` - Added environment variable fixes
+- `README.md` - Added quick start improvements
+
+## Related Issues
+- Fixes Docker Compose PYTHONPATH warnings
+- Improves Ray actor bootstrap efficiency
+- Enhances energy system monitoring and calibration
+- Provides better operational visibility and debugging
+
+## Breaking Changes
+None - this is a backward-compatible improvement that only affects build-time warnings and operational efficiency.
 

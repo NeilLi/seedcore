@@ -16,7 +16,8 @@ RUN pip install --no-cache-dir \
 ENV RAY_DASHBOARD_HOST=0.0.0.0 \
     RAY_DASHBOARD_PORT=8265 \
     PYTHONUNBUFFERED=1 \
-    RAY_TMPDIR=/home/ray/ray_tmp
+    RAY_TMPDIR=/home/ray/ray_tmp \
+    PYTHONPATH=/app:/app/src
 
 # Expose dashboard + agent gRPC + agent HTTP ports
 EXPOSE 8265 52365 52366

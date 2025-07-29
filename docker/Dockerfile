@@ -19,7 +19,7 @@ COPY src/ ./src/
 COPY scripts/ ./scripts/
 
 # Set environment
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app:/app/src
 ENV PYTHONUNBUFFERED=1
 
 # Create non-root user for security

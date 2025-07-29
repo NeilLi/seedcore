@@ -1,4 +1,4 @@
-version: "3.9"
+# version: "3.9"  # Deprecated in Docker Compose V2, kept for legacy tooling
 
 services:
   postgres:
@@ -83,14 +83,14 @@ services:
     container_name: db-seed
     working_dir: /app
     environment:
-      - PYTHONPATH=/app
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=password
+      PYTHONPATH: /app:/app/src
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: password
     env_file:
       - ../.env
     depends_on:
@@ -114,14 +114,14 @@ services:
     shm_size: '4gb'
     working_dir: /app
     environment:
-      - PYTHONPATH=/app:/app/src:${PYTHONPATH}
+      PYTHONPATH: /app:/app/src
       # ── stream every worker's stdout/stderr to the container log ──
-      - RAY_worker_stdout_file=/dev/stdout
-      - RAY_worker_stderr_file=/dev/stderr
+      RAY_worker_stdout_file: /dev/stdout
+      RAY_worker_stderr_file: /dev/stderr
       # ── keep the driver  (seedcore‑api)  log lines too ──
-      - RAY_log_to_driver=1
+      RAY_log_to_driver: 1
       # ── lower Ray's own log level so we still see our INFO lines ──
-      - RAY_BACKEND_LOG_LEVEL=info
+      RAY_BACKEND_LOG_LEVEL: info
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
@@ -158,14 +158,14 @@ services:
     shm_size: '2gb'
     working_dir: /app
     environment:
-      - PYTHONPATH=/app:/app/src:${PYTHONPATH}
+      PYTHONPATH: /app:/app/src
       # ── stream every worker's stdout/stderr to the container log ──
-      - RAY_worker_stdout_file=/dev/stdout
-      - RAY_worker_stderr_file=/dev/stderr
+      RAY_worker_stdout_file: /dev/stdout
+      RAY_worker_stderr_file: /dev/stderr
       # ── keep the driver  (seedcore‑api)  log lines too ──
-      - RAY_log_to_driver=1
+      RAY_log_to_driver: 1
       # ── lower Ray's own log level so we still see our INFO lines ──
-      - RAY_BACKEND_LOG_LEVEL=info
+      RAY_BACKEND_LOG_LEVEL: info
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
@@ -189,7 +189,7 @@ services:
     container_name: seedcore-api
     working_dir: /app
     environment:
-      - PYTHONPATH=/app:/app/src:${PYTHONPATH}
+      PYTHONPATH: /app:/app/src
     env_file:
       - ../.env
     ports:

@@ -26,7 +26,8 @@ import logging
 import json
 
 from .ray_actor import RayAgent
-from ..energy.optimizer import select_best_agent
+from ..energy.optimizer import select_best_agent, score_agent
+from ..energy.calculator import EnergyLedger  # For fallback
 
 logger = logging.getLogger(__name__)
 
@@ -180,29 +181,25 @@ class Tier0MemoryManager:
         # Get all agent actor handles
         agent_handles = list(self.agents.values())
         
-        # Define energy weights (these would typically come from a config)
-        energy_weights = {
-            'w_pair': 1.0,
-            'w_hyper': 1.0,
-            'w_explore': 0.2
-        }
-        
-        # Select the best agent using the optimizer
-        best_agent_handle = select_best_agent(agent_handles, task_data, energy_weights)
-        
-        if not best_agent_handle:
-            logger.error("Could not select a best agent.")
-            return None
-        
         try:
+            # Use the new energy-aware selection
+            best_agent, predicted_delta_e = select_best_agent(agent_handles, task_data)
+            
+            if not best_agent:
+                logger.error("Could not select a best agent.")
+                return None
+            
             # Execute the task on the selected agent
-            result = ray.get(best_agent_handle.execute_task.remote(task_data))
-            agent_id = ray.get(best_agent_handle.get_id.remote())
-            logger.info(f"✅ Task executed on best agent {agent_id}")
+            result = ray.get(best_agent.execute_task.remote(task_data))
+            agent_id = ray.get(best_agent.get_id.remote())
+            
+            logger.info(f"✅ Energy-aware selection: Chose agent {agent_id} with predicted ΔE of {predicted_delta_e:.4f}")
             return result
+            
         except Exception as e:
-            logger.error(f"Failed to execute task on best agent: {e}")
-            return None
+            logger.warning(f"Energy optimizer failed ({e}), falling back to random selection.")
+            # Fallback to old method
+            return self.execute_task_on_random_agent(task_data)
     
     async def collect_heartbeats(self) -> Dict[str, Dict[str, Any]]:
         """
