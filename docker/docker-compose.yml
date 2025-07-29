@@ -5,18 +5,17 @@ services:
     image: pgvector/pgvector:pg16
     container_name: seedcore-postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-postgres}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./setup/init_pgvector.sql:/docker-entrypoint-initdb.d/init_pgvector.sql
     networks:
       - seedcore-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -25,42 +24,31 @@ services:
     image: mysql:8.0
     container_name: seedcore-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-seedcore}
-      MYSQL_USER: ${MYSQL_USER:-seedcore}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-password}
-      MYSQL_ROOT_HOST: '%'
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: seedcore
+      MYSQL_USER: seedcore
+      MYSQL_PASSWORD: password
     ports:
-      - "${MYSQL_PORT:-3306}:3306"
+      - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./setup/init_mysql.sql:/docker-entrypoint-initdb.d/init_mysql.sql
     networks:
       - seedcore-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
       timeout: 5s
       retries: 5
-    command: >
-      --default-authentication-plugin=mysql_native_password
-      --character-set-server=utf8mb4
-      --collation-server=utf8mb4_unicode_ci
-      --skip-host-cache
-      --host-cache-size=0
 
   neo4j:
     image: neo4j:5.15
     container_name: seedcore-neo4j
     environment:
-      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-password}
-      NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
-      NEO4J_dbms_security_procedures_unrestricted: apoc.*,gds.*
-      NEO4J_dbms_memory_heap_initial__size: 512m
-      NEO4J_dbms_memory_heap_max__size: 1G
+      NEO4J_AUTH: neo4j/password
+      NEO4J_PLUGINS: '["apoc"]'
     ports:
-      - "${NEO4J_HTTP_PORT:-7474}:7474"
-      - "${NEO4J_BOLT_PORT:-7687}:7687"
+      - "7474:7474"
+      - "7687:7687"
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
@@ -70,18 +58,18 @@ services:
       - seedcore-network
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7474/browser/"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 60s
 
-  # db-seed service for database seeding
+  # Redis service removed - Ray uses its own internal Redis on port 6379
+
   db-seed:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: db-seed
-    working_dir: /app
+    container_name: seedcore-db-seed
     environment:
       PYTHONPATH: /app:/app/src
       POSTGRES_HOST: postgres
@@ -91,12 +79,12 @@ services:
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: password
-    env_file:
-      - ../.env
     depends_on:
       postgres:
         condition: service_healthy
       mysql:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
     networks:
       - seedcore-network
@@ -122,6 +110,11 @@ services:
       RAY_log_to_driver: 1
       # ── lower Ray's own log level so we still see our INFO lines ──
       RAY_BACKEND_LOG_LEVEL: info
+      # ── Ray Dashboard monitoring configuration ──
+      RAY_PROMETHEUS_HOST: http://prometheus:9090
+      RAY_GRAFANA_HOST: http://grafana:3000
+      RAY_GRAFANA_IFRAME_HOST: http://54.179.114.199:3000
+      RAY_PROMETHEUS_NAME: Prometheus
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
@@ -129,8 +122,8 @@ services:
       - "8265:8265"      # dashboard UI
       - "52365:52365"    # agent gRPC port
       - "52366:52366"    # agent HTTP port
-      - "10001:10001"
-      - "6379:6379"
+      - "10001:10001"    # Ray head gRPC / jobs / client
+      - "6379:6379"      # Ray internal Redis
     networks:
       - seedcore-network
     # Removed depends_on db-seed since it's disabled
@@ -144,9 +137,9 @@ services:
       ray start --head
                 --dashboard-host 0.0.0.0
                 --dashboard-port 8265
-                --dashboard-agent-grpc-port 52365
-                --dashboard-agent-listen-port 52366
+                --port=6379
                 --include-dashboard true
+                --metrics-export-port=8080
                 --num-cpus 1
                 --block
 
@@ -166,6 +159,11 @@ services:
       RAY_log_to_driver: 1
       # ── lower Ray's own log level so we still see our INFO lines ──
       RAY_BACKEND_LOG_LEVEL: info
+      # ── Ray Dashboard monitoring configuration ──
+      RAY_PROMETHEUS_HOST: http://prometheus:9090
+      RAY_GRAFANA_HOST: http://grafana:3000
+      RAY_GRAFANA_IFRAME_HOST: http://54.179.114.199:3000
+      RAY_PROMETHEUS_NAME: Prometheus
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
@@ -180,6 +178,7 @@ services:
     #   timeout: 10s
     #   retries: 3
     #   start_period: 60s
+    # Ray workers connect to the head's Redis port 6379
     command: ray start --address=ray-head:6379 --num-cpus 1 --block
 
   seedcore-api:
@@ -190,6 +189,7 @@ services:
     working_dir: /app
     environment:
       PYTHONPATH: /app:/app/src
+      RAY_ADDRESS: ray://ray-head:10001
     env_file:
       - ../.env
     ports:
@@ -209,6 +209,80 @@ services:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
     command: uvicorn src.seedcore.telemetry.server:app --host 0.0.0.0 --port 8000 --reload
+
+  # ───────────────────────────────────────────────────────────────────── #
+  # Observability stack
+  # ───────────────────────────────────────────────────────────────────── #
+  
+  # Nginx proxy for Ray metrics with CORS support
+  ray-metrics-proxy:
+    image: nginx:alpine
+    container_name: seedcore-ray-metrics-proxy
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8081:8081"
+    depends_on:
+      - ray-head
+    networks:
+      - seedcore-network
+
+  # Dashboard proxy to intercept localhost:8080 requests
+  ray-dashboard-proxy:
+    image: nginx:alpine
+    container_name: seedcore-ray-dashboard-proxy
+    volumes:
+      - ./dashboard-proxy.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ray-head
+      - ray-metrics-proxy
+    networks:
+      - seedcore-network
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: seedcore-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus_rules.yml:/etc/prometheus/prometheus_rules.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    depends_on:
+      - seedcore-api
+      - ray-head
+    networks:
+      - seedcore-network
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: seedcore-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=seedcore
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - seedcore-network
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: seedcore-node-exporter
+    ports:
+      - "9100:9100"
+    networks:
+      - seedcore-network
 
 volumes:
   postgres_data:

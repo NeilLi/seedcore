@@ -1,0 +1,88 @@
+groups:
+  - name: seedcore_alerts
+    rules:
+      # Agent health alerts
+      - alert: AgentSuccessRateLow
+        expr: agent_success_rate < 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent {{ $labels.agent_id }} has low success rate"
+          description: "Agent {{ $labels.agent_id }} success rate is {{ $value }} (threshold: 0.5)"
+          
+      - alert: AgentCapabilityLow
+        expr: agent_capability < 0.3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent {{ $labels.agent_id }} has low capability"
+          description: "Agent {{ $labels.agent_id }} capability is {{ $value }} (threshold: 0.3)"
+          
+      # Energy system alerts
+      - alert: EnergyTotalHigh
+        expr: energy_total > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Total energy is high"
+          description: "Total energy is {{ $value }} (threshold: 10)"
+          
+      - alert: EnergyDeltaSpike
+        expr: abs(energy_delta_last_task) > 2
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Energy delta spike detected"
+          description: "Energy delta is {{ $value }} (threshold: 2)"
+          
+      # Memory system alerts
+      - alert: MemoryCompressionRatioLow
+        expr: memory_compression_ratio < 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory compression ratio is low"
+          description: "Compression ratio is {{ $value }} (threshold: 0.5)"
+          
+      # System health alerts
+      - alert: NoActiveAgents
+        expr: system_active_agents == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No active agents"
+          description: "No agents are currently active"
+          
+      - alert: HighMemoryUtilization
+        expr: system_memory_utilization_kb > 1000000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory utilization"
+          description: "Memory utilization is {{ $value }} KB (threshold: 1GB)"
+          
+      # API health alerts
+      - alert: APIRequestDurationHigh
+        expr: histogram_quantile(0.95, api_request_duration_seconds) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API request duration is high"
+          description: "95th percentile request duration is {{ $value }}s (threshold: 5s)"
+          
+      - alert: APIErrorRateHigh
+        expr: rate(api_requests_total{endpoint=~".*"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "API requests are being made"
+          description: "API request rate is {{ $value }} requests/second" 

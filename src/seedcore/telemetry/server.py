@@ -19,6 +19,7 @@ Simple FastAPI/uvicorn server that exposes simulation controls and telemetry.
 """
 import logging
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 import os
 import numpy as np
 import random
@@ -58,7 +59,7 @@ from ..control.memory.meta_controller import adjust
 import asyncio
 from ..api.routers.mfb_router import mfb_router
 from ..config.ray_config import get_ray_config
-from ..utils.ray_utils import init_ray, get_ray_cluster_info
+from ..utils.ray_utils import init_ray, get_ray_cluster_info, is_ray_available
 
 # --- Persistent State ---
 # Create a single, persistent registry when the server starts.
@@ -228,6 +229,40 @@ async def sync_counters():
         COSTVQ.set(avg_cost or 0)
     finally:
         await c.close()
+
+@app.on_event("startup")
+async def start_metrics_integration():
+    """Start the metrics integration service on startup."""
+    try:
+        from .metrics_integration import start_metrics_integration
+        import asyncio
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        # Start metrics integration in background
+        asyncio.create_task(start_metrics_integration(
+            base_url="http://localhost:8000",  # Use internal port 8000
+            update_interval=30  # Update every 30 seconds
+        ))
+        logger.info("🚀 Started metrics integration service")
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to start metrics integration: {e}")
+
+@app.on_event("shutdown")
+async def stop_metrics_integration():
+    """Stop the metrics integration service on shutdown."""
+    try:
+        from .metrics_integration import stop_metrics_integration
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        await stop_metrics_integration()
+        logger.info("🛑 Stopped metrics integration service")
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to stop metrics integration: {e}")
 
 @app.on_event("shutdown")
 async def cleanup_memory():

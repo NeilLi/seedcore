@@ -1,0 +1,18 @@
+{
+  "dashboard": {
+    "prometheus": {
+      "host": "prometheus",
+      "port": 9090,
+      "enabled": true
+    },
+    "grafana": {
+      "host": "grafana",
+      "port": 3000,
+      "enabled": true
+    },
+    "metrics": {
+      "enabled": true,
+      "export_interval": 30
+    }
+  }
+} 
