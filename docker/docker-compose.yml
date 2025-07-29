@@ -12,6 +12,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./setup/init_pgvector.sql:/docker-entrypoint-initdb.d/init_pgvector.sql:ro
     networks:
       - seedcore-network
     healthcheck:
@@ -32,6 +33,7 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./setup/init_mysql.sql:/docker-entrypoint-initdb.d/init_mysql.sql:ro
     networks:
       - seedcore-network
     healthcheck:
@@ -126,13 +128,10 @@ services:
       - "6379:6379"      # Ray internal Redis
     networks:
       - seedcore-network
-    # Removed depends_on db-seed since it's disabled
-    # healthcheck:
-    #   test: ["CMD", "curl", "-sf", "http://localhost:8265/api/version"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 60s
+    depends_on:
+      db-seed:
+        condition: service_completed_successfully
+    restart: unless-stopped
     command: >
       ray start --head
                 --dashboard-host 0.0.0.0
@@ -172,12 +171,7 @@ services:
         condition: service_started
     networks:
       - seedcore-network
-    # healthcheck:
-    #   test: ["CMD", "curl", "-sf", "http://localhost:8265/api/version"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 60s
+    restart: unless-stopped
     # Ray workers connect to the head's Redis port 6379
     command: ray start --address=ray-head:6379 --num-cpus 1 --block
 
@@ -202,6 +196,8 @@ services:
       neo4j:
         condition: service_healthy
       ray-head:
+        condition: service_started
+      ray-worker:
         condition: service_started
     networks:
       - seedcore-network
