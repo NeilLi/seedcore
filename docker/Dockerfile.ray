@@ -10,7 +10,9 @@ RUN pip install --no-cache-dir \
     "jinja2<3.1" \
     "grpcio==1.63.0" \
     numpy pandas scipy scikit-learn matplotlib seaborn jupyter redis asyncpg neo4j \
-    prometheus_client aiohttp psutil
+    prometheus_client aiohttp psutil \
+    fastapi uvicorn pydantic sqlalchemy psycopg2-binary pgvector mysql-connector-python \
+    pyyaml tqdm
 
 # Set environment variables for Ray dashboard
 ENV RAY_DASHBOARD_HOST=0.0.0.0 \
