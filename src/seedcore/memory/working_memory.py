@@ -6,6 +6,12 @@ from src.seedcore.memory.mw_store import MwStore
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.propagate = True
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
+    logger.addHandler(handler)
 
 @ray.remote
 class MissTracker:

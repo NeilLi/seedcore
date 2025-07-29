@@ -1,12 +1,31 @@
-# docker/Dockerfile.ray
-FROM rayproject/ray:latest-cpu
+##########################
+# Use rayproject's pre-built Ray image for Python 3.10
+##########################
+FROM rayproject/ray:latest-py310
 
-RUN conda install -c conda-forge python=3.12 -y
-RUN pip install "ray[default]"
-RUN pip install numpy pandas scipy scikit-learn matplotlib seaborn jupyter redis asyncpg neo4j
-# Install dashboard dependencies
-RUN pip install prometheus_client aiohttp jinja2 psutil grpcio
+# Install additional dependencies
+RUN pip install --no-cache-dir \
+    "setproctitle>=1.3.3" \
+    "aiohttp-jinja2>=1.5.1" \
+    "jinja2<3.1" \
+    "grpcio==1.63.0" \
+    numpy pandas scipy scikit-learn matplotlib seaborn jupyter redis asyncpg neo4j \
+    prometheus_client aiohttp psutil
 
-ENV PATH=/opt/conda/envs/ray/bin:$PATH
+# Set environment variables for Ray dashboard
+ENV RAY_DASHBOARD_HOST=0.0.0.0 \
+    RAY_DASHBOARD_PORT=8265 \
+    PYTHONUNBUFFERED=1 \
+    RAY_TMPDIR=/home/ray/ray_tmp
 
-RUN python --version && pip --version && python -c "import numpy; print(f'NumPy version: {numpy.__version__}')" 
+# Expose dashboard + agent gRPC + agent HTTP ports
+EXPOSE 8265 52365 52366
+
+WORKDIR /app
+COPY . /app
+
+# Create ray_tmp directory and ensure permissions
+RUN mkdir -p /home/ray/ray_tmp && \
+    chown -R ray /home/ray/ray_tmp
+
+CMD ["ray", "start", "--head", "--port=6379", "--include-dashboard=true", "--dashboard-host=0.0.0.0", "--dashboard-port=8265", "--dashboard-agent-grpc-port=52365", "--dashboard-agent-listen-port=52366", "--num-cpus=1", "--block"] 

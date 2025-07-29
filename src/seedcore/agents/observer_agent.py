@@ -9,7 +9,12 @@ import json
 import ray
 
 logger = logging.getLogger(__name__)
-logger.propagate = True          # <── add this
+logger.setLevel(logging.INFO)
+logger.propagate = True
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
+    logger.addHandler(handler)
 
 from ..memory.working_memory import get_miss_tracker, get_shared_cache
 from ..memory.long_term_memory import LongTermMemoryManager

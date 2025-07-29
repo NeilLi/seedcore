@@ -27,6 +27,12 @@ from dataclasses import dataclass, field
 import logging
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.propagate = True
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
+    logger.addHandler(handler)
 
 # NEW: Import the FlashbulbClient
 from ..memory.flashbulb_client import FlashbulbClient

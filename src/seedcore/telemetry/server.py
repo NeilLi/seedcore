@@ -18,6 +18,7 @@
 Simple FastAPI/uvicorn server that exposes simulation controls and telemetry.
 """
 import logging
+logging.basicConfig(level=logging.INFO)
 import os
 import numpy as np
 import random

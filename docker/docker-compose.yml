@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -72,6 +74,7 @@ services:
       timeout: 5s
       retries: 5
 
+  # db-seed service for database seeding
   db-seed:
     build:
       context: ..
@@ -101,13 +104,13 @@ services:
     volumes:
       - ..:/app
       - ./artifacts:/data
-    command: python -m scripts.populate_mlt
+    command: python -m scripts.populate_mlt_simple
     restart: "no"
 
   ray-head:
     build:
-      context: .
-      dockerfile: Dockerfile.ray
+      context: ..
+      dockerfile: docker/Dockerfile.ray
     container_name: ray-head
     shm_size: '4gb'
     working_dir: /app
@@ -124,26 +127,34 @@ services:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
     ports:
-      - "8265:8265"
+      - "8265:8265"      # dashboard UI
+      - "52365:52365"    # agent gRPC port
+      - "52366:52366"    # agent HTTP port
       - "10001:10001"
       - "6379:6379"
-    depends_on:
-      db-seed:
-        condition: service_completed_successfully
     networks:
       - seedcore-network
+    # Removed depends_on db-seed since it's disabled
+    # healthcheck:
+    #   test: ["CMD", "curl", "-sf", "http://localhost:8265/api/version"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 60s
     command: >
       ray start --head
                 --dashboard-host 0.0.0.0
                 --dashboard-port 8265
-                --include-dashboard false
+                --dashboard-agent-grpc-port 52365
+                --dashboard-agent-listen-port 52366
+                --include-dashboard true
                 --num-cpus 1
                 --block
 
   ray-worker:
     build:
-      context: .
-      dockerfile: Dockerfile.ray
+      context: ..
+      dockerfile: docker/Dockerfile.ray
     container_name: ray-worker
     shm_size: '2gb'
     working_dir: /app
@@ -160,27 +171,17 @@ services:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
     depends_on:
-      db-seed:
-        condition: service_completed_successfully
       ray-head:
         condition: service_started
     networks:
       - seedcore-network
+    # healthcheck:
+    #   test: ["CMD", "curl", "-sf", "http://localhost:8265/api/version"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 60s
     command: ray start --address=ray-head:6379 --num-cpus 1 --block
-
-  ray-log-forwarder:
-    image: alpine:latest
-    container_name: ray-log-forwarder
-    volumes:
-      - ray_logs:/tmp/ray:ro
-    command: sh -c "while true; do find /tmp/ray -name '*.out' -type f -exec tail -f {} + 2>/dev/null || sleep 1; done"
-    depends_on:
-      ray-head:
-        condition: service_started
-      ray-worker:
-        condition: service_started
-    networks:
-      - seedcore-network
 
   seedcore-api:
     build:
@@ -195,8 +196,12 @@ services:
     ports:
       - "80:8000"
     depends_on:
-      db-seed:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
       ray-head:
         condition: service_started
     networks:
@@ -213,8 +218,6 @@ volumes:
   neo4j_logs:
   neo4j_import:
   neo4j_plugins:
-  redis-data:
-  ray_logs:
 
 networks:
   seedcore-network:
