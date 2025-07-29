@@ -1,0 +1,37 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "prometheus_rules.yml"
+
+scrape_configs:
+  # SeedCore API metrics
+  - job_name: 'seedcore-api'
+    static_configs:
+      - targets: ['seedcore-api:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    
+  # Ray metrics exporter (via dashboard proxy with CORS)
+  - job_name: 'ray'
+    static_configs:
+      - targets: ['ray-dashboard-proxy:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    
+  # Ray dashboard metrics (if available)
+  # Note: Ray Dashboard doesn't expose metrics endpoint, using standalone monitoring instead
+  # - job_name: 'ray-dashboard'
+  #   static_configs:
+  #     - targets: ['ray-head:8265']
+  #   metrics_path: '/api/metrics'
+  #   scrape_interval: 30s
+  #   scrape_timeout: 10s
+    
+  # Node exporter for system metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s 
