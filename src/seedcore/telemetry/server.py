@@ -256,6 +256,56 @@ async def energy_gradient():
         "deltaE_last": ENERGY_SLOPE._value.get()
     }
 
+
+@app.get("/healthz/energy")
+def healthz_energy():
+    """Health check endpoint for energy system readiness."""
+    try:
+        from ..energy.calculator import energy_gradient_payload, EnergyLedger
+        
+        # Create a temporary ledger for health check
+        ledger = EnergyLedger()
+        
+        # Get energy ledger snapshot
+        ledger_snapshot = energy_gradient_payload(ledger)
+        
+        # Check if energy system is responsive
+        current_energy = ledger.get_total()
+        
+        # Determine health status
+        if current_energy < float('inf') and current_energy > float('-inf'):
+            status = "healthy"
+            message = "Energy system operational"
+        else:
+            status = "unhealthy"
+            message = "Energy calculation error"
+        
+        return {
+            "status": status,
+            "message": message,
+            "timestamp": time.time(),
+            "energy_snapshot": ledger_snapshot,
+            "checks": {
+                "energy_calculation": "pass" if status == "healthy" else "fail",
+                "ledger_accessible": "pass",
+                "pair_stats_count": len(ledger.pair_stats),
+                "hyper_stats_count": len(ledger.hyper_stats),
+                "role_entropy_count": len(ledger.role_entropy),
+                "mem_stats_count": len(ledger.mem_stats)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Energy health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "message": f"Energy health check error: {str(e)}",
+            "timestamp": time.time(),
+            "checks": {
+                "energy_calculation": "fail",
+                "ledger_accessible": "fail"
+            }
+        }
+
 @app.get('/agents/state')
 def get_agents_state() -> List[Dict]:
     """Returns the current state of all agents in the simulation."""

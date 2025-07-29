@@ -31,6 +31,45 @@ A stateful, interactive cognitive architecture system with persistent organs, ag
 
 ## Quick Start
 
+### Prerequisites
+- Docker and Docker Compose
+- Python 3.10 (for local development)
+
+### 1. Clone and Setup
+```bash
+git clone <repository-url>
+cd seedcore
+```
+
+### 2. Start Services
+```bash
+cd docker
+docker compose up -d
+```
+
+**Note**: The Docker Compose configuration has been optimized to eliminate PYTHONPATH warnings and ensure clean builds.
+
+### 3. Verify Installation
+```bash
+# Check Ray dashboard
+curl http://localhost:8265/api/version
+
+# Check API health
+curl http://localhost:8000/health
+
+# Check energy system
+curl http://localhost:8000/healthz/energy
+```
+
+### 4. Run Tests
+```bash
+# Test energy model
+docker compose exec seedcore-api python -m scripts.test_energy_model
+
+# Run energy calibration
+docker compose exec seedcore-api python -m scripts.test_energy_calibration
+```
+
 ### 1. Install Dependencies
 ```bash
 cd seedcore

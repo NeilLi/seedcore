@@ -11,18 +11,24 @@ The Energy Model Foundation implements the core energy-aware agent selection and
 1. **Energy Calculator** (`src/seedcore/energy/calculator.py`)
    - Implements the Unified Energy Function with all five core energy terms
    - Calculates pairwise collaboration, entropy, regularization, and memory energy
+   - **NEW**: EnergyLedger for incremental updates and event-driven energy tracking
+   - **NEW**: Event handlers for real-time energy updates
 
 2. **Energy Optimizer** (`src/seedcore/energy/optimizer.py`)
    - Provides energy-aware agent selection using gradient proxies
    - Implements task complexity estimation and role mapping
+   - **NEW**: Enhanced scoring with memory utilization and state complexity penalties
 
 3. **Agent Energy Tracking** (`src/seedcore/agents/ray_actor.py`)
    - Tracks energy state and role probabilities for each agent
    - Provides methods for energy state updates and retrieval
+   - **NEW**: AgentState dataclass with capability and memory utility tracking
+   - **NEW**: Real-time energy event emission for ledger updates
 
 4. **Tier0 Manager Integration** (`src/seedcore/agents/tier0_manager.py`)
    - Integrates energy-aware selection into agent management
    - Provides `execute_task_on_best_agent()` method
+   - **NEW**: Fallback to random selection if energy optimizer fails
 
 ## Energy Terms
 
@@ -56,7 +62,7 @@ Future implementation for complex pattern tracking and hypergraph-based energy c
 ### Suitability Scoring
 The system calculates agent suitability scores using the formula:
 ```
-score_i = w_pair * E_pair_delta(i,t) + w_hyper * E_hyper_delta(i,t) - w_explore * entropy-gain(i)
+score_i = w_pair * E_pair_delta(i,t) + w_hyper * E_hyper_delta(i,t) - w_explore * ΔH + w_mem * mem_penalty + w_state * state_penalty
 ```
 
 ### Task-Role Mapping
@@ -72,6 +78,7 @@ score_i = w_pair * E_pair_delta(i,t) + w_hyper * E_hyper_delta(i,t) - w_explore 
 3. **Current Energy State**: Considers agent's current energy contribution
 4. **Task Complexity**: Adjusts scoring based on task difficulty
 5. **Memory Utilization**: Penalizes high memory pressure
+6. **State Complexity**: Penalizes high state vector norms
 
 ## Usage
 
@@ -101,18 +108,31 @@ from src.seedcore.energy.optimizer import calculate_agent_suitability_score
 score = calculate_agent_suitability_score(agent, task_data, weights)
 ```
 
+### Energy Ledger Management
+```python
+from src.seedcore.energy.calculator import EnergyLedger, on_pair_success
+
+# Create and update energy ledger
+ledger = EnergyLedger()
+event = {'type': 'pair_success', 'agents': ['agent1', 'agent2'], 'success': 0.8, 'sim': 0.7}
+on_pair_success(event, ledger)
+print(f"Total Energy: {ledger.get_total()}")
+```
+
 ## Configuration
 
 ### Energy Weights
 Default weights for energy terms:
 ```python
 weights = {
-    'alpha': 0.5,        # Entropy energy weight
+    'alpha': 0.1,        # Entropy energy weight
     'lambda_reg': 0.01,  # Regularization weight
-    'beta_mem': 0.2,     # Memory energy weight
+    'beta_mem': 0.05,    # Memory energy weight
     'w_pair': 1.0,       # Pair energy weight in selection
     'w_hyper': 1.0,      # Hyper energy weight in selection
-    'w_explore': 0.2     # Exploration weight in selection
+    'w_explore': 0.2,    # Exploration weight in selection
+    'w_mem': 0.3,        # Memory penalty weight
+    'w_state': 0.01      # State complexity weight
 }
 ```
 
@@ -123,16 +143,26 @@ weights = {
 
 ## Testing
 
+### Basic Test Suite
 Run the comprehensive test suite:
 ```bash
 docker compose exec seedcore-api python -m scripts.test_energy_model
 ```
 
-The test validates:
+### Energy Calibration
+Run energy calibration to optimize weights:
+```bash
+docker compose exec seedcore-api python -m scripts.test_energy_calibration
+```
+
+The tests validate:
 - Energy calculation accuracy
 - Agent selection logic
 - Task execution with energy optimization
 - Ray integration and remote calls
+- Energy ledger functionality
+- Event-driven energy updates
+- Weight optimization
 
 ## Performance Considerations
 
@@ -140,16 +170,104 @@ The test validates:
 - All agent interactions use Ray remote calls
 - Energy calculations are distributed across the cluster
 - State embeddings and heartbeats are retrieved asynchronously
+- **NEW**: Runtime context guards prevent duplicate bootstrap calls
 
 ### Memory Usage
 - Energy state tracking adds minimal overhead per agent
 - Memory energy calculations integrate with existing memory system
 - Regularization prevents unbounded state growth
+- **NEW**: Incremental ledger updates reduce computation overhead
 
 ### Scalability
 - Energy calculations scale with number of agents O(n²) for pair energy
 - Agent selection scales linearly O(n) with number of agents
 - Ray distribution allows horizontal scaling
+- **NEW**: Event-driven updates improve real-time performance
+
+## Health Monitoring
+
+### Health Check Endpoint
+```bash
+curl http://localhost:8000/healthz/energy
+```
+
+Returns:
+```json
+{
+  "status": "healthy",
+  "message": "Energy system operational",
+  "timestamp": 1234567890.123,
+  "energy_snapshot": {
+    "ts": 1234567890.123,
+    "E_terms": {...},
+    "deltaE_last": 0.0,
+    "pair_stats_count": 5,
+    "hyper_stats_count": 0,
+    "role_entropy_count": 0,
+    "mem_stats_count": 0
+  },
+  "checks": {
+    "energy_calculation": "pass",
+    "ledger_accessible": "pass",
+    "pair_stats_count": 5,
+    "hyper_stats_count": 0,
+    "role_entropy_count": 0,
+    "mem_stats_count": 0
+  }
+}
+```
+
+### Energy Gradient Endpoint
+```bash
+curl http://localhost:8000/energy/gradient
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Ray Remote Call Errors**
+   - Ensure all agent method calls use `.remote()`
+   - Check Ray cluster connectivity
+   - **NEW**: Verify runtime context guards are working
+
+2. **Memory System Integration**
+   - Verify memory system has required attributes (Mw, Mlt, bytes_used, hit_count, datastore)
+   - Check CostVQ function availability
+   - **NEW**: Ensure energy events are being emitted correctly
+
+3. **Energy Calculation Errors**
+   - Validate agent state embeddings are 128-dimensional
+   - Ensure role probabilities sum to 1.0
+   - **NEW**: Check ledger event handlers are functioning
+
+4. **Duplicate Bootstrap Messages**
+   - **NEW**: Runtime context guards should prevent worker process bootstrapping
+   - Check Ray cluster configuration
+   - Verify actor namespace settings
+
+5. **Docker Compose Warnings**
+   - **FIXED**: PYTHONPATH warnings eliminated by using direct environment variable assignment
+   - Use `PYTHONPATH: /app:/app/src` instead of `- PYTHONPATH=/app:/app/src:${PYTHONPATH}`
+   - This prevents variable substitution warnings when PYTHONPATH is not set on the host
+   - **Best Practice**: Always use explicit values in docker-compose.yml for deterministic builds
+
+### Debug Mode
+Enable debug logging for detailed energy calculations:
+```python
+import logging
+logging.getLogger('src.seedcore.energy').setLevel(logging.DEBUG)
+```
+
+### Performance Monitoring
+Monitor energy trends over time:
+```bash
+# Run calibration test
+docker compose exec seedcore-api python -m scripts.test_energy_calibration
+
+# Check health status
+curl http://localhost:8000/healthz/energy
+```
 
 ## Future Enhancements
 
@@ -159,35 +277,14 @@ The test validates:
 3. **Energy History Tracking**: Temporal energy patterns and trends
 4. **Advanced Role Mapping**: Machine learning-based task-role assignment
 5. **Energy Forecasting**: Predictive energy modeling for proactive optimization
+6. **Memory-Aware Pruning**: Hook β_mem * CostVQ into the optimizer
+7. **Hyper-Term Back-Prop**: Implement Newton step for role rotation
 
 ### Integration Opportunities
 1. **Meta-Controller Integration**: Energy-aware system-level decisions
 2. **Memory Loop Enhancement**: Deeper integration with adaptive memory compression
 3. **Performance Analytics**: Energy-based performance metrics and dashboards
 4. **Multi-Objective Optimization**: Balancing energy with other system objectives
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Ray Remote Call Errors**
-   - Ensure all agent method calls use `.remote()`
-   - Check Ray cluster connectivity
-
-2. **Memory System Integration**
-   - Verify memory system has required attributes (Mw, Mlt, bytes_used, hit_count, datastore)
-   - Check CostVQ function availability
-
-3. **Energy Calculation Errors**
-   - Validate agent state embeddings are 128-dimensional
-   - Ensure role probabilities sum to 1.0
-
-### Debug Mode
-Enable debug logging for detailed energy calculations:
-```python
-import logging
-logging.getLogger('src.seedcore.energy').setLevel(logging.DEBUG)
-```
 
 ## References
 

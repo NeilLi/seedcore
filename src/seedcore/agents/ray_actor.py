@@ -37,6 +37,14 @@ if not logger.handlers:
 # NEW: Import the FlashbulbClient
 from ..memory.flashbulb_client import FlashbulbClient
 
+@dataclass
+class AgentState:
+    """Holds the local state for an agent."""
+    h: np.ndarray  # Embedding
+    p: Dict[str, float]  # Role probabilities
+    c: float = 0.5  # Capability
+    mem_util: float = 0.0  # Memory Utility
+
 @ray.remote
 class RayAgent:
     """
@@ -54,11 +62,17 @@ class RayAgent:
         # 1. Agent Identity and State
         self.agent_id = agent_id
         
-        # 2. State Vector (h) - 128-dimensional as per COA specification
-        self.state_embedding: np.ndarray = np.random.randn(128)
+        # 2. Initialize AgentState with COA specifications
+        self.state = AgentState(
+            h=np.random.randn(128),  # 128-dimensional embedding
+            p=initial_role_probs or {'E': 0.9, 'S': 0.1, 'O': 0.0},
+            c=0.5,  # Initial capability
+            mem_util=0.0  # Initial memory utility
+        )
         
-        # 3. Role Probabilities (from original Agent)
-        self.role_probs = initial_role_probs or {'E': 0.9, 'S': 0.1, 'O': 0.0}
+        # 3. Backward compatibility - keep old attributes
+        self.state_embedding = self.state.h
+        self.role_probs = self.state.p
         
         # 4. Performance Tracking Metrics
         self.tasks_processed = 0
@@ -146,7 +160,36 @@ class RayAgent:
                 new_role_probs[role] /= total_prob
         
         self.role_probs = new_role_probs.copy()
+        self.state.p = new_role_probs.copy()  # Update AgentState
         logger.debug(f"Agent {self.agent_id} role probabilities updated: {self.role_probs}")
+    
+    def update_local_metrics(self, success: float, quality: float, mem_hits: int):
+        """
+        Update capability and memory utility using EWMA after a task.
+        """
+        # Update Capability (c) using EWMA
+        self.state.c = (1 - 0.1) * self.state.c + 0.1 * (0.6 * success + 0.4 * quality)
+        
+        # Update Memory Utility (mem_util) using EWMA
+        self.state.mem_util = (1 - 0.1) * self.state.mem_util + 0.1 * mem_hits
+        
+        # Update backward compatibility attributes
+        self.capability_score = self.state.c
+        self.mem_util = self.state.mem_util
+        
+        logger.debug(f"Agent {self.agent_id} metrics updated - capability: {self.state.c:.3f}, mem_util: {self.state.mem_util:.3f}")
+    
+    def get_energy_proxy(self) -> Dict[str, float]:
+        """
+        Returns the agent's expected contribution to energy terms.
+        This is a lightweight local estimate.
+        """
+        return {
+            'capability': self.state.c,
+            'entropy_contribution': -sum(p * np.log2(p + 1e-9) for p in self.state.p.values()),
+            'mem_util': self.state.mem_util,
+            'state_norm': np.linalg.norm(self.state.h)
+        }
     
     def update_state_embedding(self, new_embedding: np.ndarray):
         """Updates the state embedding vector."""
@@ -205,7 +248,7 @@ class RayAgent:
     
     def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute a task and update performance metrics.
+        Execute a task and update performance metrics with energy tracking.
         
         Args:
             task_data: Task information and payload
@@ -225,6 +268,9 @@ class RayAgent:
         success = random.choice([True, False])
         quality = random.uniform(0.5, 1.0)
         
+        # Simulate memory hits for energy tracking
+        mem_hits = random.randint(0, 5)
+        
         # Update memory utilization based on task complexity
         task_complexity = task_data.get('complexity', 0.5)
         self.mem_util = min(1.0, self.mem_util + task_complexity * 0.1)
@@ -236,8 +282,56 @@ class RayAgent:
         
         # --- END TASK LOGIC ---
         
-        # Update internal performance metrics
+        # Update local metrics using the new energy-aware method
+        self.update_local_metrics(success, quality, mem_hits)
+        
+        # Update internal performance metrics for backward compatibility
         self.update_performance(success, quality, task_data)
+        
+        # Emit energy events for ledger updates
+        try:
+            # Pair success event (if this was a collaborative task)
+            if task_data.get('partner_id'):
+                pair_event = {
+                    'type': 'pair_success',
+                    'agents': [self.agent_id, task_data['partner_id']],
+                    'success': success,
+                    'sim': np.dot(self.state.h, task_data.get('partner_embedding', self.state.h))
+                }
+                logger.debug(f"Pair energy event: {pair_event}")
+            
+            # Role update event (if roles changed significantly)
+            old_entropy = -sum(p * np.log2(p + 1e-9) for p in self.state.p.values())
+            new_entropy = -sum(p * np.log2(p + 1e-9) for p in self.role_probs.values())
+            if abs(new_entropy - old_entropy) > 0.1:  # Significant change
+                role_event = {
+                    'type': 'role_update',
+                    'H_new': new_entropy,
+                    'H_prev': old_entropy
+                }
+                logger.debug(f"Role energy event: {role_event}")
+            
+            # State update event (if embedding changed significantly)
+            old_norm = np.linalg.norm(self.state_embedding)
+            new_norm = np.linalg.norm(self.state.h)
+            if abs(new_norm - old_norm) > 0.1:  # Significant change
+                state_event = {
+                    'type': 'state_update',
+                    'norm2_new': new_norm**2,
+                    'norm2_old': old_norm**2
+                }
+                logger.debug(f"State energy event: {state_event}")
+            
+            # Memory event (if memory utilization changed)
+            if self.mem_util > 0:
+                mem_event = {
+                    'type': 'mem_event',
+                    'cost_delta': self.mem_util * 0.1  # Simplified cost delta
+                }
+                logger.debug(f"Memory energy event: {mem_event}")
+                
+        except Exception as e:
+            logger.warning(f"Failed to emit energy events: {e}")
         
         return {
             "agent_id": self.agent_id,

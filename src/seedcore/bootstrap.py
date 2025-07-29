@@ -9,6 +9,16 @@ from .memory.working_memory import MissTracker, SharedCache, MwStore
 
 def bootstrap_actors():
     """Create singleton actors at cluster bootstrap."""
+    # Check if we're in a worker process to avoid duplicate bootstrapping
+    try:
+        runtime_context = ray.get_runtime_context()
+        if runtime_context.worker.mode == ray.WORKER_MODE:
+            # We're in a worker process, don't bootstrap
+            return None, None, None
+    except Exception:
+        # If we can't get runtime context, assume we're the driver
+        pass
+    
     print("🚀 Bootstrapping singleton Ray actors...")
     
     # Initialize Ray if not already initialized
