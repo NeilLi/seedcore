@@ -89,6 +89,9 @@ class RayAgent:
         self.created_at = time.time()
         self.last_heartbeat = time.time()
         
+        # 11. Energy State Tracking (NEW)
+        self.energy_state: Dict[str, float] = {}
+        
         # --- NEW: Memory Managers for Mw and Mlt access ---
         # Initialize memory managers within the actor
         try:
@@ -123,6 +126,27 @@ class RayAgent:
     def get_state_embedding(self) -> np.ndarray:
         """Returns the current state embedding vector."""
         return self.state_embedding.copy()
+    
+    def update_energy_state(self, energy_data: Dict[str, float]):
+        """Updates the agent's knowledge of its energy contribution."""
+        self.energy_state = energy_data.copy()
+        
+    def get_energy_state(self) -> Dict[str, float]:
+        """Returns the current energy state."""
+        return self.energy_state.copy()
+    
+    def update_role_probs(self, new_role_probs: Dict[str, float]):
+        """Updates the agent's role probabilities."""
+        # Validate that probabilities sum to 1.0
+        total_prob = sum(new_role_probs.values())
+        if abs(total_prob - 1.0) > 1e-6:
+            logger.warning(f"Role probabilities don't sum to 1.0 (sum={total_prob}), normalizing")
+            # Normalize
+            for role in new_role_probs:
+                new_role_probs[role] /= total_prob
+        
+        self.role_probs = new_role_probs.copy()
+        logger.debug(f"Agent {self.agent_id} role probabilities updated: {self.role_probs}")
     
     def update_state_embedding(self, new_embedding: np.ndarray):
         """Updates the state embedding vector."""
@@ -284,7 +308,8 @@ class RayAgent:
                 "created_at": self.created_at,
                 "last_heartbeat": self.last_heartbeat,
                 "uptime": time.time() - self.created_at
-            }
+            },
+            "energy_state": self.energy_state  # Add energy state to heartbeat
         }
         
         self.last_heartbeat = time.time()

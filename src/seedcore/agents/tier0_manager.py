@@ -26,6 +26,7 @@ import logging
 import json
 
 from .ray_actor import RayAgent
+from ..energy.optimizer import select_best_agent
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,47 @@ class Tier0MemoryManager:
         import random
         agent_id = random.choice(list(self.agents.keys()))
         return self.execute_task_on_agent(agent_id, task_data)
+    
+    def execute_task_on_best_agent(self, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Executes a task on the most suitable agent based on energy optimization.
+        
+        Args:
+            task_data: Task information and payload
+            
+        Returns:
+            Task execution result or None if no agents available
+        """
+        if not self.agents:
+            logger.warning("No agents available for task execution")
+            return None
+        
+        # Get all agent actor handles
+        agent_handles = list(self.agents.values())
+        
+        # Define energy weights (these would typically come from a config)
+        energy_weights = {
+            'w_pair': 1.0,
+            'w_hyper': 1.0,
+            'w_explore': 0.2
+        }
+        
+        # Select the best agent using the optimizer
+        best_agent_handle = select_best_agent(agent_handles, task_data, energy_weights)
+        
+        if not best_agent_handle:
+            logger.error("Could not select a best agent.")
+            return None
+        
+        try:
+            # Execute the task on the selected agent
+            result = ray.get(best_agent_handle.execute_task.remote(task_data))
+            agent_id = ray.get(best_agent_handle.get_id.remote())
+            logger.info(f"✅ Task executed on best agent {agent_id}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to execute task on best agent: {e}")
+            return None
     
     async def collect_heartbeats(self) -> Dict[str, Dict[str, Any]]:
         """

@@ -1,15 +1,44 @@
-# Copyright 2024 SeedCore Contributors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+"""
+Energy Model Foundation Package
 
-"""Energy subpackage."""
+This package implements the energy-aware agent selection and optimization system
+as defined by the Cognitive Organism Architecture (COA).
+
+The energy model provides:
+- Unified Energy Function calculation
+- Energy-aware agent selection
+- Task complexity estimation
+- Role-based task assignment
+"""
+
+from .calculator import (
+    calculate_pair_energy,
+    calculate_entropy_energy,
+    calculate_reg_energy,
+    calculate_mem_energy,
+    calculate_total_energy
+)
+
+from .optimizer import (
+    calculate_agent_suitability_score,
+    select_best_agent,
+    rank_agents_by_suitability,
+    get_ideal_role_for_task,
+    estimate_task_complexity
+)
+
+__all__ = [
+    # Calculator functions
+    'calculate_pair_energy',
+    'calculate_entropy_energy', 
+    'calculate_reg_energy',
+    'calculate_mem_energy',
+    'calculate_total_energy',
+    
+    # Optimizer functions
+    'calculate_agent_suitability_score',
+    'select_best_agent',
+    'rank_agents_by_suitability',
+    'get_ideal_role_for_task',
+    'estimate_task_complexity'
+]
