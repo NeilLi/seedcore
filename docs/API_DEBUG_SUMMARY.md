@@ -2,7 +2,7 @@
 
 ## Issue Description
 
-The `/agents/state` endpoint at `http://54.179.114.199/agents/state` was returning an empty response due to a FastAPI validation error.
+The `/agents/state` endpoint was returning an empty response due to a FastAPI validation error.
 
 ## Root Cause Analysis
 
@@ -52,13 +52,13 @@ def get_agents_state() -> Dict:
 
 ### Before Fix
 ```bash
-curl -s http://54.179.114.199/agents/state
+curl -s /agents/state
 # Returns: (empty response)
 ```
 
 ### After Fix
 ```bash
-curl -s http://54.179.114.199/agents/state | jq .
+curl -s /agents/state | jq .
 ```
 
 **Response:**

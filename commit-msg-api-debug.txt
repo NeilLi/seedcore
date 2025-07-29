@@ -4,7 +4,7 @@ fix: resolve FastAPI validation error in /agents/state endpoint
 Fixed a critical FastAPI validation error that was preventing the `/agents/state` endpoint from returning data. The issue was caused by a type annotation mismatch between the function signature and actual return value.
 
 ## Problem
-The `/agents/state` endpoint at `http://54.179.114.199/agents/state` was returning empty responses due to:
+The `/agents/state` endpoint was returning empty responses due to:
 ```
 fastapi.exceptions.ResponseValidationError: 1 validation errors:
   {'type': 'list_type', 'loc': ('response',), 'msg': 'Input should be a valid list', 'input': {'agents': [...], 'summary': {...}}}
@@ -51,13 +51,13 @@ def get_agents_state() -> Dict:
 
 ### Before Fix
 ```bash
-curl -s http://54.179.114.199/agents/state
+curl -s /agents/state
 # Returns: (empty response)
 ```
 
 ### After Fix
 ```bash
-curl -s http://54.179.114.199/agents/state | jq .
+curl -s /agents/state | jq .
 # Returns: Complete agent data with summary
 ```
 
