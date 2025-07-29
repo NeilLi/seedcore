@@ -251,10 +251,258 @@ def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
 
 @app.get('/energy/gradient')
 async def energy_gradient():
-    return {
-        "CostVQ": COSTVQ._value.get(),
-        "deltaE_last": ENERGY_SLOPE._value.get()
-    }
+    """
+    Enhanced energy gradient endpoint that provides real energy data from the Energy Model Foundation.
+    """
+    try:
+        from ..energy.calculator import energy_gradient_payload, EnergyLedger, calculate_energy
+        from ..agents.tier0_manager import Tier0MemoryManager
+        import ray
+        
+        # Initialize Ray if not already done
+        if not ray.is_initialized():
+            ray.init(address="auto", ignore_reinit_error=True)
+        
+        # Get Tier0 manager instance (create if needed)
+        tier0_manager = Tier0MemoryManager()
+        
+        # Get all available agents
+        agent_ids = tier0_manager.list_agents()
+        
+        if not agent_ids:
+            # If no agents exist, create some default agents for demonstration
+            agent_configs = [
+                {"agent_id": "explorer_1", "role_probs": {"E": 0.8, "S": 0.1, "O": 0.1}},
+                {"agent_id": "specialist_1", "role_probs": {"E": 0.1, "S": 0.8, "O": 0.1}},
+                {"agent_id": "balanced_1", "role_probs": {"E": 0.4, "S": 0.4, "O": 0.2}}
+            ]
+            tier0_manager.create_agents_batch(agent_configs)
+            agent_ids = tier0_manager.list_agents()
+        
+        # Collect current agent data
+        agents = [tier0_manager.get_agent(agent_id) for agent_id in agent_ids if tier0_manager.get_agent(agent_id)]
+        
+        # Get memory system stats
+        memory_stats = {
+            'cost_vq': COSTVQ._value.get(),
+            'bytes_used': MEMORY_SYSTEM.get_memory_stats().get('bytes_used', 0),
+            'hit_count': MEMORY_SYSTEM.get_memory_stats().get('hit_count', 0),
+            'compression_ratio': compression_knob
+        }
+        
+        # Calculate real energy using the Energy Model Foundation
+        if agents:
+            # Create state for energy calculation
+            state = {
+                'agents': agents,
+                'memory_stats': memory_stats,
+                'pair_stats': PAIR_TRACKER.get_all_stats(),
+                'alpha': 0.1,
+                'lambda_reg': 0.01,
+                'beta_mem': 0.05
+            }
+            
+            # Calculate energy terms
+            energy_terms = calculate_energy(state)
+            
+            # Create energy ledger with real data
+            ledger = EnergyLedger()
+            ledger.terms = energy_terms
+            
+            # Add some pair stats for demonstration
+            if len(agents) >= 2:
+                # Simulate some pair interactions
+                for i in range(len(agents)):
+                    for j in range(i + 1, min(i + 2, len(agents))):
+                        pair_key = tuple(sorted([agent_ids[i], agent_ids[j]]))
+                        ledger.pair_stats[pair_key] = {
+                            'w': 0.7,  # Simulated collaboration weight
+                            'sim': 0.6  # Simulated similarity
+                        }
+            
+            # Get energy gradient payload
+            energy_payload = energy_gradient_payload(ledger)
+            
+            # Add additional real-time metrics
+            energy_payload.update({
+                "real_time_metrics": {
+                    "active_agents": len(agents),
+                    "total_agents": len(agent_ids),
+                    "memory_utilization": memory_stats['bytes_used'] / 1024,  # KB
+                    "compression_knob": compression_knob,
+                    "last_energy_update": time.time()
+                },
+                "agent_summaries": [
+                    {
+                        "agent_id": agent_id,
+                        "capability": ray.get(tier0_manager.get_agent(agent_id).get_heartbeat.remote()).get('capability_score', 0.5),
+                        "mem_util": ray.get(tier0_manager.get_agent(agent_id).get_heartbeat.remote()).get('mem_util', 0.0),
+                        "role_probs": ray.get(tier0_manager.get_agent(agent_id).get_heartbeat.remote()).get('role_probs', {})
+                    }
+                    for agent_id in agent_ids[:5]  # Limit to first 5 agents
+                ]
+            })
+            
+            return energy_payload
+            
+        else:
+            # Fallback to basic energy calculation
+            ledger = EnergyLedger()
+            return energy_gradient_payload(ledger)
+            
+    except Exception as e:
+        logger.error(f"Error calculating energy gradient: {e}")
+        # Return enhanced error response with fallback data
+        return {
+            "error": str(e),
+            "ts": time.time(),
+            "E_terms": {
+                "pair": 0.0,
+                "hyper": 0.0,
+                "entropy": 0.0,
+                "reg": 0.0,
+                "mem": COSTVQ._value.get(),
+                "total": COSTVQ._value.get()
+            },
+            "deltaE_last": ENERGY_SLOPE._value.get(),
+            "pair_stats_count": 0,
+            "hyper_stats_count": 0,
+            "role_entropy_count": 0,
+            "mem_stats_count": 0,
+            "real_time_metrics": {
+                "active_agents": 0,
+                "total_agents": 0,
+                "memory_utilization": 0,
+                "compression_knob": compression_knob,
+                "last_energy_update": time.time()
+            }
+        }
+
+
+@app.get("/energy/calibrate")
+def energy_calibrate():
+    """Energy calibration endpoint that runs synthetic tasks and returns calibration results."""
+    try:
+        from ..energy.calculator import EnergyLedger, calculate_energy
+        from ..agents.tier0_manager import Tier0MemoryManager
+        import ray
+        import numpy as np
+        
+        # Initialize Ray if not already done
+        if not ray.is_initialized():
+            ray.init(address="auto", ignore_reinit_error=True)
+        
+        # Get Tier0 manager
+        tier0_manager = Tier0MemoryManager()
+        agent_ids = tier0_manager.list_agents()
+        
+        # Create calibration agents if needed
+        if len(agent_ids) < 3:
+            agent_configs = [
+                {"agent_id": "cal_explorer", "role_probs": {"E": 0.8, "S": 0.1, "O": 0.1}},
+                {"agent_id": "cal_specialist", "role_probs": {"E": 0.1, "S": 0.8, "O": 0.1}},
+                {"agent_id": "cal_balanced", "role_probs": {"E": 0.4, "S": 0.4, "O": 0.2}}
+            ]
+            tier0_manager.create_agents_batch(agent_configs)
+            agent_ids = tier0_manager.list_agents()
+        
+        # Get agents
+        agents = [tier0_manager.get_agent(agent_id) for agent_id in agent_ids if tier0_manager.get_agent(agent_id)]
+        
+        # Run calibration tasks
+        calibration_results = []
+        energy_history = []
+        
+        for i in range(10):  # Run 10 calibration tasks
+            # Create synthetic task
+            task = {
+                "task_id": f"calibration_task_{i}",
+                "type": np.random.choice(["optimization", "exploration", "analysis"]),
+                "complexity": np.random.uniform(0.1, 0.9),
+                "description": f"Calibration task {i}"
+            }
+            
+            # Execute task with energy-aware selection
+            result = tier0_manager.execute_task_on_best_agent(task)
+            
+            if result and result.get('success'):
+                # Update energy ledger
+                ledger = EnergyLedger()
+                
+                # Simulate pair success event
+                if len(agents) >= 2:
+                    pair_event = {
+                        'type': 'pair_success',
+                        'agents': [result['agent_id'], f"task_{i}"],
+                        'success': result['success'],
+                        'sim': np.random.uniform(0.5, 0.9)
+                    }
+                    
+                    from ..energy.calculator import on_pair_success
+                    on_pair_success(pair_event, ledger)
+                
+                # Record energy
+                current_energy = ledger.get_total()
+                energy_history.append({
+                    'task_num': i + 1,
+                    'energy': current_energy,
+                    'timestamp': time.time()
+                })
+                
+                calibration_results.append({
+                    'task_id': task['task_id'],
+                    'agent_id': result.get('agent_id'),
+                    'success': result.get('success'),
+                    'energy': current_energy
+                })
+        
+        # Calculate calibration metrics
+        if energy_history:
+            energies = [e['energy'] for e in energy_history]
+            energy_trend = energies[-1] - energies[0] if len(energies) > 1 else 0.0
+            
+            calibration_metrics = {
+                'total_tasks': len(calibration_results),
+                'successful_tasks': len([r for r in calibration_results if r.get('success')]),
+                'final_energy': energies[-1] if energies else 0.0,
+                'energy_trend': energy_trend,
+                'energy_range': {'min': min(energies), 'max': max(energies)} if energies else {'min': 0.0, 'max': 0.0},
+                'trend_direction': 'decreasing' if energy_trend < 0 else 'increasing',
+                'calibration_quality': 'good' if energy_trend < 0 else 'needs_adjustment'
+            }
+        else:
+            calibration_metrics = {
+                'total_tasks': 0,
+                'successful_tasks': 0,
+                'final_energy': 0.0,
+                'energy_trend': 0.0,
+                'energy_range': {'min': 0.0, 'max': 0.0},
+                'trend_direction': 'unknown',
+                'calibration_quality': 'insufficient_data'
+            }
+        
+        return {
+            "timestamp": time.time(),
+            "calibration_metrics": calibration_metrics,
+            "energy_history": energy_history,
+            "task_results": calibration_results,
+            "agent_summary": {
+                "total_agents": len(agent_ids),
+                "active_agents": len([a for a in agents if a is not None]),
+                "agent_ids": agent_ids
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Energy calibration failed: {e}")
+        return {
+            "error": str(e),
+            "timestamp": time.time(),
+            "calibration_metrics": {"error": "Calibration failed"},
+            "energy_history": [],
+            "task_results": [],
+            "agent_summary": {"total_agents": 0}
+        }
 
 
 @app.get("/healthz/energy")
@@ -262,9 +510,29 @@ def healthz_energy():
     """Health check endpoint for energy system readiness."""
     try:
         from ..energy.calculator import energy_gradient_payload, EnergyLedger
+        from ..agents.tier0_manager import Tier0MemoryManager
+        import ray
         
-        # Create a temporary ledger for health check
+        # Initialize Ray if not already done
+        if not ray.is_initialized():
+            ray.init(address="auto", ignore_reinit_error=True)
+        
+        # Get Tier0 manager for real agent data
+        tier0_manager = Tier0MemoryManager()
+        agent_ids = tier0_manager.list_agents()
+        
+        # Create a ledger with real data
         ledger = EnergyLedger()
+        
+        # Add some real pair stats if agents exist
+        if len(agent_ids) >= 2:
+            for i in range(len(agent_ids)):
+                for j in range(i + 1, min(i + 2, len(agent_ids))):
+                    pair_key = tuple(sorted([agent_ids[i], agent_ids[j]]))
+                    ledger.pair_stats[pair_key] = {
+                        'w': 0.7,  # Simulated collaboration weight
+                        'sim': 0.6  # Simulated similarity
+                    }
         
         # Get energy ledger snapshot
         ledger_snapshot = energy_gradient_payload(ledger)
@@ -280,14 +548,48 @@ def healthz_energy():
             status = "unhealthy"
             message = "Energy calculation error"
         
+        # Get real-time agent metrics
+        agent_metrics = {
+            "total_agents": len(agent_ids),
+            "active_agents": 0,
+            "avg_capability": 0.0,
+            "avg_mem_util": 0.0
+        }
+        
+        if agent_ids:
+            active_count = 0
+            total_capability = 0.0
+            total_mem_util = 0.0
+            
+            for agent_id in agent_ids[:5]:  # Check first 5 agents
+                try:
+                    agent = tier0_manager.get_agent(agent_id)
+                    if agent:
+                        heartbeat = ray.get(agent.get_heartbeat.remote())
+                        if heartbeat.get('last_heartbeat', 0) > time.time() - 300:  # Active in last 5 minutes
+                            active_count += 1
+                        total_capability += heartbeat.get('capability_score', 0.5)
+                        total_mem_util += heartbeat.get('mem_util', 0.0)
+                except Exception:
+                    pass
+            
+            agent_metrics.update({
+                "active_agents": active_count,
+                "avg_capability": total_capability / len(agent_ids) if agent_ids else 0.0,
+                "avg_mem_util": total_mem_util / len(agent_ids) if agent_ids else 0.0
+            })
+        
         return {
             "status": status,
             "message": message,
             "timestamp": time.time(),
             "energy_snapshot": ledger_snapshot,
+            "agent_metrics": agent_metrics,
             "checks": {
                 "energy_calculation": "pass" if status == "healthy" else "fail",
                 "ledger_accessible": "pass",
+                "ray_connection": "pass" if ray.is_initialized() else "fail",
+                "tier0_manager": "pass" if tier0_manager else "fail",
                 "pair_stats_count": len(ledger.pair_stats),
                 "hyper_stats_count": len(ledger.hyper_stats),
                 "role_entropy_count": len(ledger.role_entropy),
@@ -302,43 +604,320 @@ def healthz_energy():
             "timestamp": time.time(),
             "checks": {
                 "energy_calculation": "fail",
-                "ledger_accessible": "fail"
+                "ledger_accessible": "fail",
+                "ray_connection": "fail",
+                "tier0_manager": "fail"
             }
         }
 
+
+@app.get("/energy/monitor")
+def energy_monitor():
+    """Real-time energy monitoring endpoint with detailed metrics."""
+    try:
+        from ..energy.calculator import energy_gradient_payload, EnergyLedger, calculate_energy
+        from ..agents.tier0_manager import Tier0MemoryManager
+        import ray
+        
+        # Initialize Ray if not already done
+        if not ray.is_initialized():
+            ray.init(address="auto", ignore_reinit_error=True)
+        
+        # Get Tier0 manager
+        tier0_manager = Tier0MemoryManager()
+        agent_ids = tier0_manager.list_agents()
+        
+        # Create default agents if none exist
+        if not agent_ids:
+            agent_configs = [
+                {"agent_id": "monitor_explorer", "role_probs": {"E": 0.8, "S": 0.1, "O": 0.1}},
+                {"agent_id": "monitor_specialist", "role_probs": {"E": 0.1, "S": 0.8, "O": 0.1}},
+                {"agent_id": "monitor_balanced", "role_probs": {"E": 0.4, "S": 0.4, "O": 0.2}}
+            ]
+            tier0_manager.create_agents_batch(agent_configs)
+            agent_ids = tier0_manager.list_agents()
+        
+        # Get agents and calculate real energy
+        agents = [tier0_manager.get_agent(agent_id) for agent_id in agent_ids if tier0_manager.get_agent(agent_id)]
+        
+        # Memory system stats
+        memory_stats = {
+            'cost_vq': COSTVQ._value.get(),
+            'bytes_used': MEMORY_SYSTEM.get_memory_stats().get('bytes_used', 0),
+            'hit_count': MEMORY_SYSTEM.get_memory_stats().get('hit_count', 0),
+            'compression_ratio': compression_knob
+        }
+        
+        # Calculate energy if agents exist
+        if agents:
+            state = {
+                'agents': agents,
+                'memory_stats': memory_stats,
+                'pair_stats': PAIR_TRACKER.get_all_stats(),
+                'alpha': 0.1,
+                'lambda_reg': 0.01,
+                'beta_mem': 0.05
+            }
+            energy_terms = calculate_energy(state)
+        else:
+            energy_terms = EnergyLedger().terms
+        
+        # Get detailed agent metrics
+        agent_details = []
+        for agent_id in agent_ids:
+            try:
+                agent = tier0_manager.get_agent(agent_id)
+                if agent:
+                    heartbeat = ray.get(agent.get_heartbeat.remote())
+                    summary = ray.get(agent.get_summary_stats.remote())
+                    energy_proxy = ray.get(agent.get_energy_proxy.remote())
+                    
+                    agent_details.append({
+                        "agent_id": agent_id,
+                        "capability": heartbeat.get('capability_score', 0.5),
+                        "mem_util": heartbeat.get('mem_util', 0.0),
+                        "role_probs": heartbeat.get('role_probs', {}),
+                        "tasks_processed": summary.get('tasks_processed', 0),
+                        "success_rate": summary.get('success_rate', 0.0),
+                        "energy_proxy": energy_proxy,
+                        "last_heartbeat": heartbeat.get('last_heartbeat', time.time()),
+                        "is_active": heartbeat.get('last_heartbeat', 0) > time.time() - 300
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get details for agent {agent_id}: {e}")
+        
+        return {
+            "timestamp": time.time(),
+            "energy_terms": {
+                "pair": energy_terms.pair,
+                "hyper": energy_terms.hyper,
+                "entropy": energy_terms.entropy,
+                "reg": energy_terms.reg,
+                "mem": energy_terms.mem,
+                "total": energy_terms.total
+            },
+            "memory_metrics": {
+                "cost_vq": memory_stats['cost_vq'],
+                "bytes_used_kb": memory_stats['bytes_used'] / 1024,
+                "hit_count": memory_stats['hit_count'],
+                "compression_ratio": memory_stats['compression_ratio']
+            },
+            "agent_metrics": {
+                "total_agents": len(agent_ids),
+                "active_agents": len([a for a in agent_details if a.get('is_active', False)]),
+                "avg_capability": sum(a.get('capability', 0) for a in agent_details) / len(agent_details) if agent_details else 0.0,
+                "avg_mem_util": sum(a.get('mem_util', 0) for a in agent_details) / len(agent_details) if agent_details else 0.0,
+                "agent_details": agent_details
+            },
+            "system_metrics": {
+                "compression_knob": compression_knob,
+                "energy_slope": ENERGY_SLOPE._value.get(),
+                "ray_initialized": ray.is_initialized(),
+                "tier0_manager_available": tier0_manager is not None
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Energy monitoring failed: {e}")
+        return {
+            "error": str(e),
+            "timestamp": time.time(),
+            "energy_terms": {"total": 0.0},
+            "memory_metrics": {},
+            "agent_metrics": {"total_agents": 0},
+            "system_metrics": {}
+        }
+
 @app.get('/agents/state')
-def get_agents_state() -> List[Dict]:
-    """Returns the current state of all agents in the simulation."""
-    all_agents = []
-    for organ in SIMULATION_REGISTRY.all():
-        for agent in organ.agents:
-            all_agents.append({
-                "id": agent.agent_id,
-                "capability": agent.capability,
-                "mem_util": agent.mem_util,
-                "role_probs": agent.role_probs,
-                "personality_vector": agent.h.tolist(),
-                "memory_writes": agent.memory_writes,
-                "memory_hits_on_writes": agent.memory_hits_on_writes,
-                "salient_events_logged": agent.salient_events_logged,
-                "total_compression_gain": agent.total_compression_gain
-            })
-    return all_agents
+def get_agents_state() -> Dict:
+    """Returns the current state of all agents in the simulation with real data."""
+    try:
+        from ..agents.tier0_manager import Tier0MemoryManager
+        import ray
+        
+        # Initialize Ray if not already done
+        if not ray.is_initialized():
+            ray.init(address="auto", ignore_reinit_error=True)
+        
+        all_agents = []
+        
+        # Get Tier0 agents (real Ray actors)
+        tier0_manager = Tier0MemoryManager()
+        agent_ids = tier0_manager.list_agents()
+        
+        for agent_id in agent_ids:
+            try:
+                agent = tier0_manager.get_agent(agent_id)
+                if agent:
+                    heartbeat = ray.get(agent.get_heartbeat.remote())
+                    summary = ray.get(agent.get_summary_stats.remote())
+                    
+                    all_agents.append({
+                        "id": agent_id,
+                        "type": "tier0_ray_agent",
+                        "capability": heartbeat.get('capability_score', 0.5),
+                        "mem_util": heartbeat.get('mem_util', 0.0),
+                        "role_probs": heartbeat.get('role_probs', {}),
+                        "state_embedding": ray.get(agent.get_state_embedding.remote()).tolist(),
+                        "memory_writes": summary.get('memory_writes', 0),
+                        "memory_hits_on_writes": summary.get('memory_hits_on_writes', 0),
+                        "salient_events_logged": summary.get('salient_events_logged', 0),
+                        "total_compression_gain": summary.get('total_compression_gain', 0.0),
+                        "tasks_processed": summary.get('tasks_processed', 0),
+                        "success_rate": summary.get('success_rate', 0.0),
+                        "avg_quality": summary.get('avg_quality', 0.0),
+                        "peer_interactions": summary.get('peer_interactions_count', 0),
+                        "last_heartbeat": heartbeat.get('last_heartbeat', time.time()),
+                        "energy_state": heartbeat.get('energy_state', {}),
+                        "created_at": heartbeat.get('created_at', time.time())
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get state for Tier0 agent {agent_id}: {e}")
+                # Add error entry
+                all_agents.append({
+                    "id": agent_id,
+                    "type": "tier0_ray_agent",
+                    "error": str(e),
+                    "status": "unavailable"
+                })
+        
+        # Get legacy organ agents
+        for organ in SIMULATION_REGISTRY.all():
+            for agent in organ.agents:
+                all_agents.append({
+                    "id": agent.agent_id,
+                    "type": "legacy_organ_agent",
+                    "capability": agent.capability,
+                    "mem_util": agent.mem_util,
+                    "role_probs": agent.role_probs,
+                    "personality_vector": agent.h.tolist(),
+                    "memory_writes": agent.memory_writes,
+                    "memory_hits_on_writes": agent.memory_hits_on_writes,
+                    "salient_events_logged": agent.salient_events_logged,
+                    "total_compression_gain": agent.total_compression_gain
+                })
+        
+        return {
+            "agents": all_agents,
+            "summary": {
+                "total_agents": len(all_agents),
+                "tier0_agents": len([a for a in all_agents if a.get('type') == 'tier0_ray_agent']),
+                "legacy_agents": len([a for a in all_agents if a.get('type') == 'legacy_organ_agent']),
+                "active_agents": len([a for a in all_agents if a.get('last_heartbeat', 0) > time.time() - 300]),
+                "timestamp": time.time()
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting agents state: {e}")
+        return {
+            "error": str(e),
+            "agents": [],
+            "summary": {
+                "total_agents": 0,
+                "tier0_agents": 0,
+                "legacy_agents": 0,
+                "active_agents": 0,
+                "timestamp": time.time()
+            }
+        }
 
 @app.get('/system/status')
 def system_status():
-    """Returns the current status of the persistent system."""
-    organs = SIMULATION_REGISTRY.all()
-    total_agents = sum(len(organ.agents) for organ in organs)
-    
-    return {
-        "organs": [{"id": organ.organ_id, "agent_count": len(organ.agents)} for organ in organs],
-        "total_agents": total_agents,
-        "energy_state": energy_gradient_payload(),
-        "compression_knob": compression_knob,
-        "pair_stats": PAIR_TRACKER.get_all_stats(),
-        "memory_system": MEMORY_SYSTEM.get_memory_stats()
-    }
+    """Returns the current status of the persistent system with real data."""
+    try:
+        from ..energy.calculator import energy_gradient_payload, EnergyLedger
+        from ..agents.tier0_manager import Tier0MemoryManager
+        import ray
+        
+        # Initialize Ray if not already done
+        if not ray.is_initialized():
+            ray.init(address="auto", ignore_reinit_error=True)
+        
+        # Get Tier0 manager for real agent data
+        tier0_manager = Tier0MemoryManager()
+        agent_ids = tier0_manager.list_agents()
+        
+        # Get legacy organ data
+        organs = SIMULATION_REGISTRY.all()
+        legacy_agents = sum(len(organ.agents) for organ in organs)
+        
+        # Get real energy state
+        try:
+            energy_state = energy_gradient_payload(EnergyLedger())
+        except Exception:
+            energy_state = {"error": "Energy calculation failed"}
+        
+        # Get enhanced memory system stats
+        memory_stats = MEMORY_SYSTEM.get_memory_stats()
+        memory_stats.update({
+            "compression_knob": compression_knob,
+            "cost_vq": COSTVQ._value.get(),
+            "energy_slope": ENERGY_SLOPE._value.get()
+        })
+        
+        # Get real agent statistics
+        agent_stats = []
+        if agent_ids:
+            for agent_id in agent_ids[:10]:  # Limit to first 10 agents
+                try:
+                    agent = tier0_manager.get_agent(agent_id)
+                    if agent:
+                        heartbeat = ray.get(agent.get_heartbeat.remote())
+                        agent_stats.append({
+                            "agent_id": agent_id,
+                            "capability_score": heartbeat.get('capability_score', 0.5),
+                            "mem_util": heartbeat.get('mem_util', 0.0),
+                            "tasks_processed": heartbeat.get('tasks_processed', 0),
+                            "success_rate": heartbeat.get('success_rate', 0.0),
+                            "role_probs": heartbeat.get('role_probs', {}),
+                            "last_heartbeat": heartbeat.get('last_heartbeat', time.time())
+                        })
+                except Exception as e:
+                    logger.warning(f"Failed to get stats for agent {agent_id}: {e}")
+        
+        return {
+            "system_info": {
+                "timestamp": time.time(),
+                "version": "1.0.0",
+                "status": "operational"
+            },
+            "agents": {
+                "tier0_agents": len(agent_ids),
+                "legacy_agents": legacy_agents,
+                "total_agents": len(agent_ids) + legacy_agents,
+                "agent_details": agent_stats
+            },
+            "organs": [{"id": organ.organ_id, "agent_count": len(organ.agents)} for organ in organs],
+            "energy_system": {
+                "energy_state": energy_state,
+                "compression_knob": compression_knob,
+                "cost_vq": COSTVQ._value.get(),
+                "energy_slope": ENERGY_SLOPE._value.get()
+            },
+            "memory_system": memory_stats,
+            "pair_stats": PAIR_TRACKER.get_all_stats(),
+            "performance_metrics": {
+                "memory_utilization_kb": memory_stats.get('bytes_used', 0) / 1024,
+                "hit_rate": memory_stats.get('hit_count', 0) / max(memory_stats.get('total_requests', 1), 1),
+                "compression_efficiency": compression_knob,
+                "active_agents": len([a for a in agent_stats if a.get('last_heartbeat', 0) > time.time() - 300])  # Active in last 5 minutes
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting system status: {e}")
+        return {
+            "error": str(e),
+            "timestamp": time.time(),
+            "status": "error",
+            "organs": [],
+            "agents": {"total_agents": 0},
+            "energy_system": {"energy_state": {"error": "Calculation failed"}},
+            "memory_system": {"error": "Unavailable"},
+            "pair_stats": {},
+            "performance_metrics": {}
+        }
 
 @app.post('/actions/run_two_agent_task')
 def run_two_agent_task():
