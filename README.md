@@ -20,6 +20,7 @@ A stateful, interactive cognitive architecture system with persistent organs, ag
 - **Fast Loop**: Real-time agent selection and task execution
 - **Slow Loop**: Energy-aware role evolution with learning rate control
 - **Memory Loop**: Adaptive compression and memory utilization control
+- **Energy Model Foundation**: Intelligent energy-aware agent selection and optimization
 
 ### 📊 Comprehensive Telemetry
 - Energy gradient monitoring
@@ -159,6 +160,30 @@ The system tracks five energy terms:
 - **entropy**: Choice availability and uncertainty energy
 - **reg**: Regularization and model complexity energy
 - **mem**: Memory usage and compression energy
+
+### Energy Model Foundation
+The system implements intelligent energy-aware agent selection and optimization:
+
+```python
+# Energy-aware task execution
+from src.seedcore.agents.tier0_manager import Tier0MemoryManager
+
+tier0_manager = Tier0MemoryManager()
+result = tier0_manager.execute_task_on_best_agent(task_data)
+```
+
+**Key Features:**
+- **Unified Energy Function**: Five-term energy calculation (pair, entropy, reg, mem, hyper)
+- **Energy Gradient Proxies**: Intelligent agent suitability scoring
+- **Task-Role Mapping**: Automatic mapping of tasks to optimal agent roles
+- **Ray Integration**: Distributed energy calculations across the cluster
+
+**Energy Terms:**
+- **Pair Energy**: Collaboration similarity between agents
+- **Entropy Energy**: Role diversity maintenance
+- **Regularization Energy**: State complexity control
+- **Memory Energy**: Memory pressure and information loss
+- **Hyper Energy**: Complex pattern tracking (future)
 
 ### Control Loops
 
