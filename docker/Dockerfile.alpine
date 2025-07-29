@@ -1,5 +1,5 @@
 # Stage 1: Build dependencies
-FROM python:3.11-alpine AS builder
+FROM python:3.10-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache \
@@ -14,7 +14,7 @@ RUN pip install --upgrade pip && \
     pip install --prefix=/install --no-cache-dir -r requirements.txt
 
 # Stage 2: Final image
-FROM python:3.11-alpine
+FROM python:3.10-alpine
 
 # Install runtime dependencies only
 RUN apk add --no-cache \
