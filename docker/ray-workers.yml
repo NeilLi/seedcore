@@ -28,7 +28,7 @@ services:
       - docker_seedcore-network
     restart: unless-stopped
     # Ray workers connect to the head's Redis port 6379
-    command: ray start --address=ray-head:6379 --num-cpus 1 --block
+    command: ray start --address=seedcore-ray-head:6379 --num-cpus 1 --block
     deploy:
       replicas: 3
 
