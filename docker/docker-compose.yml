@@ -71,6 +71,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    image: seedcore-db-seed:latest
     container_name: seedcore-db-seed
     environment:
       PYTHONPATH: /app:/app/src
@@ -96,11 +97,12 @@ services:
     command: python -m scripts.populate_mlt_simple
     restart: "no"
 
-  ray-head:
+  seedcore-ray-head:
     build:
       context: ..
       dockerfile: docker/Dockerfile.ray
-    container_name: ray-head
+    image: seedcore-ray-head:latest
+    container_name: seedcore-ray-head
     shm_size: '4gb'
     working_dir: /app
     environment:
@@ -149,13 +151,14 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    image: seedcore-api:latest
     container_name: seedcore-api
     working_dir: /app
     environment:
       PYTHONPATH: /app:/app/src
-      RAY_ADDRESS: ray://ray-head:10001
+      RAY_ADDRESS: ray://seedcore-ray-head:10001
     env_file:
-      - ../.env
+      - .env
     ports:
       - "80:8000"
     depends_on:
@@ -165,7 +168,7 @@ services:
         condition: service_healthy
       neo4j:
         condition: service_healthy
-      ray-head:
+      seedcore-ray-head:
         condition: service_started
     networks:
       - seedcore-network
@@ -187,7 +190,7 @@ services:
     ports:
       - "8081:8081"
     depends_on:
-      - ray-head
+      - seedcore-ray-head
     networks:
       - seedcore-network
 
@@ -200,7 +203,7 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - ray-head
+      - seedcore-ray-head
       - ray-metrics-proxy
     networks:
       - seedcore-network
@@ -218,7 +221,7 @@ services:
       - "9090:9090"
     depends_on:
       - seedcore-api
-      - ray-head
+      - seedcore-ray-head
     networks:
       - seedcore-network
 
