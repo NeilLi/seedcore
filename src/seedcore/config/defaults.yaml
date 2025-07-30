@@ -13,3 +13,19 @@ seedcore:
     alpha: 0.5
     lambda_reg: 0.01
     beta_mem: 0.2
+  
+  # COA Organism Configuration
+  organism:
+    organ_types:
+      - id: "cognitive_organ_1"
+        type: "Cognitive"
+        description: "Handles reasoning, planning, and complex task decomposition."
+        agent_count: 1
+      - id: "actuator_organ_1"
+        type: "Actuator"
+        description: "Executes actions and interacts with external APIs."
+        agent_count: 1
+      - id: "utility_organ_1"
+        type: "Utility"
+        description: "Manages memory, health checks, and internal system tasks."
+        agent_count: 1 

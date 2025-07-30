@@ -12,4 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Organs subpackage."""
+"""Organs subpackage for COA framework."""
+
+from .base import Organ
+from .organism_manager import OrganismManager, organism_manager
+
+__all__ = ['Organ', 'OrganismManager', 'organism_manager']

@@ -20,25 +20,69 @@ upstream to the energy system. See §4, §6, and §3.x gradient proxies.
 """
 
 from __future__ import annotations
-from typing import List, Any, TYPE_CHECKING
+import ray
+from typing import List, Any, TYPE_CHECKING, Dict
 
 if TYPE_CHECKING:
-    from ..agents.base import Agent
+    from ..agents.ray_actor import RayAgent
 
+@ray.remote
 class Organ:
-    def __init__(self, organ_id: str):
+    """
+    Stateful Ray-based organ actor for COA framework.
+    
+    Each organ acts as a specialized container for pools of agents,
+    reflecting the "swarm-of-swarms" model central to the COA framework.
+    """
+    
+    def __init__(self, organ_id: str, organ_type: str):
         self.organ_id = organ_id
-        self.agents: List['Agent'] = []
+        self.organ_type = organ_type
+        self.agents: Dict[str, 'RayAgent'] = {}
 
-    def register(self, agent: 'Agent'):
-        self.agents.append(agent)
+    def register_agent(self, agent_id: str, agent_handle: 'RayAgent'):
+        """Registers a Ray agent actor with this organ."""
+        self.agents[agent_id] = agent_handle
 
-    def select_agent(self, task) -> 'Agent':
-        # TODO: implement energy-aware scoring proxy
+    def get_agent_count(self) -> int:
+        """Returns the number of agents in this organ."""
+        return len(self.agents)
+
+    def select_agent(self, task) -> 'RayAgent':
+        """
+        Selects an agent within the organ for a task.
+        TODO: Implement the full energy-aware scoring proxy here.
+        """
         if not self.agents:
             raise ValueError("No agents available in this organ.")
-        return self.agents[0]
+        # Simple random selection for now
+        import random
+        agent_id = random.choice(list(self.agents.keys()))
+        return self.agents[agent_id]
 
-    def run_task(self, task):
+    async def run_task(self, task):
+        """Selects an agent and executes a task, returning the result."""
         agent = self.select_agent(task)
-        return agent.execute(task)
+        # Use .remote() to call the Ray actor method
+        result_ref = agent.execute_task.remote(task)
+        return await result_ref
+
+    def get_status(self) -> Dict[str, Any]:
+        """Returns the current status of the organ."""
+        return {
+            "organ_id": self.organ_id,
+            "organ_type": self.organ_type,
+            "agent_count": len(self.agents),
+            "agent_ids": list(self.agents.keys())
+        }
+
+    def get_agent_handles(self) -> Dict[str, 'RayAgent']:
+        """Returns all agent handles in this organ."""
+        return self.agents.copy()
+
+    def remove_agent(self, agent_id: str) -> bool:
+        """Removes an agent from this organ."""
+        if agent_id in self.agents:
+            del self.agents[agent_id]
+            return True
+        return False
