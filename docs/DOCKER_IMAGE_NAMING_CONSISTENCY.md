@@ -7,10 +7,10 @@ Updated Docker Compose configuration to use consistent image naming without the 
 ## Problem
 
 Docker Compose was automatically naming built images with the `docker-` prefix:
-- `docker-ray-head:latest`
-- `docker-ray-worker:latest`
-- `docker-seedcore-api:latest`
-- `docker-db-seed:latest`
+- `seedcore-ray-head:latest`
+- `seedcore-ray-worker:latest`
+- `seedcore-api:latest`
+- `seedcore-db-seed:latest`
 
 This created inconsistency with other images that don't have the prefix.
 
@@ -56,10 +56,10 @@ ray-worker:
 
 | Service | Old Name | New Name |
 |---------|----------|----------|
-| Ray Head | `docker-ray-head:latest` | `seedcore-ray-head:latest` |
-| Ray Worker | `docker-ray-worker:latest` | `seedcore-ray-worker:latest` |
-| SeedCore API | `docker-seedcore-api:latest` | `seedcore-api:latest` |
-| DB Seed | `docker-db-seed:latest` | `seedcore-db-seed:latest` |
+| Ray Head | `seedcore-ray-head:latest` | `seedcore-ray-head:latest` |
+| Ray Worker | `seedcore-ray-worker:latest` | `seedcore-ray-worker:latest` |
+| SeedCore API | `seedcore-api:latest` | `seedcore-api:latest` |
+| DB Seed | `seedcore-db-seed:latest` | `seedcore-db-seed:latest` |
 
 ## Migration Steps
 
@@ -74,7 +74,7 @@ docker compose down
 docker compose -f ray-workers.yml down
 
 # Remove old images
-docker rmi docker-ray-head:latest docker-ray-worker:latest docker-seedcore-api:latest docker-db-seed:latest
+docker rmi seedcore-ray-head:latest seedcore-ray-worker:latest seedcore-api:latest seedcore-db-seed:latest
 
 # Build new images
 docker compose build

@@ -195,14 +195,14 @@ services:
     networks:
       - seedcore-network
 
-  # Dashboard proxy to intercept localhost:8080 requests
+  # Dashboard proxy to intercept localhost:8082 requests
   ray-dashboard-proxy:
     image: nginx:alpine
     container_name: seedcore-ray-dashboard-proxy
     volumes:
       - ./dashboard-proxy.conf:/etc/nginx/nginx.conf:ro
     ports:
-      - "8080:8080"
+      - "8082:8080"
     depends_on:
       - seedcore-ray-head
       - ray-metrics-proxy

@@ -21,10 +21,10 @@ echo "✅ .env file found in docker/ directory"
 
 # Remove old images with docker- prefix
 echo "🗑️  Removing old images with docker- prefix..."
-docker rmi docker-ray-head:latest 2>/dev/null || echo "  - docker-ray-head:latest not found"
-docker rmi docker-ray-worker:latest 2>/dev/null || echo "  - docker-ray-worker:latest not found"
-docker rmi docker-seedcore-api:latest 2>/dev/null || echo "  - docker-seedcore-api:latest not found"
-docker rmi docker-db-seed:latest 2>/dev/null || echo "  - docker-db-seed:latest not found"
+docker rmi seedcore-ray-head:latest 2>/dev/null || echo "  - seedcore-ray-head:latest not found"
+docker rmi seedcore-ray-worker:latest 2>/dev/null || echo "  - seedcore-ray-worker:latest not found"
+docker rmi seedcore-api:latest 2>/dev/null || echo "  - seedcore-api:latest not found"
+docker rmi seedcore-db-seed:latest 2>/dev/null || echo "  - seedcore-db-seed:latest not found"
 
 # Build new images with consistent naming
 echo "🔨 Building new images with consistent naming..."
