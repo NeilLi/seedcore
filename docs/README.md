@@ -1,455 +1,441 @@
 # SeedCore Documentation
 
-## Project Overview
+## Overview
 
-SeedCore is a multi-tier memory system implementing the Collective Organic Architecture (COA) specification. The system provides stateful Ray-based agents with distributed memory management across multiple tiers.
+SeedCore is a distributed cognitive computing platform that implements the Cognitive Organism Architecture (COA) using Ray for distributed computing. This documentation provides comprehensive guidance for understanding, deploying, and managing the SeedCore system.
 
-## Architecture Overview
+## System Architecture
 
-### Memory Tiers Implementation Status
-
-| Tier | Name | Purpose | Status | Implementation |
-|------|------|---------|--------|----------------|
-| **Tier 0** | **Ma** | Per-Agent Memory | ✅ **COMPLETE** | Ray Actors with 128-dim state vectors |
-| **Tier 1** | **Mw** | Working Memory | ✅ **COMPLETE** | In-memory with capacity limits |
-| **Tier 2** | **Mlt** | Long-Term Memory | ✅ **COMPLETE** | In-memory with larger capacity |
-| **Tier 3** | **Mfb** | Flashbulb Memory | ✅ **COMPLETE** | MySQL-backed for high-salience events |
-
-### Infrastructure Status
-
-| Component | Status | Details |
-|-----------|--------|---------|
-| **Ray Cluster** | ✅ **RUNNING** | Head + Worker nodes for distributed computing |
-| **PostgreSQL** | ✅ **RUNNING** | Primary relational database |
-| **Neo4j** | ✅ **RUNNING** | Graph database for relationships |
-| **Redis** | ✅ **RUNNING** | In-memory cache and pub/sub |
-| **MySQL** | ✅ **RUNNING** | Flashbulb Memory storage |
-| **FastAPI** | ✅ **RUNNING** | REST API server on port 80 |
-
-## Current Implementation Details
-
-### Tier 0: Per-Agent Memory (Ma) ✅
-
-**Location**: `src/seedcore/agents/ray_actor.py`
-
-**Features**:
-- Stateful Ray actors with private memory
-- 128-dimensional state vectors (h)
-- Performance tracking (success_rate, quality_score, capability_score)
-- EWMA-smoothed capability scores
-- Memory utilization tracking
-- Heartbeat system for monitoring
-- Role probability distributions (E/S/O)
-
-**API Endpoints**:
-- `POST /tier0/agents/create` - Create new agent
-- `GET /tier0/agents/{id}/heartbeat` - Get agent heartbeat
-- `POST /tier0/agents/{id}/execute` - Execute task on agent
-- `GET /tier0/summary` - System summary
-
-### Tier 1: Working Memory (Mw) ✅
-
-**Location**: `src/seedcore/memory/system.py`
-
-**Features**:
-- In-memory storage with capacity limits
-- Fast access for active data
-- Automatic overflow to long-term memory
-- Hit/miss tracking
-
-### Tier 2: Long-Term Memory (Mlt) ✅
-
-**Location**: `src/seedcore/memory/system.py`
-
-**Features**:
-- Larger capacity than working memory
-- Slower access but persistent storage
-- Compression and optimization
-- Integration with PostgreSQL backend
-
-### Tier 3: Flashbulb Memory (Mfb) ✅
-
-**Location**: `src/seedcore/memory/flashbulb_memory.py`
-
-**Features**:
-- MySQL-backed storage for high-salience events
-- JSON event data storage
-- Salience score tracking
-- Time-based and threshold-based queries
-- Durable long-term archiving
-
-**API Endpoints**:
-- `POST /mfb/incidents` - Log high-salience incident
-- `GET /mfb/incidents/{id}` - Retrieve incident
-- `GET /mfb/incidents` - Query incidents by time/salience
-- `GET /mfb/stats` - System statistics
-
-## File Structure
+SeedCore implements a "swarm-of-swarms" model with specialized organs containing intelligent agents:
 
 ```
-seedcore/
-├── docker/
-│   ├── docker-compose.yml          # Multi-service orchestration
-│   ├── setup/
-│   │   └── init_mysql.sql         # MySQL initialization
-│   └── requirements-minimal.txt    # Python dependencies
-├── src/seedcore/
-│   ├── agents/
-│   │   ├── ray_actor.py           # Tier 0 Ray agents
-│   │   ├── tier0_manager.py       # Agent management
-│   │   └── __init__.py
-│   ├── memory/
-│   │   ├── system.py              # Memory tier implementation
-│   │   ├── flashbulb_memory.py    # Flashbulb memory (Mfb)
-│   │   ├── long_term_memory.py    # Long-term memory (Mlt)
-│   │   └── __init__.py
-│   ├── telemetry/
-│   │   ├── server.py              # FastAPI server
-│   │   ├── stats.py               # Statistics collection
-│   │   └── __init__.py
-│   └── __init__.py
-├── scripts/
-│   ├── scenario_1_knowledge_gap.py # Collaborative task scenario
-│   ├── populate_mlt.py            # Pre-populate long-term memory
-│   └── write_to_mw.py             # Working memory operations
-├── tests/
-└── docs/
+SeedCore Platform
+├── Ray Distributed Computing Cluster
+│   ├── Ray Head Node (Cluster Management)
+│   ├── Ray Workers (Distributed Processing)
+│   └── Redis (State Management)
+├── Cognitive Organism Architecture (COA)
+│   ├── Cognitive Organ (Reasoning & Planning)
+│   ├── Actuator Organ (Action Execution)
+│   └── Utility Organ (System Management)
+├── FastAPI Application Server
+│   ├── HTTP Endpoints
+│   ├── OrganismManager
+│   └── Task Execution
+└── Observability Stack
+    ├── Prometheus (Metrics)
+    ├── Grafana (Visualization)
+    └── Ray Dashboard (Monitoring)
 ```
 
-## Scenarios and Examples
+## Quick Start
 
-### Scenario 1: Collaborative Task with Knowledge Gap
+### Prerequisites
 
-**Purpose**: Tests how agents collaborate, identify knowledge gaps, and use the memory hierarchy to fill them.
+- Docker and Docker Compose
+- 4GB+ RAM available
+- Linux/macOS/Windows with Docker support
 
-**Flow**:
-1. Two agents are assigned a collaborative task
-2. Agent A has partial knowledge, Agent B needs missing information
-3. Agent B queries Mw (Working Memory) first - gets cache miss
-4. Agent B escalates query to Mlt (Long-Term Memory) - finds the information
-5. Agent B caches the information in Mw for future use
-6. Both agents complete the task successfully
-
-**Validation**: Demonstrates Mw → Mlt escalation and caching behavior.
-
-**Running**: `docker-compose exec seedcore-api python -m scripts.scenario_1_knowledge_gap`
-
-### Scenario 2: Critical Failure and Flashbulb Incident
-
-**Purpose**: Tests how agents handle high-stakes task failures and trigger flashbulb memory incidents.
-
-**Flow**:
-1. Agent is assigned a high-risk task (e.g., nuclear core coolant system check)
-2. Task fails with a critical error (external API timeout)
-3. Agent calculates salience score based on task risk and failure severity
-4. If salience score exceeds threshold (0.7), incident is logged to Flashbulb Memory (Mfb)
-5. Full agent state, task details, and error context are captured
-6. Incident is permanently stored in MySQL database
-
-**Validation**: Demonstrates automatic incident detection and permanent storage of critical events.
-
-**Running**: `docker-compose exec seedcore-api python -m scripts.scenario_2_flashbulb`
-
-**Expected Output**:
-```
-✅ VALIDATION SUCCEEDED: A high-salience incident was correctly identified and logged.
-Check the 'seedcore-api' container logs for confirmation of the write to MySQL.
-```
-
-**Technical Implementation**:
-- FlashbulbClient for HTTP communication with API
-- Salience score calculation (risk × severity)
-- Automatic threshold-based incident logging
-- Full state capture including agent heartbeat data
-- MySQL backend for permanent storage
-
-#### What It Validates
-
-- ✅ **Cache Miss Handling**: System correctly handles Mw miss and escalates to Mlt
-- ✅ **Mlt Integration**: Agents can effectively query and retrieve data from Long-Term Memory
-- ✅ **Knowledge Caching**: Read-through cache pattern works (retrieved knowledge populates Mw)
-- ✅ **Performance Tracking**: Agents update their internal Ma with performance metrics
-- ✅ **Collaborative Execution**: Multiple agents can work on the same task
-
-#### Running the Scenario
+### Installation
 
 ```bash
-# 1. Ensure all services are running
-docker-compose ps
+# Clone the repository
+git clone <repository-url>
+cd seedcore
 
-# 2. Pre-populate Long-Term Memory (if needed)
-docker-compose exec seedcore-api python scripts/populate_mlt.py
-
-# 3. Run the scenario
-docker-compose exec seedcore-api python -m scripts.scenario_1_knowledge_gap
-```
-
-#### Expected Output
-
-```
-🚀 Starting Scenario 1: Collaborative Task with Knowledge Gap
-================================================================================
-✅ Ray initialized successfully
-🤖 Creating agents for collaborative task...
-✅ Agents created successfully
-
-📋 Task Definition:
-   - Name: Launch Sequence Alpha
-   - Required Fact: fact_X_uuid
-   - Complexity: 0.8
-
-============================================================
-🔄 PHASE 1: First Attempt (Cache Miss Expected)
-============================================================
-📤 Assigning task to Agent-B (who has the knowledge gap)...
-📊 Result from first attempt:
-   - Agent: Agent-B
-   - Task: Launch Sequence Alpha
-   - Success: True
-   - Quality: 0.900
-   - Knowledge Found: True
-
-============================================================
-🔄 PHASE 2: Second Attempt (Cache Hit Expected)
-============================================================
-📤 Assigning the same task again to Agent-B...
-   Expected: Cache hit in Mw this time!
-📊 Result from second attempt:
-   - Agent: Agent-B
-   - Task: Launch Sequence Alpha
-   - Success: True
-   - Quality: 0.900
-   - Knowledge Found: True
-
-============================================================
-🔄 PHASE 3: Agent-A Collaboration
-============================================================
-📤 Assigning task to Agent-A for collaboration...
-📊 Result from Agent-A:
-   - Agent: Agent-A
-   - Task: Launch Sequence Alpha
-   - Success: True
-   - Quality: 0.900
-   - Knowledge Found: True
-
-============================================================
-📈 SCENARIO ANALYSIS
-============================================================
-🔍 Comparing Phase 1 vs Phase 2:
-   - Phase 1 Success: True
-   - Phase 2 Success: True
-   - Phase 1 Quality: 0.900
-   - Phase 2 Quality: 0.900
-
-✅ Cache behavior detected: Knowledge availability changed between attempts
-
-================================================================================
-✅ SCENARIO 1 COMPLETED SUCCESSFULLY!
-================================================================================
-```
-
-#### Technical Implementation
-
-**Key Components**:
-- **RayAgent**: Stateful Ray actors with memory management capabilities
-- **MwManager**: Working Memory manager with Redis backend
-- **LongTermMemoryManager**: Long-term memory with PgVector and Neo4j backends
-- **Memory Escalation Logic**: Automatic fallback from Mw to Mlt on cache misses
-
-**Memory Interaction Flow**:
-```
-Agent Task Request → Mw Query → Cache Miss → Mlt Query → Knowledge Retrieval → Mw Cache Update → Task Completion
-```
-
-#### Troubleshooting
-
-**Common Issues**:
-1. **ModuleNotFoundError**: Ensure all dependencies are installed in Ray containers
-2. **Connection Errors**: Verify all services (Redis, PostgreSQL, Neo4j) are running
-3. **Agent Initialization Failures**: Check Ray cluster status and memory manager connections
-
-**Debug Commands**:
-```bash
-# Check service status
-docker-compose ps
-
-# View Ray logs
-docker-compose logs ray-head ray-worker
-
-# Test memory manager connections
-docker-compose exec seedcore-api python -c "from src.seedcore.memory.mw_manager import MwManager; print('MwManager OK')"
-```
-
-## Quick Start Guide
-
-### 1. Start the System
-```bash
+# Navigate to docker directory
 cd docker
-docker-compose up -d
+
+# Start the system
+docker compose up -d
+
+# Wait for initialization (2-3 minutes)
+# Check status
+docker compose ps
 ```
 
-### 2. Verify Services
-```bash
-# Check all services are running
-docker-compose ps
+### Verification
 
-# Test API health
-curl http://localhost/health
+```bash
+# Check Ray dashboard
+curl http://localhost:8265/#/jobs
+
+# Check COA organism status
+curl -X GET "http://localhost:8000/organism/status"
+
+# Check API health
+curl -X GET "http://localhost:8000/health"
 ```
 
-### 3. Test Tier 0 (Agent Memory)
+## Core Components
+
+### 1. Ray Cluster
+
+The distributed computing backbone:
+
+- **Head Node**: Manages cluster resources and job distribution
+- **Workers**: Execute distributed tasks and agent computations
+- **Dashboard**: Web UI for monitoring (Port 8265)
+- **Redis**: Internal state management (Port 6379)
+
+### 2. Cognitive Organism Architecture (COA)
+
+A biological-inspired computing model:
+
+- **Organs**: Specialized containers for agent pools
+- **Agents**: Ray actors with private memory and performance tracking
+- **OrganismManager**: Central coordinator for lifecycle management
+
+#### Organ Types
+
+1. **Cognitive Organ**
+   - Purpose: Reasoning, planning, complex task decomposition
+   - Agents: 1 cognitive agent
+   - Specialization: Analytical thinking and problem-solving
+
+2. **Actuator Organ**
+   - Purpose: Action execution and external API interactions
+   - Agents: 1 actuator agent
+   - Specialization: Task execution and system interactions
+
+3. **Utility Organ**
+   - Purpose: Memory management, health checks, system tasks
+   - Agents: 1 utility agent
+   - Specialization: System maintenance and optimization
+
+### 3. FastAPI Application Server
+
+The main application interface:
+
+- **HTTP Endpoints**: RESTful API for external access
+- **OrganismManager Integration**: COA lifecycle management
+- **Task Execution**: Routes requests to appropriate organs
+- **Health Monitoring**: System status and metrics
+
+## Documentation Structure
+
+### 📚 Core Documentation
+
+- **[Ray Cluster Diagnostics](./ray-cluster-diagnostics.md)**
+  - Comprehensive guide for diagnosing and analyzing Ray clusters
+  - Job scheduling and management procedures
+  - Troubleshooting and best practices
+
+- **[COA Implementation Guide](./coa-implementation-guide.md)**
+  - Detailed implementation of the Cognitive Organism Architecture
+  - Configuration and usage examples
+  - Testing and validation procedures
+
+- **[Job Analysis and Management](./job-analysis-and-management.md)**
+  - Understanding Ray job types and responsibilities
+  - Job lifecycle and scheduling analysis
+  - Monitoring and troubleshooting procedures
+
+### 🛠️ Operational Documentation
+
+- **[Docker Compose Configuration](../docker/docker-compose.yml)**
+  - Service definitions and networking
+  - Resource allocation and dependencies
+  - Environment configuration
+
+- **[Configuration Files](../src/seedcore/config/)**
+  - System configuration and parameters
+  - COA organ definitions
+  - Environment-specific settings
+
+## Key Features
+
+### 🧠 Cognitive Computing
+
+- **Distributed Intelligence**: Ray-based distributed computing
+- **Biological Inspiration**: COA with specialized organs and agents
+- **Adaptive Learning**: Agent performance tracking and optimization
+- **Scalable Architecture**: Horizontal scaling with Ray workers
+
+### 🔧 System Management
+
+- **Container Orchestration**: Docker Compose for service management
+- **Health Monitoring**: Comprehensive observability stack
+- **API-First Design**: RESTful endpoints for all operations
+- **Configuration Management**: YAML-based configuration system
+
+### 📊 Observability
+
+- **Ray Dashboard**: Real-time cluster monitoring
+- **Grafana**: Metrics visualization and dashboards
+- **Prometheus**: Metrics collection and storage
+- **Structured Logging**: Comprehensive logging system
+
+## API Reference
+
+### Core Endpoints
+
+#### Organism Management
+
 ```bash
-# Create an agent
-curl -X POST http://localhost/tier0/agents/create \
+# Get organism status
+GET /organism/status
+
+# Execute task on specific organ
+POST /organism/execute/{organ_id}
+{
+  "description": "Task description",
+  "parameters": {"key": "value"}
+}
+
+# Execute task on random organ
+POST /organism/execute/random
+{
+  "description": "Task description"
+}
+
+# Get organism summary
+GET /organism/summary
+
+# Initialize organism
+POST /organism/initialize
+
+# Shutdown organism
+POST /organism/shutdown
+```
+
+#### System Health
+
+```bash
+# Health check
+GET /health
+
+# Ray cluster status
+GET /ray/status
+
+# System metrics
+GET /metrics
+```
+
+### Example Usage
+
+```bash
+# Check system health
+curl -X GET "http://localhost:8000/health"
+
+# Get COA organism status
+curl -X GET "http://localhost:8000/organism/status"
+
+# Execute a cognitive task
+curl -X POST "http://localhost:8000/organism/execute/cognitive_organ_1" \
   -H "Content-Type: application/json" \
-  -d '{"agent_id": "test_agent", "role_probs": {"E": 0.7, "S": 0.2, "O": 0.1}}'
+  -d '{"description": "Analyze the given data and provide insights"}'
 
-# Get agent heartbeat
-curl http://localhost/tier0/agents/test_agent/heartbeat
-
-# Execute a task
-curl -X POST http://localhost/tier0/agents/test_agent/execute \
+# Execute a random task
+curl -X POST "http://localhost:8000/organism/execute/random" \
   -H "Content-Type: application/json" \
-  -d '{"task_id": "task_1", "type": "analysis", "complexity": 0.8}'
+  -d '{"description": "Process the request"}'
 ```
 
-### 4. Test Tier 3 (Flashbulb Memory)
+## Monitoring and Diagnostics
+
+### Dashboard Access
+
+- **Ray Dashboard**: `http://localhost:8265`
+  - Cluster overview and job status
+  - Resource utilization
+  - Actor and task monitoring
+
+- **Grafana**: `http://localhost:3000`
+  - Metrics visualization
+  - Performance dashboards
+  - Alert management
+
+- **Prometheus**: `http://localhost:9090`
+  - Metrics collection
+  - Query interface
+  - Alert rules
+
+### Diagnostic Tools
+
+#### Quick Health Check
+
 ```bash
-# Log a high-salience incident
-curl -X POST http://localhost/mfb/incidents \
-  -H "Content-Type: application/json" \
-  -d '{"event_data": {"type": "security_alert", "severity": "high"}, "salience_score": 0.9}'
+# Copy diagnostic script
+docker cp comprehensive_job_analysis.py seedcore-api:/tmp/
 
-# Get system statistics
-curl http://localhost/mfb/stats
+# Run analysis
+docker exec -it seedcore-api python3 /tmp/comprehensive_job_analysis.py
 ```
 
-## Configuration
+#### COA Testing
 
-### Environment Variables (.env)
 ```bash
-# MySQL Configuration
-MYSQL_ROOT_PASSWORD=rootpassword
-MYSQL_DATABASE=seedcore
-MYSQL_USER=seedcore
-MYSQL_PASSWORD=password
-MYSQL_PORT=3306
-MYSQL_HOST=seedcore-mysql
+# Copy test script
+docker cp test_organism.py seedcore-api:/tmp/
 
-# PostgreSQL Configuration
-PG_DSN=postgresql+psycopg2://postgres:password@postgres:5432/postgres
-
-# Ray Configuration
-RAY_HEAD_HOST=ray-head
-RAY_HEAD_PORT=10001
+# Run tests
+docker exec -it seedcore-api python3 /tmp/test_organism.py
 ```
 
-## Development Status
+#### System Cleanup
 
-### ✅ Completed Features
-1. **Tier 0 (Ma)**: Full Ray actor implementation with performance tracking
-2. **Tier 1 (Mw)**: Working memory with capacity management
-3. **Tier 2 (Mlt)**: Long-term memory with compression
-4. **Tier 3 (Mfb)**: MySQL-backed flashbulb memory
-5. **API Layer**: RESTful endpoints for all tiers
-6. **Docker Infrastructure**: Complete multi-service setup
-7. **Database Integration**: PostgreSQL, Neo4j, Redis, MySQL
+```bash
+# Copy cleanup script
+docker cp cleanup_organs.py seedcore-api:/tmp/
 
-### 🔄 In Progress
-- Performance optimization and monitoring
-- Advanced compression algorithms
-- Cross-tier data migration policies
-
-### 📋 Next Steps
-
-#### Immediate (Next 1-2 weeks)
-1. **Energy Model Integration**
-   - Implement energy-aware agent selection
-   - Add energy consumption tracking
-   - Create energy optimization algorithms
-
-2. **Advanced Monitoring**
-   - Add Prometheus metrics
-   - Create Grafana dashboards
-   - Implement alerting system
-
-3. **Performance Testing**
-   - Load testing with multiple agents
-   - Memory tier performance benchmarks
-   - Scalability testing
-
-#### Medium Term (Next 1-2 months)
-1. **Machine Learning Integration**
-   - Implement salience scoring algorithms
-   - Add pattern recognition for flashbulb events
-   - Create predictive models for agent performance
-
-2. **Advanced Memory Management**
-   - Implement adaptive compression
-   - Add memory tier optimization
-   - Create intelligent data migration
-
-3. **Distributed Coordination**
-   - Implement agent-to-agent communication
-   - Add distributed consensus mechanisms
-   - Create fault tolerance and recovery
-
-#### Long Term (Next 3-6 months)
-1. **Production Readiness**
-   - Security hardening
-   - Performance optimization
-   - Monitoring and alerting
-   - Documentation and training
-
-2. **Advanced Features**
-   - Multi-tenant support
-   - Advanced analytics
-   - Integration with external systems
+# Execute cleanup
+docker exec -it seedcore-api python3 /tmp/cleanup_organs.py
+```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Ray Worker Not Starting**
+1. **Ray Cluster Issues**
+   - Check Ray dashboard for job status
+   - Verify container connectivity
+   - Review Ray logs
+
+2. **COA Initialization Problems**
+   - Check organism status endpoint
+   - Verify configuration file syntax
+   - Review OrganismManager logs
+
+3. **API Endpoint Issues**
+   - Check FastAPI server status
+   - Verify port accessibility
+   - Review application logs
+
+### Diagnostic Procedures
+
+1. **System Health Check**
    ```bash
-   docker-compose logs ray-worker
-   # Check for port conflicts or resource issues
+   docker compose ps
+   curl -X GET "http://localhost:8000/health"
    ```
 
-2. **MySQL Connection Issues**
+2. **Ray Cluster Analysis**
    ```bash
-   # Test MySQL connection
-   mysql -h 127.0.0.1 -P 3306 -u seedcore -ppassword seedcore
+   docker exec -it seedcore-api python3 -c "
+   import ray
+   ray.init(address='ray://ray-head:10001', namespace='seedcore')
+   print('Ray Status:', ray.is_initialized())
+   print('Cluster Resources:', ray.cluster_resources())
+   "
    ```
 
-3. **API Endpoints Not Responding**
+3. **COA Status Verification**
    ```bash
-   # Check API logs
-   docker-compose logs seedcore-api
-   # Verify all dependencies are running
-   docker-compose ps
+   curl -X GET "http://localhost:8000/organism/status"
+   curl -X GET "http://localhost:8000/organism/summary"
    ```
 
-### Debug Commands
+## Development
+
+### Local Development Setup
+
 ```bash
-# View all logs
-docker-compose logs
+# Clone repository
+git clone <repository-url>
+cd seedcore
 
-# Restart specific service
-docker-compose restart seedcore-api
+# Install dependencies
+pip install -r requirements.txt
 
-# Clean restart
-docker-compose down -v && docker-compose up -d --build
+# Set up development environment
+cp .env.example .env
+# Edit .env with your configuration
+
+# Start development services
+cd docker
+docker compose up -d postgres mysql neo4j
 ```
 
-## Contributing
+### Testing
 
-1. Follow the existing code structure
-2. Add tests for new features
-3. Update documentation
-4. Use conventional commit messages
-5. Test with Docker before submitting
+```bash
+# Run unit tests
+python -m pytest tests/
+
+# Run integration tests
+python -m pytest tests/integration/
+
+# Run COA tests
+python test_organism.py
+```
+
+### Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests for new functionality
+5. Submit a pull request
+
+## Performance Considerations
+
+### Resource Requirements
+
+- **Minimum**: 4GB RAM, 2 CPU cores
+- **Recommended**: 8GB RAM, 4 CPU cores
+- **Production**: 16GB+ RAM, 8+ CPU cores
+
+### Scaling
+
+- **Horizontal Scaling**: Add Ray workers via `ray-workers.yml`
+- **Vertical Scaling**: Increase container resource limits
+- **Load Balancing**: Implement external load balancer
+
+### Optimization
+
+- **Memory Management**: Monitor agent memory usage
+- **CPU Utilization**: Balance workload across workers
+- **Network Performance**: Optimize container networking
+
+## Security
+
+### Best Practices
+
+1. **Container Security**
+   - Use non-root users in containers
+   - Regularly update base images
+   - Implement resource limits
+
+2. **Network Security**
+   - Use internal networks for inter-service communication
+   - Implement proper firewall rules
+   - Secure external API access
+
+3. **Data Security**
+   - Encrypt sensitive data
+   - Implement proper access controls
+   - Regular security audits
+
+## Support
+
+### Getting Help
+
+1. **Documentation**: Review this documentation thoroughly
+2. **Issues**: Check existing GitHub issues
+3. **Community**: Join the community discussions
+4. **Support**: Contact support team for critical issues
+
+### Reporting Issues
+
+When reporting issues, please include:
+
+- System configuration and environment
+- Detailed error messages and logs
+- Steps to reproduce the issue
+- Expected vs actual behavior
 
 ## License
 
-Apache License 2.0 - See LICENSE file for details. 
+This project is licensed under the [MIT License](../LICENSE).
+
+## Acknowledgments
+
+- Ray team for the distributed computing framework
+- FastAPI team for the web framework
+- Docker team for containerization technology
+- The open-source community for contributions
+
+---
+
+For more information, visit the [project repository](https://github.com/your-org/seedcore) or contact the development team. 
