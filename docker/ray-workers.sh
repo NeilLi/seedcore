@@ -72,7 +72,7 @@ generate_workers_config() {
     # Create the workers file
     cat > "$WORKERS_FILE" << EOF
 services:
-  seedcore-ray-worker:
+  ray-worker:
     build:
       context: ..
       dockerfile: docker/Dockerfile.ray
@@ -99,7 +99,7 @@ services:
     # Note: seedcore-ray-head service is defined in main docker-compose.yml
     # Workers connect to seedcore-ray-head via the shared network
     networks:
-      - seedcore_seedcore-network
+      - seedcore-network
     restart: unless-stopped
     # Ray workers connect to the head's Redis port 6379
     command: ray start --address=seedcore-ray-head:6379 --num-cpus 1 --block
@@ -107,7 +107,7 @@ services:
       replicas: $num_workers
 
 networks:
-  seedcore_seedcore-network:
+  seedcore-network:
     external: true
 EOF
 

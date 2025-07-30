@@ -9,7 +9,7 @@ echo "=================================================="
 echo "📦 Stopping all containers..."
 cd docker
 docker compose down
-docker compose -f ray-workers.yml down
+docker compose -f ray-workers.yml -p seedcore down
 
 # Verify .env file location
 if [ ! -f ".env" ]; then
@@ -39,7 +39,7 @@ echo "  - Building db-seed:latest..."
 docker compose build db-seed
 
 echo "  - Building seedcore-ray-worker:latest..."
-docker compose -f ray-workers.yml build seedcore-ray-worker
+docker compose -f ray-workers.yml -p seedcore build seedcore-ray-worker
 
 # Show the new image list
 echo ""
