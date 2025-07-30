@@ -76,6 +76,9 @@ class OrganismManager:
         logger.info("🚀 Initializing the Cognitive Organism...")
         
         try:
+            # Clean up dead actors first
+            await self._cleanup_dead_actors()
+            
             self._create_organs()
             await self._create_and_distribute_agents()
             self._initialized = True
@@ -83,6 +86,35 @@ class OrganismManager:
         except Exception as e:
             logger.error(f"❌ Failed to initialize organism: {e}")
             raise
+
+    async def _cleanup_dead_actors(self):
+        """Clean up dead Ray actors to prevent accumulation."""
+        try:
+            import ray
+            from ray.util.state import list_actors
+            
+            # Get all actors
+            actors = list_actors()
+            dead_actors = [actor for actor in actors if actor.state == "DEAD"]
+            
+            if dead_actors:
+                logger.info(f"🧹 Found {len(dead_actors)} dead actors, cleaning up...")
+                
+                for actor in dead_actors:
+                    try:
+                        if hasattr(actor, 'actor_id'):
+                            # Try to kill the dead actor
+                            ray.kill(actor.actor_id)
+                            logger.debug(f"🗑️ Cleaned up dead actor: {actor.actor_id}")
+                    except Exception as e:
+                        logger.debug(f"Could not clean up dead actor {actor.actor_id}: {e}")
+                        
+                logger.info(f"✅ Cleaned up {len(dead_actors)} dead actors")
+            else:
+                logger.info("✅ No dead actors found")
+                
+        except Exception as e:
+            logger.warning(f"Could not clean up dead actors: {e}")
 
     def _create_organs(self):
         """Creates the organ actors as defined in the configuration."""
@@ -126,16 +158,30 @@ class OrganismManager:
 
             logger.info(f"Creating {num_agents} agents for organ {organ_id}...")
             
+            # First, clean up excess agents if needed
+            await self._cleanup_excess_agents(organ_handle, organ_id, num_agents)
+            
             for i in range(num_agents):
                 agent_id = f"{organ_id}_agent_{i}"
                 
                 try:
+                    # Check if agent already exists in the organ
+                    existing_agents = await organ_handle.get_agent_handles.remote()
+                    
+                    if agent_id in existing_agents:
+                        # Reuse existing agent
+                        logger.info(f"✅ Reusing existing agent: {agent_id}")
+                        self.agent_to_organ_map[agent_id] = organ_id
+                        agent_count += 1
+                        continue
+                    
                     # Create the agent actor with appropriate role probabilities based on organ type
                     initial_role_probs = self._get_role_probs_for_organ_type(organ_config['type'])
                     
-                    # Create agent with unique name to avoid conflicts
+                    # Create agent with stable name (no timestamp) to enable reuse
                     agent_handle = RayAgent.options(
-                        name=f"{agent_id}_{int(time.time())}"
+                        name=agent_id,  # Use stable name without timestamp
+                        lifetime="detached"  # Make it persistent
                     ).remote(
                         agent_id=agent_id,
                         initial_role_probs=initial_role_probs
@@ -146,11 +192,35 @@ class OrganismManager:
                     self.agent_to_organ_map[agent_id] = organ_id
                     agent_count += 1
                     
+                    logger.info(f"✅ Created new agent: {agent_id}")
+                    
                 except Exception as e:
                     logger.error(f"❌ Failed to create agent {agent_id}: {e}")
                     continue
         
         logger.info(f"✅ Created and distributed {agent_count} agents across {len(self.organs)} organs.")
+
+    async def _cleanup_excess_agents(self, organ_handle, organ_id: str, target_count: int):
+        """Remove excess agents from an organ to match the target count."""
+        try:
+            existing_agents = await organ_handle.get_agent_handles.remote()
+            current_count = len(existing_agents)
+            
+            if current_count > target_count:
+                excess_count = current_count - target_count
+                logger.info(f"🧹 Cleaning up {excess_count} excess agents from {organ_id}")
+                
+                # Remove excess agents (keep the first target_count)
+                agent_ids = list(existing_agents.keys())
+                for agent_id in agent_ids[target_count:]:
+                    try:
+                        await organ_handle.remove_agent.remote(agent_id)
+                        logger.info(f"🗑️ Removed excess agent: {agent_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to remove agent {agent_id}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"❌ Error during agent cleanup for {organ_id}: {e}")
 
     def _get_role_probs_for_organ_type(self, organ_type: str) -> Dict[str, float]:
         """Returns appropriate role probabilities based on organ type."""
