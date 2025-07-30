@@ -1,0 +1,25 @@
+feat: reorganize documentation structure and move docker docs
+
+- Reorganize docs/ directory from flat structure to logical categories:
+  * architecture/ - System architecture and design (4 files)
+  * api-reference/ - API documentation (4 files)
+  * monitoring/ - Monitoring and diagnostics (7 files)
+  * energy-model/ - Energy model documentation (2 files)
+  * guides/ - User guides and references (5 files)
+  * reports/ - Technical reports and analysis (6 files)
+  * commit-messages/ - Development history (8 files)
+
+- Move 10 documentation files from docker/ directory to appropriate docs/ subdirectories:
+  * 2 files → guides/ (docker setup, ray workers)
+  * 3 files → monitoring/ (dashboard fixes, logging)
+  * 5 files → reports/ (analysis, summaries, migrations)
+
+- Create comprehensive documentation indexes:
+  * MAIN_INDEX.md - Organized documentation overview
+  * Subdirectory README files for each category
+  * Cross-references between related documentation
+
+- Clean up docker/ directory to contain only configuration files
+
+Improves documentation discoverability, maintainability, and follows
+professional documentation organization best practices. 
