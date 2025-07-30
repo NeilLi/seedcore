@@ -1,0 +1,67 @@
+# Multi-stage build for optimized Ray image
+FROM rayproject/ray:2.48.0-py310 as ray-base
+
+# Install system dependencies and Python packages in base stage
+USER root
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
+USER ray
+RUN pip install --no-cache-dir \
+    "setproctitle>=1.3.3" \
+    "grpcio==1.63.0" \
+    prometheus_client aiohttp psutil \
+    numpy pandas scipy scikit-learn
+
+# Production stage - use a lighter base
+FROM python:3.10-slim as production
+
+# Install only essential system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create ray user
+RUN useradd --create-home --shell /bin/bash ray
+
+# Copy Python packages from ray-base
+COPY --from=ray-base /home/ray/anaconda3 /home/ray/anaconda3
+COPY --from=ray-base /home/ray/.local /home/ray/.local
+
+# Copy Ray installation from base
+COPY --from=ray-base /home/ray/anaconda3/lib/python3.10/site-packages/ray /home/ray/anaconda3/lib/python3.10/site-packages/ray
+COPY --from=ray-base /home/ray/anaconda3/bin/ray /home/ray/anaconda3/bin/ray
+
+# Set up environment
+ENV PATH=/home/ray/anaconda3/bin:/home/ray/.local/bin:$PATH
+ENV PYTHONPATH=/home/ray/anaconda3/lib/python3.10/site-packages
+ENV HOME=/home/ray
+
+# Switch to ray user
+USER ray
+
+# Set up working directory
+WORKDIR /app
+
+# Copy only essential source code
+COPY --chown=ray:ray src/ ./src/
+COPY --chown=ray:ray scripts/ ./scripts/
+COPY --chown=ray:ray docker/ ./docker/
+
+# Runtime environment variables
+ENV PYTHONUNBUFFERED=1 \
+    RAY_TMPDIR=/tmp/ray \
+    PYTHONPATH=/app:/app/src:$PYTHONPATH
+
+# Add the wait-for-head helper
+USER root
+COPY --chown=ray:ray docker/wait_for_head.sh /usr/local/bin/wait_for_head.sh
+RUN chmod +x /usr/local/bin/wait_for_head.sh
+
+# Switch back to ray user
+USER ray
+
+# Default command (will be overridden by docker-compose)
+CMD ["ray", "start", "--head"] 
