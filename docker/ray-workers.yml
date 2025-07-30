@@ -1,8 +1,9 @@
 services:
-  ray-worker:
+  seedcore-ray-worker:
     build:
       context: ..
       dockerfile: docker/Dockerfile.ray
+    image: seedcore-ray-worker:latest
     shm_size: '2gb'
     working_dir: /app
     environment:
@@ -22,8 +23,8 @@ services:
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
-    # Note: ray-head service is defined in main docker-compose.yml
-    # Workers connect to ray-head via the shared network
+    # Note: seedcore-ray-head service is defined in main docker-compose.yml
+    # Workers connect to seedcore-ray-head via the shared network
     networks:
       - docker_seedcore-network
     restart: unless-stopped
