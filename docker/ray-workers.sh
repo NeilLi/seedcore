@@ -55,7 +55,7 @@ show_usage() {
 
 # Function to check if main services are running
 check_main_services() {
-    if ! docker compose -f "$MAIN_COMPOSE_FILE" ps seedcore-ray-head | grep -q "Up"; then
+    if ! docker compose -f "$MAIN_COMPOSE_FILE" -p seedcore ps seedcore-ray-head | grep -q "Up"; then
         print_error "Ray head node is not running. Please start the main services first:"
         echo "  docker compose up -d"
         exit 1
@@ -99,7 +99,7 @@ services:
     # Note: seedcore-ray-head service is defined in main docker-compose.yml
     # Workers connect to seedcore-ray-head via the shared network
     networks:
-      - docker_seedcore-network
+      - seedcore_seedcore-network
     restart: unless-stopped
     # Ray workers connect to the head's Redis port 6379
     command: ray start --address=seedcore-ray-head:6379 --num-cpus 1 --block
@@ -107,7 +107,7 @@ services:
       replicas: $num_workers
 
 networks:
-  docker_seedcore-network:
+  seedcore_seedcore-network:
     external: true
 EOF
 
@@ -123,7 +123,7 @@ start_workers() {
     check_main_services
     generate_workers_config $num_workers
     
-    docker compose -f "$WORKERS_FILE" up -d
+    docker compose -f "$WORKERS_FILE" -p seedcore up -d
     
     print_success "Started $num_workers Ray workers"
     print_status "You can monitor them with: $0 status"
@@ -134,7 +134,7 @@ stop_workers() {
     print_status "Stopping all Ray workers..."
     
     if [ -f "$WORKERS_FILE" ]; then
-        docker compose -f "$WORKERS_FILE" down
+        docker compose -f "$WORKERS_FILE" -p seedcore down
         print_success "Stopped all Ray workers"
     else
         print_warning "No workers configuration file found"
@@ -168,11 +168,11 @@ scale_workers() {
     
     # Stop existing workers
     if [ -f "$WORKERS_FILE" ]; then
-        docker compose -f "$WORKERS_FILE" down
+        docker compose -f "$WORKERS_FILE" -p seedcore down
     fi
     
     # Start new configuration
-    docker compose -f "$WORKERS_FILE" up -d
+    docker compose -f "$WORKERS_FILE" -p seedcore up -d
     
     print_success "Scaled to $num_workers Ray workers"
 }
@@ -183,14 +183,14 @@ show_status() {
     echo ""
     
     if [ -f "$WORKERS_FILE" ]; then
-        docker compose -f "$WORKERS_FILE" ps
+        docker compose -f "$WORKERS_FILE" -p seedcore ps
     else
         print_warning "No workers configuration file found"
     fi
     
     echo ""
     print_status "Ray Cluster Status:"
-    if docker compose -f "$MAIN_COMPOSE_FILE" ps seedcore-ray-head | grep -q "Up"; then
+    if docker compose -f "$MAIN_COMPOSE_FILE" -p seedcore ps seedcore-ray-head | grep -q "Up"; then
         echo "Ray Head: ✅ Running"
         echo "Dashboard: http://localhost:8265"
     else
@@ -203,7 +203,7 @@ show_logs() {
     print_status "Showing logs from all Ray workers..."
     
     if [ -f "$WORKERS_FILE" ]; then
-        docker compose -f "$WORKERS_FILE" logs -f
+        docker compose -f "$WORKERS_FILE" -p seedcore logs -f
     else
         print_warning "No workers configuration file found"
     fi

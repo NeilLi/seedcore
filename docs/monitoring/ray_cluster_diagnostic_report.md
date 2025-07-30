@@ -7,9 +7,9 @@
 ### Cluster Architecture
 - **Head Node:** `ray-head` (172.18.0.5:6379)
 - **Worker Nodes:** 3 active workers
-  - `docker-ray-worker-1` (172.18.0.2)
-  - `docker-ray-worker-2` (172.18.0.3) 
-  - `docker-ray-worker-3` (172.18.0.4)
+  - `seedcore-ray-worker-1` (172.18.0.2)
+  - `seedcore-ray-worker-2` (172.18.0.3) 
+  - `seedcore-ray-worker-3` (172.18.0.4)
 - **Dashboard:** Available at http://localhost:8265
 - **Ray Version:** 2.48.x (Python 3.10 compatible)
 

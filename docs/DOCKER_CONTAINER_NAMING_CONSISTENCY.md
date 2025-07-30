@@ -8,7 +8,7 @@ Updated Docker Compose configuration to use consistent container naming with the
 
 Container names were inconsistent:
 - `ray-head` (missing seedcore- prefix)
-- `docker-ray-worker-*` (using docker- prefix instead of seedcore-)
+- `seedcore-ray-worker-*` (corrected from docker- prefix)
 - `seedcore-*` (correct format)
 
 ## Solution
@@ -44,7 +44,7 @@ seedcore-ray-worker:
 | Service | Old Container Name | New Container Name |
 |---------|-------------------|-------------------|
 | Ray Head | `ray-head` | `seedcore-ray-head` |
-| Ray Workers | `docker-ray-worker-*` | `seedcore-ray-worker-*` |
+| Ray Workers | `seedcore-ray-worker-*` | `seedcore-ray-worker-*` |
 | API | `seedcore-api` | `seedcore-api` (unchanged) |
 | DB Seed | `seedcore-db-seed` | `seedcore-db-seed` (unchanged) |
 
@@ -53,7 +53,7 @@ seedcore-ray-worker:
 | Service | Old Image Name | New Image Name |
 |---------|----------------|----------------|
 | Ray Head | `ray-head:latest` | `seedcore-ray-head:latest` |
-| Ray Workers | `docker-ray-worker:latest` | `seedcore-ray-worker:latest` |
+| Ray Workers | `seedcore-ray-worker:latest` | `seedcore-ray-worker:latest` |
 | API | `seedcore-api:latest` | `seedcore-api:latest` (unchanged) |
 | DB Seed | `seedcore-db-seed:latest` | `seedcore-db-seed:latest` (unchanged) |
 
@@ -79,10 +79,10 @@ docker compose -f ray-workers.yml down
 ### 2. Remove Old Containers and Images
 ```bash
 # Remove old containers
-docker rm -f ray-head docker-ray-worker-1 docker-ray-worker-2 docker-ray-worker-3 2>/dev/null || true
+docker rm -f seedcore-ray-head seedcore-ray-worker-1 seedcore-ray-worker-2 seedcore-ray-worker-3 2>/dev/null || true
 
 # Remove old images
-docker rmi ray-head:latest docker-ray-worker:latest 2>/dev/null || true
+docker rmi seedcore-ray-head:latest seedcore-ray-worker:latest 2>/dev/null || true
 ```
 
 ### 3. Rebuild with New Names
