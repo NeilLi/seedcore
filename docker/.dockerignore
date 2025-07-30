@@ -1,57 +1,108 @@
-# Python
+# Git and version control
+.git
+.gitignore
+.gitattributes
+
+# Python cache and compiled files
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
+.installed.cfg
 *.egg
 
 # Virtual environments
 venv/
 env/
+ENV/
 .venv/
 .env/
 
-# Git
-.git/
-.gitignore
-
-# Development files
-*.ipynb
-*.md
-docs/
-tests/
-notebooks/
-examples/
-
-# Data and models
-data/
-models/
-logs/
-*.log
-
-# IDE
+# IDE and editor files
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# OS
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
-# Docker
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+logs/
+temp/
+tmp/
+
+# Docker files (we don't need to copy these into the container)
+docker-compose*.yml
 Dockerfile*
-docker-compose*
 .dockerignore
 
-# Build artifacts
-build/
-dist/
-*.tar.gz
-*.zip
+# Documentation and non-essential files
+docs/
+*.md
+README*
+LICENSE*
 
-# Documentation
-*.pdf
-*.html 
+# Test files
+tests/
+test_*
+*_test.py
+.pytest_cache/
+
+# Development and CI files
+.ci/
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Node.js (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Artifacts and data (these should be mounted as volumes)
+artifacts/
+data/
+outputs/
+results/ 
