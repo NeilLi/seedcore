@@ -36,6 +36,7 @@ from ..control.slow_loop import slow_loop_update_roles, slow_loop_update_roles_s
 from ..control.mem_loop import adaptive_mem_update, estimate_memory_gradient, get_memory_metrics
 from ..organs.base import Organ
 from ..organs.registry import OrganRegistry
+from ..organs.organism_manager import organism_manager
 from ..agents.base import Agent
 from ..agents import RayAgent, Tier0MemoryManager, tier0_manager
 from ..memory.system import SharedMemorySystem
@@ -69,34 +70,9 @@ SIMULATION_REGISTRY = OrganRegistry()
 PAIR_TRACKER = PairStatsTracker()
 MEMORY_SYSTEM = SharedMemorySystem()  # Persistent memory system
 
-# Create a main organ
-main_organ = Organ(organ_id="cognitive_organ_1")
-
-# Create a few agents with different initial role probabilities and personality vectors
-# Some vectors are similar, some are dissimilar to test the logic
-agents_to_create = [
-    Agent(
-        agent_id="agent_alpha", 
-        role_probs={'E': 0.6, 'S': 0.3, 'O': 0.1},
-        h=np.array([0.8, 0.6, 0.4, 0.2, 0.1, 0.3, 0.5, 0.7])  # Similar to beta
-    ),
-    Agent(
-        agent_id="agent_beta", 
-        role_probs={'E': 0.2, 'S': 0.7, 'O': 0.1},
-        h=np.array([0.7, 0.5, 0.3, 0.1, 0.2, 0.4, 0.6, 0.8])  # Similar to alpha
-    ),
-    Agent(
-        agent_id="agent_gamma", 
-        role_probs={'E': 0.3, 'S': 0.3, 'O': 0.4},
-        h=np.array([0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.6])  # Different from alpha/beta
-    ),
-]
-
-# Register the agents with the organ, and the organ with the registry
-for agent in agents_to_create:
-    main_organ.register(agent)
-SIMULATION_REGISTRY.add(main_organ)
-print(f"State initialized with 1 organ and {len(agents_to_create)} agents.")
+# Note: Organ and agent creation is now handled by the OrganismManager
+# during startup. The old manual creation code has been removed.
+print("Organism initialization will be handled by OrganismManager during startup.")
 
 # Global compression knob for memory control
 compression_knob = 0.5
@@ -136,6 +112,14 @@ async def startup_event():
                 logging.info("Ray initialization successful")
                 cluster_info = get_ray_cluster_info()
                 logging.info(f"Ray cluster info: {cluster_info}")
+                
+                # Initialize the COA organism after Ray is ready
+                try:
+                    await organism_manager.initialize_organism()
+                    app.state.organism = organism_manager
+                    logging.info("✅ COA organism initialized successfully")
+                except Exception as e:
+                    logging.error(f"❌ Failed to initialize COA organism: {e}")
             else:
                 logging.warning("Ray initialization failed, continuing without Ray")
         else:
@@ -1654,4 +1638,101 @@ async def mlt_insert_holon(request: dict):
     """Insert a holon into long-term memory (PgVector + Neo4j, saga pattern)."""
     result = await ltm_manager.insert_holon(request)
     return {"success": result}
+
+# --- COA Organism Endpoints ---
+
+@app.get("/organism/status")
+async def get_organism_status():
+    """Returns the current status of all organs and their agents."""
+    try:
+        if not hasattr(app.state, 'organism') or not app.state.organism:
+            return {"success": False, "error": "Organism not initialized"}
+            
+        status = await app.state.organism.get_organism_status()
+        return {"success": True, "data": status}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/organism/execute/{organ_id}")
+async def execute_task_on_organ(organ_id: str, request: dict):
+    """Execute a task on a specific organ."""
+    try:
+        if not hasattr(app.state, 'organism') or not app.state.organism:
+            return {"success": False, "error": "Organism not initialized"}
+            
+        task_data = request.get('task_data', {})
+        result = await app.state.organism.execute_task_on_organ(organ_id, task_data)
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/organism/execute/random")
+async def execute_task_on_random_organ(request: dict):
+    """Execute a task on a randomly selected organ."""
+    try:
+        if not hasattr(app.state, 'organism') or not app.state.organism:
+            return {"success": False, "error": "Organism not initialized"}
+            
+        task_data = request.get('task_data', {})
+        result = await app.state.organism.execute_task_on_random_organ(task_data)
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/organism/summary")
+async def get_organism_summary():
+    """Get a summary of the organism including organ and agent counts."""
+    try:
+        if not hasattr(app.state, 'organism') or not app.state.organism:
+            return {"success": False, "error": "Organism not initialized"}
+            
+        organism = app.state.organism
+        summary = {
+            "initialized": organism.is_initialized(),
+            "organ_count": organism.get_organ_count(),
+            "total_agent_count": organism.get_total_agent_count(),
+            "organs": {}
+        }
+        
+        # Get detailed organ information
+        for organ_id in organism.organs.keys():
+            organ_handle = organism.get_organ_handle(organ_id)
+            if organ_handle:
+                try:
+                    status = await organ_handle.get_status.remote()
+                    summary["organs"][organ_id] = status
+                except Exception as e:
+                    summary["organs"][organ_id] = {"error": str(e)}
+        
+        return {"success": True, "summary": summary}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/organism/initialize")
+async def initialize_organism():
+    """Manually initialize the organism (useful for testing)."""
+    try:
+        if not hasattr(app.state, 'organism'):
+            return {"success": False, "error": "Organism manager not available"}
+            
+        organism = app.state.organism
+        if organism.is_initialized():
+            return {"success": True, "message": "Organism already initialized"}
+            
+        await organism.initialize_organism()
+        return {"success": True, "message": "Organism initialized successfully"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/organism/shutdown")
+async def shutdown_organism():
+    """Shutdown the organism and clean up resources."""
+    try:
+        if not hasattr(app.state, 'organism') or not app.state.organism:
+            return {"success": False, "error": "Organism not initialized"}
+            
+        app.state.organism.shutdown_organism()
+        return {"success": True, "message": "Organism shutdown successfully"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
