@@ -43,13 +43,13 @@ def deploy_serve_app():
         app = create_serve_app()
         
         # Deploy the application
-        serve.run(app, host="0.0.0.0", port=8000)
+        app_name = app
         
         print("✅ ML Serve application deployed successfully!")
         print("📊 Available endpoints:")
-        print("   - Salience Scoring: http://localhost:8000/salience")
-        print("   - Anomaly Detection: http://localhost:8000/anomaly")
-        print("   - Scaling Prediction: http://localhost:8000/scaling")
+        print("   - Salience Scoring: /SalienceScorer")
+        print("   - Anomaly Detection: /AnomalyDetector")
+        print("   - Scaling Prediction: /ScalingPredictor")
         
         return True
     except Exception as e:

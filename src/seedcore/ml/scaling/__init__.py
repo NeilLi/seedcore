@@ -7,7 +7,6 @@ Provides ML-driven resource management for:
 - Performance optimization recommendations
 """
 
-from .predictor import ScalingPredictor
-from .allocator import ResourceAllocator
+from .predictor import ScalingPredictor, ResourceAllocator
 
 __all__ = ["ScalingPredictor", "ResourceAllocator"] 

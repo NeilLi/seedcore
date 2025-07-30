@@ -7,7 +7,6 @@ Provides ML-based salience scoring for ranking and prioritizing:
 - User interactions and behaviors
 """
 
-from .scorer import SalienceScorer
-from .models import SalienceModel
+from .scorer import SalienceScorer, SalienceModel
 
 __all__ = ["SalienceScorer", "SalienceModel"] 
