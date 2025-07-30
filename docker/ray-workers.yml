@@ -23,13 +23,16 @@ services:
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
-    # Note: seedcore-ray-head service is defined in main docker-compose.yml
-    # Workers connect to seedcore-ray-head via the shared network
+    # Note: ray-head service is defined in main docker-compose.yml
+    # Workers connect to ray-head via the shared network
     networks:
       - seedcore-network
     restart: unless-stopped
-    # Ray workers connect to the head's Redis port 6379
-    command: ray start --address=seedcore-ray-head:6379 --num-cpus 1 --block
+    # Use wait_for_head.sh wrapper to ensure head is ready
+    command: ["wait_for_head.sh",
+              "ray-head:6379",
+              "ray", "start", "--address=ray-head:6379",
+              "--num-cpus", "1", "--block"]
     deploy:
       replicas: 3
 

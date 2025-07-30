@@ -7,7 +7,6 @@ Provides ML-based pattern recognition for:
 - Predictive maintenance signals
 """
 
-from .detector import AnomalyDetector
-from .analyzer import PatternAnalyzer
+from .detector import AnomalyDetector, PatternAnalyzer
 
 __all__ = ["AnomalyDetector", "PatternAnalyzer"] 

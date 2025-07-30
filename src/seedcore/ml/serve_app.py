@@ -139,29 +139,19 @@ class ScalingPredictor:
 def create_serve_app():
     """Create and configure the Ray Serve application."""
     
-    # Initialize Ray if not already done
-    if not ray.is_initialized():
-        ray.init()
-    
-    # Deploy the models
+    # Create the deployments
     salience_scorer = SalienceScorer.bind()
     anomaly_detector = AnomalyDetector.bind()
     scaling_predictor = ScalingPredictor.bind()
     
-    # Create the application
-    app = serve.Application(
-        "seedcore_ml",
-        [
-            ("/salience", salience_scorer),
-            ("/anomaly", anomaly_detector),
-            ("/scaling", scaling_predictor),
-        ]
-    )
-    
-    return app
+    # Return the deployment graph (will be deployed by serve.run in entrypoint)
+    return salience_scorer
 
 if __name__ == "__main__":
     # Create and run the application
-    app = create_serve_app()
-    serve.run(app, host="0.0.0.0", port=8000)
-    print("SeedCore ML Serve application is running on http://localhost:8000") 
+    app_name = create_serve_app()
+    print(f"SeedCore ML Serve application '{app_name}' deployed successfully!")
+    print("Available endpoints:")
+    print("  - Salience Scoring: /SalienceScorer")
+    print("  - Anomaly Detection: /AnomalyDetector")
+    print("  - Scaling Prediction: /ScalingPredictor") 

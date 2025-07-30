@@ -1,34 +1,38 @@
 ##########################
 # Use rayproject's pre-built Ray image for Python 3.10
 ##########################
-FROM rayproject/ray:latest-py310
+FROM rayproject/ray:2.48.0-py310
 
-# Install additional dependencies
+# Install system dependencies as root
+USER root
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Switch back to ray user and install Python packages
+USER ray
 RUN pip install --no-cache-dir \
     "setproctitle>=1.3.3" \
-    "aiohttp-jinja2>=1.5.1" \
-    "jinja2<3.1" \
     "grpcio==1.63.0" \
-    numpy pandas scipy scikit-learn matplotlib seaborn jupyter redis asyncpg neo4j \
     prometheus_client aiohttp psutil \
-    fastapi uvicorn pydantic sqlalchemy psycopg2-binary pgvector mysql-connector-python \
-    pyyaml tqdm
+    # ML libs (put big ones last so they cache)
+    numpy pandas scipy scikit-learn
 
-# Set environment variables for Ray dashboard
-ENV RAY_DASHBOARD_HOST=0.0.0.0 \
-    RAY_DASHBOARD_PORT=8265 \
-    PYTHONUNBUFFERED=1 \
-    RAY_TMPDIR=/home/ray/ray_tmp \
-    PYTHONPATH=/app:/app/src
-
-# Expose dashboard + agent gRPC + agent HTTP ports
-EXPOSE 8265 52365 52366
-
+# Put project code in /app
 WORKDIR /app
 COPY . /app
 
-# Create ray_tmp directory and ensure permissions
-RUN mkdir -p /home/ray/ray_tmp && \
-    chown -R ray /home/ray/ray_tmp
+# Runtime env vars
+ENV PYTHONUNBUFFERED=1 \
+    RAY_TMPDIR=/tmp/ray \
+    PYTHONPATH=/app:/app/src
 
-CMD ["ray", "start", "--head", "--port=6379", "--include-dashboard=true", "--dashboard-host=0.0.0.0", "--dashboard-port=8265", "--dashboard-agent-grpc-port=52365", "--dashboard-agent-listen-port=52366", "--num-cpus=1", "--block"] 
+# Add the wait‑and‑start helper (next section)
+USER root
+COPY docker/wait_for_head.sh /usr/local/bin/wait_for_head.sh
+RUN chmod +x /usr/local/bin/wait_for_head.sh
+
+# Switch back to ray user
+USER ray
+
+# We'll let docker‑compose override CMD 

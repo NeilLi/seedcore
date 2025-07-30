@@ -17,6 +17,7 @@ WORKDIR /app
 # Copy only essential source code (from parent directory context)
 COPY src/ ./src/
 COPY scripts/ ./scripts/
+COPY docker/ ./docker/
 
 # Set environment
 ENV PYTHONPATH=/app:/app/src

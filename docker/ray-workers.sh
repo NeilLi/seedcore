@@ -55,7 +55,7 @@ show_usage() {
 
 # Function to check if main services are running
 check_main_services() {
-    if ! docker compose -f "$MAIN_COMPOSE_FILE" -p seedcore ps seedcore-ray-head | grep -q "Up"; then
+    if ! docker compose -f "$MAIN_COMPOSE_FILE" -p seedcore ps ray-head | grep -q "Up"; then
         print_error "Ray head node is not running. Please start the main services first:"
         echo "  docker compose up -d"
         exit 1
@@ -96,13 +96,16 @@ services:
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
-    # Note: seedcore-ray-head service is defined in main docker-compose.yml
-    # Workers connect to seedcore-ray-head via the shared network
+    # Note: ray-head service is defined in main docker-compose.yml
+    # Workers connect to ray-head via the shared network
     networks:
       - seedcore-network
     restart: unless-stopped
-    # Ray workers connect to the head's Redis port 6379
-    command: ray start --address=seedcore-ray-head:6379 --num-cpus 1 --block
+    # Use wait_for_head.sh wrapper to ensure head is ready
+    command: ["wait_for_head.sh",
+              "ray-head:6379",
+              "ray", "start", "--address=ray-head:6379",
+              "--num-cpus", "1", "--block"]
     deploy:
       replicas: $num_workers
 
@@ -190,7 +193,7 @@ show_status() {
     
     echo ""
     print_status "Ray Cluster Status:"
-    if docker compose -f "$MAIN_COMPOSE_FILE" -p seedcore ps seedcore-ray-head | grep -q "Up"; then
+    if docker compose -f "$MAIN_COMPOSE_FILE" -p seedcore ps ray-head | grep -q "Up"; then
         echo "Ray Head: ✅ Running"
         echo "Dashboard: http://localhost:8265"
     else

@@ -25,7 +25,7 @@ def test_salience_scoring():
     
     try:
         response = requests.post(
-            "http://localhost:8000/salience",
+            "http://localhost:8000/SalienceScorer",
             json=test_data,
             timeout=10
         )
@@ -57,7 +57,7 @@ def test_anomaly_detection():
     
     try:
         response = requests.post(
-            "http://localhost:8000/anomaly",
+            "http://localhost:8000/AnomalyDetector",
             json=test_data,
             timeout=10
         )
@@ -90,7 +90,7 @@ def test_scaling_prediction():
     
     try:
         response = requests.post(
-            "http://localhost:8000/scaling",
+            "http://localhost:8000/ScalingPredictor",
             json=test_data,
             timeout=10
         )

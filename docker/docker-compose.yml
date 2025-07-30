@@ -97,7 +97,7 @@ services:
     command: python -m scripts.populate_mlt_simple
     restart: "no"
 
-  seedcore-ray-head:
+  ray-head:
     build:
       context: ..
       dockerfile: docker/Dockerfile.ray
@@ -129,12 +129,18 @@ services:
       - "10001:10001"    # Ray head gRPC / jobs / client
       - "6379:6379"      # Ray internal Redis
       - "8080:8080"      # Ray metrics export port
+      - "8000:8000"      # Ray Serve application port
     networks:
       - seedcore-network
     depends_on:
       db-seed:
         condition: service_completed_successfully
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8265/api/version"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
     command: >
       ray start --head
                 --dashboard-host 0.0.0.0
@@ -148,6 +154,17 @@ services:
   # Ray workers are defined in ray-workers.yml
   # To start workers: docker compose -f ray-workers.yml up -d
 
+  ray-serve:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ray
+    image: seedcore-ray-serve:latest
+    command: ["python", "docker/serve_entrypoint.py"]
+    depends_on:
+      ray-head:
+        condition: service_healthy
+    networks: [seedcore-network]
+
   seedcore-api:
     build:
       context: ..
@@ -157,7 +174,7 @@ services:
     working_dir: /app
     environment:
       PYTHONPATH: /app:/app/src
-      RAY_ADDRESS: ray://seedcore-ray-head:10001
+      RAY_ADDRESS: ray://ray-head:10001
     env_file:
       - .env
     ports:
@@ -169,7 +186,7 @@ services:
         condition: service_healthy
       neo4j:
         condition: service_healthy
-      seedcore-ray-head:
+      ray-head:
         condition: service_started
     networks:
       - seedcore-network
@@ -191,7 +208,7 @@ services:
     ports:
       - "8081:8081"
     depends_on:
-      - seedcore-ray-head
+      - ray-head
     networks:
       - seedcore-network
 
@@ -204,7 +221,7 @@ services:
     ports:
       - "8082:8080"
     depends_on:
-      - seedcore-ray-head
+      - ray-head
       - ray-metrics-proxy
     networks:
       - seedcore-network
@@ -222,7 +239,7 @@ services:
       - "9090:9090"
     depends_on:
       - seedcore-api
-      - seedcore-ray-head
+      - ray-head
     networks:
       - seedcore-network
 
@@ -262,5 +279,5 @@ volumes:
 
 networks:
   seedcore-network:
-    driver: bridge
+    external: true
 
