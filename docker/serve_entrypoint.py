@@ -5,7 +5,6 @@ from src.seedcore.ml.serve_app import create_serve_app
 
 RAY_ADDRESS = os.getenv("RAY_ADDRESS", "auto")
 APP_NAME = "seedcore-ml"
-ROUTE_PREFIX = "/ml"
 MAX_DEPLOY_RETRIES = 30
 DELAY = 2
 
@@ -39,21 +38,22 @@ def main():
             print("🔧 Creating ML Serve application...")
             app = create_serve_app()
 
-            print("🚀 Deploying ML application with route prefix /ml...")
-            serve.run(app, name=APP_NAME, route_prefix=ROUTE_PREFIX)
+            print("🚀 Deploying ML application...")
+            serve.run(app, name=APP_NAME)
 
             # Wait for the endpoint to be up
             print("⏳ Waiting for deployment to be ready...")
-            url = f"http://localhost:8000/ml/score/salience"
+            url = f"http://localhost:8000/score/salience"
             if not wait_for_http_ready(url, MAX_DEPLOY_RETRIES, DELAY):
                 raise RuntimeError("Deployed service endpoint did not respond.")
 
             print("🟢 ML Serve deployments are live!")
             print("📊 Available endpoints:")
-            print("   - Salience Scoring: /ml/score/salience")
-            print("   - Anomaly Detection: /ml/detect/anomaly")
-            print("   - Scaling Prediction: /ml/predict/scaling")
-            print("   - Application ready at: http://localhost:8000/ml/")
+            print("   - Salience Scoring: /score/salience")
+            print("   - Anomaly Detection: /detect/anomaly")
+            print("   - Scaling Prediction: /predict/scaling")
+            print("   - Health Check: /health")
+            print("   - Application ready at: http://localhost:8000/")
             break
 
         except (ConnectionError, RuntimeError) as e:

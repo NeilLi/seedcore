@@ -1,8 +1,8 @@
 # Ray Serve Deployment Status
 
-## ✅ **Current Status: WORKING**
+## ✅ **Current Status: DEPLOYMENT WORKING - DASHBOARD VISIBILITY ISSUE**
 
-The Ray Serve deployment is **successfully running** and all core functionality is operational.
+The Ray Serve deployment is **successfully running** but there's a dashboard visibility issue that needs to be resolved.
 
 ### **What's Working:**
 
@@ -12,25 +12,44 @@ The Ray Serve deployment is **successfully running** and all core functionality 
    - Container status: `healthy`
 
 2. **Application is ready**
-   - Endpoint available at: `http://localhost:8000/ml`
-   - Application ready message: `Application 'seedcore-ml' is ready at http://127.0.0.1:8000/ml`
+   - Application ready message: `Application 'seedcore-ml' is ready at http://127.0.0.1:8000/`
+   - MLService initialized successfully
 
-3. **Input validation is working correctly**
-   - Malformed JSON requests are properly handled
-   - Error logging is functional
-   - Graceful fallback behavior
+3. **Deployment is functional**
+   - Ray Serve deployment created successfully
+   - MLService replicas are running
 
-4. **Health checks are passing**
-   - Docker Compose health check: `healthy`
-   - Ray cluster status: operational
+## 🔧 **Current Issue: Dashboard Visibility**
+
+### **Problem**: Applications not showing in Ray Dashboard
+- **Root Cause**: Applications are deployed in the "serve" namespace, but dashboard shows "default" namespace
+- **Status**: Deployment working, but dashboard shows empty applications list
+
+### **Solution**: Switch Dashboard Namespace
+
+**Option 1: Dashboard — Change the App Namespace**
+1. Open the Ray dashboard at http://localhost:8265
+2. Look for an app selector at the top of the dashboard
+3. You may be viewing only the "default" app
+4. **Switch to "seedcore-ml" in the namespace/app drop-down**
+5. You'll see your deployments and endpoints
+
+**Option 2: API — Check Correct Namespace**
+```bash
+# Check applications in the "serve" namespace
+curl -s http://localhost:8265/api/serve/applications/ | jq .
+
+# The applications should show up when viewing the correct namespace
+```
 
 ## 🔧 **Issues Identified and Fixed:**
 
-### 1. **Dashboard Port Conflict** ✅ FIXED
-- **Issue**: Dashboard was failing to start due to port conflicts
-- **Root Cause**: Port 8265 was already in use, causing dashboard to fail silently
-- **Fix**: Added port 8266 as fallback and updated health checks
-- **Status**: Dashboard now starts successfully (may use port 8266 as fallback)
+### 1. **Dashboard Port Conflict** ✅ EXPECTED BEHAVIOR
+- **Issue**: "Failed to start the dashboard" errors in logs
+- **Root Cause**: Ray's rapid retry pattern during dashboard startup (normal behavior)
+- **Fix**: Dashboard actually starts successfully after retries
+- **Status**: Dashboard is working correctly at http://localhost:8265/api/version
+- **Note**: Error messages in logs are from retry attempts, not actual failures
 
 ### 2. **Missing `pkill` command** ✅ FIXED
 - **Issue**: `pkill: command not found` in cleanup scripts
@@ -50,48 +69,55 @@ The Ray Serve deployment is **successfully running** and all core functionality 
 - **Fix**: This is proper error handling - not a bug
 - **Status**: Input validation is working as designed
 
+### 5. **serve.connect() Error** ✅ FIXED
+- **Issue**: `AttributeError: module 'ray.serve' has no attribute 'connect'`
+- **Root Cause**: `serve.connect()` method doesn't exist in this Ray version
+- **Fix**: Removed `serve.connect()` call from serve_entrypoint.py
+- **Status**: Fixed and deployment working
+
 ## 📊 **Available Endpoints:**
 
-- **Base Endpoint**: `http://localhost:8000/ml`
-- **Salience Scoring**: `http://localhost:8000/ml/score/salience` (POST with JSON)
-- **Anomaly Detection**: `http://localhost:8000/ml/detect/anomaly` (POST with JSON)
-- **Scaling Prediction**: `http://localhost:8000/ml/predict/scaling` (POST with JSON)
+- **Base Endpoint**: `http://localhost:8000/`
+- **Salience Scoring**: `http://localhost:8000/score/salience` (POST with JSON)
+- **Anomaly Detection**: `http://localhost:8000/detect/anomaly` (POST with JSON)
+- **Scaling Prediction**: `http://localhost:8000/predict/scaling` (POST with JSON)
+- **Health Check**: `http://localhost:8000/health`
 
 ## 🧪 **Testing the Endpoint:**
 
 ### Correct way to test:
 ```bash
-curl -X POST http://localhost:8000/ml \
+curl -X POST http://localhost:8000/score/salience \
   -H "Content-Type: application/json" \
   -d '{"features": [{"task_risk": 0.5, "failure_severity": 0.3}]}'
 ```
 
-### What NOT to do (will trigger expected error logs):
-```bash
-# This will trigger "Malformed JSON" error (expected)
-curl http://localhost:8000/ml
-
-# This will trigger "Malformed JSON" error (expected)
-curl -X POST http://localhost:8000/ml -d ""
-```
-
 ## 🎯 **Conclusion:**
 
-**The system is working correctly.** All "errors" in the logs are either:
-1. **Expected behavior** (input validation, fallback models)
-2. **Minor issues** that have been fixed (missing procps)
-3. **Dashboard port conflicts** that have been resolved
+**The system is working correctly.** The deployment is successful, but you need to switch to the correct namespace in the Ray dashboard to see the applications.
 
-The Ray Serve deployment is **production-ready** and all core functionality is operational.
+**To see your ML Serve deployments in the dashboard:**
+1. Go to http://localhost:8265
+2. Look for the namespace/app selector at the top
+3. Switch from "default" to "seedcore-ml" or "serve"
+4. Your deployments will be visible
+
+## 🔍 **Dashboard Status Verification:**
+
+To verify the dashboard is working correctly:
+```bash
+# Check if dashboard is accessible
+curl -s http://localhost:8265/api/version
+
+# Check container health
+docker ps | grep ray-head
+
+# Check Ray cluster status
+docker exec seedcore-ray-head ray status
+```
 
 ## 📝 **Next Steps:**
 
-1. **Rebuild container** to apply the `procps` fix:
-   ```bash
-   docker compose build ray-head
-   docker compose up -d ray-head
-   ```
-
-2. **Test with proper JSON payloads** to verify full functionality
-
+1. **Switch dashboard namespace** to see applications
+2. **Test endpoints** with proper JSON payloads
 3. **Optional**: Add actual ML model files if needed for production use 
