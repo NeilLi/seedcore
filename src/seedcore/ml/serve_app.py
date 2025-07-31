@@ -26,6 +26,47 @@ logger = logging.getLogger(__name__)
 # Create FastAPI app for salience scoring
 salience_app = FastAPI()
 
+@salience_app.get("/health")
+async def health_check():
+    """Health check endpoint for ML Serve applications."""
+    try:
+        # Check if ML models are available
+        from src.seedcore.ml.salience.scorer import SalienceScorer as MLSalienceScorer
+        try:
+            scorer = MLSalienceScorer()
+            salience_model_status = "loaded"
+        except Exception as e:
+            salience_model_status = f"error: {str(e)}"
+        
+        # Get system info
+        import psutil
+        system_info = {
+            "cpu_percent": psutil.cpu_percent(interval=1),
+            "memory_percent": psutil.virtual_memory().percent,
+            "disk_percent": psutil.disk_usage('/').percent
+        }
+        
+        return {
+            "status": "healthy",
+            "service": "ml_serve",
+            "timestamp": time.time(),
+            "models": {
+                "salience_scorer": salience_model_status
+            },
+            "system": system_info,
+            "endpoints": {
+                "salience_scoring": "/ml/score/salience",
+                "anomaly_detection": "/ml/detect/anomaly",
+                "scaling_prediction": "/ml/predict/scaling"
+            },
+            "version": "1.0.0"
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": time.time()
+        }
 
 
 @salience_app.post("/score/salience")
