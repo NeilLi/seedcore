@@ -143,6 +143,33 @@ The main application interface:
   - COA organ definitions
   - Environment-specific settings
 
+### 📁 Documentation Directories
+
+- **[Guides](./guides/)** - Step-by-step guides and operational procedures
+  - Docker setup and configuration
+  - Ray workers management
+  - Salience service operations
+  - **Ray Serve troubleshooting and debugging**
+  - Ray Serve deployment patterns
+  - Docker optimization and performance tuning
+  - Job analysis and management
+
+- **[Monitoring](./monitoring/)** - Monitoring, diagnostics, and analysis tools
+  - Ray cluster diagnostic reports
+  - Dashboard fixes and configurations
+  - Monitoring system integration
+  - Logging and observability guides
+
+- **[API Reference](./api-reference/)** - Complete API documentation
+  - Endpoint specifications
+  - Request/response examples
+  - Authentication and authorization
+
+- **[Architecture](./architecture/)** - System design and architecture
+  - Component diagrams
+  - Data flow documentation
+  - Design decisions and rationale
+
 ## Key Features
 
 ### 🧠 Cognitive Computing

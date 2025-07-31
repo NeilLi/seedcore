@@ -14,6 +14,22 @@ ray start --head \
 echo "⏳ Waiting for Ray to be ready..."
 sleep 10
 
+# Start Serve with proper configuration for external access
+echo "🚀 Starting Ray Serve with external access..."
+python -c "
+import ray
+from ray import serve
+ray.init()
+serve.start(
+    detached=True,
+    http_options={
+        'host': '0.0.0.0',
+        'port': 8000
+    }
+)
+print('✅ Ray Serve started with external access')
+"
+
 # Deploy a simple Serve application
 echo "🚀 Deploying Ray Serve application..."
 python /app/scripts/deploy_simple_serve.py

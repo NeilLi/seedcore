@@ -1,5 +1,7 @@
 #!/bin/bash
 
+docker compose -f ray-workers.yml -p seedcore down --remove-orphans
+
 # One-liner to spin up the full Ray Serve cluster
 echo "🚀 Starting SeedCore Ray Serve cluster..."
 
