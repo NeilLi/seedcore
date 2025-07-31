@@ -4,6 +4,7 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: seedcore-postgres
+    profiles: ["core"]
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
@@ -24,6 +25,7 @@ services:
   mysql:
     image: mysql:8.0
     container_name: seedcore-mysql
+    profiles: ["core"]
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_DATABASE: seedcore
@@ -45,6 +47,7 @@ services:
   neo4j:
     image: neo4j:5.15
     container_name: seedcore-neo4j
+    profiles: ["core"]
     environment:
       NEO4J_AUTH: neo4j/password
       NEO4J_PLUGINS: '["apoc"]'
@@ -73,6 +76,7 @@ services:
       dockerfile: docker/Dockerfile
     image: seedcore-db-seed:latest
     container_name: seedcore-db-seed
+    profiles: ["core", "seed"]
     environment:
       PYTHONPATH: /app:/app/src
       POSTGRES_HOST: postgres
@@ -103,6 +107,7 @@ services:
       dockerfile: docker/Dockerfile.ray
     image: seedcore-ray-head:latest
     container_name: seedcore-ray-head
+    profiles: ["ray"]
     shm_size: '4gb'
     working_dir: /app
     environment:
@@ -119,11 +124,13 @@ services:
       RAY_GRAFANA_HOST: http://grafana:3000
       RAY_GRAFANA_IFRAME_HOST: ${PUBLIC_GRAFANA_URL}
       RAY_PROMETHEUS_NAME: Prometheus
+
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
     ports:
       - "8265:8265"      # dashboard UI
+      - "8266:8266"      # dashboard UI (fallback)
       - "52365:52365"    # agent gRPC port
       - "52366:52366"    # agent HTTP port
       - "10001:10001"    # Ray head gRPC / jobs / client
@@ -133,11 +140,15 @@ services:
     networks:
       - seedcore-network
     depends_on:
-      db-seed:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8265/api/version"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8265/api/version || curl -sf http://localhost:8266/api/version"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -152,6 +163,7 @@ services:
       dockerfile: docker/Dockerfile
     image: seedcore-api:latest
     container_name: seedcore-api
+    profiles: ["api"]
     working_dir: /app
     environment:
       PYTHONPATH: /app:/app/src
@@ -198,6 +210,7 @@ services:
   ray-metrics-proxy:
     image: nginx:alpine
     container_name: seedcore-ray-metrics-proxy
+    profiles: ["obs"]
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
@@ -211,6 +224,7 @@ services:
   ray-dashboard-proxy:
     image: nginx:alpine
     container_name: seedcore-ray-dashboard-proxy
+    profiles: ["obs"]
     volumes:
       - ./dashboard-proxy.conf:/etc/nginx/nginx.conf:ro
     ports:
@@ -224,6 +238,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.52.0
     container_name: seedcore-prometheus
+    profiles: ["obs"]
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus_rules.yml:/etc/prometheus/prometheus_rules.yml:ro
@@ -241,6 +256,7 @@ services:
   grafana:
     image: grafana/grafana:11.0.0
     container_name: seedcore-grafana
+    profiles: ["obs"]
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=seedcore
       - GF_SECURITY_ALLOW_EMBEDDING=true
@@ -259,6 +275,7 @@ services:
   node-exporter:
     image: prom/node-exporter:v1.8.1
     container_name: seedcore-node-exporter
+    profiles: ["obs"]
     ports:
       - "9100:9100"
     networks:

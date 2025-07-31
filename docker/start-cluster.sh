@@ -8,17 +8,9 @@ echo "🚀 Starting SeedCore Ray Serve cluster..."
 # Create the external network if it doesn't exist
 docker network create seedcore-network 2>/dev/null || true
 
-# Start all core services (databases, monitoring, Ray stack)
-echo "📦 Starting core services..."
-docker compose -p seedcore up -d postgres mysql neo4j prometheus grafana node-exporter
-
-# Start Ray stack and API
-echo "🚀 Starting Ray stack and API..."
-docker compose -p seedcore up -d ray-head seedcore-api
-
-# Start proxy services
-echo "🌐 Starting proxy services..."
-docker compose -p seedcore up -d ray-metrics-proxy ray-dashboard-proxy
+# Start all services using the debug helper
+echo "📦 Starting full stack..."
+./debug-helper.sh start-full
 
 # Wait for head node to be healthy before starting workers
 echo "⏳ Waiting for head node to be healthy..."

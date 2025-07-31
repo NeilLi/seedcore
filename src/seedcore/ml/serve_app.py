@@ -122,13 +122,32 @@ class SalienceScorer:
     async def __call__(self, request):
         """Score salience using ML model."""
         try:
-            data = await request.json()
+            # Handle malformed JSON gracefully
+            try:
+                data = await request.json()
+            except Exception as json_error:
+                logger.warning(f"Malformed JSON request to salience scorer: {json_error}")
+                return {
+                    "error": "Malformed JSON input. Expected format: {\"features\": [...]}",
+                    "status": "error",
+                    "timestamp": time.time()
+                }
+            
+            # Validate input structure
+            if not isinstance(data, dict):
+                return {
+                    "error": "Invalid input format. Expected JSON object with 'features' field.",
+                    "status": "error",
+                    "timestamp": time.time()
+                }
+            
             features_list = data.get("features", [])
             
             if not features_list:
                 return {
-                    "error": "No features provided",
-                    "status": "error"
+                    "error": "No features provided. Expected non-empty 'features' array.",
+                    "status": "error",
+                    "timestamp": time.time()
                 }
             
             # Use ML model to score features if available
@@ -155,10 +174,12 @@ class SalienceScorer:
         except Exception as e:
             logger.error(f"Error in salience scoring: {e}")
             return {
-                "error": str(e),
+                "error": f"Internal server error: {str(e)}",
                 "status": "error",
                 "timestamp": time.time()
             }
+
+
 
 @serve.deployment(
     num_replicas=2,
@@ -186,13 +207,32 @@ class AnomalyDetector:
     async def __call__(self, request):
         """Detect anomalies in input data."""
         try:
-            data = await request.json()
+            # Handle malformed JSON gracefully
+            try:
+                data = await request.json()
+            except Exception as json_error:
+                logger.warning(f"Malformed JSON request to anomaly detector: {json_error}")
+                return {
+                    "error": "Malformed JSON input. Expected format: {\"metrics\": [...]}",
+                    "status": "error",
+                    "timestamp": time.time()
+                }
+            
+            # Validate input structure
+            if not isinstance(data, dict):
+                return {
+                    "error": "Invalid input format. Expected JSON object with 'metrics' field.",
+                    "status": "error",
+                    "timestamp": time.time()
+                }
+            
             metrics = data.get("metrics", [])
             
             if not metrics:
                 return {
-                    "error": "No metrics provided",
-                    "status": "error"
+                    "error": "No metrics provided. Expected non-empty 'metrics' array.",
+                    "status": "error",
+                    "timestamp": time.time()
                 }
             
             # Apply anomaly detection
@@ -212,7 +252,7 @@ class AnomalyDetector:
         except Exception as e:
             logger.error(f"Error in anomaly detection: {e}")
             return {
-                "error": str(e),
+                "error": f"Internal server error: {str(e)}",
                 "status": "error",
                 "timestamp": time.time()
             }
@@ -243,13 +283,32 @@ class ScalingPredictor:
     async def __call__(self, request):
         """Predict scaling requirements."""
         try:
-            data = await request.json()
+            # Handle malformed JSON gracefully
+            try:
+                data = await request.json()
+            except Exception as json_error:
+                logger.warning(f"Malformed JSON request to scaling predictor: {json_error}")
+                return {
+                    "error": "Malformed JSON input. Expected format: {\"usage_patterns\": {...}}",
+                    "status": "error",
+                    "timestamp": time.time()
+                }
+            
+            # Validate input structure
+            if not isinstance(data, dict):
+                return {
+                    "error": "Invalid input format. Expected JSON object with 'usage_patterns' field.",
+                    "status": "error",
+                    "timestamp": time.time()
+                }
+            
             usage_patterns = data.get("usage_patterns", {})
             
             if not usage_patterns:
                 return {
-                    "error": "No usage patterns provided",
-                    "status": "error"
+                    "error": "No usage patterns provided. Expected non-empty 'usage_patterns' object.",
+                    "status": "error",
+                    "timestamp": time.time()
                 }
             
             # Apply scaling prediction
@@ -268,7 +327,7 @@ class ScalingPredictor:
         except Exception as e:
             logger.error(f"Error in scaling prediction: {e}")
             return {
-                "error": str(e),
+                "error": f"Internal server error: {str(e)}",
                 "status": "error",
                 "timestamp": time.time()
             }

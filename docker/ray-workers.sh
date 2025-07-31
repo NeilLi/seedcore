@@ -55,9 +55,11 @@ show_usage() {
 
 # Function to check if main services are running
 check_main_services() {
-    if ! docker compose -f "$MAIN_COMPOSE_FILE" -p seedcore ps ray-head | grep -q "Up"; then
+    if ! docker ps --filter "name=seedcore-ray-head" --filter "status=running" | grep -q "seedcore-ray-head"; then
         print_error "Ray head node is not running. Please start the main services first:"
-        echo "  docker compose up -d"
+        echo "  ./debug-helper.sh start-ray"
+        echo "  or"
+        echo "  docker compose -p seedcore --profile core --profile ray up -d"
         exit 1
     fi
     print_success "Ray head node is running"
@@ -193,11 +195,12 @@ show_status() {
     
     echo ""
     print_status "Ray Cluster Status:"
-    if docker compose -f "$MAIN_COMPOSE_FILE" -p seedcore ps ray-head | grep -q "Up"; then
+    if docker ps --filter "name=seedcore-ray-head" --filter "status=running" | grep -q "seedcore-ray-head"; then
         echo "Ray Head: ✅ Running"
         echo "Dashboard: http://localhost:8265"
     else
         echo "Ray Head: ❌ Not running"
+        echo "Start with: ./debug-helper.sh start-ray"
     fi
 }
 
