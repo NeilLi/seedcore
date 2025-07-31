@@ -30,14 +30,14 @@ serve.start(
 print('✅ Ray Serve started with external access')
 "
 
-# Deploy a simple Serve application
-echo "🚀 Deploying Ray Serve application..."
-python /app/scripts/deploy_simple_serve.py
+# Deploy your ML Serve application in this same container!
+echo "🚀 Deploying ML Serve application..."
+python /app/docker/serve_entrypoint.py
 
 # Keep the container running
-echo "✅ Ray head with Serve is ready!"
+echo "✅ Ray head with ML Serve is ready!"
 echo "📊 Dashboard: http://localhost:8265"
-echo "🔗 Serve endpoint: http://localhost:8000"
+echo "🔗 ML Serve endpoint: http://localhost:8000/ml/score/salience"
 
 # Block forever
 tail -f /dev/null 

@@ -13,6 +13,7 @@ mysql-connector-python==8.2.0
 
 # HTTP and networking
 aiohttp==3.9.1
+httpx==0.25.2
 grpcio==1.63.0
 protobuf==4.21.12
 

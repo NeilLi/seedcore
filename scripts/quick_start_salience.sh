@@ -72,7 +72,7 @@ log_info "Starting core services..."
 docker-compose -p seedcore up -d postgres mysql neo4j prometheus grafana node-exporter
 
 log_info "Starting Ray stack and API..."
-docker-compose -p seedcore up -d ray-head ray-serve seedcore-api
+docker-compose -p seedcore up -d ray-head seedcore-api
 
 log_info "Starting proxy services..."
 docker-compose -p seedcore up -d ray-metrics-proxy ray-dashboard-proxy

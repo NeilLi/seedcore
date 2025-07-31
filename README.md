@@ -44,8 +44,10 @@ cd seedcore
 ### 2. Start Services
 ```bash
 cd docker
-docker compose up -d
+./start-cluster.sh
 ```
+
+**⚠️ Important**: Always use `./start-cluster.sh` instead of `docker compose up -d` to ensure proper service startup order and dependency management. Individual service restarts may fail due to Ray cluster state dependencies.
 
 **Note**: The Docker Compose configuration has been optimized to eliminate PYTHONPATH warnings and ensure clean builds.
 

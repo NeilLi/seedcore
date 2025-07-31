@@ -75,8 +75,7 @@ class SalienceScorer:
 
 @serve.deployment(
     num_replicas=2,
-    ray_actor_options={"num_cpus": 1, "num_gpus": 0},
-    route_prefix="/detect/anomaly"
+    ray_actor_options={"num_cpus": 1, "num_gpus": 0}
 )
 class AnomalyDetector:
     """Ray Serve deployment for anomaly detection models."""
@@ -133,8 +132,7 @@ class AnomalyDetector:
 
 @serve.deployment(
     num_replicas=2,
-    ray_actor_options={"num_cpus": 1, "num_gpus": 0},
-    route_prefix="/predict/scaling"
+    ray_actor_options={"num_cpus": 1, "num_gpus": 0}
 )
 class ScalingPredictor:
     """Ray Serve deployment for predictive scaling models."""
@@ -191,9 +189,9 @@ class ScalingPredictor:
 class SalienceServiceClient:
     """Client for interacting with the SalienceScorer service with circuit breaker pattern."""
     
-    def __init__(self, base_url: str = "http://seedcore-api:8002"):
+    def __init__(self, base_url: str = "http://ray-head:8000"):
         self.base_url = base_url
-        self.salience_endpoint = f"{self.base_url}/score/salience"
+        self.salience_endpoint = f"{self.base_url}/ml/score/salience"
         self.failure_count = 0
         self.last_failure_time = 0
         self.circuit_breaker_threshold = 5
