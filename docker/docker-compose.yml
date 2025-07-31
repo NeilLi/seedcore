@@ -141,15 +141,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
-    command: >
-      ray start --head
-                --dashboard-host 0.0.0.0
-                --dashboard-port 8265
-                --port=6379
-                --include-dashboard true
-                --metrics-export-port=8080
-                --num-cpus 1
-                --block
+    command: ["/bin/bash", "docker/start-ray-with-serve.sh"]
 
   # Ray workers are defined in ray-workers.yml
   # To start workers: docker compose -f ray-workers.yml up -d
@@ -175,10 +167,12 @@ services:
     environment:
       PYTHONPATH: /app:/app/src
       RAY_ADDRESS: ray://ray-head:10001
+      RAY_memory_usage_threshold: 0.8
+      RAY_memory_monitor_refresh_ms: 2500
     env_file:
       - .env
     ports:
-      - "80:8000"
+      - "80:8002"
     depends_on:
       postgres:
         condition: service_healthy
@@ -193,7 +187,19 @@ services:
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
-    command: uvicorn src.seedcore.telemetry.server:app --host 0.0.0.0 --port 8000 --reload
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+    command:
+      - /bin/sh
+      - -c
+      - |
+        if [ "$DEV_RELOAD" = "1" ]; then
+          uvicorn src.seedcore.telemetry.server:app --host 0.0.0.0 --port 8002 --reload
+        else
+          uvicorn src.seedcore.telemetry.server:app --host 0.0.0.0 --port 8002
+        fi
 
   # ───────────────────────────────────────────────────────────────────── #
   # Observability stack

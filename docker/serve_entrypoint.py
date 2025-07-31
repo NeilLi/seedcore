@@ -1,5 +1,5 @@
 # docker/serve_entrypoint.py
-import os, time, ray
+import ray, os, time
 from ray import serve
 from src.seedcore.ml.serve_app import create_serve_app
 
@@ -7,17 +7,20 @@ RAY_ADDRESS = os.getenv("RAY_ADDRESS", "ray://seedcore-ray-head:10001")
 
 while True:
     try:
-        ray.init(address=RAY_ADDRESS, namespace="serve")  # namespace avoids resource leaks
-        serve.start(detached=True)                        # no RuntimeError if Serve already running
+        # Check if Ray is already initialized
+        if not ray.is_initialized():
+            ray.init(address=RAY_ADDRESS, log_to_driver=False, namespace="serve")
+        
+        # Connect to existing Serve instance
+        serve.connect()
 
-        app = create_serve_app()                          # returns a deployment graph
-        serve.run(app, name="seedcore-ml", route_prefix="/")  # idempotent
+        app = create_serve_app()  # returns a single deployment
+        serve.run(app, name="seedcore-ml")  # deploy with name
 
-        print("🟢 Serve app is live. Blocking to keep container up ...")
+        print("🟢 Serve deployments are live. Blocking to keep container up ...")
         print("📊 Available endpoints:")
-        print("   - Salience Scoring: /SalienceScorer")
-        print("   - Anomaly Detection: /AnomalyDetector") 
-        print("   - Scaling Prediction: /ScalingPredictor")
+        print("   - Salience Scoring: /")
+        print("   - Application ready at: http://localhost:8000/")
         
         while True:
             time.sleep(3600)

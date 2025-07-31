@@ -1,33 +1,78 @@
 # Guides Documentation
 
-This directory contains user guides, operational procedures, and reference materials for the SeedCore system.
+This directory contains step-by-step guides and operational documentation for the SeedCore system.
 
-## Contents
+## 📚 Available Guides
 
-- **[job-analysis-and-management.md](job-analysis-and-management.md)** - Job analysis and management guide
-- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Quick reference guide for common operations
-- **[NEXT_STEPS.md](NEXT_STEPS.md)** - Next steps and roadmap
-- **[docker-setup-guide.md](docker-setup-guide.md)** - Docker setup and configuration guide
-- **[ray-workers-guide.md](ray-workers-guide.md)** - Ray workers management guide
+- **[docker-setup-guide.md](docker-setup-guide.md)** - Complete Docker environment setup guide
+- **[ray-workers-guide.md](ray-workers-guide.md)** - Ray workers management and scaling
+- **[salience-service-operations.md](salience-service-operations.md)** - Salience scoring service operations
+- **[job-analysis-and-management.md](job-analysis-and-management.md)** - Job analysis and management procedures
+- **[ray_serve_troubleshooting.md](ray_serve_troubleshooting.md)** - Ray Serve troubleshooting guide
+- **[ray_serve_debugging_commands.md](ray_serve_debugging_commands.md)** - Quick reference for Ray Serve debugging commands
+- **[RAY_SERVE_PATTERN.md](RAY_SERVE_PATTERN.md)** - Ray Serve deployment patterns and best practices
+- **[OPTIMIZATION_SUMMARY.md](OPTIMIZATION_SUMMARY.md)** - Docker optimization and performance tuning
 
-## Overview
+## 🚀 Quick Start Guides
+
+- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Quick reference for common operations
+- **[NEXT_STEPS.md](NEXT_STEPS.md)** - Next steps and development roadmap
+
+## 🔧 Ray Serve Operations
+
+The Ray Serve guides cover:
+
+### Troubleshooting
+- **"Serve not started" warnings** - Dashboard false positives and solutions
+- **Endpoint accessibility** - External access configuration
+- **Application deployment** - Proper FastAPI and routing setup
+- **Dashboard detection** - API and namespace issues
+
+### Debugging Commands
+- Container status and log checking
+- Serve API endpoint testing
+- Network and port verification
+- Application deployment monitoring
+
+### Quick Fixes
+- External access configuration with `host: "0.0.0.0"`
+- FastAPI with `@serve.ingress` for proper routing
+- Namespace management and connection patterns
+- Model file handling and fallback strategies
+
+### Deployment Patterns
+- **RAY_SERVE_PATTERN.md** - Best practices for Ray Serve deployments
+- FastAPI integration patterns
+- External access configuration
+- Namespace and application management
+
+## 🐳 Docker Operations
+
+### Setup and Configuration
+- **docker-setup-guide.md** - Complete Docker environment setup
+- **OPTIMIZATION_SUMMARY.md** - Performance tuning and optimization
+- Container orchestration and management
+- Resource allocation and scaling
+
+### Optimization
+- Image size optimization strategies
+- Performance tuning techniques
+- Resource allocation best practices
+- Monitoring and metrics configuration
+
+## 📋 Operational Procedures
 
 The guides documentation covers:
-- Operational procedures
-- Setup and configuration guides
-- Quick reference materials
-- Best practices
-- Troubleshooting guides
+- System setup and configuration
+- Service operations and maintenance
+- Troubleshooting and debugging
+- Performance optimization
+- Monitoring and observability
+- Best practices and recommendations
 
-## Quick Start
+## 🔗 Related Documentation
 
-1. **New Users**: Start with [docker-setup-guide.md](docker-setup-guide.md)
-2. **Developers**: Check [QUICK_REFERENCE.md](QUICK_REFERENCE.md) for common commands
-3. **System Admins**: Review [ray-workers-guide.md](ray-workers-guide.md) for cluster management
-4. **Advanced Users**: See [job-analysis-and-management.md](job-analysis-and-management.md) for detailed analysis
-
-## Related Documentation
-
-- **Architecture**: See `../architecture/` for system design
 - **API Reference**: See `../api-reference/` for API documentation
-- **Monitoring**: See `../monitoring/` for diagnostic tools 
+- **Architecture**: See `../architecture/` for system design
+- **Monitoring**: See `../monitoring/` for monitoring tools
+- **Docker Configuration**: See `../../docker/` for Docker files and scripts 

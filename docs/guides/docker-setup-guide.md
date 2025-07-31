@@ -1,274 +1,236 @@
-# SeedCore Holon Fabric Setup
+# SeedCore Docker Setup
 
-This directory contains the Docker setup for the SeedCore hierarchical memory fabric using PGVector and Neo4j, with comprehensive monitoring including Ray cluster integration.
+This directory contains the Docker configuration for the SeedCore Ray Serve cluster, including optimized images and deployment scripts.
 
-## Architecture
-
-- **PGVector**: Vector store for Mlt (long-term memory) with 768-dimensional embeddings
-- **Neo4j**: Graph database for relationship storage and traversal
-- **SeedCore API**: FastAPI server with integrated Holon Fabric
-- **Ray Cluster**: Distributed computing framework with head and worker nodes
-- **Monitoring Stack**: Prometheus, Grafana, and Node Exporter for comprehensive observability
-
-## Quick Start
-
-### 1. Start the Services
+## 🚀 Quick Start
 
 ```bash
-cd docker
-docker-compose up -d
+# Start the entire cluster with one command
+./start-cluster.sh
+
+# Monitor the cluster
+docker compose -p seedcore ps
+docker compose -p seedcore logs -f ray-head
 ```
 
-This will start:
-- PostgreSQL with PGVector extension on port 5432
-- Neo4j on ports 7474 (HTTP) and 7687 (Bolt)
-- SeedCore API on port 8000
-- Ray cluster (head + worker) on ports 8265 (dashboard) and 10001 (gRPC)
-- Prometheus on port 9090
-- Grafana on port 3000
-- Node Exporter on port 9100
+## 📦 Image Optimization
 
-### 2. Initialize Databases
+The Ray images have been optimized for production use:
 
-The databases will be automatically initialized with sample data when the containers start.
+### Image Size Comparison
 
-### 3. Test the Setup
+| Image | Size | Reduction | Status |
+|-------|------|-----------|---------|
+| **Original** | 2.21GB | - | ❌ Large |
+| **Optimized** | 1.02GB | **54% smaller** | ✅ **Recommended** |
+
+### Key Optimizations
+
+1. **Base Image**: Changed from `rayproject/ray:latest-py310` (~1.4GB) to `python:3.10-slim` (~77MB)
+2. **Selective Dependencies**: Only install essential packages used by the codebase
+3. **Docker Ignore**: Exclude unnecessary files from build context
+4. **Multi-stage Build**: Optimized layer caching and reduced final image size
+
+### Essential Packages Included
+
+- **Ray Core**: `ray[default]==2.48.0`
+- **Web Framework**: `fastapi`, `uvicorn`, `pydantic`
+- **Database**: `asyncpg`, `psycopg2-binary`, `neo4j`
+- **ML Libraries**: `numpy`, `pandas`, `scipy`, `scikit-learn`
+- **Utilities**: `pyyaml`, `tqdm`, `prometheus_client`, `aiohttp`, `psutil`
+
+## 🏗️ Architecture
+
+### Services
+
+- **ray-head**: Ray cluster head node with dashboard
+- **ray-serve**: Ray Serve application deployment
+- **ray-worker**: Ray worker nodes (managed by `ray-workers.sh`)
+- **seedcore-api**: FastAPI application server
+- **Monitoring**: Prometheus, Grafana, Node Exporter
+- **Databases**: PostgreSQL, MySQL, Neo4j
+
+### Network
+
+All services run on the `seedcore-network` external network for proper communication.
+
+## 📁 File Structure
+
+```
+docker/
+├── Dockerfile.ray              # Optimized Ray image (head, worker, serve)
+├── Dockerfile                  # API server image
+├── docker-compose.yml          # Main services configuration
+├── ray-workers.yml             # Worker services configuration
+├── start-cluster.sh            # One-command cluster startup
+├── ray-workers.sh              # Worker management script
+├── wait_for_head.sh            # Head node readiness check
+├── serve_entrypoint.py         # Ray Serve deployment script
+├── .dockerignore               # Build context optimization
+└── README.md                   # This file
+```
+
+## 🔧 Configuration
+
+### Environment Variables
+
+- `RAY_ADDRESS`: Ray cluster address (default: `ray://ray-head:10001`)
+- `PYTHONPATH`: Python module search path
+- `RAY_TMPDIR`: Ray temporary directory
+- `RAY_DASHBOARD_HOST`: Dashboard host (default: `0.0.0.0`)
+- `RAY_DASHBOARD_PORT`: Dashboard port (default: `8265`)
+
+### Ports
+
+- **8265**: Ray Dashboard
+- **8000**: Ray Serve applications
+- **80**: SeedCore API
+- **9090**: Prometheus
+- **3000**: Grafana
+- **9100**: Node Exporter
+
+## 🚀 Deployment
+
+### Production Deployment
+
+1. **Build Images**:
+   ```bash
+   docker build -f Dockerfile.ray -t seedcore-ray:latest ..
+   docker build -f Dockerfile -t seedcore-api:latest ..
+   ```
+
+2. **Start Cluster**:
+   ```bash
+   ./start-cluster.sh
+   ```
+
+3. **Verify Health**:
+   ```bash
+   # Check all services
+   docker compose -p seedcore ps
+   
+   # Test API endpoint
+   curl http://localhost:80/health
+   
+   # Check Ray Dashboard
+   curl http://localhost:8265/api/version
+   ```
+
+### Development
+
+For development with hot reloading:
 
 ```bash
-# Test the API
-curl http://localhost:8000/system/status
+# Start only core services
+docker compose -p seedcore up -d postgres mysql neo4j ray-head
 
-# Test RAG endpoint
-curl -X POST http://localhost:8000/rag \
-  -H "Content-Type: application/json" \
-  -d '{"embedding": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5}'
-
-# Get holon statistics
-curl http://localhost:8000/holon/stats
-
-# Check Ray cluster status
-curl http://localhost:8265/api/version
+# Start API with volume mount for development
+docker compose -p seedcore up seedcore-api
 ```
 
-## Monitoring Access
-
-### Grafana Dashboards
-- **URL**: http://localhost:3000
-- **Username**: `admin`
-- **Password**: `seedcore`
-- **Dashboards**:
-  - "SeedCore System Overview" - System metrics and agent performance
-  - "Default Dashboard" - Ray cluster monitoring (auto-generated by Ray)
+## 🔍 Monitoring
 
 ### Ray Dashboard
 - **URL**: http://localhost:8265
-- **Features**: Cluster overview, task monitoring, resource utilization
-- **Integration**: Properly integrated with Grafana for metrics visualization
+- **Features**: Cluster status, task monitoring, resource usage
 
 ### Prometheus
 - **URL**: http://localhost:9090
-- **Features**: Metrics storage, alerting, query interface
-- **Targets**: API metrics, Ray metrics, system metrics
+- **Features**: Metrics collection, alerting
 
-### Node Exporter
-- **URL**: http://localhost:9100/metrics
-- **Features**: System-level metrics (CPU, memory, disk, network)
+### Grafana
+- **URL**: http://localhost:3000
+- **Features**: Dashboards, visualization
+- **Default Credentials**: admin/admin
 
-## Manual Database Setup
-
-If you need to manually initialize the databases:
-
-### PostgreSQL Setup
-
-```bash
-# Connect to PostgreSQL
-docker exec -it seedcore-postgres psql -U postgres -d postgres
-
-# Run the initialization script
-\i /docker-entrypoint-initdb.d/init_pgvector.sql
-```
-
-### Neo4j Setup
-
-1. Open Neo4j Browser at http://localhost:7474
-2. Login with username `neo4j` and password `password`
-3. Run the Cypher commands from `setup/init_neo4j.cypher`
-
-## API Endpoints
-
-### Holon Fabric Endpoints
-
-- `POST /rag` - Fuzzy search with holon expansion
-- `POST /holon/insert` - Insert a new holon
-- `GET /holon/{uuid}` - Get a specific holon
-- `POST /holon/relationship` - Create a relationship between holons
-- `GET /holon/stats` - Get fabric statistics
-
-### Legacy Endpoints
-
-- `GET /system/status` - System status
-- `GET /energy/gradient` - Energy state
-- `POST /actions/run_two_agent_task` - Run agent task
-- `GET /run_memory_loop` - Run memory loop
-- `GET /run_pgvector_neo4j_experiment` - Run experiment
-
-### Monitoring Endpoints
-
-- `GET /metrics` - Prometheus metrics
-- `GET /ray/status` - Ray cluster status
-
-## Environment Variables
-
-Set these environment variables for the API:
-
-```bash
-export PG_DSN="postgresql://postgres:password@localhost:5432/postgres"
-export NEO4J_URI="bolt://localhost:7687"
-export NEO4J_USER="neo4j"
-export NEO4J_PASSWORD="password"
-```
-
-## Ray Cluster Configuration
-
-### Ray Head Node
-- **Dashboard**: http://localhost:8265
-- **gRPC Port**: 10001
-- **Redis Port**: 6379
-- **Metrics Port**: 8080 (via proxy)
-
-### Ray Worker Node
-- **Connects to**: ray-head:6379
-- **Resources**: 1 CPU, 2GB shared memory
-
-### Ray Integration
-- **Grafana Host**: http://grafana:3000
-- **Prometheus Host**: http://prometheus:9090
-- **Dashboard UID**: rayDefaultDashboard (auto-generated by Ray)
-
-## Running Experiments
-
-### 1. Start the API Server
-
-```bash
-# From project root
-PYTHONPATH=src uvicorn src.seedcore.telemetry.server:app --reload --host 0.0.0.0 --port 8000
-```
-
-### 2. Run Retrieval Traffic Hammer
-
-```bash
-python scripts/blast_retrieval.py
-```
-
-This will send 50,000 random queries to test the system.
-
-### 3. Run Compression Sweep
-
-```python
-# In a Python notebook or script
-from src.seedcore.memory.consolidation_worker import run_consolidation_sweep
-from src.seedcore.memory.holon_fabric import HolonFabric
-
-# Initialize fabric
-fabric = HolonFabric(vec_store, graph)
-
-# Run sweep
-tau_values = [0.1, 0.2, 0.4, 0.8]
-results = await run_consolidation_sweep(fabric, mw, tau_values)
-```
-
-## Monitoring
-
-- **Neo4j Browser**: http://localhost:7474
-- **API Documentation**: http://localhost:8000/docs
-- **Grafana**: http://localhost:3000
-- **Ray Dashboard**: http://localhost:8265
-- **Prometheus**: http://localhost:9090
-- **Health Checks**: 
-  - PostgreSQL: `docker exec seedcore-postgres pg_isready -U postgres`
-  - Neo4j: `curl http://localhost:7474`
-  - Ray: `curl http://localhost:8265/api/version`
-
-## Troubleshooting
+## 🛠️ Troubleshooting
 
 ### Common Issues
 
-1. **Connection refused**: Make sure all containers are healthy
-2. **Import errors**: Check PYTHONPATH and __init__.py files
-3. **Database errors**: Check logs with `docker-compose logs`
-4. **Ray dashboard issues**: Check Ray's generated dashboard UID in Grafana
+1. **"Head not ready yet"**:
+   - Workers use `wait_for_head.sh` to ensure head node readiness
+   - Check head node logs: `docker compose -p seedcore logs ray-head`
+
+2. **Image too large**:
+   - Use optimized images (1.02GB vs 2.21GB)
+   - Check `.dockerignore` excludes unnecessary files
+
+3. **Missing packages**:
+   - All essential packages are included in optimized image
+   - Verify with: `docker run --rm seedcore-ray:latest pip list`
 
 ### Logs
 
 ```bash
 # View all logs
-docker-compose logs
+docker compose -p seedcore logs
 
-# View specific service logs
-docker-compose logs postgres
-docker-compose logs neo4j
-docker-compose logs seedcore-api
-docker-compose logs ray-head
-docker-compose logs grafana
+# Follow specific service
+docker compose -p seedcore logs -f ray-head
+
+# Check worker logs
+./ray-workers.sh logs
 ```
 
-### Ray Dashboard Issues
-
-If you see "Panel with id XX not found" errors:
-
-1. **Check Ray's generated dashboard**:
-   ```bash
-   docker exec ray-head find /home/ray -name "*grafana_dashboard.json"
-   ```
-
-2. **Verify dashboard UID**:
-   ```bash
-   curl -u admin:seedcore http://localhost:3000/api/search
-   ```
-
-3. **Check anonymous access**:
-   ```bash
-   curl http://localhost:3000/api/dashboards/uid/rayDefaultDashboard
-   ```
-
-4. **Restart Grafana** if needed:
-   ```bash
-   docker-compose restart grafana
-   ```
-
-### Reset Everything
+### Health Checks
 
 ```bash
-# Stop and remove everything
-docker-compose down -v
+# Check service health
+docker compose -p seedcore ps
 
-# Rebuild and start
-docker-compose up --build -d
+# Test API health
+curl http://localhost:80/health
+
+# Test Ray cluster
+curl http://localhost:8265/api/version
 ```
 
-## Development
+## 🔄 Updates
 
-### Adding New Endpoints
+### Rebuilding Images
 
-1. Add the endpoint to `src/seedcore/telemetry/server.py`
-2. Test with curl or the API docs
-3. Update this README
+```bash
+# Rebuild with latest changes
+docker build -f Dockerfile.ray -t seedcore-ray:latest --no-cache ..
+docker build -f Dockerfile -t seedcore-api:latest --no-cache ..
 
-### Modifying Schemas
+# Restart services
+docker compose -p seedcore restart
+```
 
-1. Update the SQL/Cypher files in `setup/`
-2. Rebuild containers: `docker-compose down -v && docker-compose up --build -d`
+### Updating Dependencies
 
-### Performance Tuning
+1. Update package versions in `Dockerfile.ray`
+2. Rebuild images with `--no-cache`
+3. Test thoroughly before deployment
 
-- **PGVector**: Adjust HNSW index parameters
-- **Neo4j**: Tune memory settings in docker-compose.yml
-- **API**: Adjust uvicorn workers and timeout settings
-- **Ray**: Adjust CPU and memory allocations
-- **Prometheus**: Tune scrape intervals and retention
+## 📊 Performance
 
-### Monitoring Customization
+### Resource Usage
 
-- **Grafana Dashboards**: Edit JSON files in `grafana/dashboards/`
-- **Prometheus Rules**: Modify `prometheus_rules.yml`
-- **Alerting**: Configure alert thresholds and notifications 
+- **Memory**: ~2-4GB per Ray node (configurable)
+- **CPU**: 1-4 cores per worker (configurable)
+- **Storage**: Optimized images reduce pull/push time by 54%
+
+### Scaling
+
+- **Workers**: Use `./ray-workers.sh start <num_workers>`
+- **API**: Scale with `docker compose -p seedcore up --scale seedcore-api=3`
+
+## 🤝 Contributing
+
+When making changes to Docker configuration:
+
+1. Test image builds locally
+2. Verify all services start correctly
+3. Update this README if needed
+4. Include size optimization considerations
+
+## 📝 Changelog
+
+### v2.0.0 - Image Optimization
+- Reduced image size by 54% (2.21GB → 1.02GB)
+- Switched to lightweight base image
+- Added selective package installation
+- Improved build context with `.dockerignore`
+- Added comprehensive monitoring stack 

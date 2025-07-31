@@ -28,7 +28,8 @@ RUN pip install --no-cache-dir \
     fastapi uvicorn pydantic \
     asyncpg psycopg2-binary \
     neo4j \
-    pyyaml tqdm
+    pyyaml tqdm \
+    httpx
 
 # Set up environment
 ENV PATH=/home/ray/.local/bin:$PATH

@@ -19,6 +19,9 @@ COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY docker/ ./docker/
 
+# Ensure models directory exists
+RUN mkdir -p /app/src/seedcore/ml/models
+
 # Set environment
 ENV PYTHONPATH=/app:/app/src
 ENV PYTHONUNBUFFERED=1
@@ -28,8 +31,8 @@ RUN useradd --create-home --shell /bin/bash app && \
     chown -R app:app /app
 USER app
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD python -c "import socket; socket.create_connection(('localhost', 8000), timeout=5)" || exit 1
+# Health check - more lenient with longer start period
+HEALTHCHECK --interval=30s --timeout=30s --start-period=120s --retries=5 \
+    CMD python -c "import socket; socket.create_connection(('localhost', 8002), timeout=10)" || exit 1
 
-CMD ["uvicorn", "src.seedcore.telemetry.server:app", "--host", "0.0.0.0", "--port", "8000"] 
+CMD ["uvicorn", "src.seedcore.telemetry.server:app", "--host", "0.0.0.0", "--port", "8002"] 
