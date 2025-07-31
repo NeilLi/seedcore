@@ -12,6 +12,8 @@ This directory contains step-by-step guides and operational documentation for th
 - **[ray_serve_debugging_commands.md](ray_serve_debugging_commands.md)** - Quick reference for Ray Serve debugging commands
 - **[RAY_SERVE_PATTERN.md](RAY_SERVE_PATTERN.md)** - Ray Serve deployment patterns and best practices
 - **[OPTIMIZATION_SUMMARY.md](OPTIMIZATION_SUMMARY.md)** - Docker optimization and performance tuning
+- **[service-dependencies-and-restart-behavior.md](service-dependencies-and-restart-behavior.md)** - Service dependencies and restart behavior patterns
+- **[SERVICE_DEPENDENCIES_SUMMARY.md](SERVICE_DEPENDENCIES_SUMMARY.md)** - Quick reference for operators
 
 ## 🚀 Quick Start Guides
 
@@ -59,6 +61,26 @@ The Ray Serve guides cover:
 - Performance tuning techniques
 - Resource allocation best practices
 - Monitoring and metrics configuration
+
+## 🔗 Service Dependencies
+
+### Understanding System Dependencies
+- **[service-dependencies-and-restart-behavior.md](service-dependencies-and-restart-behavior.md)** - Comprehensive guide to service dependencies and restart behavior
+- Ray cluster state management
+- API dependency on Ray head and databases
+- Safe restart procedures and troubleshooting
+
+### Key Concepts
+- **Ray Client/Cluster State**: Understanding Ray's stateful nature
+- **Actor & Namespace Coupling**: How actors and namespaces affect restarts
+- **Service Health Checks**: Docker Compose dependency limitations
+- **Ray Networking**: Container network timing sensitivity
+
+### Best Practices
+- Full cluster restarts vs. individual service restarts
+- Dependency tree understanding
+- Diagnostic procedures for dependency issues
+- Troubleshooting common restart problems
 
 ## 📋 Operational Procedures
 

@@ -395,6 +395,47 @@ python test_organism.py
 4. Add tests for new functionality
 5. Submit a pull request
 
+## 🚨 Quick Reference: Service Dependencies
+
+### Important: Service Restart Behavior
+
+**⚠️ Critical Information**: The SeedCore system has specific dependency requirements that affect how services can be restarted.
+
+#### ✅ Recommended: Full Cluster Restart
+```bash
+# Always use this for reliable operation
+cd docker
+./start-cluster.sh
+```
+
+#### ⚠️ Risky: Individual Service Restart
+```bash
+# This may fail due to dependency issues
+docker compose restart seedcore-api
+```
+
+#### Why This Matters
+- **`seedcore-api` depends on Ray cluster state** being consistent
+- **Ray client connections are stateful** and can hang if cluster state is inconsistent
+- **Independent restarts** may fail if dependencies aren't fully ready
+
+#### Quick Diagnostic
+If API hangs after restart, check:
+```bash
+# 1. Ray head health
+docker ps | grep seedcore-ray-head
+
+# 2. Ray cluster status  
+docker exec seedcore-ray-head ray status
+
+# 3. API logs
+docker logs seedcore-api --tail 20
+```
+
+**📖 For detailed information**: See [Service Dependencies and Restart Behavior](./guides/service-dependencies-and-restart-behavior.md)
+
+---
+
 ## Performance Considerations
 
 ### Resource Requirements

@@ -146,17 +146,6 @@ services:
   # Ray workers are defined in ray-workers.yml
   # To start workers: docker compose -f ray-workers.yml up -d
 
-  ray-serve:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.ray
-    image: seedcore-ray-serve:latest
-    command: ["python", "docker/serve_entrypoint.py"]
-    depends_on:
-      ray-head:
-        condition: service_healthy
-    networks: [seedcore-network]
-
   seedcore-api:
     build:
       context: ..
