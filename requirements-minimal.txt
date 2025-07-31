@@ -1,1 +1,6 @@
-sqlalchemy 
+# Root requirements-minimal.txt - references docker requirements
+# This file maintains compatibility with Dockerfile layers
+# The actual requirements are in docker/requirements-minimal.txt
+
+# Include all requirements from docker directory
+-r docker/requirements-minimal.txt 

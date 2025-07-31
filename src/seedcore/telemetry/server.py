@@ -59,6 +59,7 @@ from ..telemetry.metrics import COSTVQ, ENERGY_SLOPE, MEM_WRITES
 from ..control.memory.meta_controller import adjust
 import asyncio
 from ..api.routers.mfb_router import mfb_router
+from ..api.routers.salience_router import router as salience_router
 from ..config.ray_config import get_ray_config
 from ..utils.ray_utils import init_ray, get_ray_cluster_info, is_ray_available
 
@@ -86,6 +87,7 @@ mw_cache = {}  # This should be updated by your memory system as needed
 
 app = FastAPI()
 app.include_router(mfb_router)
+app.include_router(salience_router)
 
 class _Ctl:
     tau: float = 0.3

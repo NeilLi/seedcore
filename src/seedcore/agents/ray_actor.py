@@ -551,12 +551,9 @@ class RayAgent:
         error_context = {"reason": "External API timeout", "code": 504}
         logger.warning(f"[{self.agent_id}] Task failed! Reason: {error_context['reason']}")
         
-        # --- 2. Calculate Salience Score ---
-        # A simple calculation based on task risk and failure severity
-        risk = task_info.get('risk', 0.5)
-        severity = 1.0 # Max severity for this type of failure
-        salience_score = risk * severity  # This will be between 0 and 1
-        logger.info(f"[{self.agent_id}] Calculated salience score: {salience_score:.2f}")
+        # --- 2. Calculate Salience Score using ML Service ---
+        salience_score = self._calculate_ml_salience_score(task_info, error_context)
+        logger.info(f"[{self.agent_id}] Calculated ML salience score: {salience_score:.2f}")
 
         # --- 3. Trigger Flashbulb Logging if threshold is met ---
         SALIENCE_THRESHOLD = 0.7  # Changed from 7.0 to 0.7
@@ -593,6 +590,151 @@ class RayAgent:
             "incident_logged": incident_logged,
             "error_context": error_context
         }
+    
+    def _calculate_ml_salience_score(self, task_info: dict, error_context: dict) -> float:
+        """Calculate salience score using ML service with circuit breaker pattern."""
+        try:
+            # Import the salience service client
+            from src.seedcore.ml.serve_app import SalienceServiceClient
+            
+            # Initialize client (will be created once and reused)
+            if not hasattr(self, '_salience_client'):
+                self._salience_client = SalienceServiceClient()
+            
+            # Prepare features for ML model
+            features = self._extract_salience_features(task_info, error_context)
+            
+            # Score using ML service
+            scores = self._salience_client.score_salience([features], self._fallback_salience_scorer)
+            
+            if scores and len(scores) > 0:
+                return scores[0]
+            else:
+                logger.warning(f"[{self.agent_id}] No scores returned from ML service, using fallback")
+                return self._fallback_salience_scorer([features])[0]
+                
+        except Exception as e:
+            logger.error(f"[{self.agent_id}] Error in ML salience scoring: {e}, using fallback")
+            return self._fallback_salience_scorer([self._extract_salience_features(task_info, error_context)])[0]
+    
+    def _extract_salience_features(self, task_info: dict, error_context: dict) -> dict:
+        """Extract features for salience scoring from task and error context."""
+        # Get current system state
+        heartbeat = self.get_heartbeat()
+        performance_metrics = heartbeat.get('performance_metrics', {})
+        
+        # Extract features for ML model
+        features = {
+            # Task-related features
+            'task_risk': task_info.get('risk', 0.5),
+            'failure_severity': 1.0,  # High severity for task failures
+            'task_complexity': task_info.get('complexity', 0.5),
+            'user_impact': task_info.get('user_impact', 0.5),
+            'business_criticality': task_info.get('business_criticality', 0.5),
+            
+            # Agent-related features
+            'agent_capability': performance_metrics.get('capability_score_c', 0.5),
+            'agent_memory_util': performance_metrics.get('mem_util', 0.0),
+            
+            # System-related features (from energy state)
+            'system_load': self._get_system_load(),
+            'memory_usage': self._get_memory_usage(),
+            'cpu_usage': self._get_cpu_usage(),
+            'response_time': self._get_response_time(),
+            'error_rate': self._get_error_rate(),
+            
+            # Error context features
+            'error_code': error_context.get('code', 500),
+            'error_type': self._classify_error_type(error_context.get('reason', ''))
+        }
+        
+        return features
+    
+    def _get_system_load(self) -> float:
+        """Get current system load from energy state."""
+        try:
+            energy_state = self.get_energy_state()
+            # Normalize energy state to system load (0-1)
+            total_energy = sum(energy_state.values())
+            return min(total_energy / 10.0, 1.0)  # Normalize to 0-1 range
+        except:
+            return 0.5
+    
+    def _get_memory_usage(self) -> float:
+        """Get current memory usage."""
+        try:
+            return self.mem_util
+        except:
+            return 0.5
+    
+    def _get_cpu_usage(self) -> float:
+        """Get current CPU usage estimate."""
+        try:
+            # Estimate CPU usage based on agent activity
+            tasks_processed = getattr(self, 'tasks_processed', 0)
+            return min(tasks_processed / 100.0, 1.0)
+        except:
+            return 0.5
+    
+    def _get_response_time(self) -> float:
+        """Get current response time estimate."""
+        try:
+            # Estimate response time based on recent performance
+            quality_scores = getattr(self, 'quality_scores', [])
+            if quality_scores:
+                avg_quality = sum(quality_scores) / len(quality_scores)
+                # Lower quality = higher response time
+                return max(0.1, 2.0 - avg_quality)
+            return 1.0
+        except:
+            return 1.0
+    
+    def _get_error_rate(self) -> float:
+        """Get current error rate."""
+        try:
+            tasks_processed = getattr(self, 'tasks_processed', 0)
+            successful_tasks = getattr(self, 'successful_tasks', 0)
+            if tasks_processed > 0:
+                return (tasks_processed - successful_tasks) / tasks_processed
+            return 0.0
+        except:
+            return 0.0
+    
+    def _classify_error_type(self, error_reason: str) -> float:
+        """Classify error type for feature extraction."""
+        error_reason_lower = error_reason.lower()
+        
+        if 'timeout' in error_reason_lower:
+            return 0.8  # High severity for timeouts
+        elif 'connection' in error_reason_lower:
+            return 0.7  # Medium-high for connection issues
+        elif 'permission' in error_reason_lower:
+            return 0.6  # Medium for permission issues
+        elif 'validation' in error_reason_lower:
+            return 0.4  # Lower for validation errors
+        else:
+            return 0.5  # Default severity
+    
+    def _fallback_salience_scorer(self, features_list: List[dict]) -> List[float]:
+        """Fallback salience scorer when ML service is unavailable."""
+        scores = []
+        for features in features_list:
+            # Simple heuristic-based scoring (original method)
+            task_risk = features.get('task_risk', 0.5)
+            failure_severity = features.get('failure_severity', 0.5)
+            score = task_risk * failure_severity
+            
+            # Add some context from other features
+            agent_capability = features.get('agent_capability', 0.5)
+            system_load = features.get('system_load', 0.5)
+            
+            # Adjust score based on agent capability and system load
+            score *= (1.0 + (1.0 - agent_capability) * 0.2)  # Higher score for lower capability
+            score *= (1.0 + system_load * 0.1)  # Higher score under high load
+            
+            scores.append(max(0.0, min(1.0, score)))
+        
+        return scores
     
     async def start_heartbeat_loop(self, interval_seconds: int = 10):
         """
