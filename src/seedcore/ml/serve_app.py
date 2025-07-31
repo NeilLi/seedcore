@@ -26,11 +26,14 @@ logger = logging.getLogger(__name__)
 # Create FastAPI app for salience scoring
 salience_app = FastAPI()
 
+
+
 @salience_app.post("/score/salience")
 async def score_salience(request: Dict[str, Any]):
-    """Score the salience of input data."""
+    """Score the salience of input data using ML model."""
     try:
-        features_list = request.get("features", [])
+        data = await request.json()
+        features_list = data.get("features", [])
         
         if not features_list:
             return {
@@ -38,18 +41,14 @@ async def score_salience(request: Dict[str, Any]):
                 "status": "error"
             }
         
-        # Apply salience scoring
-        scores = []
-        for features in features_list:
-            # Use simple scoring for now
-            task_risk = features.get('task_risk', 0.5)
-            failure_severity = features.get('failure_severity', 0.5)
-            score = task_risk * failure_severity
-            scores.append(score)
+        # Use ML model to score features
+        from src.seedcore.ml.salience.scorer import SalienceScorer as MLSalienceScorer
+        scorer = MLSalienceScorer()
+        scores = scorer.score_features(features_list)
         
         return {
             "scores": scores,
-            "model": "salience_scorer",
+            "model": "ml_salience_scorer",
             "status": "success",
             "timestamp": time.time()
         }
@@ -66,12 +65,59 @@ async def score_salience(request: Dict[str, Any]):
     num_replicas=2,
     ray_actor_options={"num_cpus": 1, "num_gpus": 0}
 )
-@serve.ingress(salience_app)
 class SalienceScorer:
     """Ray Serve deployment for salience scoring models."""
     
     def __init__(self):
-        logger.info("SalienceScorer initialized")
+        # Load the ML-based salience scorer
+        try:
+            from src.seedcore.ml.salience.scorer import SalienceScorer as MLSalienceScorer
+            self.scorer = MLSalienceScorer()
+            logger.info("✅ SalienceScorer initialized with ML model")
+        except Exception as e:
+            logger.error(f"Error loading ML salience scorer: {e}, using fallback")
+            self.scorer = None
+    
+    async def __call__(self, request):
+        """Score salience using ML model."""
+        try:
+            data = await request.json()
+            features_list = data.get("features", [])
+            
+            if not features_list:
+                return {
+                    "error": "No features provided",
+                    "status": "error"
+                }
+            
+            # Use ML model to score features if available
+            if self.scorer is not None:
+                scores = self.scorer.score_features(features_list)
+                model_type = "ml_salience_scorer"
+            else:
+                # Fallback to simple scoring
+                scores = []
+                for features in features_list:
+                    task_risk = features.get('task_risk', 0.5)
+                    failure_severity = features.get('failure_severity', 0.5)
+                    score = task_risk * failure_severity
+                    scores.append(score)
+                model_type = "simple_salience_scorer"
+            
+            return {
+                "scores": scores,
+                "model": model_type,
+                "status": "success",
+                "timestamp": time.time()
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in salience scoring: {e}")
+            return {
+                "error": str(e),
+                "status": "error",
+                "timestamp": time.time()
+            }
 
 @serve.deployment(
     num_replicas=2,
