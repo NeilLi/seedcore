@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Quick smoke test for Ray 2.48.0 + Python 3.10 dashboard fixes
+# Quick smoke test for Ray 2.9.3 + Python 3.10 dashboard fixes
 # Based on the suggested checklist
 
 set -e

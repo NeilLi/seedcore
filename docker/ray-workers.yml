@@ -8,27 +8,20 @@ services:
     working_dir: /app
     environment:
       PYTHONPATH: /app:/app/src
-      # ── stream every worker's stdout/stderr to the container log ──
       RAY_worker_stdout_file: /dev/stdout
       RAY_worker_stderr_file: /dev/stderr
-      # ── keep the driver  (seedcore‑api)  log lines too ──
       RAY_log_to_driver: 1
-      # ── lower Ray's own log level so we still see our INFO lines ──
       RAY_BACKEND_LOG_LEVEL: info
-      # ── Ray Dashboard monitoring configuration ──
       RAY_PROMETHEUS_HOST: http://prometheus:9090
       RAY_GRAFANA_HOST: http://grafana:3000
-      RAY_GRAFANA_IFRAME_HOST: 
+      RAY_GRAFANA_IFRAME_HOST: ${PUBLIC_GRAFANA_URL}
       RAY_PROMETHEUS_NAME: Prometheus
     volumes:
-      - ..:/app  # Mounts the project root into /app in the container
-      - ./artifacts:/data  # Mount artifacts directory for UUID access
-    # Note: ray-head service is defined in main docker-compose.yml
-    # Workers connect to ray-head via the shared network
+      - ..:/app
+      - ./artifacts:/data
     networks:
       - seedcore-network
     restart: unless-stopped
-    # Use wait_for_head.sh wrapper to ensure head is ready
     command: ["wait_for_head.sh",
               "ray-head:6379",
               "ray", "start", "--address=ray-head:6379",

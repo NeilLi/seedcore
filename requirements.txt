@@ -1,4 +1,6 @@
-ray>=2.10
+ray==2.20.0
+aiorwlock==1.3.0
+aioredis==2.0.1
 dgl>=2.1
 numpy
 pydantic>=2
