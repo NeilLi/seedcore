@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Comprehensive verification script for Ray 2.48.0 + Python 3.10 compatibility
+# Comprehensive verification script for Ray 2.9.3 + Python 3.10 compatibility
 # Tests all three key fixes mentioned in the playbook
 
 set -e
 
-echo "🔍 Verifying Python 3.10 + Ray 2.48.0 Dashboard Compatibility"
+echo "🔍 Verifying Python 3.10 + Ray 2.9.3 Dashboard Compatibility"
 echo "================================================================"
 
 # Test 1: Check Python version and Ray version

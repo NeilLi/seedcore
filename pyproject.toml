@@ -26,7 +26,7 @@ classifiers = [
 ]
 keywords = ["cognitive-architecture", "multi-agent-system", "energy-based-ai", "adaptive-learning"]
 dependencies = [
-    "ray>=2.10",
+    "ray>=2.20.0",
     "dgl>=2.1",
     "numpy",
     "pydantic>=2",

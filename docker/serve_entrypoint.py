@@ -38,14 +38,50 @@ def main():
         try:
             if not ray.is_initialized():
                 print(f"🔧 Initializing Ray connection to {RAY_ADDRESS}...")
-                ray.init(address=RAY_ADDRESS, log_to_driver=False, namespace="serve")
-                print("✅ Ray connection established")
+                # Use default namespace for Ray 2.9 compatibility
+                ray.init(address=RAY_ADDRESS, log_to_driver=False)
+                print("✅ Ray connection established in default namespace")
+
+            # Wait a bit for Ray to be fully ready
+            print("⏳ Waiting for Ray to be fully ready...")
+            time.sleep(10)
+            
+            # Check Ray cluster resources
+            print("🔍 Checking Ray cluster resources...")
+            try:
+                cluster_resources = ray.cluster_resources()
+                print(f"✅ Ray cluster resources: {cluster_resources}")
+            except Exception as e:
+                print(f"⚠️ Could not get cluster resources: {e}")
+
+            # Check if Serve is already running and connect to it
+            print("🔧 Checking existing Serve instance...")
+            try:
+                serve_status = serve.status()
+                print(f"✅ Found existing Serve instance: {serve_status}")
+            except Exception as e:
+                print(f"⚠️ No existing Serve instance found: {e}")
+                # Start Serve if not running
+                print("🔧 Starting new Serve instance...")
+                serve.start(
+                    http_options={
+                        'host': '0.0.0.0',
+                        'port': 8000
+                    },
+                    detached=True
+                )
+                print("✅ Serve instance started")
 
             print("🔧 Creating ML Serve application...")
             app = create_serve_app()
 
             print("🚀 Deploying ML application...")
-            serve.run(app, name=APP_NAME)
+            # Deploy in default namespace for Ray 2.9 compatibility
+            # HTTP options are configured in serve.start() for Ray 2.20.0 compatibility
+            serve.run(
+                app, 
+                name=APP_NAME
+            )
 
             # Wait for the endpoint to be up
             print("⏳ Waiting for deployment to be ready...")
@@ -63,11 +99,11 @@ def main():
             break
 
         except (ConnectionError, RuntimeError) as e:
-            print(f"🔄 Ray or Serve not ready ({e}); retrying in 5s...")
+            print(f"🔄 Ray or Serve not ready ({e}); retrying in 10s...")
             if attempt >= max_attempts:
                 print(f"❌ Failed after {max_attempts} attempts. Exiting.")
                 sys.exit(1)
-            time.sleep(5)
+            time.sleep(10)
         except Exception as e:
             print(f"❌ Unexpected error during deployment: {e}")
             print(f"Error type: {type(e).__name__}")
@@ -75,7 +111,7 @@ def main():
             if attempt >= max_attempts:
                 print(f"❌ Failed after {max_attempts} attempts. Exiting.")
                 sys.exit(1)
-            time.sleep(5)
+            time.sleep(10)
 
 if __name__ == "__main__":
     main() 

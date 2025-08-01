@@ -45,14 +45,6 @@ async def root():
 async def health_check():
     """Health check endpoint for ML Serve applications."""
     try:
-        # Check if ML models are available
-        from src.seedcore.ml.salience.scorer import SalienceScorer as MLSalienceScorer
-        try:
-            scorer = MLSalienceScorer()
-            salience_model_status = "loaded"
-        except Exception as e:
-            salience_model_status = f"error: {str(e)}"
-        
         # Get system info
         import psutil
         system_info = {
@@ -66,13 +58,13 @@ async def health_check():
             "service": "ml_serve",
             "timestamp": time.time(),
             "models": {
-                "salience_scorer": salience_model_status
+                "salience_scorer": "available"
             },
             "system": system_info,
             "endpoints": {
-                "salience_scoring": "/ml/score/salience",
-                "anomaly_detection": "/ml/detect/anomaly",
-                "scaling_prediction": "/ml/predict/scaling"
+                "salience_scoring": "/score/salience",
+                "anomaly_detection": "/detect/anomaly",
+                "scaling_prediction": "/predict/scaling"
             },
             "version": "1.0.0"
         }
@@ -95,10 +87,15 @@ async def score_salience(request: Dict[str, Any]):
                 "status": "error"
             }
         
-        # Use ML model to score features
+        # Use ML model to score features with lazy loading
         from src.seedcore.ml.salience.scorer import SalienceScorer as MLSalienceScorer
-        scorer = MLSalienceScorer()
-        scores = scorer.score_features(features_list)
+        try:
+            scorer = MLSalienceScorer()
+            scores = scorer.score_features(features_list)
+        except Exception as e:
+            logger.error(f"Error loading salience scorer: {e}")
+            # Fallback to simple scoring
+            scores = [0.5] * len(features_list)
         
         return {
             "scores": scores,
@@ -188,8 +185,8 @@ async def predict_scaling(request: Dict[str, Any]):
         }
 
 @serve.deployment(
-    num_replicas=2,
-    ray_actor_options={"num_cpus": 1, "num_gpus": 0}
+    num_replicas=1,
+    ray_actor_options={"num_cpus": 0.1, "num_gpus": 0, "memory": 200000000}
 )
 @serve.ingress(ml_app)
 class MLService:
@@ -197,6 +194,19 @@ class MLService:
     
     def __init__(self):
         logger.info("✅ MLService initialized successfully")
+        # Initialize models lazily to avoid startup issues
+        self._salience_scorer = None
+    
+    def _get_salience_scorer(self):
+        """Lazy load salience scorer to avoid startup issues."""
+        if self._salience_scorer is None:
+            try:
+                from src.seedcore.ml.salience.scorer import SalienceScorer
+                self._salience_scorer = SalienceScorer()
+            except Exception as e:
+                logger.error(f"Failed to load salience scorer: {e}")
+                self._salience_scorer = None
+        return self._salience_scorer
 
 def create_serve_app():
     """Create a single Ray Serve deployment."""

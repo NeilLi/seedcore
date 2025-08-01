@@ -105,6 +105,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.ray
+      # dockerfile: docker/Dockerfile.ray.optimized
     image: seedcore-ray-head:latest
     container_name: seedcore-ray-head
     profiles: ["ray"]
@@ -121,11 +122,26 @@ services:
       RAY_BACKEND_LOG_LEVEL: info
       # ── disable usage stats collection (silences warning) ──
       RAY_USAGE_STATS_ENABLED: "0"
+      # ── disable additional metrics server to prevent port conflicts ──
+      RAY_DISABLE_METRICS_SERVER: "1"
+      # ── Ray 2.20.0 specific configurations ──
+      RAY_METRICS_EXPORT_PORT: "8080"
+      RAY_DASHBOARD_METRICS_PORT: "8080"
       # ── Ray Dashboard monitoring configuration ──
       RAY_PROMETHEUS_HOST: http://prometheus:9090
       RAY_GRAFANA_HOST: http://grafana:3000
       RAY_GRAFANA_IFRAME_HOST: ${PUBLIC_GRAFANA_URL}
       RAY_PROMETHEUS_NAME: Prometheus
+      # ── Ray Serve configuration for dashboard integration ──
+      RAY_SERVE_ENABLE_DASHBOARD_INTEGRATION: "1"
+      RAY_SERVE_DASHBOARD_HOST: "0.0.0.0"
+      RAY_SERVE_DASHBOARD_PORT: "8000"
+      # ── Asyncio configuration to prevent Ray Serve controller errors ──
+      PYTHONASYNCIODEBUG: "1"
+      RAY_SERVE_ASYNC_DEBUG: "1"
+      # ── Ray Serve stability settings ──
+      RAY_SERVE_CONTROLLER_HEARTBEAT_TIMEOUT_S: "30"
+      RAY_SERVE_PROXY_HEARTBEAT_TIMEOUT_S: "30"
 
     volumes:
       - ..:/app  # Mounts the project root into /app in the container
@@ -151,10 +167,10 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || ray health-check"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
-      retries: 12          # 2 min budget
-      start_period: 30s    # 30-second grace solves the race
+      retries: 10
+      start_period: 90s # Generous grace period for startup
     command: ["/bin/bash", "docker/start-ray-with-serve.sh"]
 
   # Ray workers are defined in ray-workers.yml

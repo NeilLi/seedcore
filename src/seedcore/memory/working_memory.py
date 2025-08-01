@@ -52,7 +52,8 @@ def get_miss_tracker():
     """
     global _miss_tracker
     if _miss_tracker is None:
-        _miss_tracker = ray.get_actor("miss_tracker", namespace="seedcore")
+        # Use default namespace for Ray 2.9 compatibility
+        _miss_tracker = ray.get_actor("miss_tracker")
     return _miss_tracker
 
 def get_shared_cache():
@@ -61,7 +62,8 @@ def get_shared_cache():
     """
     global _shared_cache
     if _shared_cache is None:
-        _shared_cache = ray.get_actor("shared_cache", namespace="seedcore")
+        # Use default namespace for Ray 2.9 compatibility
+        _shared_cache = ray.get_actor("shared_cache")
     return _shared_cache
 
 def get_mw_store():
@@ -70,7 +72,8 @@ def get_mw_store():
     """
     global _mw_store
     if _mw_store is None:
-        _mw_store = ray.get_actor("mw", namespace="seedcore")
+        # Use default namespace for Ray 2.9 compatibility
+        _mw_store = ray.get_actor("mw")
     return _mw_store
 
 class MwManager:

@@ -3,7 +3,7 @@
 # Test script to verify Ray dashboard is working with Python 3.10 fixes
 # Based on the playbook suggestions
 
-echo "🧪 Testing Ray Dashboard with Python 3.11 fixes..."
+echo "🧪 Testing Ray Dashboard with Python 3.10 fixes..."
 
 # Test 1: Check if Ray cluster is running
 echo "1️⃣ Testing Ray cluster initialization..."
