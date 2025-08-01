@@ -24,6 +24,9 @@ cleanup() {
 # Trap signals for graceful shutdown
 trap cleanup SIGTERM SIGINT
 
+# Ignore SIGTERM during startup to prevent premature shutdown
+trap '' SIGTERM
+
 echo "🚀 Starting SeedCore Ray Head with ML Serve..."
 
 
@@ -32,20 +35,47 @@ echo "🚀 Starting SeedCore Ray Head with ML Serve..."
 echo "🧹 Cleaning up any existing Ray processes..."
 ray stop || true
 pkill -f ray || true
-sleep 2
+sleep 10             # <-- longer sleep to ensure ports are fully released and TIME_WAIT expires
+
+# Simple port availability check using Python
+echo "⏳ checking if port ${DASHBOARD_PORT} is available..."
+python3 -c "
+import socket
+import time
+for i in range(10):
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex(('localhost', ${DASHBOARD_PORT}))
+        sock.close()
+        if result != 0:
+            print(f'Port ${DASHBOARD_PORT} is available')
+            exit(0)
+        else:
+            print(f'Port ${DASHBOARD_PORT} still in use, waiting...')
+            time.sleep(1)
+    except:
+        pass
+print(f'Port ${DASHBOARD_PORT} check completed')
+"
 
 # Start Ray head node with optimized configuration
 echo "🔧 Starting Ray head node..."
-ray start --head \
-    --dashboard-host 0.0.0.0 \
-    --dashboard-port ${DASHBOARD_PORT} \
-    --port=${RAY_PORT} \
-    --ray-client-server-port=10001 \
-    --include-dashboard true \
-    --metrics-export-port=${METRICS_PORT} \
-    --num-cpus 1 \
-    --temp-dir /tmp/ray \
-    --log-style record
+if ! ray status --address=auto 2>/dev/null | grep -q "Ray is running"; then
+    ray start --head \
+        --dashboard-host 0.0.0.0 \
+        --dashboard-port ${DASHBOARD_PORT} \
+        --port=${RAY_PORT} \
+        --ray-client-server-port=10001 \
+        --include-dashboard true \
+        --metrics-export-port=${METRICS_PORT} \
+        --num-cpus 1 \
+        --temp-dir /tmp/ray \
+        --log-style record \
+        --disable-usage-stats
+else
+    echo "✅ Ray is already running"
+fi
 
 echo "⏳ Starting Ray cluster..."
 

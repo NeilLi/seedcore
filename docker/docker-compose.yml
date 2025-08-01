@@ -119,6 +119,8 @@ services:
       RAY_log_to_driver: 1
       # ── lower Ray's own log level so we still see our INFO lines ──
       RAY_BACKEND_LOG_LEVEL: info
+      # ── disable usage stats collection (silences warning) ──
+      RAY_USAGE_STATS_ENABLED: "0"
       # ── Ray Dashboard monitoring configuration ──
       RAY_PROMETHEUS_HOST: http://prometheus:9090
       RAY_GRAFANA_HOST: http://grafana:3000
@@ -148,10 +150,11 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8265/api/version || curl -sf http://localhost:8266/api/version"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || ray health-check"]
+      interval: 10s
+      timeout: 5s
+      retries: 12          # 2 min budget
+      start_period: 30s    # 30-second grace solves the race
     command: ["/bin/bash", "docker/start-ray-with-serve.sh"]
 
   # Ray workers are defined in ray-workers.yml
