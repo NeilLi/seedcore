@@ -28,7 +28,13 @@ def wait_for_http_ready(url, max_retries=30, delay=2):
 def main():
     print(f"🚀 Starting ML Serve deployment with Ray address: {RAY_ADDRESS}")
     
-    while True:
+    max_attempts = 5
+    attempt = 0
+    
+    while attempt < max_attempts:
+        attempt += 1
+        print(f"🔄 Attempt {attempt}/{max_attempts}")
+        
         try:
             if not ray.is_initialized():
                 print(f"🔧 Initializing Ray connection to {RAY_ADDRESS}...")
@@ -43,7 +49,7 @@ def main():
 
             # Wait for the endpoint to be up
             print("⏳ Waiting for deployment to be ready...")
-            url = f"http://localhost:8000/score/salience"
+            url = f"http://localhost:8000/health"
             if not wait_for_http_ready(url, MAX_DEPLOY_RETRIES, DELAY):
                 raise RuntimeError("Deployed service endpoint did not respond.")
 
@@ -57,13 +63,19 @@ def main():
             break
 
         except (ConnectionError, RuntimeError) as e:
-            print(f"🔄 Ray or Serve not ready ({e}); retrying in 3s...")
-            time.sleep(3)
+            print(f"🔄 Ray or Serve not ready ({e}); retrying in 5s...")
+            if attempt >= max_attempts:
+                print(f"❌ Failed after {max_attempts} attempts. Exiting.")
+                sys.exit(1)
+            time.sleep(5)
         except Exception as e:
             print(f"❌ Unexpected error during deployment: {e}")
             print(f"Error type: {type(e).__name__}")
             traceback.print_exc()
-            time.sleep(3)
+            if attempt >= max_attempts:
+                print(f"❌ Failed after {max_attempts} attempts. Exiting.")
+                sys.exit(1)
+            time.sleep(5)
 
 if __name__ == "__main__":
     main() 

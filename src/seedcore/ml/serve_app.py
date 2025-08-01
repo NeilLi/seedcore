@@ -26,6 +26,21 @@ logger = logging.getLogger(__name__)
 # Create FastAPI app for ML services
 ml_app = FastAPI()
 
+@ml_app.get("/")
+async def root():
+    """Root endpoint for health checks and basic info."""
+    return {
+        "status": "ok",
+        "service": "seedcore-ml",
+        "version": "1.0.0",
+        "endpoints": {
+            "health": "/health",
+            "salience_scoring": "/score/salience",
+            "anomaly_detection": "/detect/anomaly",
+            "scaling_prediction": "/predict/scaling"
+        }
+    }
+
 @ml_app.get("/health")
 async def health_check():
     """Health check endpoint for ML Serve applications."""
@@ -195,6 +210,102 @@ def create_serve_app():
     except Exception as e:
         logger.error(f"Error creating Serve application: {e}")
         raise
+
+class SalienceServiceClient:
+    """
+    Client for interacting with the Salience ML service with circuit breaker pattern.
+    """
+    
+    def __init__(self, base_url: str = "http://localhost:8000"):
+        self.base_url = base_url
+        self.salience_endpoint = f"{self.base_url}/ml/score/salience"
+        
+        # Circuit breaker configuration
+        self.circuit_breaker_threshold = 5
+        self.circuit_breaker_timeout = 60
+        self.fallback_enabled = True
+        
+        # Circuit breaker state
+        self.failure_count = 0
+        self.last_failure_time = 0
+        self._circuit_open = False
+        
+        # HTTP client
+        self.client = httpx.Client(timeout=10.0)
+    
+    def score_salience(self, features: List[Dict[str, Any]]) -> List[float]:
+        """
+        Score salience using ML service with circuit breaker pattern.
+        
+        Args:
+            features: List of feature dictionaries
+            
+        Returns:
+            List of salience scores
+        """
+        if self._is_circuit_open():
+            logger.warning("Circuit breaker is open, using fallback scoring")
+            return self._simple_fallback(features)
+        
+        try:
+            response = self.client.post(
+                self.salience_endpoint,
+                json={"features": features},
+                headers={"Content-Type": "application/json"}
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                self.failure_count = 0  # Reset failure count on success
+                return result.get("scores", [])
+            else:
+                raise Exception(f"HTTP {response.status_code}: {response.text}")
+                
+        except Exception as e:
+            logger.error(f"Salience scoring failed: {e}")
+            self.failure_count += 1
+            
+            if self.failure_count >= self.circuit_breaker_threshold:
+                self._open_circuit()
+            
+            if self.fallback_enabled:
+                return self._simple_fallback(features)
+            else:
+                raise
+    
+    def _simple_fallback(self, features: List[Dict[str, Any]]) -> List[float]:
+        """Simple fallback scoring when ML service is unavailable."""
+        scores = []
+        for feature in features:
+            task_risk = feature.get('task_risk', 0.5)
+            failure_severity = feature.get('failure_severity', 0.5)
+            score = task_risk * failure_severity
+            scores.append(score)
+        return scores
+    
+    def _is_circuit_open(self) -> bool:
+        """Check if circuit breaker is open."""
+        if not self._circuit_open:
+            return False
+        
+        # Check if timeout has passed
+        if time.time() - self.last_failure_time > self.circuit_breaker_timeout:
+            self._close_circuit()
+            return False
+        
+        return True
+    
+    def _open_circuit(self):
+        """Open the circuit breaker."""
+        self._circuit_open = True
+        self.last_failure_time = time.time()
+        logger.warning(f"Circuit breaker opened after {self.failure_count} failures")
+    
+    def _close_circuit(self):
+        """Close the circuit breaker."""
+        self._circuit_open = False
+        self.failure_count = 0
+        logger.info("Circuit breaker closed")
 
 if __name__ == "__main__":
     # For direct execution

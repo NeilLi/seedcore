@@ -214,9 +214,26 @@ async def salience_info() -> Dict[str, Any]:
     Returns:
         Service information and model details
     """
+    try:
+        circuit_breaker_info = {
+            "enabled": True,
+            "threshold": salience_client.circuit_breaker_threshold if salience_client else 5,
+            "timeout_seconds": salience_client.circuit_breaker_timeout if salience_client else 60,
+            "fallback_enabled": salience_client.fallback_enabled if salience_client else True
+        }
+    except Exception as e:
+        logger.warning(f"Could not get circuit breaker info: {e}")
+        circuit_breaker_info = {
+            "enabled": False,
+            "threshold": 5,
+            "timeout_seconds": 60,
+            "fallback_enabled": True
+        }
+    
     return {
         "service": "salience_scoring",
-        "model_type": "gradient_boosting_regressor",
+        "model_type": "gradient_boosting_regressor" if SALIENCE_AVAILABLE else "simple_heuristic",
+        "model_available": SALIENCE_AVAILABLE,
         "features": [
             "task_risk", "failure_severity", "agent_capability", "system_load",
             "memory_usage", "cpu_usage", "response_time", "error_rate",
@@ -228,10 +245,5 @@ async def salience_info() -> Dict[str, Any]:
             "health": "GET /salience/health",
             "info": "GET /salience/info"
         },
-        "circuit_breaker": {
-            "enabled": True,
-            "threshold": salience_client.circuit_breaker_threshold,
-            "timeout_seconds": salience_client.circuit_breaker_timeout,
-            "fallback_enabled": salience_client.fallback_enabled
-        }
+        "circuit_breaker": circuit_breaker_info
     } 
