@@ -143,8 +143,8 @@ networks:
     external: true
 EOF
   
-  # Use same project name as main services (like ray-workers.sh does)
-  docker compose -f "$WORKERS_FILE" -p $PROJECT up -d
+  # Use separate project name for workers to avoid conflicts
+  docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT up -d
   echo "✅ workers started"
 }
 
@@ -162,7 +162,7 @@ cmd_up() {
   
   start_workers "$W"
   echo -e "\n🎉 cluster up → http://localhost:8265\n"
-  echo "📊 Check worker status with: docker compose -f ray-workers.yml -p seedcore ps"
+  echo "📊 Check worker status with: docker compose -f ray-workers.yml -p seedcore-workers ps"
 }
 
 cmd_restart() {
@@ -170,13 +170,15 @@ cmd_restart() {
 
   if [[ -f "$WORKERS_FILE" ]]; then
     echo "⏸️  stopping workers first …"
-    CUR_WORKERS=$(docker compose -f "$WORKERS_FILE" -p $PROJECT ps --services --filter "status=running" | wc -l)
-    docker compose -f "$WORKERS_FILE" -p $PROJECT down --remove-orphans
+    CUR_WORKERS=$(docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT ps --services --filter "status=running" | wc -l)
+    docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT down --remove-orphans
   else
     CUR_WORKERS=0
   fi
 
-  # Restart app services and wait for ray-head to be ready
+  # Explicitly restart only app services, keeping databases running
+  echo "🔄 restarting app services: ${APP_SERVICES[*]}"
+  # Use --no-deps to prevent restarting dependencies (like databases)
   docker compose -f "$COMPOSE_MAIN" -p $PROJECT restart --no-deps "${APP_SERVICES[@]}"
   
   if ! wait_for_head; then
@@ -193,7 +195,7 @@ cmd_restart() {
 }
 
 cmd_down() {
-  [[ -f "$WORKERS_FILE" ]] && docker compose -f "$WORKERS_FILE" -p $PROJECT down --remove-orphans
+  [[ -f "$WORKERS_FILE" ]] && docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT down --remove-orphans
   docker compose -f "$COMPOSE_MAIN" -p $PROJECT down --remove-orphans
 }
 
@@ -201,7 +203,7 @@ cmd_logs() {
   case "${1:-}" in
     head) docker compose -f "$COMPOSE_MAIN" -p $PROJECT logs -f --tail=100 ray-head ;;
     api)  docker compose -f "$COMPOSE_MAIN" -p $PROJECT logs -f --tail=100 seedcore-api ;;
-    workers) docker compose -f "$WORKERS_FILE" -p $PROJECT logs -f --tail=100 ;;
+    workers) docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT logs -f --tail=100 ;;
     *) echo "logs {head|api|workers}"; exit 1 ;;
   esac
 }
@@ -211,7 +213,7 @@ cmd_status() {
   docker compose -f "$COMPOSE_MAIN" -p $PROJECT ps
   echo ""
   echo "📊 Ray workers:"
-  docker compose -f "$WORKERS_FILE" -p $PROJECT ps 2>/dev/null || echo "No workers running"
+  docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT ps 2>/dev/null || echo "No workers running"
 }
 cmd_seed()   { docker compose -f "$COMPOSE_MAIN" -p $PROJECT --profile core --profile seed up db-seed; }
 

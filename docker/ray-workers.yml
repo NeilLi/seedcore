@@ -27,7 +27,7 @@ services:
               "ray", "start", "--address=ray-head:6379",
               "--num-cpus", "1", "--block"]
     deploy:
-      replicas: 3
+      replicas: 1
 
 networks:
   seedcore-network:

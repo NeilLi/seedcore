@@ -114,6 +114,8 @@ services:
     environment:
       PYTHONPATH: /app:/app/src
       # ── Ray connection address for internal use ──
+      # Injects a Ray Client address into every container that runs the driver
+      # Guarantees every driver knows where to connect; avoids hard-coding dynamic Docker IPs
       RAY_ADDRESS: ray://localhost:10001
       # ── stream every worker's stdout/stderr to the container log ──
       RAY_worker_stdout_file: /dev/stdout
