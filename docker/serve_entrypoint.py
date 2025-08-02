@@ -8,7 +8,7 @@ RAY_ADDRESS = os.getenv("RAY_ADDRESS")
 if not RAY_ADDRESS:
     raise RuntimeError("RAY_ADDRESS env var not set!")
 
-# Check if Ray is already initialized to avoid double initialization
+# Ensure the driver attaches just once even if the script is re-entered
 if not ray.is_initialized():
     ray.init(address=RAY_ADDRESS, log_to_driver=False)
 else:
@@ -82,10 +82,12 @@ def main():
                 )
                 print("✅ Serve instance started")
 
-            # Add a safety-net to be sure the HTTP proxy really exists
+            # Safety-net that starts an HTTP proxy if one isn't present
             if not serve.status().proxies:
+                print("🔧 No HTTP proxy found, starting one...")
                 serve.start(detached=True,
                             http_options={"host": "0.0.0.0", "port": 8000})
+                print("✅ HTTP proxy started")
 
             print("🔧 Creating ML Serve application...")
             app = create_serve_app()
