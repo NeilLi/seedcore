@@ -113,6 +113,8 @@ services:
     working_dir: /app
     environment:
       PYTHONPATH: /app:/app/src
+      # ── Ray connection address for internal use ──
+      RAY_ADDRESS: ray://localhost:10001
       # ── stream every worker's stdout/stderr to the container log ──
       RAY_worker_stdout_file: /dev/stdout
       RAY_worker_stderr_file: /dev/stderr

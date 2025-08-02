@@ -3,7 +3,17 @@ import ray, os, time, sys, traceback
 from ray import serve
 from src.seedcore.ml.serve_app import create_serve_app
 
-RAY_ADDRESS = os.getenv("RAY_ADDRESS", "auto")
+# Remove the "auto" default -------------------------
+RAY_ADDRESS = os.getenv("RAY_ADDRESS")
+if not RAY_ADDRESS:
+    raise RuntimeError("RAY_ADDRESS env var not set!")
+
+# Check if Ray is already initialized to avoid double initialization
+if not ray.is_initialized():
+    ray.init(address=RAY_ADDRESS, log_to_driver=False)
+else:
+    print("✅ Ray is already initialized, skipping initialization")
+# ---------------------------------------------------
 APP_NAME = "seedcore-ml"
 MAX_DEPLOY_RETRIES = 30
 DELAY = 2
@@ -71,6 +81,11 @@ def main():
                     detached=True
                 )
                 print("✅ Serve instance started")
+
+            # Add a safety-net to be sure the HTTP proxy really exists
+            if not serve.status().proxies:
+                serve.start(detached=True,
+                            http_options={"host": "0.0.0.0", "port": 8000})
 
             print("🔧 Creating ML Serve application...")
             app = create_serve_app()
