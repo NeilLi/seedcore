@@ -58,7 +58,8 @@ print('✅ Ray Serve started successfully in default namespace')
 # Set RAY_ADDRESS for the serve entrypoint script
 # Exports the same Ray Client URL for any subsequent shell commands inside the container
 # Keeps one source of truth for the address during manual debugging
-export RAY_ADDRESS=ray://localhost:10001
+# Note: In the head container, we don't need to set RAY_ADDRESS as we connect directly
+# export RAY_ADDRESS=ray://localhost:10001
 
 # Deploy applications
 python /app/docker/serve_entrypoint.py

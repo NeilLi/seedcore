@@ -3,16 +3,22 @@ import ray, os, time, sys, traceback
 from ray import serve
 from src.seedcore.ml.serve_app import create_serve_app
 
-# Remove the "auto" default -------------------------
+# Handle Ray initialization for both head and worker containers
 RAY_ADDRESS = os.getenv("RAY_ADDRESS")
-if not RAY_ADDRESS:
-    raise RuntimeError("RAY_ADDRESS env var not set!")
-
-# Ensure the driver attaches just once even if the script is re-entered
-if not ray.is_initialized():
-    ray.init(address=RAY_ADDRESS, log_to_driver=False)
+if RAY_ADDRESS:
+    # We're in a worker or external environment, connect via RAY_ADDRESS
+    if not ray.is_initialized():
+        ray.init(address=RAY_ADDRESS, log_to_driver=False)
+        print(f"✅ Connected to Ray cluster at {RAY_ADDRESS}")
+    else:
+        print("✅ Ray is already initialized, skipping initialization")
 else:
-    print("✅ Ray is already initialized, skipping initialization")
+    # Fallback: We're in the head container without RAY_ADDRESS, connect to the existing Ray instance
+    if not ray.is_initialized():
+        ray.init()
+        print("✅ Connected to existing Ray instance in head container")
+    else:
+        print("✅ Ray is already initialized, skipping initialization")
 # ---------------------------------------------------
 APP_NAME = "seedcore-ml"
 MAX_DEPLOY_RETRIES = 30
@@ -36,7 +42,10 @@ def wait_for_http_ready(url, max_retries=30, delay=2):
     return False
 
 def main():
-    print(f"🚀 Starting ML Serve deployment with Ray address: {RAY_ADDRESS}")
+    if RAY_ADDRESS:
+        print(f"🚀 Starting ML Serve deployment with Ray address: {RAY_ADDRESS}")
+    else:
+        print("🚀 Starting ML Serve deployment in head container")
     
     max_attempts = 5
     attempt = 0
@@ -47,10 +56,15 @@ def main():
         
         try:
             if not ray.is_initialized():
-                print(f"🔧 Initializing Ray connection to {RAY_ADDRESS}...")
-                # Use default namespace for Ray 2.9 compatibility
-                ray.init(address=RAY_ADDRESS, log_to_driver=False)
-                print("✅ Ray connection established in default namespace")
+                if RAY_ADDRESS:
+                    print(f"🔧 Initializing Ray connection to {RAY_ADDRESS}...")
+                    # Use default namespace for Ray 2.9 compatibility
+                    ray.init(address=RAY_ADDRESS, log_to_driver=False)
+                    print("✅ Ray connection established in default namespace")
+                else:
+                    print("🔧 Connecting to existing Ray instance in head container...")
+                    ray.init()
+                    print("✅ Ray connection established in head container")
 
             # Wait a bit for Ray to be fully ready
             print("⏳ Waiting for Ray to be fully ready...")
@@ -106,11 +120,39 @@ def main():
             if not wait_for_http_ready(url, MAX_DEPLOY_RETRIES, DELAY):
                 raise RuntimeError("Deployed service endpoint did not respond.")
 
+            # Initialize XGBoost service (after Ray and Serve are ready)
+            print("🔧 Initializing XGBoost service...")
+            try:
+                # Import and initialize XGBoost service directly (avoid subprocess for better integration)
+                from seedcore.ml.models.xgboost_service import get_xgboost_service
+                
+                # Get the service instance (this will use the already initialized Ray)
+                xgb_service = get_xgboost_service()
+                
+                if xgb_service is None:
+                    raise RuntimeError("Failed to get XGBoost service instance")
+                
+                print("✅ XGBoost service initialized successfully")
+                
+                # Test basic functionality
+                print("🧪 Testing XGBoost service functionality...")
+                test_dataset = xgb_service.create_sample_dataset(n_samples=100, n_features=5)
+                print(f"✅ XGBoost service test passed - created dataset with {test_dataset.count()} samples")
+                
+            except Exception as e:
+                print(f"⚠️ XGBoost service initialization warning: {e}")
+                print("   XGBoost endpoints may not work properly")
+                # Don't fail the entire deployment for XGBoost issues
+
             print("🟢 ML Serve deployments are live!")
             print("📊 Available endpoints:")
             print("   - Salience Scoring: /score/salience")
             print("   - Anomaly Detection: /detect/anomaly")
             print("   - Scaling Prediction: /predict/scaling")
+            print("   - XGBoost Training: /xgboost/train")
+            print("   - XGBoost Prediction: /xgboost/predict")
+            print("   - XGBoost Batch Prediction: /xgboost/batch_predict")
+            print("   - XGBoost Model Management: /xgboost/list_models, /xgboost/model_info")
             print("   - Health Check: /health")
             print("   - Application ready at: http://localhost:8000/")
             break
