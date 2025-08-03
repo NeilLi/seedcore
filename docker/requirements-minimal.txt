@@ -29,8 +29,14 @@ numpy==1.26.4
 # ML dependencies for salience scoring
 scikit-learn==1.3.0
 
+# XGBoost integration
+xgboost>=2.0.0
+xgboost-ray>=0.1.19
+pandas>=2.0.0
+pyarrow==14.0.2
+
 # Distributed computing (required for consolidation worker)
-ray[default]==2.20.0
+ray[default,train]==2.20.0
 
 # Ray Serve dependencies
 aiorwlock==1.3.0
