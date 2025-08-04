@@ -170,8 +170,8 @@ class UtilityPredictor:
         }
         
         try:
-            # Post the event to the energy ledger API
-            requests.post("http://localhost:8000/energy/log", 
+            # Post the event to the energy ledger API (telemetry server on internal network)
+            requests.post("http://seedcore-api:8002/energy/log", 
                          json=energy_event, timeout=2)
             logger.debug(f"Energy event logged: {energy_event}")
         except requests.RequestException as e:
