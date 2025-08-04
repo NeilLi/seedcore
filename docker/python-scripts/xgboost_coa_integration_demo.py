@@ -407,9 +407,23 @@ def test_batch_prediction(model_path: str) -> bool:
     np.random.seed(42)
     n_samples = 100
     
-    # Generate sample features (adjust based on your model)
-    feature_data = np.random.random((n_samples, 20))
-    df = pd.DataFrame(feature_data, columns=[f"feature_{i}" for i in range(20)])
+    # Generate sample features with correct feature names (matching training data)
+    task_complexity = np.random.beta(2, 5, n_samples)
+    resource_availability = np.random.beta(3, 2, n_samples)
+    historical_success = np.random.beta(4, 2, n_samples)
+    memory_pressure = np.random.beta(2, 3, n_samples)
+    network_latency = np.random.beta(1, 4, n_samples)
+    agent_capability = np.random.beta(3, 1, n_samples)
+    
+    # Create DataFrame with correct feature names
+    df = pd.DataFrame({
+        'task_complexity': task_complexity,
+        'resource_availability': resource_availability,
+        'historical_success': historical_success,
+        'memory_pressure': memory_pressure,
+        'network_latency': network_latency,
+        'agent_capability': agent_capability
+    })
     
     # Save batch data
     batch_csv_path = "/data/batch_prediction_data.csv"
@@ -423,7 +437,8 @@ def test_batch_prediction(model_path: str) -> bool:
     batch_request = {
         "data_source": batch_csv_path,
         "data_format": "csv",
-        "feature_columns": [f"feature_{i}" for i in range(20)],
+        "feature_columns": ['task_complexity', 'resource_availability', 'historical_success', 
+                           'memory_pressure', 'network_latency', 'agent_capability'],
         "path": model_path
     }
     
