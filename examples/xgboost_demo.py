@@ -50,7 +50,7 @@ def demo_xgboost_integration():
         "use_sample_data": True,
         "sample_size": 5000,
         "sample_features": 15,
-        "model_name": "demo_model",
+        "name": "demo_model",
         "xgb_config": {
             "objective": "binary:logistic",
             "eval_metric": ["logloss", "auc"],
@@ -75,11 +75,11 @@ def demo_xgboost_integration():
         if response.status_code == 200:
             result = response.json()
             print("✅ Model training completed successfully!")
-            print(f"   Model Path: {result['model_path']}")
+            print(f"   Model Path: {result['path']}")
             print(f"   Training Time: {result['training_time']:.2f}s")
             print(f"   Final AUC: {result['metrics'].get('validation_0-auc', 'N/A')}")
             
-            model_path = result['model_path']
+            model_path = result['path']
         else:
             print(f"❌ Training failed: {response.status_code}")
             print(f"   Error: {response.text}")
@@ -97,7 +97,7 @@ def demo_xgboost_integration():
     
     predict_request = {
         "features": sample_features,
-        "model_path": model_path
+        "path": model_path
     }
     
     try:
@@ -111,7 +111,7 @@ def demo_xgboost_integration():
             result = response.json()
             print("✅ Prediction completed successfully!")
             print(f"   Prediction: {result['prediction']}")
-            print(f"   Model Used: {result['model_path']}")
+            print(f"   Model Used: {result['path']}")
         else:
             print(f"❌ Prediction failed: {response.status_code}")
             print(f"   Error: {response.text}")
@@ -149,8 +149,8 @@ def demo_xgboost_integration():
             result = response.json()
             print("✅ Model info retrieved!")
             print(f"   Status: {result['status']}")
-            if result['model_path']:
-                print(f"   Current Model: {result['model_path']}")
+            if result['path']:
+                print(f"   Current Model: {result['path']}")
                 if result['metadata']:
                     print(f"   Training Time: {result['metadata'].get('training_time', 'N/A')}s")
         else:
@@ -198,7 +198,7 @@ def demo_advanced_features():
     train_request = {
         "data_source": csv_path,
         "data_format": "csv",
-        "model_name": "csv_demo_model",
+        "name": "csv_demo_model",
         "label_column": "target",
         "xgb_config": {
             "objective": "binary:logistic",
@@ -219,7 +219,7 @@ def demo_advanced_features():
         if response.status_code == 200:
             result = response.json()
             print("✅ CSV training completed!")
-            print(f"   Model: {result['model_path']}")
+            print(f"   Model: {result['path']}")
             print(f"   Time: {result['training_time']:.2f}s")
             
             # Test batch prediction
@@ -229,7 +229,7 @@ def demo_advanced_features():
                 "data_source": csv_path,
                 "data_format": "csv",
                 "feature_columns": [f"feature_{i}" for i in range(10)],
-                "model_path": result['model_path']
+                "path": result['path']
             }
             
             batch_response = requests.post(

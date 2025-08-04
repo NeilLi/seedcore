@@ -47,7 +47,7 @@ curl -X POST http://localhost:8000/xgboost/train \
     "use_sample_data": true,
     "sample_size": 10000,
     "sample_features": 20,
-    "model_name": "'$MODEL_NAME'"
+    "name": "'$MODEL_NAME'"
   }'
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Quick training completed for model: $MODEL_NAME"
@@ -66,7 +66,7 @@ curl -X POST http://localhost:8000/xgboost/train \
     "use_sample_data": true,
     "sample_size": 50000,
     "sample_features": 30,
-    "model_name": "'$MODEL_NAME'",
+    "name": "'$MODEL_NAME'",
     "xgb_config": {
       "objective": "binary:logistic",
       "eval_metric": ["logloss", "auc"],
@@ -93,7 +93,7 @@ curl -X POST http://localhost:8000/xgboost/predict \
   -H "Content-Type: application/json" \
   -d '{
     "features": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-    "model_path": "/data/models/production_model/model.xgb"
+    "path": "/data/models/production_model/model.xgb"
   }'
 ```
 
@@ -103,7 +103,7 @@ curl -X POST http://localhost:8000/xgboost/predict \
 curl -X POST http://localhost:8000/xgboost/load_model \
   -H "Content-Type: application/json" \
   -d '{
-    "model_path": "/data/models/production_model/model.xgb"
+    "path": "/data/models/production_model/model.xgb"
   }'
 
 # Then predict (model will be loaded automatically)
@@ -131,7 +131,7 @@ curl http://localhost:8000/xgboost/model_info
 curl -X POST http://localhost:8000/xgboost/load_model \
   -H "Content-Type: application/json" \
   -d '{
-    "model_path": "/data/models/my_model/model.xgb"
+    "path": "/data/models/my_model/model.xgb"
   }'
 ```
 
@@ -140,7 +140,7 @@ curl -X POST http://localhost:8000/xgboost/load_model \
 curl -X DELETE http://localhost:8000/xgboost/delete_model \
   -H "Content-Type: application/json" \
   -d '{
-    "model_name": "old_model"
+    "name": "old_model"
   }'
 ```
 
@@ -387,7 +387,7 @@ curl -X POST http://localhost:8000/xgboost/train \
     "use_sample_data": true,
     "sample_size": 1000,
     "sample_features": 10,
-    "model_name": "test_model"
+    "name": "test_model"
   }'
 ```
 
@@ -400,7 +400,7 @@ curl -X POST http://localhost:8000/xgboost/train \
     "data_source": "/data/my_data.csv",
     "data_format": "csv",
     "label_column": "target",
-    "model_name": "csv_model"
+    "name": "csv_model"
   }'
 ```
 
@@ -412,7 +412,7 @@ curl -X POST http://localhost:8000/xgboost/train \
     "data_source": "/data/my_data.parquet",
     "data_format": "parquet",
     "label_column": "target",
-    "model_name": "parquet_model"
+    "name": "parquet_model"
   }'
 ```
 
@@ -426,7 +426,7 @@ import json
 # Load model
 response = requests.post(
     "http://localhost:8000/xgboost/load_model",
-    json={"model_path": "/data/models/production_model/model.xgb"}
+    json={"path": "/data/models/production_model/model.xgb"}
 )
 
 # Batch predictions
@@ -499,7 +499,7 @@ curl http://localhost:8000/health
 curl http://localhost:8000/xgboost/list_models
 
 # Quick training
-curl -X POST http://localhost:8000/xgboost/train -H "Content-Type: application/json" -d '{"use_sample_data": true, "sample_size": 1000, "model_name": "test"}'
+curl -X POST http://localhost:8000/xgboost/train -H "Content-Type: application/json" -d '{"use_sample_data": true, "sample_size": 1000, "name": "test"}'
 
 # Quick prediction
 curl -X POST http://localhost:8000/xgboost/predict -H "Content-Type: application/json" -d '{"features": [0.1]*20}'

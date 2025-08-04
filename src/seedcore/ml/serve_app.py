@@ -259,7 +259,7 @@ async def train_xgboost_model(request: Dict[str, Any]):
             label_column=train_request.label_column,
             xgb_config=xgb_config,
             training_config=training_config,
-            model_name=train_request.model_name
+            model_name=train_request.name
         )
         
         return TrainModelResponse(**result)
@@ -282,10 +282,10 @@ async def predict_xgboost(request: Dict[str, Any]):
         xgb_service = get_xgboost_service()
         
         # Load model if specified
-        if predict_request.model_path:
-            success = xgb_service.load_model(predict_request.model_path)
+        if predict_request.path:
+            success = xgb_service.load_model(predict_request.path)
             if not success:
-                raise HTTPException(status_code=400, detail=f"Failed to load model from {predict_request.model_path}")
+                raise HTTPException(status_code=400, detail=f"Failed to load model from {predict_request.path}")
         
         # Make prediction
         predictions = xgb_service.predict(predict_request.features)
@@ -299,7 +299,7 @@ async def predict_xgboost(request: Dict[str, Any]):
         return PredictResponse(
             status="success",
             prediction=prediction,
-            model_path=xgb_service.current_model_path or "unknown"
+            path=xgb_service.current_model_path or "unknown"
         )
         
     except Exception as e:
@@ -320,10 +320,10 @@ async def batch_predict_xgboost(request: Dict[str, Any]):
         xgb_service = get_xgboost_service()
         
         # Load model if specified
-        if batch_request.model_path:
-            success = xgb_service.load_model(batch_request.model_path)
+        if batch_request.path:
+            success = xgb_service.load_model(batch_request.path)
             if not success:
-                raise HTTPException(status_code=400, detail=f"Failed to load model from {batch_request.model_path}")
+                raise HTTPException(status_code=400, detail=f"Failed to load model from {batch_request.path}")
         
         # Load dataset
         dataset = xgb_service.load_dataset_from_source(
@@ -342,7 +342,7 @@ async def batch_predict_xgboost(request: Dict[str, Any]):
             status="success",
             predictions_path=predictions_path,
             num_predictions=result_dataset.count(),
-            model_path=xgb_service.current_model_path or "unknown"
+            path=xgb_service.current_model_path or "unknown"
         )
         
     except Exception as e:
@@ -363,12 +363,12 @@ async def load_xgboost_model(request: Dict[str, Any]):
         xgb_service = get_xgboost_service()
         
         # Load model
-        success = xgb_service.load_model(load_request.model_path)
+        success = xgb_service.load_model(load_request.path)
         
         if success:
             return ModelInfoResponse(
                 status="success",
-                model_path=xgb_service.current_model_path,
+                path=xgb_service.current_model_path,
                 metadata=xgb_service.model_metadata,
                 message="Model loaded successfully"
             )
@@ -434,12 +434,12 @@ async def delete_xgboost_model(request: Dict[str, Any]):
         xgb_service = get_xgboost_service()
         
         # Delete model
-        success = xgb_service.delete_model(delete_request.model_name)
+        success = xgb_service.delete_model(delete_request.name)
         
         if success:
             return DeleteModelResponse(
                 status="success",
-                model_name=delete_request.model_name,
+                name=delete_request.name,
                 message="Model deleted successfully"
             )
         else:

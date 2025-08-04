@@ -4,6 +4,7 @@ XGBoost Docker Demo for SeedCore
 
 This script demonstrates the XGBoost integration within the Docker container environment.
 Run this script inside the Ray head container to test the integration.
+This is a test
 
 Usage:
     docker exec -it seedcore-ray-head python /app/docker/xgboost_docker_demo.py
@@ -31,7 +32,7 @@ def demo_basic_training():
         "use_sample_data": True,
         "sample_size": 2000,
         "sample_features": 12,
-        "model_name": "demo_basic_model",
+        "name": "demo_basic_model",
         "xgb_config": {
             "objective": "binary:logistic",
             "eval_metric": ["logloss", "auc"],
@@ -57,11 +58,11 @@ def demo_basic_training():
     if response.status_code == 200:
         result = response.json()
         print("✅ Training completed successfully!")
-        print(f"   Model: {result['model_name']}")
-        print(f"   Path: {result['model_path']}")
+        print(f"   Model: {result['name']}")
+        print(f"   Path: {result['path']}")
         print(f"   Time: {result['training_time']:.2f}s")
         print(f"   AUC: {result['metrics'].get('validation_0-auc', 'N/A')}")
-        return result['model_path']
+        return result['path']
     else:
         print(f"❌ Training failed: {response.status_code}")
         print(f"   Error: {response.text}")
@@ -78,7 +79,7 @@ def demo_prediction(model_path):
     
     predict_request = {
         "features": sample_features,
-        "model_path": model_path
+        "path": model_path
     }
     
     print("📤 Making prediction...")
@@ -93,7 +94,7 @@ def demo_prediction(model_path):
         result = response.json()
         print("✅ Prediction completed!")
         print(f"   Prediction: {result['prediction']}")
-        print(f"   Model: {result['model_path']}")
+        print(f"   Model: {result['path']}")
     else:
         print(f"❌ Prediction failed: {response.status_code}")
         print(f"   Error: {response.text}")
@@ -123,8 +124,8 @@ def demo_model_management():
     if response.status_code == 200:
         result = response.json()
         print(f"✅ Model info: {result['status']}")
-        if result['model_path']:
-            print(f"   Current model: {result['model_path']}")
+        if result['path']:
+            print(f"   Current model: {result['path']}")
     else:
         print(f"❌ Failed to get model info: {response.status_code}")
 
@@ -139,7 +140,7 @@ def demo_advanced_training():
         "use_sample_data": True,
         "sample_size": 3000,
         "sample_features": 15,
-        "model_name": "demo_advanced_model",
+        "name": "demo_advanced_model",
         "xgb_config": {
             "objective": "binary:logistic",
             "eval_metric": ["logloss", "auc"],
@@ -168,11 +169,11 @@ def demo_advanced_training():
     if response.status_code == 200:
         result = response.json()
         print("✅ Advanced training completed!")
-        print(f"   Model: {result['model_name']}")
+        print(f"   Model: {result['name']}")
         print(f"   Time: {result['training_time']:.2f}s")
         print(f"   AUC: {result['metrics'].get('validation_0-auc', 'N/A')}")
         print(f"   Log Loss: {result['metrics'].get('validation_0-logloss', 'N/A')}")
-        return result['model_path']
+        return result['path']
     else:
         print(f"❌ Advanced training failed: {response.status_code}")
         print(f"   Error: {response.text}")
@@ -204,7 +205,7 @@ def demo_batch_prediction():
         "data_source": csv_path,
         "data_format": "csv",
         "feature_columns": [f"feature_{i}" for i in range(10)],
-        "model_path": "/data/models/demo_advanced_model/model.xgb"
+        "path": "/data/models/demo_advanced_model/model.xgb"
     }
     
     print("📤 Running batch prediction...")
