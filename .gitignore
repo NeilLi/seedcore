@@ -23,3 +23,7 @@ env/
 
 # Local config
 local_*.yaml
+
+# Docker artifacts and generated files
+docker/artifacts/
+docker/test.txt
