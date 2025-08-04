@@ -437,17 +437,25 @@ class XGBoostService:
             if features.ndim == 1:
                 features = features.reshape(1, -1)
             
-            # Use feature names from model metadata if available, otherwise generate default names
-            if hasattr(self, 'model_metadata') and self.model_metadata.get('feature_columns'):
-                feature_names = self.model_metadata['feature_columns']
+            # Get actual feature names from the loaded XGBoost model
+            if hasattr(self.current_model, 'feature_names') and self.current_model.feature_names:
+                feature_names = self.current_model.feature_names
                 if len(feature_names) != features.shape[1]:
                     logger.warning(f"⚠️  Feature count mismatch: expected {len(feature_names)}, got {features.shape[1]}")
                     # Fallback to default names
                     feature_names = [f"feature_{i}" for i in range(features.shape[1])]
             else:
-                # Create default feature names
-                n_features = features.shape[1]
-                feature_names = [f"feature_{i}" for i in range(n_features)]
+                # Fallback to metadata if model doesn't have feature names
+                if hasattr(self, 'model_metadata') and self.model_metadata.get('feature_columns'):
+                    feature_names = self.model_metadata['feature_columns']
+                    if len(feature_names) != features.shape[1]:
+                        logger.warning(f"⚠️  Feature count mismatch: expected {len(feature_names)}, got {features.shape[1]}")
+                        # Fallback to default names
+                        feature_names = [f"feature_{i}" for i in range(features.shape[1])]
+                else:
+                    # Create default feature names
+                    n_features = features.shape[1]
+                    feature_names = [f"feature_{i}" for i in range(n_features)]
             
             # Create DMatrix with feature names
             dmatrix = xgb.DMatrix(features, feature_names=feature_names)
@@ -479,22 +487,40 @@ class XGBoostService:
         if not isinstance(feature_columns, list):
             feature_columns = list(feature_columns)
         
-        # Validate feature columns against model's expected features
-        if hasattr(self, 'model_metadata') and self.model_metadata.get('feature_columns'):
-            expected_features = self.model_metadata['feature_columns']
-            missing_features = set(expected_features) - set(feature_columns)
-            extra_features = set(feature_columns) - set(expected_features)
-            
-            if missing_features:
-                raise ValueError(f"❌ Batch prediction failed: Missing required features: {list(missing_features)}")
-            
-            if extra_features:
-                logger.warning(f"⚠️  Extra features provided (will be ignored): {list(extra_features)}")
-            
-            # Ensure correct order
-            if feature_columns != expected_features:
-                logger.info(f"🔄 Reordering features to match training order")
-                feature_columns = expected_features
+        # Get actual feature names from the loaded XGBoost model
+        if hasattr(self.current_model, 'feature_names'):
+            expected_features = self.current_model.feature_names
+            if expected_features:
+                missing_features = set(expected_features) - set(feature_columns)
+                extra_features = set(feature_columns) - set(expected_features)
+                
+                if missing_features:
+                    raise ValueError(f"❌ Batch prediction failed: Missing required features: {list(missing_features)}")
+                
+                if extra_features:
+                    logger.warning(f"⚠️  Extra features provided (will be ignored): {list(extra_features)}")
+                
+                # Ensure correct order
+                if feature_columns != expected_features:
+                    logger.info(f"🔄 Reordering features to match training order")
+                    feature_columns = expected_features
+        else:
+            # Fallback to metadata if model doesn't have feature names
+            if hasattr(self, 'model_metadata') and self.model_metadata.get('feature_columns'):
+                expected_features = self.model_metadata['feature_columns']
+                missing_features = set(expected_features) - set(feature_columns)
+                extra_features = set(feature_columns) - set(expected_features)
+                
+                if missing_features:
+                    raise ValueError(f"❌ Batch prediction failed: Missing required features: {list(missing_features)}")
+                
+                if extra_features:
+                    logger.warning(f"⚠️  Extra features provided (will be ignored): {list(extra_features)}")
+                
+                # Ensure correct order
+                if feature_columns != expected_features:
+                    logger.info(f"🔄 Reordering features to match training order")
+                    feature_columns = expected_features
         
         logger.info(f"📊 Batch prediction with {len(feature_columns)} features: {feature_columns[:5]}{'...' if len(feature_columns) > 5 else ''}")
         
