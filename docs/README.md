@@ -1,509 +1,123 @@
 # SeedCore Documentation
 
-## Overview
+Welcome to the SeedCore documentation! This directory contains comprehensive documentation organized for maximum efficiency and ease of use.
+
+## 📚 Documentation Structure
+
+### 🚀 [Guides](./guides/) - User and Developer Guides
+- **[Getting Started](./guides/getting-started/)** - Quick start guides and tutorials
+  - [XGBoost Quickstart](./guides/getting-started/xgboost_quickstart.md)
+  - [Quick Reference](./guides/getting-started/QUICK_REFERENCE.md)
+  - [Next Steps](./guides/getting-started/NEXT_STEPS.md)
+- **[Deployment](./guides/deployment/)** - Deployment and infrastructure guides
+  - [Docker Setup Guide](./guides/deployment/docker-setup-guide.md)
+  - [Ray Workers Guide](./guides/deployment/ray-workers-guide.md)
+- **[Troubleshooting](./guides/troubleshooting/)** - Common issues and solutions
+  - [Ray Serve Troubleshooting](./guides/troubleshooting/ray_serve_troubleshooting.md)
+  - [Service Dependencies](./guides/troubleshooting/service-dependencies-and-restart-behavior.md)
+- **[Best Practices](./guides/best-practices/)** - Best practices and recommendations
+  - [Ray Serve Pattern](./guides/best-practices/RAY_SERVE_PATTERN.md)
+  - [Optimization Summary](./guides/best-practices/OPTIMIZATION_SUMMARY.md)
+
+### 🔌 [API](./api/) - API Documentation
+- **[Reference](./api/reference/)** - API reference documentation
+  - [XGBoost Daily Reference](./api/reference/xgboost_daily_reference.md)
+- **[Examples](./api/examples/)** - API usage examples
+  - [XGBoost Integration](./api/examples/xgboost_integration.md)
+  - [XGBoost COA Integration](./api/examples/xgboost_coa_integration.md)
+- **[Schemas](./api/schemas/)** - Data schemas and models
+
+### 🏗️ [Architecture](./architecture/) - System Architecture
+- **[Overview](./architecture/overview/)** - High-level architecture
+  - [Main Index](./architecture/overview/MAIN_INDEX.md)
+  - [Index](./architecture/overview/INDEX.md)
+- **[Components](./architecture/components/)** - Component documentation
+  - [Reports](./architecture/components/reports/)
+  - [Energy Model](./architecture/components/energy-model/)
+- **[Decisions](./architecture/decisions/)** - Architecture decision records
+  - [Commit Messages](./architecture/decisions/commit-messages/)
+
+### 📊 [Monitoring](./monitoring/) - Monitoring and Observability
+- **[Setup](./monitoring/setup/)** - Monitoring setup guides
+  - [Monitoring Integration](./monitoring/setup/MONITORING_INTEGRATION.md)
+  - [Ray Logging Guide](./monitoring/setup/RAY_LOGGING_GUIDE.md)
+- **[Dashboards](./monitoring/dashboards/)** - Dashboard documentation
+  - [Ray Dashboard Fixes](./monitoring/dashboards/RAY_DASHBOARD_FIXES.md)
+- **[Alerts](./monitoring/alerts/)** - Alert configuration
+
+### 🚀 [Releases](./releases/) - Release Documentation
+- **[Changelog](./releases/changelog/)** - Release changelogs
+- **[Migration](./releases/migration/)** - Migration guides
+- **[Notes](./releases/notes/)** - Release notes
+  - [Production Readiness 2024-06](./releases/notes/2024-06-production-readiness.md)
+  - [Production Readiness 2025-07](./releases/notes/2025-07-production-readiness.md)
+
+### 📜 [Historical](./historical/) - Historical and Archived Docs
+- **[Fixes](./historical/fixes/)** - Version-specific fixes
+  - [Ray 2.20.0 Fixes](./historical/fixes/)
+  - [Ray 2.9 Fixes](./historical/fixes/)
+  - [Ray Serve Fixes](./historical/fixes/)
+- **[Upgrades](./historical/upgrades/)** - Upgrade documentation
+  - [Version Update Summary](./historical/upgrades/VERSION_UPDATE_SUMMARY.md)
+- **[Deprecated](./historical/deprecated/)** - Deprecated features
+
+## 🎯 Quick Navigation
+
+### For New Users
+1. Start with [XGBoost Quickstart](./guides/getting-started/xgboost_quickstart.md)
+2. Review [Quick Reference](./guides/getting-started/QUICK_REFERENCE.md)
+3. Follow [Next Steps](./guides/getting-started/NEXT_STEPS.md)
+
+### For Developers
+1. Check [API Reference](./api/reference/) for endpoints
+2. Review [Best Practices](./guides/best-practices/) for patterns
+3. Use [Troubleshooting](./guides/troubleshooting/) for issues
+
+### For DevOps
+1. Follow [Docker Setup Guide](./guides/deployment/docker-setup-guide.md)
+2. Configure [Monitoring](./monitoring/setup/)
+3. Review [Deployment Guides](./guides/deployment/)
+
+### For Troubleshooting
+1. Check [Ray Serve Troubleshooting](./guides/troubleshooting/ray_serve_troubleshooting.md)
+2. Review [Service Dependencies](./guides/troubleshooting/service-dependencies-and-restart-behavior.md)
+3. Use [Debugging Commands](./guides/troubleshooting/ray_serve_debugging_commands.md)
+
+## 📋 Documentation Standards
+
+### File Naming
+- Use lowercase with underscores for file names
+- Use descriptive names that indicate content
+- Group related files with common prefixes
+
+### Content Structure
+- Start with a clear title and overview
+- Include practical examples
+- Provide step-by-step instructions
+- Link to related documentation
+
+### Maintenance
+- Keep documentation up to date with code changes
+- Archive historical documents in [historical](./historical/)
+- Update this README when adding new sections
+
+## 🔗 Related Resources
 
-SeedCore is a distributed cognitive computing platform that implements the Cognitive Organism Architecture (COA) using Ray for distributed computing. This documentation provides comprehensive guidance for understanding, deploying, and managing the SeedCore system.
+- [Docker Resources](../docker/README.md) - Docker configuration and deployment
+- [Project README](../README.md) - Main project documentation
+- [Reorganization Plan](./REORGANIZATION_PLAN.md) - Details about this reorganization
 
-## System Architecture
+## 🤝 Contributing
 
-SeedCore implements a "swarm-of-swarms" model with specialized organs containing intelligent agents:
+When adding new documentation:
+1. Place files in the appropriate subdirectory
+2. Update this README with new links
+3. Follow the existing naming conventions
+4. Include practical examples and clear instructions
 
-```
-SeedCore Platform
-├── Ray Distributed Computing Cluster
-│   ├── Ray Head Node (Cluster Management)
-│   ├── Ray Workers (Distributed Processing)
-│   └── Redis (State Management)
-├── Cognitive Organism Architecture (COA)
-│   ├── Cognitive Organ (Reasoning & Planning)
-│   ├── Actuator Organ (Action Execution)
-│   └── Utility Organ (System Management)
-├── FastAPI Application Server
-│   ├── HTTP Endpoints
-│   ├── OrganismManager
-│   └── Task Execution
-└── Observability Stack
-    ├── Prometheus (Metrics)
-    ├── Grafana (Visualization)
-    └── Ray Dashboard (Monitoring)
-```
+## 📞 Support
 
-## Quick Start
-
-### Prerequisites
-
-- Docker and Docker Compose
-- 4GB+ RAM available
-- Linux/macOS/Windows with Docker support
-
-### Installation
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd seedcore
-
-# Navigate to docker directory
-cd docker
-
-# Start the system
-docker compose up -d
-
-# Wait for initialization (2-3 minutes)
-# Check status
-docker compose ps
-```
-
-### Verification
-
-```bash
-# Check Ray dashboard
-curl http://localhost:8265/#/jobs
-
-# Check COA organism status
-curl -X GET "http://localhost:8000/organism/status"
-
-# Check API health
-curl -X GET "http://localhost:8000/health"
-```
-
-## Core Components
-
-### 1. Ray Cluster
-
-The distributed computing backbone:
-
-- **Head Node**: Manages cluster resources and job distribution
-- **Workers**: Execute distributed tasks and agent computations
-- **Dashboard**: Web UI for monitoring (Port 8265)
-- **Redis**: Internal state management (Port 6379)
-
-### 2. Cognitive Organism Architecture (COA)
-
-A biological-inspired computing model:
-
-- **Organs**: Specialized containers for agent pools
-- **Agents**: Ray actors with private memory and performance tracking
-- **OrganismManager**: Central coordinator for lifecycle management
-
-#### Organ Types
-
-1. **Cognitive Organ**
-   - Purpose: Reasoning, planning, complex task decomposition
-   - Agents: 1 cognitive agent
-   - Specialization: Analytical thinking and problem-solving
-
-2. **Actuator Organ**
-   - Purpose: Action execution and external API interactions
-   - Agents: 1 actuator agent
-   - Specialization: Task execution and system interactions
-
-3. **Utility Organ**
-   - Purpose: Memory management, health checks, system tasks
-   - Agents: 1 utility agent
-   - Specialization: System maintenance and optimization
-
-### 3. FastAPI Application Server
-
-The main application interface:
-
-- **HTTP Endpoints**: RESTful API for external access
-- **OrganismManager Integration**: COA lifecycle management
-- **Task Execution**: Routes requests to appropriate organs
-- **Health Monitoring**: System status and metrics
-
-## Documentation Structure
-
-### 📚 Core Documentation
-
-- **[Ray Cluster Diagnostics](./ray-cluster-diagnostics.md)**
-  - Comprehensive guide for diagnosing and analyzing Ray clusters
-  - Job scheduling and management procedures
-  - Troubleshooting and best practices
-
-- **[COA Implementation Guide](./coa-implementation-guide.md)**
-  - Detailed implementation of the Cognitive Organism Architecture
-  - Configuration and usage examples
-  - Testing and validation procedures
-
-- **[Job Analysis and Management](./job-analysis-and-management.md)**
-  - Understanding Ray job types and responsibilities
-  - Job lifecycle and scheduling analysis
-  - Monitoring and troubleshooting procedures
-
-### 🛠️ Operational Documentation
-
-- **[Docker Compose Configuration](../docker/docker-compose.yml)**
-  - Service definitions and networking
-  - Resource allocation and dependencies
-  - Environment configuration
-
-- **[Configuration Files](../src/seedcore/config/)**
-  - System configuration and parameters
-  - COA organ definitions
-  - Environment-specific settings
-
-### 📁 Documentation Directories
-
-- **[Guides](./guides/)** - Step-by-step guides and operational procedures
-  - Docker setup and configuration
-  - Ray workers management
-  - Salience service operations
-  - **Ray Serve troubleshooting and debugging**
-  - Ray Serve deployment patterns
-  - Docker optimization and performance tuning
-  - Job analysis and management
-
-- **[Monitoring](./monitoring/)** - Monitoring, diagnostics, and analysis tools
-  - Ray cluster diagnostic reports
-  - Dashboard fixes and configurations
-  - Monitoring system integration
-  - Logging and observability guides
-
-- **[API Reference](./api-reference/)** - Complete API documentation
-  - Endpoint specifications
-  - Request/response examples
-  - Authentication and authorization
-
-- **[Architecture](./architecture/)** - System design and architecture
-  - Component diagrams
-  - Data flow documentation
-  - Design decisions and rationale
-
-## Key Features
-
-### 🧠 Cognitive Computing
-
-- **Distributed Intelligence**: Ray-based distributed computing
-- **Biological Inspiration**: COA with specialized organs and agents
-- **Adaptive Learning**: Agent performance tracking and optimization
-- **Scalable Architecture**: Horizontal scaling with Ray workers
-
-### 🔧 System Management
-
-- **Container Orchestration**: Docker Compose for service management
-- **Health Monitoring**: Comprehensive observability stack
-- **API-First Design**: RESTful endpoints for all operations
-- **Configuration Management**: YAML-based configuration system
-
-### 📊 Observability
-
-- **Ray Dashboard**: Real-time cluster monitoring
-- **Grafana**: Metrics visualization and dashboards
-- **Prometheus**: Metrics collection and storage
-- **Structured Logging**: Comprehensive logging system
-
-## API Reference
-
-### Core Endpoints
-
-#### Organism Management
-
-```bash
-# Get organism status
-GET /organism/status
-
-# Execute task on specific organ
-POST /organism/execute/{organ_id}
-{
-  "description": "Task description",
-  "parameters": {"key": "value"}
-}
-
-# Execute task on random organ
-POST /organism/execute/random
-{
-  "description": "Task description"
-}
-
-# Get organism summary
-GET /organism/summary
-
-# Initialize organism
-POST /organism/initialize
-
-# Shutdown organism
-POST /organism/shutdown
-```
-
-#### System Health
-
-```bash
-# Health check
-GET /health
-
-# Ray cluster status
-GET /ray/status
-
-# System metrics
-GET /metrics
-```
-
-### Example Usage
-
-```bash
-# Check system health
-curl -X GET "http://localhost:8000/health"
-
-# Get COA organism status
-curl -X GET "http://localhost:8000/organism/status"
-
-# Execute a cognitive task
-curl -X POST "http://localhost:8000/organism/execute/cognitive_organ_1" \
-  -H "Content-Type: application/json" \
-  -d '{"description": "Analyze the given data and provide insights"}'
-
-# Execute a random task
-curl -X POST "http://localhost:8000/organism/execute/random" \
-  -H "Content-Type: application/json" \
-  -d '{"description": "Process the request"}'
-```
-
-## Monitoring and Diagnostics
-
-### Dashboard Access
-
-- **Ray Dashboard**: `http://localhost:8265`
-  - Cluster overview and job status
-  - Resource utilization
-  - Actor and task monitoring
-
-- **Grafana**: `http://localhost:3000`
-  - Metrics visualization
-  - Performance dashboards
-  - Alert management
-
-- **Prometheus**: `http://localhost:9090`
-  - Metrics collection
-  - Query interface
-  - Alert rules
-
-### Diagnostic Tools
-
-#### Quick Health Check
-
-```bash
-# Copy diagnostic script
-docker cp comprehensive_job_analysis.py seedcore-api:/tmp/
-
-# Run analysis
-docker exec -it seedcore-api python3 /tmp/comprehensive_job_analysis.py
-```
-
-#### COA Testing
-
-```bash
-# Copy test script
-docker cp test_organism.py seedcore-api:/tmp/
-
-# Run tests
-docker exec -it seedcore-api python3 /tmp/test_organism.py
-```
-
-#### System Cleanup
-
-```bash
-# Copy cleanup script
-docker cp cleanup_organs.py seedcore-api:/tmp/
-
-# Execute cleanup
-docker exec -it seedcore-api python3 /tmp/cleanup_organs.py
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Ray Cluster Issues**
-   - Check Ray dashboard for job status
-   - Verify container connectivity
-   - Review Ray logs
-
-2. **COA Initialization Problems**
-   - Check organism status endpoint
-   - Verify configuration file syntax
-   - Review OrganismManager logs
-
-3. **API Endpoint Issues**
-   - Check FastAPI server status
-   - Verify port accessibility
-   - Review application logs
-
-### Diagnostic Procedures
-
-1. **System Health Check**
-   ```bash
-   docker compose ps
-   curl -X GET "http://localhost:8000/health"
-   ```
-
-2. **Ray Cluster Analysis**
-   ```bash
-   docker exec -it seedcore-api python3 -c "
-   import ray
-   ray.init(address='ray://ray-head:10001', namespace='seedcore')
-   print('Ray Status:', ray.is_initialized())
-   print('Cluster Resources:', ray.cluster_resources())
-   "
-   ```
-
-3. **COA Status Verification**
-   ```bash
-   curl -X GET "http://localhost:8000/organism/status"
-   curl -X GET "http://localhost:8000/organism/summary"
-   ```
-
-## Development
-
-### Local Development Setup
-
-```bash
-# Clone repository
-git clone <repository-url>
-cd seedcore
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Set up development environment
-cp .env.example .env
-# Edit .env with your configuration
-
-# Start development services
-cd docker
-docker compose up -d postgres mysql neo4j
-```
-
-### Testing
-
-```bash
-# Run unit tests
-python -m pytest tests/
-
-# Run integration tests
-python -m pytest tests/integration/
-
-# Run COA tests
-python test_organism.py
-```
-
-### Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Submit a pull request
-
-## 🚨 Quick Reference: Service Dependencies
-
-### Important: Service Restart Behavior
-
-**⚠️ Critical Information**: The SeedCore system has specific dependency requirements that affect how services can be restarted.
-
-#### ✅ Recommended: Full Cluster Restart
-```bash
-# Always use this for reliable operation
-cd docker
-./start-cluster.sh
-```
-
-#### ⚠️ Risky: Individual Service Restart
-```bash
-# This may fail due to dependency issues
-docker compose restart seedcore-api
-```
-
-#### Why This Matters
-- **`seedcore-api` depends on Ray cluster state** being consistent
-- **Ray client connections are stateful** and can hang if cluster state is inconsistent
-- **Independent restarts** may fail if dependencies aren't fully ready
-
-#### Quick Diagnostic
-If API hangs after restart, check:
-```bash
-# 1. Ray head health
-docker ps | grep seedcore-ray-head
-
-# 2. Ray cluster status  
-docker exec seedcore-ray-head ray status
-
-# 3. API logs
-docker logs seedcore-api --tail 20
-```
-
-**📖 For detailed information**: See [Service Dependencies and Restart Behavior](./guides/service-dependencies-and-restart-behavior.md)
-
----
-
-## Performance Considerations
-
-### Resource Requirements
-
-- **Minimum**: 4GB RAM, 2 CPU cores
-- **Recommended**: 8GB RAM, 4 CPU cores
-- **Production**: 16GB+ RAM, 8+ CPU cores
-
-### Scaling
-
-- **Horizontal Scaling**: Add Ray workers via `ray-workers.yml`
-- **Vertical Scaling**: Increase container resource limits
-- **Load Balancing**: Implement external load balancer
-
-### Optimization
-
-- **Memory Management**: Monitor agent memory usage
-- **CPU Utilization**: Balance workload across workers
-- **Network Performance**: Optimize container networking
-
-## Security
-
-### Best Practices
-
-1. **Container Security**
-   - Use non-root users in containers
-   - Regularly update base images
-   - Implement resource limits
-
-2. **Network Security**
-   - Use internal networks for inter-service communication
-   - Implement proper firewall rules
-   - Secure external API access
-
-3. **Data Security**
-   - Encrypt sensitive data
-   - Implement proper access controls
-   - Regular security audits
-
-## Support
-
-### Getting Help
-
-1. **Documentation**: Review this documentation thoroughly
-2. **Issues**: Check existing GitHub issues
-3. **Community**: Join the community discussions
-4. **Support**: Contact support team for critical issues
-
-### Reporting Issues
-
-When reporting issues, please include:
-
-- System configuration and environment
-- Detailed error messages and logs
-- Steps to reproduce the issue
-- Expected vs actual behavior
-
-## License
-
-This project is licensed under the [MIT License](../LICENSE).
-
-## Acknowledgments
-
-- Ray team for the distributed computing framework
-- FastAPI team for the web framework
-- Docker team for containerization technology
-- The open-source community for contributions
-
----
-
-For more information, visit the [project repository](https://github.com/your-org/seedcore) or contact the development team. 
+For questions about documentation:
+1. Check the [troubleshooting guides](./guides/troubleshooting/)
+2. Review [historical fixes](./historical/fixes/) for similar issues
+3. Consult the [API reference](./api/reference/) for technical details 
