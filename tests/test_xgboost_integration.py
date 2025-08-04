@@ -58,7 +58,7 @@ def test_xgboost_service():
             
             training_time = time.time() - start_time
             print(f"✅ Training completed in {training_time:.2f}s")
-            print(f"   Model saved to: {result['model_path']}")
+            print(f"   Model saved to: {result['path']}")
             print(f"   Training metrics: {result['metrics']}")
             
             # Test prediction

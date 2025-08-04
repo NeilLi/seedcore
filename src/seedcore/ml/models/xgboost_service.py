@@ -318,8 +318,8 @@ class XGBoostService:
             
             # Store metadata
             self.model_metadata = {
-                "model_name": model_name,
-                "model_path": str(model_path),
+                "name": model_name,
+                "path": str(model_path),
                 "training_time": time.time() - start_time,
                 "metrics": {"status": "completed"},  # xgboost-ray train doesn't return detailed metrics
                 "config": {
@@ -333,8 +333,8 @@ class XGBoostService:
             
             return {
                 "status": "success",
-                "model_path": str(model_path),
-                "model_name": model_name,
+                "path": str(model_path),
+                "name": model_name,
                 "training_time": self.model_metadata['training_time'],
                 "metrics": {"status": "completed"},
                 "config": self.model_metadata['config']
@@ -466,7 +466,7 @@ class XGBoostService:
         
         return {
             "status": "model_loaded",
-            "model_path": self.current_model_path,
+            "path": self.current_model_path,
             "metadata": self.model_metadata
         }
     

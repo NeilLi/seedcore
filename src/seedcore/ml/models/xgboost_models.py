@@ -48,35 +48,35 @@ class TrainModelRequest(BaseModel):
     sample_size: int = Field(default=10000, ge=1000, le=100000, description="Sample dataset size")
     sample_features: int = Field(default=20, ge=5, le=100, description="Number of features in sample data")
     label_column: str = Field(default="target", description="Name of the target column")
-    model_name: Optional[str] = Field(default=None, description="Optional name for the model")
+    name: Optional[str] = Field(default=None, description="Optional name for the model")
     xgb_config: Optional[XGBoostConfigRequest] = Field(default=None, description="XGBoost hyperparameters")
     training_config: Optional[TrainingConfigRequest] = Field(default=None, description="Training configuration")
 
 class PredictRequest(BaseModel):
     """Request model for making predictions."""
     features: List[Union[float, int]] = Field(description="Feature vector for prediction")
-    model_path: Optional[str] = Field(default=None, description="Path to specific model (optional)")
+    path: Optional[str] = Field(default=None, description="Path to specific model (optional)")
 
 class BatchPredictRequest(BaseModel):
     """Request model for batch predictions."""
     data_source: str = Field(description="Path to data source for batch prediction")
     data_format: str = Field(default="auto", description="Data format")
     feature_columns: List[str] = Field(description="List of feature column names")
-    model_path: Optional[str] = Field(default=None, description="Path to specific model (optional)")
+    path: Optional[str] = Field(default=None, description="Path to specific model (optional)")
 
 class LoadModelRequest(BaseModel):
     """Request model for loading a model."""
-    model_path: str = Field(description="Path to the model file")
+    path: str = Field(description="Path to the model file")
 
 class DeleteModelRequest(BaseModel):
     """Request model for deleting a model."""
-    model_name: str = Field(description="Name of the model to delete")
+    name: str = Field(description="Name of the model to delete")
 
 class TrainModelResponse(BaseModel):
     """Response model for training results."""
     status: str = Field(description="Training status")
-    model_path: str = Field(description="Path to the trained model")
-    model_name: str = Field(description="Name of the trained model")
+    path: str = Field(description="Path to the trained model")
+    name: str = Field(description="Name of the trained model")
     training_time: float = Field(description="Training time in seconds")
     metrics: Dict[str, Any] = Field(description="Training metrics")
     config: Dict[str, Any] = Field(description="Training configuration used")
@@ -86,7 +86,7 @@ class PredictResponse(BaseModel):
     """Response model for predictions."""
     status: str = Field(description="Prediction status")
     prediction: Union[float, List[float]] = Field(description="Prediction result(s)")
-    model_path: str = Field(description="Path to the model used")
+    path: str = Field(description="Path to the model used")
     confidence: Optional[float] = Field(default=None, description="Prediction confidence (if applicable)")
 
 class BatchPredictResponse(BaseModel):
@@ -94,12 +94,12 @@ class BatchPredictResponse(BaseModel):
     status: str = Field(description="Batch prediction status")
     predictions_path: str = Field(description="Path to predictions output")
     num_predictions: int = Field(description="Number of predictions made")
-    model_path: str = Field(description="Path to the model used")
+    path: str = Field(description="Path to the model used")
 
 class ModelInfoResponse(BaseModel):
     """Response model for model information."""
     status: str = Field(description="Model status")
-    model_path: Optional[str] = Field(default=None, description="Path to current model")
+    path: Optional[str] = Field(default=None, description="Path to current model")
     metadata: Optional[Dict[str, Any]] = Field(default=None, description="Model metadata")
     message: Optional[str] = Field(default=None, description="Additional message")
 
@@ -111,7 +111,7 @@ class ModelListResponse(BaseModel):
 class DeleteModelResponse(BaseModel):
     """Response model for model deletion."""
     status: str = Field(description="Deletion status")
-    model_name: str = Field(description="Name of the deleted model")
+    name: str = Field(description="Name of the deleted model")
     message: str = Field(description="Deletion message")
 
 class ErrorResponse(BaseModel):

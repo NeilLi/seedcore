@@ -60,7 +60,7 @@ curl -X POST http://localhost:8000/xgboost/train \
     "use_sample_data": true,
     "sample_size": 1000,
     "sample_features": 10,
-    "model_name": "my_first_model",
+    "name": "my_first_model",
     "xgb_config": {
       "objective": "binary:logistic",
       "num_boost_round": 10
@@ -99,7 +99,7 @@ curl -X POST http://localhost:8000/xgboost/train \
     "data_source": "/data/your_data.csv",
     "data_format": "csv",
     "label_column": "target",
-    "model_name": "production_model"
+    "name": "production_model"
   }'
 ```
 
@@ -116,7 +116,7 @@ curl -X POST http://localhost:8000/xgboost/batch_predict \
     "data_source": "/data/test_data.csv",
     "data_format": "csv",
     "feature_columns": ["feature_1", "feature_2", "feature_3"],
-    "model_path": "/data/models/production_model/model.xgb"
+    "path": "/data/models/production_model/model.xgb"
   }'
 ```
 
@@ -130,14 +130,14 @@ curl http://localhost:8000/xgboost/list_models
 curl -X POST http://localhost:8000/xgboost/load_model \
   -H "Content-Type: application/json" \
   -d '{
-    "model_path": "/data/models/production_model/model.xgb"
+    "path": "/data/models/production_model/model.xgb"
   }'
 
 # Delete a model
 curl -X DELETE http://localhost:8000/xgboost/delete_model \
   -H "Content-Type: application/json" \
   -d '{
-    "model_name": "old_model"
+    "name": "old_model"
   }'
 ```
 

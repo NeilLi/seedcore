@@ -60,7 +60,7 @@ def test_xgboost_service_in_docker():
         
         training_time = time.time() - start_time
         print(f"✅ Training completed in {training_time:.2f}s")
-        print(f"   Model saved to: {result['model_path']}")
+        print(f"   Model saved to: {result['path']}")
         print(f"   Training metrics: {result['metrics']}")
         
         # Test prediction
@@ -154,7 +154,7 @@ def test_xgboost_training_via_api():
             "use_sample_data": True,
             "sample_size": 2000,  # Increased to meet minimum requirements
             "sample_features": 8,
-            "model_name": "api_test_model",
+            "name": "api_test_model",
             "xgb_config": {
                 "objective": "binary:logistic",
                 "eval_metric": ["logloss", "auc"],
@@ -180,7 +180,7 @@ def test_xgboost_training_via_api():
         if response.status_code == 200:
             result = response.json()
             print("✅ Training via API completed successfully!")
-            print(f"   Model Path: {result['model_path']}")
+            print(f"   Model Path: {result['path']}")
             print(f"   Training Time: {result['training_time']:.2f}s")
             print(f"   Status: {result['status']}")
             
@@ -188,7 +188,7 @@ def test_xgboost_training_via_api():
             print("\n📊 Testing Prediction with Trained Model...")
             predict_request = {
                 "features": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
-                "model_path": result['model_path']
+                "path": result['path']
             }
             
             predict_response = requests.post(
@@ -202,7 +202,7 @@ def test_xgboost_training_via_api():
                 predict_result = predict_response.json()
                 print("✅ Prediction via API completed!")
                 print(f"   Prediction: {predict_result['prediction']}")
-                print(f"   Model Used: {predict_result['model_path']}")
+                print(f"   Model Used: {predict_result['path']}")
             else:
                 print(f"❌ Prediction failed: {predict_response.status_code}")
                 print(f"   Error: {predict_response.text}")

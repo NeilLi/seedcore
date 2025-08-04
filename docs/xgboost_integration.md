@@ -71,7 +71,7 @@ Train a new XGBoost model using distributed Ray training.
   "use_sample_data": true,
   "sample_size": 10000,
   "sample_features": 20,
-  "model_name": "my_model",
+  "name": "my_model",
   "xgb_config": {
     "objective": "binary:logistic",
     "eval_metric": ["logloss", "auc"],
@@ -91,8 +91,8 @@ Train a new XGBoost model using distributed Ray training.
 ```json
 {
   "status": "success",
-  "model_path": "/data/models/my_model/model.xgb",
-  "model_name": "my_model",
+  "path": "/data/models/my_model/model.xgb",
+  "name": "my_model",
   "training_time": 45.23,
   "metrics": {
     "validation_0-auc": 0.95,
@@ -115,7 +115,7 @@ Make predictions using a trained model.
 ```json
 {
   "features": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-  "model_path": "/data/models/my_model/model.xgb"
+  "path": "/data/models/my_model/model.xgb"
 }
 ```
 
@@ -124,7 +124,7 @@ Make predictions using a trained model.
 {
   "status": "success",
   "prediction": 0.85,
-  "model_path": "/data/models/my_model/model.xgb"
+  "path": "/data/models/my_model/model.xgb"
 }
 ```
 
@@ -140,7 +140,7 @@ Make predictions on a dataset.
   "data_source": "/data/my_dataset.csv",
   "data_format": "csv",
   "feature_columns": ["feature_0", "feature_1", "feature_2"],
-  "model_path": "/data/models/my_model/model.xgb"
+  "path": "/data/models/my_model/model.xgb"
 }
 ```
 
@@ -150,7 +150,7 @@ Make predictions on a dataset.
   "status": "success",
   "predictions_path": "/data/predictions_1234567890.parquet",
   "num_predictions": 1000,
-  "model_path": "/data/models/my_model/model.xgb"
+  "path": "/data/models/my_model/model.xgb"
 }
 ```
 
