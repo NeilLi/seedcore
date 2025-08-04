@@ -303,16 +303,30 @@ class XGBoostService:
                 if isinstance(local_params.get('eval_metric'), list):
                     local_params['eval_metric'] = local_params['eval_metric'][0]  # Use first metric
                 
+                # Split data for validation
+                from sklearn.model_selection import train_test_split
+                X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+                
+                # Create DMatrix for training and validation
+                dtrain_local = xgb.DMatrix(X_train, label=y_train)
+                dval_local = xgb.DMatrix(X_val, label=y_val)
+                
+                # Train with validation
+                evals = [(dtrain_local, 'train'), (dval_local, 'validation')]
                 bst = xgb.train(
                     local_params,
                     dtrain_local,
-                    num_boost_round=xgb_config.num_boost_round
+                    num_boost_round=xgb_config.num_boost_round,
+                    evals=evals,
+                    early_stopping_rounds=xgb_config.early_stopping_rounds,
+                    verbose_eval=False
                 )
                 
                 # Create a mock result object to maintain compatibility
                 class MockResult:
-                    def __init__(self, booster):
+                    def __init__(self, booster, eval_results=None):
                         self.booster = booster
+                        self.eval_results = eval_results or {}
                         self.checkpoint = type('obj', (object,), {
                             'to_xgboost': lambda: booster
                         })()
@@ -325,7 +339,10 @@ class XGBoostService:
                         """Predict using the booster."""
                         return self.booster.predict(dmatrix)
                 
-                result = MockResult(bst)
+                # Get evaluation results
+                eval_results = bst.evals_result() if hasattr(bst, 'evals_result') else {}
+                
+                result = MockResult(bst, eval_results)
                 logger.info("✅ Local training completed successfully")
             
             # Save model
@@ -335,12 +352,22 @@ class XGBoostService:
             self.current_model = result
             self.current_model_path = model_path
             
+            # Extract metrics from training result
+            metrics = {"status": "completed"}
+            if hasattr(result, 'eval_results') and result.eval_results:
+                # Extract the best validation metrics
+                for eval_name, eval_metrics in result.eval_results.items():
+                    if 'validation' in eval_name:
+                        for metric_name, values in eval_metrics.items():
+                            if values:  # Get the last (best) value
+                                metrics[f"validation_{metric_name}"] = values[-1]
+            
             # Store metadata
             self.model_metadata = {
                 "name": model_name,
                 "path": str(model_path),
                 "training_time": time.time() - start_time,
-                "metrics": {"status": "completed"},  # xgboost-ray train doesn't return detailed metrics
+                "metrics": metrics,
                 "feature_columns": feature_columns,  # Store feature columns for validation
                 "config": {
                     "xgb_config": xgb_config.__dict__,
@@ -356,7 +383,7 @@ class XGBoostService:
                 "path": str(model_path),
                 "name": model_name,
                 "training_time": self.model_metadata['training_time'],
-                "metrics": {"status": "completed"},
+                "metrics": metrics,
                 "config": self.model_metadata['config']
             }
             
@@ -410,6 +437,28 @@ class XGBoostService:
             
         except Exception as e:
             logger.error(f"❌ Failed to load model: {e}")
+            return False
+    
+    def refresh_model(self) -> bool:
+        """
+        Refresh the model to use the latest promoted model from tuning.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Look for the latest promoted model
+            blessed_model_path = self.model_storage_path / "utility_risk_model_latest" / "model.xgb"
+            
+            if blessed_model_path.exists():
+                logger.info(f"🔄 Refreshing model to latest promoted version: {blessed_model_path}")
+                return self.load_model(str(blessed_model_path))
+            else:
+                logger.warning(f"⚠️ No promoted model found at: {blessed_model_path}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to refresh model: {e}")
             return False
     
     def predict(self, features: Union[List, np.ndarray, pd.DataFrame]) -> np.ndarray:

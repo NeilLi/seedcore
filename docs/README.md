@@ -9,6 +9,9 @@ Welcome to the SeedCore documentation! This directory contains comprehensive doc
   - [XGBoost Quickstart](./guides/getting-started/xgboost_quickstart.md)
   - [Quick Reference](./guides/getting-started/QUICK_REFERENCE.md)
   - [Next Steps](./guides/getting-started/NEXT_STEPS.md)
+- **[Hyperparameter Tuning](./guides/hyperparameter-tuning/)** - ✅ **NEW** - Automated ML model optimization
+  - [Hyperparameter Tuning Guide](./guides/hyperparameter-tuning/HYPERPARAMETER_TUNING_GUIDE.md)
+  - [Quick Reference](./guides/hyperparameter-tuning/QUICK_REFERENCE.md)
 - **[Deployment](./guides/deployment/)** - Deployment and infrastructure guides
   - [Docker Setup Guide](./guides/deployment/docker-setup-guide.md)
   - [Ray Workers Guide](./guides/deployment/ray-workers-guide.md)
@@ -66,7 +69,8 @@ Welcome to the SeedCore documentation! This directory contains comprehensive doc
 ### For New Users
 1. Start with [XGBoost Quickstart](./guides/getting-started/xgboost_quickstart.md)
 2. Review [Quick Reference](./guides/getting-started/QUICK_REFERENCE.md)
-3. Follow [Next Steps](./guides/getting-started/NEXT_STEPS.md)
+3. Try [Hyperparameter Tuning](./guides/hyperparameter-tuning/QUICK_REFERENCE.md) for model optimization
+4. Follow [Next Steps](./guides/getting-started/NEXT_STEPS.md)
 
 ### For Developers
 1. Check [API Reference](./api/reference/) for endpoints

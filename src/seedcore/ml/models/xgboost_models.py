@@ -118,4 +118,22 @@ class ErrorResponse(BaseModel):
     """Response model for errors."""
     status: str = Field(default="error", description="Error status")
     error: str = Field(description="Error message")
-    details: Optional[Dict[str, Any]] = Field(default=None, description="Error details") 
+    details: Optional[Dict[str, Any]] = Field(default=None, description="Error details")
+
+class TuneRequest(BaseModel):
+    """Request model for hyperparameter tuning."""
+    space_type: str = Field(default="default", description="Type of search space (default, conservative, aggressive)")
+    config_type: str = Field(default="default", description="Type of tuning config (default, conservative, aggressive)")
+    custom_search_space: Optional[Dict[str, Any]] = Field(default=None, description="Custom search space (overrides space_type)")
+    custom_tune_config: Optional[Dict[str, Any]] = Field(default=None, description="Custom tuning config (overrides config_type)")
+    experiment_name: str = Field(default="xgboost_tuning", description="Name for the tuning experiment")
+
+class TuneResponse(BaseModel):
+    """Response model for hyperparameter tuning results."""
+    status: str = Field(description="Tuning status")
+    experiment_name: str = Field(description="Name of the tuning experiment")
+    best_trial: Optional[Dict[str, Any]] = Field(default=None, description="Best trial information")
+    promotion: Optional[Dict[str, Any]] = Field(default=None, description="Model promotion information")
+    total_trials: Optional[int] = Field(default=None, description="Total number of trials")
+    experiment_path: Optional[str] = Field(default=None, description="Path to experiment results")
+    error: Optional[str] = Field(default=None, description="Error message if tuning failed") 
