@@ -1,39 +1,13 @@
-# SeedCore: Dynamic Cognitive Architecture
+# SeedCore: Dynamic Cognitive Architecture with XGBoost ML Integration
 
-A stateful, interactive cognitive architecture system with persistent organs, agents, and energy-based control loops featuring realistic agent collaboration learning.
+A stateful, interactive cognitive architecture system with persistent organs, agents, energy-based control loops, and integrated XGBoost machine learning capabilities featuring realistic agent collaboration learning.
 
-## Features
-
-### 🧠 Persistent State Management
-- **Organ Registry**: Centralized state management with `OrganRegistry`
-- **Persistent Organs & Agents**: System maintains state across API calls
-- **Energy Ledger**: Multi-term energy accounting (pair, hyper, entropy, reg, mem)
-- **Role Evolution**: Dynamic agent role probability adjustment
-
-### 🤖 Agent Personality System
-- **Personality Vectors**: Each agent has an 8-dimensional personality embedding (`h`)
-- **Cosine Similarity**: Calculates compatibility between agent personalities
-- **Collaboration Learning**: Tracks historical success rates between agent pairs
-- **Adaptive Weights**: Learns which agent combinations work best together
-
-### 🔄 Control Loops
-- **Fast Loop**: Real-time agent selection and task execution
-- **Slow Loop**: Energy-aware role evolution with learning rate control
-- **Memory Loop**: Adaptive compression and memory utilization control
-- **Energy Model Foundation**: Intelligent energy-aware agent selection and optimization
-
-### 📊 Comprehensive Telemetry
-- Energy gradient monitoring
-- Role performance metrics
-- Memory utilization tracking
-- Pair collaboration statistics
-- System status endpoints
-
-## Quick Start
+## 🚀 Quick Start (5 minutes)
 
 ### Prerequisites
 - Docker and Docker Compose
-- Python 3.10 (for local development)
+- 4GB+ RAM available
+- Linux/macOS/Windows with Docker support
 
 ### 1. Clone and Setup
 ```bash
@@ -41,7 +15,7 @@ git clone <repository-url>
 cd seedcore
 ```
 
-### 2. Start Services
+### 2. Start the Cluster
 ```bash
 cd docker
 ./start-cluster.sh
@@ -49,9 +23,16 @@ cd docker
 
 **⚠️ Important**: Always use `./start-cluster.sh` instead of `docker compose up -d` to ensure proper service startup order and dependency management. Individual service restarts may fail due to Ray cluster state dependencies.
 
-**Note**: The Docker Compose configuration has been optimized to eliminate PYTHONPATH warnings and ensure clean builds.
+### 3. Wait for Initialization
+```bash
+# Wait 2-3 minutes for full startup
+sleep 120
 
-### 3. Verify Installation
+# Check health
+curl http://localhost:8000/health
+```
+
+### 4. Verify Installation
 ```bash
 # Check Ray dashboard
 curl http://localhost:8265/api/version
@@ -61,521 +42,390 @@ curl http://localhost:8000/health
 
 # Check energy system
 curl http://localhost:8000/healthz/energy
+
+# Test XGBoost integration
+docker exec -it seedcore-ray-head python /app/docker/test_xgboost_docker.py
 ```
 
-### 4. Run Tests
+### 5. Run the Complete Demo
 ```bash
-# Test energy model
-docker compose exec seedcore-api python -m scripts.test_energy_model
-
-# Run energy calibration
-docker compose exec seedcore-api python -m scripts.test_energy_calibration
+# Run the full XGBoost demo
+docker exec -it seedcore-ray-head python /app/docker/xgboost_docker_demo.py
 ```
 
-### 1. Install Dependencies
+## 🧠 Core Features
+
+### Cognitive Architecture
+- **Persistent State Management**: Centralized state management with `OrganRegistry`
+- **Persistent Organs & Agents**: System maintains state across API calls
+- **Energy Ledger**: Multi-term energy accounting (pair, hyper, entropy, reg, mem)
+- **Role Evolution**: Dynamic agent role probability adjustment
+
+### Agent Personality System
+- **Personality Vectors**: Each agent has an 8-dimensional personality embedding (`h`)
+- **Cosine Similarity**: Calculates compatibility between agent personalities
+- **Collaboration Learning**: Tracks historical success rates between agent pairs
+- **Adaptive Weights**: Learns which agent combinations work best together
+
+### Control Loops
+- **Fast Loop**: Real-time agent selection and task execution
+- **Slow Loop**: Energy-aware role evolution with learning rate control
+- **Memory Loop**: Adaptive compression and memory utilization control
+- **Energy Model Foundation**: Intelligent energy-aware agent selection and optimization
+
+### 🎯 XGBoost Machine Learning Integration
+- **Distributed Training**: Train XGBoost models across your Ray cluster (1 head + 3 workers)
+- **Data Pipeline Integration**: Seamless data loading from various sources (CSV, Parquet, etc.)
+- **Model Management**: Save, load, and manage trained models
+- **Batch and Real-time Inference**: Support for both single predictions and batch processing
+- **REST API**: Full integration with the SeedCore ML service
+- **Feature Validation**: Automatic feature consistency checking between training and prediction
+
+## 🏗️ System Architecture
+
+```
+SeedCore Platform
+├── Ray Distributed Computing Cluster
+│   ├── Ray Head Node (Cluster Management)
+│   ├── Ray Workers (Distributed Processing)
+│   └── Redis (State Management)
+├── Cognitive Organism Architecture (COA)
+│   ├── Cognitive Organ (Reasoning & Planning)
+│   ├── Actuator Organ (Action Execution)
+│   └── Utility Organ (System Management)
+├── FastAPI Application Server
+│   ├── HTTP Endpoints
+│   ├── OrganismManager
+│   ├── XGBoost ML Service
+│   └── Task Execution
+└── Observability Stack
+    ├── Prometheus (Metrics)
+    ├── Grafana (Visualization)
+    └── Ray Dashboard (Monitoring)
+```
+
+## 📊 XGBoost Machine Learning
+
+### Quick XGBoost Training
 ```bash
-cd seedcore
-pip install -r requirements.txt
+# Train a model with sample data
+curl -X POST http://localhost:8000/xgboost/train \
+  -H "Content-Type: application/json" \
+  -d '{
+    "use_sample_data": true,
+    "sample_size": 1000,
+    "sample_features": 20,
+    "name": "my_first_model",
+    "xgb_config": {
+      "objective": "binary:logistic",
+      "num_boost_round": 10
+    }
+  }'
 ```
 
-### 2. Run the Server
+### Make Predictions
 ```bash
-uvicorn src.seedcore.telemetry.server:app --reload --host 0.0.0.0 --port 8000
+# Single prediction
+curl -X POST http://localhost:8000/xgboost/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "features": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+  }'
+
+# Batch prediction
+curl -X POST http://localhost:8000/xgboost/batch_predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "data_source": "/data/test_data.csv",
+    "data_format": "csv",
+    "feature_columns": ["feature_0", "feature_1", "feature_2"],
+    "path": "/data/models/my_model/model.xgb"
+  }'
 ```
 
-### 3. Test the System
+### Model Management
+```bash
+# List all models
+curl http://localhost:8000/xgboost/list_models
 
-#### Basic Energy Operations
+# Get model info
+curl http://localhost:8000/xgboost/model_info
+
+# Delete a model
+curl -X DELETE http://localhost:8000/xgboost/delete_model \
+  -H "Content-Type: application/json" \
+  -d '{"name": "old_model"}'
+```
+
+## 🔄 Energy System Operations
+
+### Basic Energy Operations
 ```bash
 # Check current energy state
 curl http://localhost:8000/energy/gradient
 
-# Run a realistic two-agent task (NEW!)
+# Run a realistic two-agent task
 curl -X POST http://localhost:8000/actions/run_two_agent_task
 
-# Run a simulation step (legacy)
+# Run a simulation step
 curl http://localhost:8000/run_simulation_step
 
 # Reset energy ledger and pair statistics
 curl -X POST http://localhost:8000/actions/reset
 ```
 
-#### Control Loop Operations
+### COA Organism Management
 ```bash
-# Run slow loop (energy-aware role evolution)
-curl http://localhost:8000/run_slow_loop
-# or
-curl -X POST http://localhost:8000/actions/run_slow_loop
+# Get organism status
+curl -X GET "http://localhost:8000/organism/status"
 
-# Run simple slow loop (strengthen dominant roles)
-curl http://localhost:8000/run_slow_loop_simple
+# Execute task on specific organ
+curl -X POST "http://localhost:8000/organism/execute/cognitive_organ_1" \
+  -H "Content-Type: application/json" \
+  -d '{"description": "Analyze the given data and provide insights"}'
 
-# Run memory loop (adaptive compression)
-curl http://localhost:8000/run_memory_loop
-
-# Run all loops in sequence
-curl http://localhost:8000/run_all_loops
+# Execute task on random organ
+curl -X POST "http://localhost:8000/organism/execute/random" \
+  -H "Content-Type: application/json" \
+  -d '{"description": "Process the request"}'
 ```
 
-#### System Monitoring
+## 📈 Monitoring and Observability
+
+### Dashboard Access
+- **Ray Dashboard**: `http://localhost:8265` - Cluster overview and job status
+- **Grafana**: `http://localhost:3000` (admin/seedcore) - Metrics visualization
+- **Prometheus**: `http://localhost:9090` - Metrics collection and querying
+
+### Health Checks
 ```bash
-# Get system status (includes pair statistics)
-curl http://localhost:8000/system/status
+# System health
+curl http://localhost:8000/health
 
-# Get agent states (includes personality vectors)
-curl http://localhost:8000/agents/state
+# Ray cluster status
+curl http://localhost:8000/ray/status
 
-# Get pair collaboration statistics
-curl http://localhost:8000/pair_stats
+# Energy system health
+curl http://localhost:8000/healthz/energy
 ```
 
-## API Endpoints
+## 🛠️ Development
 
-### Energy Management
-- `GET /energy/gradient` - Get current energy state
-- `POST /actions/run_two_agent_task` - **NEW**: Run realistic two-agent collaboration
-- `GET /run_simulation_step` - Legacy: Execute one simulation step
-- `GET /reset_energy` - Legacy: Reset energy ledger
-- `POST /actions/reset` - New: Reset energy ledger and pair statistics
+### Local Development Setup
+```bash
+# Install dependencies
+pip install -r requirements.txt
 
-### Control Loops
-- `GET /run_slow_loop` - Legacy: Energy-aware role evolution
-- `POST /actions/run_slow_loop` - New: Energy-aware role evolution
-- `GET /run_slow_loop_simple` - Simple role strengthening
-- `GET /run_memory_loop` - Adaptive memory control
-- `GET /run_all_loops` - Execute all control loops
+# Set up development environment
+cp env.example .env
+# Edit .env with your configuration
 
-### System Status
-- `GET /system/status` - Get comprehensive system state
-- `GET /agents/state` - Get detailed agent states (includes personality vectors)
-- `GET /pair_stats` - **NEW**: Get pair collaboration statistics
-
-## Architecture Components
-
-### Agent Personality System
-Each agent has a personality vector that influences collaboration:
-
-```python
-# Agent with personality vector
-agent = Agent(
-    agent_id="agent_alpha",
-    h=np.array([0.8, 0.6, 0.4, 0.2, 0.1, 0.3, 0.5, 0.7])  # 8D personality
-)
-
-# Calculate similarity between agents
-similarity = cosine_similarity(agent1.h, agent2.h)
+# Start development services
+cd docker
+docker compose up -d postgres mysql neo4j
 ```
 
-### Pair Statistics Tracking
-The system learns which agent pairs work best together:
+### Testing
+```bash
+# Test energy model
+docker compose exec seedcore-api python -m scripts.test_energy_model
 
-```python
-# Track collaboration success
-pair_stats = PAIR_TRACKER.get_pair("agent1", "agent2")
-pair_stats.update_weight(success=True, learning_rate=0.1)
+# Run energy calibration
+docker compose exec seedcore-api python -m scripts.test_energy_calibration
 
-# Get historical performance
-stats = PAIR_TRACKER.get_all_stats()
-# Returns: {"agent1-agent2": {"weight": 0.85, "success_rate": 0.75, ...}}
+# Test XGBoost integration
+docker exec -it seedcore-ray-head python /app/docker/test_xgboost_docker.py
+
+# Run the complete demo
+docker exec -it seedcore-ray-head python /app/docker/xgboost_docker_demo.py
 ```
 
-### Organ Registry
-The system uses a centralized `OrganRegistry` for state management:
-```python
-# Initialize registry
-registry = OrganRegistry()
+## 🔧 Configuration
 
-# Create and register organs
-organ = Organ(organ_id="cognitive_organ_1")
-registry.add(organ)
-
-# Access organs
-organ = registry.get("cognitive_organ_1")
-all_organs = registry.all()
-```
-
-### Energy Ledger
-The system tracks five energy terms:
-- **pair**: Pairwise interaction energy (now with realistic learning)
-- **hyper**: Complexity-precision tradeoff energy
-- **entropy**: Choice availability and uncertainty energy
-- **reg**: Regularization and model complexity energy
-- **mem**: Memory usage and compression energy
-
-### Energy Model Foundation
-The system implements intelligent energy-aware agent selection and optimization:
-
-```python
-# Energy-aware task execution
-from src.seedcore.agents.tier0_manager import Tier0MemoryManager
-
-tier0_manager = Tier0MemoryManager()
-result = tier0_manager.execute_task_on_best_agent(task_data)
-```
-
-**Key Features:**
-- **Unified Energy Function**: Five-term energy calculation (pair, entropy, reg, mem, hyper)
-- **Energy Gradient Proxies**: Intelligent agent suitability scoring
-- **Task-Role Mapping**: Automatic mapping of tasks to optimal agent roles
-- **Ray Integration**: Distributed energy calculations across the cluster
-
-**Energy Terms:**
-- **Pair Energy**: Collaboration similarity between agents
-- **Entropy Energy**: Role diversity maintenance
-- **Regularization Energy**: State complexity control
-- **Memory Energy**: Memory pressure and information loss
-- **Hyper Energy**: Complex pattern tracking (future)
-
-### Control Loops
-
-#### Fast Loop
-- Real-time agent selection based on energy gradients
-- Task execution and energy updates
-- Runs on every simulation step
-
-#### Slow Loop
-- **Energy-aware**: Adjusts roles based on current energy state
-  - High energy → Increase Explorer (E) role
-  - Low energy → Increase Specialist (S) role
-  - Moderate energy → Increase Optimizer (O) role
-- **Simple**: Strengthens dominant roles without energy context
-- Configurable learning rate for adjustment speed
-- **Flexible**: Works with both organ lists and agent lists
-
-#### Memory Loop
-- **Comprehensive Tiered Memory System**: Implements working memory (Mw) and long-term memory (Mlt)
-- **Dynamic Memory Utility**: Calculates agent mem_util based on actual memory interactions
-- **CostVQ Calculation**: Trade-off between memory usage, reconstruction loss, and staleness
-- **Adaptive Compression Control**: Gradient-based optimization of compression knob
-- **Memory Activity Simulation**: Realistic write/read cycles with feedback loops
-
-### Agent Roles
-Each agent has three role types with probabilities:
-- **E (Explorer)**: Seeks new solutions and opportunities
-- **S (Specialist)**: Focuses on specific tasks and optimization
-- **O (Optimizer)**: Balances exploration and exploitation
-
-## Realistic Simulation Features
-
-### Two-Agent Task Simulation
-The new `/actions/run_two_agent_task` endpoint provides realistic collaboration:
-
-1. **Random Agent Selection**: Picks two agents randomly
-2. **Personality Compatibility**: Calculates cosine similarity between personality vectors
-3. **Historical Learning**: Uses past collaboration success rates
-4. **Capability Integration**: Combines agent capabilities with historical weights
-5. **Energy Calculation**: Updates pair energy based on `-w_effective * similarity`
-6. **Success Simulation**: Task success probability based on similarity
-7. **Learning Update**: Updates pair statistics for future collaborations
-
-### Example Task Response
+### XGBoost Configuration
 ```json
 {
-  "message": "Two-agent task completed between agent_alpha and agent_beta",
-  "agents": {
-    "agent1": {
-      "id": "agent_alpha",
-      "capability": 0.5,
-      "personality": [0.8, 0.6, 0.4, 0.2, 0.1, 0.3, 0.5, 0.7]
-    },
-    "agent2": {
-      "id": "agent_beta", 
-      "capability": 0.5,
-      "personality": [0.7, 0.5, 0.3, 0.1, 0.2, 0.4, 0.6, 0.8]
-    }
+  "xgb_config": {
+    "objective": "binary:logistic",
+    "eval_metric": ["logloss", "auc"],
+    "eta": 0.1,
+    "max_depth": 5,
+    "tree_method": "hist",
+    "num_boost_round": 50,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8
   },
-  "calculations": {
-    "cosine_similarity": 0.92,
-    "historical_weight": 1.0,
-    "effective_weight": 0.25,
-    "energy_delta": -0.23
-  },
-  "task_result": {
-    "successful": true,
-    "success_probability": 0.92
-  },
-  "new_energy_state": {...},
-  "pair_stats": {...}
-}
-```
-
-## Comprehensive Memory System
-
-### Tiered Memory Architecture
-The system implements a sophisticated tiered memory structure as described in the energy validation document:
-
-#### Memory Tiers
-- **Mw (Working Memory)**: Fast, small-capacity memory for active processing
-- **Mlt (Long-term Memory)**: Slower, large-capacity memory for persistent storage
-
-#### Memory Operations
-```python
-# Write data to memory
-success = MEMORY_SYSTEM.write(agent, "data_id", "Mw", data_size=10)
-
-# Read data from memory (searches Mw first, then Mlt)
-author_id = MEMORY_SYSTEM.read(reader_agent, "data_id")
-
-# Log salient events
-MEMORY_SYSTEM.log_salient_event(agent)
-```
-
-### Dynamic Memory Utility Calculation
-Agent memory utility is now calculated based on actual memory interactions:
-
-```python
-# Calculate mem_util based on memory interactions
-mem_util = calculate_dynamic_mem_util(agent, weights={
-    'w_hit': 0.6,      # Weight for memory hits on writes
-    'w_salience': 0.4   # Weight for salient events
-})
-
-# Formula: (w_hit * memory_hits_on_writes + w_salience * salient_events_logged) / memory_writes
-```
-
-### CostVQ Energy Calculation
-The memory energy term is calculated using the CostVQ function:
-
-```python
-cost_vq_data = calculate_cost_vq(memory_system, compression_knob)
-
-# Components:
-# - bytes_used: Total memory usage across tiers
-# - recon_loss: Information loss due to compression (1.0 - compression_knob)
-# - staleness: Based on hit rate (1.0 / (1.0 + hit_rate))
-# - cost_vq: Weighted sum of components
-```
-
-### Memory Loop Operation
-The comprehensive memory loop performs these steps:
-
-1. **Write Phase**: Randomly select agents to write data to memory tiers
-2. **Read Phase**: Simulate agents reading data, creating feedback loops
-3. **Utility Calculation**: Calculate dynamic mem_util for all agents
-4. **Energy Update**: Calculate and update memory energy using CostVQ
-5. **Compression Optimization**: Update compression knob using gradient descent
-6. **Metrics Collection**: Gather comprehensive memory statistics
-
-### Example Memory Loop Response
-```json
-{
-  "message": "Comprehensive memory loop completed successfully!",
-  "compression_knob": 0.65,
-  "average_mem_util": 0.42,
-  "individual_mem_utils": {
-    "agent_alpha": 0.38,
-    "agent_beta": 0.45,
-    "agent_gamma": 0.43
-  },
-  "memory_metrics": {
-    "average_mem_util": 0.42,
-    "total_memory_writes": 15,
-    "total_memory_hits": 8,
-    "total_salient_events": 3
-  },
-  "cost_vq_breakdown": {
-    "cost_vq": 0.23,
-    "bytes_used": 150,
-    "recon_loss": 0.35,
-    "staleness": 0.12,
-    "hit_rate": 0.53
-  },
-  "memory_energy": 0.23,
-  "memory_system_stats": {
-    "Mw": {"bytes_used": 50, "hit_count": 5, "data_count": 3},
-    "Mlt": {"bytes_used": 100, "hit_count": 3, "data_count": 7}
+  "training_config": {
+    "num_workers": 3,
+    "use_gpu": false,
+    "cpu_per_worker": 1,
+    "memory_per_worker": 2000000000
   }
 }
 ```
 
-### Agent Memory Tracking
-Each agent now tracks detailed memory interactions:
-
-```python
-agent = Agent(agent_id="test_agent")
-# Memory interaction fields:
-agent.memory_writes = 5          # Number of memory writes
-agent.memory_hits_on_writes = 3  # Times this agent's data was read
-agent.salient_events_logged = 2  # Number of salient events
-agent.total_compression_gain = 0.0  # Compression benefits
-agent.mem_util = 0.52           # Calculated memory utility
-```
-
-## Testing
-
-Run the test suite:
+### Environment Variables
 ```bash
-cd seedcore
-python -m pytest tests/ -v
+# Copy and edit the example environment file
+cp env.example .env
+
+# Key variables to configure:
+RAY_ADDRESS=ray://localhost:10001
+PYTHONPATH=/app:/app/src
 ```
 
-### Test Coverage
-- Energy ledger operations and calculations
-- Control loop functionality (both organ and agent inputs)
-- Role evolution and performance metrics
-- **NEW**: Comprehensive tiered memory system
-- **NEW**: Dynamic memory utility calculations
-- **NEW**: CostVQ energy calculations
-- **NEW**: Memory activity simulation and feedback loops
-- **NEW**: Pair statistics tracking and learning
-- **NEW**: Agent personality vectors and similarity
-- OrganRegistry integration
-- Integration tests for all components
+## 🚨 Troubleshooting
 
-## Docker & Deployment Improvements (2024)
+### Common Issues
 
-### Optimized Docker Image
-- **Multi-stage Dockerfile**: Now uses a multi-stage build for smaller, more secure images.
-- **Minimal requirements**: Production images use `requirements-minimal.txt` (excludes unused ML libraries like DGL).
-- **.dockerignore**: Now excludes dev, data, and build artifacts for smaller build context.
-- **Alpine variant**: Optional `Dockerfile.alpine` for ultra-small images (experimental).
-- **Image size reduced**: From 1.7GB to 749MB for the API server.
+1. **Service Dependencies**
+   ```bash
+   # Always use the cluster script for reliable operation
+   cd docker
+   ./start-cluster.sh restart
+   
+   # Don't restart individual services - they may fail due to dependencies
+   ```
 
-### Usage
+2. **Ray Cluster Issues**
+   ```bash
+   # Check Ray dashboard
+   curl http://localhost:8265/api/version
+   
+   # Check container status
+   docker ps | grep seedcore
+   
+   # Check Ray logs
+   docker logs seedcore-ray-head
+   ```
 
-**Build optimized image:**
+3. **XGBoost Feature Mismatch**
+   ```bash
+   # Ensure feature count matches between training and prediction
+   # Check model metadata for expected features
+   curl http://localhost:8000/xgboost/model_info
+   ```
+
+4. **Memory Issues**
+   ```bash
+   # Reduce memory usage in training config
+   "memory_per_worker": 1000000000  # 1GB instead of 2GB
+   ```
+
+### Diagnostic Tools
 ```bash
-docker build -f docker/Dockerfile -t seedcore-api:optimized .
+# Comprehensive job analysis
+docker cp comprehensive_job_analysis.py seedcore-api:/tmp/
+docker exec -it seedcore-api python3 /tmp/comprehensive_job_analysis.py
+
+# COA testing
+docker cp test_organism.py seedcore-api:/tmp/
+docker exec -it seedcore-api python3 /tmp/test_organism.py
+
+# System cleanup
+docker cp cleanup_organs.py seedcore-api:/tmp/
+docker exec -it seedcore-api python3 /tmp/cleanup_organs.py
 ```
 
-**(Optional) Build Alpine image:**
-```bash
-docker build -f docker/Dockerfile.alpine -t seedcore-api:alpine .
-```
+## 📚 Documentation
 
-**Run:**
-```bash
-docker run --rm -p 8000:8000 seedcore-api:optimized
-```
+### Core Documentation
+- **[XGBoost Quick Start](docs/xgboost_quickstart.md)** - Get started with XGBoost in 5 minutes
+- **[XGBoost Integration Guide](docs/xgboost_integration.md)** - Complete XGBoost API reference
+- **[XGBoost Daily Reference](docs/xgboost_daily_reference.md)** - Common operations and troubleshooting
+- **[Main Documentation](docs/README.md)** - Comprehensive system documentation
 
-**For development:**  
-- Use the standard image and `requirements.txt` for full-featured dev environment.
-- Use volume mounts in `docker-compose.yml` for live code reload.
+### API Reference
+- **Core Endpoints**: `/health`, `/organism/*`, `/energy/*`
+- **XGBoost Endpoints**: `/xgboost/train`, `/xgboost/predict`, `/xgboost/batch_predict`
+- **Model Management**: `/xgboost/list_models`, `/xgboost/model_info`, `/xgboost/delete_model`
 
-**For production:**  
-- Use the optimized image and `requirements-minimal.txt` for fast, secure deployment.
+## 🎯 Performance Considerations
 
-### Image Analysis
-A new script is provided to analyze image size and bloat:
-```bash
-bash docker/analyze-image.sh
-```
+### Resource Requirements
+- **Minimum**: 4GB RAM, 2 CPU cores
+- **Recommended**: 8GB RAM, 4 CPU cores
+- **Production**: 16GB+ RAM, 8+ CPU cores
 
-### Development Workflow
-- **Development:** Use the normal image for rapid iteration, debugging, and testing.
-- **Release:** Use the optimized image for deployment to minimize size and attack surface.
+### Scaling
+- **Horizontal Scaling**: Add Ray workers via `ray-workers.yml`
+- **Vertical Scaling**: Increase container resource limits
+- **Load Balancing**: Implement external load balancer
 
-### Other Notable Changes
-- **Redis, Prometheus, asyncpg, Ray**: All dependencies are now managed for both dev and prod.
-- **Improved error handling and logging** in the API server and memory consolidation logic.
-- **Runtime tuning endpoints** and health checks added.
-- **Docker Compose**: Now references the correct Dockerfile and context for builds.
+### Optimization
+- **Memory Management**: Monitor agent memory usage
+- **CPU Utilization**: Balance workload across workers
+- **Network Performance**: Optimize container networking
 
-### Quick Migration
-- If you want to use the new optimized image in Compose, set:
-  ```yaml
-  image: seedcore-api:optimized
-  ```
-  Or keep the build section with the correct context and Dockerfile path.
+## 🔒 Security
 
-## Development
+### Best Practices
+1. **Container Security**
+   - Use non-root users in containers
+   - Regularly update base images
+   - Implement resource limits
 
-### Project Structure
-```
-seedcore/
-├── src/seedcore/
-│   ├── agents/          # Agent implementations (with personality vectors)
-│   ├── control/         # Control loops (fast, slow, memory)
-│   ├── energy/          # Energy ledger, calculations, and pair statistics
-│   ├── memory/          # NEW: Tiered memory system and adaptive loops
-│   ├── organs/          # Organ implementations and registry
-│   └── telemetry/       # API server and monitoring
-├── tests/               # Test suite
-├── examples/            # Usage examples
-└── docs/               # Documentation
-```
+2. **Network Security**
+   - Use internal networks for inter-service communication
+   - Implement proper firewall rules
+   - Secure external API access
 
-### Adding New Features
-1. **Energy Terms**: Add new methods to `EnergyLedger` class
-2. **Control Loops**: Implement new loop logic in `control/` directory
-3. **Agents**: Extend `Agent` base class with new capabilities
-4. **API Endpoints**: Add new routes to `telemetry/server.py`
-5. **Registry**: Use `OrganRegistry` for state management
-6. **Personality**: Extend personality vectors or add new similarity metrics
+3. **Data Security**
+   - Encrypt sensitive data
+   - Implement proper access controls
+   - Regular security audits
 
-## Energy Calculation Examples
-
-### Pair Energy (Enhanced)
-```python
-# Pair energy with realistic learning
-# -w_effective * similarity where w_effective = w_historical * capability1 * capability2
-ledger.add_pair_delta(w_effective=0.25, similarity=0.92)  # Adds -0.23 to pair energy
-```
-
-### Hyper Energy
-```python
-# Hyper energy based on complexity vs precision tradeoff
-ledger.add_hyper_delta(complexity=0.8, precision=0.3)  # Adds 0.5 to hyper energy
-```
-
-### Entropy Energy
-```python
-# Entropy energy increases with choice availability and uncertainty
-ledger.add_entropy_delta(choice_count=5, uncertainty=0.6)  # Adds 0.3 to entropy energy
-```
-
-### Memory Energy
-```python
-# Memory energy based on usage vs compression
-ledger.add_mem_delta(memory_usage=0.7, compression_ratio=0.4)  # Adds 0.3 to mem energy
-```
-
-## Migration from Legacy Endpoints
-
-The system now supports both legacy and new API endpoints:
-
-| Legacy | New | Description |
-|--------|-----|-------------|
-| `GET /run_simulation_step` | `POST /actions/run_two_agent_task` | **NEW**: Realistic two-agent collaboration |
-| `GET /run_slow_loop` | `POST /actions/run_slow_loop` | Slow loop execution |
-| `GET /reset_energy` | `POST /actions/reset` | Reset energy ledger and pair stats |
-| `GET /system_status` | `GET /system/status` | System status (includes pair stats) |
-
-## Next Steps
-
-This implementation provides a solid foundation for a dynamic cognitive architecture. Future enhancements could include:
-
-1. **Advanced Energy Models**: More sophisticated energy calculations
-2. **Multi-Organ Coordination**: Inter-organ communication and coordination
-3. **Learning Mechanisms**: Reinforcement learning for role optimization
-4. **External Integrations**: Connect with external AI services and databases
-5. **Visualization**: Real-time system state visualization
-6. **Performance Optimization**: Caching and parallel processing
-7. **Advanced Personality Models**: More sophisticated personality representations
-8. **Team Formation**: Automatic team composition based on personality compatibility
-
-## Contributing
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass
+3. Make your changes
+4. Add tests for new functionality
 5. Submit a pull request
 
-## License
+## 📞 Support
 
-This project is licensed under the Apache License, Version 2.0 - see the [LICENSE](LICENSE) file for details.
+### Getting Help
+1. **Documentation**: Review this documentation thoroughly
+2. **Issues**: Check existing GitHub issues
+3. **Community**: Join the community discussions
+4. **Support**: Contact support team for critical issues
 
-Copyright 2024 SeedCore Contributors
+### Reporting Issues
+When reporting issues, please include:
+- System configuration and environment
+- Detailed error messages and logs
+- Steps to reproduce the issue
+- Expected vs actual behavior
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+## 📄 License
 
-    http://www.apache.org/licenses/LICENSE-2.0
+This project is licensed under the [MIT License](LICENSE).
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+## 🙏 Acknowledgments
+
+- Ray team for the distributed computing framework
+- XGBoost team for the gradient boosting library
+- FastAPI team for the web framework
+- Docker team for containerization technology
+- The open-source community for contributions
+
+---
+
+## 🎉 Recent Updates
+
+### Latest Fixes (2025-08-04)
+- ✅ **Fixed XGBoost batch prediction feature mismatch** - Resolved TypeError and ReadTimeoutError
+- ✅ **Enhanced feature validation** - Added automatic feature consistency checking
+- ✅ **Improved error handling** - Better timeout management and error messages
+- ✅ **Performance optimization** - Reduced batch sizes and increased timeouts
+- ✅ **Defensive coding** - Added comprehensive feature validation and metadata storage
+
+### Key Improvements
+- **Feature Consistency**: Automatic validation between training and prediction features
+- **Better Error Messages**: Detailed debugging information for feature mismatches
+- **Increased Timeouts**: Extended from 60s to 180s for batch prediction
+- **Metadata Storage**: Feature columns stored in model metadata for validation
+- **Performance Tuning**: Optimized batch sizes and processing parameters
+
+For more information, visit the [project repository](https://github.com/your-org/seedcore) or contact the development team.
