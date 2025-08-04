@@ -190,9 +190,10 @@ def demo_batch_prediction():
     import numpy as np
     from sklearn.datasets import make_classification
     
-    # Generate sample data
-    X, y = make_classification(n_samples=100, n_features=10, random_state=42)
-    df = pd.DataFrame(X, columns=[f"feature_{i}" for i in range(10)])
+    # Generate sample data with same number of features as advanced training (15)
+    # Reduced sample size for faster processing
+    X, y = make_classification(n_samples=50, n_features=15, random_state=42)
+    df = pd.DataFrame(X, columns=[f"feature_{i}" for i in range(15)])
     df["target"] = y
     
     # Save to CSV in the shared data directory
@@ -204,26 +205,41 @@ def demo_batch_prediction():
     batch_request = {
         "data_source": csv_path,
         "data_format": "csv",
-        "feature_columns": [f"feature_{i}" for i in range(10)],
+        "feature_columns": [f"feature_{i}" for i in range(15)],
         "path": "/data/models/demo_advanced_model/model.xgb"
     }
     
     print("📤 Running batch prediction...")
-    response = requests.post(
-        "http://localhost:8000/xgboost/batch_predict",
-        json=batch_request,
-        headers={"Content-Type": "application/json"},
-        timeout=60
-    )
+    print(f"   Data source: {csv_path}")
+    print(f"   Features: {len(batch_request['feature_columns'])} columns")
+    print(f"   Model: {batch_request['path']}")
     
-    if response.status_code == 200:
-        result = response.json()
-        print("✅ Batch prediction completed!")
-        print(f"   Predictions saved to: {result['predictions_path']}")
-        print(f"   Number of predictions: {result['num_predictions']}")
-    else:
-        print(f"❌ Batch prediction failed: {response.status_code}")
-        print(f"   Error: {response.text}")
+    try:
+        response = requests.post(
+            "http://localhost:8000/xgboost/batch_predict",
+            json=batch_request,
+            headers={"Content-Type": "application/json"},
+            timeout=180  # Increased timeout to 3 minutes
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            print("✅ Batch prediction completed!")
+            print(f"   Predictions saved to: {result['predictions_path']}")
+            print(f"   Number of predictions: {result['num_predictions']}")
+        else:
+            print(f"❌ Batch prediction failed: {response.status_code}")
+            print(f"   Error: {response.text}")
+            
+    except requests.exceptions.Timeout:
+        print("❌ Batch prediction timed out after 3 minutes")
+        print("   This might be due to Ray processing delays or system load")
+        print("   Try reducing the batch size or checking system resources")
+    except requests.exceptions.ConnectionError:
+        print("❌ Connection error during batch prediction")
+        print("   Check if the API service is still running")
+    except Exception as e:
+        print(f"❌ Unexpected error during batch prediction: {e}")
 
 def main():
     """Run the complete XGBoost Docker demo."""
