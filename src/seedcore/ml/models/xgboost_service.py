@@ -188,6 +188,7 @@ class XGBoostService:
         self,
         dataset: ray.data.Dataset,
         label_column: str = "target",
+        feature_columns: Optional[List[str]] = None,
         xgb_config: Optional[XGBoostConfig] = None,
         training_config: Optional[TrainingConfig] = None,
         model_name: Optional[str] = None
@@ -216,6 +217,24 @@ class XGBoostService:
         
         if model_name is None:
             model_name = f"xgboost_model_{int(time.time())}"
+        
+        # Extract feature columns if not provided
+        if feature_columns is None:
+            # Get schema from dataset to extract feature columns
+            schema = dataset.schema()
+            if hasattr(schema, 'names'):
+                # Ray Dataset schema
+                feature_columns = [col for col in schema.names if col != label_column]
+            else:
+                # Fallback: take a sample to get columns
+                sample_df = dataset.take(1)[0]
+                if isinstance(sample_df, dict):
+                    feature_columns = [col for col in sample_df.keys() if col != label_column]
+                else:
+                    # Assume it's a pandas DataFrame
+                    feature_columns = [col for col in sample_df.columns if col != label_column]
+        
+        logger.info(f"📊 Training with {len(feature_columns)} features: {feature_columns[:5]}{'...' if len(feature_columns) > 5 else ''}")
         
         logger.info(f"🚀 Starting distributed XGBoost training with {training_config.num_workers} workers")
         
@@ -322,6 +341,7 @@ class XGBoostService:
                 "path": str(model_path),
                 "training_time": time.time() - start_time,
                 "metrics": {"status": "completed"},  # xgboost-ray train doesn't return detailed metrics
+                "feature_columns": feature_columns,  # Store feature columns for validation
                 "config": {
                     "xgb_config": xgb_config.__dict__,
                     "training_config": training_config.__dict__
@@ -417,9 +437,17 @@ class XGBoostService:
             if features.ndim == 1:
                 features = features.reshape(1, -1)
             
-            # Create feature names if not provided (to match training data format)
-            n_features = features.shape[1]
-            feature_names = [f"feature_{i}" for i in range(n_features)]
+            # Use feature names from model metadata if available, otherwise generate default names
+            if hasattr(self, 'model_metadata') and self.model_metadata.get('feature_columns'):
+                feature_names = self.model_metadata['feature_columns']
+                if len(feature_names) != features.shape[1]:
+                    logger.warning(f"⚠️  Feature count mismatch: expected {len(feature_names)}, got {features.shape[1]}")
+                    # Fallback to default names
+                    feature_names = [f"feature_{i}" for i in range(features.shape[1])]
+            else:
+                # Create default feature names
+                n_features = features.shape[1]
+                feature_names = [f"feature_{i}" for i in range(n_features)]
             
             # Create DMatrix with feature names
             dmatrix = xgb.DMatrix(features, feature_names=feature_names)
@@ -447,11 +475,49 @@ class XGBoostService:
         if self.current_model is None:
             raise ValueError("No model loaded. Please load a model first.")
         
+        # Ensure feature_columns is a list of strings
+        if not isinstance(feature_columns, list):
+            feature_columns = list(feature_columns)
+        
+        # Validate feature columns against model's expected features
+        if hasattr(self, 'model_metadata') and self.model_metadata.get('feature_columns'):
+            expected_features = self.model_metadata['feature_columns']
+            missing_features = set(expected_features) - set(feature_columns)
+            extra_features = set(feature_columns) - set(expected_features)
+            
+            if missing_features:
+                raise ValueError(f"❌ Batch prediction failed: Missing required features: {list(missing_features)}")
+            
+            if extra_features:
+                logger.warning(f"⚠️  Extra features provided (will be ignored): {list(extra_features)}")
+            
+            # Ensure correct order
+            if feature_columns != expected_features:
+                logger.info(f"🔄 Reordering features to match training order")
+                feature_columns = expected_features
+        
+        logger.info(f"📊 Batch prediction with {len(feature_columns)} features: {feature_columns[:5]}{'...' if len(feature_columns) > 5 else ''}")
+        
         def predict_batch(batch):
             """Predict on a batch of data."""
-            features = batch[feature_columns].values
-            predictions = self.predict(features)
-            batch['predictions'] = predictions
+            import pandas as pd
+            
+            # Convert batch to pandas DataFrame if it's not already
+            if not isinstance(batch, pd.DataFrame):
+                batch = pd.DataFrame(batch)
+            
+            # Extract features and make predictions
+            try:
+                features = batch[feature_columns].values
+                predictions = self.predict(features)
+                batch['predictions'] = predictions
+            except Exception as e:
+                logger.error(f"❌ Batch prediction failed: {e}")
+                logger.error(f"Batch type: {type(batch)}")
+                logger.error(f"Feature columns: {feature_columns}")
+                logger.error(f"Available columns: {list(batch.columns) if hasattr(batch, 'columns') else 'No columns'}")
+                raise
+            
             return batch
         
         # Apply prediction to dataset
