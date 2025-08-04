@@ -270,6 +270,88 @@ def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     
     return dot_product / (norm_v1 * norm_v2)
 
+# Energy logging storage for XGBoost integration
+energy_logs = []
+
+@app.post('/energy/log')
+async def log_energy_event(event: dict):
+    """
+    Log energy events from XGBoost predictions and other sources.
+    
+    This endpoint integrates with the Energy system to track:
+    - XGBoost model predictions and their impact
+    - Utility organ performance metrics
+    - Model refresh events and success rates
+    
+    The logged events influence the Unified Energy Function (E_core)
+    by updating pair, mem, and reg energy terms.
+    """
+    try:
+        # Add timestamp if not provided
+        if 'ts' not in event:
+            event['ts'] = time.time()
+        
+        # Store the event
+        energy_logs.append(event)
+        
+        # Limit log size to prevent memory issues
+        if len(energy_logs) > 10000:
+            energy_logs.pop(0)
+        
+        # Update energy terms based on event type
+        if event.get('organ') == 'utility' and event.get('metric') == 'predicted_risk':
+            # Update pair energy based on prediction success
+            if event.get('success', False):
+                # Successful prediction reduces pair energy (better collaboration)
+                _ledger.add_pair_delta(w_effective=0.1, similarity=0.8)
+            else:
+                # Failed prediction increases pair energy (worse collaboration)
+                _ledger.add_pair_delta(w_effective=0.1, similarity=0.2)
+            
+            # Update mem energy based on model usage
+            if event.get('model_path'):
+                # Model loading adds to memory pressure
+                _ledger.add_mem_delta(memory_usage=0.1, compression_ratio=0.5)
+            
+            # Update reg energy based on model complexity
+            if event.get('prediction_count', 0) > 100:
+                # High prediction count indicates model complexity
+                _ledger.add_reg_delta(complexity=0.05)
+        
+        logger.info(f"Energy event logged: {event}")
+        return {"status": "success", "message": "Energy event logged", "event_count": len(energy_logs)}
+        
+    except Exception as e:
+        logger.error(f"Failed to log energy event: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to log energy event: {str(e)}")
+
+
+@app.get('/energy/logs')
+async def get_energy_logs(limit: int = 100):
+    """
+    Retrieve energy logs for monitoring and analysis.
+    
+    Args:
+        limit: Maximum number of logs to return (default: 100)
+    
+    Returns:
+        List of energy events with timestamps and metadata
+    """
+    try:
+        # Return the most recent logs
+        recent_logs = energy_logs[-limit:] if len(energy_logs) > limit else energy_logs
+        
+        return {
+            "logs": recent_logs,
+            "total_count": len(energy_logs),
+            "returned_count": len(recent_logs)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to retrieve energy logs: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve energy logs: {str(e)}")
+
+
 @app.get('/energy/gradient')
 async def energy_gradient():
     """
