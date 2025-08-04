@@ -75,11 +75,13 @@ docker exec -it seedcore-ray-head python /app/docker/xgboost_docker_demo.py
 
 ### 🎯 XGBoost Machine Learning Integration
 - **Distributed Training**: Train XGBoost models across your Ray cluster (1 head + 3 workers)
+- **Hyperparameter Tuning**: ✅ **FULLY OPERATIONAL** - Automated hyperparameter optimization using Ray Tune with ASHA scheduler
 - **Data Pipeline Integration**: Seamless data loading from various sources (CSV, Parquet, etc.)
-- **Model Management**: Save, load, and manage trained models
+- **Model Management**: Save, load, and manage trained models with automatic promotion
 - **Batch and Real-time Inference**: Support for both single predictions and batch processing
 - **REST API**: Full integration with the SeedCore ML service
 - **Feature Validation**: Automatic feature consistency checking between training and prediction
+- **Flashbulb Memory Integration**: High-impact tuning events logged to cognitive memory
 
 ## 🏗️ System Architecture
 
@@ -155,6 +157,24 @@ curl http://localhost:8000/xgboost/model_info
 curl -X DELETE http://localhost:8000/xgboost/delete_model \
   -H "Content-Type: application/json" \
   -d '{"name": "old_model"}'
+```
+
+### Hyperparameter Tuning
+```bash
+# Start conservative tuning (recommended for first-time users)
+curl -X POST http://localhost:8000/xgboost/tune \
+  -H "Content-Type: application/json" \
+  -d '{
+    "space_type": "conservative",
+    "config_type": "conservative",
+    "experiment_name": "my_tuning_experiment"
+  }'
+
+# Use the best tuned model
+curl -X POST http://localhost:8000/xgboost/refresh_model
+
+# Monitor tuning progress
+open http://localhost:8265  # Ray Dashboard
 ```
 
 ## 🔄 Energy System Operations

@@ -46,7 +46,9 @@ async def root():
                 "load_model": "/xgboost/load_model",
                 "list_models": "/xgboost/list_models",
                 "model_info": "/xgboost/model_info",
-                "delete_model": "/xgboost/delete_model"
+                "delete_model": "/xgboost/delete_model",
+                "tune": "/xgboost/tune",
+                "refresh_model": "/xgboost/refresh_model"
             }
         }
     }
@@ -447,6 +449,59 @@ async def delete_xgboost_model(request: Dict[str, Any]):
         
     except Exception as e:
         logger.error(f"Error deleting XGBoost model: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@ml_app.post("/xgboost/tune")
+async def run_tuning_sweep(request: Dict[str, Any]):
+    """Run a hyperparameter tuning sweep using Ray Tune."""
+    try:
+        from src.seedcore.ml.tuning_service import get_tuning_service
+        from src.seedcore.ml.models.xgboost_models import TuneRequest, TuneResponse
+        
+        # Validate request
+        tune_request = TuneRequest(**request)
+        
+        # Get tuning service
+        tuning_service = get_tuning_service()
+        
+        # Run the tuning sweep
+        result = tuning_service.run_tuning_sweep(
+            space_type=tune_request.space_type,
+            config_type=tune_request.config_type,
+            custom_search_space=tune_request.custom_search_space,
+            custom_tune_config=tune_request.custom_tune_config,
+            experiment_name=tune_request.experiment_name
+        )
+        
+        return TuneResponse(**result)
+        
+    except Exception as e:
+        logger.error(f"Error in XGBoost tuning: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@ml_app.post("/xgboost/refresh_model")
+async def refresh_xgboost_model():
+    """Refresh the XGBoost model to use the latest promoted model from tuning."""
+    try:
+        from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+        
+        # Get XGBoost service
+        xgb_service = get_xgboost_service()
+        
+        # Refresh the model
+        success = xgb_service.refresh_model()
+        
+        if success:
+            return {
+                "status": "success",
+                "message": "Model refreshed successfully",
+                "current_model_path": xgb_service.current_model_path
+            }
+        else:
+            raise HTTPException(status_code=400, detail="Failed to refresh model")
+        
+    except Exception as e:
+        logger.error(f"Error refreshing XGBoost model: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @serve.deployment(
