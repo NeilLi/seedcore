@@ -86,6 +86,11 @@ services:
       # In Ray 2.20, the head container needs RAY_ADDRESS for Ray Serve to connect
       # This enables the client server on localhost:10001 for internal connections
       RAY_ADDRESS: ray://localhost:10001
+      # ── API service configuration for agents ──
+      API_HOST: seedcore-api
+      API_PORT: 8002
+      # ── Local Ray Serve configuration for internal connections ──
+      RAY_SERVE_ADDRESS: localhost:8000
       # ── stream every worker's stdout/stderr to the container log ──
       RAY_worker_stdout_file: /dev/stdout
       RAY_worker_stderr_file: /dev/stderr
@@ -157,6 +162,7 @@ services:
     environment:
       PYTHONPATH: /app:/app/src
       RAY_ADDRESS: ray://ray-head:10001
+      RAY_SERVE_ADDRESS: ray://ray-head:8000
       RAY_memory_usage_threshold: 0.8
       RAY_memory_monitor_refresh_ms: 2500
       POSTGRES_HOST: postgres

@@ -5,6 +5,7 @@ Agent Distribution Analysis Script
 
 import ray
 import requests
+import os
 from datetime import datetime
 
 def analyze_agent_distribution():
@@ -98,7 +99,11 @@ def analyze_agent_distribution():
     
     try:
         # Check organism status
-        response = requests.get("http://localhost:8000/organism/status", timeout=5)
+        # Use environment variable for Ray Serve address
+        base_url = os.getenv("RAY_SERVE_ADDRESS", "localhost:8000")
+        if not base_url.startswith("http"):
+            base_url = f"http://{base_url}"
+        response = requests.get(f"{base_url}/organism/status", timeout=5)
         if response.status_code == 200:
             data = response.json()
             if data.get("success"):

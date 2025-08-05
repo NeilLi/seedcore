@@ -68,11 +68,11 @@ async def run_scenario():
         result = ray.get(result_ref)  # No await needed
         
         print("\\n📊 Result from first attempt:")
-        print(f"   - Agent: {result["agent_id"]}")
-        print(f"   - Task: {result["task_name"]}")
-        print(f"   - Success: {result["success"]}")
-        print(f"   - Quality: {result["quality"]:.3f}")
-        print(f"   - Knowledge Found: {result["knowledge_found"]}")
+        print(f"   - Agent: {result['agent_id']}")
+        print(f"   - Task: {result['task_name']}")
+        print(f"   - Success: {result['success']}")
+        print(f"   - Quality: {result['quality']:.3f}")
+        print(f"   - Knowledge Found: {result['knowledge_found']}")
         
         print("\\n⏳ Waiting 5 seconds to simulate time passing...")
         await asyncio.sleep(5)
@@ -88,11 +88,11 @@ async def run_scenario():
         result_2 = ray.get(result_ref_2)  # No await needed
         
         print("\\n📊 Result from second attempt:")
-        print(f"   - Agent: {result_2["agent_id"]}")
-        print(f"   - Task: {result_2["task_name"]}")
-        print(f"   - Success: {result_2["success"]}")
-        print(f"   - Quality: {result_2["quality"]:.3f}")
-        print(f"   - Knowledge Found: {result_2["knowledge_found"]}")
+        print(f"   - Agent: {result_2['agent_id']}")
+        print(f"   - Task: {result_2['task_name']}")
+        print(f"   - Success: {result_2['success']}")
+        print(f"   - Quality: {result_2['quality']:.3f}")
+        print(f"   - Knowledge Found: {result_2['knowledge_found']}")
 
         print("\\n" + "=" * 60)
         print("🔄 PHASE 3: Agent-A Collaboration")
@@ -104,23 +104,23 @@ async def run_scenario():
         result_3 = ray.get(result_ref_3)  # No await needed
         
         print("\\n📊 Result from Agent-A:")
-        print(f"   - Agent: {result_3["agent_id"]}")
-        print(f"   - Task: {result_3["task_name"]}")
-        print(f"   - Success: {result_3["success"]}")
-        print(f"   - Quality: {result_3["quality"]:.3f}")
-        print(f"   - Knowledge Found: {result_3["knowledge_found"]}")
+        print(f"   - Agent: {result_3['agent_id']}")
+        print(f"   - Task: {result_3['task_name']}")
+        print(f"   - Success: {result_3['success']}")
+        print(f"   - Quality: {result_3['quality']:.3f}")
+        print(f"   - Knowledge Found: {result_3['knowledge_found']}")
 
         print("\\n" + "=" * 60)
         print("📈 SCENARIO ANALYSIS")
         print("=" * 60)
         
         print("🔍 Comparing Phase 1 vs Phase 2:")
-        print(f"   - Phase 1 Success: {result["success"]}")
-        print(f"   - Phase 2 Success: {result_2["success"]}")
-        print(f"   - Phase 1 Quality: {result["quality"]:.3f}")
-        print(f"   - Phase 2 Quality: {result_2["quality"]:.3f}")
+        print(f"   - Phase 1 Success: {result['success']}")
+        print(f"   - Phase 2 Success: {result_2['success']}")
+        print(f"   - Phase 1 Quality: {result['quality']:.3f}")
+        print(f"   - Phase 2 Quality: {result_2['quality']:.3f}")
         
-        if result["knowledge_found"] != result_2["knowledge_found"]:
+        if result['knowledge_found'] != result_2['knowledge_found']:
             print("✅ Cache behavior detected: Knowledge availability changed between attempts")
         else:
             print("⚠️ Cache behavior: Knowledge availability remained consistent")

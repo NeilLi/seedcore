@@ -14,6 +14,7 @@ import json
 import numpy as np
 from datetime import datetime
 import logging
+import os
 from typing import Optional, Dict, Any, List
 import operator
 
@@ -28,7 +29,11 @@ def get_latest_model_path() -> Optional[str]:
         str: Path to the latest model, or None if no models found
     """
     try:
-        r = requests.get("http://localhost:8000/xgboost/list_models", timeout=5)
+        # Use environment variable for Ray Serve address
+        base_url = os.getenv("RAY_SERVE_ADDRESS", "localhost:8000")
+        if not base_url.startswith("http"):
+            base_url = f"http://{base_url}"
+        r = requests.get(f"{base_url}/xgboost/list_models", timeout=5)
         r.raise_for_status()
         models = r.json().get("models", [])
         if not models:
@@ -129,7 +134,11 @@ class UtilityPredictor:
         }
         
         try:
-            r = requests.post("http://localhost:8000/xgboost/predict",
+            # Use environment variable for Ray Serve address
+            base_url = os.getenv("RAY_SERVE_ADDRESS", "localhost:8000")
+            if not base_url.startswith("http"):
+                base_url = f"http://{base_url}"
+            r = requests.post(f"{base_url}/xgboost/predict",
                               json=payload, timeout=5)
             r.raise_for_status()
             prediction = r.json()["prediction"]

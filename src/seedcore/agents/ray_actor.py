@@ -605,7 +605,7 @@ class RayAgent:
             features = self._extract_salience_features(task_info, error_context)
             
             # Score using ML service
-            scores = self._salience_client.score_salience([features], self._fallback_salience_scorer)
+            scores = self._salience_client.score_salience([features])
             
             if scores and len(scores) > 0:
                 return scores[0]

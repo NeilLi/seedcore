@@ -227,8 +227,12 @@ async def start_metrics_integration():
         logger = logging.getLogger(__name__)
         
         # Start metrics integration in background
+        # Use environment variable for Ray Serve address
+        base_url = os.getenv("RAY_SERVE_ADDRESS", "localhost:8000")
+        if not base_url.startswith("http"):
+            base_url = f"http://{base_url}"
         asyncio.create_task(start_metrics_integration(
-            base_url="http://localhost:8000",  # Use internal port 8000
+            base_url=base_url,  # Use environment variable
             update_interval=30  # Update every 30 seconds
         ))
         logger.info("🚀 Started metrics integration service")
