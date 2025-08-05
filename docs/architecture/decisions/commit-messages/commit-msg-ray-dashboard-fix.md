@@ -39,7 +39,7 @@ Ray dashboard was showing "Panel with id 41 not found" and "Panel with id 24 not
 
 ### CORS Proxy Architecture
 - **ray-metrics-proxy** (port 8081): Handles CORS headers for browser access
-- **ray-dashboard-proxy** (port 8080): Intercepts Ray dashboard requests
+- **ray-proxy** (port 8082): Intercepts Ray dashboard requests
 - **Prometheus**: Scrapes metrics via proxy to avoid CORS issues
 
 ### Environment Variables

@@ -79,7 +79,7 @@ measure_restart_time() {
     log_info "Restarting Ray cluster..."
     
     # Restart app services
-    docker compose -f "$COMPOSE_MAIN" -p $PROJECT restart --no-deps ray-head seedcore-api ray-metrics-proxy ray-dashboard-proxy prometheus grafana node-exporter
+    docker compose -f "$COMPOSE_MAIN" -p $PROJECT restart --no-deps ray-head seedcore-api ray-metrics-proxy ray-proxy prometheus grafana node-exporter
     
     # Wait for ray-head to be ready
     local head_start_time=$(date +%s.%N)

@@ -75,7 +75,7 @@ log_info "Starting Ray stack and API..."
 docker-compose -p seedcore up -d ray-head seedcore-api
 
 log_info "Starting proxy services..."
-docker-compose -p seedcore up -d ray-metrics-proxy ray-dashboard-proxy
+docker-compose -p seedcore up -d ray-metrics-proxy ray-proxy
 
 # Wait for head node to be healthy
 log_info "Waiting for Ray head node to be healthy..."

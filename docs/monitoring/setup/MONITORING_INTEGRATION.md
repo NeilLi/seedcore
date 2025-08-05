@@ -73,7 +73,7 @@ Instead of instrumenting every component individually, we use a **metrics integr
 
 **Scrape Targets:**
 - `seedcore-api:80` - Main API metrics
-- `ray-dashboard-proxy:8080` - Ray dashboard metrics (via CORS proxy)
+- `ray-proxy:8082` - Ray dashboard metrics (via CORS proxy)
 - `node-exporter:9100` - System metrics
 
 **Scrape Intervals:**
