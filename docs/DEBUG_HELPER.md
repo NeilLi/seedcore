@@ -121,8 +121,8 @@ docker compose up -d ray-head
 - **All application services** (using Docker Compose dependency resolution)
   - `seedcore-ray-head`
   - `seedcore-api`
-  - `seedcore-ray-metrics-proxy`
-  - `seedcore-ray-dashboard-proxy`
+  - `seedcore-ray-proxy`
+  - `seedcore-ray-proxy`
   - `seedcore-prometheus`
   - `seedcore-grafana`
   - `seedcore-node-exporter`
