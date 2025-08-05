@@ -8,7 +8,7 @@ WORKERS_FILE="$SCRIPT_DIR/ray-workers.yml"
 WORKERS_PROJECT="${PROJECT}-workers"               # <── own project name
 NETWORK=seedcore-network
 
-APP_SERVICES=(ray-head seedcore-api ray-metrics-proxy ray-dashboard-proxy \
+APP_SERVICES=(ray-head seedcore-api ray-proxy \
               prometheus grafana node-exporter)
 
 # ---------- utilities ---------------------------------------------------------
