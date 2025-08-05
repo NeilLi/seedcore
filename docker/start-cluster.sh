@@ -120,6 +120,7 @@ services:
       # Override RAY_ADDRESS for workers to connect to head container
       RAY_ADDRESS: ray://ray-head:10001
       RAY_SERVE_ADDRESS: ray-head:8000
+      SEEDCORE_API_ADDRESS: seedcore-api:8002
       RAY_worker_stdout_file: /dev/stdout
       RAY_worker_stderr_file: /dev/stderr
       RAY_log_to_driver: 1

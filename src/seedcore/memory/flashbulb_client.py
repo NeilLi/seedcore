@@ -8,10 +8,12 @@ class FlashbulbClient:
     """A simple client for agents to log incidents via the central API."""
     def __init__(self):
         # The API service is reachable via its container name on the Docker network
-        # Use environment variables to determine the correct endpoint
-        api_host = os.getenv("API_HOST", "seedcore-api")
-        api_port = os.getenv("API_PORT", "8002")
-        self.base_url = f"http://{api_host}:{api_port}"
+        # Use the unified SEEDCORE_API_ADDRESS environment variable
+        api_address = os.getenv("SEEDCORE_API_ADDRESS", "seedcore-api:8002")
+        if not api_address.startswith("http"):
+            self.base_url = f"http://{api_address}"
+        else:
+            self.base_url = api_address
         logger.info(f"FlashbulbClient configured for API at {self.base_url}")
 
     def log_incident(self, event_data: dict, salience_score: float) -> bool:
