@@ -24,7 +24,6 @@ echo "🗑️  Removing old images with docker- prefix..."
 docker rmi seedcore-ray-head:latest 2>/dev/null || echo "  - seedcore-ray-head:latest not found"
 docker rmi seedcore-ray-worker:latest 2>/dev/null || echo "  - seedcore-ray-worker:latest not found"
 docker rmi seedcore-api:latest 2>/dev/null || echo "  - seedcore-api:latest not found"
-docker rmi seedcore-db-seed:latest 2>/dev/null || echo "  - seedcore-db-seed:latest not found"
 
 # Build new images with consistent naming
 echo "🔨 Building new images with consistent naming..."
@@ -34,9 +33,6 @@ docker compose build seedcore-api
 
 echo "  - Building seedcore-ray-head:latest..."
 docker compose build seedcore-ray-head
-
-echo "  - Building db-seed:latest..."
-docker compose build db-seed
 
 echo "  - Building seedcore-ray-worker:latest..."
 docker compose -f ray-workers.yml -p seedcore build seedcore-ray-worker

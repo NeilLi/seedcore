@@ -20,7 +20,6 @@ PROJECT_NAME="seedcore"
 # All services you want to restart in one shot (using service names, not container names)
 APP_STACK=(
   node-exporter
-  db-seed
   ray-head
   seedcore-api
   prometheus
@@ -55,7 +54,7 @@ function restart_app() {
   echo "🔄  Restarting services using Docker Compose dependency resolution..."
   
   # Stop all non-DB services first
-  docker compose -p $PROJECT_NAME stop ray-head seedcore-api prometheus grafana node-exporter db-seed
+  docker compose -p $PROJECT_NAME stop ray-head seedcore-api prometheus grafana node-exporter
   
   # Start them in the correct order using profiles (like start-full does)
   docker compose -p $PROJECT_NAME --profile core --profile ray --profile api --profile obs up -d
@@ -108,11 +107,7 @@ function clean() {
   echo "✅ All containers stopped and removed!"
 }
 
-function seed_db() {
-  echo "🌱 Running database seeding..."
-  docker compose -p $PROJECT_NAME --profile core --profile seed up db-seed
-  echo "✅ Database seeding completed!"
-}
+
 
 case "${1:-}" in
   start-ray)    start_ray    ;;

@@ -217,8 +217,6 @@ cmd_status() {
   echo "📊 Ray workers:"
   docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT ps 2>/dev/null || echo "No workers running"
 }
-cmd_seed()   { docker compose -f "$COMPOSE_MAIN" -p $PROJECT --profile core --profile seed up db-seed; }
-
 # ---------- entry -------------------------------------------------------------
 case "${1:-}" in
   up)       shift; cmd_up   "${1:-3}"   ;;
@@ -226,6 +224,5 @@ case "${1:-}" in
   down)            cmd_down           ;;
   logs)    shift; cmd_logs "$@"       ;;
   status)          cmd_status         ;;
-  seed-db)         cmd_seed           ;;
-  *) echo "Usage: $0 {up|restart|down|logs|status|seed-db}"; exit 1 ;;
+  *) echo "Usage: $0 {up|restart|down|logs|status}"; exit 1 ;;
 esac 

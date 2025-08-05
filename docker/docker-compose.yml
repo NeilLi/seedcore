@@ -70,37 +70,6 @@ services:
 
   # Redis service removed - Ray uses its own internal Redis on port 6379
 
-  db-seed:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    image: seedcore-db-seed:latest
-    container_name: seedcore-db-seed
-    profiles: ["core", "seed"]
-    environment:
-      PYTHONPATH: /app:/app/src
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
-      NEO4J_URI: bolt://neo4j:7687
-      NEO4J_USER: neo4j
-      NEO4J_PASSWORD: password
-    depends_on:
-      postgres:
-        condition: service_healthy
-      mysql:
-        condition: service_healthy
-      neo4j:
-        condition: service_healthy
-    networks:
-      - seedcore-network
-    volumes:
-      - ..:/app
-      - ./artifacts:/data
-    command: python -m scripts.populate_mlt_simple
-    restart: "no"
-
   ray-head:
     build:
       context: ..
@@ -190,6 +159,13 @@ services:
       RAY_ADDRESS: ray://ray-head:10001
       RAY_memory_usage_threshold: 0.8
       RAY_memory_monitor_refresh_ms: 2500
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: password
     env_file:
       - .env
     ports:
@@ -216,6 +192,9 @@ services:
       - /bin/sh
       - -c
       - |
+        echo "⏳ Seeding core databases …"
+        python -m scripts.populate_mlt_simple && \
+        echo "✅ Seeding complete, starting API" && \
         if [ "$DEV_RELOAD" = "1" ]; then
           uvicorn src.seedcore.telemetry.server:app --host 0.0.0.0 --port 8002 --reload
         else

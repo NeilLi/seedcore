@@ -17,8 +17,8 @@ def load_holon_uuid():
             return data["fact_X"]
     except (FileNotFoundError, KeyError) as e:
         print(f"ERROR: Could not load fact_X UUID from {uuid_file_path}.")
-        print("This usually means the db-seed service hasn't run yet.")
-        print("Please ensure you've run 'docker-compose up -d --build' to seed the database.")
+        print("This usually means the database hasn't been seeded yet.")
+        print("Please ensure you've run the seedcore-api service to seed the database.")
         raise e
 
 FACT_TO_FIND = load_holon_uuid()
