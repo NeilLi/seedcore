@@ -1,3 +1,20 @@
+# ---------------------------------------------------------------------------
+# Re‑use a single environment map so head & workers never drift.            #
+# ---------------------------------------------------------------------------
+x-ray-common-env: &ray-common-env
+  PYTHONPATH: /app:/app/src
+  RAY_ADDRESS: ray://ray-head:10001   # Ray client endpoint
+  RAY_SERVE_ADDRESS: ray-head:8000
+  SEEDCORE_API_ADDRESS: seedcore-api:8002
+  RAY_worker_stdout_file: /dev/stdout
+  RAY_worker_stderr_file: /dev/stderr
+  RAY_log_to_driver: 1
+  RAY_BACKEND_LOG_LEVEL: info
+  RAY_PROMETHEUS_HOST: http://prometheus:9090
+  RAY_GRAFANA_HOST: http://grafana:3000
+  RAY_GRAFANA_IFRAME_HOST: ${PUBLIC_GRAFANA_URL}
+  RAY_PROMETHEUS_NAME: Prometheus
+
 services:
   ray-worker:
     build:
@@ -6,32 +23,27 @@ services:
     image: seedcore-ray-worker:latest
     shm_size: '2gb'
     working_dir: /app
-    environment:
-      PYTHONPATH: /app:/app/src
-      # Override RAY_ADDRESS for workers to connect to head container
-      RAY_ADDRESS: ray://ray-head:10001
-      RAY_SERVE_ADDRESS: ray-head:8000
-      SEEDCORE_API_ADDRESS: seedcore-api:8002
-      RAY_worker_stdout_file: /dev/stdout
-      RAY_worker_stderr_file: /dev/stderr
-      RAY_log_to_driver: 1
-      RAY_BACKEND_LOG_LEVEL: info
-      RAY_PROMETHEUS_HOST: http://prometheus:9090
-      RAY_GRAFANA_HOST: http://grafana:3000
-      RAY_GRAFANA_IFRAME_HOST: ${PUBLIC_GRAFANA_URL}
-      RAY_PROMETHEUS_NAME: Prometheus
+    environment: *ray-common-env
     volumes:
       - ..:/app
       - ./artifacts:/data
     networks:
       - seedcore-network
     restart: unless-stopped
-    command: ["wait_for_head.sh",
-              "ray-head:6379",
-              "ray", "start", "--address=ray-head:6379",
-              "--num-cpus", "1", "--block"]
+
+    # Honour optional RAY_WORKER_CPUS for easy benchmarking.
+    command: >
+      ray start --address=ray-head:6379
+                --num-cpus=${RAY_WORKER_CPUS:-1}
+                --block
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep 'ray start' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     deploy:
-      replicas: 1
+      replicas: 1  # default ‑ overridden by --scale if needed
 
 networks:
   seedcore-network:
