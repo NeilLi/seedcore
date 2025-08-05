@@ -8,11 +8,15 @@ import asyncio
 import requests
 import json
 import time
+import os
 from typing import Dict, Any
 
 def test_organism_endpoints():
     """Test the organism endpoints to verify the implementation."""
-    base_url = "http://localhost:8000"
+    # Use environment variable for Ray Serve address
+    base_url = os.getenv("RAY_SERVE_ADDRESS", "localhost:8000")
+    if not base_url.startswith("http"):
+        base_url = f"http://{base_url}"
     
     print("🔍 Testing COA Organism Implementation")
     print("=" * 50)
@@ -119,7 +123,11 @@ def test_ray_cluster():
     print("-" * 30)
     
     try:
-        response = requests.get("http://localhost:8000/ray/status")
+        # Use environment variable for Ray Serve address
+        base_url = os.getenv("RAY_SERVE_ADDRESS", "localhost:8000")
+        if not base_url.startswith("http"):
+            base_url = f"http://{base_url}"
+        response = requests.get(f"{base_url}/ray/status")
         if response.status_code == 200:
             data = response.json()
             print(f"✅ Ray cluster is running")

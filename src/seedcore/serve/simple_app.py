@@ -8,6 +8,7 @@ import ray
 from ray import serve
 from fastapi import FastAPI
 import logging
+import os
 from typing import Dict, Any
 import time
 
@@ -115,7 +116,11 @@ def deploy_health_service():
         
         logger.info("✅ SeedCore Health Service deployed successfully to Ray Serve")
         logger.info("📊 Serve dashboard available at: http://localhost:8265/#/serve")
-        logger.info("🔗 Health endpoint available at: http://localhost:8000/health")
+        # Use environment variable for Ray Serve address
+        base_url = os.getenv("RAY_SERVE_ADDRESS", "localhost:8000")
+        if not base_url.startswith("http"):
+            base_url = f"http://{base_url}"
+        logger.info(f"🔗 Health endpoint available at: {base_url}/health")
         
         return True
         

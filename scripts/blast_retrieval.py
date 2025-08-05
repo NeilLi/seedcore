@@ -18,7 +18,9 @@ import aiohttp
 import numpy as np
 
 # Get API endpoint from environment variable
-API_BASE_URL = os.getenv('SEEDCORE_API_URL', 'http://localhost:8000')
+API_BASE_URL = os.getenv('SEEDCORE_API_URL', os.getenv('RAY_SERVE_ADDRESS', 'localhost:8000'))
+if not API_BASE_URL.startswith("http"):
+    API_BASE_URL = f"http://{API_BASE_URL}"
 
 async def blast_retrieval():
     """Send 50,000 random queries to test the system."""

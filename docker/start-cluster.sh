@@ -119,6 +119,7 @@ services:
       PYTHONPATH: /app:/app/src
       # Override RAY_ADDRESS for workers to connect to head container
       RAY_ADDRESS: ray://ray-head:10001
+      RAY_SERVE_ADDRESS: ray-head:8000
       RAY_worker_stdout_file: /dev/stdout
       RAY_worker_stderr_file: /dev/stderr
       RAY_log_to_driver: 1

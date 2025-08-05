@@ -17,6 +17,7 @@ import logging
 import time
 import requests
 import httpx
+import os
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 
@@ -568,9 +569,14 @@ class SalienceServiceClient:
     Client for interacting with the Salience ML service with circuit breaker pattern.
     """
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = None):
+        if base_url is None:
+            # Use environment variable or default to localhost:8000 for ray-head container
+            base_url = os.getenv("RAY_SERVE_ADDRESS", "localhost:8000")
+            if not base_url.startswith("http"):
+                base_url = f"http://{base_url}"
         self.base_url = base_url
-        self.salience_endpoint = f"{self.base_url}/ml/score/salience"
+        self.salience_endpoint = f"{self.base_url}/score/salience"
         
         # Circuit breaker configuration
         self.circuit_breaker_threshold = 5
