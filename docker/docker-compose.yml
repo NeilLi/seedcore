@@ -151,14 +151,10 @@ services:
       - ..:/app  # Mounts the project root into /app in the container
       - ./artifacts:/data  # Mount artifacts directory for UUID access
     ports:
-      - "8265:8265"      # dashboard UI
-      - "8266:8266"      # dashboard UI (fallback)
-      - "52365:52365"    # agent gRPC port
-      - "52366:52366"    # agent HTTP port
-      - "10001:10001"    # Ray head gRPC / jobs / client
-      - "6379:6379"      # Ray internal Redis
-      - "8080:8080"      # Ray metrics export port
-      - "8000:8000"      # Ray Serve application port
+      # ── Expose *only* what the outside world needs ─────────────── #
+      - "8265:8265"      # Ray Dashboard UI
+      - "6379:6379"      # Ray GCS (needed if workers join from outside Docker)
+      # - "8000:8000"    # ← uncomment if you actually need Ray Serve HTTP externally
     networks:
       - seedcore-network
     depends_on:
@@ -229,32 +225,18 @@ services:
   # Observability stack
   # ───────────────────────────────────────────────────────────────────── #
   
-  # Nginx proxy for Ray metrics with CORS support
-  ray-metrics-proxy:
+  # Unified Nginx proxy (metrics 8081 · dashboard shim 8082)
+  ray-proxy:
     image: nginx:alpine
-    container_name: seedcore-ray-metrics-proxy
+    container_name: seedcore-ray-proxy
     profiles: ["obs"]
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ray-proxy.conf:/etc/nginx/nginx.conf:ro
     ports:
-      - "8081:8081"
+      - "8081:8081"   # Prometheus / Grafana scrape endpoint
+      - "8082:8082"   # Shim that satisfies Ray Dashboard JS
     depends_on:
       - ray-head
-    networks:
-      - seedcore-network
-
-  # Dashboard proxy to intercept localhost:8082 requests
-  ray-dashboard-proxy:
-    image: nginx:alpine
-    container_name: seedcore-ray-dashboard-proxy
-    profiles: ["obs"]
-    volumes:
-      - ./dashboard-proxy.conf:/etc/nginx/nginx.conf:ro
-    ports:
-      - "8082:8080"
-    depends_on:
-      - ray-head
-      - ray-metrics-proxy
     networks:
       - seedcore-network
 
