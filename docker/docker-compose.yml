@@ -154,7 +154,8 @@ services:
       # ── Expose *only* what the outside world needs ─────────────── #
       - "8265:8265"      # Ray Dashboard UI
       - "6379:6379"      # Ray GCS (needed if workers join from outside Docker)
-      # - "8000:8000"    # ← uncomment if you actually need Ray Serve HTTP externally
+      - "8000:8000"      # Ray Serve HTTP externally
+      - "8080:8080"      # Ray Metrics
     networks:
       - seedcore-network
     depends_on:
@@ -225,21 +226,6 @@ services:
   # Observability stack
   # ───────────────────────────────────────────────────────────────────── #
   
-  # Unified Nginx proxy (metrics 8081 · dashboard shim 8082)
-  ray-proxy:
-    image: nginx:alpine
-    container_name: seedcore-ray-proxy
-    profiles: ["obs"]
-    volumes:
-      - ./ray-proxy.conf:/etc/nginx/nginx.conf:ro
-    ports:
-      - "8081:8081"   # Prometheus / Grafana scrape endpoint
-      - "8082:8082"   # Shim that satisfies Ray Dashboard JS
-    depends_on:
-      - ray-head
-    networks:
-      - seedcore-network
-
   prometheus:
     image: prom/prometheus:v2.52.0
     container_name: seedcore-prometheus
