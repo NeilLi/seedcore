@@ -376,7 +376,10 @@ def test_energy_integration() -> bool:
     
     try:
         # Check energy logs endpoint (on API service)
-        response = requests.get("http://seedcore-api:8002/energy/logs", timeout=5)
+        api_address = os.getenv("SEEDCORE_API_ADDRESS", "seedcore-api:8002")
+        if not api_address.startswith("http"):
+            api_address = f"http://{api_address}"
+        response = requests.get(f"{api_address}/energy/logs", timeout=5)
         if response.status_code == 200:
             logs_data = response.json()
             print(f"✅ Energy logs accessible")
@@ -389,7 +392,7 @@ def test_energy_integration() -> bool:
                 print(f"   Latest event: {recent_logs[-1]}")
             
             # Also check energy gradient
-            gradient_response = requests.get("http://seedcore-api:8002/energy/gradient", timeout=5)
+            gradient_response = requests.get(f"{api_address}/energy/gradient", timeout=5)
             if gradient_response.status_code == 200:
                 gradient_data = gradient_response.json()
                 print(f"✅ Energy gradient accessible")
@@ -487,7 +490,10 @@ def monitor_operational_metrics() -> None:
         
         # Check energy gradient
         print("🔍 Checking energy gradient...")
-        response = requests.get("http://seedcore-api:8002/energy/gradient", timeout=5)
+        api_address = os.getenv("SEEDCORE_API_ADDRESS", "seedcore-api:8002")
+        if not api_address.startswith("http"):
+            api_address = f"http://{api_address}"
+        response = requests.get(f"{api_address}/energy/gradient", timeout=5)
         if response.status_code == 200:
             energy_data = response.json()
             print(f"✅ Energy system active")

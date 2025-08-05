@@ -9,7 +9,7 @@ scrape_configs:
   # SeedCore API metrics
   - job_name: 'seedcore-api'
     static_configs:
-      - targets: ['seedcore-api:8000']
+      - targets: ['seedcore-api:8002']
     metrics_path: '/metrics'
     scrape_interval: 30s
     

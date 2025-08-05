@@ -47,7 +47,10 @@ def test_energy_endpoints():
     
     try:
         # Test energy logs endpoint (telemetry server on internal network)
-        response = requests.get("http://seedcore-api:8002/energy/logs", timeout=10)
+        api_address = os.getenv("SEEDCORE_API_ADDRESS", "seedcore-api:8002")
+        if not api_address.startswith("http"):
+            api_address = f"http://{api_address}"
+        response = requests.get(f"{api_address}/energy/logs", timeout=10)
         if response.status_code == 200:
             logs_data = response.json()
             print(f"✅ Energy logs accessible")
@@ -183,8 +186,11 @@ def test_energy_logging():
     }
     
     try:
+        api_address = os.getenv("SEEDCORE_API_ADDRESS", "seedcore-api:8002")
+        if not api_address.startswith("http"):
+            api_address = f"http://{api_address}"
         response = requests.post(
-            "http://seedcore-api:8002/energy/log",
+            f"{api_address}/energy/log",
             json=energy_event,
             timeout=10
         )
