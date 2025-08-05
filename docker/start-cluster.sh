@@ -159,8 +159,8 @@ cmd_down() {
 
 cmd_logs() {
   case "${1:-}" in
-    head) docker compose -f "$COMPOSE_MAIN" -p $PROJECT logs -f --tail=100 ray-head ;;
-    api)  docker compose -f "$COMPOSE_MAIN" -p $PROJECT logs -f --tail=100 seedcore-api ;;
+    head) docker compose -f "$COMPOSE_MAIN" -p $PROJECT --profile core --profile ray logs -f --tail=100 ray-head ;;
+    api)  docker compose -f "$COMPOSE_MAIN" -p $PROJECT --profile core --profile ray --profile api logs -f --tail=100 seedcore-api ;;
     workers) docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT logs -f --tail=100 ray-worker ;;
     *) echo "logs {head|api|workers}"; exit 1 ;;
   esac
