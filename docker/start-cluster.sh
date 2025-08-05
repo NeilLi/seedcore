@@ -4,8 +4,7 @@ set -euo pipefail
 PROJECT=seedcore
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_MAIN="$SCRIPT_DIR/docker-compose.yml" 
-WORKERS_FILE="$SCRIPT_DIR/ray-workers.yml"
-WORKERS_PROJECT="${PROJECT}-workers"               # <── own project name
+WORKERS_FILE="$SCRIPT_DIR/ray-workers.yml"   # checked‑in, no longer generated
 NETWORK=seedcore-network
 
 APP_SERVICES=(ray-head seedcore-api \
@@ -101,55 +100,11 @@ except Exception as e:
   return 1
 }
 
-start_workers() {
+# Use docker‑compose native scaling instead of generating YAML on the fly
+scale_workers() {
   local n=${1:-3}
-  echo "🚀 starting $n ray workers..."
-  
-  # Generate workers configuration dynamically (like ray-workers.sh does)
-  cat > "$WORKERS_FILE" << EOF
-services:
-  ray-worker:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.ray
-    image: seedcore-ray-worker:latest
-    shm_size: '2gb'
-    working_dir: /app
-    environment:
-      PYTHONPATH: /app:/app/src
-      # Override RAY_ADDRESS for workers to connect to head container
-      RAY_ADDRESS: ray://ray-head:10001
-      RAY_SERVE_ADDRESS: ray-head:8000
-      SEEDCORE_API_ADDRESS: seedcore-api:8002
-      RAY_worker_stdout_file: /dev/stdout
-      RAY_worker_stderr_file: /dev/stderr
-      RAY_log_to_driver: 1
-      RAY_BACKEND_LOG_LEVEL: info
-      RAY_PROMETHEUS_HOST: http://prometheus:9090
-      RAY_GRAFANA_HOST: http://grafana:3000
-      RAY_GRAFANA_IFRAME_HOST: \${PUBLIC_GRAFANA_URL}
-      RAY_PROMETHEUS_NAME: Prometheus
-    volumes:
-      - ..:/app
-      - ./artifacts:/data
-    networks:
-      - seedcore-network
-    restart: unless-stopped
-    command: ["wait_for_head.sh",
-              "ray-head:6379",
-              "ray", "start", "--address=ray-head:6379",
-              "--num-cpus", "1", "--block"]
-    deploy:
-      replicas: $n
-
-networks:
-  seedcore-network:
-    external: true
-EOF
-  
-  # Use separate project name for workers to avoid conflicts
-  docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT up -d
-  echo "✅ workers started"
+  echo "🚀 scaling workers to $n replicas…"
+  docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT up -d --scale ray-worker=$n
 }
 
 # ---------- commands ----------------------------------------------------------
@@ -164,7 +119,7 @@ cmd_up() {
     exit 1
   fi
   
-  start_workers "$W"
+  scale_workers "$W"
   echo -e "\n🎉 cluster up → http://localhost:8265\n"
   echo "📊 Check worker status with: docker compose -f ray-workers.yml -p seedcore-workers ps"
 }
@@ -174,8 +129,8 @@ cmd_restart() {
 
   if [[ -f "$WORKERS_FILE" ]]; then
     echo "⏸️  stopping workers first …"
-    CUR_WORKERS=$(docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT ps --services --filter "status=running" | wc -l)
-    docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT down --remove-orphans
+    CUR_WORKERS=$(docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT ps ray-worker --filter "status=running" | wc -l)
+    docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT down ray-worker --remove-orphans
   else
     CUR_WORKERS=0
   fi
@@ -192,22 +147,21 @@ cmd_restart() {
 
   if (( CUR_WORKERS > 0 )); then
     echo "🚀 restarting $CUR_WORKERS workers …"
-    start_workers "$CUR_WORKERS"
+    scale_workers "$CUR_WORKERS"
   fi
 
   echo "✅ restart complete (head healthy, $CUR_WORKERS workers running)"
 }
 
 cmd_down() {
-  [[ -f "$WORKERS_FILE" ]] && docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT down --remove-orphans
-  docker compose -f "$COMPOSE_MAIN" -p $PROJECT down --remove-orphans
+  docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT down --remove-orphans
 }
 
 cmd_logs() {
   case "${1:-}" in
     head) docker compose -f "$COMPOSE_MAIN" -p $PROJECT logs -f --tail=100 ray-head ;;
     api)  docker compose -f "$COMPOSE_MAIN" -p $PROJECT logs -f --tail=100 seedcore-api ;;
-    workers) docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT logs -f --tail=100 ;;
+    workers) docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT logs -f --tail=100 ray-worker ;;
     *) echo "logs {head|api|workers}"; exit 1 ;;
   esac
 }
@@ -217,7 +171,7 @@ cmd_status() {
   docker compose -f "$COMPOSE_MAIN" -p $PROJECT ps
   echo ""
   echo "📊 Ray workers:"
-  docker compose -f "$WORKERS_FILE" -p $WORKERS_PROJECT ps 2>/dev/null || echo "No workers running"
+  docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT ps ray-worker 2>/dev/null || echo "No workers running"
 }
 # ---------- entry -------------------------------------------------------------
 case "${1:-}" in
