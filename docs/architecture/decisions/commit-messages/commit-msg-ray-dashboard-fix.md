@@ -17,9 +17,9 @@ Ray dashboard was showing "Panel with id 41 not found" and "Panel with id 24 not
 
 ### Core Fixes
 - **docker/grafana/dashboards/ray-default-dashboard.json**: Import Ray's generated dashboard with correct UID
-- **docker/nginx.conf**: CORS-enabled proxy for Ray metrics (port 8081)
+- **Direct access**: Ray metrics available directly from ray-head:8080
 - **docker/dashboard-proxy.conf**: Dashboard request interceptor (port 8080)
-- **docker/prometheus.yml**: Updated to scrape Ray metrics via proxy
+- **docker/prometheus.yml**: Updated to scrape Ray metrics directly
 
 ### Configuration Updates
 - **docker-compose.yml**: Added Ray metrics and dashboard proxy services
@@ -37,10 +37,9 @@ Ray dashboard was showing "Panel with id 41 not found" and "Panel with id 24 not
 - Dashboard includes all required panel IDs (41, 24, etc.) that Ray expects
 - Anonymous access enabled for seamless integration
 
-### CORS Proxy Architecture
-- **ray-metrics-proxy** (port 8081): Handles CORS headers for browser access
-- **ray-proxy** (port 8082): Intercepts Ray dashboard requests
-- **Prometheus**: Scrapes metrics via proxy to avoid CORS issues
+### Metrics Access Architecture
+- **Direct access**: Prometheus scrapes metrics directly from ray-head:8080
+- **No proxy needed**: Simplified architecture with direct metrics access
 
 ### Environment Variables
 - `RAY_PROMETHEUS_HOST`: http://prometheus:9090
@@ -60,11 +59,10 @@ Ray dashboard was showing "Panel with id 41 not found" and "Panel with id 24 not
 - **Ray Dashboard**: http://localhost:8265
 - **Grafana**: http://localhost:3000 (admin/seedcore)
 - **Prometheus**: http://localhost:9090
-- **Ray Metrics**: http://localhost:8080/metrics (via proxy)
+- **Ray Metrics**: http://localhost:8080/metrics (direct access)
 
 ## Files Changed
 - docker/grafana/dashboards/ray-default-dashboard.json (new)
-- docker/nginx.conf (new)
 - docker/dashboard-proxy.conf (new)
 - docker/prometheus.yml (modified)
 - docker-compose.yml (modified)
@@ -72,6 +70,8 @@ Ray dashboard was showing "Panel with id 41 not found" and "Panel with id 24 not
 - docker/README.md (modified)
 - docker/grafana/dashboards/ray-cluster-overview.json (removed)
 - docker/grafana/dashboards/ray-node-overview.json (removed)
+- docker/ray-proxy.conf (removed)
+- docker/nginx.conf (removed)
 
 ## Impact
 - Resolves Ray dashboard panel integration issues

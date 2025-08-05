@@ -13,10 +13,10 @@ scrape_configs:
     metrics_path: '/metrics'
     scrape_interval: 30s
     
-  # Ray metrics exporter (via dashboard proxy with CORS)
+  # Ray metrics exporter (direct access)
   - job_name: 'ray'
     static_configs:
-      - targets: ['ray-proxy:8082']
+      - targets: ['ray-head:8080']
     metrics_path: '/metrics'
     scrape_interval: 30s
     scrape_timeout: 10s

@@ -23,8 +23,6 @@ APP_STACK=(
   db-seed
   ray-head
   seedcore-api
-  ray-metrics-proxy
-  ray-proxy
   prometheus
   grafana
 )
@@ -57,7 +55,7 @@ function restart_app() {
   echo "🔄  Restarting services using Docker Compose dependency resolution..."
   
   # Stop all non-DB services first
-  docker compose -p $PROJECT_NAME stop ray-head seedcore-api ray-metrics-proxy ray-proxy prometheus grafana node-exporter db-seed
+  docker compose -p $PROJECT_NAME stop ray-head seedcore-api prometheus grafana node-exporter db-seed
   
   # Start them in the correct order using profiles (like start-full does)
   docker compose -p $PROJECT_NAME --profile core --profile ray --profile api --profile obs up -d

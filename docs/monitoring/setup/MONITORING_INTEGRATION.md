@@ -73,7 +73,7 @@ Instead of instrumenting every component individually, we use a **metrics integr
 
 **Scrape Targets:**
 - `seedcore-api:80` - Main API metrics
-- `ray-proxy:8082` - Ray dashboard metrics (via CORS proxy)
+- `ray-head:8080` - Ray dashboard metrics (direct access)
 - `node-exporter:9100` - System metrics
 
 **Scrape Intervals:**
@@ -127,10 +127,10 @@ Instead of instrumenting every component individually, we use a **metrics integr
 
 ### 6. Ray Integration Components
 
-#### Ray Metrics Proxy (`docker/nginx.conf`)
-- **CORS-enabled proxy** for Ray metrics endpoint
-- **Port 8081** - Handles CORS headers for browser access
-- **Proxies to Ray head** - Forwards requests to `ray-head:8080`
+#### Ray Metrics Access
+- **Direct access** to Ray metrics endpoint
+- **Port 8080** - Ray metrics available directly from `ray-head:8080`
+- **No proxy needed** - Prometheus scrapes directly from ray-head
 
 #### Ray Dashboard Proxy (`docker/dashboard-proxy.conf`)
 - **Port 8080** - Intercepts Ray dashboard requests
@@ -201,7 +201,7 @@ The Ray dashboard was showing "Panel with id 41 not found" and "Panel with id 24
 ### Key Files
 
 - `docker/grafana/dashboards/ray-default-dashboard.json` - Ray's auto-generated dashboard
-- `docker/nginx.conf` - CORS-enabled metrics proxy
+- Direct access to ray-head:8080 for metrics
 - `docker/dashboard-proxy.conf` - Dashboard request interceptor
 - `docker/prometheus.yml` - Updated to scrape via proxy
 
