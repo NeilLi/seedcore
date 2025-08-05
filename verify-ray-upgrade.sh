@@ -56,8 +56,8 @@ else
 fi
 
 # Check application container
-echo -n "Application (seedcore-db-seed): "
-APP_VERSION=$(get_ray_version "seedcore-db-seed")
+echo -n "Application (seedcore-api): "
+APP_VERSION=$(get_ray_version "seedcore-api")
 if [[ "$APP_VERSION" == "2.20.0" ]]; then
     echo -e "${GREEN}✅ $APP_VERSION${NC}"
 else

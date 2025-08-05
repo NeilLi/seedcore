@@ -14,8 +14,8 @@ try:
         FACT_TO_FIND = json.load(f)["fact_Y"]
 except (FileNotFoundError, KeyError):
     print(f"ERROR: Could not load fact_Y UUID from {UUID_FILE_PATH}.")
-    print("This usually means the db-seed service hasn't run yet.")
-    print("Please ensure you've run 'docker-compose up -d --build' to seed the database.")
+    print("This usually means the database hasn't been seeded yet.")
+    print("Please ensure you've run the seedcore-api service to seed the database.")
     exit(1)
 
 NUM_WORKER_AGENTS = 5
