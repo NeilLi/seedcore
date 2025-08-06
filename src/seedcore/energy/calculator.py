@@ -48,8 +48,23 @@ def on_pair_success(event: Dict[str, Any], ledger: EnergyLedger):
         ledger.pair_stats[pair_key] = {'w': 0.0, 'sim': 0.0}
     
     stats = ledger.pair_stats[pair_key]
-    # Update weight with an EWMA
-    stats['w'] = (1 - 0.1) * stats['w'] + 0.1 * event['success']
+    
+    # Get agent states for dynamic capability-based weighting
+    agent_states = event.get('agent_states', {})
+    if len(agent_states) >= 2:
+        # Calculate dynamic pair weight based on min(ci, cj)
+        from ..agents.lifecycle import calculate_pair_weight
+        agent_ids = list(agent_states.keys())
+        agent_i_state = agent_states[agent_ids[0]]
+        agent_j_state = agent_states[agent_ids[1]]
+        dynamic_weight = calculate_pair_weight(agent_i_state, agent_j_state)
+        
+        # Update weight with EWMA, incorporating dynamic capability
+        stats['w'] = (1 - 0.1) * stats['w'] + 0.1 * (event['success'] * dynamic_weight)
+    else:
+        # Fallback to original logic
+        stats['w'] = (1 - 0.1) * stats['w'] + 0.1 * event['success']
+    
     stats['sim'] = event['sim']
     # Update the ledger (subtracting because lower energy is better)
     delta = (stats['w'] * stats['sim']) - ledger.terms.pair
@@ -76,7 +91,17 @@ def on_state_update(event: Dict[str, Any], ledger: EnergyLedger, lambda_reg: flo
 
 def on_mem_event(event: Dict[str, Any], ledger: EnergyLedger, beta_mem: float):
     """Update memory term after memory operations."""
-    delta = beta_mem * event['cost_delta']
+    base_cost = event['cost_delta']
+    
+    # Apply memory utility discount if agent state is provided
+    agent_state = event.get('agent_state')
+    if agent_state:
+        from ..agents.lifecycle import apply_memory_discount
+        discounted_cost = apply_memory_discount(agent_state, base_cost)
+        delta = beta_mem * discounted_cost
+    else:
+        delta = beta_mem * base_cost
+    
     ledger.terms.mem += delta
 
 

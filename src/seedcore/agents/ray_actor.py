@@ -258,7 +258,21 @@ class RayAgent:
             self.smoothing_factor * current_performance
         )
         
-        logger.info(f"📈 Agent {self.agent_id} performance updated: Capability={self.capability_score:.3f}")
+        # Update state for backward compatibility
+        self.state.capability_score = self.capability_score
+        
+        # Update memory utility if memory stats are provided
+        if task_metadata and 'memory_stats' in task_metadata:
+            from .lifecycle import update_agent_metrics
+            mem_stats = task_metadata['memory_stats']
+            update_agent_metrics(self.state, success, quality, mem_stats)
+            self.mem_util = self.state.mem_util
+        
+        # Update task record with capability and memory utility
+        task_record['capability_score'] = self.capability_score
+        task_record['mem_util'] = self.mem_util
+        
+        logger.info(f"📈 Agent {self.agent_id} performance updated: Capability={self.capability_score:.3f}, MemUtil={self.mem_util:.3f}")
     
     def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
