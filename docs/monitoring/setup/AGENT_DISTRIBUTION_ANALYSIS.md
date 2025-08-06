@@ -111,13 +111,13 @@ Use the SeedCore API endpoints:
 
 ```bash
 # Check organism status
-curl http://localhost:8000/organism/status
+curl http://localhost:8002/organism/status
 
 # Check Tier 0 agents
-curl http://localhost:8000/tier0/summary
+curl http://localhost:8002/tier0/summary
 
 # Check specific organ
-curl http://localhost:8000/organism/organs/cognitive_organ_1
+curl http://localhost:8002/organism/organs/cognitive_organ_1
 ```
 
 ### 3. Ray Dashboard Analysis
@@ -173,7 +173,7 @@ tail -f /tmp/ray/session_latest/logs/raylet.out
 #### 1. Scale Agents
 ```bash
 # Create more agents for better distribution
-curl -X POST http://localhost:8000/tier0/agents/create \
+curl -X POST http://localhost:8002/tier0/agents/create \
   -H "Content-Type: application/json" \
   -d '{"agent_id": "test_agent_1", "role_probs": {"E": 0.7, "S": 0.2, "O": 0.1}}'
 ```
@@ -201,10 +201,10 @@ open http://localhost:8265
 #### 1. Agents Not Found
 ```bash
 # Check if organism is initialized
-curl http://localhost:8000/organism/status
+curl http://localhost:8002/organism/status
 
 # Reinitialize if needed
-curl -X POST http://localhost:8000/organism/initialize
+curl -X POST http://localhost:8002/organism/initialize
 ```
 
 #### 2. Workers Not Available

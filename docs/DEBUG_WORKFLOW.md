@@ -123,7 +123,7 @@ curl http://localhost:8265/api/version
 curl http://localhost:8000/ml/score/salience
 
 # Check API
-curl http://localhost/api/health
+curl http://localhost:8002/api/health
 ```
 
 ## 🚨 Troubleshooting

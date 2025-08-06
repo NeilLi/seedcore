@@ -29,7 +29,7 @@ cd docker
 sleep 120
 
 # Check health
-curl http://localhost:8000/health
+curl http://localhost:8002/health
 ```
 
 ### 4. Verify Installation
@@ -38,10 +38,10 @@ curl http://localhost:8000/health
 curl http://localhost:8265/api/version
 
 # Check API health
-curl http://localhost:8000/health
+curl http://localhost:8002/health
 
 # Check energy system
-curl http://localhost:8000/healthz/energy
+curl http://localhost:8002/healthz/energy
 
 # Test XGBoost integration
 docker exec -it seedcore-ray-head python /app/docker/test_xgboost_docker.py
@@ -182,30 +182,30 @@ open http://localhost:8265  # Ray Dashboard
 ### Basic Energy Operations
 ```bash
 # Check current energy state
-curl http://localhost:8000/energy/gradient
+curl http://localhost:8002/energy/gradient
 
 # Run a realistic two-agent task
-curl -X POST http://localhost:8000/actions/run_two_agent_task
+curl -X POST http://localhost:8002/actions/run_two_agent_task
 
 # Run a simulation step
-curl http://localhost:8000/run_simulation_step
+curl http://localhost:8002/run_simulation_step
 
 # Reset energy ledger and pair statistics
-curl -X POST http://localhost:8000/actions/reset
+curl -X POST http://localhost:8002/actions/reset
 ```
 
 ### COA Organism Management
 ```bash
 # Get organism status
-curl -X GET "http://localhost:8000/organism/status"
+curl -X GET "http://localhost:8002/organism/status"
 
 # Execute task on specific organ
-curl -X POST "http://localhost:8000/organism/execute/cognitive_organ_1" \
+curl -X POST "http://localhost:8002/organism/execute/cognitive_organ_1" \
   -H "Content-Type: application/json" \
   -d '{"description": "Analyze the given data and provide insights"}'
 
 # Execute task on random organ
-curl -X POST "http://localhost:8000/organism/execute/random" \
+curl -X POST "http://localhost:8002/organism/execute/random" \
   -H "Content-Type: application/json" \
   -d '{"description": "Process the request"}'
 ```
@@ -220,13 +220,13 @@ curl -X POST "http://localhost:8000/organism/execute/random" \
 ### Health Checks
 ```bash
 # System health
-curl http://localhost:8000/health
+curl http://localhost:8002/health
 
 # Ray cluster status
-curl http://localhost:8000/ray/status
+curl http://localhost:8002/ray/status
 
 # Energy system health
-curl http://localhost:8000/healthz/energy
+curl http://localhost:8002/healthz/energy
 ```
 
 ## 🛠️ Development

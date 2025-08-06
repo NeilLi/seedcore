@@ -122,7 +122,7 @@ The FastAPI server has been extended with organism endpoints:
 
 3. **Verify organism status**:
    ```bash
-   curl http://localhost/organism/status | jq
+   curl http://localhost:8002/organism/status | jq
    ```
 
 ### Testing the Implementation
@@ -137,7 +137,7 @@ python3 test_organism.py
 
 #### Get Organism Status
 ```bash
-curl http://localhost/organism/status
+curl http://localhost:8002/organism/status
 ```
 
 Expected response:
@@ -169,7 +169,7 @@ Expected response:
 
 #### Execute Task on Cognitive Organ
 ```bash
-curl -X POST http://localhost/organism/execute/cognitive_organ_1 \
+curl -X POST http://localhost:8002/organism/execute/cognitive_organ_1 \
   -H "Content-Type: application/json" \
   -d '{
     "task_data": {
@@ -182,7 +182,7 @@ curl -X POST http://localhost/organism/execute/cognitive_organ_1 \
 
 #### Execute Task on Random Organ
 ```bash
-curl -X POST http://localhost/organism/execute/random \
+curl -X POST http://localhost:8002/organism/execute/random \
   -H "Content-Type: application/json" \
   -d '{
     "task_data": {
@@ -205,7 +205,7 @@ docker logs -f seedcore-api
 
 ### Cluster Status
 ```bash
-curl http://localhost/ray/status
+curl http://localhost:8002/ray/status
 ```
 
 ## Key Features
@@ -253,7 +253,7 @@ This implementation directly reflects the COA framework principles:
 ### Common Issues
 
 1. **Organism not initialized**
-   - Check Ray cluster status: `curl http://localhost/ray/status`
+   - Check Ray cluster status: `curl http://localhost:8002/ray/status`
    - Verify Ray is running: `docker ps | grep ray`
    - Check logs: `docker logs seedcore-api`
 
@@ -271,19 +271,19 @@ This implementation directly reflects the COA framework principles:
 
 ```bash
 # Check organism status
-curl http://localhost/organism/status
+curl http://localhost:8002/organism/status
 
 # Get detailed summary
-curl http://localhost/organism/summary
+curl http://localhost:8002/organism/summary
 
 # Check Ray cluster
-curl http://localhost/ray/status
+curl http://localhost:8002/ray/status
 
 # View logs
 docker logs seedcore-api
 
 # Test specific organ
-curl -X POST http://localhost/organism/execute/cognitive_organ_1 \
+curl -X POST http://localhost:8002/organism/execute/cognitive_organ_1 \
   -H "Content-Type: application/json" \
   -d '{"task_data": {"type": "test"}}'
 ```

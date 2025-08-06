@@ -133,7 +133,7 @@ log_info "Step 5: Waiting for services to be ready..."
 # Wait for API to be ready
 log_info "Waiting for API server..."
 for i in {1..30}; do
-    if curl -s http://localhost/health > /dev/null 2>&1; then
+    if curl -s http://localhost:8002/health > /dev/null 2>&1; then
         log_success "API server is ready"
         break
     fi
@@ -148,7 +148,7 @@ done
 # Wait for salience service to be ready
 log_info "Waiting for salience service..."
 for i in {1..30}; do
-    if curl -s http://localhost/salience/health > /dev/null 2>&1; then
+    if curl -s http://localhost:8002/salience/health > /dev/null 2>&1; then
         log_success "Salience service is ready"
         break
     fi
@@ -176,16 +176,16 @@ echo "=============================================="
 echo ""
 echo "📊 Service URLs:"
 echo "   🌐 API Server: http://localhost"
-echo "   📚 API Docs: http://localhost/docs"
+echo "   📚 API Docs: http://localhost:8002/docs"
 echo "   🔧 Ray Dashboard: http://localhost:8265"
 echo "   📈 Grafana: http://localhost:3000 (admin/seedcore)"
 echo "   📊 Prometheus: http://localhost:9090"
 echo ""
 echo "🧪 Salience Service Endpoints:"
-echo "   🔍 Health Check: http://localhost/salience/health"
-echo "   ℹ️  Service Info: http://localhost/salience/info"
-echo "   🎯 Single Scoring: POST http://localhost/salience/score"
-echo "   📦 Batch Scoring: POST http://localhost/salience/score/batch"
+echo "   🔍 Health Check: http://localhost:8002/salience/health"
+echo "   ℹ️  Service Info: http://localhost:8002/salience/info"
+echo "   🎯 Single Scoring: POST http://localhost:8002/salience/score"
+echo "   📦 Batch Scoring: POST http://localhost:8002/salience/score/batch"
 echo ""
 echo "🔧 Management Commands:"
 echo "   📊 Check status: docker-compose -p seedcore ps"
@@ -194,9 +194,9 @@ echo "   🔄 Restart API: docker-compose -p seedcore restart seedcore-api"
 echo "   🛑 Stop cluster: cd docker && docker-compose -p seedcore down"
 echo ""
 echo "🧪 Testing Commands:"
-echo "   🎯 Quick test: curl http://localhost/salience/health"
+echo "   🎯 Quick test: curl http://localhost:8002/salience/health"
 echo "   📊 Full validation: python scripts/validate_salience_container.py"
-echo "   🤖 Agent test: curl -X POST http://localhost/tier0/agents/create -H 'Content-Type: application/json' -d '{\"agent_id\": \"test_agent\", \"role_probs\": {\"E\": 0.7, \"S\": 0.2, \"O\": 0.1}}'"
+echo "   🤖 Agent test: curl -X POST http://localhost:8002/tier0/agents/create -H 'Content-Type: application/json' -d '{\"agent_id\": \"test_agent\", \"role_probs\": {\"E\": 0.7, \"S\": 0.2, \"O\": 0.1}}'"
 echo ""
 echo "📚 Documentation:"
 echo "   📖 Operations Guide: docs/guides/salience-service-operations.md"
@@ -226,7 +226,7 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         "agent_memory_util": 0.3
     }]'
     
-    response=$(curl -s -X POST "http://localhost/salience/score" \
+    response=$(curl -s -X POST "http://localhost:8002/salience/score" \
         -H "Content-Type: application/json" \
         -d "$test_data")
     

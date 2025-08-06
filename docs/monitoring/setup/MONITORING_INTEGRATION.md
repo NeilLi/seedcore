@@ -170,12 +170,12 @@ docker-compose up -d
 
 ```bash
 # Check metrics endpoint
-curl http://localhost:80/metrics
+curl http://localhost:8002/metrics
 
 # Check API endpoints
-curl http://localhost:80/energy/gradient
-curl http://localhost:80/agents/state
-curl http://localhost:80/system/status
+curl http://localhost:8002/energy/gradient
+curl http://localhost:8002/agents/state
+curl http://localhost:8002/system/status
 
 # Check Ray metrics (via proxy)
 curl http://localhost:8080/metrics
@@ -258,7 +258,7 @@ Modify the metrics update interval in `src/seedcore/telemetry/server.py`:
 
 ```python
 asyncio.create_task(start_metrics_integration(
-    base_url="http://localhost:80",
+    base_url="http://localhost:8002",
     update_interval=30  # Change this value
 ))
 ```
@@ -300,8 +300,8 @@ environment:
 
 **Check API endpoints:**
 ```bash
-curl http://localhost:80/energy/gradient
-curl http://localhost:80/agents/state
+curl http://localhost:8002/energy/gradient
+curl http://localhost:8002/agents/state
 ```
 
 **Check metrics integration logs:**
@@ -318,7 +318,7 @@ curl http://localhost:9090/api/v1/targets
 
 **Check network connectivity:**
 ```bash
-docker-compose exec prometheus wget -qO- http://seedcore-api:80/metrics
+docker-compose exec prometheus wget -qO- http://seedcore-api:8002/metrics
 ```
 
 ### 3. Grafana No Data

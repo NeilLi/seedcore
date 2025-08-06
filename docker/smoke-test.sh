@@ -61,11 +61,11 @@ wait_for_url http://localhost:8000/health "Ray Serve /health"
 
 # API --------------------------------------------------------------------------
 log "⏳ Checking SeedCore API …"
-wait_for_url http://localhost/health "SeedCore API /health"
+wait_for_url http://localhost:8002/health "SeedCore API /health"
 
 # Critical API checks ----------------------------------------------------------
 log "🧪 Validating critical API endpoints …"
-if curl -sf http://localhost/ray/status | grep -q '"ray_available":true'; then
+if curl -sf http://localhost:8002/ray/status | grep -q '"ray_available":true'; then
   echo "✅ /ray/status reports ray_available=true"
 else
   echo "❌ /ray/status check failed"; exit 1
@@ -73,7 +73,7 @@ fi
 
 # Energy system health check ---------------------------------------------------
 log "⚡ Checking energy system readiness …"
-if curl -sf http://localhost/healthz/energy | grep -q '"status":"healthy"'; then
+if curl -sf http://localhost:8002/healthz/energy | grep -q '"status":"healthy"'; then
   echo "✅ Energy system operational"
 else
   echo "❌ Energy system health check failed"; exit 1
@@ -81,7 +81,7 @@ fi
 
 # Salience scoring service health check ----------------------------------------
 log "🧠 Checking salience scoring service …"
-if curl -sf http://localhost/salience/health | grep -q '"status":"healthy"'; then
+if curl -sf http://localhost:8002/salience/health | grep -q '"status":"healthy"'; then
   echo "✅ Salience scoring service healthy"
 else
   echo "❌ Salience scoring service health check failed"; exit 1
@@ -89,7 +89,7 @@ fi
 
 # System status check (organs and agents) -------------------------------------
 log "🏥 Checking system status (organs and agents) …"
-if curl -sf http://localhost/system/status | grep -q '"status":"operational"'; then
+if curl -sf http://localhost:8002/system/status | grep -q '"status":"operational"'; then
   echo "✅ System operational"
 else
   echo "❌ System status check failed"; exit 1
@@ -97,13 +97,13 @@ fi
 
 # Organism status check ------------------------------------------------------
 log "🧬 Checking organism status (organs and agents) …"
-if curl -sf http://localhost/organism/status | grep -q '"success":true'; then
+if curl -sf http://localhost:8002/organism/status | grep -q '"success":true'; then
   echo "✅ Organism operational"
 else
   echo "❌ Organism status check failed"; exit 1
 fi
 
 # Lightweight Prometheus scrape (non‑blocking)
-curl -sf http://localhost/metrics >/dev/null && echo "✅ /metrics scraped"
+curl -sf http://localhost:8002/metrics >/dev/null && echo "✅ /metrics scraped"
 
 log "🎉 Health check successful!" 

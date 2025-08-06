@@ -502,17 +502,17 @@ print('RayAgent OK')
 
 ```bash
 # Create an agent
-curl -X POST http://localhost/tier0/agents/create \
+curl -X POST http://localhost:8002/tier0/agents/create \
   -H "Content-Type: application/json" \
   -d '{"agent_id": "test_agent", "role_probs": {"E": 0.7, "S": 0.2, "O": 0.1}}'
 
 # Execute a task
-curl -X POST http://localhost/tier0/agents/test_agent/execute \
+curl -X POST http://localhost:8002/tier0/agents/test_agent/execute \
   -H "Content-Type: application/json" \
   -d '{"task_id": "task_1", "type": "analysis", "complexity": 0.8}'
 
 # Log a flashbulb incident
-curl -X POST http://localhost/mfb/incidents \
+curl -X POST http://localhost:8002/mfb/incidents \
   -H "Content-Type: application/json" \
   -d '{"event_data": {"type": "alert"}, "salience_score": 0.9}'
 ```
@@ -523,18 +523,18 @@ curl -X POST http://localhost/mfb/incidents \
 import requests
 
 # Create agent
-response = requests.post('http://localhost/tier0/agents/create', json={
+response = requests.post('http://localhost:8002/tier0/agents/create', json={
     'agent_id': 'test_agent',
     'role_probs': {'E': 0.7, 'S': 0.2, 'O': 0.1}
 })
 
 # Execute task
-response = requests.post('http://localhost/tier0/agents/test_agent/execute', json={
+response = requests.post('http://localhost:8002/tier0/agents/test_agent/execute', json={
     'task_id': 'task_1',
     'type': 'analysis',
     'complexity': 0.8
 })
 
 # Get heartbeat
-response = requests.get('http://localhost/tier0/agents/test_agent/heartbeat')
+response = requests.get('http://localhost:8002/tier0/agents/test_agent/heartbeat')
 ``` 
