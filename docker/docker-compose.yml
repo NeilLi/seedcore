@@ -68,6 +68,41 @@ services:
       retries: 3
       start_period: 60s
 
+  # PgBouncer for advanced PostgreSQL connection pooling
+  pgbouncer:
+    image: bitnami/pgbouncer:1.20.1
+    container_name: seedcore-pgbouncer
+    profiles: ["core"]
+    environment:
+      POSTGRESQL_HOST: postgres
+      POSTGRESQL_PORT: 5432
+      POSTGRESQL_USERNAME: postgres
+      POSTGRESQL_PASSWORD: password
+      POSTGRESQL_DATABASE: postgres
+      PGBOUNCER_PORT: 6432
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: 1000
+      PGBOUNCER_DEFAULT_POOL_SIZE: 20
+      PGBOUNCER_DEFAULT_POOL_TIMEOUT: 30
+      PGBOUNCER_SERVER_RESET_QUERY: DISCARD ALL
+      PGBOUNCER_SERVER_CHECK_QUERY: SELECT 1
+      PGBOUNCER_SERVER_CHECK_DELAY: 30
+      PGBOUNCER_CLIENT_TLS_SSLMODE: disable
+      PGBOUNCER_ADMIN_PASSWORD: pgbouncer_admin
+    ports:
+      - "6432:6432"
+      - "6433:6433"  # Admin interface
+    networks:
+      - seedcore-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=password psql -h localhost -p 6432 -U postgres -d postgres -c 'SELECT 1' > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # Redis service removed - Ray uses its own internal Redis on port 6379
 
   ray-head:

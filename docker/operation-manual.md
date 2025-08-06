@@ -125,9 +125,10 @@ The SeedCore energy system provides real-time monitoring through dedicated endpo
 | Endpoint | URL | Description |
 | :--- | :--- | :--- |
 | **Energy Gradient** | `http://localhost:8002/energy/gradient` | Real-time energy telemetry with slopes and trends |
-| **Current Energy** | `http://localhost:8002/energy/current` | Current energy values without slopes |
-| **Energy Stats** | `http://localhost:8002/energy/stats` | Energy statistics and validation metrics |
-| **Energy History** | `http://localhost:8002/energy/history/{term}` | Historical energy data for specific terms |
+| **Energy Monitor** | `http://localhost:8002/energy/monitor` | Comprehensive energy monitoring with agent metrics |
+| **Energy Calibrate** | `http://localhost:8002/energy/calibrate` | Energy system calibration and validation |
+| **Energy Logs** | `http://localhost:8002/energy/logs` | Energy system logs and history |
+| **Energy Log** | `http://localhost:8002/energy/log` | POST endpoint for logging energy events |
 
 ### Energy System Commands
 
@@ -135,11 +136,17 @@ The SeedCore energy system provides real-time monitoring through dedicated endpo
 # Get real-time energy gradient
 curl http://localhost:8002/energy/gradient
 
-# Reset energy ledger
-curl -X POST http://localhost:8002/energy/reset
+# Get comprehensive energy monitoring
+curl http://localhost:8002/energy/monitor
 
-# Get energy statistics
-curl http://localhost:8002/energy/stats
+# Run energy system calibration
+curl http://localhost:8002/energy/calibrate
+
+# Get energy system logs
+curl http://localhost:8002/energy/logs
+
+# Log energy event (POST with body)
+curl -X POST http://localhost:8002/energy/log -H "Content-Type: application/json" -d '{"event": "test"}'
 ```
 
 -----
@@ -351,9 +358,9 @@ docker exec -it [container_name] /bin/bash
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
 | `/energy/gradient` | GET | Real-time energy telemetry |
-| `/energy/current` | GET | Current energy values |
-| `/energy/stats` | GET | Energy statistics |
-| `/energy/history/{term}` | GET | Historical energy data |
-| `/energy/reset` | POST | Reset energy ledger |
+| `/energy/monitor` | GET | Comprehensive energy monitoring |
+| `/energy/calibrate` | GET | Energy system calibration |
+| `/energy/logs` | GET | Energy system logs |
+| `/energy/log` | POST | Log energy events |
 
 This operation manual provides comprehensive guidance for managing the SeedCore application stack, including the energy system monitoring and experimental validation capabilities. 
