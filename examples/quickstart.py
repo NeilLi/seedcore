@@ -56,7 +56,7 @@ def main():
 
     print("\n--- Simulation Complete ---")
     # Get API endpoint from environment variable
-    API_BASE_URL = os.getenv('SEEDCORE_API_URL', 'http://localhost:8000')
+    API_BASE_URL = os.getenv('SEEDCORE_API_ADDRESS', 'http://localhost:8002')
     print(f"Check the API endpoint at {API_BASE_URL}/energy/gradient to see the updated value.")
 
 

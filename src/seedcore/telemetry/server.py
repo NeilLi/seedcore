@@ -236,7 +236,6 @@ async def start_metrics_integration():
         
         # Start metrics integration in background
         # Use SEEDCORE_API_ADDRESS for internal container communication
-        # SEEDCORE_API_URL is for external access, not needed here
         base_url = os.getenv("SEEDCORE_API_ADDRESS", "localhost:8002")
         if not base_url.startswith("http"):
             base_url = f"http://{base_url}"
