@@ -1,43 +1,43 @@
 {
-  "timestamp": "2025-08-06T16:01:19.246907",
+  "timestamp": "2025-08-06T16:50:25.804344",
   "docker_services": {
     "seedcore-postgres": {
-      "status": "Up 30 minutes (healthy)",
+      "status": "Up 33 minutes (healthy)",
       "running": true,
       "healthy": true
     },
     "seedcore-mysql": {
-      "status": "Up 30 minutes (healthy)",
+      "status": "Up 33 minutes (healthy)",
       "running": true,
       "healthy": true
     },
     "seedcore-neo4j": {
-      "status": "Up 30 minutes (healthy)",
+      "status": "Up 33 minutes (healthy)",
       "running": true,
       "healthy": true
     },
     "seedcore-pgbouncer": {
-      "status": "Up 30 minutes (healthy)",
+      "status": "Up 33 minutes (healthy)",
       "running": true,
       "healthy": true
     },
     "seedcore-api": {
-      "status": "Up 29 minutes (healthy)",
+      "status": "Up 2 minutes (healthy)",
       "running": true,
       "healthy": true
     },
     "seedcore-ray-head": {
-      "status": "Up 30 minutes (healthy)",
+      "status": "Up 33 minutes (healthy)",
       "running": true,
       "healthy": true
     },
     "seedcore-prometheus": {
-      "status": "Up 29 minutes",
+      "status": "Up 32 minutes",
       "running": true,
       "healthy": false
     },
     "seedcore-grafana": {
-      "status": "Up 29 minutes",
+      "status": "Up 32 minutes",
       "running": true,
       "healthy": false
     }
@@ -75,7 +75,7 @@
       "status_code": 200,
       "data": {
         "system_info": {
-          "timestamp": 1754470879.7516544,
+          "timestamp": 1754473826.3770704,
           "version": "1.0.0",
           "status": "operational"
         },
@@ -88,7 +88,7 @@
         "organs": [],
         "energy_system": {
           "energy_state": {
-            "ts": 1754470879.751432,
+            "ts": 1754473826.3769155,
             "E_terms": {
               "pair": 0.0,
               "hyper": 0.0,
@@ -190,22 +190,22 @@
           "status": "initialized",
           "cluster_resources": {
             "node:__internal_head__": 1.0,
+            "node:172.18.0.8": 1.0,
             "node:172.18.0.12": 1.0,
-            "node:172.18.0.11": 1.0,
+            "node:172.18.0.14": 1.0,
+            "memory": 20994935195.0,
+            "object_store_memory": 9283543653.0,
             "CPU": 7.0,
-            "memory": 20994969601.0,
-            "object_store_memory": 9283558399.0,
-            "node:172.18.0.7": 1.0,
             "node:172.18.0.13": 1.0
           },
           "available_resources": {
             "node:__internal_head__": 0.999,
+            "node:172.18.0.8": 1.0,
             "node:172.18.0.12": 1.0,
-            "node:172.18.0.11": 1.0,
             "CPU": 0.9,
-            "object_store_memory": 9283492671.0,
-            "memory": 20794969601.0,
-            "node:172.18.0.7": 1.0,
+            "memory": 20794935195.0,
+            "object_store_memory": 9283502467.0,
+            "node:172.18.0.14": 1.0,
             "node:172.18.0.13": 1.0
           },
           "nodes": 4,
@@ -216,40 +216,231 @@
   },
   "energy_system": {
     "energy_gradient": {
-      "success": false,
-      "error": "HTTPConnectionPool(host='localhost', port=8002): Read timed out. (read timeout=10)"
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "ts": 1754473839.1732974,
+        "E_terms": {
+          "pair": 0,
+          "hyper": 0.0,
+          "entropy": -0.3365784271677832,
+          "reg": 4.058575052681546,
+          "mem": 0.0,
+          "total": 3.7219966255137624
+        },
+        "deltaE_last": 0.0,
+        "pair_stats_count": 2,
+        "hyper_stats_count": 0,
+        "role_entropy_count": 0,
+        "mem_stats_count": 0,
+        "real_time_metrics": {
+          "active_agents": 3,
+          "total_agents": 3,
+          "memory_utilization": 0.0,
+          "compression_knob": 0.5,
+          "last_energy_update": 1754473839.1733868
+        },
+        "agent_summaries": [
+          {
+            "agent_id": "explorer_1",
+            "capability": 0.5,
+            "mem_util": 0.0,
+            "role_probs": {
+              "E": 0.8,
+              "S": 0.1,
+              "O": 0.1
+            }
+          },
+          {
+            "agent_id": "specialist_1",
+            "capability": 0.5,
+            "mem_util": 0.0,
+            "role_probs": {
+              "E": 0.1,
+              "S": 0.8,
+              "O": 0.1
+            }
+          },
+          {
+            "agent_id": "balanced_1",
+            "capability": 0.5,
+            "mem_util": 0.0,
+            "role_probs": {
+              "E": 0.4,
+              "S": 0.4,
+              "O": 0.2
+            }
+          }
+        ]
+      }
     },
     "energy_monitor": {
-      "success": false,
-      "error": "HTTPConnectionPool(host='localhost', port=8002): Read timed out. (read timeout=10)"
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "timestamp": 1754473850.5739117,
+        "energy_terms": {
+          "pair": 0,
+          "hyper": 0.0,
+          "entropy": -0.3365784271677832,
+          "reg": 3.53685052049525,
+          "mem": 0.0,
+          "total": 3.2002720933274666
+        },
+        "memory_metrics": {
+          "cost_vq": 0.0,
+          "bytes_used_kb": 0.0,
+          "hit_count": 0,
+          "compression_ratio": 0.5
+        },
+        "agent_metrics": {
+          "total_agents": 3,
+          "active_agents": 0,
+          "avg_capability": 0.5,
+          "avg_mem_util": 0.0,
+          "agent_details": [
+            {
+              "agent_id": "monitor_explorer",
+              "capability": 0.5,
+              "mem_util": 0.0,
+              "role_probs": {
+                "E": 0.8,
+                "S": 0.1,
+                "O": 0.1
+              },
+              "tasks_processed": 0,
+              "success_rate": 0,
+              "energy_proxy": {
+                "capability": 0.5,
+                "entropy_contribution": 0.9219280905592773,
+                "mem_util": 0.0,
+                "state_norm": 11.52796366076627
+              },
+              "last_heartbeat": 1754473850.3469388,
+              "is_active": false
+            },
+            {
+              "agent_id": "monitor_specialist",
+              "capability": 0.5,
+              "mem_util": 0.0,
+              "role_probs": {
+                "E": 0.1,
+                "S": 0.8,
+                "O": 0.1
+              },
+              "tasks_processed": 0,
+              "success_rate": 0,
+              "energy_proxy": {
+                "capability": 0.5,
+                "entropy_contribution": 0.9219280905592773,
+                "mem_util": 0.0,
+                "state_norm": 10.601342124880713
+              },
+              "last_heartbeat": 1754473850.5103626,
+              "is_active": false
+            },
+            {
+              "agent_id": "monitor_balanced",
+              "capability": 0.5,
+              "mem_util": 0.0,
+              "role_probs": {
+                "E": 0.4,
+                "S": 0.4,
+                "O": 0.2
+              },
+              "tasks_processed": 0,
+              "success_rate": 0,
+              "energy_proxy": {
+                "capability": 0.5,
+                "entropy_contribution": 1.5219280905592771,
+                "mem_util": 0.0,
+                "state_norm": 10.41165937959973
+              },
+              "last_heartbeat": 1754473850.5739062,
+              "is_active": false
+            }
+          ]
+        },
+        "system_metrics": {
+          "compression_knob": 0.5,
+          "energy_slope": 0.0,
+          "ray_initialized": true,
+          "tier0_manager_available": true
+        }
+      }
     },
     "energy_calibrate": {
-      "success": false,
-      "error": "HTTPConnectionPool(host='localhost', port=8002): Read timed out. (read timeout=10)"
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "timestamp": 1754473819.103183,
+        "calibration_metrics": {
+          "total_tasks": 3,
+          "successful_tasks": 3,
+          "final_energy": 0.06222443835858409,
+          "energy_trend": 0.004076493563142172,
+          "energy_range": {
+            "min": 0.05814794479544192,
+            "max": 0.07083836525610399
+          },
+          "trend_direction": "increasing",
+          "calibration_quality": "needs_adjustment"
+        },
+        "energy_history": [
+          {
+            "task_num": 1,
+            "energy": 0.05814794479544192,
+            "timestamp": 1754473818.0147998
+          },
+          {
+            "task_num": 2,
+            "energy": 0.07083836525610399,
+            "timestamp": 1754473818.0548809
+          },
+          {
+            "task_num": 7,
+            "energy": 0.06222443835858409,
+            "timestamp": 1754473818.8600254
+          }
+        ],
+        "task_results": [
+          {
+            "task_id": "calibration_task_0",
+            "agent_id": "cal_balanced",
+            "success": true,
+            "energy": 0.05814794479544192
+          },
+          {
+            "task_id": "calibration_task_1",
+            "agent_id": "cal_balanced",
+            "success": true,
+            "energy": 0.07083836525610399
+          },
+          {
+            "task_id": "calibration_task_6",
+            "agent_id": "cal_balanced",
+            "success": true,
+            "energy": 0.06222443835858409
+          }
+        ],
+        "agent_summary": {
+          "total_agents": 3,
+          "active_agents": 3,
+          "agent_ids": [
+            "cal_explorer",
+            "cal_specialist",
+            "cal_balanced"
+          ]
+        }
+      }
     },
     "energy_logs": {
       "success": true,
       "status_code": 200,
       "data": {
-        "logs": [
-          {
-            "event": "test",
-            "timestamp": 1754470276.6637642,
-            "ts": 1754470276.6713285
-          },
-          {
-            "event": "test",
-            "timestamp": 1754470568.1494274,
-            "ts": 1754470568.152167
-          },
-          {
-            "event": "test",
-            "timestamp": 1754470765.1453602,
-            "ts": 1754470765.1493464
-          }
-        ],
-        "total_count": 3,
-        "returned_count": 3
+        "logs": [],
+        "total_count": 0,
+        "returned_count": 0
       }
     },
     "energy_log_post": {
@@ -258,7 +449,7 @@
       "data": {
         "status": "success",
         "message": "Energy event logged",
-        "event_count": 4
+        "event_count": 1
       }
     }
   },
@@ -297,8 +488,8 @@
   },
   "summary": {
     "total_tests": 26,
-    "passed_tests": 23,
-    "failed_tests": 3,
-    "success_rate": 88.46153846153845
+    "passed_tests": 26,
+    "failed_tests": 0,
+    "success_rate": 100.0
   }
 }

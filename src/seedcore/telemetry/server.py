@@ -372,11 +372,23 @@ async def get_energy_logs(limit: int = 100):
 async def energy_gradient():
     """
     Enhanced energy gradient endpoint that provides real energy data from the Energy Model Foundation.
+    Now with Redis caching for improved performance.
     """
     try:
         from ..energy.calculator import energy_gradient_payload, EnergyLedger, calculate_energy
         from ..agents.tier0_manager import Tier0MemoryManager
+        from ..caching.redis_cache import get_redis_cache, energy_gradient_cache_key
         import ray
+        
+        # Try to get from cache first
+        cache = get_redis_cache()
+        cache_key = energy_gradient_cache_key()
+        
+        if cache.ping():
+            cached_result = cache.get(cache_key)
+            if cached_result is not None:
+                logger.debug(f"Cache hit for energy gradient: {cache_key}")
+                return cached_result
         
         # Initialize Ray if not already done
         if not ray.is_initialized():
@@ -462,17 +474,29 @@ async def energy_gradient():
                 ]
             })
             
+            # Cache the result for 30 seconds
+            if cache.ping():
+                cache.set(cache_key, energy_payload, expire=30)
+                logger.debug(f"Cached energy gradient result: {cache_key}")
+            
             return energy_payload
             
         else:
             # Fallback to basic energy calculation
             ledger = EnergyLedger()
-            return energy_gradient_payload(ledger)
+            fallback_payload = energy_gradient_payload(ledger)
+            
+            # Cache the fallback result for 30 seconds
+            if cache.ping():
+                cache.set(cache_key, fallback_payload, expire=30)
+                logger.debug(f"Cached fallback energy gradient result: {cache_key}")
+            
+            return fallback_payload
             
     except Exception as e:
         logger.error(f"Error calculating energy gradient: {e}")
         # Return enhanced error response with fallback data
-        return {
+        error_payload = {
             "error": str(e),
             "ts": time.time(),
             "E_terms": {
@@ -496,6 +520,13 @@ async def energy_gradient():
                 "last_energy_update": time.time()
             }
         }
+        
+        # Cache the error response for a shorter time (10 seconds)
+        if cache.ping():
+            cache.set(cache_key, error_payload, expire=10)
+            logger.debug(f"Cached error energy gradient result: {cache_key}")
+        
+        return error_payload
 
 
 @app.get("/energy/calibrate")
@@ -504,8 +535,19 @@ def energy_calibrate():
     try:
         from ..energy.calculator import EnergyLedger, calculate_energy
         from ..agents.tier0_manager import Tier0MemoryManager
+        from ..caching.redis_cache import get_redis_cache, energy_calibrate_cache_key
         import ray
         import numpy as np
+        
+        # Try to get from cache first
+        cache = get_redis_cache()
+        cache_key = energy_calibrate_cache_key()
+        
+        if cache.ping():
+            cached_result = cache.get(cache_key)
+            if cached_result is not None:
+                logger.debug(f"Cache hit for energy calibrate: {cache_key}")
+                return cached_result
         
         # Initialize Ray if not already done
         if not ray.is_initialized():
@@ -600,7 +642,7 @@ def energy_calibrate():
                 'calibration_quality': 'insufficient_data'
             }
         
-        return {
+        calibrate_payload = {
             "timestamp": time.time(),
             "calibration_metrics": calibration_metrics,
             "energy_history": energy_history,
@@ -612,9 +654,16 @@ def energy_calibrate():
             }
         }
         
+        # Cache the result for 60 seconds (calibration is more expensive)
+        if cache.ping():
+            cache.set(cache_key, calibrate_payload, expire=60)
+            logger.debug(f"Cached energy calibrate result: {cache_key}")
+        
+        return calibrate_payload
+        
     except Exception as e:
         logger.error(f"Energy calibration failed: {e}")
-        return {
+        error_payload = {
             "error": str(e),
             "timestamp": time.time(),
             "calibration_metrics": {"error": "Calibration failed"},
@@ -622,6 +671,13 @@ def energy_calibrate():
             "task_results": [],
             "agent_summary": {"total_agents": 0}
         }
+        
+        # Cache the error response for a shorter time (10 seconds)
+        if cache.ping():
+            cache.set(cache_key, error_payload, expire=10)
+            logger.debug(f"Cached error energy calibrate result: {cache_key}")
+        
+        return error_payload
 
 
 @app.get("/healthz/energy")
@@ -736,7 +792,18 @@ def energy_monitor():
     try:
         from ..energy.calculator import energy_gradient_payload, EnergyLedger, calculate_energy
         from ..agents.tier0_manager import Tier0MemoryManager
+        from ..caching.redis_cache import get_redis_cache, energy_monitor_cache_key
         import ray
+        
+        # Try to get from cache first
+        cache = get_redis_cache()
+        cache_key = energy_monitor_cache_key()
+        
+        if cache.ping():
+            cached_result = cache.get(cache_key)
+            if cached_result is not None:
+                logger.debug(f"Cache hit for energy monitor: {cache_key}")
+                return cached_result
         
         # Initialize Ray if not already done
         if not ray.is_initialized():
@@ -805,7 +872,7 @@ def energy_monitor():
             except Exception as e:
                 logger.warning(f"Failed to get details for agent {agent_id}: {e}")
         
-        return {
+        monitor_payload = {
             "timestamp": time.time(),
             "energy_terms": {
                 "pair": energy_terms.pair,
@@ -836,9 +903,16 @@ def energy_monitor():
             }
         }
         
+        # Cache the result for 30 seconds
+        if cache.ping():
+            cache.set(cache_key, monitor_payload, expire=30)
+            logger.debug(f"Cached energy monitor result: {cache_key}")
+        
+        return monitor_payload
+        
     except Exception as e:
         logger.error(f"Energy monitoring failed: {e}")
-        return {
+        error_payload = {
             "error": str(e),
             "timestamp": time.time(),
             "energy_terms": {"total": 0.0},
@@ -846,6 +920,13 @@ def energy_monitor():
             "agent_metrics": {"total_agents": 0},
             "system_metrics": {}
         }
+        
+        # Cache the error response for a shorter time (10 seconds)
+        if cache.ping():
+            cache.set(cache_key, error_payload, expire=10)
+            logger.debug(f"Cached error energy monitor result: {cache_key}")
+        
+        return error_payload
 
 @app.get('/agents/state')
 def get_agents_state() -> Dict:

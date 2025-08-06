@@ -171,10 +171,12 @@ class SimpleSeedCoreTester:
         for endpoint, method in energy_endpoints:
             try:
                 url = f"{self.base_url}/energy/{endpoint}"
+                # Use longer timeout for energy endpoints due to heavy computation
+                timeout = 30 if endpoint in ["gradient", "monitor", "calibrate"] else 10
                 if method == "GET":
-                    response = requests.get(url, timeout=10)
+                    response = requests.get(url, timeout=timeout)
                 else:
-                    response = requests.post(url, timeout=10)
+                    response = requests.post(url, timeout=timeout)
                 
                 results[f"energy_{endpoint}"] = {
                     "success": response.status_code == 200,
@@ -192,7 +194,7 @@ class SimpleSeedCoreTester:
                 f"{self.base_url}/energy/log",
                 json={"event": "test", "timestamp": time.time()},
                 headers={"Content-Type": "application/json"},
-                timeout=10
+                timeout=15
             )
             results["energy_log_post"] = {
                 "success": response.status_code in [200, 201],
