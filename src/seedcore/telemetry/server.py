@@ -24,6 +24,7 @@ import os
 import numpy as np
 import random
 import uuid
+import ray
 from fastapi import FastAPI, Depends, HTTPException, Request
 from typing import List, Dict
 import time
@@ -234,12 +235,16 @@ async def start_metrics_integration():
         logger = logging.getLogger(__name__)
         
         # Start metrics integration in background
-        # Use environment variable for Ray Serve address
-        base_url = os.getenv("RAY_SERVE_ADDRESS", "localhost:8000")
+        # Use SEEDCORE_API_ADDRESS for internal container communication
+        # SEEDCORE_API_URL is for external access, not needed here
+        base_url = os.getenv("SEEDCORE_API_ADDRESS", "localhost:8002")
         if not base_url.startswith("http"):
             base_url = f"http://{base_url}"
+            
+        logger.info(f"🔗 Metrics integration using base_url: {base_url}")
+        
         asyncio.create_task(start_metrics_integration(
-            base_url=base_url,  # Use environment variable
+            base_url=base_url,  # Use internal API service address
             update_interval=30  # Update every 30 seconds
         ))
         logger.info("🚀 Started metrics integration service")
