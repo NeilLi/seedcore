@@ -1807,14 +1807,15 @@ async def get_organism_summary():
 async def initialize_organism():
     """Manually initialize the organism (useful for testing)."""
     try:
-        if not hasattr(app.state, 'organism'):
-            return {"success": False, "error": "Organism manager not available"}
-            
-        organism = app.state.organism
-        if organism.is_initialized():
+        # Use the global organism_manager directly
+        if organism_manager.is_initialized():
+            # Also set it in app.state for consistency
+            app.state.organism = organism_manager
             return {"success": True, "message": "Organism already initialized"}
             
-        await organism.initialize_organism()
+        await organism_manager.initialize_organism()
+        # Set it in app.state for consistency
+        app.state.organism = organism_manager
         return {"success": True, "message": "Organism initialized successfully"}
     except Exception as e:
         return {"success": False, "error": str(e)}
