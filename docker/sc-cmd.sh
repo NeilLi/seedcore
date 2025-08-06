@@ -20,7 +20,7 @@ wait_for_head_stop() {
   local i=0
   local frame
 
-  printf "⏳ waiting for ray-head to stop "
+  printf "⏳ waiting for ray-cluster to stop "
 
   while (( i < max_tries )); do
     # Check if container is still running
@@ -48,7 +48,7 @@ wait_for_head() {
   local frame
 
   # Pretty output without spamming newlines
-  printf "⏳ waiting for ray-head "
+  printf "⏳ waiting for ray-cluster "
 
   while (( i < max_tries )); do
     # 1️⃣ container must exist
@@ -154,7 +154,10 @@ cmd_restart() {
 }
 
 cmd_down() {
-  docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT down --remove-orphans
+  echo "🛑 Stopping all services..."
+  # Stop all services including workers, using the same profiles as up command
+  docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT --profile core --profile ray --profile api --profile obs down --remove-orphans
+  echo "✅ All services stopped"
 }
 
 cmd_logs() {
@@ -168,10 +171,11 @@ cmd_logs() {
 
 cmd_status() { 
   echo "📊 Main services:"
-  docker compose -f "$COMPOSE_MAIN" -p $PROJECT ps
+  # Show all services except ray-worker to avoid duplication, with simplified format
+  docker compose -f "$COMPOSE_MAIN" -p $PROJECT ps --format "table {{.Service}}\t{{.State}}\t{{.Status}}" | grep -v "ray-worker"
   echo ""
   echo "📊 Ray workers:"
-  docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT ps ray-worker 2>/dev/null || echo "No workers running"
+  docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT ps ray-worker --format "table {{.Service}}\t{{.State}}\t{{.Status}}" 2>/dev/null || echo "No workers running"
 }
 
 # Restart only seedcore-api (keeps everything else untouched)
