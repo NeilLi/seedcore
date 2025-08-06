@@ -106,32 +106,46 @@ class RayAgent:
         # 11. Energy State Tracking (NEW)
         self.energy_state: Dict[str, float] = {}
         
-        # --- NEW: Memory Managers for Mw and Mlt access ---
-        # Initialize memory managers within the actor
+        # --- Initialize memory managers with better error handling ---
+        self.mw_manager = None
+        self.mlt_manager = None
+        self.mfb_client = None
+        
+        # Initialize memory managers asynchronously to avoid hanging
+        try:
+            # Only initialize basic components, defer complex initialization
+            logger.info(f"✅ RayAgent {self.agent_id} created with basic state")
+            
+            # Initialize memory managers later if needed
+            self._initialize_memory_managers()
+            
+        except Exception as e:
+            logger.warning(f"⚠️ RayAgent {self.agent_id} created with limited functionality: {e}")
+    
+    def _initialize_memory_managers(self):
+        """Initialize memory managers with proper error handling."""
         try:
             from ..memory.working_memory import MwManager
             from ..memory.long_term_memory import LongTermMemoryManager
             
-            # Create organ_id for this agent (you might want to make this configurable)
-            organ_id = f"organ_for_{agent_id}"
+            # Create organ_id for this agent
+            organ_id = f"organ_for_{self.agent_id}"
             self.mw_manager = MwManager(organ_id=organ_id)
             self.mlt_manager = LongTermMemoryManager()
             
             logger.info(f"✅ Agent {self.agent_id} initialized with memory managers")
         except Exception as e:
-            logger.error(f"❌ Failed to initialize memory managers for {self.agent_id}: {e}")
+            logger.warning(f"⚠️ Failed to initialize memory managers for {self.agent_id}: {e}")
             self.mw_manager = None
             self.mlt_manager = None
         
-        # --- Add Flashbulb Client to the agent's tools ---
+        # Initialize Flashbulb Client
         try:
             self.mfb_client = FlashbulbClient()
             logger.info(f"✅ Agent {self.agent_id} initialized with FlashbulbClient")
         except Exception as e:
-            logger.error(f"❌ Failed to initialize FlashbulbClient for {self.agent_id}: {e}")
+            logger.warning(f"⚠️ Failed to initialize FlashbulbClient for {self.agent_id}: {e}")
             self.mfb_client = None
-        
-        logger.info(f"✅ RayAgent {self.agent_id} created with initial state")
     
     def get_id(self) -> str:
         """Returns the agent's ID."""

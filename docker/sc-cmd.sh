@@ -173,12 +173,21 @@ cmd_status() {
   echo "📊 Ray workers:"
   docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT ps ray-worker 2>/dev/null || echo "No workers running"
 }
+
+# Restart only seedcore-api (keeps everything else untouched)
+cmd_restart_api() {
+  echo "🔄 restarting seedcore-api …"
+  docker compose -f "$COMPOSE_MAIN" -p $PROJECT restart --no-deps seedcore-api
+  echo "✅ seedcore-api restarted"
+}
+
 # ---------- entry -------------------------------------------------------------
 case "${1:-}" in
   up)       shift; cmd_up   "${1:-3}"   ;;
   restart)         cmd_restart        ;;
+  restart-api)     cmd_restart_api    ;;
   down)            cmd_down           ;;
   logs)    shift; cmd_logs "$@"       ;;
   status)          cmd_status         ;;
-  *) echo "Usage: $0 {up|restart|down|logs|status}"; exit 1 ;;
+  *) echo "Usage: $0 {up|restart|restart-api|down|logs|status}"; exit 1 ;;
 esac 
