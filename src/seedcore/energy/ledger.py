@@ -22,7 +22,9 @@ Key Terms:
     total() returns scalar E
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections import deque
+from typing import Dict, Any
 
 @dataclass
 class EnergyLedger:
@@ -31,6 +33,22 @@ class EnergyLedger:
     entropy: float = 0.0
     reg: float = 0.0
     mem: float = 0.0
+    
+    # Energy history tracking
+    pair_history: deque = field(default_factory=lambda: deque(maxlen=1000))
+    hyper_history: deque = field(default_factory=lambda: deque(maxlen=1000))
+    entropy_history: deque = field(default_factory=lambda: deque(maxlen=1000))
+    reg_history: deque = field(default_factory=lambda: deque(maxlen=1000))
+    mem_history: deque = field(default_factory=lambda: deque(maxlen=1000))
+    total_history: deque = field(default_factory=lambda: deque(maxlen=1000))
+    
+    # Last delta tracking
+    last_delta: float = 0.0
+    
+    # Weight parameters for adaptive control
+    alpha: float = 0.5
+    lambda_reg: float = 0.01
+    beta_mem: float = 0.2
 
     @property
     def total(self) -> float:
@@ -38,37 +56,71 @@ class EnergyLedger:
 
     def reset(self):
         self.pair = self.hyper = self.entropy = self.reg = self.mem = 0.0
+        self.last_delta = 0.0
+        
+        # Clear history
+        self.pair_history.clear()
+        self.hyper_history.clear()
+        self.entropy_history.clear()
+        self.reg_history.clear()
+        self.mem_history.clear()
+        self.total_history.clear()
+    
+    def update_term(self, term: str, delta: float):
+        """Update energy term with history tracking."""
+        current_value = getattr(self, term)
+        new_value = current_value + delta
+        setattr(self, term, new_value)
+        
+        # Update history
+        history_attr = f"{term}_history"
+        if hasattr(self, history_attr):
+            getattr(self, history_attr).append(new_value)
+        
+        # Update total history
+        self.total_history.append(self.total)
+        
+        # Track last delta
+        self.last_delta = delta
+        
+        print(f"Updated {term} energy by {delta:.4f}. New total: {new_value:.4f}")
+    
+    def get_recent_energy(self, window: int = 100) -> Dict[str, list]:
+        """Get recent energy values for all terms."""
+        return {
+            "pair": list(self.pair_history)[-window:] if len(self.pair_history) >= window else list(self.pair_history),
+            "hyper": list(self.hyper_history)[-window:] if len(self.hyper_history) >= window else list(self.hyper_history),
+            "entropy": list(self.entropy_history)[-window:] if len(self.entropy_history) >= window else list(self.entropy_history),
+            "reg": list(self.reg_history)[-window:] if len(self.reg_history) >= window else list(self.reg_history),
+            "mem": list(self.mem_history)[-window:] if len(self.mem_history) >= window else list(self.mem_history),
+            "total": list(self.total_history)[-window:] if len(self.total_history) >= window else list(self.total_history)
+        }
     
     def add_pair_delta(self, delta: float) -> None:
         """Adds a pre-calculated delta to the pair energy term."""
-        self.pair += delta  # The delta can be positive or negative
-        print(f"Updated pair energy by {delta}. New total: {self.pair}")
+        self.update_term("pair", delta)
     
     def add_hyper_delta(self, complexity: float, precision: float) -> None:
         """Increment hyper term based on complexity-precision tradeoff."""
         # Hyper energy increases with complexity, decreases with precision
         delta = complexity - precision
-        self.hyper += delta
-        print(f"Updated hyper energy by {delta}. New total: {self.hyper}")
+        self.update_term("hyper", delta)
     
     def add_entropy_delta(self, choice_count: int, uncertainty: float) -> None:
         """Increment entropy term based on choice availability and uncertainty."""
         # Entropy increases when there are many choices and high uncertainty
         delta = choice_count * uncertainty * 0.1  # Scale factor to keep reasonable
-        self.entropy += delta
-        print(f"Updated entropy energy by {delta}. New total: {self.entropy}")
+        self.update_term("entropy", delta)
     
     def add_reg_delta(self, regularization_strength: float, model_complexity: float) -> None:
         """Increment regularization term based on model complexity control."""
         # Regularization energy increases with model complexity and regularization strength
         delta = regularization_strength * model_complexity
-        self.reg += delta
-        print(f"Updated reg energy by {delta}. New total: {self.reg}")
+        self.update_term("reg", delta)
     
     def add_mem_delta(self, memory_usage: float, compression_ratio: float) -> None:
         """Increment memory term based on memory usage and compression."""
         # Memory energy increases with usage, decreases with compression
         delta = memory_usage - compression_ratio
-        self.mem += delta
-        print(f"Updated mem energy by {delta}. New total: {self.mem}")
+        self.update_term("mem", delta)
 

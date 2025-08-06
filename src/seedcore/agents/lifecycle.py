@@ -18,6 +18,8 @@ Lifecycle transitions (Scout <-> Employed <-> Specialist).
 Threshold logic from §2.1; event emitters feed Energy updates.
 """
 
+import numpy as np
+from typing import Dict, Any, Optional
 from .base import Agent
 
 PROMOTE_TAU_C = 0.7
@@ -27,3 +29,65 @@ def evaluate_lifecycle(agent: Agent):
     if agent.capability >= PROMOTE_TAU_C and agent.mem_util >= PROMOTE_TAU_U:
         # promote to Employed/Specialist
         pass
+
+def update_agent_metrics(agent_state, task_success: bool, task_quality: float, mem_stats: dict):
+    """
+    Updates agent capability and memory utility using EWMA.
+    This is based on the update equations in the blueprint.
+    
+    Args:
+        agent_state: The agent's state object containing capability_score and mem_util
+        task_success: Boolean indicating if the task was successful
+        task_quality: Float indicating the quality of task execution (0.0 to 1.0)
+        mem_stats: Dictionary containing memory performance metrics
+    """
+    # Smoothing factors (these can be configured)
+    eta_c = 0.1
+    eta_u = 0.1
+
+    # Weights for metrics (configurable)
+    w_s = 0.6  # success weight
+    w_q = 0.4  # quality weight
+    w_hit = 0.5 # memory hit weight
+    w_compr = 0.3 # compression gain weight
+    w_sal = 0.2 # salience weight
+
+    # Update capability score (ci)
+    current_performance = (w_s * float(task_success)) + (w_q * task_quality)
+    agent_state.capability_score = ((1 - eta_c) * agent_state.capability_score) + (eta_c * current_performance)
+
+    # Update memory utility (ui)
+    mem_performance = (w_hit * mem_stats.get('hits', 0)) + \
+                      (w_compr * mem_stats.get('compr_gain', 0)) + \
+                      (w_sal * mem_stats.get('salience', 0))
+    agent_state.mem_util = ((1 - eta_u) * agent_state.mem_util) + (eta_u * mem_performance)
+
+def calculate_pair_weight(agent_i_state, agent_j_state) -> float:
+    """
+    Calculate pair weight based on min(ci, cj) as specified in the blueprint.
+    
+    Args:
+        agent_i_state: State of first agent
+        agent_j_state: State of second agent
+        
+    Returns:
+        Pair weight based on minimum capability
+    """
+    ci = agent_i_state.capability_score
+    cj = agent_j_state.capability_score
+    return min(ci, cj)
+
+def apply_memory_discount(agent_state, base_cost: float) -> float:
+    """
+    Apply memory cost discount based on agent's memory utility.
+    
+    Args:
+        agent_state: Agent state containing mem_util
+        base_cost: Base memory cost (CostVQ)
+        
+    Returns:
+        Discounted memory cost
+    """
+    # Higher memory utility reduces memory cost
+    discount_factor = 1.0 - (agent_state.mem_util * 0.5)  # Max 50% discount
+    return base_cost * max(discount_factor, 0.5)  # Minimum 50% of base cost
