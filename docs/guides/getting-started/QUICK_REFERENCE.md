@@ -30,31 +30,31 @@ docker-compose down
 ### Tier 0 (Agent Memory) Testing
 ```bash
 # Create an agent
-curl -X POST http://localhost/tier0/agents/create \
+curl -X POST http://localhost:8002/tier0/agents/create \
   -H "Content-Type: application/json" \
   -d '{"agent_id": "test_agent", "role_probs": {"E": 0.7, "S": 0.2, "O": 0.1}}'
 
 # Get agent heartbeat
-curl http://localhost/tier0/agents/test_agent/heartbeat
+curl http://localhost:8002/tier0/agents/test_agent/heartbeat
 
 # Execute a task
-curl -X POST http://localhost/tier0/agents/test_agent/execute \
+curl -X POST http://localhost:8002/tier0/agents/test_agent/execute \
   -H "Content-Type: application/json" \
   -d '{"task_id": "task_1", "type": "analysis", "complexity": 0.8}'
 
 # Get system summary
-curl http://localhost/tier0/summary
+curl http://localhost:8002/tier0/summary
 ```
 
 ### Tier 3 (Flashbulb Memory) Testing
 ```bash
 # Log an incident
-curl -X POST http://localhost/mfb/incidents \
+curl -X POST http://localhost:8002/mfb/incidents \
   -H "Content-Type: application/json" \
   -d '{"event_data": {"type": "alert"}, "salience_score": 0.9}'
 
 # Get statistics
-curl http://localhost/mfb/stats
+curl http://localhost:8002/mfb/stats
 ```
 
 ## 🔧 Configuration
@@ -80,7 +80,7 @@ RAY_HEAD_PORT=10001
 ### Service Ports
 | Service | Port | Purpose |
 |---------|------|---------|
-| FastAPI | 80 | Main API server |
+| FastAPI | 8002 | Main API server |
 | Ray Dashboard | 8265 | Ray cluster monitoring |
 | PostgreSQL | 5432 | Primary database |
 | Neo4j | 7474 | Graph database |
@@ -118,7 +118,7 @@ curl -u neo4j:password http://localhost:7474/db/data/
 #### 3. API Endpoints Not Responding
 ```bash
 # Check API health
-curl http://localhost/health
+curl http://localhost:8002/health
 
 # Check API logs
 docker-compose logs seedcore-api
@@ -172,7 +172,7 @@ seedcore/
 ### Health Checks
 ```bash
 # System health
-curl http://localhost/health
+curl http://localhost:8002/health
 
 # Ray cluster health
 curl http://localhost:8265/api/cluster
@@ -185,7 +185,7 @@ docker-compose exec mysql mysqladmin ping
 ### Performance Monitoring
 ```bash
 # Check agent performance
-curl http://localhost/tier0/summary | jq '.summary'
+curl http://localhost:8002/tier0/summary | jq '.summary'
 
 # Check memory usage
 docker stats --no-stream
@@ -322,7 +322,7 @@ docker-compose restart ray-head ray-worker
 ### Load Testing
 ```bash
 # Basic load test (requires Apache Bench)
-ab -n 1000 -c 10 http://localhost/tier0/summary
+ab -n 1000 -c 10 http://localhost:8002/tier0/summary
 
 # Python load test
 python examples/test_tier0_api.py

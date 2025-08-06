@@ -110,7 +110,7 @@ docker/
    docker compose -p seedcore ps
    
    # Test API endpoint
-   curl http://localhost:80/health
+   curl http://localhost:8002/health
    
    # Check Ray Dashboard
    curl http://localhost:8265/api/version
@@ -179,7 +179,7 @@ docker compose -p seedcore logs -f ray-head
 docker compose -p seedcore ps
 
 # Test API health
-curl http://localhost:80/health
+curl http://localhost:8002/health
 
 # Test Ray cluster
 curl http://localhost:8265/api/version

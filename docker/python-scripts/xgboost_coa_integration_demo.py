@@ -375,7 +375,7 @@ def test_energy_integration() -> bool:
     
     try:
         # Check energy logs endpoint
-        response = requests.get("http://localhost:8000/energy/logs", timeout=5)
+        response = requests.get("http://localhost:8002/energy/logs", timeout=5)
         if response.status_code == 200:
             logs_data = response.json()
             print(f"✅ Energy logs accessible")
@@ -469,7 +469,7 @@ def monitor_operational_metrics() -> None:
     try:
         # Check Ray dashboard status
         print("🔍 Checking Ray cluster status...")
-        response = requests.get("http://localhost:8000/ray/status", timeout=5)
+        response = requests.get("http://localhost:8002/ray/status", timeout=5)
         if response.status_code == 200:
             ray_status = response.json()
             print(f"✅ Ray cluster healthy")
@@ -478,7 +478,7 @@ def monitor_operational_metrics() -> None:
         
         # Check energy gradient
         print("🔍 Checking energy gradient...")
-        response = requests.get("http://localhost:8000/energy/gradient", timeout=5)
+        response = requests.get("http://localhost:8002/energy/gradient", timeout=5)
         if response.status_code == 200:
             energy_data = response.json()
             print(f"✅ Energy system active")

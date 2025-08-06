@@ -70,7 +70,7 @@ This runs comprehensive tests including:
 
 #### Single Scoring
 ```bash
-curl -X POST "http://localhost/salience/score" \
+curl -X POST "http://localhost:8002/salience/score" \
   -H "Content-Type: application/json" \
   -d '[
     {
@@ -103,7 +103,7 @@ curl -X POST "http://localhost/salience/score" \
 
 #### Batch Scoring
 ```bash
-curl -X POST "http://localhost/salience/score/batch" \
+curl -X POST "http://localhost:8002/salience/score/batch" \
   -H "Content-Type: application/json" \
   -d '{
     "batch_id": "batch_001",
@@ -142,7 +142,7 @@ curl -X POST "http://localhost/salience/score/batch" \
 
 #### Health Check
 ```bash
-curl "http://localhost/salience/health"
+curl "http://localhost:8002/salience/health"
 ```
 
 **Response:**
@@ -162,7 +162,7 @@ curl "http://localhost/salience/health"
 
 #### Service Information
 ```bash
-curl "http://localhost/salience/info"
+curl "http://localhost:8002/salience/info"
 ```
 
 **Response:**
@@ -205,7 +205,7 @@ The salience scoring is automatically integrated with RayAgent. When agents exec
 
 ```bash
 # Create a test agent
-curl -X POST "http://localhost/tier0/agents/create" \
+curl -X POST "http://localhost:8002/tier0/agents/create" \
   -H "Content-Type: application/json" \
   -d '{
     "agent_id": "test_agent",
@@ -213,7 +213,7 @@ curl -X POST "http://localhost/tier0/agents/create" \
   }'
 
 # Execute a high-stakes task
-curl -X POST "http://localhost/tier0/agents/test_agent/execute" \
+curl -X POST "http://localhost:8002/tier0/agents/test_agent/execute" \
   -H "Content-Type: application/json" \
   -d '{
     "task_id": "critical_task",
@@ -375,7 +375,7 @@ class SalienceServiceClient:
 ### Regular Tasks
 
 #### Daily
-- Check service health: `curl "http://localhost/salience/health"`
+- Check service health: `curl "http://localhost:8002/salience/health"`
 - Monitor circuit breaker status
 - Review error logs: `docker compose -p seedcore logs seedcore-api`
 
@@ -422,7 +422,7 @@ cp src/seedcore/ml/serve_app.py backups/
 - `scripts/deploy_salience_service.py`: Complete deployment
 
 ### Monitoring URLs
-- **API Documentation**: http://localhost/docs
+- **API Documentation**: http://localhost:8002/docs
 - **Ray Dashboard**: http://localhost:8265
 - **Grafana**: http://localhost:3000
 - **Prometheus**: http://localhost:9090

@@ -94,7 +94,7 @@ SeedCore is a multi-tier memory system implementing the Collective Organic Archi
 cd docker && docker-compose up -d
 
 # Test Tier 0 (Agent Memory)
-curl -X POST http://localhost/tier0/agents/create \
+curl -X POST http://localhost:8002/tier0/agents/create \
   -H "Content-Type: application/json" \
   -d '{"agent_id": "test_agent", "role_probs": {"E": 0.7, "S": 0.2, "O": 0.1}}'
 ```
@@ -175,7 +175,7 @@ print('✅ Memory managers ready')
 
 ### Technical Issues
 - Check logs: `docker-compose logs`
-- Verify system health: `curl http://localhost/health`
+- Verify system health: `curl http://localhost:8002/health`
 - Review the troubleshooting guide in [QUICK_REFERENCE.md](QUICK_REFERENCE.md)
 
 ### Development Questions

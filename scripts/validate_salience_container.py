@@ -521,7 +521,7 @@ def main():
     
     if success:
         logger.info("\n🚀 Next Steps:")
-        logger.info("   1. Access API documentation: http://localhost/docs")
+        logger.info("   1. Access API documentation: http://localhost:8002/docs")
         logger.info("   2. Monitor Ray cluster: http://localhost:8265")
         logger.info("   3. View Grafana dashboards: http://localhost:3000")
         logger.info("   4. Check Prometheus metrics: http://localhost:9090")

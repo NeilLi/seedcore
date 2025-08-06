@@ -108,7 +108,7 @@ Once the stack is running with `up`, the following services are available at the
 
 | Service | URL | Description |
 | :--- | :--- | :--- |
-| **SeedCore API** | `http://localhost:80` | The main application API. |
+| **SeedCore API** | `http://localhost:8002` | The main application API. |
 | **Ray Dashboard** | `http://localhost:8265` | UI for monitoring the Ray cluster, jobs, and actors. |
 | **Grafana** | `http://localhost:3000` | Dashboards for observing system metrics. (Default login: `admin`/`seedcore`) |
 | **Prometheus** | `http://localhost:9090` | Direct access to the metrics collection server. |
@@ -124,22 +124,22 @@ The SeedCore energy system provides real-time monitoring through dedicated endpo
 
 | Endpoint | URL | Description |
 | :--- | :--- | :--- |
-| **Energy Gradient** | `http://localhost:80/energy/gradient` | Real-time energy telemetry with slopes and trends |
-| **Current Energy** | `http://localhost:80/energy/current` | Current energy values without slopes |
-| **Energy Stats** | `http://localhost:80/energy/stats` | Energy statistics and validation metrics |
-| **Energy History** | `http://localhost:80/energy/history/{term}` | Historical energy data for specific terms |
+| **Energy Gradient** | `http://localhost:8002/energy/gradient` | Real-time energy telemetry with slopes and trends |
+| **Current Energy** | `http://localhost:8002/energy/current` | Current energy values without slopes |
+| **Energy Stats** | `http://localhost:8002/energy/stats` | Energy statistics and validation metrics |
+| **Energy History** | `http://localhost:8002/energy/history/{term}` | Historical energy data for specific terms |
 
 ### Energy System Commands
 
 ```bash
 # Get real-time energy gradient
-curl http://localhost:80/energy/gradient
+curl http://localhost:8002/energy/gradient
 
 # Reset energy ledger
-curl -X POST http://localhost:80/energy/reset
+curl -X POST http://localhost:8002/energy/reset
 
 # Get energy statistics
-curl http://localhost:80/energy/stats
+curl http://localhost:8002/energy/stats
 ```
 
 -----
@@ -296,7 +296,7 @@ docker exec -it [container_name] /bin/bash
 5. **Test Energy System**
    ```bash
    # Test energy endpoints
-   curl http://localhost:80/energy/gradient
+   curl http://localhost:8002/energy/gradient
    
    # Run validation experiments
    python -c "import asyncio; from seedcore.experiments.harness import EnergyValidationHarness; asyncio.run(EnergyValidationHarness().experiment_A_pair())"
@@ -341,10 +341,10 @@ docker exec -it [container_name] /bin/bash
 
 | Service | URL | Purpose |
 | :--- | :--- | :--- |
-| API | `http://localhost:80` | Main application interface |
+| API | `http://localhost:8002` | Main application interface |
 | Ray Dashboard | `http://localhost:8265` | Cluster monitoring |
 | Grafana | `http://localhost:3000` | Metrics visualization |
-| Energy Gradient | `http://localhost:80/energy/gradient` | Real-time energy telemetry |
+| Energy Gradient | `http://localhost:8002/energy/gradient` | Real-time energy telemetry |
 
 ### Energy System Endpoints
 
