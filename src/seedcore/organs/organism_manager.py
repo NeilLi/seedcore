@@ -92,28 +92,46 @@ class OrganismManager:
             logger.error(f"Error loading organism configuration: {e}")
             self.organ_configs = []
 
-    async def initialize_organism(self):
-        """Creates all organs and populates them with agents based on the config."""
-        if self._initialized:
-            logger.warning("Organism already initialized. Skipping re-initialization.")
-            return
-            
-        logger.info("🚀 Initializing the Cognitive Organism...")
-        
+    def _check_ray_cluster_health(self):
+        """Check Ray cluster health and log diagnostic information."""
         try:
-            # Ensure Ray is properly initialized before proceeding
-            self._ensure_ray_initialized()
+            import ray
+            from ray.util.state import list_actors, list_nodes
             
-            # Clean up dead actors first
-            await self._cleanup_dead_actors()
+            logger.info("🔍 Checking Ray cluster health...")
             
-            self._create_organs()
-            await self._create_and_distribute_agents()
-            self._initialized = True
-            logger.info("✅ Organism initialization complete.")
+            # Check cluster resources
+            cluster_resources = ray.cluster_resources()
+            available_resources = ray.available_resources()
+            
+            logger.info(f"📊 Cluster resources: {cluster_resources}")
+            logger.info(f"📊 Available resources: {available_resources}")
+            
+            # Check nodes
+            try:
+                nodes = list_nodes()
+                logger.info(f"🖥️ Ray nodes: {len(nodes)} total")
+                for node in nodes:
+                    logger.info(f"   - Node {node.node_id}: {node.state} (CPU: {node.cpu_count})")
+            except Exception as e:
+                logger.warning(f"Could not list nodes: {e}")
+            
+            # Check actors
+            try:
+                actors = list_actors()
+                logger.info(f"🎭 Ray actors: {len(actors)} total")
+                dead_actors = [actor for actor in actors if actor.state == "DEAD"]
+                if dead_actors:
+                    logger.warning(f"⚠️ Found {len(dead_actors)} dead actors")
+                    for actor in dead_actors[:5]:  # Log first 5 dead actors
+                        logger.warning(f"   - Dead actor: {actor.actor_id} ({actor.class_name})")
+            except Exception as e:
+                logger.warning(f"Could not list actors: {e}")
+                
+            logger.info("✅ Ray cluster health check completed")
+            
         except Exception as e:
-            logger.error(f"❌ Failed to initialize organism: {e}")
-            raise
+            logger.error(f"❌ Failed to check Ray cluster health: {e}")
 
     async def _cleanup_dead_actors(self):
         """Clean up dead Ray actors to prevent accumulation."""
@@ -153,6 +171,70 @@ class OrganismManager:
         except Exception as e:
             logger.warning(f"Could not clean up dead actors: {e}")
 
+    def _test_organ_health(self, organ_handle, organ_id: str) -> bool:
+        """Test if an organ actor is healthy and responsive."""
+        try:
+            import asyncio
+            import concurrent.futures
+            
+            # Test with a timeout using ThreadPoolExecutor
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    lambda: asyncio.run(
+                        asyncio.wait_for(
+                            organ_handle.get_status.remote(),
+                            timeout=5.0
+                        )
+                    )
+                )
+                result = future.result(timeout=10.0)
+                logger.info(f"✅ Organ {organ_id} health check passed")
+                return True
+        except Exception as e:
+            logger.warning(f"⚠️ Organ {organ_id} health check failed: {e}")
+            return False
+
+    def _recreate_dead_organ(self, organ_id: str, organ_type: str):
+        """Recreate a dead organ actor."""
+        try:
+            logger.info(f"🔄 Recreating dead organ: {organ_id}")
+            
+            # Try to kill the dead actor first
+            try:
+                import ray
+                from ray.util.state import list_actors
+                actors = list_actors()
+                for actor in actors:
+                    if actor.name == organ_id and actor.state == "DEAD":
+                        ray.kill(actor.actor_id)
+                        logger.info(f"🗑️ Killed dead actor: {organ_id}")
+                        break
+            except Exception as e:
+                logger.warning(f"Could not kill dead actor {organ_id}: {e}")
+            
+            # Create new organ
+            new_organ = Organ.options(
+                name=organ_id, 
+                lifetime="detached",
+                num_cpus=1
+            ).remote(
+                organ_id=organ_id,
+                organ_type=organ_type
+            )
+            
+            # Test the new organ
+            if self._test_organ_health(new_organ, organ_id):
+                self.organs[organ_id] = new_organ
+                logger.info(f"✅ Successfully recreated organ: {organ_id}")
+                return True
+            else:
+                logger.error(f"❌ Failed to create healthy organ: {organ_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to recreate organ {organ_id}: {e}")
+            return False
+
     def _create_organs(self):
         """Creates the organ actors as defined in the configuration."""
         for config in self.organ_configs:
@@ -161,21 +243,40 @@ class OrganismManager:
             
             if organ_id not in self.organs:
                 try:
+                    logger.info(f"🔍 Attempting to get existing organ: {organ_id}")
                     # Try to get existing organ first
                     try:
                         existing_organ = ray.get_actor(organ_id)
-                        self.organs[organ_id] = existing_organ
                         logger.info(f"✅ Retrieved existing Organ: {organ_id} (Type: {organ_type})")
+                        
+                        # Test if the organ is healthy
+                        if not self._test_organ_health(existing_organ, organ_id):
+                            logger.warning(f"⚠️ Organ {organ_id} is unresponsive, recreating...")
+                            if self._recreate_dead_organ(organ_id, organ_type):
+                                continue
+                            else:
+                                raise Exception(f"Failed to recreate organ {organ_id}")
+                        
+                        self.organs[organ_id] = existing_organ
+                        
                     except ValueError:
                         # Create new organ if it doesn't exist
+                        logger.info(f"🚀 Creating new organ: {organ_id} (Type: {organ_type})")
                         self.organs[organ_id] = Organ.options(
                             name=organ_id, 
-                            lifetime="detached"
+                            lifetime="detached",
+                            num_cpus=1  # Ensure resource allocation
                         ).remote(
                             organ_id=organ_id,
                             organ_type=organ_type
                         )
                         logger.info(f"✅ Created new Organ: {organ_id} (Type: {organ_type})")
+                        
+                        # Test the new organ
+                        if not self._test_organ_health(self.organs[organ_id], organ_id):
+                            logger.error(f"❌ New organ {organ_id} is not healthy")
+                            raise Exception(f"New organ {organ_id} failed health check")
+                            
                 except Exception as e:
                     logger.error(f"❌ Failed to create/get organ {organ_id}: {e}")
                     raise
@@ -203,7 +304,14 @@ class OrganismManager:
                 
                 try:
                     # Check if agent already exists in the organ
-                    existing_agents = await organ_handle.get_agent_handles.remote()
+                    logger.info(f"🔍 Checking for existing agent {agent_id} in organ {organ_id}...")
+                    try:
+                        # get_agent_handles is synchronous, so use ray.get() instead of await
+                        existing_agents = ray.get(organ_handle.get_agent_handles.remote())
+                        logger.info(f"✅ Retrieved existing agents for {organ_id}: {list(existing_agents.keys())}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to get agent handles from organ {organ_id}: {e}")
+                        continue
                     
                     if agent_id in existing_agents:
                         # Reuse existing agent
@@ -218,25 +326,33 @@ class OrganismManager:
                     # Create agent with stable name (no timestamp) to enable reuse
                     # Add timeout and error handling for agent creation
                     try:
+                        logger.info(f"🚀 Creating Ray agent {agent_id} with options...")
                         agent_handle = RayAgent.options(
                             name=agent_id,  # Use stable name without timestamp
-                            lifetime="detached"  # Make it persistent
+                            lifetime="detached",  # Make it persistent
+                            num_cpus=1  # Ensure resource allocation
                         ).remote(
                             agent_id=agent_id,
                             initial_role_probs=initial_role_probs
                         )
+                        logger.info(f"✅ Ray agent {agent_id} created, testing with get_id...")
                         
                         # Test the agent creation with a simple call
                         test_result = await asyncio.wait_for(
                             agent_handle.get_id.remote(), 
                             timeout=30.0  # 30 second timeout
                         )
+                        logger.info(f"✅ Agent {agent_id} get_id test passed: {test_result}")
                         
                         if test_result != agent_id:
                             raise Exception(f"Agent ID mismatch: expected {agent_id}, got {test_result}")
                         
                         # Register the agent with its organ
-                        await organ_handle.register_agent.remote(agent_id, agent_handle)
+                        logger.info(f"📝 Registering agent {agent_id} with organ {organ_id}...")
+                        # register_agent is synchronous, so use ray.get() instead of await
+                        ray.get(organ_handle.register_agent.remote(agent_id, agent_handle))
+                        logger.info(f"✅ Agent {agent_id} registered with organ {organ_id}")
+                        
                         self.agent_to_organ_map[agent_id] = organ_id
                         agent_count += 1
                         
@@ -258,8 +374,11 @@ class OrganismManager:
     async def _cleanup_excess_agents(self, organ_handle, organ_id: str, target_count: int):
         """Remove excess agents from an organ to match the target count."""
         try:
-            existing_agents = await organ_handle.get_agent_handles.remote()
+            logger.info(f"🧹 Checking for excess agents in {organ_id} (target: {target_count})...")
+            # get_agent_handles is synchronous, so use ray.get() instead of await
+            existing_agents = ray.get(organ_handle.get_agent_handles.remote())
             current_count = len(existing_agents)
+            logger.info(f"📊 Current agent count in {organ_id}: {current_count}")
             
             if current_count > target_count:
                 excess_count = current_count - target_count
@@ -269,10 +388,14 @@ class OrganismManager:
                 agent_ids = list(existing_agents.keys())
                 for agent_id in agent_ids[target_count:]:
                     try:
-                        await organ_handle.remove_agent.remote(agent_id)
-                        logger.info(f"🗑️ Removed excess agent: {agent_id}")
+                        logger.info(f"🗑️ Removing excess agent: {agent_id}")
+                        # remove_agent is also synchronous
+                        ray.get(organ_handle.remove_agent.remote(agent_id))
+                        logger.info(f"✅ Removed excess agent: {agent_id}")
                     except Exception as e:
                         logger.error(f"❌ Failed to remove agent {agent_id}: {e}")
+            else:
+                logger.info(f"✅ No excess agents to clean up in {organ_id}")
                         
         except Exception as e:
             logger.error(f"❌ Error during agent cleanup for {organ_id}: {e}")
@@ -345,6 +468,36 @@ class OrganismManager:
         import random
         organ_id = random.choice(list(self.organs.keys()))
         return await self.execute_task_on_organ(organ_id, task)
+
+    async def initialize_organism(self):
+        """Creates all organs and populates them with agents based on the config."""
+        if self._initialized:
+            logger.warning("Organism already initialized. Skipping re-initialization.")
+            return
+            
+        logger.info("🚀 Initializing the Cognitive Organism...")
+        
+        try:
+            # Ensure Ray is properly initialized before proceeding
+            self._ensure_ray_initialized()
+            
+            # Check Ray cluster health before proceeding
+            self._check_ray_cluster_health()
+            
+            # Clean up dead actors first
+            await self._cleanup_dead_actors()
+            
+            logger.info("🏗️ Creating organs...")
+            self._create_organs()
+            
+            logger.info("🤖 Creating and distributing agents...")
+            await self._create_and_distribute_agents()
+            
+            self._initialized = True
+            logger.info("✅ Organism initialization complete.")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize organism: {e}")
+            raise
 
     def shutdown_organism(self):
         """Shuts down the organism and cleans up resources."""
