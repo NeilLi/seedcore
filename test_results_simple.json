@@ -1,0 +1,304 @@
+{
+  "timestamp": "2025-08-06T16:01:19.246907",
+  "docker_services": {
+    "seedcore-postgres": {
+      "status": "Up 30 minutes (healthy)",
+      "running": true,
+      "healthy": true
+    },
+    "seedcore-mysql": {
+      "status": "Up 30 minutes (healthy)",
+      "running": true,
+      "healthy": true
+    },
+    "seedcore-neo4j": {
+      "status": "Up 30 minutes (healthy)",
+      "running": true,
+      "healthy": true
+    },
+    "seedcore-pgbouncer": {
+      "status": "Up 30 minutes (healthy)",
+      "running": true,
+      "healthy": true
+    },
+    "seedcore-api": {
+      "status": "Up 29 minutes (healthy)",
+      "running": true,
+      "healthy": true
+    },
+    "seedcore-ray-head": {
+      "status": "Up 30 minutes (healthy)",
+      "running": true,
+      "healthy": true
+    },
+    "seedcore-prometheus": {
+      "status": "Up 29 minutes",
+      "running": true,
+      "healthy": false
+    },
+    "seedcore-grafana": {
+      "status": "Up 29 minutes",
+      "running": true,
+      "healthy": false
+    }
+  },
+  "database_connections": {
+    "postgres_pgbouncer": {
+      "success": true,
+      "output": "test \n------\n    1\n(1 row)",
+      "error": null
+    },
+    "mysql": {
+      "success": true,
+      "output": "test\n1",
+      "error": null
+    },
+    "neo4j": {
+      "success": true,
+      "status_code": 200
+    }
+  },
+  "api_endpoints": {
+    "health": {
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "ok": true,
+        "warnings": [],
+        "mw_staleness": 0.0,
+        "energy_delta_last": 0.0,
+        "slope_positive_duration": 0
+      }
+    },
+    "system_status": {
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "system_info": {
+          "timestamp": 1754470879.7516544,
+          "version": "1.0.0",
+          "status": "operational"
+        },
+        "agents": {
+          "tier0_agents": 0,
+          "legacy_agents": 0,
+          "total_agents": 0,
+          "agent_details": []
+        },
+        "organs": [],
+        "energy_system": {
+          "energy_state": {
+            "ts": 1754470879.751432,
+            "E_terms": {
+              "pair": 0.0,
+              "hyper": 0.0,
+              "entropy": 0.0,
+              "reg": 0.0,
+              "mem": 0.0,
+              "total": 0.0
+            },
+            "deltaE_last": 0.0,
+            "pair_stats_count": 0,
+            "hyper_stats_count": 0,
+            "role_entropy_count": 0,
+            "mem_stats_count": 0
+          },
+          "compression_knob": 0.5,
+          "cost_vq": 0.0,
+          "energy_slope": 0.0
+        },
+        "memory_system": {
+          "Mw": {
+            "bytes_used": 0,
+            "max_capacity": 100,
+            "hit_count": 0,
+            "data_count": 0
+          },
+          "Mlt": {
+            "bytes_used": 0,
+            "max_capacity": 1000,
+            "hit_count": 0,
+            "data_count": 0
+          },
+          "total_bytes": 0,
+          "total_hits": 0,
+          "compression_knob": 0.5,
+          "cost_vq": 0.0,
+          "energy_slope": 0.0
+        },
+        "pair_stats": {},
+        "performance_metrics": {
+          "memory_utilization_kb": 0.0,
+          "hit_rate": 0.0,
+          "compression_efficiency": 0.5,
+          "active_agents": 0
+        }
+      }
+    },
+    "organism_status": {
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "success": true,
+        "data": [
+          {
+            "organ_id": "cognitive_organ_1",
+            "organ_type": "Cognitive",
+            "agent_count": 1,
+            "agent_ids": [
+              "cognitive_organ_1_agent_0"
+            ]
+          },
+          {
+            "organ_id": "actuator_organ_1",
+            "organ_type": "Actuator",
+            "agent_count": 1,
+            "agent_ids": [
+              "actuator_organ_1_agent_0"
+            ]
+          },
+          {
+            "organ_id": "utility_organ_1",
+            "organ_type": "Utility",
+            "agent_count": 1,
+            "agent_ids": [
+              "utility_organ_1_agent_0"
+            ]
+          }
+        ]
+      }
+    },
+    "tier0_summary": {
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "success": true,
+        "summary": {
+          "total_agents": 0,
+          "status": "no_agents"
+        }
+      }
+    },
+    "ray_status": {
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "ray_configured": true,
+        "ray_available": true,
+        "config": "RayConfig(remote=ray-head:10001, namespace=seedcore)",
+        "cluster_info": {
+          "status": "initialized",
+          "cluster_resources": {
+            "node:__internal_head__": 1.0,
+            "node:172.18.0.12": 1.0,
+            "node:172.18.0.11": 1.0,
+            "CPU": 7.0,
+            "memory": 20994969601.0,
+            "object_store_memory": 9283558399.0,
+            "node:172.18.0.7": 1.0,
+            "node:172.18.0.13": 1.0
+          },
+          "available_resources": {
+            "node:__internal_head__": 0.999,
+            "node:172.18.0.12": 1.0,
+            "node:172.18.0.11": 1.0,
+            "CPU": 0.9,
+            "object_store_memory": 9283492671.0,
+            "memory": 20794969601.0,
+            "node:172.18.0.7": 1.0,
+            "node:172.18.0.13": 1.0
+          },
+          "nodes": 4,
+          "config": "RayConfig(remote=ray-head:10001, namespace=seedcore)"
+        }
+      }
+    }
+  },
+  "energy_system": {
+    "energy_gradient": {
+      "success": false,
+      "error": "HTTPConnectionPool(host='localhost', port=8002): Read timed out. (read timeout=10)"
+    },
+    "energy_monitor": {
+      "success": false,
+      "error": "HTTPConnectionPool(host='localhost', port=8002): Read timed out. (read timeout=10)"
+    },
+    "energy_calibrate": {
+      "success": false,
+      "error": "HTTPConnectionPool(host='localhost', port=8002): Read timed out. (read timeout=10)"
+    },
+    "energy_logs": {
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "logs": [
+          {
+            "event": "test",
+            "timestamp": 1754470276.6637642,
+            "ts": 1754470276.6713285
+          },
+          {
+            "event": "test",
+            "timestamp": 1754470568.1494274,
+            "ts": 1754470568.152167
+          },
+          {
+            "event": "test",
+            "timestamp": 1754470765.1453602,
+            "ts": 1754470765.1493464
+          }
+        ],
+        "total_count": 3,
+        "returned_count": 3
+      }
+    },
+    "energy_log_post": {
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "status": "success",
+        "message": "Energy event logged",
+        "event_count": 4
+      }
+    }
+  },
+  "ray_cluster": {
+    "ray_dashboard": {
+      "success": true,
+      "status_code": 200
+    }
+  },
+  "monitoring_services": {
+    "prometheus": {
+      "success": true,
+      "status_code": 200
+    },
+    "grafana": {
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "commit": "83b9528bce85cf9371320f6d6e450916156da3f6",
+        "database": "ok",
+        "version": "11.0.0"
+      }
+    },
+    "api_metrics": {
+      "success": true,
+      "status_code": 200,
+      "has_prometheus_format": true
+    }
+  },
+  "database_pooling": {
+    "pooling_health": {
+      "success": true,
+      "mw_staleness": 0.0,
+      "pooling_healthy": true
+    }
+  },
+  "summary": {
+    "total_tests": 26,
+    "passed_tests": 23,
+    "failed_tests": 3,
+    "success_rate": 88.46153846153845
+  }
+}
