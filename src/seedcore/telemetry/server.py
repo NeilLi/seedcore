@@ -109,21 +109,28 @@ async def startup_event():
         ray_config = get_ray_config()
         if ray_config.is_configured():
             logging.info(f"Initializing Ray with configuration: {ray_config}")
-            success = init_ray()
-            if success:
-                logging.info("Ray initialization successful")
+            
+            # Check if Ray is already initialized to avoid double initialization
+            if not ray.is_initialized():
+                success = init_ray()
+                if success:
+                    logging.info("Ray initialization successful")
+                    cluster_info = get_ray_cluster_info()
+                    logging.info(f"Ray cluster info: {cluster_info}")
+                else:
+                    logging.warning("Ray initialization failed, continuing without Ray")
+            else:
+                logging.info("Ray is already initialized, skipping initialization")
                 cluster_info = get_ray_cluster_info()
                 logging.info(f"Ray cluster info: {cluster_info}")
-                
-                # Initialize the COA organism after Ray is ready
-                try:
-                    await organism_manager.initialize_organism()
-                    app.state.organism = organism_manager
-                    logging.info("✅ COA organism initialized successfully")
-                except Exception as e:
-                    logging.error(f"❌ Failed to initialize COA organism: {e}")
-            else:
-                logging.warning("Ray initialization failed, continuing without Ray")
+            
+            # Initialize the COA organism after Ray is ready
+            try:
+                await organism_manager.initialize_organism()
+                app.state.organism = organism_manager
+                logging.info("✅ COA organism initialized successfully")
+            except Exception as e:
+                logging.error(f"❌ Failed to initialize COA organism: {e}")
         else:
             logging.info("Ray not configured, skipping Ray initialization")
     except Exception as e:

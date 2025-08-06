@@ -22,10 +22,10 @@ import yaml
 import logging
 import asyncio
 import time
+import ray
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-import ray
 from .base import Organ
 from ..agents.ray_actor import RayAgent
 
@@ -48,6 +48,31 @@ class OrganismManager:
         self.organ_configs: List[Dict[str, Any]] = []
         self._load_config(config_path)
         self._initialized = False
+        
+        # Initialize Ray connection if not already initialized
+        self._ensure_ray_initialized()
+
+    def _ensure_ray_initialized(self):
+        """Ensure Ray is properly initialized with the correct address."""
+        import os
+        
+        try:
+            if not ray.is_initialized():
+                # Get Ray address from environment
+                ray_address = os.getenv("RAY_ADDRESS")
+                if ray_address:
+                    logger.info(f"Initializing Ray with address: {ray_address}")
+                    ray.init(address=ray_address, ignore_reinit_error=True, namespace="seedcore")
+                    logger.info("✅ Ray initialized successfully with remote address")
+                else:
+                    logger.warning("RAY_ADDRESS not set, initializing Ray locally")
+                    ray.init(ignore_reinit_error=True, namespace="seedcore")
+                    logger.info("✅ Ray initialized locally")
+            else:
+                logger.info("✅ Ray is already initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Ray: {e}")
+            raise
 
     def _load_config(self, config_path: str):
         """Loads the organism configuration from a YAML file."""
@@ -76,6 +101,9 @@ class OrganismManager:
         logger.info("🚀 Initializing the Cognitive Organism...")
         
         try:
+            # Ensure Ray is properly initialized before proceeding
+            self._ensure_ray_initialized()
+            
             # Clean up dead actors first
             await self._cleanup_dead_actors()
             
@@ -93,25 +121,34 @@ class OrganismManager:
             import ray
             from ray.util.state import list_actors
             
-            # Get all actors
-            actors = list_actors()
-            dead_actors = [actor for actor in actors if actor.state == "DEAD"]
+            # Check if Ray is initialized before trying to list actors
+            if not ray.is_initialized():
+                logger.info("Ray not initialized, skipping dead actor cleanup")
+                return
             
-            if dead_actors:
-                logger.info(f"🧹 Found {len(dead_actors)} dead actors, cleaning up...")
+            # Get all actors with timeout
+            try:
+                actors = list_actors()
+                dead_actors = [actor for actor in actors if actor.state == "DEAD"]
                 
-                for actor in dead_actors:
-                    try:
-                        if hasattr(actor, 'actor_id'):
-                            # Try to kill the dead actor
-                            ray.kill(actor.actor_id)
-                            logger.debug(f"🗑️ Cleaned up dead actor: {actor.actor_id}")
-                    except Exception as e:
-                        logger.debug(f"Could not clean up dead actor {actor.actor_id}: {e}")
-                        
-                logger.info(f"✅ Cleaned up {len(dead_actors)} dead actors")
-            else:
-                logger.info("✅ No dead actors found")
+                if dead_actors:
+                    logger.info(f"🧹 Found {len(dead_actors)} dead actors, cleaning up...")
+                    
+                    for actor in dead_actors:
+                        try:
+                            if hasattr(actor, 'actor_id'):
+                                # Try to kill the dead actor
+                                ray.kill(actor.actor_id)
+                                logger.debug(f"🗑️ Cleaned up dead actor: {actor.actor_id}")
+                        except Exception as e:
+                            logger.debug(f"Could not clean up dead actor {actor.actor_id}: {e}")
+                            
+                    logger.info(f"✅ Cleaned up {len(dead_actors)} dead actors")
+                else:
+                    logger.info("✅ No dead actors found")
+                    
+            except Exception as e:
+                logger.warning(f"Could not list actors: {e}")
                 
         except Exception as e:
             logger.warning(f"Could not clean up dead actors: {e}")
@@ -179,20 +216,38 @@ class OrganismManager:
                     initial_role_probs = self._get_role_probs_for_organ_type(organ_config['type'])
                     
                     # Create agent with stable name (no timestamp) to enable reuse
-                    agent_handle = RayAgent.options(
-                        name=agent_id,  # Use stable name without timestamp
-                        lifetime="detached"  # Make it persistent
-                    ).remote(
-                        agent_id=agent_id,
-                        initial_role_probs=initial_role_probs
-                    )
-                    
-                    # Register the agent with its organ
-                    await organ_handle.register_agent.remote(agent_id, agent_handle)
-                    self.agent_to_organ_map[agent_id] = organ_id
-                    agent_count += 1
-                    
-                    logger.info(f"✅ Created new agent: {agent_id}")
+                    # Add timeout and error handling for agent creation
+                    try:
+                        agent_handle = RayAgent.options(
+                            name=agent_id,  # Use stable name without timestamp
+                            lifetime="detached"  # Make it persistent
+                        ).remote(
+                            agent_id=agent_id,
+                            initial_role_probs=initial_role_probs
+                        )
+                        
+                        # Test the agent creation with a simple call
+                        test_result = await asyncio.wait_for(
+                            agent_handle.get_id.remote(), 
+                            timeout=30.0  # 30 second timeout
+                        )
+                        
+                        if test_result != agent_id:
+                            raise Exception(f"Agent ID mismatch: expected {agent_id}, got {test_result}")
+                        
+                        # Register the agent with its organ
+                        await organ_handle.register_agent.remote(agent_id, agent_handle)
+                        self.agent_to_organ_map[agent_id] = organ_id
+                        agent_count += 1
+                        
+                        logger.info(f"✅ Created new agent: {agent_id}")
+                        
+                    except asyncio.TimeoutError:
+                        logger.error(f"❌ Timeout creating agent {agent_id}")
+                        continue
+                    except Exception as e:
+                        logger.error(f"❌ Failed to create agent {agent_id}: {e}")
+                        continue
                     
                 except Exception as e:
                     logger.error(f"❌ Failed to create agent {agent_id}: {e}")

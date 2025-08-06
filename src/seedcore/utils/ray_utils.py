@@ -30,29 +30,43 @@ def init_ray(
         bool: True if initialization successful, False otherwise
     """
     try:
-        # Configure Ray if host is provided
-        if host:
-            configure_ray_remote(host, port, password)
-            logger.info(f"Configured Ray for remote connection: {host}:{port}")
-        
-        # Get current configuration
-        config = get_ray_config()
+        import os
         
         # Check if Ray is already initialized
         if ray.is_initialized() and not force_reinit:
             logger.info("Ray is already initialized")
             return True
         
-        # Get connection arguments
-        connection_args = config.get_connection_args()
+        # Get Ray address from environment variable (Ray 2.20 compatibility)
+        ray_address = os.getenv("RAY_ADDRESS")
         
-        # Initialize Ray
-        if config.is_configured():
-            logger.info(f"Initializing Ray with: {config}")
+        if ray_address:
+            # Use the environment variable directly
+            logger.info(f"Initializing Ray with RAY_ADDRESS: {ray_address}")
+            ray.init(address=ray_address, ignore_reinit_error=True, namespace="seedcore")
+        elif host:
+            # Configure Ray if host is provided
+            configure_ray_remote(host, port, password)
+            logger.info(f"Configured Ray for remote connection: {host}:{port}")
+            
+            # Get current configuration
+            config = get_ray_config()
+            connection_args = config.get_connection_args()
             ray.init(**connection_args)
         else:
-            logger.info("Initializing Ray locally")
-            ray.init(ignore_reinit_error=True, namespace="seedcore")
+            # Get current configuration
+            config = get_ray_config()
+            
+            # Get connection arguments
+            connection_args = config.get_connection_args()
+            
+            # Initialize Ray
+            if config.is_configured():
+                logger.info(f"Initializing Ray with: {config}")
+                ray.init(**connection_args)
+            else:
+                logger.info("Initializing Ray locally")
+                ray.init(ignore_reinit_error=True, namespace="seedcore")
         
         logger.info("Ray initialization successful")
         return True
