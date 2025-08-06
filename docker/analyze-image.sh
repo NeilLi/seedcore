@@ -71,10 +71,7 @@ echo "🚀 Building optimized images for comparison..."
 # Build with standard Dockerfile
 build_and_analyze "docker/Dockerfile" "seedcore-api:optimized"
 
-# Build with Alpine Dockerfile (if it exists)
-if [ -f "Dockerfile.alpine" ]; then
-    build_and_analyze "docker/Dockerfile.alpine" "seedcore-api:alpine"
-fi
+# Alpine Dockerfile removed - using optimized Dockerfile instead
 
 echo ""
 echo "✅ Analysis complete!"
