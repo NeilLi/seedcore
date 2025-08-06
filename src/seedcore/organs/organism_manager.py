@@ -107,12 +107,29 @@ class OrganismManager:
             logger.info(f"📊 Cluster resources: {cluster_resources}")
             logger.info(f"📊 Available resources: {available_resources}")
             
+            # Verify we have at least some CPU resources available
+            total_cpu = cluster_resources.get('CPU', 0)
+            available_cpu = available_resources.get('CPU', 0)
+            
+            if total_cpu == 0:
+                raise Exception("No CPU resources available in Ray cluster")
+            
+            if available_cpu < 1.0:
+                logger.warning(f"⚠️ Low CPU availability: {available_cpu}/{total_cpu} CPUs available")
+            
             # Check nodes
             try:
                 nodes = list_nodes()
                 logger.info(f"🖥️ Ray nodes: {len(nodes)} total")
+                alive_nodes = 0
                 for node in nodes:
+                    if node.state == "ALIVE":
+                        alive_nodes += 1
                     logger.info(f"   - Node {node.node_id}: {node.state} (CPU: {node.cpu_count})")
+                
+                if alive_nodes == 0:
+                    raise Exception("No alive nodes in Ray cluster")
+                    
             except Exception as e:
                 logger.warning(f"Could not list nodes: {e}")
             
@@ -132,6 +149,7 @@ class OrganismManager:
             
         except Exception as e:
             logger.error(f"❌ Failed to check Ray cluster health: {e}")
+            raise  # Re-raise to trigger retry mechanism
 
     async def _cleanup_dead_actors(self):
         """Clean up dead Ray actors to prevent accumulation."""
@@ -174,18 +192,13 @@ class OrganismManager:
     def _test_organ_health(self, organ_handle, organ_id: str) -> bool:
         """Test if an organ actor is healthy and responsive."""
         try:
-            import asyncio
             import concurrent.futures
+            import ray
             
-            # Test with a timeout using ThreadPoolExecutor
+            # Test with a timeout using ThreadPoolExecutor since get_status is synchronous
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(
-                    lambda: asyncio.run(
-                        asyncio.wait_for(
-                            organ_handle.get_status.remote(),
-                            timeout=5.0
-                        )
-                    )
+                    lambda: ray.get(organ_handle.get_status.remote())
                 )
                 result = future.result(timeout=10.0)
                 logger.info(f"✅ Organ {organ_id} health check passed")
@@ -338,10 +351,7 @@ class OrganismManager:
                         logger.info(f"✅ Ray agent {agent_id} created, testing with get_id...")
                         
                         # Test the agent creation with a simple call
-                        test_result = await asyncio.wait_for(
-                            agent_handle.get_id.remote(), 
-                            timeout=30.0  # 30 second timeout
-                        )
+                        test_result = ray.get(agent_handle.get_id.remote())
                         logger.info(f"✅ Agent {agent_id} get_id test passed: {test_result}")
                         
                         if test_result != agent_id:
@@ -417,8 +427,15 @@ class OrganismManager:
             return [{"error": "Organism not initialized"}]
             
         try:
-            status_futures = [organ.get_status.remote() for organ in self.organs.values()]
-            statuses = await asyncio.gather(*status_futures)
+            # Since get_status is synchronous, use ray.get instead of asyncio.gather
+            statuses = []
+            for organ in self.organs.values():
+                try:
+                    status = ray.get(organ.get_status.remote())
+                    statuses.append(status)
+                except Exception as e:
+                    logger.error(f"Error getting organ status: {e}")
+                    statuses.append({"error": str(e)})
             return statuses
         except Exception as e:
             logger.error(f"Error getting organism status: {e}")
@@ -477,27 +494,43 @@ class OrganismManager:
             
         logger.info("🚀 Initializing the Cognitive Organism...")
         
-        try:
-            # Ensure Ray is properly initialized before proceeding
-            self._ensure_ray_initialized()
-            
-            # Check Ray cluster health before proceeding
-            self._check_ray_cluster_health()
-            
-            # Clean up dead actors first
-            await self._cleanup_dead_actors()
-            
-            logger.info("🏗️ Creating organs...")
-            self._create_organs()
-            
-            logger.info("🤖 Creating and distributing agents...")
-            await self._create_and_distribute_agents()
-            
-            self._initialized = True
-            logger.info("✅ Organism initialization complete.")
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize organism: {e}")
-            raise
+        max_retries = 3
+        retry_delay = 10  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"🔄 Attempt {attempt + 1}/{max_retries} to initialize organism...")
+                
+                # Ensure Ray is properly initialized before proceeding
+                self._ensure_ray_initialized()
+                
+                # Check Ray cluster health before proceeding
+                self._check_ray_cluster_health()
+                
+                # Clean up dead actors first
+                await self._cleanup_dead_actors()
+                
+                logger.info("🏗️ Creating organs...")
+                self._create_organs()
+                
+                logger.info("🤖 Creating and distributing agents...")
+                await self._create_and_distribute_agents()
+                
+                self._initialized = True
+                logger.info("✅ Organism initialization complete.")
+                return  # Success, exit the retry loop
+                
+            except Exception as e:
+                logger.error(f"❌ Attempt {attempt + 1}/{max_retries} failed to initialize organism: {e}")
+                
+                if attempt < max_retries - 1:
+                    logger.info(f"⏳ Waiting {retry_delay} seconds before retry...")
+                    import asyncio
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    logger.error(f"❌ All {max_retries} attempts failed. Giving up.")
+                    raise
 
     def shutdown_organism(self):
         """Shuts down the organism and cleans up resources."""

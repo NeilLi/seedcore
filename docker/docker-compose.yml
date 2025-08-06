@@ -140,11 +140,11 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || ray health-check"]
+      test: ["CMD-SHELL", "python -c \"import ray; ray.init(address='ray://localhost:10001', ignore_reinit_error=True); print('Ray is ready')\" || exit 1"]
       interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 90s # Generous grace period for startup
+      timeout: 10s
+      retries: 15
+      start_period: 120s # Generous grace period for startup
     command: ["/bin/bash", "docker/start-ray-with-serve.sh"]
 
   # Ray workers are defined in ray-workers.yml
@@ -184,7 +184,7 @@ services:
       neo4j:
         condition: service_healthy
       ray-head:
-        condition: service_started
+        condition: service_healthy
     networks:
       - seedcore-network
     volumes:
@@ -198,6 +198,8 @@ services:
       - /bin/sh
       - -c
       - |
+        echo "⏳ Waiting for Ray to be fully ready..."
+        sleep 10
         echo "⏳ Seeding core databases …"
         python -m scripts.populate_mlt_simple && \
         echo "✅ Seeding complete, starting API" && \
