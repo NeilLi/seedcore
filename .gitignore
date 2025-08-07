@@ -29,3 +29,9 @@ docker/artifacts/
 !docker/artifacts/fact_uuids.json
 !docker/artifacts/holon_ids.jsonl
 docker/test.txt
+
+# Log files
+*.log
+assertion.log
+azure_openai_usage.log
+openai_usage.log
