@@ -1,0 +1,50 @@
+✅ Tier0MemoryManager initialized
+✅ Tier0MemoryManager initialized
+✅ RayAgent specialist_1 created with basic state
+✅ MwManager for Organ 'organ_for_specialist_1' initialized.
+✅ Agent specialist_1 initialized with memory managers
+FlashbulbClient configured for API at http://seedcore-api:8002
+✅ Agent specialist_1 initialized with FlashbulbClient
+✅ Tier0MemoryManager initialized
+✅ Tier0MemoryManager initialized
+✅ RayAgent balanced_1 created with basic state
+Initialized CognitiveCore with openai and model gpt-4o
+Initialized global cognitive core with openai and gpt-4o
+✅ Agent specialist_1 initialized with cognitive core
+✅ MwManager for Organ 'organ_for_balanced_1' initialized.
+✅ Agent balanced_1 initialized with memory managers
+FlashbulbClient configured for API at http://seedcore-api:8002
+✅ Agent balanced_1 initialized with FlashbulbClient
+Initialized CognitiveCore with openai and model gpt-4o
+Initialized global cognitive core with openai and gpt-4o
+✅ Agent balanced_1 initialized with cognitive core
+✅ Tier0MemoryManager initialized
+✅ Tier0MemoryManager initialized
+✅ RayAgent monitor_explorer created with basic state
+✅ MwManager for Organ 'organ_for_monitor_explorer' initialized.
+✅ Agent monitor_explorer initialized with memory managers
+FlashbulbClient configured for API at http://seedcore-api:8002
+✅ Agent monitor_explorer initialized with FlashbulbClient
+Initialized CognitiveCore with openai and model gpt-4o
+Initialized global cognitive core with openai and gpt-4o
+✅ Agent monitor_explorer initialized with cognitive core
+✅ Tier0MemoryManager initialized
+✅ Tier0MemoryManager initialized
+✅ RayAgent monitor_specialist created with basic state
+✅ MwManager for Organ 'organ_for_monitor_specialist' initialized.
+✅ Agent monitor_specialist initialized with memory managers
+FlashbulbClient configured for API at http://seedcore-api:8002
+✅ Agent monitor_specialist initialized with FlashbulbClient
+Initialized CognitiveCore with openai and model gpt-4o
+Initialized global cognitive core with openai and gpt-4o
+✅ Agent monitor_specialist initialized with cognitive core
+✅ Tier0MemoryManager initialized
+✅ Tier0MemoryManager initialized
+✅ RayAgent monitor_balanced created with basic state
+✅ MwManager for Organ 'organ_for_monitor_balanced' initialized.
+✅ Agent monitor_balanced initialized with memory managers
+FlashbulbClient configured for API at http://seedcore-api:8002
+✅ Agent monitor_balanced initialized with FlashbulbClient
+Initialized CognitiveCore with openai and model gpt-4o
+Initialized global cognitive core with openai and gpt-4o
+✅ Agent monitor_balanced initialized with cognitive core
