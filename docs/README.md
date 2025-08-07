@@ -9,6 +9,9 @@ Welcome to the SeedCore documentation! This directory contains comprehensive doc
   - [XGBoost Quickstart](./guides/getting-started/xgboost_quickstart.md)
   - [Quick Reference](./guides/getting-started/QUICK_REFERENCE.md)
   - [Next Steps](./guides/getting-started/NEXT_STEPS.md)
+- **[DSPy Integration](./)** - ✅ **NEW** - AI/ML cognitive reasoning
+  - [DSPy Integration Guide](./dspy_integration_guide.md) - Comprehensive integration guide
+  - [DSPy Examples Guide](./examples_guide.md) - Complete examples documentation
 - **[Hyperparameter Tuning](./guides/hyperparameter-tuning/)** - ✅ **NEW** - Automated ML model optimization
   - [Hyperparameter Tuning Guide](./guides/hyperparameter-tuning/HYPERPARAMETER_TUNING_GUIDE.md)
   - [Quick Reference](./guides/hyperparameter-tuning/QUICK_REFERENCE.md)
@@ -71,6 +74,11 @@ Welcome to the SeedCore documentation! This directory contains comprehensive doc
 2. Review [Quick Reference](./guides/getting-started/QUICK_REFERENCE.md)
 3. Try [Hyperparameter Tuning](./guides/hyperparameter-tuning/QUICK_REFERENCE.md) for model optimization
 4. Follow [Next Steps](./guides/getting-started/NEXT_STEPS.md)
+
+### For AI/ML Developers
+1. Start with [DSPy Integration Guide](./dspy_integration_guide.md) for cognitive reasoning
+2. Try [Simple DSPy Examples](./examples_guide.md) for development
+3. Use [Optimized DSPy Examples](./examples_guide.md#advanced-examples-production) for production
 
 ### For Developers
 1. Check [API Reference](./api/reference/) for endpoints

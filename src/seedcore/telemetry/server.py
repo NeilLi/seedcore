@@ -26,7 +26,7 @@ import random
 import uuid
 import ray
 from fastapi import FastAPI, Depends, HTTPException, Request
-from typing import List, Dict
+from typing import List, Dict, Any
 import time
 # import redis
 from ..telemetry.stats import StatsCollector
@@ -63,6 +63,16 @@ from ..api.routers.mfb_router import mfb_router
 from ..api.routers.salience_router import router as salience_router
 from ..config.ray_config import get_ray_config
 from ..utils.ray_utils import init_ray, get_ray_cluster_info, is_ray_available
+
+# NEW: Import DSPy cognitive core
+from ..agents.cognitive_core import (
+    CognitiveCore, 
+    CognitiveContext, 
+    CognitiveTaskType,
+    initialize_cognitive_core,
+    get_cognitive_core
+)
+from ..serve.cognitive_serve import CognitiveCoreClient
 
 # --- Persistent State ---
 # Create a single, persistent registry when the server starts.
@@ -1832,6 +1842,412 @@ async def get_organism_status():
         return {"success": True, "data": status}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# =============================================================================
+# DSPy Cognitive Core Endpoints
+# =============================================================================
+
+# Global cognitive core client
+cognitive_client = None
+
+def get_cognitive_client():
+    """Get or create the cognitive core client."""
+    global cognitive_client
+    if cognitive_client is None:
+        try:
+            cognitive_client = CognitiveCoreClient()
+            logger.info("✅ Cognitive core client initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize cognitive core client: {e}")
+            cognitive_client = None
+    return cognitive_client
+
+@app.post("/dspy/reason-about-failure")
+async def reason_about_failure(incident_id: str, agent_id: str = None):
+    """
+    Analyze agent failures using cognitive reasoning.
+    
+    Args:
+        incident_id: ID of the incident to analyze
+        agent_id: ID of the agent (optional, will use default if not provided)
+    
+    Returns:
+        Analysis results with thought process and proposed solutions
+    """
+    try:
+        client = get_cognitive_client()
+        if not client:
+            # Fallback to direct cognitive core if client not available
+            cognitive_core = get_cognitive_core()
+            if not cognitive_core:
+                cognitive_core = initialize_cognitive_core()
+            
+            # Create mock incident context for demonstration
+            incident_context = {
+                "incident_id": incident_id,
+                "error_message": "Task execution failed",
+                "agent_state": {
+                    "capability_score": 0.5,
+                    "memory_utilization": 0.3,
+                    "tasks_processed": 10
+                },
+                "task_context": {
+                    "task_type": "data_processing",
+                    "complexity": 0.7,
+                    "timestamp": time.time()
+                }
+            }
+            
+            context = CognitiveContext(
+                agent_id=agent_id or "default_agent",
+                task_type=CognitiveTaskType.FAILURE_ANALYSIS,
+                input_data=incident_context
+            )
+            
+            result = cognitive_core(context)
+            return {
+                "success": True,
+                "agent_id": agent_id or "default_agent",
+                "incident_id": incident_id,
+                "thought_process": result.get("thought", ""),
+                "proposed_solution": result.get("proposed_solution", ""),
+                "confidence_score": result.get("confidence_score", 0.0)
+            }
+        
+        # Use Ray Serve client
+        result = await client.reason_about_failure(agent_id or "default_agent", incident_context)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in failure reasoning: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/dspy/plan-task")
+async def plan_task(
+    task_description: str,
+    agent_id: str = None,
+    agent_capabilities: Dict[str, Any] = None,
+    available_resources: Dict[str, Any] = None
+):
+    """
+    Plan complex tasks using cognitive reasoning.
+    
+    Args:
+        task_description: Description of the task to plan
+        agent_id: ID of the agent (optional)
+        agent_capabilities: Agent capabilities (optional)
+        available_resources: Available resources (optional)
+    
+    Returns:
+        Task planning results with step-by-step plan
+    """
+    try:
+        client = get_cognitive_client()
+        if not client:
+            # Fallback to direct cognitive core
+            cognitive_core = get_cognitive_core()
+            if not cognitive_core:
+                cognitive_core = initialize_cognitive_core()
+            
+            input_data = {
+                "task_description": task_description,
+                "agent_capabilities": agent_capabilities or {"capability_score": 0.5},
+                "available_resources": available_resources or {}
+            }
+            
+            context = CognitiveContext(
+                agent_id=agent_id or "default_agent",
+                task_type=CognitiveTaskType.TASK_PLANNING,
+                input_data=input_data
+            )
+            
+            result = cognitive_core(context)
+            return {
+                "success": True,
+                "agent_id": agent_id or "default_agent",
+                "task_description": task_description,
+                "step_by_step_plan": result.get("step_by_step_plan", ""),
+                "estimated_complexity": result.get("estimated_complexity", ""),
+                "risk_assessment": result.get("risk_assessment", "")
+            }
+        
+        # Use Ray Serve client
+        result = await client.plan_task(
+            agent_id or "default_agent",
+            task_description,
+            agent_capabilities or {"capability_score": 0.5},
+            available_resources or {}
+        )
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in task planning: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/dspy/make-decision")
+async def make_decision(
+    decision_context: Dict[str, Any],
+    agent_id: str = None,
+    historical_data: Dict[str, Any] = None
+):
+    """
+    Make decisions using cognitive reasoning.
+    
+    Args:
+        decision_context: Context for the decision
+        agent_id: ID of the agent (optional)
+        historical_data: Historical data (optional)
+    
+    Returns:
+        Decision results with reasoning and confidence
+    """
+    try:
+        client = get_cognitive_client()
+        if not client:
+            # Fallback to direct cognitive core
+            cognitive_core = get_cognitive_core()
+            if not cognitive_core:
+                cognitive_core = initialize_cognitive_core()
+            
+            input_data = {
+                "decision_context": decision_context,
+                "historical_data": historical_data or {}
+            }
+            
+            context = CognitiveContext(
+                agent_id=agent_id or "default_agent",
+                task_type=CognitiveTaskType.DECISION_MAKING,
+                input_data=input_data
+            )
+            
+            result = cognitive_core(context)
+            return {
+                "success": True,
+                "agent_id": agent_id or "default_agent",
+                "reasoning": result.get("reasoning", ""),
+                "decision": result.get("decision", ""),
+                "confidence": result.get("confidence", 0.0),
+                "alternative_options": result.get("alternative_options", "")
+            }
+        
+        # Use Ray Serve client
+        result = await client.make_decision(
+            agent_id or "default_agent",
+            decision_context,
+            historical_data
+        )
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in decision making: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/dspy/solve-problem")
+async def solve_problem(
+    problem_statement: str,
+    constraints: Dict[str, Any],
+    available_tools: Dict[str, Any],
+    agent_id: str = None
+):
+    """
+    Solve problems using cognitive reasoning.
+    
+    Args:
+        problem_statement: Statement of the problem
+        constraints: Problem constraints
+        available_tools: Available tools
+        agent_id: ID of the agent (optional)
+    
+    Returns:
+        Problem solution with approach and steps
+    """
+    try:
+        client = get_cognitive_client()
+        if not client:
+            # Fallback to direct cognitive core
+            cognitive_core = get_cognitive_core()
+            if not cognitive_core:
+                cognitive_core = initialize_cognitive_core()
+            
+            input_data = {
+                "problem_statement": problem_statement,
+                "constraints": constraints,
+                "available_tools": available_tools
+            }
+            
+            context = CognitiveContext(
+                agent_id=agent_id or "default_agent",
+                task_type=CognitiveTaskType.PROBLEM_SOLVING,
+                input_data=input_data
+            )
+            
+            result = cognitive_core(context)
+            return {
+                "success": True,
+                "agent_id": agent_id or "default_agent",
+                "solution_approach": result.get("solution_approach", ""),
+                "solution_steps": result.get("solution_steps", ""),
+                "success_metrics": result.get("success_metrics", "")
+            }
+        
+        # Use Ray Serve client
+        result = await client.solve_problem(
+            agent_id or "default_agent",
+            problem_statement,
+            constraints,
+            available_tools
+        )
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in problem solving: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/dspy/synthesize-memory")
+async def synthesize_memory(
+    memory_fragments: List[Dict[str, Any]],
+    synthesis_goal: str,
+    agent_id: str = None
+):
+    """
+    Synthesize information from multiple memory sources.
+    
+    Args:
+        memory_fragments: List of memory fragments to synthesize
+        synthesis_goal: Goal of the synthesis
+        agent_id: ID of the agent (optional)
+    
+    Returns:
+        Synthesis results with insights and patterns
+    """
+    try:
+        client = get_cognitive_client()
+        if not client:
+            # Fallback to direct cognitive core
+            cognitive_core = get_cognitive_core()
+            if not cognitive_core:
+                cognitive_core = initialize_cognitive_core()
+            
+            input_data = {
+                "memory_fragments": memory_fragments,
+                "synthesis_goal": synthesis_goal
+            }
+            
+            context = CognitiveContext(
+                agent_id=agent_id or "default_agent",
+                task_type=CognitiveTaskType.MEMORY_SYNTHESIS,
+                input_data=input_data
+            )
+            
+            result = cognitive_core(context)
+            return {
+                "success": True,
+                "agent_id": agent_id or "default_agent",
+                "synthesized_insight": result.get("synthesized_insight", ""),
+                "confidence_level": result.get("confidence_level", 0.0),
+                "related_patterns": result.get("related_patterns", "")
+            }
+        
+        # Use Ray Serve client
+        result = await client.synthesize_memory(
+            agent_id or "default_agent",
+            memory_fragments,
+            synthesis_goal
+        )
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in memory synthesis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/dspy/assess-capabilities")
+async def assess_capabilities(
+    performance_data: Dict[str, Any],
+    current_capabilities: Dict[str, Any],
+    target_capabilities: Dict[str, Any],
+    agent_id: str = None
+):
+    """
+    Assess agent capabilities and suggest improvements.
+    
+    Args:
+        performance_data: Performance data
+        current_capabilities: Current capabilities
+        target_capabilities: Target capabilities
+        agent_id: ID of the agent (optional)
+    
+    Returns:
+        Assessment results with gaps and improvement plans
+    """
+    try:
+        client = get_cognitive_client()
+        if not client:
+            # Fallback to direct cognitive core
+            cognitive_core = get_cognitive_core()
+            if not cognitive_core:
+                cognitive_core = initialize_cognitive_core()
+            
+            input_data = {
+                "performance_data": performance_data,
+                "current_capabilities": current_capabilities,
+                "target_capabilities": target_capabilities
+            }
+            
+            context = CognitiveContext(
+                agent_id=agent_id or "default_agent",
+                task_type=CognitiveTaskType.CAPABILITY_ASSESSMENT,
+                input_data=input_data
+            )
+            
+            result = cognitive_core(context)
+            return {
+                "success": True,
+                "agent_id": agent_id or "default_agent",
+                "capability_gaps": result.get("capability_gaps", ""),
+                "improvement_plan": result.get("improvement_plan", ""),
+                "priority_recommendations": result.get("priority_recommendations", "")
+            }
+        
+        # Use Ray Serve client
+        result = await client.assess_capabilities(
+            agent_id or "default_agent",
+            performance_data,
+            current_capabilities,
+            target_capabilities
+        )
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in capability assessment: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/dspy/status")
+async def get_dspy_status():
+    """
+    Get the status of the DSPy cognitive core system.
+    
+    Returns:
+        Status information about the cognitive core
+    """
+    try:
+        client = get_cognitive_client()
+        cognitive_core = get_cognitive_core()
+        
+        return {
+            "success": True,
+            "cognitive_core_available": cognitive_core is not None,
+            "serve_client_available": client is not None,
+            "supported_task_types": [task.value for task in CognitiveTaskType],
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting DSPy status: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": time.time()
+        }
 
 @app.post("/organism/execute/{organ_id}")
 async def execute_task_on_organ(organ_id: str, request: dict):

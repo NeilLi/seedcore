@@ -37,6 +37,15 @@ if not logger.handlers:
 # NEW: Import the FlashbulbClient
 from ..memory.flashbulb_client import FlashbulbClient
 
+# NEW: Import the Cognitive Core
+from .cognitive_core import (
+    CognitiveCore, 
+    CognitiveContext, 
+    CognitiveTaskType,
+    initialize_cognitive_core,
+    get_cognitive_core
+)
+
 @dataclass
 class AgentState:
     """Holds the local state for an agent."""
@@ -111,6 +120,9 @@ class RayAgent:
         self.mlt_manager = None
         self.mfb_client = None
         
+        # --- Initialize cognitive core ---
+        self.cognitive_core = None
+        
         # Initialize memory managers asynchronously to avoid hanging
         try:
             # Only initialize basic components, defer complex initialization
@@ -118,6 +130,9 @@ class RayAgent:
             
             # Initialize memory managers later if needed
             self._initialize_memory_managers()
+            
+            # Initialize cognitive systems
+            self._initialize_cognitive_systems()
             
         except Exception as e:
             logger.warning(f"⚠️ RayAgent {self.agent_id} created with limited functionality: {e}")
@@ -146,6 +161,20 @@ class RayAgent:
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize FlashbulbClient for {self.agent_id}: {e}")
             self.mfb_client = None
+    
+    def _initialize_cognitive_systems(self):
+        """Initialize cognitive reasoning systems."""
+        try:
+            # Get or initialize the global cognitive core
+            self.cognitive_core = get_cognitive_core()
+            if self.cognitive_core is None:
+                # Initialize with default settings
+                self.cognitive_core = initialize_cognitive_core()
+            
+            logger.info(f"✅ Agent {self.agent_id} initialized with cognitive core")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize cognitive core for {self.agent_id}: {e}")
+            self.cognitive_core = None
     
     def get_id(self) -> str:
         """Returns the agent's ID."""
@@ -799,4 +828,323 @@ class RayAgent:
         self.total_compression_gain = 0.0
         self.skill_deltas.clear()
         self.peer_interactions.clear()
-        logger.info(f"🔄 Agent {self.agent_id} metrics reset") 
+        logger.info(f"🔄 Agent {self.agent_id} metrics reset")
+    
+    # =============================================================================
+    # Cognitive Reasoning Methods
+    # =============================================================================
+    
+    async def reason_about_failure(self, incident_id: str) -> Dict[str, Any]:
+        """
+        Analyze agent failures using cognitive reasoning.
+        
+        Args:
+            incident_id: ID of the incident to analyze
+            
+        Returns:
+            Dictionary containing analysis results
+        """
+        if not self.cognitive_core:
+            return {"success": False, "reason": "Cognitive core not initialized."}
+        if not self.mfb_client:
+            return {"success": False, "reason": "Memory client not available."}
+
+        try:
+            # Get incident context from memory
+            incident_context_dict = self.mfb_client.get_incident(incident_id)
+            if not incident_context_dict:
+                return {"success": False, "reason": "Incident not found."}
+            
+            # Create cognitive context
+            context = CognitiveContext(
+                agent_id=self.agent_id,
+                task_type=CognitiveTaskType.FAILURE_ANALYSIS,
+                input_data=incident_context_dict,
+                memory_context=self._get_memory_context(),
+                energy_context=self.get_energy_state(),
+                lifecycle_context=self._get_lifecycle_context()
+            )
+            
+            # Perform cognitive reasoning
+            reasoning_result = self.cognitive_core(context)
+            
+            # Calculate energy cost for reasoning
+            reg_delta = 0.01 * len(reasoning_result.get("thought", ""))
+            
+            # Update energy state
+            current_energy = self.get_energy_state()
+            current_energy["cognitive_cost"] = current_energy.get("cognitive_cost", 0.0) + reg_delta
+            self.update_energy_state(current_energy)
+            
+            return {
+                "success": True,
+                "agent_id": self.agent_id,
+                "incident_id": incident_id,
+                "thought_process": reasoning_result.get("thought", ""),
+                "proposed_solution": reasoning_result.get("proposed_solution", ""),
+                "confidence_score": reasoning_result.get("confidence_score", 0.0),
+                "energy_cost": reg_delta
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in failure reasoning for agent {self.agent_id}: {e}")
+            return {
+                "success": False,
+                "agent_id": self.agent_id,
+                "incident_id": incident_id,
+                "error": str(e)
+            }
+    
+    async def plan_complex_task(self, task_description: str, available_resources: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Plan complex tasks using cognitive reasoning.
+        
+        Args:
+            task_description: Description of the task to plan
+            available_resources: Available resources and constraints
+            
+        Returns:
+            Dictionary containing task plan
+        """
+        if not self.cognitive_core:
+            return {"success": False, "reason": "Cognitive core not initialized."}
+
+        try:
+            # Prepare input data
+            input_data = {
+                "task_description": task_description,
+                "agent_capabilities": self._get_agent_capabilities(),
+                "available_resources": available_resources or {}
+            }
+            
+            # Create cognitive context
+            context = CognitiveContext(
+                agent_id=self.agent_id,
+                task_type=CognitiveTaskType.TASK_PLANNING,
+                input_data=input_data,
+                memory_context=self._get_memory_context(),
+                energy_context=self.get_energy_state(),
+                lifecycle_context=self._get_lifecycle_context()
+            )
+            
+            # Perform cognitive reasoning
+            planning_result = self.cognitive_core(context)
+            
+            return {
+                "success": True,
+                "agent_id": self.agent_id,
+                "task_description": task_description,
+                "step_by_step_plan": planning_result.get("step_by_step_plan", ""),
+                "estimated_complexity": planning_result.get("estimated_complexity", ""),
+                "risk_assessment": planning_result.get("risk_assessment", "")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in task planning for agent {self.agent_id}: {e}")
+            return {
+                "success": False,
+                "agent_id": self.agent_id,
+                "task_description": task_description,
+                "error": str(e)
+            }
+    
+    async def make_decision(self, decision_context: Dict[str, Any], historical_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Make decisions using cognitive reasoning.
+        
+        Args:
+            decision_context: Context for the decision
+            historical_data: Historical data to inform the decision
+            
+        Returns:
+            Dictionary containing decision results
+        """
+        if not self.cognitive_core:
+            return {"success": False, "reason": "Cognitive core not initialized."}
+
+        try:
+            # Prepare input data
+            input_data = {
+                "decision_context": decision_context,
+                "historical_data": historical_data or {}
+            }
+            
+            # Create cognitive context
+            context = CognitiveContext(
+                agent_id=self.agent_id,
+                task_type=CognitiveTaskType.DECISION_MAKING,
+                input_data=input_data,
+                memory_context=self._get_memory_context(),
+                energy_context=self.get_energy_state(),
+                lifecycle_context=self._get_lifecycle_context()
+            )
+            
+            # Perform cognitive reasoning
+            decision_result = self.cognitive_core(context)
+            
+            return {
+                "success": True,
+                "agent_id": self.agent_id,
+                "reasoning": decision_result.get("reasoning", ""),
+                "decision": decision_result.get("decision", ""),
+                "confidence": decision_result.get("confidence", 0.0),
+                "alternative_options": decision_result.get("alternative_options", "")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in decision making for agent {self.agent_id}: {e}")
+            return {
+                "success": False,
+                "agent_id": self.agent_id,
+                "error": str(e)
+            }
+    
+    async def synthesize_memory(self, memory_fragments: List[Dict[str, Any]], synthesis_goal: str) -> Dict[str, Any]:
+        """
+        Synthesize information from multiple memory sources.
+        
+        Args:
+            memory_fragments: List of memory fragments to synthesize
+            synthesis_goal: Goal of the synthesis
+            
+        Returns:
+            Dictionary containing synthesis results
+        """
+        if not self.cognitive_core:
+            return {"success": False, "reason": "Cognitive core not initialized."}
+
+        try:
+            # Prepare input data
+            input_data = {
+                "memory_fragments": memory_fragments,
+                "synthesis_goal": synthesis_goal
+            }
+            
+            # Create cognitive context
+            context = CognitiveContext(
+                agent_id=self.agent_id,
+                task_type=CognitiveTaskType.MEMORY_SYNTHESIS,
+                input_data=input_data,
+                memory_context=self._get_memory_context(),
+                energy_context=self.get_energy_state(),
+                lifecycle_context=self._get_lifecycle_context()
+            )
+            
+            # Perform cognitive reasoning
+            synthesis_result = self.cognitive_core(context)
+            
+            return {
+                "success": True,
+                "agent_id": self.agent_id,
+                "synthesized_insight": synthesis_result.get("synthesized_insight", ""),
+                "confidence_level": synthesis_result.get("confidence_level", 0.0),
+                "related_patterns": synthesis_result.get("related_patterns", "")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in memory synthesis for agent {self.agent_id}: {e}")
+            return {
+                "success": False,
+                "agent_id": self.agent_id,
+                "error": str(e)
+            }
+    
+    async def assess_capabilities(self, target_capabilities: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Assess agent capabilities and suggest improvements.
+        
+        Args:
+            target_capabilities: Target capabilities to assess against
+            
+        Returns:
+            Dictionary containing assessment results
+        """
+        if not self.cognitive_core:
+            return {"success": False, "reason": "Cognitive core not initialized."}
+
+        try:
+            # Prepare input data
+            input_data = {
+                "performance_data": self._get_performance_data(),
+                "current_capabilities": self._get_agent_capabilities(),
+                "target_capabilities": target_capabilities or {}
+            }
+            
+            # Create cognitive context
+            context = CognitiveContext(
+                agent_id=self.agent_id,
+                task_type=CognitiveTaskType.CAPABILITY_ASSESSMENT,
+                input_data=input_data,
+                memory_context=self._get_memory_context(),
+                energy_context=self.get_energy_state(),
+                lifecycle_context=self._get_lifecycle_context()
+            )
+            
+            # Perform cognitive reasoning
+            assessment_result = self.cognitive_core(context)
+            
+            return {
+                "success": True,
+                "agent_id": self.agent_id,
+                "capability_gaps": assessment_result.get("capability_gaps", ""),
+                "improvement_plan": assessment_result.get("improvement_plan", ""),
+                "priority_recommendations": assessment_result.get("priority_recommendations", "")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in capability assessment for agent {self.agent_id}: {e}")
+            return {
+                "success": False,
+                "agent_id": self.agent_id,
+                "error": str(e)
+            }
+    
+    # =============================================================================
+    # Helper Methods for Cognitive Context
+    # =============================================================================
+    
+    def _get_memory_context(self) -> Dict[str, Any]:
+        """Get memory context for cognitive tasks."""
+        return {
+            "memory_utilization": self.mem_util,
+            "memory_writes": self.memory_writes,
+            "memory_hits": self.memory_hits_on_writes,
+            "compression_gain": self.total_compression_gain,
+            "skill_deltas": self.skill_deltas.copy()
+        }
+    
+    def _get_lifecycle_context(self) -> Dict[str, Any]:
+        """Get lifecycle context for cognitive tasks."""
+        return {
+            "agent_id": self.agent_id,
+            "created_at": self.created_at,
+            "last_heartbeat": self.last_heartbeat,
+            "capability_score": self.capability_score,
+            "role_probabilities": self.role_probs.copy(),
+            "tasks_processed": self.tasks_processed,
+            "successful_tasks": self.successful_tasks
+        }
+    
+    def _get_agent_capabilities(self) -> Dict[str, Any]:
+        """Get current agent capabilities."""
+        return {
+            "capability_score": self.capability_score,
+            "role_probabilities": self.role_probs.copy(),
+            "skill_deltas": self.skill_deltas.copy(),
+            "performance_history": {
+                "tasks_processed": self.tasks_processed,
+                "successful_tasks": self.successful_tasks,
+                "avg_quality": sum(self.quality_scores) / len(self.quality_scores) if self.quality_scores else 0.0
+            }
+        }
+    
+    def _get_performance_data(self) -> Dict[str, Any]:
+        """Get performance data for capability assessment."""
+        return {
+            "tasks_processed": self.tasks_processed,
+            "successful_tasks": self.successful_tasks,
+            "quality_scores": self.quality_scores.copy(),
+            "capability_score": self.capability_score,
+            "memory_utilization": self.mem_util,
+            "peer_interactions": self.peer_interactions.copy()
+        } 
