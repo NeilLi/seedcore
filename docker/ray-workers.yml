@@ -15,21 +15,39 @@ x-ray-common-env: &ray-common-env
   RAY_GRAFANA_IFRAME_HOST: ${PUBLIC_GRAFANA_URL}
   RAY_PROMETHEUS_NAME: Prometheus
 
+# Remote worker env (runs on host network outside the compose network)
+x-ray-remote-env: &ray-remote-env
+  PYTHONPATH: /app:/app/src
+  # Ray Client for any client-mode utilities inside the container
+  RAY_ADDRESS: ray://${HEAD_IP:-ray-head}:10001
+  # Serve HTTP on the head node
+  RAY_SERVE_ADDRESS: ${HEAD_IP:-ray-head}:8000
+  # Logging & observability
+  RAY_worker_stdout_file: /dev/stdout
+  RAY_worker_stderr_file: /dev/stderr
+  RAY_log_to_driver: 1
+  RAY_BACKEND_LOG_LEVEL: info
+
+# Common container settings shared by local and remote workers
+x-ray-worker-base: &ray-worker-base
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.ray
+  image: seedcore-ray-worker:latest
+  shm_size: '2gb'
+  working_dir: /app
+  volumes:
+    - ..:/app
+    - ./artifacts:/data
+  restart: unless-stopped
+
 services:
+  # Local worker attached to compose network (default scaling target)
   ray-worker:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.ray
-    image: seedcore-ray-worker:latest
-    shm_size: '2gb'
-    working_dir: /app
+    <<: *ray-worker-base
     environment: *ray-common-env
-    volumes:
-      - ..:/app
-      - ./artifacts:/data
     networks:
       - seedcore-network
-    restart: unless-stopped
 
     # Honour optional RAY_WORKER_CPUS for easy benchmarking.
     command: >
@@ -44,6 +62,30 @@ services:
       start_period: 60s
     deploy:
       replicas: 1  # default ‑ overridden by --scale if needed
+
+  # Remote worker that joins a head reachable via ${HEAD_IP} and uses host networking.
+  # This is used by sc-cmd.sh up-worker on external hosts.
+  ray-worker-remote:
+    <<: *ray-worker-base
+    environment: *ray-remote-env
+    network_mode: host
+    command: >
+      ray start
+        --address=${HEAD_IP:-ray-head}:6380
+        --node-ip-address=${WORKER_IP:-127.0.0.1}
+        --object-manager-port=${RAY_OBJECT_MANAGER_PORT:-8076}
+        --node-manager-port=${RAY_NODE_MANAGER_PORT:-8077}
+        --min-worker-port=${RAY_MIN_WORKER_PORT:-11000} --max-worker-port=${RAY_MAX_WORKER_PORT:-11020}
+        --num-cpus=${RAY_WORKER_CPUS:-1}
+        --block
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep 'ray start' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    deploy:
+      replicas: 1
 
 networks:
   seedcore-network:
