@@ -488,13 +488,42 @@ async def refresh_xgboost_model():
         
         # Get XGBoost service
         xgb_service = get_xgboost_service()
-        
-        # Refresh the model
+        # Pre-flight Lipschitz audit
+        try:
+            meta_before = _get_energy_meta()
+            if meta_before.get("L_tot", 1.0) >= PROMOTION_LTOT_CAP:
+                return {"accepted": False, "reason": "System at/over Lipschitz cap (pre-flight)", "meta": meta_before}
+        except HTTPException:
+            # Energy meta unavailable; refuse refresh for safety
+            return {"accepted": False, "reason": "Energy meta unavailable"}
+
+        # Keep old model to allow rollback
+        old_path = getattr(xgb_service, "current_model_path", None)
+
+        # Refresh the model (load latest promoted)
         success = xgb_service.refresh_model()
         
         if success:
+            # Post-flight audit
+            meta_after = _get_energy_meta()
+            if meta_after.get("L_tot", 1.0) >= PROMOTION_LTOT_CAP:
+                # Rollback if cap violated
+                if old_path:
+                    try:
+                        xgb_service.load_model(old_path)
+                    except Exception:
+                        logger.error("Rollback failed after L_tot cap violation (refresh)")
+                return {"accepted": False, "reason": "Post-refresh L_tot cap violated", "meta": meta_after}
+
+            # Log a refresh event
+            _log_flywheel_event({
+                "organ": "utility",
+                "metric": "model_refresh",
+                "model_path": xgb_service.current_model_path,
+                "success": True
+            })
             return {
-                "status": "success",
+                "accepted": True,
                 "message": "Model refreshed successfully",
                 "current_model_path": xgb_service.current_model_path
             }
@@ -503,6 +532,108 @@ async def refresh_xgboost_model():
         
     except Exception as e:
         logger.error(f"Error refreshing XGBoost model: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Promotion gate configuration
+PROMOTION_LTOT_CAP: float = float(os.getenv("SEEDCORE_PROMOTION_LTOT_CAP", "0.98"))
+E_GUARD: float = float(os.getenv("SEEDCORE_E_GUARD", "0.0"))  # require delta_E <= -E_GUARD
+
+
+def _get_seedcore_api_base() -> str:
+    base = os.getenv("SEEDCORE_API_ADDRESS", "localhost:8002")
+    if not base.startswith("http"):
+        base = f"http://{base}"
+    return base
+
+
+def _get_energy_meta() -> Dict[str, Any]:
+    try:
+        base = _get_seedcore_api_base()
+        r = requests.get(f"{base}/energy/meta", timeout=3)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.error(f"Failed to fetch /energy/meta: {e}")
+        raise HTTPException(status_code=502, detail=f"Energy meta unavailable: {e}")
+
+
+def _log_flywheel_event(payload: Dict[str, Any]) -> None:
+    try:
+        base = _get_seedcore_api_base()
+        requests.post(f"{base}/energy/log", json=payload, timeout=2)
+    except Exception as e:
+        logger.warning(f"Failed to log flywheel event: {e}")
+
+
+@ml_app.post("/xgboost/promote")
+async def promote_xgboost_model(request: Dict[str, Any]):
+    """Gated promotion endpoint for XGBoost models.
+
+    Body fields:
+      - model_path | candidate_uri: path/uri of the candidate model
+      - delta_E: predicted energy reduction (negative is good)
+      - latency_ms (optional)
+      - beta_mem_new (optional)
+    """
+    try:
+        from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+
+        candidate = request.get("model_path") or request.get("candidate_uri")
+        if not candidate:
+            raise HTTPException(status_code=400, detail="model_path (or candidate_uri) is required")
+        try:
+            delta_E = float(request.get("delta_E", 0.0))
+        except Exception:
+            raise HTTPException(status_code=400, detail="delta_E must be a number")
+
+        # ΔE guard: require sufficient predicted reduction
+        if not (delta_E <= -E_GUARD):
+            return {"accepted": False, "reason": f"ΔE guard failed (delta_E={delta_E} must be ≤ {-E_GUARD})"}
+
+        # Pre-flight audit: ensure system is under L_tot cap now
+        meta_before = _get_energy_meta()
+        if meta_before.get("L_tot", 1.0) >= PROMOTION_LTOT_CAP:
+            return {"accepted": False, "reason": "System at/over Lipschitz cap (pre-flight)", "meta": meta_before}
+
+        # Attempt swap
+        xgb_service = get_xgboost_service()
+        old_path = getattr(xgb_service, "current_model_path", None)
+        if not xgb_service.load_model(candidate):
+            return {"accepted": False, "reason": "Failed to load candidate model"}
+
+        # Post-flight audit
+        meta_after = _get_energy_meta()
+        if meta_after.get("L_tot", 1.0) >= PROMOTION_LTOT_CAP:
+            # Rollback
+            if old_path:
+                try:
+                    xgb_service.load_model(old_path)
+                except Exception:
+                    logger.error("Rollback failed after L_tot cap violation")
+            return {"accepted": False, "reason": "Post-promotion L_tot cap violated", "meta": meta_after}
+
+        # Log flywheel/promotion result for observability
+        event = {
+            "organ": "utility",
+            "metric": "flywheel_result",
+            "delta_E": delta_E,
+            "latency_ms": request.get("latency_ms"),
+            "beta_mem_new": request.get("beta_mem_new"),
+            "model_path": candidate,
+            "success": True,
+        }
+        _log_flywheel_event(event)
+
+        return {
+            "accepted": True,
+            "current_model_path": getattr(xgb_service, "current_model_path", None),
+            "meta": meta_after,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during xgboost promotion: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @serve.deployment(

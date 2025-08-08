@@ -181,9 +181,9 @@ result = tier0_manager.execute_task_on_best_agent(task_data)
 import requests
 
 # Fast cached responses for energy endpoints
-response = requests.get("http://localhost:8002/energy/gradient")  # ~0.05s for cache hits
-response = requests.get("http://localhost:8002/energy/monitor")   # ~0.02s for cache hits
-response = requests.get("http://localhost:8002/energy/calibrate") # ~0.015s for cache hits
+response = requests.get("http://localhost:8002/energy/gradient")  # ~0.05s for cache hits (served by API on 8002)
+response = requests.get("http://localhost:8002/energy/monitor")   # ~0.02s for cache hits (served by API on 8002)
+response = requests.get("http://localhost:8002/energy/calibrate") # ~0.015s for cache hits (served by API on 8002)
 ```
 
 ## Configuration
@@ -286,3 +286,65 @@ The implementation follows best practices for:
 - **Observability**: Real-time monitoring and health checks
 - **Scalability**: Configurable settings and distributed caching support
 - **Maintainability**: Clean code structure and comprehensive documentation 
+
+## Promotion Gate and Runtime Contractivity Audit
+
+### Overview
+To ensure safe model promotions and flywheel actions, the system exposes:
+
+- `GET /energy/meta` (served by API on port 8002): returns runtime contractivity audit metrics and the composite bound `L_tot`. Promotion is safe if `L_tot < cap`.
+- `POST /xgboost/promote` (served by Ray Serve on port 8000): a gated, transactional promotion endpoint that enforces both a ΔE guard and the `L_tot` cap before committing the model swap.
+
+### Composite Bound
+The composite bound tracks runtime factors:
+
+`L_tot = ((1 - p_esc) * β_router + p_esc * β_meta) * ρ * β_mem`
+
+Promotion must satisfy `L_tot < cap` (default `cap = 0.98`).
+
+### ΔE Guard
+Promotions must also pass a predicted energy reduction guard: require `delta_E <= -E_GUARD` (with `E_GUARD` defaulting to 0.0). This ensures only improvements are promoted.
+
+### Endpoint Summary
+
+- `GET http://localhost:8002/energy/meta` → `{ p_fast, p_esc, beta_router, beta_meta, rho, beta_mem, L_tot, cap, ok_for_promotion }`
+- `POST http://localhost:8000/xgboost/promote` with body:
+  `{ "model_path": "/app/.../model.xgb", "delta_E": -0.05 }`
+
+Example:
+
+```bash
+curl -sS -X POST http://localhost:8000/xgboost/promote \
+  -H 'Content-Type: application/json' \
+  -d '{"model_path":"/app/docker/artifacts/models/docker_test_model/model.xgb","delta_E":-0.05}'
+```
+
+Response:
+
+```json
+{
+  "accepted": true,
+  "current_model_path": "/app/docker/artifacts/models/docker_test_model/model.xgb",
+  "meta": {
+    "p_fast": 0.0,
+    "p_esc": 0.0,
+    "beta_router": 1.0,
+    "beta_meta": 0.8,
+    "rho": 0.95,
+    "beta_mem": 0.2,
+    "L_tot": 0.0,
+    "cap": 0.98,
+    "ok_for_promotion": true
+  }
+}
+```
+
+### Configuration
+
+- `SEEDCORE_PROMOTION_LTOT_CAP` (default `0.98`)
+- `SEEDCORE_E_GUARD` (default `0.0`)
+
+### Notes
+
+- The XGBoost/Ray Serve endpoints (including `/xgboost/promote`) are exposed via Ray Serve on port `8000`.
+- Energy telemetry and audits (`/energy/*`) are exposed via the main API service on port `8002`.

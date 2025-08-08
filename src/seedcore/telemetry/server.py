@@ -26,6 +26,7 @@ import random
 import uuid
 import ray
 from fastapi import FastAPI, Depends, HTTPException, Request
+from collections import deque
 from typing import List, Dict, Any
 import time
 # import redis
@@ -105,6 +106,25 @@ class _Ctl:
     gamma: float = 2.0
     kappa: float = 0.5  # TD-priority knob
 app.state.controller = _Ctl()
+
+# --- Energy Meta/Audit State ---
+# Rolling counters for router fast-path vs escalation (for contractivity audit)
+router_fast_hits: int = 0
+router_escalations: int = 0
+router_latency_ms_window: deque = deque(maxlen=1000)
+
+# DSPy/LLM token accounting (optional)
+tokens_in_total: int = 0
+tokens_out_total: int = 0
+token_cost_total: float = 0.0
+
+# Guard-rail and weighting knobs (overridable via env)
+BETA_ROUTER: float = float(os.getenv("SEEDCORE_BETA_ROUTER", "1.0"))
+BETA_META: float = float(os.getenv("SEEDCORE_BETA_META", "0.80"))
+RHO_CLIP: float = float(os.getenv("SEEDCORE_RHO_CLIP", "0.95"))
+# Token cost term is OFF by default; can enable later safely
+BETA_TOK: float = float(os.getenv("SEEDCORE_BETA_TOK", "0.0"))
+PROMOTION_LTOT_CAP: float = float(os.getenv("SEEDCORE_PROMOTION_LTOT_CAP", "0.98"))
 
 @app.on_event("startup")
 async def startup_event():
@@ -323,25 +343,104 @@ async def log_energy_event(event: dict):
         if len(energy_logs) > 10000:
             energy_logs.pop(0)
         
-        # Update energy terms based on event type
-        if event.get('organ') == 'utility' and event.get('metric') == 'predicted_risk':
-            # Update pair energy based on prediction success
-            if event.get('success', False):
-                # Successful prediction reduces pair energy (better collaboration)
-                _ledger.add_pair_delta(w_effective=0.1, similarity=0.8)
-            else:
-                # Failed prediction increases pair energy (worse collaboration)
-                _ledger.add_pair_delta(w_effective=0.1, similarity=0.2)
-            
-            # Update mem energy based on model usage
+        # Update energy/meta based on event type
+        metric = event.get('metric')
+        organ = event.get('organ')
+
+        # 1) Existing XGBoost predicted_risk → pair/mem/reg adjustments
+        if organ == 'utility' and metric == 'predicted_risk':
+            success = bool(event.get('success', False))
+            # Successful prediction reduces pair energy (better collaboration)
+            _ledger.add_pair_delta(-0.1 if success else 0.1)
+            # Memory pressure when model is loaded/used
             if event.get('model_path'):
-                # Model loading adds to memory pressure
                 _ledger.add_mem_delta(memory_usage=0.1, compression_ratio=0.5)
-            
-            # Update reg energy based on model complexity
+            # Complexity tax when prediction volume is large
             if event.get('prediction_count', 0) > 100:
-                # High prediction count indicates model complexity
-                _ledger.add_reg_delta(complexity=0.05)
+                _ledger.add_reg_delta(regularization_strength=0.05, model_complexity=1.0)
+
+        # 2) Core flow health: router_hit / escalation
+        elif metric in ("router_hit", "escalation"):
+            global router_fast_hits, router_escalations
+            latency_ms = float(event.get('latency_ms', 0))
+            router_latency_ms_window.append(latency_ms)
+            if metric == 'router_hit':
+                router_fast_hits += 1
+                # Reward fast-path with tiny negative regularization delta
+                _ledger.add_reg_delta(regularization_strength=0.01, model_complexity=-0.5)
+            else:
+                router_escalations += 1
+                # Penalize escalation with small positive regularization delta
+                _ledger.add_reg_delta(regularization_strength=0.01, model_complexity=0.5)
+
+        # 3) HGNN outcomes: hyperedge_apply
+        elif metric == 'hyperedge_apply':
+            success = bool(event.get('success', False))
+            novelty = float(event.get('novelty', 0.0))
+            # If success, reduce hyper energy slightly; else increase
+            complexity = novelty
+            precision = 1.0 if success else 0.5
+            _ledger.add_hyper_delta(complexity=complexity, precision=precision)
+
+        # 4) DSPy/LLM costs
+        elif metric in ("llm_call", "dspy_step"):
+            global tokens_in_total, tokens_out_total, token_cost_total
+            ti = int(event.get('tokens_in', 0))
+            to = int(event.get('tokens_out', 0))
+            latency_ms = float(event.get('latency_ms', 0))
+            tokens_in_total += ti
+            tokens_out_total += to
+            token_cost_total += BETA_TOK * (ti + to)
+            # Map to reg as complexity; tiny token-cost if enabled
+            reg_base = 0.001 * (ti + to) + 0.0005 * latency_ms
+            if BETA_TOK > 0:
+                reg_base += BETA_TOK * (ti + to)
+            _ledger.add_reg_delta(regularization_strength=reg_base, model_complexity=1.0)
+
+        # 5) Memory/CostVQ updates
+        elif metric == 'memory_op':
+            # event fields: tier, cost_vq, compressed(bool), r (compression factor)
+            cost_vq = float(event.get('cost_vq', 0.0))
+            compressed = bool(event.get('compressed', False))
+            r = float(event.get('r', 1.0))
+            # Update COSTVQ gauge if available
+            try:
+                from ..telemetry.metrics import COSTVQ
+                COSTVQ.set(cost_vq)
+            except Exception:
+                pass
+            # Map to mem term: usage minus compression effectiveness
+            compression_ratio = 1.0 / max(r, 1e-6) if compressed else 0.0
+            _ledger.add_mem_delta(memory_usage=cost_vq, compression_ratio=compression_ratio)
+
+        # 6) Pair outcomes update (agents/organs)
+        elif metric == 'pair_outcome':
+            success = bool(event.get('success', False))
+            similarity = float(event.get('similarity', 0.5))
+            w_effective = float(event.get('w_effective', 0.1))
+            # Lower energy when success is True and similarity high
+            delta = -w_effective * (similarity if success else (1.0 - similarity))
+            _ledger.add_pair_delta(delta)
+            # Also update PairStats for future full recompute
+            try:
+                agents = event.get('agents') or []
+                if isinstance(agents, list) and len(agents) == 2:
+                    PAIR_TRACKER.update_on_task_complete(agents[0], agents[1], success)
+            except Exception:
+                pass
+
+        # 7) Flywheel results
+        elif metric == 'flywheel_result':
+            delta_E = float(event.get('delta_E', 0.0))
+            beta_mem_new = event.get('beta_mem_new')
+            # Reflect delta_E into reg minimally (telemetry)
+            _ledger.add_reg_delta(regularization_strength=delta_E, model_complexity=0.0)
+            if beta_mem_new is not None:
+                try:
+                    # Adjust runtime beta_mem knob if present on ledger
+                    _ledger.beta_mem = float(beta_mem_new)
+                except Exception:
+                    pass
         
         logger.info(f"Energy event logged: {event}")
         return {"status": "success", "message": "Energy event logged", "event_count": len(energy_logs)}
@@ -537,6 +636,41 @@ async def energy_gradient():
         
         return error_payload
 
+
+@app.get("/energy/meta")
+def energy_meta():
+    """Runtime contractivity audit and guard-rails for promotions.
+    Returns L_tot components and current cap.
+    """
+    try:
+        # p_fast / p_esc
+        total_router = (router_fast_hits + router_escalations) or 1
+        p_fast = router_fast_hits / total_router
+        p_esc = router_escalations / total_router
+
+        # Components
+        beta_router = BETA_ROUTER
+        beta_meta = BETA_META
+        rho = RHO_CLIP
+        beta_mem = float(getattr(_ledger, 'beta_mem', 0.95)) if hasattr(_ledger, 'beta_mem') else 0.95
+
+        # Composite Lipschitz-like factor (heuristic composition)
+        L_tot = min(0.999, beta_router * (p_fast + p_esc) * beta_meta * rho * beta_mem)
+
+        return {
+            "p_fast": p_fast,
+            "p_esc": p_esc,
+            "beta_router": beta_router,
+            "beta_meta": beta_meta,
+            "rho": rho,
+            "beta_mem": beta_mem,
+            "L_tot": L_tot,
+            "cap": PROMOTION_LTOT_CAP,
+            "ok_for_promotion": L_tot < PROMOTION_LTOT_CAP
+        }
+    except Exception as e:
+        logger.error(f"Energy meta computation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/energy/calibrate")
 def energy_calibrate():
@@ -881,6 +1015,11 @@ def energy_monitor():
             except Exception as e:
                 logger.warning(f"Failed to get details for agent {agent_id}: {e}")
         
+        # Router fast/esc metrics
+        total_router = (router_fast_hits + router_escalations) or 1
+        p_fast = router_fast_hits / total_router
+        p_esc = router_escalations / total_router
+
         monitor_payload = {
             "timestamp": time.time(),
             "energy_terms": {
@@ -890,6 +1029,14 @@ def energy_monitor():
                 "reg": energy_terms.reg,
                 "mem": energy_terms.mem,
                 "total": energy_terms.total
+            },
+            "router_metrics": {
+                "p_fast": p_fast,
+                "p_esc": p_esc,
+                "latency_ms_p50": float(np.percentile(list(router_latency_ms_window), 50)) if len(router_latency_ms_window) > 0 else 0.0,
+                "latency_ms_p95": float(np.percentile(list(router_latency_ms_window), 95)) if len(router_latency_ms_window) > 0 else 0.0,
+                "fast_hits": router_fast_hits,
+                "escalations": router_escalations
             },
             "memory_metrics": {
                 "cost_vq": memory_stats['cost_vq'],
@@ -911,12 +1058,12 @@ def energy_monitor():
                 "tier0_manager_available": tier0_manager is not None
             }
         }
-        
+
         # Cache the result for 30 seconds
         if cache.ping():
             cache.set(cache_key, monitor_payload, expire=30)
             logger.debug(f"Cached energy monitor result: {cache_key}")
-        
+
         return monitor_payload
         
     except Exception as e:
