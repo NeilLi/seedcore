@@ -130,7 +130,7 @@ This document summarizes the transformation of SeedCore API endpoints from retur
 - ✅ Detailed memory system metrics
 - ✅ Performance indicators and health checks
 
-### 3. Agents State Endpoint (`/agents/state`)
+### 3. Agents State Endpoint (`/tier0/agents/state`)
 
 #### Before (Basic Agent Data)
 ```json
@@ -278,7 +278,7 @@ curl http://localhost:80/energy/calibrate
 curl http://localhost:80/energy/monitor | jq '.energy_terms'
 
 # Check agent performance
-curl http://localhost:80/agents/state | jq '.agents[].capability'
+curl http://localhost:80/tier0/agents/state | jq '.agents[].capability'
 
 # Monitor system health
 curl http://localhost:80/healthz/energy

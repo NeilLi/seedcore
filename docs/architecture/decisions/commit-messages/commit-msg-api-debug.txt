@@ -1,10 +1,10 @@
-fix: resolve FastAPI validation error in /agents/state endpoint
+fix: resolve FastAPI validation error in /tier0/agents/state endpoint
 
 ## Summary
-Fixed a critical FastAPI validation error that was preventing the `/agents/state` endpoint from returning data. The issue was caused by a type annotation mismatch between the function signature and actual return value.
+Fixed a critical FastAPI validation error that was preventing the `/tier0/agents/state` endpoint (formerly `/agents/state`) from returning data. The issue was caused by a type annotation mismatch between the function signature and actual return value.
 
 ## Problem
-The `/agents/state` endpoint was returning empty responses due to:
+The `/tier0/agents/state` endpoint was returning empty responses due to:
 ```
 fastapi.exceptions.ResponseValidationError: 1 validation errors:
   {'type': 'list_type', 'loc': ('response',), 'msg': 'Input should be a valid list', 'input': {'agents': [...], 'summary': {...}}}
@@ -51,13 +51,13 @@ def get_agents_state() -> Dict:
 
 ### Before Fix
 ```bash
-curl -s /agents/state
+curl -s /tier0/agents/state
 # Returns: (empty response)
 ```
 
 ### After Fix
 ```bash
-curl -s /agents/state | jq .
+curl -s /tier0/agents/state | jq .
 # Returns: Complete agent data with summary
 ```
 
@@ -104,7 +104,7 @@ curl -s /agents/state | jq .
 ## Impact
 
 ### ✅ Resolved Issues
-- **API Functionality**: `/agents/state` endpoint now returns real data
+- **API Functionality**: `/tier0/agents/state` endpoint now returns real data
 - **Type Safety**: Correct return type annotations
 - **Error Handling**: No more FastAPI validation errors
 - **Data Visibility**: Full agent state information available
@@ -118,7 +118,7 @@ curl -s /agents/state | jq .
 ## Related Endpoints Status
 
 ### ✅ Working Endpoints
-- `/agents/state` - Fixed and returning real data
+- `/tier0/agents/state` - Fixed and returning real data
 - `/energy/gradient` - Working with real energy calculations
 - `/energy/monitor` - Real-time energy monitoring
 - `/energy/calibrate` - Energy calibration with synthetic tasks

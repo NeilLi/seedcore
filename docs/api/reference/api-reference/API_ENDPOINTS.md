@@ -300,7 +300,7 @@ This document describes all available API endpoints in the SeedCore system, with
 }
 ```
 
-### 6. Agents State (`GET /agents/state`) — API 8002
+### 6. Agents State (`GET /tier0/agents/state`) — API 8002
 
 **Description**: Returns the current state of all agents in the simulation with real data.
 
@@ -419,7 +419,7 @@ curl http://localhost:8002/healthz/energy
 curl http://localhost:8002/system/status
 
 # Get all agent states
-curl http://localhost:8002/agents/state
+curl http://localhost:8002/tier0/agents/state
 
 # Basic health check
 curl http://localhost:8002/health
