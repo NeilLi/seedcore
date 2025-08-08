@@ -180,6 +180,7 @@ services:
       - "8265:8265"      # Ray Dashboard UI
       - "8000:8000"      # Ray Serve HTTP externally
       - "8080:8080"      # Ray Metrics
+      - "6380:6380"      # Ray GCS (Global Control Store) - needed for remote workers
     networks:
       - seedcore-network
     depends_on:

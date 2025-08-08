@@ -121,7 +121,7 @@ cmd_up() {
   
   scale_workers "$W"
   echo -e "\n🎉 cluster up → http://localhost:8265\n"
-  echo "📊 Check worker status with: docker compose -f ray-workers.yml -p seedcore-workers ps"
+  echo "📊 Check worker status with: docker compose -f ray-workers.yml -p $PROJECT ps"
 }
 
 cmd_restart() {
@@ -164,7 +164,10 @@ cmd_logs() {
   case "${1:-}" in
     head) docker compose -f "$COMPOSE_MAIN" -p $PROJECT --profile core --profile ray logs -f --tail=100 ray-head ;;
     api)  docker compose -f "$COMPOSE_MAIN" -p $PROJECT --profile core --profile ray --profile api logs -f --tail=100 seedcore-api ;;
-    workers) docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT logs -f --tail=100 ray-worker ;;
+    workers) 
+      # Use the main project name for consistency
+      docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT logs -f --tail=100 ray-worker
+      ;;
     *) echo "logs {head|api|workers}"; exit 1 ;;
   esac
 }
@@ -185,6 +188,81 @@ cmd_restart_api() {
   echo "✅ seedcore-api restarted"
 }
 
+cmd_up_worker() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 up-worker <RAY_HEAD_PRIVATE_IP> [num_workers]"
+    echo "Note: Only 1 worker per EC2 host is recommended for stability."
+    exit 1
+  fi
+
+  local HEAD_IP="$1"
+  local NUM_WORKERS="${2:-1}"
+
+  if [[ "$NUM_WORKERS" -gt 1 ]]; then
+    echo "⚠️  Warning: Only 1 Ray worker per EC2 host is recommended."
+    echo "    Continuing with $NUM_WORKERS as requested..."
+    echo
+  fi
+
+  echo "🚀 Launching $NUM_WORKERS worker(s) connecting to Ray head at $HEAD_IP…"
+
+  local WORKER_IP
+  WORKER_IP=$(hostname -I | awk '{print $1}')
+  echo "📍 This worker's IP address is $WORKER_IP"
+
+  local PROJECT_ROOT
+  PROJECT_ROOT=$(realpath "$SCRIPT_DIR/..")
+
+  local REMOTE_WORKERS_FILE="/tmp/remote-worker-$$.yml"
+  cat > "$REMOTE_WORKERS_FILE" << EOF
+services:
+  ray-worker:
+    image: seedcore-ray-worker:latest
+    build:
+      context: ${PROJECT_ROOT}
+      dockerfile: docker/Dockerfile.ray
+    shm_size: "3gb"
+    working_dir: /app
+    environment:
+      PYTHONPATH: /app:/app/src
+      RAY_LOG_TO_STDERR: "1"
+      RAY_BACKEND_LOG_LEVEL: "debug"
+      # only if you actually use Ray Client from inside this container:
+      RAY_ADDRESS: ray://${HEAD_IP}:10001
+      RAY_SERVE_ADDRESS: ${HEAD_IP}:8000
+    volumes:
+      - ${PROJECT_ROOT}:/app
+      - ${PROJECT_ROOT}/artifacts:/data
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - bash
+      - -lc
+      - >
+        ray start
+        --address=${HEAD_IP}:6380
+        --node-ip-address=${WORKER_IP}
+        --object-manager-port=8076
+        --node-manager-port=8077
+        --min-worker-port=11000 --max-worker-port=11020
+        --block
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep 'ray start' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+EOF
+
+  docker compose -f "$REMOTE_WORKERS_FILE" -p "$PROJECT" up -d --scale ray-worker="$NUM_WORKERS"
+  rm -f "$REMOTE_WORKERS_FILE"
+
+  echo
+  echo "✅ Ray worker(s) started and should be connecting to head at $HEAD_IP:6380."
+  echo "💡 Dashboard: http://$HEAD_IP:8265"
+}
+
+
 # ---------- entry -------------------------------------------------------------
 case "${1:-}" in
   up)       shift; cmd_up   "${1:-3}"   ;;
@@ -193,5 +271,6 @@ case "${1:-}" in
   down)            cmd_down           ;;
   logs)    shift; cmd_logs "$@"       ;;
   status)          cmd_status         ;;
-  *) echo "Usage: $0 {up|restart|restart-api|down|logs|status}"; exit 1 ;;
+  up-worker) shift; cmd_up_worker "$@" ;;
+  *) echo "Usage: $0 {up|restart|restart-api|down|logs|status|up-worker <RAY_HEAD_PRIVATE_IP> [num_workers]}"; exit 1 ;;
 esac 

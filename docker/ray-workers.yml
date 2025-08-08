@@ -33,7 +33,7 @@ services:
 
     # Honour optional RAY_WORKER_CPUS for easy benchmarking.
     command: >
-      ray start --address=ray-head:6379
+      ray start --address=ray-head:6380
                 --num-cpus=${RAY_WORKER_CPUS:-1}
                 --block
     healthcheck:

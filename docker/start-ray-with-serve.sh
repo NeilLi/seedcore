@@ -18,7 +18,7 @@ export RAY_DISABLE_METRICS_SERVER=1
 ray start --head \
     --dashboard-host 0.0.0.0 \
     --dashboard-port 8265 \
-    --port=6379 \
+    --port=6380 \
     --ray-client-server-port=10001 \
     --include-dashboard true \
     --metrics-export-port=8080 \
