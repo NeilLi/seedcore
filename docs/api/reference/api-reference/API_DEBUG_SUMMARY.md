@@ -1,8 +1,8 @@
-# API Debug Summary: `/agents/state` Endpoint Fix
+# API Debug Summary: `/tier0/agents/state` Endpoint Fix
 
 ## Issue Description
 
-The `/agents/state` endpoint was returning an empty response due to a FastAPI validation error.
+The `/tier0/agents/state` endpoint (formerly `/agents/state`) was returning an empty response due to a FastAPI validation error.
 
 ## Root Cause Analysis
 
@@ -52,13 +52,13 @@ def get_agents_state() -> Dict:
 
 ### Before Fix
 ```bash
-curl -s /agents/state
+curl -s /tier0/agents/state
 # Returns: (empty response)
 ```
 
 ### After Fix
 ```bash
-curl -s /agents/state | jq .
+curl -s /tier0/agents/state | jq .
 ```
 
 **Response:**
@@ -146,7 +146,7 @@ curl -s /agents/state | jq .
 ## Related Endpoints Status
 
 ### ✅ Working Endpoints
-- `/agents/state` - Fixed and returning real data
+- `/tier0/agents/state` - Fixed and returning real data
 - `/energy/gradient` - Working with real energy calculations
 - `/system/status` - Working with comprehensive system info
 
@@ -218,4 +218,4 @@ curl -s /agents/state | jq .
 
 ## Conclusion
 
-The `/agents/state` endpoint is now fully functional and returning real data from the SeedCore system. The fix was simple but crucial - ensuring type annotations match actual implementations. This debugging process demonstrates the importance of proper error handling and type safety in API development. 
+The `/tier0/agents/state` endpoint is now fully functional and returning real data from the SeedCore system. The fix was simple but crucial - ensuring type annotations match actual implementations. This debugging process demonstrates the importance of proper error handling and type safety in API development. 

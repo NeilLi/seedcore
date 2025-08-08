@@ -87,7 +87,7 @@ class MetricsIntegrationService:
         # Fetch data from all endpoints concurrently
         tasks = [
             self._fetch_endpoint("/energy/gradient"),
-            self._fetch_endpoint("/agents/state"),
+            self._fetch_endpoint("/tier0/agents/state"),
             self._fetch_endpoint("/system/status"),
             self._fetch_endpoint("/energy/monitor")
         ]

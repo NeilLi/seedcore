@@ -62,6 +62,10 @@ from ..control.memory.meta_controller import adjust
 import asyncio
 from ..api.routers.mfb_router import mfb_router
 from ..api.routers.salience_router import router as salience_router
+from ..api.routers.organism_router import router as organism_router
+from ..api.routers.tier0_router import router as tier0_router
+from ..api.routers.energy_router import router as energy_router
+from ..api.routers.holon_router import router as holon_router
 from ..config.ray_config import get_ray_config
 from ..utils.ray_utils import init_ray, get_ray_cluster_info, is_ray_available
 
@@ -100,6 +104,10 @@ mw_cache = {}  # This should be updated by your memory system as needed
 app = FastAPI()
 app.include_router(mfb_router)
 app.include_router(salience_router)
+app.include_router(organism_router)
+app.include_router(tier0_router)
+app.include_router(energy_router)
+app.include_router(holon_router)
 
 class _Ctl:
     tau: float = 0.3
@@ -823,97 +831,121 @@ def energy_calibrate():
         return error_payload
 
 
-@app.get("/healthz/energy")
-def healthz_energy():
-    """Health check endpoint for energy system readiness."""
-    try:
-        from ..energy.calculator import energy_gradient_payload, EnergyLedger
-        from ..agents.tier0_manager import Tier0MemoryManager
-        import ray
-        
-        # Initialize Ray if not already done
-        if not ray.is_initialized():
-            ray.init(address="auto", ignore_reinit_error=True)
-        
-        # Get Tier0 manager for real agent data
-        tier0_manager = Tier0MemoryManager()
-        agent_ids = tier0_manager.list_agents()
-        
-        # Create a ledger with real data
-        ledger = EnergyLedger()
-        
-        # Add some real pair stats if agents exist
-        if len(agent_ids) >= 2:
-            for i in range(len(agent_ids)):
-                for j in range(i + 1, min(i + 2, len(agent_ids))):
-                    pair_key = tuple(sorted([agent_ids[i], agent_ids[j]]))
-                    ledger.pair_stats[pair_key] = {
-                        'w': 0.7,  # Simulated collaboration weight
-                        'sim': 0.6  # Simulated similarity
-                    }
-        
-        # Get energy ledger snapshot
-        ledger_snapshot = energy_gradient_payload(ledger)
-        
-        # Check if energy system is responsive
-        current_energy = ledger.get_total()
-        
-        # Determine health status
-        if current_energy < float('inf') and current_energy > float('-inf'):
-            status = "healthy"
-            message = "Energy system operational"
-        else:
-            status = "unhealthy"
-            message = "Energy calculation error"
-        
-        # Get real-time agent metrics
-        agent_metrics = {
-            "total_agents": len(agent_ids),
-            "active_agents": 0,
-            "avg_capability": 0.0,
-            "avg_mem_util": 0.0
+def _build_energy_health_payload():
+    """Internal: Build energy health payload for both legacy and new health routes."""
+    from ..energy.calculator import energy_gradient_payload, EnergyLedger
+    from ..agents.tier0_manager import Tier0MemoryManager
+    import ray
+
+    # Initialize Ray if not already done
+    if not ray.is_initialized():
+        ray.init(address="auto", ignore_reinit_error=True)
+
+    # Get Tier0 manager for real agent data
+    tier0_manager = Tier0MemoryManager()
+    agent_ids = tier0_manager.list_agents()
+
+    # Create a ledger with real data
+    ledger = EnergyLedger()
+
+    # Add some real pair stats if agents exist
+    if len(agent_ids) >= 2:
+        for i in range(len(agent_ids)):
+            for j in range(i + 1, min(i + 2, len(agent_ids))):
+                pair_key = tuple(sorted([agent_ids[i], agent_ids[j]]))
+                ledger.pair_stats[pair_key] = {
+                    'w': 0.7,  # Simulated collaboration weight
+                    'sim': 0.6  # Simulated similarity
+                }
+
+    # Get energy ledger snapshot
+    ledger_snapshot = energy_gradient_payload(ledger)
+
+    # Check if energy system is responsive
+    current_energy = ledger.get_total()
+
+    # Determine health status
+    if current_energy < float('inf') and current_energy > float('-inf'):
+        status = "healthy"
+        message = "Energy system operational"
+    else:
+        status = "unhealthy"
+        message = "Energy calculation error"
+
+    # Get real-time agent metrics
+    agent_metrics = {
+        "total_agents": len(agent_ids),
+        "active_agents": 0,
+        "avg_capability": 0.0,
+        "avg_mem_util": 0.0
+    }
+
+    if agent_ids:
+        active_count = 0
+        total_capability = 0.0
+        total_mem_util = 0.0
+        for agent_id in agent_ids[:5]:  # Check first 5 agents
+            try:
+                agent = tier0_manager.get_agent(agent_id)
+                if agent:
+                    heartbeat = ray.get(agent.get_heartbeat.remote())
+                    if heartbeat.get('last_heartbeat', 0) > time.time() - 300:  # Active in last 5 minutes
+                        active_count += 1
+                    total_capability += heartbeat.get('capability_score', 0.5)
+                    total_mem_util += heartbeat.get('mem_util', 0.0)
+            except Exception:
+                pass
+
+        agent_metrics.update({
+            "active_agents": active_count,
+            "avg_capability": total_capability / len(agent_ids) if agent_ids else 0.0,
+            "avg_mem_util": total_mem_util / len(agent_ids) if agent_ids else 0.0
+        })
+
+    return {
+        "status": status,
+        "message": message,
+        "timestamp": time.time(),
+        "energy_snapshot": ledger_snapshot,
+        "agent_metrics": agent_metrics,
+        "checks": {
+            "energy_calculation": "pass" if status == "healthy" else "fail",
+            "ledger_accessible": "pass",
+            "ray_connection": "pass" if ray.is_initialized() else "fail",
+            "tier0_manager": "pass" if tier0_manager else "fail",
+            "pair_stats_count": len(ledger.pair_stats),
+            "hyper_stats_count": len(ledger.hyper_stats),
+            "role_entropy_count": len(ledger.role_entropy),
+            "mem_stats_count": len(ledger.mem_stats)
         }
-        
-        if agent_ids:
-            active_count = 0
-            total_capability = 0.0
-            total_mem_util = 0.0
-            
-            for agent_id in agent_ids[:5]:  # Check first 5 agents
-                try:
-                    agent = tier0_manager.get_agent(agent_id)
-                    if agent:
-                        heartbeat = ray.get(agent.get_heartbeat.remote())
-                        if heartbeat.get('last_heartbeat', 0) > time.time() - 300:  # Active in last 5 minutes
-                            active_count += 1
-                        total_capability += heartbeat.get('capability_score', 0.5)
-                        total_mem_util += heartbeat.get('mem_util', 0.0)
-                except Exception:
-                    pass
-            
-            agent_metrics.update({
-                "active_agents": active_count,
-                "avg_capability": total_capability / len(agent_ids) if agent_ids else 0.0,
-                "avg_mem_util": total_mem_util / len(agent_ids) if agent_ids else 0.0
-            })
-        
+    }
+
+
+@app.get("/healthz/energy", include_in_schema=False)
+def healthz_energy():
+    """Legacy health path; use /energy/health. Returns same payload."""
+    try:
+        return _build_energy_health_payload()
+    except Exception as e:
+        logger.error(f"Energy health check failed: {e}")
         return {
-            "status": status,
-            "message": message,
+            "status": "unhealthy",
+            "message": f"Energy health check error: {str(e)}",
             "timestamp": time.time(),
-            "energy_snapshot": ledger_snapshot,
-            "agent_metrics": agent_metrics,
             "checks": {
-                "energy_calculation": "pass" if status == "healthy" else "fail",
-                "ledger_accessible": "pass",
-                "ray_connection": "pass" if ray.is_initialized() else "fail",
-                "tier0_manager": "pass" if tier0_manager else "fail",
-                "pair_stats_count": len(ledger.pair_stats),
-                "hyper_stats_count": len(ledger.hyper_stats),
-                "role_entropy_count": len(ledger.role_entropy),
-                "mem_stats_count": len(ledger.mem_stats)
+                "energy_calculation": "fail",
+                "ledger_accessible": "fail",
+                "ray_connection": "fail",
+                "tier0_manager": "fail"
             }
         }
+
+
+@app.get("/energy/health")
+def energy_health():
+    """Energy health endpoint aligned with /energy/* namespace."""
+    try:
+        return _build_energy_health_payload()
     except Exception as e:
         logger.error(f"Energy health check failed: {e}")
         return {
@@ -1084,7 +1116,7 @@ def energy_monitor():
         
         return error_payload
 
-@app.get('/agents/state')
+@app.get('/tier0/agents/state')
 def get_agents_state() -> Dict:
     """Returns the current state of all agents in the simulation with real data."""
     try:
@@ -1096,18 +1128,18 @@ def get_agents_state() -> Dict:
             ray.init(address="auto", ignore_reinit_error=True)
         
         all_agents = []
-        
-        # Get Tier0 agents (real Ray actors)
+
+        # Only report Tier 0 agents for consistency
         tier0_manager = Tier0MemoryManager()
         agent_ids = tier0_manager.list_agents()
-        
+
         for agent_id in agent_ids:
             try:
                 agent = tier0_manager.get_agent(agent_id)
                 if agent:
                     heartbeat = ray.get(agent.get_heartbeat.remote())
                     summary = ray.get(agent.get_summary_stats.remote())
-                    
+
                     all_agents.append({
                         "id": agent_id,
                         "type": "tier0_ray_agent",
@@ -1129,7 +1161,6 @@ def get_agents_state() -> Dict:
                     })
             except Exception as e:
                 logger.warning(f"Failed to get state for Tier0 agent {agent_id}: {e}")
-                # Add error entry
                 all_agents.append({
                     "id": agent_id,
                     "type": "tier0_ray_agent",
@@ -1137,28 +1168,12 @@ def get_agents_state() -> Dict:
                     "status": "unavailable"
                 })
         
-        # Get legacy organ agents
-        for organ in SIMULATION_REGISTRY.all():
-            for agent in organ.agents:
-                all_agents.append({
-                    "id": agent.agent_id,
-                    "type": "legacy_organ_agent",
-                    "capability": agent.capability,
-                    "mem_util": agent.mem_util,
-                    "role_probs": agent.role_probs,
-                    "personality_vector": agent.h.tolist(),
-                    "memory_writes": agent.memory_writes,
-                    "memory_hits_on_writes": agent.memory_hits_on_writes,
-                    "salient_events_logged": agent.salient_events_logged,
-                    "total_compression_gain": agent.total_compression_gain
-                })
-        
         return {
             "agents": all_agents,
             "summary": {
                 "total_agents": len(all_agents),
                 "tier0_agents": len([a for a in all_agents if a.get('type') == 'tier0_ray_agent']),
-                "legacy_agents": len([a for a in all_agents if a.get('type') == 'legacy_organ_agent']),
+                "legacy_agents": 0,
                 "active_agents": len([a for a in all_agents if a.get('last_heartbeat', 0) > time.time() - 300]),
                 "timestamp": time.time()
             }
@@ -1177,6 +1192,11 @@ def get_agents_state() -> Dict:
                 "timestamp": time.time()
             }
         }
+
+# Backward-compat alias, hidden from schema
+@app.get('/agents/state', include_in_schema=False)
+def get_agents_state_legacy_alias() -> Dict:
+    return get_agents_state()
 
 @app.get('/system/status')
 def system_status():
@@ -1275,7 +1295,7 @@ def system_status():
             "performance_metrics": {}
         }
 
-@app.post('/actions/run_two_agent_task')
+@app.post('/actions/run_two_agent_task', include_in_schema=False)
 def run_two_agent_task():
     """
     Runs a realistic two-agent task simulation with learning.
@@ -1343,22 +1363,31 @@ def run_two_agent_task():
         "pair_stats": PAIR_TRACKER.get_all_stats()
     }
 
-@app.get('/run_simulation_step')
+@app.get('/run_simulation_step', include_in_schema=False)
 def run_simulation_step():
     """
     Legacy endpoint: Runs a single simulation step to demonstrate an energy change.
     """
-    organ = SIMULATION_REGISTRY.get("cognitive_organ_1")
-    fast_loop_select_agent(organ, task="analyze_data")
-    
-    return {
-        "message": "Simulation step completed successfully!",
-        "new_energy_state": energy_gradient_payload(),
-        "active_agents": len(organ.agents)
-    }
+    try:
+        organ = SIMULATION_REGISTRY.get("cognitive_organ_1")
+        if not organ or not getattr(organ, 'agents', None):
+            return {
+                "success": False,
+                "error": "Legacy simulation organ 'cognitive_organ_1' not available",
+                "hint": "Initialize legacy SIMULATION_REGISTRY or use /organism/* endpoints for COA."
+            }
+        fast_loop_select_agent(organ, task="analyze_data")
+        return {
+            "success": True,
+            "message": "Simulation step completed successfully!",
+            "new_energy_state": energy_gradient_payload(),
+            "active_agents": len(organ.agents)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 # --- Slow Loop Endpoints ---
-@app.post('/actions/run_slow_loop')
+@app.post('/actions/run_slow_loop', include_in_schema=False)
 def run_slow_loop_endpoint():
     """
     Runs the slow loop, evolving agent roles based on energy state.
@@ -1376,7 +1405,7 @@ def run_slow_loop_endpoint():
         "energy_state": energy_gradient_payload()
     }
 
-@app.get('/run_slow_loop')
+@app.get('/run_slow_loop', include_in_schema=False)
 def run_slow_loop():
     """
     Legacy endpoint: Runs the slow loop to update agent roles based on performance.
@@ -1391,7 +1420,7 @@ def run_slow_loop():
         "energy_state": energy_gradient_payload()
     }
 
-@app.get('/run_slow_loop_simple')
+@app.get('/run_slow_loop_simple', include_in_schema=False)
 def run_slow_loop_simple():
     """
     Runs the simple slow loop that strengthens dominant roles without energy context.
@@ -1406,7 +1435,7 @@ def run_slow_loop_simple():
     }
 
 # --- Memory Loop Endpoints ---
-@app.get('/run_memory_loop')
+@app.get('/run_memory_loop', include_in_schema=False)
 def run_memory_loop():
     """
     Runs the comprehensive adaptive memory loop with tiered memory system.
@@ -1497,15 +1526,10 @@ def run_memory_loop():
         "energy_state": energy_gradient_payload()
     }
 
-@app.get('/run_pgvector_neo4j_experiment')
-def run_pgvector_neo4j_experiment():
-    """
-    Runs the PGVector + Neo4j memory loop experiment and returns the results.
-    """
-    return run_memory_loop_experiment()
+# Experiment moved to examples; endpoint removed to prefer script usage.
 
 # --- Combined Operations ---
-@app.get('/run_all_loops')
+@app.get('/run_all_loops', include_in_schema=False)
 def run_all_loops():
     """
     Runs all control loops in sequence: fast, slow, and memory.
@@ -1538,7 +1562,7 @@ def run_all_loops():
     }
 
 # --- Reset Operations ---
-@app.post('/actions/reset')
+@app.post('/actions/reset', include_in_schema=False)
 def reset_simulation():
     """Resets the energy ledger, pair statistics, and memory system back to zero."""
     global PAIR_TRACKER, MEMORY_SYSTEM
@@ -1561,13 +1585,10 @@ def reset_simulation():
         "memory_system_stats": MEMORY_SYSTEM.get_memory_stats()
     }
 
-@app.get('/reset_energy')
-def reset_energy():
-    """Legacy endpoint: Resets the energy ledger back to zero."""
-    _ledger.reset()
-    return {"message": "Energy ledger has been reset."}
-
-@app.get('/pair_stats')
+# Energy endpoints are registered via energy_router
+ 
+@app.get('/energy/pair_stats')
+@app.get('/pair_stats', include_in_schema=False)
 def get_pair_stats():
     """Get all pair collaboration statistics."""
     return {
@@ -1575,145 +1596,37 @@ def get_pair_stats():
         "total_pairs": len(PAIR_TRACKER.pair_stats)
     }
 
-# --- Holon Fabric Endpoints ---
-@app.post('/rag')
-async def rag_endpoint(q: dict):
-    """RAG endpoint for fuzzy search with holon expansion"""
-    global holon_fabric
-    if not holon_fabric:
-        return {"error": "Holon Fabric not initialized"}
-    
-    embedding = np.array(q.get("embedding", []))
-    k = q.get("k", 10)
-    
-    if len(embedding) == 0:
-        return {"error": "No embedding provided"}
-    
-    # Pad or truncate to 768 dimensions
-    if len(embedding) < 768:
-        embedding = np.pad(embedding, (0, 768 - len(embedding)), mode='constant')
-    else:
-        embedding = embedding[:768]
-    
-    holons = await holon_fabric.query_fuzzy(embedding, k=k)
-    return {"holons": holons}
-
-@app.post('/holon/insert')
-async def insert_holon(holon_data: dict):
-    """Insert a new holon into the fabric"""
-    global holon_fabric
-    if not holon_fabric:
-        return {"error": "Holon Fabric not initialized"}
-    
-    try:
-        embedding = np.array(holon_data["embedding"])
-        # Pad or truncate to 768 dimensions
-        if len(embedding) < 768:
-            embedding = np.pad(embedding, (0, 768 - len(embedding)), mode='constant')
-        else:
-            embedding = embedding[:768]
-            
-        holon = Holon(
-            uuid=holon_data.get("uuid", str(uuid.uuid4())),
-            embedding=embedding,
-            meta=holon_data.get("meta", {})
-        )
-        await holon_fabric.insert_holon(holon)
-        return {"message": "Holon inserted successfully", "uuid": holon.uuid}
-    except Exception as e:
-        return {"error": f"Failed to insert holon: {str(e)}"}
-
-@app.get('/holon/stats')
-async def holon_stats():
-    sc = app.state.stats
-    errors = {}
-    # Mw stats
-    try:
-        mw = sc.mw_stats()
-    except Exception as e:
-        mw = {"error": str(e)}
-        errors["Mw"] = str(e)
-    # PGVector (Mlt) stats
-    try:
-        mlt = await sc.mlt_stats()
-    except Exception as e:
-        mlt = {"error": str(e)}
-        errors["Mlt"] = str(e)
-    # Neo4j relationship stats
-    try:
-        rel = sc.rel_stats()
-    except Exception as e:
-        rel = {"error": str(e)}
-        errors["Neo4j"] = str(e)
-    # Prometheus energy stats
-    try:
-        energy = sc.energy_stats()
-    except Exception as e:
-        energy = {"error": str(e)}
-        errors["Prometheus"] = str(e)
-    # Compose response
-    body = {
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "tiers": {
-            "Mw": mw,
-            "Mlt": mlt
-        },
-        "vector_dimensions": getattr(sc, "EMB_DIM", 768),
-        "energy": energy,
-        "status": "healthy" if not errors else "unhealthy"
-    }
-    if isinstance(rel, dict):
-        body.update(rel)
-    if errors:
-        body["errors"] = errors
-    # simple rule: status=unhealthy if Mw staleness > 3 s or PG query slow
-    if isinstance(mw, dict) and mw.get("avg_staleness_s", 0) > 3:
-        body["status"] = "unhealthy"
-    return body
-
-@app.get('/holon/{uuid}')
-async def get_holon(uuid: str):
-    """Get a specific holon by UUID"""
-    global holon_fabric
-    if not holon_fabric:
-        return {"error": "Holon Fabric not initialized"}
-    
-    result = await holon_fabric.query_exact(uuid)
-    if result:
-        return result
-    else:
-        return {"error": "Holon not found"}
-
-@app.post('/holon/relationship')
-async def create_relationship(rel_data: dict):
-    """Create a relationship between two holons"""
-    global holon_fabric
-    if not holon_fabric:
-        return {"error": "Holon Fabric not initialized"}
-    
-    src_uuid = rel_data.get("src_uuid")
-    rel = rel_data.get("rel")
-    dst_uuid = rel_data.get("dst_uuid")
-    
-    if not all([src_uuid, rel, dst_uuid]):
-        return {"error": "Missing required fields: src_uuid, rel, dst_uuid"}
-    
-    await holon_fabric.create_relationship(src_uuid, rel, dst_uuid)
-    return {"message": "Relationship created successfully"}
+## Holon endpoints are registered via holon_router
 
 import os
-from ..memory.consolidation_task import consolidation_worker
-@app.post("/admin/consolidate_once")
-async def consolidate_once(batch: int = 10, tau: float = 0.3):
-    mw = dict(list(app.state.stats.mw.items())[:batch])   # freeze a snapshot
-    n  = ray.get(
-        consolidation_worker.remote(
-            os.getenv("PG_DSN"),
-            "bolt://seedcore-neo4j:7687",
-            ("neo4j", os.getenv("NEO4J_PASSWORD")),
-            mw, tau, batch)
-    )
-    return {"consolidated": n}
+import base64
+@app.get("/admin/mw_snapshot", include_in_schema=False)
+async def mw_snapshot(limit: int = 10):
+    """Dev-only: return a JSON-serializable snapshot of Mw for consolidation examples."""
+    try:
+        items = list(app.state.stats.mw.items())[: max(0, min(limit, 1024))]
+        out = []
+        for key, val in items:
+            blob = val.get("blob") if isinstance(val, dict) else None
+            ts = val.get("ts") if isinstance(val, dict) else None
+            enc: dict
+            if isinstance(blob, (bytes, bytearray)):
+                enc = {"type": "bytes", "b64": base64.b64encode(blob).decode("ascii")}
+            elif hasattr(blob, "tolist"):
+                enc = {"type": "array", "data": blob.tolist()}
+            elif isinstance(blob, list):
+                enc = {"type": "array", "data": blob}
+            elif blob is None:
+                enc = {"type": "none"}
+            else:
+                try:
+                    enc = {"type": "str", "data": str(blob)}
+                except Exception:
+                    enc = {"type": "unknown"}
+            out.append({"key": key, "ts": ts or time.time(), "blob": enc})
+        return {"mw": out, "count": len(out)}
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.post("/admin/write_to_mw", include_in_schema=False)
 def write_to_mw():
@@ -1830,121 +1743,7 @@ async def ray_connect(request: dict):
 
 # --- Tier 0 (Ma) Memory Endpoints ---
 
-@app.post("/tier0/agents/create")
-async def create_ray_agent(request: dict):
-    """Create a new Ray agent actor."""
-    try:
-        agent_id = request.get('agent_id')
-        role_probs = request.get('role_probs')
-        
-        if not agent_id:
-            return {"success": False, "message": "agent_id is required"}
-        
-        created_id = tier0_manager.create_agent(agent_id, role_probs)
-        return {"success": True, "agent_id": created_id, "message": f"Agent {created_id} created"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-@app.post("/tier0/agents/create_batch")
-async def create_ray_agents_batch(request: dict):
-    """Create multiple Ray agent actors in batch."""
-    try:
-        agent_configs = request.get('agent_configs', [])
-        
-        if not agent_configs:
-            return {"success": False, "message": "agent_configs list is required"}
-        
-        created_ids = tier0_manager.create_agents_batch(agent_configs)
-        return {"success": True, "agent_ids": created_ids, "message": f"Created {len(created_ids)} agents"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-@app.get("/tier0/agents")
-async def list_ray_agents():
-    """List all Ray agent IDs."""
-    try:
-        agents = tier0_manager.list_agents()
-        return {"success": True, "agents": agents, "count": len(agents)}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-@app.post("/tier0/agents/{agent_id}/execute")
-async def execute_task_on_agent(agent_id: str, request: dict):
-    """Execute a task on a specific agent."""
-    try:
-        task_data = request.get('task_data', {})
-        result = tier0_manager.execute_task_on_agent(agent_id, task_data)
-        
-        if result:
-            return {"success": True, "result": result}
-        else:
-            return {"success": False, "message": f"Agent {agent_id} not found or task failed"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-@app.post("/tier0/agents/execute_random")
-async def execute_task_on_random_agent(request: dict):
-    """Execute a task on a randomly selected agent."""
-    try:
-        task_data = request.get('task_data', {})
-        result = tier0_manager.execute_task_on_random_agent(task_data)
-        
-        if result:
-            return {"success": True, "result": result}
-        else:
-            return {"success": False, "message": "No agents available"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-@app.get("/tier0/agents/{agent_id}/heartbeat")
-async def get_agent_heartbeat(agent_id: str):
-    """Get the latest heartbeat for a specific agent."""
-    try:
-        # Force a heartbeat collection before returning
-        await tier0_manager.collect_heartbeats()
-        heartbeat = tier0_manager.get_agent_heartbeat(agent_id)
-        if heartbeat:
-            return {"success": True, "heartbeat": heartbeat}
-        else:
-            return {"success": False, "message": f"Heartbeat for agent {agent_id} not yet collected"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-@app.get("/tier0/agents/heartbeats")
-async def get_all_agent_heartbeats():
-    """Get heartbeats from all agents."""
-    try:
-        heartbeats = tier0_manager.get_all_heartbeats()
-        return {"success": True, "heartbeats": heartbeats, "count": len(heartbeats)}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-@app.get("/tier0/summary")
-async def get_tier0_summary():
-    """Get a summary of the Tier 0 memory system."""
-    try:
-        summary = tier0_manager.get_system_summary()
-        return {"success": True, "summary": summary}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-@app.post("/tier0/agents/{agent_id}/reset")
-async def reset_agent_metrics(agent_id: str):
-    """Reset metrics for a specific agent."""
-    try:
-        success = tier0_manager.reset_agent_metrics(agent_id)
-        return {"success": success, "message": f"Agent {agent_id} metrics reset" if success else f"Agent {agent_id} not found"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-@app.post("/tier0/agents/shutdown")
-async def shutdown_tier0_agents():
-    """Shutdown all Tier 0 agents."""
-    try:
-        tier0_manager.shutdown_agents()
-        return {"success": True, "message": "All agents shut down"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
+# Tier0 endpoints are registered via tier0_router
 
 # --- Tier 1 (Mw) Working Memory Endpoints ---
 
@@ -1966,29 +1765,9 @@ def mw_get_item(organ_id: str, item_id: str):
     value = mw.get_item(item_id)
     return {"success": value is not None, "value": value}
 
-# --- Tier 2 (Mlt) Long-Term Memory Endpoints ---
+# --- Tier 2 (Mlt) Long-Term Memory Endpoints are handled via holon_router ---
 
-ltm_manager = LongTermMemoryManager()
-
-@app.post('/mlt/insert_holon')
-async def mlt_insert_holon(request: dict):
-    """Insert a holon into long-term memory (PgVector + Neo4j, saga pattern)."""
-    result = await ltm_manager.insert_holon(request)
-    return {"success": result}
-
-# --- COA Organism Endpoints ---
-
-@app.get("/organism/status")
-async def get_organism_status():
-    """Returns the current status of all organs and their agents."""
-    try:
-        if not hasattr(app.state, 'organism') or not app.state.organism:
-            return {"success": False, "error": "Organism not initialized"}
-            
-        status = await app.state.organism.get_organism_status()
-        return {"success": True, "data": status}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# --- COA Organism Endpoints are registered via organism_router ---
 
 # =============================================================================
 # DSPy Cognitive Core Endpoints
@@ -2396,87 +2175,5 @@ async def get_dspy_status():
             "timestamp": time.time()
         }
 
-@app.post("/organism/execute/{organ_id}")
-async def execute_task_on_organ(organ_id: str, request: dict):
-    """Execute a task on a specific organ."""
-    try:
-        if not hasattr(app.state, 'organism') or not app.state.organism:
-            return {"success": False, "error": "Organism not initialized"}
-            
-        task_data = request.get('task_data', {})
-        result = await app.state.organism.execute_task_on_organ(organ_id, task_data)
-        return result
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
-@app.post("/organism/execute/random")
-async def execute_task_on_random_organ(request: dict):
-    """Execute a task on a randomly selected organ."""
-    try:
-        if not hasattr(app.state, 'organism') or not app.state.organism:
-            return {"success": False, "error": "Organism not initialized"}
-            
-        task_data = request.get('task_data', {})
-        result = await app.state.organism.execute_task_on_random_organ(task_data)
-        return result
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.get("/organism/summary")
-async def get_organism_summary():
-    """Get a summary of the organism including organ and agent counts."""
-    try:
-        if not hasattr(app.state, 'organism') or not app.state.organism:
-            return {"success": False, "error": "Organism not initialized"}
-            
-        organism = app.state.organism
-        summary = {
-            "initialized": organism.is_initialized(),
-            "organ_count": organism.get_organ_count(),
-            "total_agent_count": organism.get_total_agent_count(),
-            "organs": {}
-        }
-        
-        # Get detailed organ information
-        for organ_id in organism.organs.keys():
-            organ_handle = organism.get_organ_handle(organ_id)
-            if organ_handle:
-                try:
-                    status = await organ_handle.get_status.remote()
-                    summary["organs"][organ_id] = status
-                except Exception as e:
-                    summary["organs"][organ_id] = {"error": str(e)}
-        
-        return {"success": True, "summary": summary}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/organism/initialize")
-async def initialize_organism():
-    """Manually initialize the organism (useful for testing)."""
-    try:
-        # Use the global organism_manager directly
-        if organism_manager.is_initialized():
-            # Also set it in app.state for consistency
-            app.state.organism = organism_manager
-            return {"success": True, "message": "Organism already initialized"}
-            
-        await organism_manager.initialize_organism()
-        # Set it in app.state for consistency
-        app.state.organism = organism_manager
-        return {"success": True, "message": "Organism initialized successfully"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/organism/shutdown")
-async def shutdown_organism():
-    """Shutdown the organism and clean up resources."""
-    try:
-        if not hasattr(app.state, 'organism') or not app.state.organism:
-            return {"success": False, "error": "Organism not initialized"}
-            
-        app.state.organism.shutdown_organism()
-        return {"success": True, "message": "Organism shutdown successfully"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 

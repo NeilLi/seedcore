@@ -10,7 +10,7 @@ This document describes the enhanced monitoring integration for SeedCore, which 
 
 Instead of instrumenting every component individually, we use a **metrics integration service** that:
 
-1. **Polls existing API endpoints** (`/energy/gradient`, `/agents/state`, `/system/status`, `/energy/monitor`)
+1. **Polls existing API endpoints** (`/energy/gradient`, `/tier0/agents/state`, `/system/status`, `/energy/monitor`)
 2. **Converts rich JSON data** into Prometheus metrics
 3. **Provides comprehensive monitoring** without code changes
 4. **Integrates Ray cluster monitoring** with proper dashboard UID management
@@ -65,7 +65,7 @@ Instead of instrumenting every component individually, we use a **metrics integr
 
 **API Endpoints Polled:**
 - `/energy/gradient` - Energy system data
-- `/agents/state` - Agent state and performance
+- `/tier0/agents/state` - Agent state and performance
 - `/system/status` - System health and memory
 - `/energy/monitor` - Detailed energy monitoring
 
@@ -174,7 +174,7 @@ curl http://localhost:8002/metrics
 
 # Check API endpoints
 curl http://localhost:8002/energy/gradient
-curl http://localhost:8002/agents/state
+curl http://localhost:8002/tier0/agents/state
 curl http://localhost:8002/system/status
 
 # Check Ray metrics (via proxy)
@@ -301,7 +301,7 @@ environment:
 **Check API endpoints:**
 ```bash
 curl http://localhost:8002/energy/gradient
-curl http://localhost:8002/agents/state
+curl http://localhost:8002/tier0/agents/state
 ```
 
 **Check metrics integration logs:**
