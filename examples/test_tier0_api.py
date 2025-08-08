@@ -7,8 +7,14 @@ import requests
 import json
 import time
 import random
+import os
 
-API_BASE = "http://localhost:8000"
+# Determine API base URL
+# Per docker/operation-manual.md, the API is exposed on port 8002.
+# Allow override via SEEDCORE_API_ADDRESS (can be host:port or full URL).
+API_BASE = os.getenv("SEEDCORE_API_ADDRESS", "localhost:8002")
+if not API_BASE.startswith("http"):
+    API_BASE = f"http://{API_BASE}"
 
 def test_tier0_api():
     """Test the Tier 0 API endpoints."""

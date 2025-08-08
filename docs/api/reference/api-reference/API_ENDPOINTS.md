@@ -4,13 +4,14 @@
 
 This document describes all available API endpoints in the SeedCore system, with a focus on the enhanced endpoints that provide real data from the Energy Model Foundation.
 
-## Base URL
+## Base URLs
 
-All endpoints are available at: `http://localhost:80` (or your server IP)
+- Main API (energy, system): `http://localhost:8002`
+- Ray Serve ML (XGBoost, salience): `http://localhost:8000`
 
 ## Energy System Endpoints
 
-### 1. Energy Gradient (`GET /energy/gradient`)
+### 1. Energy Gradient (`GET /energy/gradient`) — API 8002
 
 **Description**: Enhanced endpoint that provides real energy data from the Energy Model Foundation.
 
@@ -55,7 +56,7 @@ All endpoints are available at: `http://localhost:80` (or your server IP)
 }
 ```
 
-### 2. Energy Monitor (`GET /energy/monitor`)
+### 2. Energy Monitor (`GET /energy/monitor`) — API 8002
 
 **Description**: Real-time energy monitoring endpoint with detailed metrics.
 
@@ -116,7 +117,7 @@ All endpoints are available at: `http://localhost:80` (or your server IP)
 }
 ```
 
-### 3. Energy Calibration (`GET /energy/calibrate`)
+### 3. Energy Calibration (`GET /energy/calibrate`) — API 8002
 
 **Description**: Energy calibration endpoint that runs synthetic tasks and returns calibration results.
 
@@ -165,7 +166,7 @@ All endpoints are available at: `http://localhost:80` (or your server IP)
 }
 ```
 
-### 4. Energy Health Check (`GET /healthz/energy`)
+### 4. Energy Health Check (`GET /healthz/energy`) — API 8002
 
 **Description**: Health check endpoint for energy system readiness.
 
@@ -218,7 +219,7 @@ All endpoints are available at: `http://localhost:80` (or your server IP)
 
 ## System Status Endpoints
 
-### 5. System Status (`GET /system/status`)
+### 5. System Status (`GET /system/status`) — API 8002
 
 **Description**: Returns the current status of the persistent system with real data.
 
@@ -299,7 +300,7 @@ All endpoints are available at: `http://localhost:80` (or your server IP)
 }
 ```
 
-### 6. Agents State (`GET /agents/state`)
+### 6. Agents State (`GET /agents/state`) — API 8002
 
 **Description**: Returns the current state of all agents in the simulation with real data.
 
@@ -345,47 +346,83 @@ All endpoints are available at: `http://localhost:80` (or your server IP)
 
 ## Legacy Endpoints
 
-### 7. Basic Health Check (`GET /health`)
+### 7. Basic Health Check (`GET /health`) — API 8002
 
 **Description**: Basic health check endpoint.
 
-### 8. Metrics (`GET /metrics`)
+### 8. Metrics (`GET /metrics`) — API 8002
 
 **Description**: Prometheus metrics endpoint.
 
-### 9. Ray Status (`GET /ray/status`)
+### 9. Ray Status (`GET /ray/status`) — API 8002
+
+## ML (Ray Serve) Endpoints — Port 8000
+
+### 10. XGBoost Promote (`POST /xgboost/promote`)
+
+Transactional, gated promotion with ΔE guard and runtime contractivity audit via `/energy/meta`.
+
+Request:
+
+```bash
+curl -sS -X POST http://localhost:8000/xgboost/promote \
+  -H 'Content-Type: application/json' \
+  -d '{"model_path":"/app/docker/artifacts/models/docker_test_model/model.xgb","delta_E":-0.05}'
+```
+
+Response (example):
+
+```json
+{
+  "accepted": true,
+  "current_model_path": "/app/docker/artifacts/models/docker_test_model/model.xgb",
+  "meta": { "L_tot": 0.0, "cap": 0.98, "ok_for_promotion": true }
+}
+```
+
+### 11. XGBoost Train/Infer/Manage
+
+- `POST /xgboost/train`
+- `POST /xgboost/predict`
+- `POST /xgboost/batch_predict`
+- `POST /xgboost/load_model`
+- `GET /xgboost/list_models`
+- `GET /xgboost/model_info`
+- `DELETE /xgboost/delete_model`
+- `POST /xgboost/tune`
+- `POST /xgboost/refresh_model` (now includes pre/post `/energy/meta` gate)
 
 **Description**: Ray cluster status information.
 
 ## Usage Examples
 
-### Testing Energy System
+### Testing Energy System (API 8002)
 
 ```bash
 # Get real-time energy data
-curl http://localhost:80/energy/gradient
+curl http://localhost:8002/energy/gradient
 
 # Monitor energy system
-curl http://localhost:80/energy/monitor
+curl http://localhost:8002/energy/monitor
 
 # Run energy calibration
-curl http://localhost:80/energy/calibrate
+curl http://localhost:8002/energy/calibrate
 
 # Check energy system health
-curl http://localhost:80/healthz/energy
+curl http://localhost:8002/healthz/energy
 ```
 
-### System Monitoring
+### System Monitoring (API 8002)
 
 ```bash
 # Get comprehensive system status
-curl http://localhost:80/system/status
+curl http://localhost:8002/system/status
 
 # Get all agent states
-curl http://localhost:80/agents/state
+curl http://localhost:8002/agents/state
 
 # Basic health check
-curl http://localhost:80/health
+curl http://localhost:8002/health
 ```
 
 ### Data Analysis
