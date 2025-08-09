@@ -218,6 +218,10 @@ class AgentPrivateMemory:
         self._fail = EWMStats(alpha)
         self._tasks = 0
         self._mem_util = EWMStats(alpha)
+        # OCPS regime signals (initialize to avoid AttributeError on first update)
+        self._ocps_drift = EWMStats(alpha)
+        self._ocps_fast_p = EWMStats(alpha)
+        self._ocps_esc_rate = EWMStats(alpha)
 
         # Adaptive allocation state (active dims for T,S,P)
         self.dT, self.dS, self.dP = INIT_ALLOC
@@ -414,6 +418,39 @@ class AgentPrivateMemory:
     def get_vector_list(self) -> List[float]:
         return self.h.astype(np.float32).tolist()
 
+    # Optional serialization helpers for checkpointing
+    def dump(self) -> Dict[str, Any]:
+        return {
+            "h": self.get_vector_list(),
+            "task": [float(x) for x in self._task_ema.tolist()],
+            "skill": [float(x) for x in self._skill_sketch.tolist()],
+            "peer_cms": [float(x) for x in self._peer_cms.table.reshape(-1).tolist()],
+            "dT": int(getattr(self, "dT", 64)),
+            "dS": int(getattr(self, "dS", 24)),
+            "dP": int(getattr(self, "dP", 24)),
+        }
+
+    def load(self, blob: Dict[str, Any]) -> None:
+        try:
+            t = np.array(blob.get("task", []), dtype=np.float32)
+            s = np.array(blob.get("skill", []), dtype=np.float32)
+            p = np.array(blob.get("peer_cms", []), dtype=np.float32)
+            if t.size:
+                self._task_ema[: min(t.size, self._task_ema.size)] = t[: self._task_ema.size]
+            if s.size:
+                self._skill_sketch[: min(s.size, self._skill_sketch.size)] = s[: self._skill_sketch.size]
+            if p.size:
+                flat = self._peer_cms.table.reshape(-1)
+                flat[: min(p.size, flat.size)] = p[: flat.size]
+            # Allocation
+            self.dT = int(blob.get("dT", self.dT))
+            self.dS = int(blob.get("dS", self.dS))
+            self.dP = int(blob.get("dP", self.dP))
+            self._rebuild_h()
+        except Exception:
+            # Fail silently to avoid blocking startup
+            pass
+
     def telemetry(self) -> Dict[str, Any]:
         topk = self._peer_topk.topk()
         return {
@@ -449,5 +486,36 @@ class AgentPrivateMemory:
                         "S": float(getattr(self, '_score_S', EWMStats(self.alpha)).mean if hasattr(self, '_score_S') else 0.0),
                         "P": float(getattr(self, '_score_P', EWMStats(self.alpha)).mean if hasattr(self, '_score_P') else 0.0)},
         }
+
+# === Simple discrete allocator ===
+class AdaptiveAllocator:
+    def __init__(self, templates: List[Tuple[int, int, int]], hysteresis: float = 0.05, min_steps_between: int = 50):
+        # templates are (T,S,P) triples summing to 112
+        self.templates = templates
+        self.hysteresis = hysteresis
+        self.min_steps_between = min_steps_between
+
+    def select(self, scores: Tuple[float, float, float], current: Tuple[int, int, int]) -> Optional[Tuple[int, int, int]]:
+        sT, sS, sP = scores
+        s = np.array([max(sT, 1e-8), max(sS, 1e-8), max(sP, 1e-8)], dtype=np.float32)
+        s = s / float(s.sum())
+
+        def score_template(t: Tuple[int, int, int]) -> float:
+            t_arr = np.array(t, dtype=np.float32)
+            t_arr = t_arr / float(t_arr.sum())
+            return float(np.dot(s, t_arr))
+
+        current_score = score_template(current)
+        best_t = current
+        best_score = current_score
+        for t in self.templates:
+            sc = score_template(t)
+            if sc > best_score:
+                best_score = sc
+                best_t = t
+
+        if best_t != current and (best_score - current_score) / max(current_score, 1e-8) > self.hysteresis:
+            return best_t
+        return None
 
 

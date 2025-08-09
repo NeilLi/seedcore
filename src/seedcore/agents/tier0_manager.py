@@ -48,6 +48,8 @@ class Tier0MemoryManager:
         self.agent_stats: Dict[str, Dict[str, Any]] = {}  # agent_id -> summary stats
         self.last_collection = time.time()
         self.collection_interval = 5.0  # seconds
+        # Track transient ping failures to avoid pruning on single hiccup
+        self._ping_failures: Dict[str, int] = {}
         
         logger.info("✅ Tier0MemoryManager initialized")
         
@@ -119,13 +121,12 @@ class Tier0MemoryManager:
             # Create the Ray actor
             options_kwargs: Dict[str, Any] = {}
             # Use a stable, detached, named actor when options are provided
-            if name:
-                options_kwargs["name"] = name
-            # Default to using agent_id as name if a lifetime is set but no name provided
-            if lifetime and not name:
-                options_kwargs["name"] = agent_id
-            if lifetime:
-                options_kwargs["lifetime"] = lifetime
+            # Favor stable named, detached actors by default
+            effective_name = name or agent_id if (lifetime or True) else name
+            if effective_name:
+                options_kwargs["name"] = effective_name
+            # Default to detached lifetime if not specified
+            options_kwargs["lifetime"] = lifetime or "detached"
             if num_cpus is not None:
                 options_kwargs["num_cpus"] = num_cpus
             if num_gpus is not None:
@@ -213,32 +214,43 @@ class Tier0MemoryManager:
         If no local registrations exist, attempt to discover detached RayAgent actors
         that are already running in the Ray cluster and attach them.
         """
-        if not self.agents:
-            try:
+        # Prefer returning only alive agents and refresh if registry is empty
+        try:
+            if not self.agents:
                 self._refresh_agents_from_cluster()
-            except Exception as e:
-                logger.debug(f"Agent discovery failed during list: {e}")
-        return list(self.agents.keys())
+        except Exception as e:
+            logger.debug(f"Agent discovery failed during list: {e}")
+        alive = self.prune_and_list()
+        return [a["id"] for a in alive]
 
     # Health-aware listing and pruning
     def _alive(self, handle: Any) -> bool:
         try:
-            ray.get(handle.ping.remote(), timeout=0.5)
+            ray.get(handle.ping.remote(), timeout=2.0)
             return True
         except Exception:
             return False
 
     def prune_and_list(self) -> List[Dict[str, Any]]:
         """Remove dead handles and return a simple list of alive agent ids."""
+        if not self.agents:
+            try:
+                self._refresh_agents_from_cluster()
+            except Exception as e:
+                logger.debug(f"Agent discovery failed during prune: {e}")
         live: Dict[str, Any] = {}
         for agent_id, handle in list(self.agents.items()):
             if self._alive(handle):
                 live[agent_id] = handle
+                self._ping_failures[agent_id] = 0
             else:
-                logger.warning(f"Pruning dead agent handle: {agent_id}")
-                self.agents.pop(agent_id, None)
-                self.heartbeats.pop(agent_id, None)
-                self.agent_stats.pop(agent_id, None)
+                fails = self._ping_failures.get(agent_id, 0) + 1
+                self._ping_failures[agent_id] = fails
+                if fails >= 3:
+                    logger.warning(f"Pruning agent after {fails} consecutive ping failures: {agent_id}")
+                    self.agents.pop(agent_id, None)
+                    self.heartbeats.pop(agent_id, None)
+                    self.agent_stats.pop(agent_id, None)
         return [{"id": aid} for aid in live.keys()]
 
     # ---------------------------------------------------------------------
