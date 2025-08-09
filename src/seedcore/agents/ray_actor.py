@@ -46,15 +46,18 @@ from .cognitive_core import (
     get_cognitive_core
 )
 
+# === COA §6/§8: agent-private memory vector h_i ∈ R^128 ===
+from .private_memory import AgentPrivateMemory, PeerEvent
+
 @dataclass
 class AgentState:
     """Holds the local state for an agent."""
-    h: np.ndarray  # Embedding
+    h: Any  # Embedding (kept JSON-safe as Python list)
     p: Dict[str, float]  # Role probabilities
     c: float = 0.5  # Capability
     mem_util: float = 0.0  # Memory Utility
 
-@ray.remote
+@ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
 class RayAgent:
     """
     Stateful Ray actor for Tier 0 per-agent memory (Ma).
@@ -73,14 +76,15 @@ class RayAgent:
         
         # 2. Initialize AgentState with COA specifications
         self.state = AgentState(
-            h=np.random.randn(128),  # 128-dimensional embedding
+            h=[0.0] * 128,  # JSON-safe list; managed by AgentPrivateMemory
             p=initial_role_probs or {'E': 0.9, 'S': 0.1, 'O': 0.0},
             c=0.5,  # Initial capability
             mem_util=0.0  # Initial memory utility
         )
         
         # 3. Backward compatibility - keep old attributes
-        self.state_embedding = self.state.h
+        # Keep a separate numpy copy for legacy paths that expect ndarray
+        self.state_embedding = np.array(self.state.h, dtype=np.float32)
         self.role_probs = self.state.p
         
         # 4. Performance Tracking Metrics
@@ -122,6 +126,9 @@ class RayAgent:
         
         # --- Initialize cognitive core ---
         self.cognitive_core = None
+
+        # --- Initialize private memory (lifetime-only persistence) ---
+        self._privmem = AgentPrivateMemory(agent_id=self.agent_id, alpha=0.1)
         
         # Initialize memory managers asynchronously to avoid hanging
         try:
@@ -191,6 +198,10 @@ class RayAgent:
     def get_energy_state(self) -> Dict[str, float]:
         """Returns the current energy state."""
         return self.energy_state.copy()
+
+    def ping(self) -> Dict[str, Any]:
+        """Cheap liveness RPC used by Tier-0 to detect/prune dead handles."""
+        return {"id": self.agent_id, "ts": time.time()}
     
     def update_role_probs(self, new_role_probs: Dict[str, float]):
         """Updates the agent's role probabilities."""
@@ -390,6 +401,43 @@ class RayAgent:
         except Exception as e:
             logger.warning(f"Failed to emit energy events: {e}")
         
+        # Update agent-private memory vector h (post-task)
+        try:
+            # Optional placeholders if your pipeline provides them
+            task_embedding = task_data.get('task_embedding')
+            latency_s = task_data.get('latency_s')
+            energy = task_data.get('energy')
+            delta_e = task_data.get('delta_e')
+            peer_events: Optional[List[PeerEvent]] = task_data.get('peer_events')
+            # Convert skill deltas dict to a flat vector if present
+            skill_delta_vec = None
+            if isinstance(self.skill_deltas, dict) and self.skill_deltas:
+                skill_delta_vec = np.asarray(list(self.skill_deltas.values()), dtype=np.float32)
+            # OCPS signals
+            ocps_drift = task_data.get('drift_score') if isinstance(task_data, dict) else None
+            ocps_p_fast = task_data.get('p_fast') if isinstance(task_data, dict) else None
+            ocps_escalated = task_data.get('escalated') if isinstance(task_data, dict) else None
+            new_h = self._privmem.update_after_task(
+                task_embed=task_embedding,
+                success=bool(success),
+                quality=float(quality) if quality is not None else None,
+                latency_s=latency_s,
+                energy=energy,
+                delta_e=delta_e,
+                peer_events=peer_events,
+                skill_delta=skill_delta_vec,
+                mem_utilization=self.mem_util,
+                ocps_drift=ocps_drift,
+                ocps_p_fast=ocps_p_fast,
+                ocps_escalated=ocps_escalated,
+            )
+            # Keep JSON-safe state.h as list
+            self.state.h = new_h.tolist()
+            # Maintain numpy copy for any legacy computations
+            self.state_embedding = np.array(self.state.h, dtype=np.float32)
+        except Exception as e:
+            logger.warning(f"[{self.agent_id}] private memory update failed: {e}")
+
         return {
             "agent_id": self.agent_id,
             "task_processed": True,
@@ -398,6 +446,18 @@ class RayAgent:
             "capability_score": self.capability_score,
             "mem_util": self.mem_util
         }
+
+    # === Telemetry surfaces for Tier-0 / Meta-learning ===
+    def get_private_memory_vector(self) -> List[float]:
+        return self._privmem.get_vector().tolist()
+
+    def get_private_memory_telemetry(self) -> Dict[str, Any]:
+        return self._privmem.telemetry()
+
+    def reset_private_memory(self) -> bool:
+        self._privmem.reset()
+        self.state.h[:] = 0.0
+        return True
     
     def update_skill_delta(self, skill_name: str, delta: float):
         """

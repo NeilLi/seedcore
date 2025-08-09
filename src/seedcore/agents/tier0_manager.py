@@ -220,6 +220,27 @@ class Tier0MemoryManager:
                 logger.debug(f"Agent discovery failed during list: {e}")
         return list(self.agents.keys())
 
+    # Health-aware listing and pruning
+    def _alive(self, handle: Any) -> bool:
+        try:
+            ray.get(handle.ping.remote(), timeout=0.5)
+            return True
+        except Exception:
+            return False
+
+    def prune_and_list(self) -> List[Dict[str, Any]]:
+        """Remove dead handles and return a simple list of alive agent ids."""
+        live: Dict[str, Any] = {}
+        for agent_id, handle in list(self.agents.items()):
+            if self._alive(handle):
+                live[agent_id] = handle
+            else:
+                logger.warning(f"Pruning dead agent handle: {agent_id}")
+                self.agents.pop(agent_id, None)
+                self.heartbeats.pop(agent_id, None)
+                self.agent_stats.pop(agent_id, None)
+        return [{"id": aid} for aid in live.keys()]
+
     # ---------------------------------------------------------------------
     # Cluster discovery and attachment helpers
     # ---------------------------------------------------------------------
@@ -423,6 +444,37 @@ class Tier0MemoryManager:
             logger.warning(f"Energy optimizer failed ({e}), falling back to random selection.")
             # Fallback to old method
             return self.execute_task_on_random_agent(task_data)
+
+    # === COA §6: Local GNN-like selection within an organ (fast path Level 4) ===
+    def execute_task_on_best_of(self, candidate_agent_ids: List[str], task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Execute a task on the best agent selected from a provided candidate set.
+        Supports OrganismManager's Level-4 local selection (COA §6.2).
+        """
+        handles = [self.agents[a] for a in candidate_agent_ids if a in self.agents]
+        if not handles:
+            logger.warning("No candidate agents available for constrained best-of selection")
+            return None
+        try:
+            best_agent, predicted_delta_e = select_best_agent(handles, task_data)
+            result = ray.get(best_agent.execute_task.remote(task_data))
+            agent_id = ray.get(best_agent.get_id.remote())
+            logger.info(f"✅ Best-of selection: {agent_id} ΔE≈{predicted_delta_e:.4f}")
+            return result
+        except Exception as e:
+            logger.warning(f"Best-of optimizer failed ({e}); falling back to random within candidate set.")
+            import random
+            handle = random.choice(handles)
+            return ray.get(handle.execute_task.remote(task_data))
+
+    def execute_task_on_organ_best(self, organ_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Convenience: select best agent among those belonging to an organ.
+        Assumes standard agent naming: f"{organ_id}_agent_{'{'}i{'}'}".
+        """
+        prefix = f"{organ_id}_agent_"
+        candidate_ids = [aid for aid in self.agents.keys() if aid.startswith(prefix)]
+        return self.execute_task_on_best_of(candidate_ids, task_data)
     
     async def collect_heartbeats(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -521,6 +573,27 @@ class Tier0MemoryManager:
             "collection_interval": self.collection_interval,
             "status": "active"
         }
+
+    def get_agent_private_memory(self, agent_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Returns the agent's private memory vector and telemetry if available.
+        Falls back to legacy state.h when telemetry endpoints are unavailable.
+        """
+        agent = self.get_agent(agent_id)
+        if not agent:
+            logger.warning(f"Agent {agent_id} not found for private memory fetch")
+            return None
+        try:
+            h = ray.get(agent.get_private_memory_vector.remote())
+            tel = ray.get(agent.get_private_memory_telemetry.remote())
+            return {"h": h, "telemetry": tel}
+        except Exception:
+            # Legacy fallback
+            try:
+                state = ray.get(agent.get_state.remote())
+                return {"h": state.get("h")}
+            except Exception:
+                return None
     
     async def start_heartbeat_monitoring(self, interval_seconds: int = 10):
         """

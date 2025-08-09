@@ -24,12 +24,71 @@ import asyncio
 import time
 import ray
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Any, Optional, Tuple, Set
 
 from .base import Organ
 from ..agents import tier0_manager
 
 logger = logging.getLogger(__name__)
+
+@dataclass
+class StandardizedOrganInterface:
+    """COA §6.2: I_o = <T_o, R_o, S_o>"""
+    task_types: Set[str] = field(default_factory=set)
+    response_schema: Dict[str, Any] = field(default_factory=dict)
+    state_summary: Dict[str, Any] = field(default_factory=dict)
+
+
+class OCPSValve:
+    """
+    Online Change-Point Sentinel (CUSUM) used as the coordinator valve.
+    Maintains p_fast and decides escalation to HGNN (COA §6).
+    """
+    def __init__(self, nu: float = 0.1, h: float = 5.0):
+        self.nu = nu
+        self.h = h
+        self.S = 0.0
+        self.fast_hits = 0
+        self.esc_hits = 0
+
+    def update(self, drift_score: float) -> bool:
+        # One-sided CUSUM-like statistic
+        self.S = max(0.0, self.S + drift_score - self.nu)
+        escalate = self.S > self.h
+        if escalate:
+            self.esc_hits += 1
+            self.S = 0.0
+        else:
+            self.fast_hits += 1
+        return escalate
+
+    @property
+    def p_fast(self) -> float:
+        tot = self.fast_hits + self.esc_hits
+        return (self.fast_hits / tot) if tot else 1.0
+
+
+class RoutingTable:
+    """Hierarchical routing (COA §6.2): Levels 1–3, plus a hyperedge cache."""
+    def __init__(self):
+        self.by_task_type: Dict[str, str] = {}
+        self.by_domain: Dict[Tuple[str, str], str] = {}
+        self.hyperedge_cache: Dict[str, List[str]] = {}
+
+    def resolve(self, task_type: Optional[str], domain: Optional[str]) -> Optional[str]:
+        if task_type is None:
+            return None
+        key = (task_type, domain)
+        if key in self.by_domain:
+            return self.by_domain[key]
+        return self.by_task_type.get(task_type)
+
+    def standardize(self, task_type: str, organ_id: str, domain: Optional[str] = None):
+        if domain:
+            self.by_domain[(task_type, domain)] = organ_id
+        else:
+            self.by_task_type[task_type] = organ_id
 
 class OrganismManager:
     """
@@ -51,6 +110,11 @@ class OrganismManager:
         
         # Initialize Ray connection if not already initialized
         self._ensure_ray_initialized()
+
+        # COA §6: Initialize routing components
+        self.ocps = OCPSValve()
+        self.routing = RoutingTable()
+        self.organ_interfaces: Dict[str, StandardizedOrganInterface] = {}
 
     def _ensure_ray_initialized(self):
         """Ensure Ray is properly initialized with the correct address."""
@@ -273,16 +337,20 @@ class OrganismManager:
                         self.organs[organ_id] = existing_organ
                         
                     except ValueError:
-                        # Create new organ if it doesn't exist
+                        # Create new organ if it doesn't exist (idempotent semantics)
                         logger.info(f"🚀 Creating new organ: {organ_id} (Type: {organ_type})")
-                        self.organs[organ_id] = Organ.options(
-                            name=organ_id, 
-                            lifetime="detached",
-                            num_cpus=1  # Ensure resource allocation
-                        ).remote(
-                            organ_id=organ_id,
-                            organ_type=organ_type
-                        )
+                        try:
+                            existing_organ = ray.get_actor(organ_id)
+                            self.organs[organ_id] = existing_organ
+                        except ValueError:
+                            self.organs[organ_id] = Organ.options(
+                                name=organ_id, 
+                                lifetime="detached",
+                                num_cpus=1  # Ensure resource allocation
+                            ).remote(
+                                organ_id=organ_id,
+                                organ_type=organ_type
+                            )
                         logger.info(f"✅ Created new Organ: {organ_id} (Type: {organ_type})")
                         
                         # Test the new organ
@@ -486,6 +554,83 @@ class OrganismManager:
         organ_id = random.choice(list(self.organs.keys()))
         return await self.execute_task_on_organ(organ_id, task)
 
+    # === COA §6: Fast Router + OCPS Valve + HGNN Escalation ===
+    async def route_and_execute(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Coordinator entry-point. Implements the two-tier coordination from COA §6:
+        Level 1–2 fast routing; OCPS decides whether to escalate the remaining ~10% to HGNN.
+        Returns a dict with success flag, result payload, selected path, and p_fast.
+        """
+        if not self._initialized:
+            raise RuntimeError("Organism not initialized")
+
+        ttype = task.get("type") or task.get("task_type")
+        domain = task.get("domain")
+        drift = float(task.get("drift_score", 0.0))
+
+        # Try fast-path resolution first
+        organ_id = self.routing.resolve(ttype, domain)
+        escalate = self.ocps.update(drift)
+
+        if organ_id and not escalate:
+            try:
+                # Level 4: best agent within selected organ via Tier 0 constrained selection
+                organ_handle = self.organs[organ_id]
+                handles = ray.get(organ_handle.get_agent_handles.remote())
+                candidate_ids = list(handles.keys())
+                # Inject OCPS regime signals for agent-side F-block features
+                task["p_fast"] = self.ocps.p_fast
+                task["escalated"] = False
+                result = tier0_manager.execute_task_on_best_of(candidate_ids, task)
+                return {"success": True, "result": result, "organ_id": organ_id, "path": "fast", "p_fast": self.ocps.p_fast}
+            except Exception as e:
+                logger.warning(f"Fast-path failure on organ {organ_id}: {e}; escalating to HGNN")
+                escalate = True
+
+        # Escalation path: HGNN decomposition to multi-organ plan
+        plan = self._hgnn_decompose(task)
+        results: List[Dict[str, Any]] = []
+        for sub in plan:
+            sub_organ = sub["organ_id"]
+            sub_task = sub["task"]
+            # Inject OCPS regime signals for escalated path
+            sub_task["p_fast"] = self.ocps.p_fast
+            sub_task["escalated"] = True
+            r = await self.execute_task_on_organ(sub_organ, sub_task)
+            results.append(r)
+
+        success = all(r.get("success") for r in results) if results else False
+        if success:
+            key = self._pattern_key(plan)
+            self.routing.hyperedge_cache.setdefault(key, [p["organ_id"] for p in plan])
+        return {"success": success, "result": results, "path": "hgnn", "p_fast": self.ocps.p_fast}
+
+    # === COA §6.1: placeholder hypergraph decomposition ===
+    def _hgnn_decompose(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Placeholder for HGNN-based decomposition. For now, route to a minimal multi-organ plan
+        if no fast-path mapping exists.
+        """
+        # Example: trivial single-organ passthrough
+        ttype = task.get("type") or task.get("task_type")
+        # If any organ claims support for this type, prefer it
+        for organ_id, iface in getattr(self, "organ_interfaces", {}).items():
+            if ttype in iface.task_types:
+                return [{"organ_id": organ_id, "task": task}]
+        # Fallback: round-robin across known organs
+        if self.organs:
+            first = next(iter(self.organs.keys()))
+            return [{"organ_id": first, "task": task}]
+        return []
+
+    def _pattern_key(self, plan: List[Dict[str, Any]]) -> str:
+        return "|".join(f"{p['organ_id']}:{p['task'].get('type', p['task'].get('task_type',''))}" for p in plan)
+
+    # === §8 hooks: memory-aware prefetch/record (stubs) ===
+    def prefetch_context(self, task: Dict[str, Any]) -> None:
+        """Hook for Mw/Mlt prefetch as per §8.6 Unified RAG Operations. No-op until memory wired."""
+        pass
+
     async def initialize_organism(self):
         """Creates all organs and populates them with agents based on the config."""
         if self._initialized:
@@ -515,6 +660,14 @@ class OrganismManager:
                 
                 logger.info("🤖 Creating and distributing agents...")
                 await self._create_and_distribute_agents()
+                # Register known task types for fast-path routing (standardization)
+                for organ_config in self.organ_configs:
+                    organ_id = organ_config['id']
+                    known_types = set(organ_config.get('task_types', []) or [])
+                    if known_types:
+                        self.organ_interfaces[organ_id] = StandardizedOrganInterface(task_types=known_types)
+                        for t in known_types:
+                            self.routing.standardize(t, organ_id)
                 
                 self._initialized = True
                 logger.info("✅ Organism initialization complete.")
