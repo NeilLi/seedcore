@@ -1120,17 +1120,18 @@ def energy_monitor():
 def get_agents_state() -> Dict:
     """Returns the current state of all agents in the simulation with real data."""
     try:
-        from ..agents.tier0_manager import Tier0MemoryManager
+        from ..agents import tier0_manager
         import ray
         
-        # Initialize Ray if not already done
-        if not ray.is_initialized():
-            ray.init(address="auto", ignore_reinit_error=True)
+        # Ensure Ray is initialized with correct env namespace/address
+        try:
+            tier0_manager._ensure_ray()  # type: ignore[attr-defined]
+        except Exception:
+            pass
         
         all_agents = []
 
         # Only report Tier 0 agents for consistency
-        tier0_manager = Tier0MemoryManager()
         agent_ids = tier0_manager.list_agents()
 
         for agent_id in agent_ids:
