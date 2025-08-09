@@ -92,11 +92,12 @@ SeedCore implements a multi-tier memory system based on the Collective Organic A
 
 **Key Features**:
 - **Stateful Actors**: Each agent maintains its own private state
-- **128-Dimensional State Vectors**: Per COA specification
+- **128-Dimensional State Vectors**: Per COA specification with adaptive T/S/P budgeting and OCPS signals in F-block
 - **Performance Tracking**: Success rate, quality score, capability score
 - **Memory Utilization**: Tracks agent memory usage
 - **Heartbeat System**: Periodic state reporting for monitoring
 - **Role Probabilities**: E/S/O role distribution
+- **Optional Checkpointing (MySQL)**: Agents can persist/restore their private state via a pluggable MySQL-backed checkpoint store; default behavior remains ephemeral.
 
 ### 3. Memory Tier System (Tiers 1-2)
 
@@ -185,6 +186,7 @@ SeedCore implements a multi-tier memory system based on the Collective Organic A
 - **Connection Pooling**: Efficient database connections
 - **Session Management**: SQLAlchemy session handling
 - **Error Handling**: Robust connection error management
+- **Agent Checkpointing (MySQL)**: Optional MySQL-backed store for agent private memory warm restarts
 
 ## Data Flow
 

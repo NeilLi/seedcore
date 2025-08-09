@@ -48,6 +48,7 @@ from .cognitive_core import (
 
 # === COA §6/§8: agent-private memory vector h_i ∈ R^128 ===
 from .private_memory import AgentPrivateMemory, PeerEvent
+from .checkpoint_store import CheckpointStoreFactory, CheckpointStore, NullStore
 
 @dataclass
 class AgentState:
@@ -70,7 +71,9 @@ class RayAgent:
     - Memory managers for Mw and Mlt access
     """
     
-    def __init__(self, agent_id: str, initial_role_probs: Optional[Dict[str, float]] = None):
+    def __init__(self, agent_id: str, initial_role_probs: Optional[Dict[str, float]] = None,
+                 organ_id: Optional[str] = None,
+                 checkpoint_cfg: Optional[Dict[str, Any]] = None):
         # 1. Agent Identity and State
         self.agent_id = agent_id
         
@@ -129,6 +132,12 @@ class RayAgent:
 
         # --- Initialize private memory (lifetime-only persistence) ---
         self._privmem = AgentPrivateMemory(agent_id=self.agent_id, alpha=0.1)
+        # Optional checkpoint store (disabled by default)
+        self._organ_id = organ_id or "_"
+        self._ckpt_cfg = checkpoint_cfg or {"enabled": False}
+        self._ckpt_store: CheckpointStore = CheckpointStoreFactory.from_config(self._ckpt_cfg)
+        self._ckpt_key = f"{self._organ_id}/{self.agent_id}"
+        self._maybe_restore()
         
         # Initialize memory managers asynchronously to avoid hanging
         try:
@@ -435,6 +444,8 @@ class RayAgent:
             self.state.h = new_h.tolist()
             # Maintain numpy copy for any legacy computations
             self.state_embedding = np.array(self.state.h, dtype=np.float32)
+            # Optional checkpoint
+            self._post_task_housekeeping()
         except Exception as e:
             logger.warning(f"[{self.agent_id}] private memory update failed: {e}")
 
@@ -458,6 +469,25 @@ class RayAgent:
         self._privmem.reset()
         self.state.h[:] = 0.0
         return True
+
+    # ---------- Checkpointing ----------
+    def _maybe_restore(self):
+        try:
+            if self._ckpt_cfg.get("enabled") and hasattr(self._privmem, "load"):
+                blob = self._ckpt_store.load(self._ckpt_key)
+                if blob:
+                    self._privmem.load(blob)
+                    self.state.h = self._privmem.get_vector_list()
+                    self.state_embedding = np.array(self.state.h, dtype=np.float32)
+        except Exception as e:
+            logger.warning(f"[{self.agent_id}] restore failed: {e}")
+
+    def _post_task_housekeeping(self):
+        try:
+            if self._ckpt_cfg.get("enabled") and hasattr(self._privmem, "dump"):
+                self._ckpt_store.save(self._ckpt_key, self._privmem.dump())
+        except Exception as e:
+            logger.warning(f"[{self.agent_id}] checkpoint failed: {e}")
     
     def update_skill_delta(self, skill_name: str, delta: float):
         """
