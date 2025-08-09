@@ -3452,25 +3452,25 @@
             "targets": [
                 {
                     "exemplar": true,
-                    "expr": "sum(autoscaler_active_nodes{SessionName=~\"$SessionName\",ray_io_cluster=~\"$Cluster\",}) by (NodeType)",
+                    "expr": "count(count by (instance) (ray_node_cpu_count{SessionName=~\"$SessionName\",instance=~\"$Instance\"}))",
                     "interval": "",
-                    "legendFormat": "Active Nodes: {{NodeType}}",
+                    "legendFormat": "Active Nodes",
                     "queryType": "randomWalk",
                     "refId": "A"
                 },
                 {
                     "exemplar": true,
-                    "expr": "sum(autoscaler_recently_failed_nodes{SessionName=~\"$SessionName\",ray_io_cluster=~\"$Cluster\",}) by (NodeType)",
+                    "expr": "0",
                     "interval": "",
-                    "legendFormat": "Failed Nodes: {{NodeType}}",
+                    "legendFormat": "Failed Nodes",
                     "queryType": "randomWalk",
                     "refId": "B"
                 },
                 {
                     "exemplar": true,
-                    "expr": "sum(autoscaler_pending_nodes{SessionName=~\"$SessionName\",ray_io_cluster=~\"$Cluster\",}) by (NodeType)",
+                    "expr": "0",
                     "interval": "",
-                    "legendFormat": "Pending Nodes: {{NodeType}}",
+                    "legendFormat": "Pending Nodes",
                     "queryType": "randomWalk",
                     "refId": "C"
                 }
@@ -4027,7 +4027,13 @@
             },
             {
                 "current": {
-                    "selected": false
+                    "selected": true,
+                    "text": [
+                        "All"
+                    ],
+                    "value": [
+                        "$__all"
+                    ]
                 },
                 "datasource": "${datasource}",
                 "definition": "label_values(ray_node_network_receive_speed{}, ray_io_cluster)",
