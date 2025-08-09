@@ -12,18 +12,20 @@ router = APIRouter()
 @router.get("/tier0/agents/state")
 def get_tier0_agents_state() -> Dict[str, Any]:
     try:
-        # Initialize Ray if needed
-        if not ray.is_initialized():
-            ray.init(address="auto", ignore_reinit_error=True)
+        # Ensure Ray is initialized consistently
+        try:
+            tier0_manager._ensure_ray()  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
         all_agents = []
 
-        manager = Tier0MemoryManager()
-        agent_ids = manager.list_agents()
+        # Use the shared singleton manager
+        agent_ids = tier0_manager.list_agents()
 
         for agent_id in agent_ids:
             try:
-                agent = manager.get_agent(agent_id)
+                agent = tier0_manager.get_agent(agent_id)
                 if agent:
                     heartbeat = ray.get(agent.get_heartbeat.remote())
                     summary = ray.get(agent.get_summary_stats.remote())
@@ -118,8 +120,129 @@ async def create_ray_agents_batch(request: Dict[str, Any]):
 @router.get("/tier0/agents")
 async def list_ray_agents():
     try:
+        # Ensure discovery of detached Ray agents before listing
         agents = tier0_manager.list_agents()
         return {"success": True, "agents": agents, "count": len(agents)}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+@router.get("/tier0/agents/debug/discovery")
+async def debug_agent_discovery():
+    """Diagnostic endpoint to troubleshoot Ray agent discovery."""
+    import os
+    import ray
+    details = {
+        "env": {
+            "RAY_ADDRESS": os.getenv("RAY_ADDRESS"),
+            "RAY_NAMESPACE": os.getenv("RAY_NAMESPACE"),
+        },
+        "ray": {
+            "initialized": ray.is_initialized(),
+            "namespace": None,
+        },
+        "manager": {
+            "known_agents": list(tier0_manager.list_agents()),
+        },
+        "actors": {
+            "total": 0,
+            "ray_agents": [],
+        },
+    }
+
+    # Namespace if available
+    try:
+        ctx = ray.get_runtime_context()
+        # Depending on Ray version, ctx may or may not expose namespace
+        ns = getattr(ctx, "namespace", None)
+        details["ray"]["namespace"] = ns
+    except Exception:
+        pass
+
+    # Ensure Ray connected
+    try:
+        if not ray.is_initialized():
+            addr = os.getenv("RAY_ADDRESS", "auto")
+            ns = os.getenv("RAY_NAMESPACE", "seedcore")
+            ray.init(address=addr, ignore_reinit_error=True, namespace=ns)
+            details["ray"]["initialized"] = True
+            details["ray"]["namespace"] = ns
+    except Exception as e:
+        details["ray"]["error"] = str(e)
+
+    # List actors
+    try:
+        try:
+            from ray.util.state import list_actors  # type: ignore
+            actor_infos = list_actors()
+        except Exception:
+            actor_infos = []
+
+        details["actors"]["total"] = len(actor_infos)
+        for info in actor_infos:
+            try:
+                name = getattr(info, "name", None) if not isinstance(info, dict) else info.get("name") or info.get("actor_name")
+                class_name = getattr(info, "class_name", None) if not isinstance(info, dict) else info.get("class_name") or (info.get("classDescriptor") or {}).get("class_name")
+                namespace = getattr(info, "namespace", None) if not isinstance(info, dict) else info.get("namespace")
+                if name and class_name and str(class_name).endswith("RayAgent"):
+                    details["actors"]["ray_agents"].append({
+                        "name": name,
+                        "class": class_name,
+                        "namespace": namespace,
+                    })
+            except Exception:
+                continue
+    except Exception as e:
+        details["actors"]["error"] = str(e)
+
+    return {"success": True, "debug": details}
+
+
+@router.post("/tier0/agents/attach")
+async def attach_agent(request: Dict[str, Any]):
+    """Attach an existing named Ray actor (by name/namespace) as a Tier 0 agent.
+
+    Body:
+      - actor_name: required, Ray named actor to attach
+      - agent_id: optional, registry key (defaults to actor_name)
+      - namespace: optional, Ray namespace to resolve in (falls back to current)
+    """
+    import ray
+    actor_name = request.get("actor_name")
+    agent_id = request.get("agent_id") or actor_name
+    namespace = request.get("namespace")
+
+    if not actor_name:
+        return {"success": False, "message": "actor_name is required"}
+
+    # Ensure Ray is initialized
+    try:
+        tier0_manager._ensure_ray()  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    # Resolve actor handle
+    try:
+        handle = None
+        if namespace:
+            try:
+                handle = ray.get_actor(name=actor_name, namespace=namespace)
+            except Exception:
+                handle = None
+        if handle is None:
+            handle = ray.get_actor(actor_name)
+
+        # Sanity check get_id
+        resolved_id = ray.get(handle.get_id.remote())
+        if agent_id != resolved_id:
+            # Prefer the actor's self-reported id for consistency
+            agent_id = resolved_id
+
+        # Attach into manager
+        tier0_manager.attach_existing_actor(agent_id, handle)  # type: ignore[attr-defined]
+
+        agents = tier0_manager.list_agents()
+        return {"success": True, "attached": agent_id, "agents": agents, "count": len(agents)}
     except Exception as e:
         return {"success": False, "message": str(e)}
 

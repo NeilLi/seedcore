@@ -50,8 +50,57 @@ class Tier0MemoryManager:
         self.collection_interval = 5.0  # seconds
         
         logger.info("✅ Tier0MemoryManager initialized")
+        
+        # Best-effort auto-discovery on init so that detached Ray actors get picked up
+        try:
+            self._refresh_agents_from_cluster()
+        except Exception as e:
+            logger.debug(f"Auto-discovery on init skipped: {e}")
+
+        # Optional environment-driven attachment of known actor names
+        try:
+            import os
+            attach_env = os.getenv("TIER0_ATTACH_ACTORS", "").strip()
+            if attach_env:
+                self._ensure_ray()
+                # Support comma/semicolon/space-separated lists
+                raw_parts = [p for sep in [",", ";", " "] for p in attach_env.split(sep)]
+                candidate_names = [p.strip() for p in raw_parts if p and p.strip()]
+                attached = 0
+                for actor_name in candidate_names:
+                    try:
+                        # Try default/current namespace first, then explicit env namespace
+                        try:
+                            handle = ray.get_actor(actor_name)
+                        except Exception:
+                            ns = os.getenv("RAY_NAMESPACE", None)
+                            if ns:
+                                handle = ray.get_actor(name=actor_name, namespace=ns)
+                            else:
+                                raise
+                        # Sanity check
+                        resolved_id = ray.get(handle.get_id.remote())
+                        self.attach_existing_actor(resolved_id, handle)
+                        attached += 1
+                    except Exception as e:
+                        logger.debug(f"Env attach failed for {actor_name}: {e}")
+                if attached:
+                    logger.info(f"🔗 Attached {attached} actor(s) from TIER0_ATTACH_ACTORS")
+        except Exception as e:
+            logger.debug(f"Env-driven attachment skipped: {e}")
     
-    def create_agent(self, agent_id: str, role_probs: Optional[Dict[str, float]] = None) -> str:
+    def create_agent(
+        self,
+        agent_id: str,
+        role_probs: Optional[Dict[str, float]] = None,
+        *,
+        name: Optional[str] = None,
+        lifetime: Optional[str] = None,
+        num_cpus: Optional[float] = None,
+        num_gpus: Optional[float] = None,
+        resources: Optional[Dict[str, float]] = None,
+        namespace: Optional[str] = None,
+    ) -> str:
         """
         Create a new Ray agent actor.
         
@@ -68,7 +117,31 @@ class Tier0MemoryManager:
         
         try:
             # Create the Ray actor
-            agent_handle = RayAgent.remote(agent_id, role_probs)
+            options_kwargs: Dict[str, Any] = {}
+            # Use a stable, detached, named actor when options are provided
+            if name:
+                options_kwargs["name"] = name
+            # Default to using agent_id as name if a lifetime is set but no name provided
+            if lifetime and not name:
+                options_kwargs["name"] = agent_id
+            if lifetime:
+                options_kwargs["lifetime"] = lifetime
+            if num_cpus is not None:
+                options_kwargs["num_cpus"] = num_cpus
+            if num_gpus is not None:
+                options_kwargs["num_gpus"] = num_gpus
+            if resources:
+                options_kwargs["resources"] = resources
+            if namespace:
+                options_kwargs["namespace"] = namespace
+
+            if options_kwargs:
+                agent_handle = RayAgent.options(**options_kwargs).remote(
+                    agent_id=agent_id,
+                    initial_role_probs=role_probs,
+                )
+            else:
+                agent_handle = RayAgent.remote(agent_id, role_probs)
             self.agents[agent_id] = agent_handle
             
             # Initialize heartbeat and stats
@@ -97,8 +170,24 @@ class Tier0MemoryManager:
         for config in agent_configs:
             agent_id = config["agent_id"]
             role_probs = config.get("role_probs")
+            # Optional Ray options passthrough
+            name = config.get("name")
+            lifetime = config.get("lifetime")
+            num_cpus = config.get("num_cpus")
+            num_gpus = config.get("num_gpus")
+            resources = config.get("resources")
+            namespace = config.get("namespace")
             try:
-                self.create_agent(agent_id, role_probs)
+                self.create_agent(
+                    agent_id,
+                    role_probs,
+                    name=name,
+                    lifetime=lifetime,
+                    num_cpus=num_cpus,
+                    num_gpus=num_gpus,
+                    resources=resources,
+                    namespace=namespace,
+                )
                 created_ids.append(agent_id)
             except Exception as e:
                 logger.error(f"Failed to create agent {agent_id}: {e}")
@@ -119,8 +208,142 @@ class Tier0MemoryManager:
         return self.agents.get(agent_id)
     
     def list_agents(self) -> List[str]:
-        """Get list of all agent IDs."""
+        """Get list of all agent IDs.
+        
+        If no local registrations exist, attempt to discover detached RayAgent actors
+        that are already running in the Ray cluster and attach them.
+        """
+        if not self.agents:
+            try:
+                self._refresh_agents_from_cluster()
+            except Exception as e:
+                logger.debug(f"Agent discovery failed during list: {e}")
         return list(self.agents.keys())
+
+    # ---------------------------------------------------------------------
+    # Cluster discovery and attachment helpers
+    # ---------------------------------------------------------------------
+    def attach_existing_actor(self, agent_id: str, handle: Any) -> None:
+        """Attach a known Ray actor handle into the manager registry."""
+        if agent_id not in self.agents:
+            self.agents[agent_id] = handle
+            self.heartbeats.setdefault(agent_id, {})
+            self.agent_stats.setdefault(agent_id, {})
+
+    def _ensure_ray(self):
+        import os
+        try:
+            if not ray.is_initialized():
+                ray_address = os.getenv("RAY_ADDRESS", "auto")
+                ray_namespace = os.getenv("RAY_NAMESPACE", "seedcore")
+                ray.init(address=ray_address, ignore_reinit_error=True, namespace=ray_namespace)
+        except Exception:
+            # As a last resort, try local init (useful in dev)
+            if not ray.is_initialized():
+                ray_namespace = os.getenv("RAY_NAMESPACE", "seedcore")
+                ray.init(ignore_reinit_error=True, namespace=ray_namespace)
+
+    def _refresh_agents_from_cluster(self) -> None:
+        """Discover and attach existing RayAgent actors from the Ray cluster.
+        
+        This picks up detached, named Ray actors of class RayAgent that may
+        have been started by other components (e.g., organisms) and registers
+        them into this manager so API endpoints can see them.
+        """
+        self._ensure_ray()
+
+        discovered: Dict[str, Any] = {}
+
+        # Prefer public Ray state API when available
+        try:
+            # Ray 2.x public state API
+            from ray.util.state import list_actors  # type: ignore
+            actor_infos = list_actors()
+            for info in actor_infos:
+                try:
+                    # Support both object-style and dict-style info
+                    state_val = getattr(info, "state", None) if not isinstance(info, dict) else info.get("state")
+                    state_str = str(state_val).upper() if state_val is not None else ""
+                    if state_str and "ALIVE" not in state_str:
+                        continue
+
+                    name = (
+                        getattr(info, "name", None)
+                        if not isinstance(info, dict)
+                        else info.get("name") or info.get("actor_name")
+                    )
+                    class_name = (
+                        getattr(info, "class_name", None)
+                        if not isinstance(info, dict)
+                        else info.get("class_name") or (info.get("classDescriptor") or {}).get("class_name")
+                    )
+                    namespace = (
+                        getattr(info, "namespace", None)
+                        if not isinstance(info, dict)
+                        else info.get("namespace")
+                    )
+                    if name and class_name and str(class_name).endswith("RayAgent"):
+                        try:
+                            handle = None
+                            # Try resolve with namespace first if present
+                            if namespace:
+                                try:
+                                    handle = ray.get_actor(name=name, namespace=namespace)
+                                except Exception:
+                                    handle = None
+                            # Fallback to current namespace
+                            if handle is None:
+                                handle = ray.get_actor(name)
+                            discovered[name] = handle
+                        except Exception:
+                            # Could be in a different namespace; skip if not retrievable
+                            continue
+                except Exception:
+                    continue
+        except Exception:
+            # Fallback to private API (older Ray)
+            try:
+                from ray._private.state import actors  # type: ignore
+                actor_infos = actors()
+                for _, info in actor_infos.items():
+                    try:
+                        # info is a dict-like
+                        name = info.get("Name") or info.get("name")
+                        class_name = info.get("ClassName") or info.get("class_name")
+                        state = info.get("State") or info.get("state")
+                        namespace = info.get("Namespace") or info.get("namespace")
+                        if state != "ALIVE":
+                            continue
+                        if name and class_name and class_name.endswith("RayAgent"):
+                            try:
+                                handle = None
+                                if namespace:
+                                    try:
+                                        handle = ray.get_actor(name=name, namespace=namespace)
+                                    except Exception:
+                                        handle = None
+                                if handle is None:
+                                    handle = ray.get_actor(name)
+                                discovered[name] = handle
+                            except Exception:
+                                continue
+                    except Exception:
+                        continue
+            except Exception as e:
+                logger.debug(f"Ray private state API not available: {e}")
+
+        # Merge discovered into registry without overriding existing entries
+        newly_attached = 0
+        for agent_id, handle in discovered.items():
+            if agent_id not in self.agents:
+                self.agents[agent_id] = handle
+                # Initialize caches for newly attached
+                self.heartbeats.setdefault(agent_id, {})
+                self.agent_stats.setdefault(agent_id, {})
+                newly_attached += 1
+
+        if newly_attached:
+            logger.info(f"🔎 Attached {newly_attached} existing RayAgent(s) from cluster: {list(discovered.keys())}")
     
     def execute_task_on_agent(self, agent_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -209,6 +432,11 @@ class Tier0MemoryManager:
             Dictionary of agent_id -> heartbeat data
         """
         if not self.agents:
+            # Try discovering live agents before giving up
+            try:
+                self._refresh_agents_from_cluster()
+            except Exception as e:
+                logger.debug(f"Discovery failed during heartbeat collection: {e}")
             return {}
         
         try:

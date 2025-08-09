@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 from .base import Organ
-from ..agents.ray_actor import RayAgent
+from ..agents import tier0_manager
 
 logger = logging.getLogger(__name__)
 
@@ -333,41 +333,41 @@ class OrganismManager:
                         agent_count += 1
                         continue
                     
-                    # Create the agent actor with appropriate role probabilities based on organ type
+                    # Create the agent via Tier0 manager to centralize lifecycle
                     initial_role_probs = self._get_role_probs_for_organ_type(organ_config['type'])
-                    
-                    # Create agent with stable name (no timestamp) to enable reuse
-                    # Add timeout and error handling for agent creation
+
                     try:
-                        logger.info(f"🚀 Creating Ray agent {agent_id} with options...")
-                        agent_handle = RayAgent.options(
-                            name=agent_id,  # Use stable name without timestamp
-                            lifetime="detached",  # Make it persistent
-                            num_cpus=1  # Ensure resource allocation
-                        ).remote(
+                        logger.info(f"🚀 Creating Tier0 agent {agent_id} via Tier0MemoryManager...")
+                        # Ensure a detached, named actor with 1 CPU for stability
+                        tier0_manager.create_agent(
                             agent_id=agent_id,
-                            initial_role_probs=initial_role_probs
+                            role_probs=initial_role_probs,
+                            name=agent_id,
+                            lifetime="detached",
+                            num_cpus=1,
                         )
-                        logger.info(f"✅ Ray agent {agent_id} created, testing with get_id...")
-                        
-                        # Test the agent creation with a simple call
+
+                        # Retrieve the handle from Tier0 manager
+                        agent_handle = tier0_manager.get_agent(agent_id)
+                        if not agent_handle:
+                            raise Exception("Agent handle not found after creation")
+
+                        logger.info(f"✅ Tier0 agent {agent_id} created, testing with get_id...")
                         test_result = ray.get(agent_handle.get_id.remote())
                         logger.info(f"✅ Agent {agent_id} get_id test passed: {test_result}")
-                        
+
                         if test_result != agent_id:
                             raise Exception(f"Agent ID mismatch: expected {agent_id}, got {test_result}")
-                        
+
                         # Register the agent with its organ
                         logger.info(f"📝 Registering agent {agent_id} with organ {organ_id}...")
-                        # register_agent is synchronous, so use ray.get() instead of await
                         ray.get(organ_handle.register_agent.remote(agent_id, agent_handle))
                         logger.info(f"✅ Agent {agent_id} registered with organ {organ_id}")
-                        
+
                         self.agent_to_organ_map[agent_id] = organ_id
                         agent_count += 1
-                        
-                        logger.info(f"✅ Created new agent: {agent_id}")
-                        
+                        logger.info(f"✅ Created new agent via Tier0 manager: {agent_id}")
+
                     except asyncio.TimeoutError:
                         logger.error(f"❌ Timeout creating agent {agent_id}")
                         continue
