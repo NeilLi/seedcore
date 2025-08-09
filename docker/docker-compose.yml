@@ -152,7 +152,7 @@ services:
       # ── disable usage stats collection (silences warning) ──
       RAY_USAGE_STATS_ENABLED: "0"
       # ── disable additional metrics server to prevent port conflicts ──
-      RAY_DISABLE_METRICS_SERVER: "1"
+      RAY_DISABLE_METRICS_SERVER: "0"
       # ── Ray 2.20.0 specific configurations ──
       RAY_METRICS_EXPORT_PORT: "8080"
       RAY_DASHBOARD_METRICS_PORT: "8080"
@@ -191,6 +191,10 @@ services:
       neo4j:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4g
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import ray; ray.init(address='ray://localhost:10001', ignore_reinit_error=True); print('Ray is ready')\" || exit 1"]
       interval: 15s

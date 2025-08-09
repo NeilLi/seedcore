@@ -53,6 +53,7 @@ services:
     command: >
       ray start --address=ray-head:6380
                 --num-cpus=${RAY_WORKER_CPUS:-1}
+                --metrics-export-port=8090
                 --block
     healthcheck:
       test: ["CMD-SHELL", "ps aux | grep -v grep | grep 'ray start' || exit 1"]
@@ -61,6 +62,9 @@ services:
       retries: 3
       start_period: 60s
     deploy:
+      resources:
+        limits:
+          memory: 3g
       replicas: 1  # default ‑ overridden by --scale if needed
 
   # Remote worker that joins a head reachable via ${HEAD_IP} and uses host networking.
