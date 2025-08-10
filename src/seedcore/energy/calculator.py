@@ -1,16 +1,16 @@
 """
-Energy Model Foundation - Real Implementation
-
-This module implements the core energy calculation engine based on the Cognitive Organism Architecture (COA).
-It provides incremental energy updates using EnergyLedger and real energy calculations.
+Energy Model Foundation - unified energy function, term breakdown, gradients.
+Implements the bijective mapping of operational costs to energy terms (pair, hyper,
+role-entropy, L2 regularizer, memory cost) and exposes JSON-safe breakdowns.
 """
 
-import ray
-import numpy as np
+import ray  # type: ignore
+import numpy as np  # type: ignore
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field, asdict
 from seedcore.agents.ray_actor import RayAgent
+from .weights import EnergyWeights
 
 
 @dataclass
@@ -146,7 +146,7 @@ def calculate_energy(state: Dict[str, Any]) -> EnergyTerms:
     # Memory Term: β * CostVQ(M)
     mem_term = beta_mem * memory_stats.get('cost_vq', 0.0)
 
-    # Hyper term is still a placeholder
+    # Hyper term placeholder until HGNN integration supplies activations/weights
     hyper_term = 0.0
     
     total = pair_term + hyper_term + entropy_term + reg_term + mem_term
@@ -170,6 +170,63 @@ def energy_gradient_payload(ledger: EnergyLedger) -> Dict[str, Any]:
         "role_entropy_count": len(ledger.role_entropy),
         "mem_stats_count": len(ledger.mem_stats)
     }
+
+
+# New: Unified energy and gradients (paper §3 / §6)
+def entropy_of_roles(P_roles: np.ndarray) -> float:
+    q = np.clip(P_roles, 1e-8, 1.0)
+    q = q / (q.sum(axis=1, keepdims=True) + 1e-8)
+    return float(-(q * np.log(q)).sum())
+
+
+def cost_vq(memory_stats: Dict[str, Any]) -> float:
+    r = max(float(memory_stats.get("r_effective", 1.0)), 1.0)
+    pcompr = float(memory_stats.get("p_compress", 0.0))
+    return pcompr * (1.0 - 1.0 / r)
+
+
+def energy_and_grad(
+    state: Dict[str, Any],
+    weights: EnergyWeights,
+    memory_stats: Dict[str, Any],
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    """Compute term-wise energy and coarse gradients for controllers.
+
+    state keys:
+      - h_agents: np.ndarray [N, D]
+      - P_roles: np.ndarray [N, 3]
+      - hyper_sel: Optional[np.ndarray] [E]
+      - s_norm: float
+    """
+    H: np.ndarray = state["h_agents"]
+    P: np.ndarray = state["P_roles"]
+    E_sel: Optional[np.ndarray] = state.get("hyper_sel")
+    s_norm: float = float(state.get("s_norm", 0.0))
+
+    pair = -float(np.sum(weights.W_pair * (H @ H.T)))
+    hyper = -float(np.sum(weights.W_hyper * (E_sel if E_sel is not None else 0.0)))
+    ent = -float(weights.alpha_entropy) * entropy_of_roles(P)
+    reg = float(weights.lambda_reg) * (s_norm ** 2)
+    mem = float(weights.beta_mem) * cost_vq(memory_stats)
+
+    total = pair + hyper + ent + reg + mem
+    breakdown = {
+        "pair": pair,
+        "hyper": hyper,
+        "entropy": ent,
+        "reg": reg,
+        "mem": mem,
+        "total": total,
+    }
+
+    grad = {
+        "dE/dH": -2.0 * (weights.W_pair @ H),
+        "dE/dP_entropy": -float(weights.alpha_entropy),
+        "dE/dE_sel": -weights.W_hyper.copy(),
+        "dE/ds_norm": 2.0 * float(weights.lambda_reg) * s_norm,
+        "dE/dmem": float(weights.beta_mem),
+    }
+    return breakdown, grad
 
 
 # Legacy functions for backward compatibility

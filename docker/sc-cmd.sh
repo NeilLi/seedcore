@@ -131,6 +131,7 @@ cmd_restart() {
   if [[ -f "$WORKERS_FILE" ]]; then
     echo "⏸️  stopping workers first …"
     CUR_WORKERS=$(docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT ps ray-worker --filter "status=running" | wc -l)
+    CUR_WORKERS=$(( ${CUR_WORKERS:-1} - 1 )) # reduce ray-head
     docker compose -f "$COMPOSE_MAIN" -f "$WORKERS_FILE" -p $PROJECT down ray-worker --remove-orphans
   else
     CUR_WORKERS=0

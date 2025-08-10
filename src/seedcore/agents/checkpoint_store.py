@@ -6,7 +6,8 @@ Safe-by-default: if the backend isn't available/misconfigured, falls back to a n
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
-import json, logging
+import json, logging, os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,50 @@ class NullStore(CheckpointStore):
 
 
 @dataclass
+class FSStore(CheckpointStore):
+    root: str = "/tmp/seedcore"
+
+    def _resolve(self, key: str) -> Path:
+        # Keys can contain nested paths like 'energy/ledger.ndjson'
+        p = Path(self.root) / key
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def save(self, key: str, payload: Dict[str, Any]) -> bool:
+        try:
+            p = self._resolve(key)
+            tmp = p.with_suffix(p.suffix + ".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            tmp.replace(p)
+            return True
+        except Exception as e:
+            logger.warning(f"FSStore.save failed for {key}: {e}")
+            return False
+
+    def load(self, key: str) -> Optional[Dict[str, Any]]:
+        try:
+            p = self._resolve(key)
+            if not p.exists():
+                return None
+            with p.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.info(f"FSStore.load miss/fail for {key}: {e}")
+            return None
+
+    def delete(self, key: str) -> bool:
+        try:
+            p = self._resolve(key)
+            if p.exists():
+                p.unlink()
+            return True
+        except Exception as e:
+            logger.warning(f"FSStore.delete failed for {key}: {e}")
+            return False
+
+
+@dataclass
 class MySQLStore(CheckpointStore):
     host: str
     port: int
@@ -46,13 +91,21 @@ class MySQLStore(CheckpointStore):
     table: str = "agent_checkpoints"
 
     def _orm(self):
+        """Return a pooled SQLAlchemy engine and text() using the central database module.
+        Falls back to a local engine if database module is unavailable.
+        """
         try:
+            # Prefer shared engine from central database module
+            from seedcore.database import get_sync_mysql_engine  # type: ignore
+            from sqlalchemy import text  # type: ignore
+            engine = get_sync_mysql_engine()
+            return engine, text
+        except Exception:
+            # Fallback to creating a local engine if database module isn't available
             from sqlalchemy import create_engine, text  # type: ignore
-        except Exception as e:
-            raise RuntimeError("sqlalchemy not installed for MySQLStore") from e
-        dsn = f"mysql+pymysql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
-        engine = create_engine(dsn, pool_pre_ping=True)
-        return engine, text
+            dsn = f"mysql+pymysql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+            engine = create_engine(dsn, pool_pre_ping=True)
+            return engine, text
 
     def _ensure_table(self, engine, text):
         ddl = f"""
@@ -114,7 +167,7 @@ class CheckpointStoreFactory:
             return NullStore()
         backend = (cfg.get("backend") or "mysql").lower()
         try:
-            if backend == "mysql":
+            if backend in ("mysql", "sql"):
                 mysql = cfg.get("mysql", cfg)
                 return MySQLStore(
                     host=mysql.get("host", "mysql"),
@@ -124,6 +177,9 @@ class CheckpointStoreFactory:
                     database=mysql.get("database", "seedcore"),
                     table=mysql.get("table", "agent_checkpoints"),
                 )
+            if backend == "fs":
+                root = cfg.get("root") or os.getenv("ENERGY_LEDGER_ROOT", "/tmp/seedcore")
+                return FSStore(root=root)
         except Exception as e:
             logger.warning(f"CheckpointStoreFactory fallback to NullStore: {e}")
         return NullStore()

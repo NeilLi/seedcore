@@ -24,7 +24,11 @@ Key Terms:
 
 from dataclasses import dataclass, field
 from collections import deque
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+import time, uuid
+
+# New: persistence (append-only ledger + balances)
+from .energy_persistence import EnergyLedgerStore, EnergyTx
 
 @dataclass
 class EnergyLedger:
@@ -49,6 +53,69 @@ class EnergyLedger:
     alpha: float = 0.5
     lambda_reg: float = 0.01
     beta_mem: float = 0.2
+
+    def __post_init__(self):
+        # Lazy default: use MySQL-backed CheckpointStore unless overridden by env/config
+        self._ledger_store: Optional[EnergyLedgerStore] = None
+
+    def _store(self) -> EnergyLedgerStore:
+        if self._ledger_store is None:
+            # Default to environment-configured backend; enable by default
+            cfg = {"enabled": True}
+            self._ledger_store = EnergyLedgerStore(cfg)
+        return self._ledger_store
+
+    def log_step(self, breakdown: Dict[str, float], extra: Dict[str, Any]) -> Dict[str, Any]:
+        """Record a step with breakdown, persist tx, and update balances."""
+        ts_val = float(extra.get("ts", time.time()))
+        dE_val = float(extra.get("dE", 0.0))
+        rec = {
+            "ts": int(ts_val),
+            "dE": dE_val,
+            "terms": {
+                "pair": float(breakdown.get("pair", 0.0)),
+                "hyper": float(breakdown.get("hyper", 0.0)),
+                "entropy": float(breakdown.get("entropy", 0.0)),
+                "reg": float(breakdown.get("reg", 0.0)),
+                "mem": float(breakdown.get("mem", 0.0)),
+                "total": float(breakdown.get("total", 0.0)),
+            },
+            "p_fast": float(extra.get("p_fast", 0.0)),
+            "ocps_drift": float(extra.get("drift", 0.0)),
+            "beta_mem": float(extra.get("beta_mem", self.beta_mem)),
+        }
+        # Update internal state
+        self.pair = rec["terms"]["pair"]
+        self.hyper = rec["terms"]["hyper"]
+        self.entropy = rec["terms"]["entropy"]
+        self.reg = rec["terms"]["reg"]
+        self.mem = rec["terms"]["mem"]
+        self.last_delta = rec["dE"]
+        self.total_history.append(rec["terms"]["total"])
+
+        # Persist transaction via EnergyLedgerStore (cluster scope by default)
+        try:
+            tx = EnergyTx(
+                tx_id=str(uuid.uuid4()),
+                ts=ts_val,
+                scope=str(extra.get("scope", "cluster")),
+                scope_id=str(extra.get("scope_id", "-")),
+                step_id=extra.get("step_id"),
+                dE=float(breakdown.get("total", 0.0)),
+                cost=float(extra.get("cost", 0.0)),
+                breakdown={k: float(v) for k, v in rec["terms"].items()},
+                meta={
+                    "p_fast": rec["p_fast"],
+                    "drift": rec["ocps_drift"],
+                },
+            )
+            ok = self._store().append_tx(tx)
+            bal_after = self._store().apply_tx_to_balance(tx) if ok else None
+            rec.update({"tx_id": tx.tx_id, "ok": ok, "balance_after": bal_after})
+        except Exception:
+            # Persistence failures should not crash control loop
+            rec.update({"ok": False})
+        return rec
 
     @property
     def total(self) -> float:

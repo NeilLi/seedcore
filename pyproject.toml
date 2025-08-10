@@ -35,6 +35,8 @@ dependencies = [
     "grpcio",
     "protobuf",
     "pyyaml",
+    "prometheus-client",
+    "asyncpg",
 ]
 
 [project.optional-dependencies]

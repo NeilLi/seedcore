@@ -21,11 +21,11 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 import os
-import numpy as np
+import numpy as np  # type: ignore
 import random
 import uuid
 import ray
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request  # type: ignore
 from collections import deque
 from typing import List, Dict, Any
 import time
@@ -55,8 +55,8 @@ from ..memory.holon_fabric import HolonFabric
 from ..memory.backends.pgvector_backend import PgVectorStore, Holon
 from ..memory.backends.neo4j_graph import Neo4jGraph
 from ..memory.consolidation_logic import consolidate_batch
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-from fastapi import Response
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST  # type: ignore
+from fastapi import Response  # type: ignore
 from ..telemetry.metrics import COSTVQ, ENERGY_SLOPE, MEM_WRITES
 from ..control.memory.meta_controller import adjust
 import asyncio
@@ -78,6 +78,9 @@ from ..agents.cognitive_core import (
     get_cognitive_core
 )
 from ..serve.cognitive_serve import CognitiveCoreClient
+from ..energy.weights import EnergyWeights
+from ..energy.calculator import energy_and_grad
+from ..energy.energy_persistence import EnergyLedgerStore
 
 # --- Persistent State ---
 # Create a single, persistent registry when the server starts.
@@ -97,6 +100,9 @@ compression_knob = 0.5
 # Global Holon Fabric instance
 holon_fabric = None
 # --- End Persistent State ---
+
+# Energy weights state (initialized lazily once Tier0 agents are known)
+ENERGY_WEIGHTS: EnergyWeights | None = None
 
 # In-memory Tier-1 cache (Mw) for demonstration
 mw_cache = {}  # This should be updated by your memory system as needed
@@ -180,6 +186,37 @@ async def startup_event():
     asyncio.create_task(start_consolidator())
     logging.info("Consolidator loop started")
 
+    # Energy ledger: if FS/S3-like backend is configured, rebuild balances at startup
+    try:
+        store = EnergyLedgerStore({"enabled": True})
+        backend = (store.cfg.get("backend") or "").lower()
+        if backend in ("fs", "s3"):
+            logging.info("Rebuilding energy balances from ledger (backend=%s)", backend)
+            store.rebuild_balances()
+    except Exception:
+        logging.exception("Failed energy ledger rebuild on startup")
+
+    # Initialize ENERGY_WEIGHTS once agents are available
+    try:
+        global ENERGY_WEIGHTS
+        from ..agents.tier0_manager import Tier0MemoryManager
+        tier0_mgr = Tier0MemoryManager()
+        agent_ids = tier0_mgr.list_agents()
+        if agent_ids and ENERGY_WEIGHTS is None:
+            n = len(agent_ids)
+            # Start with zeros; learn from PairStats
+            ENERGY_WEIGHTS = EnergyWeights(
+                W_pair=np.zeros((n, n), dtype=np.float32),
+                W_hyper=np.zeros((0,), dtype=np.float32),
+                alpha_entropy=0.1,
+                lambda_reg=0.01,
+                beta_mem=0.05,
+            )
+            ENERGY_WEIGHTS.project()
+            app.state.energy_weights = ENERGY_WEIGHTS
+    except Exception:
+        logging.exception("Failed to initialize ENERGY_WEIGHTS")
+
 @app.on_event("startup")
 async def build_memory():
     """Initialize the Holon Fabric on server startup"""
@@ -247,7 +284,7 @@ async def start_consolidator():
 
 @app.on_event("startup")
 async def sync_counters():
-    import asyncpg
+    import asyncpg  # type: ignore
     pg_dsn = os.getenv("PG_DSN")
     if not pg_dsn:
         logging.warning("PG_DSN not configured, skipping counter sync")
@@ -494,8 +531,8 @@ async def energy_gradient():
         from ..energy.calculator import energy_gradient_payload, EnergyLedger, calculate_energy
         from ..agents.tier0_manager import Tier0MemoryManager
         from ..caching.redis_cache import get_redis_cache, energy_gradient_cache_key
-        import ray
-        
+        import ray  # type: ignore
+
         # Try to get from cache first
         cache = get_redis_cache()
         cache_key = energy_gradient_cache_key()
@@ -534,7 +571,10 @@ async def energy_gradient():
             'cost_vq': COSTVQ._value.get(),
             'bytes_used': MEMORY_SYSTEM.get_memory_stats().get('bytes_used', 0),
             'hit_count': MEMORY_SYSTEM.get_memory_stats().get('hit_count', 0),
-            'compression_ratio': compression_knob
+            'compression_ratio': compression_knob,
+            # extra fields used by cost_vq() mapping
+            'r_effective': max(1.0, 1.0 / max(compression_knob, 1e-6)),
+            'p_compress': 1.0 if compression_knob > 0 else 0.0,
         }
         
         # Calculate real energy using the Energy Model Foundation
@@ -567,8 +607,53 @@ async def energy_gradient():
                             'sim': 0.6  # Simulated similarity
                         }
             
-            # Get energy gradient payload
+            # Update W_pair from tracker with current agent ordering
+            try:
+                global ENERGY_WEIGHTS
+                if ENERGY_WEIGHTS is None or ENERGY_WEIGHTS.W_pair.shape[0] != len(agent_ids):
+                    ENERGY_WEIGHTS = EnergyWeights(
+                        W_pair=np.zeros((len(agent_ids), len(agent_ids)), dtype=np.float32),
+                        W_hyper=np.zeros((0,), dtype=np.float32),
+                        alpha_entropy=0.1,
+                        lambda_reg=0.01,
+                        beta_mem=0.05,
+                    )
+                    app.state.energy_weights = ENERGY_WEIGHTS
+                # Blend tracker stats into weights
+                PAIR_TRACKER.to_weights(tuple(agent_ids), ENERGY_WEIGHTS, ema=0.5)
+            except Exception:
+                logger.exception("Failed to update ENERGY_WEIGHTS from PAIR_TRACKER")
+
+            # Build state for unified energy and gradient
+            try:
+                # Agent embeddings and role probabilities
+                H = []
+                P = []
+                for agent_id in agent_ids:
+                    ag = tier0_manager.get_agent(agent_id)
+                    if ag:
+                        hb = ray.get(ag.get_heartbeat.remote())
+                        P.append([
+                            hb.get('role_probs', {}).get('E', 0.0),
+                            hb.get('role_probs', {}).get('S', 0.0),
+                            hb.get('role_probs', {}).get('O', 0.0),
+                        ])
+                        H.append(ray.get(ag.get_state_embedding.remote()))
+                H = np.array(H, dtype=np.float32) if H else np.zeros((0, 0), dtype=np.float32)
+                P = np.array(P, dtype=np.float32) if P else np.zeros((0, 3), dtype=np.float32)
+                s_norm = float(np.linalg.norm(H))
+                state = {"h_agents": H, "P_roles": P, "hyper_sel": None, "s_norm": s_norm}
+                breakdown, grad = energy_and_grad(state, ENERGY_WEIGHTS, memory_stats)
+            except Exception:
+                logger.exception("Failed computing unified energy and gradients")
+                breakdown, grad = {"pair": 0.0, "hyper": 0.0, "entropy": 0.0, "reg": 0.0, "mem": memory_stats['cost_vq'], "total": memory_stats['cost_vq']}, {"dE/dmem": 0.0}
+
+            # Get energy gradient payload and augment with unified breakdown/grad and L_tot
             energy_payload = energy_gradient_payload(ledger)
+            energy_payload.update({
+                "breakdown": {k: float(v) for k, v in breakdown.items()},
+                "grad": {k: (float(v) if isinstance(v, (int, float)) else None) for k, v in grad.items()},
+            })
             
             # Add additional real-time metrics
             energy_payload.update({
@@ -687,8 +772,8 @@ def energy_calibrate():
         from ..energy.calculator import EnergyLedger, calculate_energy
         from ..agents.tier0_manager import Tier0MemoryManager
         from ..caching.redis_cache import get_redis_cache, energy_calibrate_cache_key
-        import ray
-        import numpy as np
+        import ray  # type: ignore
+        import numpy as np  # type: ignore
         
         # Try to get from cache first
         cache = get_redis_cache()

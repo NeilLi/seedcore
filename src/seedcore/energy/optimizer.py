@@ -18,6 +18,34 @@ if not logger.handlers:
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
     logger.addHandler(handler)
+class GlobalClippedOpt:
+    """Shared global-clipped optimizer for meta-parameters.
+
+    Keeps updates within a global norm and projects to a radius to preserve
+    non-expansiveness of the mapping, per Lemma 4.
+    """
+
+    def __init__(self, lr: float = 1e-3, clip_norm: float = 1.0, radius: float = 0.99):
+        self.lr = lr
+        self.clip_norm = clip_norm
+        self.radius = radius
+
+    def step(self, params: Dict[str, np.ndarray], grads: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+        # 1) global clip
+        g2 = 0.0
+        for g in grads.values():
+            g2 += float(np.linalg.norm(g) ** 2)
+        scale = min(1.0, self.clip_norm / (np.sqrt(g2) + 1e-8))
+        # 2) update
+        for k in params:
+            params[k] = params[k] - self.lr * scale * grads[k]
+        # 3) projection to radius
+        for k in params:
+            n = float(np.linalg.norm(params[k]))
+            if n > self.radius and n > 1e-8:
+                params[k] = params[k] * (self.radius / n)
+        return params
+
 
 
 def score_agent(agent: RayAgent, task: Dict[str, Any]) -> float:

@@ -13,11 +13,15 @@
 # limitations under the License.
 
 """
-Pair statistics tracking for agent collaboration history.
+Pair statistics tracking for agent collaboration history and conversion to
+pairwise weights as per the unified energy mapping.
 """
 
 from dataclasses import dataclass, field
 from typing import Dict, Tuple
+import numpy as np
+
+from .weights import EnergyWeights
 
 @dataclass
 class PairStats:
@@ -83,3 +87,37 @@ class PairStatsTracker:
                 "success_rate": stats.success_count / stats.trial_count if stats.trial_count > 0 else 0.0
             }
         return result 
+
+    # New: export to EnergyWeights.W_pair via a gentle EMA-guided merge
+    def to_weights(self, agent_ids: Tuple[str, ...], weights: EnergyWeights, ema: float = 0.5) -> None:
+        """Blend observed success rates into the pair weight matrix.
+
+        - agent_ids: stable ordering of agents to index into W_pair
+        - weights: EnergyWeights instance to mutate
+        - ema: smoothing for merge with existing weights
+        """
+        n = len(agent_ids)
+        if n == 0:
+            return
+        sr_matrix = np.zeros((n, n), dtype=np.float32)
+        # Build success-rate matrix from tracker
+        for i, ai in enumerate(agent_ids):
+            for j, aj in enumerate(agent_ids):
+                if i == j:
+                    continue
+                key = tuple(sorted([ai, aj]))
+                stats = self.pair_stats.get(key)
+                if stats and stats.trial_count > 0:
+                    sr = stats.success_count / stats.trial_count
+                else:
+                    sr = 0.0
+                sr_matrix[i, j] = sr
+        # Symmetrize
+        sr_matrix = 0.5 * (sr_matrix + sr_matrix.T)
+        # Merge with existing weights.W_pair
+        if weights.W_pair.shape != (n, n):
+            weights.W_pair = sr_matrix.copy()
+        else:
+            weights.W_pair = ema * weights.W_pair + (1.0 - ema) * sr_matrix
+        # Project to keep stable
+        weights.project()
