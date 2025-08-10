@@ -27,10 +27,10 @@ grep -r "energy_router" src/seedcore/api/
 
 ```bash
 # Start the SeedCore system in Docker
-docker-compose up -d
+docker compose up -d
 
-# Test the energy gradient endpoint
-curl http://localhost:8000/energy/gradient
+# Test the energy gradient endpoint (served by API on port 8002)
+curl http://localhost:8002/energy/gradient
 
 # Expected response:
 {
@@ -242,10 +242,10 @@ asyncio.run(test_flywheel())
 
 ```bash
 # Test the endpoint returns proper JSON
-curl -s http://localhost:8000/energy/gradient | jq '.'
+curl -s http://localhost:8002/energy/gradient | jq '.'
 
 # Verify all required fields are present
-curl -s http://localhost:8000/energy/gradient | jq '.E_terms | keys'
+curl -s http://localhost:8002/energy/gradient | jq '.E_terms | keys'
 # Should return: ["pair", "hyper", "entropy", "reg", "mem", "total"]
 ```
 

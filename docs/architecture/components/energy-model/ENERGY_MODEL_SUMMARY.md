@@ -104,4 +104,25 @@ The Energy Model Foundation is now ready for:
 ---
 
 **Status**: ✅ **FULLY IMPLEMENTED AND TESTED**
-**Commit**: `877c235` - "feat: Implement Energy Model Foundation for intelligent agent selection" 
+**Commit**: `877c235` - "feat: Implement Energy Model Foundation for intelligent agent selection"
+
+## Ledger Persistence and Slow Loop (Addendum)
+
+- Energy ledger persistence is available via `src/seedcore/energy/energy_persistence.py` using `EnergyLedgerStore` and `EnergyTx`.
+- Default backend is MySQL through the shared `CheckpointStore`; FS/S3-style stores are supported with newline-delimited JSON.
+- Enable via environment:
+
+```bash
+ENERGY_LEDGER_ENABLED=true
+ENERGY_LEDGER_BACKEND=mysql   # or fs
+# If fs backend is used:
+ENERGY_LEDGER_ROOT=/app/data
+```
+
+- A background slow loop exists at `src/seedcore/energy/control_loops.py` (`SlowPSOLoop`) to tune roles and `lambda_reg` over time, with helpers `start_slow_psoloop()` and `stop_slow_psoloop()`.
+
+Contractivity guard used in telemetry:
+
+```python
+L_tot = min(0.999, (p_fast * 1.0 + (1.0 - p_fast) * beta_meta) * rho * beta_mem)
+```

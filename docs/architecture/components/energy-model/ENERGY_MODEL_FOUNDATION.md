@@ -287,6 +287,35 @@ The implementation follows best practices for:
 - **Scalability**: Configurable settings and distributed caching support
 - **Maintainability**: Clean code structure and comprehensive documentation 
 
+## Ledger Persistence and Balances
+
+The system persists energy transactions and maintains derived balances using `EnergyLedgerStore` and `EnergyTx` (`src/seedcore/energy/energy_persistence.py`).
+
+- Default backend: MySQL via `CheckpointStoreFactory`; alternative FS/S3-compatible mode uses keys `energy/ledger.ndjson` and `energy/balances.json`.
+- Enablement via environment variables:
+
+```bash
+ENERGY_LEDGER_ENABLED=true
+ENERGY_LEDGER_BACKEND=mysql   # or fs
+ENERGY_LEDGER_ROOT=/app/data  # only for fs backend
+```
+
+Usage is automatic from `EnergyLedger.log_step(...)` when enabled. Balances follow:
+
+```
+balance_after = balance_before + (−dE − cost)
+```
+
+## Slow PSO Loop and Contractivity Guardrails
+
+- Background loop: `src/seedcore/energy/control_loops.py` (`SlowPSOLoop`) optimizes role distributions and tunes `lambda_reg`.
+- Helpers: `start_slow_psoloop()`, `stop_slow_psoloop()`, `get_slow_psoloop_instance()`.
+- Contractivity bound used in telemetry and gatekeeping:
+
+```python
+L_tot = min(0.999, (p_fast * 1.0 + (1.0 - p_fast) * beta_meta) * rho * beta_mem)
+```
+
 ## Promotion Gate and Runtime Contractivity Audit
 
 ### Overview
