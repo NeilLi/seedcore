@@ -306,6 +306,8 @@ This document describes all available API endpoints in the SeedCore system, with
 
 **Features**:
 - Tier0 Ray agents and legacy organ agents
+- Auto-discovers detached, named `RayAgent` actors already running in the Ray cluster and attaches them into the manager registry
+- Optional environment-driven attachment via `TIER0_ATTACH_ACTORS` (comma/space/semicolon-separated names) and `RAY_NAMESPACE`
 - Comprehensive agent metrics
 - Energy state information
 - Performance statistics
@@ -467,9 +469,9 @@ All enhanced endpoints now provide real data from:
 4. **Agent Performance**: Live capability scores and task statistics
 5. **System Health**: Real-time health monitoring
 
-### Automatic Agent Creation
+### Automatic Agent Creation and Discovery
 
-Endpoints automatically create demonstration agents if none exist:
+Endpoints automatically create demonstration agents if none exist; the Tier0 manager will also attempt to discover existing `RayAgent` actors in the cluster:
 - Explorer agents (high exploration probability)
 - Specialist agents (high specialization probability)
 - Balanced agents (mixed role probabilities)

@@ -99,6 +99,12 @@ SeedCore implements a multi-tier memory system based on the Collective Organic A
 - **Role Probabilities**: E/S/O role distribution
 - **Optional Checkpointing (MySQL)**: Agents can persist/restore their private state via a pluggable MySQL-backed checkpoint store; default behavior remains ephemeral.
 
+**Operational Notes**:
+- Auto-discovery: the manager discovers and attaches detached, named `RayAgent` actors already running in the Ray cluster so API endpoints can see them.
+- Environment-driven attachment: set `TIER0_ATTACH_ACTORS` (comma/space/semicolon-separated names) and optionally `RAY_NAMESPACE` to attach known actors on startup.
+- Selection: Tier0 uses energy-aware selection to pick the best agent, with fallback to random selection on errors.
+- Salience logging: agents optionally integrate with `FlashbulbClient` to log high-salience incidents (Tier 3).
+
 ### 3. Memory Tier System (Tiers 1-2)
 
 **File**: `src/seedcore/memory/system.py`
