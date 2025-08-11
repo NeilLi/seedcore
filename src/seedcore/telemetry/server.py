@@ -80,6 +80,8 @@ from ..agents.cognitive_core import (
 from ..serve.cognitive_serve import CognitiveCoreClient
 from ..energy.weights import EnergyWeights
 from ..energy.calculator import energy_and_grad
+from ..energy.state import UnifiedState, AgentSnapshot, OrganState, SystemState, MemoryVector
+from ..hgnn.pattern_shim import SHIM
 from ..energy.energy_persistence import EnergyLedgerStore
 
 # --- Persistent State ---
@@ -114,6 +116,62 @@ app.include_router(organism_router)
 app.include_router(tier0_router)
 app.include_router(energy_router)
 app.include_router(holon_router)
+from ..api.routers.ocps_router import router as ocps_router
+app.include_router(ocps_router)
+# --- Unified State Builder ---
+def _get_ma_stats() -> dict:
+    try:
+        return {"count": len(tier0_manager.list_agents())}
+    except Exception:
+        return {}
+
+
+def _get_mw_stats() -> dict:
+    try:
+        return app.state.stats.mw_stats()
+    except Exception:
+        return {}
+
+
+def _get_mlt_stats() -> dict:
+    try:
+        return app.state.mem.get_memory_stats() if hasattr(app.state, "mem") else {}
+    except Exception:
+        return {}
+
+
+def _get_mfb_stats() -> dict:
+    try:
+        return {"incidents": 0}
+    except Exception:
+        return {}
+
+
+def build_unified_state(agent_ids: list[str]) -> UnifiedState:
+    agents: dict[str, AgentSnapshot] = {}
+    for agent_id in agent_ids:
+        ag = tier0_manager.get_agent(agent_id)
+        if not ag:
+            continue
+        hb = ray.get(ag.get_heartbeat.remote())
+        agents[agent_id] = AgentSnapshot(
+            h=np.array(hb.get('state_embedding_h') or [], dtype=np.float32),
+            p=hb.get('role_probs', {}),
+            c=float(hb.get('performance_metrics', {}).get('capability_score_c', 0.0)),
+            mem_util=float(hb.get('performance_metrics', {}).get('mem_util', 0.0)),
+            lifecycle=str(hb.get('lifecycle', {}).get('state', 'Employed')),
+        )
+
+    organs: dict[str, OrganState] = {}
+    E_vec, _emap = SHIM.get_E_patterns()
+    system = SystemState(E_patterns=E_vec)
+    memory = MemoryVector(
+        ma=_get_ma_stats(),
+        mw=_get_mw_stats(),
+        mlt=_get_mlt_stats(),
+        mfb=_get_mfb_stats(),
+    )
+    return UnifiedState(agents=agents, organs=organs, system=system, memory=memory)
 
 class _Ctl:
     tau: float = 0.3
@@ -528,7 +586,8 @@ async def energy_gradient():
     Now with Redis caching for improved performance.
     """
     try:
-        from ..energy.calculator import energy_gradient_payload, EnergyLedger, calculate_energy
+        from ..energy.calculator import energy_gradient_payload, calculate_energy
+        from ..energy.ledger import EnergyLedger
         from ..agents.tier0_manager import Tier0MemoryManager
         from ..caching.redis_cache import get_redis_cache, energy_gradient_cache_key
         import ray  # type: ignore
@@ -769,7 +828,8 @@ def energy_meta():
 def energy_calibrate():
     """Energy calibration endpoint that runs synthetic tasks and returns calibration results."""
     try:
-        from ..energy.calculator import EnergyLedger, calculate_energy
+        from ..energy.calculator import calculate_energy
+        from ..energy.ledger import EnergyLedger
         from ..agents.tier0_manager import Tier0MemoryManager
         from ..caching.redis_cache import get_redis_cache, energy_calibrate_cache_key
         import ray  # type: ignore
@@ -918,7 +978,8 @@ def energy_calibrate():
 
 def _build_energy_health_payload():
     """Internal: Build energy health payload for both legacy and new health routes."""
-    from ..energy.calculator import energy_gradient_payload, EnergyLedger
+    from ..energy.calculator import energy_gradient_payload
+    from ..energy.ledger import EnergyLedger
     from ..agents.tier0_manager import Tier0MemoryManager
     import ray
 
@@ -1050,7 +1111,8 @@ def energy_health():
 def energy_monitor():
     """Real-time energy monitoring endpoint with detailed metrics."""
     try:
-        from ..energy.calculator import energy_gradient_payload, EnergyLedger, calculate_energy
+        from ..energy.calculator import energy_gradient_payload, calculate_energy
+        from ..energy.ledger import EnergyLedger
         from ..agents.tier0_manager import Tier0MemoryManager
         from ..caching.redis_cache import get_redis_cache, energy_monitor_cache_key
         import ray
@@ -1288,7 +1350,8 @@ def get_agents_state_legacy_alias() -> Dict:
 def system_status():
     """Returns the current status of the persistent system with real data."""
     try:
-        from ..energy.calculator import energy_gradient_payload, EnergyLedger
+        from ..energy.calculator import energy_gradient_payload
+        from ..energy.ledger import EnergyLedger
         from ..agents.tier0_manager import Tier0MemoryManager
         import ray
         

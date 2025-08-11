@@ -27,7 +27,8 @@ import json
 
 from .ray_actor import RayAgent
 from ..energy.optimizer import select_best_agent, score_agent
-from ..energy.calculator import EnergyLedger  # For fallback
+# Avoid importing EnergyLedger at module import time to prevent circular imports.
+# We'll import it inside functions that need it.
 
 logger = logging.getLogger(__name__)
 
@@ -247,10 +248,17 @@ class Tier0MemoryManager:
                 fails = self._ping_failures.get(agent_id, 0) + 1
                 self._ping_failures[agent_id] = fails
                 if fails >= 3:
-                    logger.warning(f"Pruning agent after {fails} consecutive ping failures: {agent_id}")
-                    self.agents.pop(agent_id, None)
-                    self.heartbeats.pop(agent_id, None)
-                    self.agent_stats.pop(agent_id, None)
+                    logger.warning(f"Archiving agent after {fails} consecutive ping failures: {agent_id}")
+                    try:
+                        handle = self.agents.get(agent_id)
+                        if handle and hasattr(handle, "archive"):
+                            ray.get(handle.archive.remote())
+                    except Exception:
+                        logger.exception("archive() failed; detaching actor reference.")
+                    finally:
+                        self.agents.pop(agent_id, None)
+                        self.heartbeats.pop(agent_id, None)
+                        self.agent_stats.pop(agent_id, None)
         return [{"id": aid} for aid in live.keys()]
 
     # ---------------------------------------------------------------------

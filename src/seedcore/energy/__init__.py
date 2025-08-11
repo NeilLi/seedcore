@@ -16,8 +16,9 @@ from .calculator import (
     calculate_entropy_energy,
     calculate_reg_energy,
     calculate_mem_energy,
-    calculate_total_energy
+    calculate_total_energy,
 )
+from .ledger import EnergyLedger
 
 from .optimizer import (
     calculate_agent_suitability_score,
@@ -34,6 +35,7 @@ __all__ = [
     'calculate_reg_energy',
     'calculate_mem_energy',
     'calculate_total_energy',
+    'EnergyLedger',
     
     # Optimizer functions
     'calculate_agent_suitability_score',

@@ -121,6 +121,10 @@ class RayAgent:
         
         # 11. Energy State Tracking (NEW)
         self.energy_state: Dict[str, float] = {}
+        self.lifecycle_state: str = "Employed"
+        self.idle_ticks: int = 0
+        self.max_idle: int = 1000
+        self._archived: bool = False
         
         # --- Initialize memory managers with better error handling ---
         self.mw_manager = None
@@ -470,6 +474,38 @@ class RayAgent:
         self.state.h[:] = 0.0
         return True
 
+    def _export_tier0_summary(self) -> Dict[str, Any]:
+        return {
+            "agent_id": self.agent_id,
+            "embedding": self.state.h,
+            "capability_score": self.capability_score,
+            "mem_util": self.mem_util,
+            "tasks_processed": self.tasks_processed,
+            "success_rate": (self.successful_tasks / self.tasks_processed) if self.tasks_processed else 0.0,
+            "skill_deltas": self.skill_deltas,
+            "peer_interactions": self.peer_interactions,
+        }
+
+    def archive(self) -> bool:
+        """Move Tier-0 summaries to Mlt and mark this actor as archived."""
+        try:
+            summary = self._export_tier0_summary()
+            if self.mlt_manager and hasattr(self.mlt_manager, "store_agent_summary"):
+                self.mlt_manager.store_agent_summary(self.agent_id, summary)  # type: ignore[attr-defined]
+            if self.mw_manager and hasattr(self.mw_manager, "evict_agent"):
+                self.mw_manager.evict_agent(self.agent_id)  # type: ignore[attr-defined]
+            if self.mfb_client and hasattr(self.mfb_client, "log_incident"):
+                try:
+                    self.mfb_client.log_incident({"archive": True, "summary": summary}, salience=0.3)
+                except Exception:
+                    pass
+            self._archived = True
+            self.lifecycle_state = "Archived"
+            return True
+        except Exception as e:
+            logger.exception(f"Archive failed for {self.agent_id}: {e}")
+            return False
+
     # ---------- Checkpointing ----------
     def _maybe_restore(self):
         try:
@@ -546,9 +582,14 @@ class RayAgent:
                 "recent_quality_scores": self.quality_scores[-5:] if self.quality_scores else []
             },
             "lifecycle": {
+                "state": self.lifecycle_state,
                 "created_at": self.created_at,
                 "last_heartbeat": self.last_heartbeat,
-                "uptime": time.time() - self.created_at
+                "uptime": time.time() - self.created_at,
+                "capability_c": self.capability_score,
+                "mem_util": self.mem_util,
+                "idle_ticks": self.idle_ticks,
+                "archived": self._archived,
             },
             "energy_state": self.energy_state  # Add energy state to heartbeat
         }

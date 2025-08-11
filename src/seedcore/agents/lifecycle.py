@@ -20,15 +20,43 @@ Threshold logic from §2.1; event emitters feed Energy updates.
 
 import numpy as np
 from typing import Dict, Any, Optional
+from dataclasses import dataclass
 from .base import Agent
 
 PROMOTE_TAU_C = 0.7
 PROMOTE_TAU_U = 0.5
 
-def evaluate_lifecycle(agent: Agent):
-    if agent.capability >= PROMOTE_TAU_C and agent.mem_util >= PROMOTE_TAU_U:
-        # promote to Employed/Specialist
-        pass
+SCOUT = "Scout"
+EMPLOYED = "Employed"
+SPECIALIST = "Specialist"
+ONLOOKER = "Onlooker"
+ARCHIVED = "Archived"
+
+THETA_EVOLVE = 0.65
+THETA_SPECIALIZE = 0.80
+
+
+@dataclass
+class LifecycleDecision:
+    new_state: str
+    spawn_suborgan: bool = False
+    archive: bool = False
+
+
+def evaluate_lifecycle(agent: Agent) -> LifecycleDecision:
+    c = getattr(agent, "capability", 0.0)
+    role = getattr(agent, "lifecycle_state", EMPLOYED)
+    idle_ticks = int(getattr(agent, "idle_ticks", 0))
+    max_idle = int(getattr(agent, "max_idle", 999999))
+
+    if role == EMPLOYED and c > THETA_EVOLVE:
+        return LifecycleDecision(new_state=SCOUT)
+    if role == SCOUT and c > THETA_SPECIALIZE and bool(getattr(agent, "discovered_pattern", False)):
+        return LifecycleDecision(new_state=SPECIALIST, spawn_suborgan=True)
+    if role in (EMPLOYED, SCOUT, SPECIALIST) and idle_ticks > max_idle:
+        return LifecycleDecision(new_state=ARCHIVED, archive=True)
+
+    return LifecycleDecision(new_state=role)
 
 def update_agent_metrics(agent_state, task_success: bool, task_quality: float, mem_stats: dict):
     """

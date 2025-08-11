@@ -7,10 +7,15 @@ role-entropy, L2 regularizer, memory cost) and exposes JSON-safe breakdowns.
 import ray  # type: ignore
 import numpy as np  # type: ignore
 import time
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field, asdict
-from seedcore.agents.ray_actor import RayAgent
 from .weights import EnergyWeights
+
+# Avoid runtime circular import: only import RayAgent for typing
+if TYPE_CHECKING:
+    from seedcore.agents.ray_actor import RayAgent  # pragma: no cover
+else:
+    RayAgent = Any  # type: ignore
 
 
 @dataclass
@@ -227,6 +232,43 @@ def energy_and_grad(
         "dE/dmem": float(weights.beta_mem),
     }
     return breakdown, grad
+
+
+# Extended API for unified state users
+def compute_energy(
+    H: np.ndarray,
+    P: np.ndarray,
+    weights: EnergyWeights,
+    memory_stats: Dict[str, Any],
+    E_sel: Optional[np.ndarray] = None,
+    s_norm: float = 0.0,
+) -> Tuple[float, Dict[str, float]]:
+    """Compute total energy and per-term breakdown (includes hyper term)."""
+    pair = -float(np.sum(weights.W_pair * (H @ H.T)))
+    hyper = -float(np.sum(getattr(weights, "W_hyper", 1.0) * (E_sel if E_sel is not None else 0.0)))
+    ent = -float(weights.alpha_entropy) * entropy_of_roles(P)
+    reg = float(weights.lambda_reg) * (s_norm ** 2)
+    mem = float(weights.beta_mem) * cost_vq(memory_stats)
+    total = pair + hyper + ent + reg + mem
+    return total, {"pair": pair, "hyper": hyper, "entropy": ent, "reg": reg, "mem": mem}
+
+
+def role_entropy_grad(P_roles: np.ndarray) -> np.ndarray:
+    """Safe, bounded gradient of entropy wrt P (for controllers)."""
+    q = np.clip(P_roles, 1e-8, 1.0)
+    q = q / (q.sum(axis=1, keepdims=True) + 1e-8)
+    # d/dp (-sum p log p) = -(log p + 1); we return per-entry gradient
+    return -(np.log(q) + 1.0)
+
+
+def energy_gradient(unified_state: Any, weights: EnergyWeights) -> Dict[str, Any]:
+    """Return lightweight partial gradients for controllers (pair, entropy, mem)."""
+    H = unified_state.H_matrix()
+    P = unified_state.P_matrix()
+    d_pair_dH = -2.0 * (weights.W_pair @ H)
+    d_ent_dP = -float(weights.alpha_entropy) * role_entropy_grad(P)
+    d_mem_dCost = float(weights.beta_mem)
+    return {"d_pair_dH": d_pair_dH, "d_ent_dP": d_ent_dP, "d_mem_dCost": d_mem_dCost}
 
 
 # Legacy functions for backward compatibility

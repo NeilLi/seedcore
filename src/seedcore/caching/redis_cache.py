@@ -35,6 +35,21 @@ class RedisCache:
             socket_timeout=5,
             retry_on_timeout=True
         )
+        # Detect read-only replica status
+        self.read_only = False
+        try:
+            import os
+            if os.getenv("REDIS_READONLY", "").lower() in {"1", "true", "yes"}:
+                self.read_only = True
+            else:
+                info = self.redis_client.info(section='replication')
+                role = str(info.get('role', '')).lower()
+                # Common roles: 'master'/'primary' vs 'slave'/'replica'
+                if role in {"slave", "replica", "readonly", "reader"}:
+                    self.read_only = True
+        except Exception:
+            # Be conservative: leave as False if we cannot detect
+            pass
         
     def ping(self) -> bool:
         """Test Redis connectivity."""
@@ -58,9 +73,19 @@ class RedisCache:
     def set(self, key: str, value: Any, expire: int = 300) -> bool:
         """Set value in cache with expiration (default 5 minutes)."""
         try:
+            if getattr(self, 'read_only', False):
+                logger.debug(f"Redis is read-only; skip set for key {key}")
+                return False
             serialized = json.dumps(value, default=str)
             return self.redis_client.setex(key, expire, serialized)
         except Exception as e:
+            # Downgrade log level for read-only replica to avoid noisy ERRORs
+            msg = str(e).lower()
+            if "read only replica" in msg or "readonly" in msg:
+                # Mark as read-only for subsequent calls
+                self.read_only = True
+                logger.warning(f"Redis set skipped (read-only) for key {key}")
+                return False
             logger.error(f"Redis set failed for key {key}: {e}")
             return False
     

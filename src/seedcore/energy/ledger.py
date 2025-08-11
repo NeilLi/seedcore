@@ -30,6 +30,17 @@ import time, uuid
 # New: persistence (append-only ledger + balances)
 from .energy_persistence import EnergyLedgerStore, EnergyTx
 
+
+@dataclass
+class EnergyTerms:
+    """Lightweight per-term snapshot used for compatibility with telemetry payloads."""
+    pair: float = 0.0
+    hyper: float = 0.0
+    entropy: float = 0.0
+    reg: float = 0.0
+    mem: float = 0.0
+    total: float = 0.0
+
 @dataclass
 class EnergyLedger:
     pair: float = 0.0
@@ -53,6 +64,12 @@ class EnergyLedger:
     alpha: float = 0.5
     lambda_reg: float = 0.01
     beta_mem: float = 0.2
+
+    # Compatibility fields expected by telemetry (kept lightweight)
+    pair_stats: Dict[str, Any] = field(default_factory=dict)
+    hyper_stats: Dict[str, Any] = field(default_factory=dict)
+    role_entropy: Dict[str, Any] = field(default_factory=dict)
+    mem_stats: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         # Lazy default: use MySQL-backed CheckpointStore unless overridden by env/config
@@ -120,6 +137,18 @@ class EnergyLedger:
     @property
     def total(self) -> float:
         return self.pair + self.hyper + self.entropy + self.reg + self.mem
+
+    @property
+    def terms(self) -> EnergyTerms:
+        """Provide a dataclass view for compatibility with energy_gradient_payload."""
+        return EnergyTerms(
+            pair=float(self.pair),
+            hyper=float(self.hyper),
+            entropy=float(self.entropy),
+            reg=float(self.reg),
+            mem=float(self.mem),
+            total=float(self.total),
+        )
 
     def reset(self):
         self.pair = self.hyper = self.entropy = self.reg = self.mem = 0.0
