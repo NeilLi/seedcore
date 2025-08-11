@@ -24,10 +24,9 @@ This document provides a clarified summary of the SeedCore energy system analysi
 - **Required**: Dynamic λ_reg adjustment via PSO loop (implemented but needs tuning)
 - **Impact**: System is over-regularized, masking true performance
 
-#### 2. Missing Hyper-Edge Term Implementation
-- **Current**: Hyper term is stubbed as 0.0 in all calculations
-- **Required**: Cross-organ escalation tracking and complexity-precision tradeoffs
-- **Impact**: No validation of multi-organ coordination
+#### 2. Hyper-Edge Term Wiring via HGNN Shim
+- **Now**: HGNN pattern shim collects escalations and exposes bounded `E_patterns`; energy calculator accepts `E_sel` with weights `W_hyper` in unified API.
+- **Next**: Expand beyond shim by learning `W_hyper` from E-pattern statistics; validate multi-organ coordination.
 
 #### 3. Static Capability & Memory-Utility
 - **Current**: Hard-coded capability values, no EWMA updates
@@ -59,7 +58,7 @@ This document provides a clarified summary of the SeedCore energy system analysi
 
 ### Observability Status
 
-1. **Real-time Gradients**: ✅ `/energy/gradient` endpoint implemented
+1. **Real-time Gradients**: ✅ `/energy/gradient` endpoint implemented (uses `EnergyLedger.terms` for compatibility)
 2. **Slope Tracking**: ✅ Windowed ΔE calculations implemented
 3. **Memory Pressure**: ❌ No CostVQ integration yet
 4. **Validation Scorecard**: ✅ Framework implemented, needs real metrics
@@ -93,7 +92,7 @@ This document provides a clarified summary of the SeedCore energy system analysi
 ### Phase 3: Hyper-Edge Implementation 🔄 IN PROGRESS
 
 #### 🔄 3.1 Cross-Organ Task Tracking
-- **Status**: Framework implemented, needs integration
+- **Status**: Shim implemented and integrated into telemetry; learning `W_hyper` pending
 - **Features**: Hyper-edge tracking with organ distance scaling
 - **Next**: Integration with organism manager
 

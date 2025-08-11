@@ -39,7 +39,7 @@ Welcome to the SeedCore documentation! This directory contains comprehensive doc
   - [Index](./architecture/overview/INDEX.md)
 - **[Components](./architecture/components/)** - Component documentation
   - [Reports](./architecture/components/reports/)
-  - [Energy Model](./architecture/components/energy-model/)
+  - [Energy Model](./architecture/components/energy-model/) — now includes unified state, HGNN pattern shim, and ledger terms
 - **[Decisions](./architecture/decisions/)** - Architecture decision records
   - [Commit Messages](./architecture/decisions/commit-messages/)
 

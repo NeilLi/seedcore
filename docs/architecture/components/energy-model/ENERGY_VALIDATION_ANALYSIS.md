@@ -26,10 +26,9 @@ This document analyzes the current SeedCore energy system implementation against
 - **Required**: Dynamic λ_reg adjustment via PSO loop
 - **Impact**: System is over-regularized, masking true performance
 
-#### 3. Missing Hyper-Edge Term
-- **Current**: Hyper term is stubbed as 0.0 in all calculations
-- **Required**: Cross-organ escalation tracking and complexity-precision tradeoffs
-- **Impact**: No validation of multi-organ coordination
+#### 3. Hyper-Edge Term Wiring via HGNN Shim
+- **Now**: HGNN pattern shim provides bounded `E_patterns` from escalations; telemetry includes them in unified state
+- **Next**: Learn or configure `W_hyper` and use unified calculator API to contribute hyper term to total energy
 
 #### 4. Static Capability & Memory-Utility
 - **Current**: Hard-coded capability values, no EWMA updates

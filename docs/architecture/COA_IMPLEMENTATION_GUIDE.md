@@ -105,6 +105,7 @@ The FastAPI server has been extended with organism endpoints:
 - `POST /organism/execute/random` - Execute task on random organ
 - `POST /organism/initialize` - Manually initialize organism
 - `POST /organism/shutdown` - Shutdown organism
+- `GET /energy/gradient` and `/energy/monitor` - Unified energy telemetry; reads HGNN `E_patterns` and formats terms via `EnergyLedger.terms`
 
 ## Usage
 

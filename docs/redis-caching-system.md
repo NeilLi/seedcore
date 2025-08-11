@@ -212,6 +212,23 @@ def check_redis_health():
         "keys_count": len(cache.redis_client.keys("energy:*")),
         "memory_usage": cache.redis_client.info("memory")
     }
+### Read-Only Replica Tolerance
+
+- Behavior: When connected to a read-only Redis replica, cache writes are skipped and a warning is logged; reads continue to work.
+- Detection: The cache will auto-detect replica role via `INFO replication` or can be forced via `REDIS_READONLY=true`.
+- Effect: `set()` becomes a no-op (returns False), avoiding noisy errors while preserving endpoint functionality.
+
+Environment example:
+
+```bash
+# Force read-only behavior (e.g., when pointing to a replica)
+REDIS_READONLY=true
+```
+
+Operational notes:
+- Cache misses are expected on replicas; endpoints still compute and return fresh results.
+- Logs include a one-time `Redis set skipped (read-only)` warning when a write is first attempted.
+
 ```
 
 ### Performance Monitoring

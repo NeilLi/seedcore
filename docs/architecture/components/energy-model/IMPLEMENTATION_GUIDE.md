@@ -138,44 +138,9 @@ def optimize_lambda_reg(ledger: EnergyLedger, target_reg_ratio: float = 0.25):
 
 ### Phase 3: Hyper-Edge Implementation (Day 5)
 
-#### Step 3.1: Implement Cross-Organ Task Tracking
+#### Step 3.1: Wire HGNN Pattern Shim
 
-Add hyper-edge tracking to the energy calculator:
-
-```python
-# Add to src/seedcore/energy/calculator.py
-
-def on_hyper_exec(event: Dict[str, Any], ledger: EnergyLedger):
-    """Update hyper energy term after cross-organ task."""
-    source_organ = event['source_organ']
-    target_organ = event['target_organ']
-    complexity = event['complexity']
-    precision = event['precision']
-    
-    # Hyper energy increases with complexity, decreases with precision
-    delta = complexity - precision
-    
-    # Scale by organ distance (more distant = higher cost)
-    organ_distance = calculate_organ_distance(source_organ, target_organ)
-    scaled_delta = delta * (1 + 0.1 * organ_distance)
-    
-    ledger.update_term("hyper", scaled_delta)
-    
-    logger.info(f"Hyper edge: {source_organ}→{target_organ}, Δ={scaled_delta:.4f}")
-
-def calculate_organ_distance(organ1_id: str, organ2_id: str) -> int:
-    """Calculate distance between organs in the organism graph."""
-    # Simple distance based on organ types
-    organ1_type = get_organ_type(organ1_id)
-    organ2_type = get_organ_type(organ2_id)
-    
-    if organ1_type == organ2_type:
-        return 0
-    elif (organ1_type, organ2_type) in [("Cognitive", "Actuator"), ("Actuator", "Utility")]:
-        return 1
-    else:
-        return 2  # Cognitive ↔ Utility
-```
+The HGNN escalation→pattern shim (`seedcore.hgnn.pattern_shim.SHM`) collects escalations and exposes bounded `E_patterns` with exponential decay and top-K selection. Telemetry reads `E_patterns` and includes them in `UnifiedState.system`. The unified calculator API accepts `E_sel` and weights `W_hyper` to contribute to total energy.
 
 ### Phase 4: Experimental Harness (Day 6)
 

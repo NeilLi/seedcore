@@ -36,7 +36,7 @@ Instead of instrumenting every component individually, we use a **metrics integr
 - `agent_role_probability` - Role probabilities (E/S/O)
 
 **Energy Metrics:**
-- `energy_term_value` - Individual energy terms (pair, hyper, entropy, reg, mem)
+- `energy_term_value` - Individual energy terms (pair, hyper, entropy, reg, mem) sourced from `EnergyLedger.terms`
 - `energy_total` - Total unified energy
 - `energy_delta_last_task` - Energy delta from last task
 

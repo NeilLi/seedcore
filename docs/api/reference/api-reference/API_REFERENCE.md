@@ -18,6 +18,18 @@ All API responses follow this format:
 }
 ```
 
+## Energy System Endpoints
+
+### Energy Gradient
+**GET** `/energy/gradient`
+
+Returns runtime energy terms and metrics. Notes: Unified state is assembled from live Ray agent heartbeats; system `E_patterns` are read from the HGNN pattern shim; response terms are provided via `EnergyLedger.terms` for compatibility.
+
+### Energy Monitor
+**GET** `/energy/monitor`
+
+Detailed monitoring of energy terms and memory metrics. Notes: Uses `EnergyLedger.terms` and includes CostVQ-derived memory stats.
+
 ## Tier 0: Per-Agent Memory (Ma) Endpoints
 
 ### Create Agent

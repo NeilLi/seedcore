@@ -25,7 +25,7 @@ The Energy Model Foundation adds **intelligent energy-aware agent selection** to
 - **Entropy Energy**: Role diversity maintenance
 - **Regularization Energy**: State complexity control
 - **Memory Energy**: Memory pressure and information loss
-- **Hyper Energy**: Complex pattern tracking (future)
+- **Hyper Energy**: Complex pattern tracking via HGNN pattern shim (bounded `E_patterns`)
 
 ### Agent Selection
 - **Energy Gradient Proxies**: Intelligent suitability scoring
@@ -44,11 +44,34 @@ result = tier0_manager.execute_task_on_best_agent(task_data)
 ```
 
 ### Energy Calculation
+Prefer the explicit unified-state API:
 ```python
-from src.seedcore.energy.calculator import calculate_total_energy
+import numpy as np
+from src.seedcore.energy.weights import EnergyWeights
+from src.seedcore.energy.calculator import compute_energy
+from seedcore.hgnn.pattern_shim import SHIM
 
-energy_data = calculate_total_energy(agents, memory_system, weights)
-print(f"Total Energy: {energy_data['total']}")
+H = unified_state.H_matrix()
+P = unified_state.P_matrix()
+E_sel, _ = SHIM.get_E_patterns()
+w = EnergyWeights.default(W_pair=np.ones((H.shape[0], H.shape[0])), W_hyper=np.ones_like(E_sel))
+total, breakdown = compute_energy(H, P, w, memory_stats, E_sel=E_sel, s_norm=float(np.linalg.norm(H)))
+```
+
+### Gradients API (for controllers)
+```python
+from src.seedcore.energy.calculator import energy_and_grad, role_entropy_grad
+
+breakdown, grad = energy_and_grad(
+    state={
+        'h_agents': H,
+        'P_roles': P,
+        'hyper_sel': E_sel,
+        's_norm': float(np.linalg.norm(H)),
+    },
+    weights=w,
+    memory_stats=memory_stats,
+)
 ```
 
 ### Agent Scoring
@@ -120,6 +143,14 @@ ENERGY_LEDGER_ROOT=/app/data
 ```
 
 - A background slow loop exists at `src/seedcore/energy/control_loops.py` (`SlowPSOLoop`) to tune roles and `lambda_reg` over time, with helpers `start_slow_psoloop()` and `stop_slow_psoloop()`.
+
+## Unified State and Telemetry Notes (August 2025)
+
+- Telemetry uses `UnifiedState` to assemble agent snapshots and reads `E_patterns` from the HGNN shim.
+- Energy endpoints format responses using `EnergyLedger.terms` for compatibility with existing consumers.
+
+Implementation notes:
+- To avoid circular imports, the calculator only imports `RayAgent` under `TYPE_CHECKING` and treats it as `Any` at runtime.
 
 Contractivity guard used in telemetry:
 

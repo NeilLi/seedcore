@@ -310,6 +310,12 @@ curl http://localhost:80/healthz/energy
 4. **Authentication**: Secure access to sensitive system data
 5. **Rate Limiting**: Protection against excessive requests
 
+## August 2025 Telemetry Updates
+
+- Unified state assembly in telemetry to power energy endpoints
+- HGNN pattern shim provides bounded `E_patterns` for hyper term inputs
+- Responses use `EnergyLedger.terms` to maintain compatibility with existing dashboards and clients
+
 ## Conclusion
 
 The transformation from stub data to real data has significantly enhanced the SeedCore API's capabilities:

@@ -295,6 +295,26 @@ docker exec -it seedcore-api python -c "from ray import serve; print('Apps:', li
 | **Production Ready** | ❌ | ✅ |
 
 ## 🎯 Recommendations
+## 🧪 Unified State & HGNN Examples (New)
+
+### 1. Unified State Verification (`examples/verify_unified_state_hgnn.py`)
+- Purpose: End-to-end verification of unified state assembly, HGNN pattern shim wiring, and energy computation.
+- Highlights:
+  - Simulates OCPS escalations and reads `E_patterns` via `SHIM.get_E_patterns()`
+  - Builds `UnifiedState` (`agents`, `organs`, `system.E_patterns`, `memory`)
+  - Uses energy calculator unified APIs to compute total energy and breakdown
+- Run:
+```bash
+docker exec -it seedcore-api python examples/verify_unified_state_hgnn.py
+```
+
+### 2. HGNN Shim Quick Test (`examples/test_hgnn_shim_simple.py`)
+- Purpose: Smoke test of pattern shim decay, normalization, and mapping.
+- Run:
+```bash
+docker exec -it seedcore-api python examples/test_hgnn_shim_simple.py
+```
+
 
 ### For Development
 - Start with `test_simple_dspy.py` to validate setup

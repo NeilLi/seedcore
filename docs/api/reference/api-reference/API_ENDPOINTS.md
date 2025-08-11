@@ -21,6 +21,10 @@ This document describes all available API endpoints in the SeedCore system, with
 - Comprehensive energy terms breakdown
 - Real-time metrics and agent summaries
 
+Notes:
+- Telemetry constructs unified state via `build_unified_state(...)` and reads `E_patterns` from the HGNN shim.
+- Energy terms are sourced from `EnergyLedger().terms` for compatibility.
+
 **Response Example**:
 ```json
 {
@@ -65,6 +69,9 @@ This document describes all available API endpoints in the SeedCore system, with
 - Memory metrics and utilization
 - Detailed agent metrics with energy proxies
 - System health indicators
+
+Notes:
+- Uses `EnergyLedger.terms` for term formatting; includes derived metrics and memory stats.
 
 **Response Example**:
 ```json

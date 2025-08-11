@@ -93,10 +93,10 @@ SeedCore implements a multi-tier memory system based on the Collective Organic A
 **Key Features**:
 - **Stateful Actors**: Each agent maintains its own private state
 - **128-Dimensional State Vectors**: Per COA specification with adaptive T/S/P budgeting and OCPS signals in F-block
-- **Performance Tracking**: Success rate, quality score, capability score
-- **Memory Utilization**: Tracks agent memory usage
+- **Role Probabilities**: E/S/O role distribution (now surfaced via unified state `P_matrix()`)
+- **Unified State**: API layer assembles `UnifiedState` with agent snapshots, system `E_patterns` from HGNN shim, and memory stats
+- **Performance Tracking**: Success rate, quality score, capability score, memory utility
 - **Heartbeat System**: Periodic state reporting for monitoring
-- **Role Probabilities**: E/S/O role distribution
 - **Optional Checkpointing (MySQL)**: Agents can persist/restore their private state via a pluggable MySQL-backed checkpoint store; default behavior remains ephemeral.
 
 **Operational Notes**:
