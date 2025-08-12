@@ -31,6 +31,7 @@ from seedcore.serve.cognitive_serve import (
     undeploy_cognitive_core
 )
 from seedcore.config.llm_config import configure_llm_openai
+from seedcore.cognitive.dspy_client import for_env as cognitive_client_for_env
 
 
 def example_1_basic_cognitive_core():
@@ -237,7 +238,10 @@ async def example_5_ray_serve_deployment():
         await asyncio.sleep(2)
         
         # Create client
-        client = CognitiveCoreClient("cognitive_core_demo")
+        try:
+            client = CognitiveCoreClient("cognitive_core_demo")
+        except Exception:
+            client = cognitive_client_for_env()
         print(f"✅ Created cognitive core client")
         
         # Test failure analysis through Ray Serve

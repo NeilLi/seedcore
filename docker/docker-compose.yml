@@ -219,6 +219,8 @@ services:
       RAY_ADDRESS: ray://ray-head:10001
       RAY_SERVE_ADDRESS: ray://ray-head:8000
       SEEDCORE_API_ADDRESS: localhost:8002
+      SEEDCORE_NS: seedcore
+      SEEDCORE_STAGE: dev
       RAY_memory_usage_threshold: 0.8
       RAY_memory_monitor_refresh_ms: 2500
       POSTGRES_HOST: postgres

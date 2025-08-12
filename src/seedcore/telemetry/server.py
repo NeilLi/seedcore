@@ -117,7 +117,9 @@ app.include_router(tier0_router)
 app.include_router(energy_router)
 app.include_router(holon_router)
 from ..api.routers.ocps_router import router as ocps_router
+from ..api.routers.dspy_router import router as dspy_router
 app.include_router(ocps_router)
+app.include_router(dspy_router)
 # --- Unified State Builder ---
 def _get_ma_stats() -> dict:
     try:
@@ -701,7 +703,18 @@ async def energy_gradient():
                 H = np.array(H, dtype=np.float32) if H else np.zeros((0, 0), dtype=np.float32)
                 P = np.array(P, dtype=np.float32) if P else np.zeros((0, 3), dtype=np.float32)
                 s_norm = float(np.linalg.norm(H))
-                state = {"h_agents": H, "P_roles": P, "hyper_sel": None, "s_norm": s_norm}
+                # HGNN-pattern shim vector for hyper term (bounded [0,1])
+                E_vec, _ = SHIM.get_E_patterns()
+                # Ensure hyper weights match current E_vec length
+                try:
+                    if ENERGY_WEIGHTS is not None:
+                        if ENERGY_WEIGHTS.W_hyper.shape[0] != int(getattr(E_vec, "shape", [0])[0]):
+                            # Default to ones to enable contribution; clip via project()
+                            ENERGY_WEIGHTS.W_hyper = np.ones((E_vec.shape[0],), dtype=np.float32)
+                            ENERGY_WEIGHTS.project()
+                except Exception:
+                    pass
+                state = {"h_agents": H, "P_roles": P, "hyper_sel": E_vec, "s_norm": s_norm}
                 breakdown, grad = energy_and_grad(state, ENERGY_WEIGHTS, memory_stats)
             except Exception:
                 logger.exception("Failed computing unified energy and gradients")

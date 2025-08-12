@@ -209,6 +209,7 @@ def energy_and_grad(
     s_norm: float = float(state.get("s_norm", 0.0))
 
     pair = -float(np.sum(weights.W_pair * (H @ H.T)))
+    # Hyper term uses bounded E_patterns vector from HGNN shim (if provided)
     hyper = -float(np.sum(weights.W_hyper * (E_sel if E_sel is not None else 0.0)))
     ent = -float(weights.alpha_entropy) * entropy_of_roles(P)
     reg = float(weights.lambda_reg) * (s_norm ** 2)
