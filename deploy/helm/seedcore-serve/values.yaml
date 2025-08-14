@@ -1,0 +1,23 @@
+image: yourrepo/seedcore-serve:latest
+replicaCount: 1
+service:
+  type: ClusterIP
+  port: 80
+env:
+  RAY_ADDRESS: ray://seedcore-head-svc:10001
+  SEEDCORE_NS: seedcore-dev
+  COG_APP_NAME: seedcore-dev-dev-cognitive_core
+  COG_MIN_READY: "1"
+  PG_DSN: postgresql://postgres:password@postgresql-pgbouncer:6432/postgres
+  MYSQL_DATABASE_URL: mysql+mysqlconnector://seedcore:password@mysql:3306/seedcore
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  NEO4J_URI: bolt://neo4j:7687
+  NEO4J_USER: neo4j
+  NEO4J_PASSWORD: password
+resources:
+  requests: { cpu: 500m, memory: 1Gi }
+  limits:   { cpu: 1,    memory: 2Gi }
+
+
+

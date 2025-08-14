@@ -108,7 +108,7 @@ def main():
 
             print("🚀 Deploying ML application...")
             # Deploy in default namespace for Ray 2.9 compatibility
-            # HTTP options are configured in serve.start() for Ray 2.20.0 compatibility
+            # HTTP options are configured in serve.start() for Ray 2.33.0 compatibility
             serve.run(
                 app, 
                 name=APP_NAME

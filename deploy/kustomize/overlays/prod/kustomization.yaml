@@ -1,0 +1,27 @@
+namespace: seedcore
+nameSuffix: -prod
+# Note: commonLabels is deprecated but still functional in Kustomize v5.7.1
+# TODO: Migrate to modern labels syntax when Kustomize provides better migration tools
+commonLabels: { stage: prod }
+resources: [../../base]
+
+patches:
+  - target: { kind: Deployment, name: seedcore-serve }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: COG_MIN_READY, value: "2" }
+  - target: { kind: Deployment, name: seedcore-api }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: SEEDCORE_NS, value: "seedcore-prod" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: COG_APP_NAME, value: "seedcore-prod-cognitive_core" }
+
+
+

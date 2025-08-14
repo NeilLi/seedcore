@@ -16,8 +16,7 @@ import time
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize Ray Serve
-serve.start(detached=True)
+# Do not auto-start Serve at import time; entrypoint manages Serve lifecycle
 
 # Create a simple FastAPI app
 app = FastAPI(title="SeedCore Health Service", version="1.0.0")

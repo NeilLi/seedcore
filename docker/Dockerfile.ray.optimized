@@ -1,5 +1,5 @@
 # Multi-stage build for optimized Ray image
-FROM rayproject/ray:2.20.0-py310 as ray-base
+FROM rayproject/ray:2.33.0-py310 as ray-base
 
 # Install system dependencies and Python packages in base stage
 USER root

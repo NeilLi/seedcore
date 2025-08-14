@@ -135,7 +135,7 @@ services:
     environment:
       PYTHONPATH: /app:/app/src
       # ── Ray connection address for internal use ──
-      # In Ray 2.20, the head container needs RAY_ADDRESS for Ray Serve to connect
+      # In Ray 2.33.0, the head container needs RAY_ADDRESS for Ray Serve to connect
       # This enables the client server on localhost:10001 for internal connections
       RAY_ADDRESS: ray://localhost:10001
       # ── API service configuration for agents ──
@@ -153,7 +153,7 @@ services:
       RAY_USAGE_STATS_ENABLED: "0"
       # ── disable additional metrics server to prevent port conflicts ──
       RAY_DISABLE_METRICS_SERVER: "0"
-      # ── Ray 2.20.0 specific configurations ──
+      # ── Ray 2.33.0 specific configurations ──
       RAY_METRICS_EXPORT_PORT: "8080"
       RAY_DASHBOARD_METRICS_PORT: "8080"
       # ── Ray Dashboard monitoring configuration ──
@@ -257,6 +257,12 @@ services:
       resources:
         limits:
           memory: 4g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8002/health || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 120s
     command:
       - /bin/sh
       - -c

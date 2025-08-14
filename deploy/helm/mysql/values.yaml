@@ -1,0 +1,36 @@
+image:
+  repository: mysql
+  tag: "8.0"
+  pullPolicy: IfNotPresent
+
+mysql:
+  auth:
+    rootPassword: "password"
+    database: "seedcore"
+    username: "seedcore"
+    password: "password"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "200m"
+      memory: "512Mi"
+  persistence:
+    enabled: true
+    size: "1Gi"
+  extraEnvVars:
+    - name: MYSQL_DATABASE
+      value: "seedcore"
+    - name: MYSQL_USER
+      value: "seedcore"
+    - name: MYSQL_PASSWORD
+      value: "password"
+    - name: MYSQL_ROOT_PASSWORD
+      value: "password"
+
+service:
+  type: ClusterIP
+  port: 3306
+
+

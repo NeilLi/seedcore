@@ -1,0 +1,19 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "seedcore-serve.fullname" . }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "seedcore-serve.name" . }}
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+{{- end }}
+
+
+
+
+

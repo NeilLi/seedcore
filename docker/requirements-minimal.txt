@@ -39,7 +39,7 @@ pandas>=2.0.0
 pyarrow==14.0.2
 
 # Distributed computing (required for consolidation worker)
-ray[default,train]==2.20.0
+ray[default,train]==2.33.0
 
 # Ray Serve dependencies
 aiorwlock==1.3.0

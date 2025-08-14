@@ -1,0 +1,53 @@
+image:
+  repository: pgvector/pgvector
+  tag: "pg16"
+  pullPolicy: IfNotPresent
+
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "password"
+    database: "postgres"
+    username: "postgres"
+    password: "password"
+  primary:
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "200m"
+        memory: "512Mi"
+    persistence:
+      enabled: true
+      size: "1Gi"
+    extraEnvVars:
+      - name: POSTGRES_DB
+        value: "postgres"
+      - name: POSTGRES_USER
+        value: "postgres"
+      - name: POSTGRES_PASSWORD
+        value: "password"
+
+pgbouncer:
+  enabled: false  # Disabled for simplicity - use direct PostgreSQL connections
+  image:
+    repository: bitnami/pgbouncer
+    tag: "1.20.1"
+  auth:
+    username: "postgres"
+    password: "password"
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+  service:
+    type: ClusterIP
+    port: 6432
+
+service:
+  type: ClusterIP
+  port: 5432

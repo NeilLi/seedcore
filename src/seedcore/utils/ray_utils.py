@@ -3,12 +3,71 @@ Ray utility functions for SeedCore.
 Provides flexible Ray initialization and connection management.
 """
 
+import os
+import socket
 import ray
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 from ..config.ray_config import get_ray_config, configure_ray_remote, configure_ray_local
 
 logger = logging.getLogger(__name__)
+
+
+def _can_connect_tcp(host: str, port: int, timeout_seconds: float = 0.5) -> bool:
+    """Return True if a TCP connection can be established to host:port within timeout."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout_seconds):
+            return True
+    except Exception:
+        return False
+
+
+def _parse_ray_url(ray_url: str) -> Tuple[str, int]:
+    """Parse a ray://host:port URL into (host, port). Defaults port to 10001 if missing."""
+    try:
+        without_scheme = ray_url.replace("ray://", "", 1)
+        if ":" in without_scheme:
+            host_str, port_str = without_scheme.rsplit(":", 1)
+            return host_str, int(port_str)
+        return without_scheme, 10001
+    except Exception:
+        return ray_url, 10001
+
+
+def resolve_ray_address() -> Optional[str]:
+    """Resolve a sensible default RAY_ADDRESS for both Kubernetes and Docker Compose.
+
+    Precedence:
+    1) Respect explicit RAY_ADDRESS if set
+    2) If running in Kubernetes (service account mounted), prefer seedcore-dev-head-svc
+    3) If Docker Compose hostname is available, prefer ray-head
+    4) Fallback candidates: localhost
+    """
+    # 1) Respect explicit env if provided
+    explicit = os.getenv("RAY_ADDRESS")
+    if explicit:
+        return explicit
+
+    candidates = []
+
+    # 2) Detect Kubernetes via service account mount
+    if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
+        candidates.append("ray://seedcore-dev-head-svc:10001")
+        # Also try fully qualified DNS to be safe
+        candidates.append("ray://seedcore-dev-head-svc.seedcore-dev.svc.cluster.local:10001")
+
+    # 3) Docker Compose common hostname
+    candidates.append("ray://ray-head:10001")
+
+    # 4) Localhost fallback
+    candidates.append("ray://localhost:10001")
+
+    for candidate in candidates:
+        host, port = _parse_ray_url(candidate)
+        if _can_connect_tcp(host, port):
+            return candidate
+
+    return None
 
 
 def init_ray(
@@ -30,15 +89,14 @@ def init_ray(
         bool: True if initialization successful, False otherwise
     """
     try:
-        import os
-        
+        # Try environment-specific resolution first
         # Check if Ray is already initialized
         if ray.is_initialized() and not force_reinit:
             logger.info("Ray is already initialized")
             return True
         
         # Get Ray address from environment variable (Ray 2.20 compatibility)
-        ray_address = os.getenv("RAY_ADDRESS")
+        ray_address = os.getenv("RAY_ADDRESS") or resolve_ray_address()
         
         if ray_address:
             # Use the environment variable directly

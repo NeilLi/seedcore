@@ -1,0 +1,226 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "🚀 Setting up Kind Cluster with Ray and Data Stores"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_status() {
+    local status=$1
+    local message=$2
+    if [ "$status" = "OK" ]; then
+        echo -e "${GREEN}✅ $message${NC}"
+    elif [ "$status" = "WARN" ]; then
+        echo -e "${YELLOW}⚠️  $message${NC}"
+    elif [ "$status" = "INFO" ]; then
+        echo -e "${BLUE}ℹ️  $message${NC}"
+    else
+        echo -e "${RED}❌ $message${NC}"
+    fi
+}
+
+# Check if kind is installed
+if ! command -v kind &> /dev/null; then
+    print_status "ERROR" "kind is not installed. Please install it first."
+    exit 1
+fi
+
+# Check if kubectl is installed
+if ! command -v kubectl &> /dev/null; then
+    print_status "ERROR" "kubectl is not installed. Please install it first."
+    exit 1
+fi
+
+# Check if helm is installed
+if ! command -v helm &> /dev/null; then
+    print_status "ERROR" "helm is not installed. Please install it first."
+    exit 1
+fi
+
+CLUSTER_NAME="seedcore-dev"
+NAMESPACE="seedcore-dev"
+
+echo "🔍 Checking existing cluster..."
+if kind get clusters | grep -q "$CLUSTER_NAME"; then
+    print_status "WARN" "Cluster $CLUSTER_NAME already exists"
+    read -p "Do you want to delete and recreate it? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        print_status "INFO" "Deleting existing cluster..."
+        kind delete cluster --name "$CLUSTER_NAME"
+    else
+        print_status "INFO" "Using existing cluster"
+    fi
+fi
+
+# Step 1: Create Kind cluster
+if ! kind get clusters | grep -q "$CLUSTER_NAME"; then
+    print_status "INFO" "Creating Kind cluster with kindest/node:v1.30.0..."
+    kind create cluster --name "$CLUSTER_NAME" --image kindest/node:v1.30.0 --config kind-config.yaml
+    
+    if [ $? -eq 0 ]; then
+        print_status "OK" "Kind cluster created successfully"
+    else
+        print_status "ERROR" "Failed to create Kind cluster"
+        exit 1
+    fi
+fi
+
+# Step 2: Set kubectl context
+print_status "INFO" "Setting kubectl context..."
+kubectl cluster-info --context "kind-$CLUSTER_NAME"
+
+# Step 3: Create namespace
+print_status "INFO" "Creating namespace $NAMESPACE..."
+kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+# Step 4: Install KubeRay operator (using correct repository)
+print_status "INFO" "Installing KubeRay operator..."
+helm repo add kuberay https://ray-project.github.io/kuberay-helm/
+helm repo update
+
+if ! kubectl get namespace kuberay-system &> /dev/null; then
+    helm install kuberay-operator kuberay/kuberay-operator --namespace kuberay-system --create-namespace --wait
+    print_status "OK" "KubeRay operator installed"
+else
+    print_status "INFO" "KubeRay operator namespace already exists, checking if operator is running..."
+    if ! kubectl get pods -n kuberay-system -l app.kubernetes.io/name=kuberay-operator --no-headers | grep -q Running; then
+        print_status "INFO" "Installing/upgrading KubeRay operator..."
+        helm upgrade kuberay-operator kuberay/kuberay-operator --namespace kuberay-system --wait
+    fi
+    print_status "OK" "KubeRay operator is running"
+fi
+
+# Step 5: Wait for operator to be ready
+print_status "INFO" "Waiting for KubeRay operator to be ready..."
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kuberay-operator -n kuberay-system --timeout=300s
+
+# Step 6: Deploy Ray cluster (with correct namespace)
+print_status "INFO" "Deploying Ray cluster..."
+kubectl apply -f kustomize/base/raycluster.yaml -n "$NAMESPACE"
+
+# Step 7: Wait for Ray cluster to be ready (using correct label)
+print_status "INFO" "Waiting for Ray cluster to be ready..."
+kubectl wait --for=condition=ready pod -l ray.io/node-type=head -n "$NAMESPACE" --timeout=300s
+
+# Step 8: Check cluster status
+print_status "INFO" "Checking Ray cluster status..."
+kubectl get raycluster -n "$NAMESPACE"
+kubectl get pods -n "$NAMESPACE" -l ray.io/cluster=seedcore
+
+# Step 9: Check services
+print_status "INFO" "Checking Ray services..."
+kubectl get svc -n "$NAMESPACE"
+
+# Step 10: Test Ray connection (using correct service name)
+print_status "INFO" "Testing Ray cluster connection..."
+kubectl run ray-test --rm -it --image rayproject/ray:2.33.0-py310 --restart=Never --namespace="$NAMESPACE" -- bash -c "
+python -c \"
+import ray
+try:
+    ray.init(address='ray://seedcore-head-svc:10001', namespace='seedcore-dev')
+    print('✅ Ray cluster connected successfully!')
+    print('📊 Cluster resources:', ray.cluster_resources())
+    ray.shutdown()
+except Exception as e:
+    print('❌ Failed to connect to Ray cluster:', e)
+    exit(1)
+\"
+"
+
+if [ $? -eq 0 ]; then
+    print_status "OK" "Ray cluster connection test passed"
+else
+    print_status "ERROR" "Ray cluster connection test failed"
+fi
+
+# Step 11: Deploy Data Stores
+print_status "INFO" "Deploying data stores (PostgreSQL, MySQL, Redis, Neo4j)..."
+print_status "INFO" "This may take several minutes..."
+
+# Deploy PostgreSQL with pgvector (no PgBouncer)
+print_status "INFO" "Deploying PostgreSQL with pgvector..."
+helm upgrade --install postgresql ./helm/postgresql \
+  --namespace "$NAMESPACE" \
+  --wait \
+  --timeout 10m
+
+# Deploy MySQL
+print_status "INFO" "Deploying MySQL..."
+helm upgrade --install mysql ./helm/mysql \
+  --namespace "$NAMESPACE" \
+  --wait \
+  --timeout 10m
+
+# Deploy Redis using Bitnami chart
+print_status "INFO" "Deploying Redis using Bitnami chart..."
+helm upgrade --install redis bitnami/redis \
+  --namespace "$NAMESPACE" \
+  --set auth.enabled=false \
+  --set master.persistence.size=512Mi \
+  --set master.resources.requests.cpu=50m \
+  --set master.resources.requests.memory=64Mi \
+  --wait \
+  --timeout 10m
+
+# Deploy Neo4j
+print_status "INFO" "Deploying Neo4j..."
+helm upgrade --install neo4j neo4j/neo4j \
+  --namespace "$NAMESPACE" \
+  --wait \
+  --timeout 10m \
+  --set neo4j.name=neo4j \
+  --set neo4j.password=password \
+  --set neo4j.resources.requests.cpu=500m \
+  --set neo4j.resources.requests.memory=2Gi \
+  --set neo4j.resources.limits.cpu=1000m \
+  --set neo4j.resources.limits.memory=4Gi \
+  --set neo4j.volumeSize=2Gi \
+  --set volumes.data.mode=defaultStorageClass \
+  --set services.neo4j.enabled=false \
+  --set loadbalancer=exclude
+
+# Step 12: Verify all services are running
+print_status "INFO" "Verifying all services are running..."
+kubectl get pods -n "$NAMESPACE"
+
+print_status "INFO" "Checking data store services..."
+kubectl get svc -n "$NAMESPACE"
+
+echo ""
+print_status "OK" "🎉 Kind cluster with Ray and Data Stores setup completed!"
+echo ""
+echo "📊 Cluster Status:"
+echo "   - Kind Cluster: $CLUSTER_NAME"
+echo "   - Namespace: $NAMESPACE"
+echo "   - Ray Head: Available via kubectl port-forward"
+echo "   - Data Stores: PostgreSQL, MySQL, Redis, Neo4j"
+echo ""
+echo "🔧 Useful Commands:"
+echo "   - Check cluster: kubectl cluster-info --context kind-$CLUSTER_NAME"
+echo "   - List pods: kubectl get pods -n $NAMESPACE"
+echo "   - Ray dashboard: kubectl port-forward -n $NAMESPACE svc/seedcore-head-svc 8265:8265"
+echo "   - Delete cluster: kind delete cluster --name $CLUSTER_NAME"
+echo ""
+echo "🌐 Data Store Endpoints:"
+echo "   - PostgreSQL: postgresql.$NAMESPACE.svc.cluster.local:5432"
+echo "   - MySQL: mysql.$NAMESPACE.svc.cluster.local:3306"
+echo "   - Redis: redis-master.$NAMESPACE.svc.cluster.local:6379"
+echo "   - Neo4j: neo4j.$NAMESPACE.svc.cluster.local:7687"
+echo ""
+echo "🔑 Default Credentials:"
+echo "   - PostgreSQL: postgres/password"
+echo "   - MySQL: seedcore/password"
+echo "   - Neo4j: neo4j/password"
+echo "   - Redis: no authentication"
+echo ""
+echo "🚀 Next steps:"
+echo "   1. Deploy your applications: kubectl apply -k kustomize/base/"
+echo "   2. Access Ray dashboard: kubectl port-forward -n $NAMESPACE svc/seedcore-head-svc 8265:8265"
+echo "   3. Test data store connections using the endpoints above"

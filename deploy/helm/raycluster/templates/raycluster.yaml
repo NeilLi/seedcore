@@ -1,0 +1,44 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: {{ include "raycluster.fullname" . }}
+spec:
+  headGroupSpec:
+    serviceType: ClusterIP
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+      port: "6380"
+    template:
+      spec:
+        containers:
+        - name: ray-head
+          image: {{ .Values.head.image }}
+          ports:
+          - name: gcs
+            containerPort: 6380
+          - name: client
+            containerPort: 10001
+          - name: dashboard
+            containerPort: 8265
+          - name: metrics
+            containerPort: 8081
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+  workerGroupSpecs:
+  - groupName: small
+    replicas: {{ .Values.worker.replicas }}
+    template:
+      spec:
+        containers:
+        - name: ray-worker
+          image: {{ .Values.worker.image }}
+          resources:
+{{ toYaml .Values.worker.resources | indent 12 }}
+
+
+

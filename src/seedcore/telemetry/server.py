@@ -290,14 +290,22 @@ async def build_memory():
     neo4j_password = os.getenv("NEO4J_PASSWORD")
     
     # Validate required environment variables
+    optional_backends = str(os.getenv("SEEDCORE_OPTIONAL_BACKENDS", "false")).lower() in ("1", "true", "yes")
+    missing_vars: list[str] = []
     if not pg_dsn:
-        raise ValueError("PG_DSN environment variable is required")
+        missing_vars.append("PG_DSN")
     if not neo4j_uri:
-        raise ValueError("NEO4J_URI environment variable is required")
+        missing_vars.append("NEO4J_URI")
     if not neo4j_user:
-        raise ValueError("NEO4J_USER environment variable is required")
+        missing_vars.append("NEO4J_USER")
     if not neo4j_password:
-        raise ValueError("NEO4J_PASSWORD environment variable is required")
+        missing_vars.append("NEO4J_PASSWORD")
+
+    if missing_vars:
+        if optional_backends:
+            logging.warning("Optional backends enabled; skipping Holon Fabric initialization due to missing env vars: %s", ", ".join(missing_vars))
+            return
+        raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
     
     # Initialize backends
     vec_store = PgVectorStore(pg_dsn)

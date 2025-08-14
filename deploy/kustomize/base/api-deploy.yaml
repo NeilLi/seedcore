@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seedcore-api
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: seedcore-api } }
+  template:
+    metadata: { labels: { app: seedcore-api } }
+    spec:
+      containers:
+      - name: api
+        image: yourrepo/seedcore-api:latest
+        ports: [{ containerPort: 8002, name: http }]
+        env:
+          - { name: RAY_ADDRESS, value: "ray://seedcore-head-svc:10001" }
+          - { name: SEEDCORE_NS,  value: "seedcore-dev" }
+          - { name: COG_APP_NAME, value: "seedcore-dev-dev-cognitive_core" }
+          - name: OPENAI_API_KEY
+            valueFrom: { secretKeyRef: { name: openai, key: api_key } }
+          - { name: COG_MIN_READY, value: "1" }
+          - { name: PG_DSN, value: "postgresql://postgres:password@postgresql-pgbouncer:6432/postgres" }
+          - { name: MYSQL_DATABASE_URL, value: "mysql+mysqlconnector://seedcore:password@mysql:3306/seedcore" }
+          - { name: REDIS_HOST, value: "redis" }
+          - { name: REDIS_PORT, value: "6379" }
+          - { name: NEO4J_URI, value: "bolt://neo4j:7687" }
+          - { name: NEO4J_USER, value: "neo4j" }
+          - { name: NEO4J_PASSWORD, value: "password" }
+        readinessProbe:
+          httpGet: { path: /cog/health, port: http }
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /health, port: http }
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        resources:
+          requests: { cpu: "200m", memory: "256Mi" }
+          limits:   { cpu: "500m", memory: "512Mi" }
+
+
+

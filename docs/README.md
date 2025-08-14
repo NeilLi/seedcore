@@ -18,6 +18,8 @@ Welcome to the SeedCore documentation! This directory contains comprehensive doc
 - **[Deployment](./guides/deployment/)** - Deployment and infrastructure guides
   - [Docker Setup Guide](./guides/deployment/docker-setup-guide.md)
   - [Ray Workers Guide](./guides/deployment/ray-workers-guide.md)
+  - [Kubernetes Deployment Guide](./guides/deployment/kubernetes-deployment-guide.md) - ✅ **NEW** - Complete K8s setup
+  - [Data Store Integration Guide](./guides/deployment/data-store-integration-guide.md) - ✅ **NEW** - Database setup and management
 - **[Troubleshooting](./guides/troubleshooting/)** - Common issues and solutions
   - [Ray Serve Troubleshooting](./guides/troubleshooting/ray_serve_troubleshooting.md)
   - [Service Dependencies](./guides/troubleshooting/service-dependencies-and-restart-behavior.md)
@@ -87,8 +89,9 @@ Welcome to the SeedCore documentation! This directory contains comprehensive doc
 
 ### For DevOps
 1. Follow [Docker Setup Guide](./guides/deployment/docker-setup-guide.md)
-2. Configure [Monitoring](./monitoring/setup/)
-3. Review [Deployment Guides](./guides/deployment/)
+2. Follow [Kubernetes Deployment Guide](./guides/deployment/kubernetes-deployment-guide.md) for K8s setup
+3. Configure [Monitoring](./monitoring/setup/)
+4. Review [Deployment Guides](./guides/deployment/)
 
 ### For Troubleshooting
 1. Check [Ray Serve Troubleshooting](./guides/troubleshooting/ray_serve_troubleshooting.md)

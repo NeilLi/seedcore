@@ -1,0 +1,9 @@
+resources:
+  - raycluster.yaml
+  - api-deploy.yaml
+  - api-svc.yaml
+  - serve-deploy.yaml
+  - serve-svc.yaml
+
+
+

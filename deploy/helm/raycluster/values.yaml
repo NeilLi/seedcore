@@ -1,0 +1,16 @@
+head:
+  image: rayproject/ray:2.33.0
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 1,    memory: 2Gi }
+worker:
+  image: rayproject/ray:2.33.0
+  replicas: 2
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 1,    memory: 2Gi }
+
+
+
+
+

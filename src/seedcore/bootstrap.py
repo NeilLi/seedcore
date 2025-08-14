@@ -1,75 +1,49 @@
+# src/seedcore/bootstrap.py
 #!/usr/bin/env python3
 """
-Bootstrap module to create singleton Ray actors at cluster startup.
-This ensures actors are created once and reused by all workers.
+Create/retrieve singleton Ray actors (detached) in the current Ray namespace.
+Safe to call from driver or replicas; handles races.
 """
-
+import os
 import ray
-from .memory.working_memory import MissTracker, SharedCache, MwStore
+from .memory.working_memory import MissTracker, SharedCache, MwStore  # these should be @ray.remote classes
+
+def _namespace() -> str:
+    # Prefer explicit env (set by K8s), else runtime context, else a default.
+    ns = os.getenv("RAY_NAMESPACE")
+    if ns:
+        return ns
+    try:
+        ctx = ray.get_runtime_context()
+        # Ray 2.33.0 exposes 'namespace' on the context
+        if getattr(ctx, "namespace", None):
+            return ctx.namespace
+    except Exception:
+        pass
+    return "seedcore-dev"
+
+def _get_or_create(actor_cls, name: str, **options):
+    ns = _namespace()
+    try:
+        return ray.get_actor(name, namespace=ns)
+    except Exception:
+        # Not found; try to create
+        try:
+            return actor_cls.options(
+                name=name, namespace=ns, lifetime="detached", **options
+            ).remote()
+        except Exception:
+            # Race: someone else created it
+            return ray.get_actor(name, namespace=ns)
 
 def bootstrap_actors():
-    """Create singleton actors at cluster bootstrap."""
-    # Check if we're in a worker process to avoid duplicate bootstrapping
-    try:
-        runtime_context = ray.get_runtime_context()
-        if runtime_context.worker.mode == ray.WORKER_MODE:
-            # We're in a worker process, don't bootstrap
-            return None, None, None
-    except Exception:
-        # If we can't get runtime context, assume we're the driver
-        pass
-    
-    print("🚀 Bootstrapping singleton Ray actors...")
-    
-    # Initialize Ray if not already initialized
-    try:
-        if not ray.is_initialized():
-            ray.init(address="auto", namespace="seedcore")
-    except Exception:
-        # Ray might already be initialized, continue
-        pass
+    """Ensure all singleton actors exist; return handles."""
+    miss_tracker  = _get_or_create(MissTracker, "miss_tracker")
+    shared_cache  = _get_or_create(SharedCache, "shared_cache")
+    mw_store      = _get_or_create(MwStore,     "mw")
+    return miss_tracker, shared_cache, mw_store
 
-    # Create singleton actors using robust pattern
-    def create_actor_if_not_exists(actor_class, name, **options):
-        """Create an actor if it doesn't exist, handle race conditions gracefully."""
-        try:
-            # Try to get existing actor first
-            return ray.get_actor(name, namespace="seedcore")
-        except ValueError:
-            # Actor doesn't exist, create it
-            try:
-                return actor_class.options(
-                    name=name,
-                    namespace="seedcore",
-                    lifetime="detached",
-                    **options
-                ).remote()
-            except Exception as e:
-                # Another process might have created it between our check and creation
-                # Try to get it again
-                try:
-                    return ray.get_actor(name, namespace="seedcore")
-                except ValueError:
-                    # If we still can't get it, re-raise the original error
-                    raise e
-
-    # Create the singleton actors
-    try:
-        miss_tracker = create_actor_if_not_exists(MissTracker, "miss_tracker")
-        shared_cache = create_actor_if_not_exists(SharedCache, "shared_cache")
-        mw_store = create_actor_if_not_exists(MwStore, "mw")
-        
-        print("✅ Singleton actors created successfully:")
-        print(f"   - MissTracker: {miss_tracker}")
-        print(f"   - SharedCache: {shared_cache}")
-        print(f"   - MwStore: {mw_store}")
-        
-        return miss_tracker, shared_cache, mw_store
-        
-    except Exception as e:
-        print(f"⚠️ Warning: Could not create all actors: {e}")
-        print("   Actors will be created on-demand by helper functions.")
-        return None, None, None
-
-if __name__ == "__main__":
-    bootstrap_actors() 
+# Optional convenience accessors
+def get_miss_tracker(): return _get_or_create(MissTracker, "miss_tracker")
+def get_shared_cache(): return _get_or_create(SharedCache, "shared_cache")
+def get_mv_store():    return _get_or_create(MwStore,      "mw")

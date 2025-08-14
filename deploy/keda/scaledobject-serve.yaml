@@ -1,0 +1,30 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: seedcore-serve-latency
+  namespace: seedcore
+spec:
+  scaleTargetRef:
+    kind: Deployment
+    name: seedcore-serve
+  pollingInterval: 15
+  cooldownPeriod: 120
+  minReplicaCount: 1
+  maxReplicaCount: 6
+  triggers:
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus-k8s.monitoring:9090
+      metricName: seedcore_serve_p95_latency
+      threshold: "1.2"
+      query: |
+        histogram_quantile(0.95,
+          sum by (le) (
+            rate(http_server_request_duration_seconds_bucket{app="seedcore-serve"}[2m])
+          )
+        )
+
+
+
+
+

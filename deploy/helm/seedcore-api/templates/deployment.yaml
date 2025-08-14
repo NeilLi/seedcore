@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "seedcore-api.fullname" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: { app: {{ include "seedcore-api.name" . }} }
+  template:
+    metadata:
+      labels: { app: {{ include "seedcore-api.name" . }} }
+    spec:
+      containers:
+      - name: api
+        image: {{ .Values.image }}
+        ports: [{ containerPort: 8002, name: http }]
+        env:
+        {{- range $k, $v := .Values.env }}
+          - name: {{ $k }}
+            value: "{{ $v }}"
+        {{- end }}
+          - name: OPENAI_API_KEY
+            valueFrom: { secretKeyRef: { name: openai, key: api_key } }
+        readinessProbe:
+          httpGet: { path: /cog/health, port: http }
+          initialDelaySeconds: 10
+        livenessProbe:
+          httpGet: { path: /health, port: http }
+          initialDelaySeconds: 20
+        resources:
+{{ toYaml .Values.resources | indent 10 }}
+
+
+
+
+

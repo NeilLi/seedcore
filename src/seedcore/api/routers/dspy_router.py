@@ -4,6 +4,8 @@ import asyncio
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
+import os
+from ray import serve
 
 from ...cognitive.dspy_client import for_env
 
@@ -11,22 +13,41 @@ from ...cognitive.dspy_client import for_env
 router = APIRouter(prefix="/cog", tags=["cognitive"])
 
 
+MIN_READY = int(os.getenv("COG_MIN_READY", "1"))
+
+
 @router.get("/health")
 async def cognitive_health() -> Dict[str, Any]:
-    client = for_env()
-    if not client.ready(timeout_s=6.0):
-        # Return serve status snapshot to aid debugging
-        try:
-            from ray import serve
-            s = serve.status()
-            return {"status": "starting", "apps": list(s.applications.keys())}
-        except Exception:
-            raise HTTPException(status_code=503, detail="Cognitive core is not ready")
-    # Prefer async health to await Serve deployment method
+    """Production-grade health: reflects Ray Serve application readiness.
+
+    Uses serve.status() to report deployment status and a configurable
+    readiness threshold via COG_MIN_READY.
+    """
     try:
-        return await asyncio.wait_for(client.health_async(), timeout=8.0)
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Cognitive health timed out")
+        status = serve.status()
+    except Exception:
+        # Ray Serve not initialized or unreachable
+        raise HTTPException(status_code=503, detail="Ray Serve status unavailable")
+
+    # Default to cognitive_core unless overridden for staged environments
+    app_name = os.getenv("COG_APP_NAME", "cognitive_core")
+    app = status.applications.get(app_name)
+
+    if not app:
+        return {"status": "not_found", "app": app_name, "apps": list(status.applications.keys())}
+
+    deployment_statuses = getattr(app, "deployment_statuses", []) or []
+    running = sum(getattr(d, "num_healthy_replicas", 0) for d in deployment_statuses)
+    desired = sum(getattr(d, "target_num_replicas", 0) for d in deployment_statuses)
+    min_ready = max(MIN_READY, 1)
+
+    return {
+        "status": getattr(app, "status", "UNKNOWN"),
+        "ready": running >= min_ready,
+        "replicas": {"running": running, "desired": desired, "min_ready": min_ready},
+        "app": app_name,
+        "route_prefix": getattr(app, "route_prefix", "/cognitive"),
+    }
 
 
 @router.post("/tasks/{agent_id}/assess")

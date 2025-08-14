@@ -1,0 +1,43 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: seedcore
+spec:
+  headGroupSpec:
+    serviceType: ClusterIP
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+      # Keep defaults for other ports; metrics is controlled via env below
+    template:
+      spec:
+        containers:
+        - name: ray-head
+          image: rayproject/ray:2.33.0-py310
+          env:
+          - name: RAY_METRICS_EXPORT_PORT
+            value: "8081"
+          ports:
+          - name: client
+            containerPort: 10001
+          - name: dashboard
+            containerPort: 8265
+          - name: gcs-server
+            containerPort: 6380
+          - name: metrics
+            containerPort: 8081
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits:   { cpu: "1",    memory: "2Gi" }
+  workerGroupSpecs:
+  - groupName: small
+    replicas: 2
+    template:
+      spec:
+        containers:
+        - name: ray-worker
+          image: rayproject/ray:2.33.0-py310
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits:   { cpu: "1",    memory: "2Gi" }
+
+

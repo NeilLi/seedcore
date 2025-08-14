@@ -1,0 +1,26 @@
+image:
+  repository: redis
+  tag: "7.2-alpine"
+  pullPolicy: IfNotPresent
+
+redis:
+  auth:
+    enabled: false
+    password: ""
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+  persistence:
+    enabled: true
+    size: "512Mi"
+  extraEnvVars: []
+
+service:
+  type: ClusterIP
+  port: 6379
+
+
