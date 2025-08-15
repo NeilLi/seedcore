@@ -1,176 +1,311 @@
-# docker/serve_entrypoint.py
-import ray, os, time, sys, traceback
+#!/usr/bin/env python3
+"""
+Ray Serve Entrypoint (head-pod friendly)
+
+Defaults assume:
+- You're running this *on the Ray head pod* (RAY_ADDRESS="auto")
+- Ray head & workers use your app image (deps & code are baked in)
+- Serve HTTP should run here unless MANAGED_BY_RAYSERVICE=1
+
+Env knobs (all optional):
+  RAY_ADDRESS=auto | ray://seedcore-head-svc:10001
+  RAY_NAMESPACE=seedcore-dev
+  SERVE_HTTP_HOST=0.0.0.0
+  SERVE_HTTP_PORT=8000
+  MANAGED_BY_RAYSERVICE=0|1        # 1 -> don't call serve.start()
+  SERVE_RESET=0|1                  # 1 -> serve.shutdown() before start
+  ENABLE_HEALTH=0|1                # 1 -> expose /health via tiny app
+  ROUTE_PREFIX=/                   # route prefix for your main app
+  APP_IMPORT_PATH=seedcore.serve_entrypoint:build_app  # override importer
+  PYTHONPATH=/app:/app/src
+  WORKING_DIR=/app                 # used for runtime_env["working_dir"]
+  RUNTIME_PIP=0|<requirements>     # usually 0 when image contains deps
+
+# Ray readiness / health-check knobs:
+  RAY_CONNECT_TRIES=120            # attempts to init Ray (exponential-ish backoff)
+  RAY_CONNECT_BASE_DELAY_S=1       # base sleep between init attempts
+  RAY_MIN_NODES=1                  # wait until at least this many ALIVE nodes
+  RAY_MIN_CPUS=1                   # wait until cluster shows at least this many CPUs
+  RAY_MIN_HEALTH_TRIES=120         # attempts to see healthy cluster after connect
+  RAY_HEALTH_DELAY_S=1             # sleep between health checks
+"""
+
+import os
+import sys
+import time
+import signal
+import socket
+import traceback
+
+import ray
 from ray import serve
-from src.seedcore.ml.serve_app import create_serve_app
 
-# Handle Ray initialization for both head and worker containers
-RAY_ADDRESS = os.getenv("RAY_ADDRESS")
-if RAY_ADDRESS:
-    # We're in a worker or external environment, connect via RAY_ADDRESS
-    if not ray.is_initialized():
-        ray.init(address=RAY_ADDRESS, log_to_driver=False)
-        print(f"✅ Connected to Ray cluster at {RAY_ADDRESS}")
-    else:
-        print("✅ Ray is already initialized, skipping initialization")
-else:
-    # Fallback: We're in the head container without RAY_ADDRESS, connect to the existing Ray instance
-    if not ray.is_initialized():
-        ray.init()
-        print("✅ Connected to existing Ray instance in head container")
-    else:
-        print("✅ Ray is already initialized, skipping initialization")
-# ---------------------------------------------------
-APP_NAME = "seedcore-ml"
-MAX_DEPLOY_RETRIES = 30
-DELAY = 2
+# Optional FastAPI for nicer /health
+try:
+    from fastapi import FastAPI
+    from starlette.responses import PlainTextResponse
+except Exception:
+    FastAPI = None
+    PlainTextResponse = None
 
-def wait_for_http_ready(url, max_retries=30, delay=2):
-    """Wait for HTTP endpoint to be ready."""
-    import urllib.request
-    for attempt in range(max_retries):
+# -------------------------------
+# Config
+# -------------------------------
+RAY_ADDR   = os.getenv("RAY_ADDRESS", "auto")
+RAY_NS     = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+HTTP_HOST  = os.getenv("SERVE_HTTP_HOST", "0.0.0.0")
+HTTP_PORT  = int(os.getenv("SERVE_HTTP_PORT", "8000"))
+PY_PATH    = os.getenv("PYTHONPATH", "/app:/app/src")
+WORKDIR    = os.getenv("WORKING_DIR", "/app")
+ROUTE_PREF = os.getenv("ROUTE_PREFIX", "/")
+
+MANAGED_BY_RAYSERVICE = os.getenv("MANAGED_BY_RAYSERVICE", "0").lower() in {"1","true","yes","on"}
+SERVE_RST  = os.getenv("SERVE_RESET", "0").lower() in {"1","true","yes","on"}
+ENABLE_HEALTH = os.getenv("ENABLE_HEALTH", "1").lower() in {"1","true","yes","on"}
+
+# If you're now using your own image for head/worker, pip-at-runtime is unnecessary:
+RUNTIME_PIP = os.getenv("RUNTIME_PIP", "0")  # "0" disables runtime pip (recommended)
+
+APP_IMPORT_PATH = os.getenv("APP_IMPORT_PATH", "seedcore.serve_entrypoint:build_app")
+
+# Ray readiness / health-check knobs
+RAY_CONNECT_TRIES       = int(os.getenv("RAY_CONNECT_TRIES", "120"))
+RAY_CONNECT_BASE_DELAY  = float(os.getenv("RAY_CONNECT_BASE_DELAY_S", "1"))
+RAY_MIN_NODES           = int(os.getenv("RAY_MIN_NODES", "1"))
+RAY_MIN_CPUS            = float(os.getenv("RAY_MIN_CPUS", "1"))
+RAY_HEALTH_TRIES        = int(os.getenv("RAY_MIN_HEALTH_TRIES", "120"))
+RAY_HEALTH_DELAY        = float(os.getenv("RAY_HEALTH_DELAY_S", "1"))
+
+# -------------------------------
+# Helpers
+# -------------------------------
+def log(msg: str):
+    print(f"[serve] {msg}", flush=True)
+
+def err(msg: str):
+    print(f"[serve][ERROR] {msg}", file=sys.stderr, flush=True)
+
+def wait_tcp(host: str, port: int, timeout_s: int = 2, tries: int = 90) -> bool:
+    for _ in range(tries):
         try:
-            with urllib.request.urlopen(url, timeout=5) as resp:
-                if resp.status == 200:
-                    print(f"✅ Service ready at {url}")
-                    return True
-        except Exception as e:
-            if attempt < max_retries - 1:
-                print(f"🔄 Service not ready ({e}); retrying in {delay}s...")
-                time.sleep(delay)
-            else:
-                print(f"❌ Service at {url} failed to become ready after {max_retries} attempts.")
+            with socket.create_connection((host, port), timeout=timeout_s):
+                return True
+        except OSError:
+            time.sleep(2)
     return False
 
-def main():
-    if RAY_ADDRESS:
-        print(f"🚀 Starting ML Serve deployment with Ray address: {RAY_ADDRESS}")
-    else:
-        print("🚀 Starting ML Serve deployment in head container")
-    
-    max_attempts = 5
-    attempt = 0
-    
-    while attempt < max_attempts:
-        attempt += 1
-        print(f"🔄 Attempt {attempt}/{max_attempts}")
-        
+def parse_ray_addr(ray_addr: str):
+    if not isinstance(ray_addr, str) or not ray_addr.startswith("ray://"):
+        return None, None
+    rest = ray_addr[len("ray://"):]
+    host, _, port = rest.partition(":")
+    try:
+        return host, int(port)
+    except Exception:
+        return None, None
+
+# ---------- NEW: robust Ray connect + health ----------
+def _connect_to_ray_with_retry(runtime_env) -> None:
+    """Retry ray.init() until success or attempts exhausted."""
+    for i in range(1, RAY_CONNECT_TRIES + 1):
         try:
-            if not ray.is_initialized():
-                if RAY_ADDRESS:
-                    print(f"🔧 Initializing Ray connection to {RAY_ADDRESS}...")
-                    # Use default namespace for Ray 2.9 compatibility
-                    ray.init(address=RAY_ADDRESS, log_to_driver=False)
-                    print("✅ Ray connection established in default namespace")
-                else:
-                    print("🔧 Connecting to existing Ray instance in head container...")
-                    ray.init()
-                    print("✅ Ray connection established in head container")
-
-            # Wait a bit for Ray to be fully ready
-            print("⏳ Waiting for Ray to be fully ready...")
-            time.sleep(10)
-            
-            # Check Ray cluster resources
-            print("🔍 Checking Ray cluster resources...")
-            try:
-                cluster_resources = ray.cluster_resources()
-                print(f"✅ Ray cluster resources: {cluster_resources}")
-            except Exception as e:
-                print(f"⚠️ Could not get cluster resources: {e}")
-
-            # Check if Serve is already running and connect to it
-            print("🔧 Checking existing Serve instance...")
-            try:
-                serve_status = serve.status()
-                print(f"✅ Found existing Serve instance: {serve_status}")
-            except Exception as e:
-                print(f"⚠️ No existing Serve instance found: {e}")
-                # Start Serve if not running
-                print("🔧 Starting new Serve instance...")
-                serve.start(
-                    http_options={
-                        'host': '0.0.0.0',
-                        'port': 8000
-                    },
-                    detached=True
-                )
-                print("✅ Serve instance started")
-
-            # Safety-net that starts an HTTP proxy if one isn't present
-            if not serve.status().proxies:
-                print("🔧 No HTTP proxy found, starting one...")
-                serve.start(detached=True,
-                            http_options={"host": "0.0.0.0", "port": 8000})
-                print("✅ HTTP proxy started")
-
-            print("🔧 Creating ML Serve application...")
-            app = create_serve_app()
-
-            print("🚀 Deploying ML application...")
-            # Deploy in default namespace for Ray 2.9 compatibility
-            # HTTP options are configured in serve.start() for Ray 2.33.0 compatibility
-            serve.run(
-                app, 
-                name=APP_NAME
-            )
-
-            # Wait for the endpoint to be up
-            print("⏳ Waiting for deployment to be ready...")
-            url = f"http://localhost:8000/health"
-            if not wait_for_http_ready(url, MAX_DEPLOY_RETRIES, DELAY):
-                raise RuntimeError("Deployed service endpoint did not respond.")
-
-            # Initialize XGBoost service (after Ray and Serve are ready)
-            print("🔧 Initializing XGBoost service...")
-            try:
-                # Import and initialize XGBoost service directly (avoid subprocess for better integration)
-                from seedcore.ml.models.xgboost_service import get_xgboost_service
-                
-                # Get the service instance (this will use the already initialized Ray)
-                xgb_service = get_xgboost_service()
-                
-                if xgb_service is None:
-                    raise RuntimeError("Failed to get XGBoost service instance")
-                
-                print("✅ XGBoost service initialized successfully")
-                
-                # Test basic functionality
-                print("🧪 Testing XGBoost service functionality...")
-                test_dataset = xgb_service.create_sample_dataset(n_samples=100, n_features=5)
-                print(f"✅ XGBoost service test passed - created dataset with {test_dataset.count()} samples")
-                
-            except Exception as e:
-                print(f"⚠️ XGBoost service initialization warning: {e}")
-                print("   XGBoost endpoints may not work properly")
-                # Don't fail the entire deployment for XGBoost issues
-
-            print("🟢 ML Serve deployments are live!")
-            print("📊 Available endpoints:")
-            print("   - Salience Scoring: /score/salience")
-            print("   - Anomaly Detection: /detect/anomaly")
-            print("   - Scaling Prediction: /predict/scaling")
-            print("   - XGBoost Training: /xgboost/train")
-            print("   - XGBoost Prediction: /xgboost/predict")
-            print("   - XGBoost Batch Prediction: /xgboost/batch_predict")
-            print("   - XGBoost Model Management: /xgboost/list_models, /xgboost/model_info")
-            print("   - Health Check: /health")
-            print("   - Application ready at: http://localhost:8000/")
-            break
-
-        except (ConnectionError, RuntimeError) as e:
-            print(f"🔄 Ray or Serve not ready ({e}); retrying in 10s...")
-            if attempt >= max_attempts:
-                print(f"❌ Failed after {max_attempts} attempts. Exiting.")
-                sys.exit(1)
-            time.sleep(10)
+            log(f"Connecting to Ray at {RAY_ADDR} (namespace={RAY_NS}) [attempt {i}/{RAY_CONNECT_TRIES}]")
+            ray.init(address=RAY_ADDR, namespace=RAY_NS, runtime_env=runtime_env)
+            log("Connected to Ray.")
+            return
         except Exception as e:
-            print(f"❌ Unexpected error during deployment: {e}")
-            print(f"Error type: {type(e).__name__}")
-            traceback.print_exc()
-            if attempt >= max_attempts:
-                print(f"❌ Failed after {max_attempts} attempts. Exiting.")
-                sys.exit(1)
-            time.sleep(10)
+            # Exponential-ish backoff with a max cap
+            delay = min(RAY_CONNECT_BASE_DELAY * (1 + (i // 10)), 5.0)
+            err(f"ray.init() failed: {e!r} — retrying in {delay:.1f}s")
+            time.sleep(delay)
+    err("Failed to connect to Ray within allotted attempts.")
+    sys.exit(1)
+
+def _list_alive_nodes_safe():
+    """Try multiple APIs depending on Ray version to count ALIVE nodes."""
+    # Prefer public util API if present (Ray 2.x)
+    try:
+        from ray.util.state import list_nodes  # type: ignore
+        nodes = list_nodes()
+        return [n for n in nodes if str(n.get("state", "")).upper() == "ALIVE"]
+    except Exception:
+        pass
+    # Fallback: older API
+    try:
+        nodes = ray.nodes()  # type: ignore[attr-defined]
+        return [n for n in nodes if n.get("Alive", False)]
+    except Exception:
+        return []
+
+def _cluster_healthy() -> tuple[bool, str]:
+    """Heuristic cluster health: at least RAY_MIN_NODES alive & CPUs visible."""
+    try:
+        alive = _list_alive_nodes_safe()
+        num_alive = len(alive)
+        resources = ray.cluster_resources() or {}
+        cpus = float(resources.get("CPU", 0.0))
+
+        if num_alive >= RAY_MIN_NODES and cpus >= RAY_MIN_CPUS:
+            return True, f"OK (alive_nodes={num_alive}, CPUs={cpus})"
+        return False, f"Waiting (alive_nodes={num_alive}/{RAY_MIN_NODES}, CPUs={cpus}/{RAY_MIN_CPUS})"
+    except Exception as e:
+        return False, f"State query error: {e!r}"
+
+def _wait_for_ray_healthy_or_exit():
+    """Poll cluster health after connect; exit if never healthy."""
+    for i in range(1, RAY_HEALTH_TRIES + 1):
+        ok, msg = _cluster_healthy()
+        if ok:
+            log(f"Ray cluster healthy: {msg}")
+            return
+        log(f"[health {i}/{RAY_HEALTH_TRIES}] {msg}")
+        time.sleep(RAY_HEALTH_DELAY)
+    err("Ray cluster never became healthy; exiting.")
+    sys.exit(1)
+
+_stop = False
+def _graceful_shutdown(signum, frame):
+    global _stop
+    log(f"Received signal {signum}; shutting down main loop...")
+    _stop = True
+
+# -------------------------------
+# Minimal /health app (optional)
+# -------------------------------
+if ENABLE_HEALTH:
+    if FastAPI is not None:
+        health_app = FastAPI()
+
+        @health_app.get("/health")
+        def _health():
+            return PlainTextResponse("ok")
+
+        @serve.deployment
+        @serve.ingress(health_app)
+        class Health:  # noqa: N801
+            pass
+    else:
+        @serve.deployment
+        class Health:  # noqa: N801
+            async def __call__(self, request):  # type: ignore[override]
+                return "ok"
+# -------------------------------
+# Bind deployments into `app`
+# -------------------------------
+app = Health.bind()
+
+# -------------------------------
+# Bootstrapping singletons (optional)
+# -------------------------------
+def try_bootstrap_singletons():
+    try:
+        try:
+            from seedcore.bootstrap import bootstrap_actors  # type: ignore
+        except ModuleNotFoundError:
+            from src.seedcore.bootstrap import bootstrap_actors  # type: ignore
+
+        mt, sc, mv = bootstrap_actors()
+        log(f"Bootstrapped actors: miss_tracker={mt}, shared_cache={sc}, mv_store={mv}")
+    except Exception:
+        err("bootstrap_actors() failed (continuing):\n" + traceback.format_exc())
+
+# -------------------------------
+# Import your app builder
+# -------------------------------
+def import_build_app():
+    # Allow override via APP_IMPORT_PATH="pkg.module:func"
+    if ":" in APP_IMPORT_PATH:
+        mod, _, func = APP_IMPORT_PATH.partition(":")
+        mod = mod.strip()
+        func = func.strip()
+        module = __import__(mod, fromlist=[func])
+        return getattr(module, func)
+    # Fallback to legacy locations
+    try:
+        from seedcore.serve_entrypoint import build_app  # type: ignore
+        return build_app
+    except ModuleNotFoundError:
+        from src.seedcore.serve_entrypoint import build_app  # type: ignore
+        return build_app
+
+# -------------------------------
+# Main
+# -------------------------------
+def main():
+    # Preflight TCP only if using ray://
+    host, port = parse_ray_addr(RAY_ADDR)
+    if host and port:
+        log(f"Preflight: waiting for Ray Client {host}:{port} ...")
+        if not wait_tcp(host, port, tries=90):
+            err(f"Ray Client {host}:{port} not reachable.")
+            sys.exit(1)
+
+    # Build runtime_env (keep minimal now that code+deps are in the image)
+    runtime_env = {
+        "working_dir": WORKDIR,
+        "env_vars": {"PYTHONPATH": PY_PATH},
+    }
+    if RUNTIME_PIP and RUNTIME_PIP != "0":
+        runtime_env["pip"] = RUNTIME_PIP
+        log(f"runtime_env['pip'] enabled: {RUNTIME_PIP}")
+    else:
+        log("runtime_env['pip'] disabled (using baked deps).")
+
+    # ---------- NEW: connect + health wait ----------
+    _connect_to_ray_with_retry(runtime_env)
+    _wait_for_ray_healthy_or_exit()
+
+    # Optional reset so HTTP options can apply cleanly
+    if SERVE_RST:
+        log("SERVE_RESET=1 → serve.shutdown() before (re)starting HTTP.")
+        try:
+            serve.shutdown()
+        except Exception:
+            pass
+        time.sleep(1.0)
+
+    # Start Serve HTTP unless a controller is managed elsewhere (e.g., RayService)
+    if MANAGED_BY_RAYSERVICE:
+        log("MANAGED_BY_RAYSERVICE=1 → skipping serve.start(); controller managed by operator.")
+    else:
+        log(f"Starting Serve HTTP on {HTTP_HOST}:{HTTP_PORT}")
+        serve.start(detached=True, http_options={"host": HTTP_HOST, "port": HTTP_PORT})
+
+    # Health app (optional, separate app so probes work even if main app fails)
+    if ENABLE_HEALTH:
+        try:
+            serve.run(Health.bind(), name="health", route_prefix="/health")  # type: ignore[name-defined]
+            log("Health endpoint deployed at /health")
+        except Exception:
+            err("Failed to deploy Health endpoint:\n" + traceback.format_exc())
+
+    # Bootstrap singletons
+    try_bootstrap_singletons()
+
+    # Import and deploy your main application
+    try:
+        build_app = import_build_app()
+        app = build_app()
+        serve.run(app, route_prefix=ROUTE_PREF)
+        log(f"Application deployed successfully at route_prefix={ROUTE_PREF!r}")
+    except Exception:
+        err("Failed to deploy application:\n" + traceback.format_exc())
+        sys.exit(1)
+
+    # Graceful shutdown hooks
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+
+    # Idle loop
+    log("Entrypoint is now idle; press Ctrl+C or send SIGTERM to stop.")
+    while not _stop:
+        time.sleep(2)
 
 if __name__ == "__main__":
-    main() 
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        err("Fatal error in entrypoint:\n" + traceback.format_exc())
+        sys.exit(1)

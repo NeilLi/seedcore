@@ -13,16 +13,20 @@ LABEL org.opencontainers.image.title="seedcore-serve" \
       org.opencontainers.image.source="seedcore"
 
 # ---- Python deps ----
+# If you want FastAPI-based /health, ensure requirements include:
+#   fastapi==0.*  starlette==0.*  (starlette pulled by fastapi)
 COPY docker/requirements-minimal.txt /tmp/requirements.txt
+# Optional: use buildx cache for pip to speed rebuilds
+# RUN --mount=type=cache,target=/root/.cache/pip \
 RUN python -m pip install --upgrade pip wheel && \
-    PIP_NO_CACHE_DIR=1 pip install -r /tmp/requirements.txt
+    PIP_NO_CACHE_DIR=1 pip install --no-cache-dir -r /tmp/requirements.txt
 
 # ---- App files ----
 WORKDIR /app
 COPY --chown=ray:ray src/ ./src/
 COPY --chown=ray:ray scripts/ ./scripts/
 COPY --chown=ray:ray docker/ ./docker/
-COPY --chown=ray:ray docker/ray_serve_entrypoint.py /app/ray_serve_entrypoint.py
+COPY --chown=ray:ray docker/serve_entrypoint.py /app/serve_entrypoint.py
 
 # ---- Runtime env ----
 ENV PYTHONUNBUFFERED=1 \
@@ -31,16 +35,17 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/home/ray/.local/bin:${PATH}" \
     RAY_USAGE_STATS_ENABLED=0
 
-EXPOSE 8000
+# Serve HTTP (and optionally Ray dashboard if you want to forward it)
+# EXPOSE 8000
+EXPOSE 8265
+
 USER ray
 
-# ✅ Healthcheck
+# ✅ Healthcheck (enabled): your entrypoint deploys /health early and independently.
+# ✅ Healthcheck (exec form; no heredoc)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=10 \
-  CMD ["python","-c","import urllib.request,sys; \
-try: \
-  r=urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5); \
-  sys.exit(0 if r.getcode()==200 else 1) \
-except Exception: \
-  sys.exit(1)"]
+  CMD ["python","-c","import sys,urllib.request; u='http://127.0.0.1:8000/health'; \
+try:\n r=urllib.request.urlopen(u, timeout=5); sys.exit(0 if r.getcode()==200 else 1)\nexcept Exception:\n sys.exit(1)"]
 
-CMD ["python", "/app/ray_serve_entrypoint.py"]
+
+CMD ["python", "/app/serve_entrypoint.py"]

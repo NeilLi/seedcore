@@ -22,4 +22,14 @@ def build_app():
     """
     return create_serve_app()
 
+# Make a top-level app object for RayService to import directly
+try:
+    app = build_app()   # this should return your Serve graph / ingress deployment
+except Exception as e:
+    # Optional: log to help debugging if import fails in Serve controller
+    import traceback, sys
+    print("[serve_entrypoint] build_app() failed at import time:", e, file=sys.stderr)
+    traceback.print_exc()
+    app = None
+
 

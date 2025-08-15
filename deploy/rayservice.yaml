@@ -1,0 +1,118 @@
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: seedcore-svc
+  namespace: seedcore-dev
+spec:
+  serveConfigV2: |
+    proxy_location: HeadOnly
+    http_options:
+      host: 0.0.0.0
+      port: 8000
+    applications:
+      - name: seedcore
+        import_path: serve_entrypoint:app   # this must be a Serve graph object
+        route_prefix: /
+  rayClusterConfig:
+    rayVersion: "2.33.0"
+    headGroupSpec:
+      serviceType: ClusterIP
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        dashboard-port: "8265"
+        ray-client-server-port: "10001"
+        num-cpus: "1"
+      template:
+        spec:
+          containers:
+          - name: ray-head
+            image: seedcore-serve:latest
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - secretRef: { name: seedcore-env-secret }
+            ports:                   # 👈 NAME YOUR PORTS
+              - name: gcs
+                containerPort: 6379
+              - name: dashboard
+                containerPort: 8265
+              - name: client
+                containerPort: 10001
+              - name: serve
+                containerPort: 8000
+              - name: metrics
+                containerPort: 8080
+            startupProbe:
+              exec:
+                command:
+                  - bash
+                  - -lc
+                  - wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success
+              periodSeconds: 5
+              timeoutSeconds: 3
+              failureThreshold: 72     # ~6 min startup budget
+            readinessProbe:
+              exec:
+                command:
+                  - bash
+                  - -lc
+                  - wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success
+              periodSeconds: 5
+              timeoutSeconds: 2
+              failureThreshold: 3
+              successThreshold: 1
+            livenessProbe:
+              exec:
+                command:
+                  - bash
+                  - -lc
+                  - wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success
+              periodSeconds: 5
+              timeoutSeconds: 2
+              failureThreshold: 120
+              successThreshold: 1
+          # hostPath volume (optional; keep only if you need it)
+          volumes:
+          - name: data-volume
+            hostPath:
+              path: /tmp/seedcore-data
+              type: DirectoryOrCreate
+
+    workerGroupSpecs:
+    - groupName: small
+      replicas: 1
+      rayStartParams:
+        num-cpus: "1"
+      template:
+        spec:
+          containers:
+          - name: ray-worker
+            image: seedcore-serve:latest
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - secretRef: { name: seedcore-env-secret }
+            # --- ✅ worker probes: raylet-only, no :8000 checks here ---
+            readinessProbe:
+              exec:
+                command:
+                  - bash
+                  - -lc
+                  - wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success
+              periodSeconds: 5
+              timeoutSeconds: 2
+              failureThreshold: 3
+              successThreshold: 1
+            livenessProbe:
+              exec:
+                command:
+                  - bash
+                  - -lc
+                  - wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success
+              periodSeconds: 5
+              timeoutSeconds: 2
+              failureThreshold: 120
+              successThreshold: 1
+          volumes:
+          - name: data-volume
+            hostPath:
+              path: /tmp/seedcore-data
+              type: DirectoryOrCreate
