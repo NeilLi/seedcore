@@ -1,0 +1,53 @@
+# docker/Dockerfile.api
+FROM python:3.10-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PATH="/home/app/.local/bin:${PATH}"
+
+# System deps (lean)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential libpq-dev curl \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Python deps
+COPY docker/requirements-minimal.txt /tmp/requirements.txt
+RUN python -m pip install --upgrade pip wheel \
+ && pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Non-root user early (avoid root-owned artifacts later)
+RUN useradd -m -u 1000 app
+
+# ADD THIS LINE to give the 'app' user ownership of its home directory
+RUN chown app:app /app
+
+# COPY --chown=app:app ... (this can stay here, it's also fine)
+
+# --- MOVE THIS BLOCK UP ---
+# Log paths expected by the app -> send to stdout
+# (No real files, just symlinks to /dev/stdout)
+RUN ln -sf /dev/stdout /app/azure_openai_usage.log \
+ && ln -sf /dev/stdout /app/openai_usage.log
+ENV DSP_LOG_DIR=/dev/stdout
+# --- END OF MOVED BLOCK ---
+
+# Now, switch to the non-root user for the rest of the build and for runtime
+USER app
+
+# App code
+COPY --chown=app:app src/ ./src/
+COPY --chown=app:app scripts/ ./scripts/
+
+# Optional: simple entrypoint shim
+COPY --chown=app:app docker/api_entrypoint_simple.sh /app/api_entrypoint_simple.sh
+RUN chmod +x /app/api_entrypoint_simple.sh
+
+ENV PYTHONPATH=/app:/app/src
+EXPOSE 8002
+
+# ENTRYPOINT runs the shim; CMD carries the default command/args
+ENTRYPOINT ["/app/api_entrypoint_simple.sh"]
+CMD ["uvicorn","src.seedcore.telemetry.server:app","--host","0.0.0.0","--port","8002","--proxy-headers","--forwarded-allow-ips","*"]

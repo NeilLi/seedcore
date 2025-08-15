@@ -81,23 +81,52 @@ def get_env_bool_setting(key: str, default: bool) -> bool:
 
 
 # Database settings
-PG_DSN = get_env_setting("PG_DSN", "postgresql://postgres:password@postgres:5432/postgres")
+# PostgreSQL
+POSTGRES_HOST = get_env_setting("POSTGRES_HOST", "postgresql")
+POSTGRES_PORT = get_env_int_setting("POSTGRES_PORT", 5432)
+POSTGRES_DB = get_env_setting("POSTGRES_DB", "postgres")
+POSTGRES_USER = get_env_setting("POSTGRES_USER", "postgres")
+POSTGRES_PASSWORD = get_env_setting("POSTGRES_PASSWORD", "CHANGE_ME")
+PG_DSN = get_env_setting("PG_DSN", f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}")
+
+# MySQL
+MYSQL_HOST = get_env_setting("MYSQL_HOST", "mysql")
+MYSQL_PORT = get_env_int_setting("MYSQL_PORT", 3306)
+MYSQL_DB = get_env_setting("MYSQL_DB", "seedcore")
+MYSQL_USER = get_env_setting("MYSQL_USER", "root")
+MYSQL_PASSWORD = get_env_setting("MYSQL_PASSWORD", "CHANGE_ME")
+MYSQL_DSN = get_env_setting("MYSQL_DSN", f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}")
+
+# Redis
+REDIS_HOST = get_env_setting("REDIS_HOST", "redis-master")
+REDIS_PORT = get_env_int_setting("REDIS_PORT", 6379)
+REDIS_DB = get_env_int_setting("REDIS_DB", 0)
+REDIS_URL = get_env_setting("REDIS_URL", f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
+
+# Neo4j
+NEO4J_HOST = get_env_setting("NEO4J_HOST", "neo4j")
+NEO4J_BOLT_PORT = get_env_int_setting("NEO4J_BOLT_PORT", 7687)
+NEO4J_HTTP_PORT = get_env_int_setting("NEO4J_HTTP_PORT", 7474)
+NEO4J_USER = get_env_setting("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = get_env_setting("NEO4J_PASSWORD", "password")
+NEO4J_BOLT_URL = get_env_setting("NEO4J_BOLT_URL", f"bolt://{NEO4J_HOST}:{NEO4J_BOLT_PORT}")
+NEO4J_HTTP_URL = get_env_setting("NEO4J_HTTP_URL", f"http://{NEO4J_HOST}:{NEO4J_HTTP_PORT}")
+# Legacy support - keep NEO4J_URI for backward compatibility
+NEO4J_URI = NEO4J_BOLT_URL
+
+# Connection pool settings (kept for backward compatibility)
 PG_POOL_SIZE = get_env_int_setting("POSTGRES_POOL_SIZE", 20)
 PG_MAX_OVERFLOW = get_env_int_setting("POSTGRES_MAX_OVERFLOW", 10)
 PG_POOL_TIMEOUT = get_env_int_setting("POSTGRES_POOL_TIMEOUT", 30)
 PG_POOL_RECYCLE = get_env_int_setting("POSTGRES_POOL_RECYCLE", 1800)
 PG_POOL_PRE_PING = get_env_bool_setting("POSTGRES_POOL_PRE_PING", True)
 
-MYSQL_DSN = get_env_setting("MYSQL_DATABASE_URL", "mysql+mysqlconnector://seedcore:password@seedcore-mysql:3306/seedcore")
 MYSQL_POOL_SIZE = get_env_int_setting("MYSQL_POOL_SIZE", 10)
 MYSQL_MAX_OVERFLOW = get_env_int_setting("MYSQL_MAX_OVERFLOW", 5)
 MYSQL_POOL_TIMEOUT = get_env_int_setting("MYSQL_POOL_TIMEOUT", 30)
 MYSQL_POOL_RECYCLE = get_env_int_setting("MYSQL_POOL_RECYCLE", 1800)
 MYSQL_POOL_PRE_PING = get_env_bool_setting("MYSQL_POOL_PRE_PING", True)
 
-NEO4J_URI = get_env_setting("NEO4J_URI", "bolt://neo4j:7687")
-NEO4J_USER = get_env_setting("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = get_env_setting("NEO4J_PASSWORD", "password")
 NEO4J_POOL_SIZE = get_env_int_setting("NEO4J_POOL_SIZE", 50)
 NEO4J_CONNECTION_ACQUISITION_TIMEOUT = get_env_int_setting("NEO4J_CONNECTION_ACQUISITION_TIMEOUT", 30)
 

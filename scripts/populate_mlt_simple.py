@@ -74,7 +74,7 @@ async def populate_all_facts_async():
     total_start_time = time.time()
     
     # Database connection string
-    dsn = os.getenv("PG_DSN", "postgresql://postgres:password@postgres:5432/postgres")
+    dsn = os.getenv("PG_DSN", "postgresql://postgres:CHANGE_ME@postgresql:5432/postgres")
     
     # Check if our specific scenario data already exists
     if await check_existing_data(dsn):

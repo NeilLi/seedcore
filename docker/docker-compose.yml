@@ -216,9 +216,11 @@ services:
     working_dir: /app
     environment:
       PYTHONPATH: /app:/app/src
-      RAY_ADDRESS: ray://ray-head:10001
-      RAY_SERVE_ADDRESS: ray://ray-head:8000
-      SEEDCORE_API_ADDRESS: localhost:8002
+      # Use in-cluster Ray service names when deployed on Kind/K8s
+      RAY_ADDRESS: ray://seedcore-head-svc:10001
+      RAY_SERVE_ADDRESS: http://seedcore-head-svc:8000
+      RAY_DASHBOARD_ADDRESS: http://seedcore-head-svc:8265
+      SEEDCORE_API_ADDRESS: seedcore-api:8002
       SEEDCORE_NS: seedcore
       SEEDCORE_STAGE: dev
       RAY_memory_usage_threshold: 0.8
@@ -234,7 +236,7 @@ services:
       REDIS_PORT: 6379
       REDIS_DB: 0
     env_file:
-      - .env
+      - docker/.env
     ports:
       - "8002:8002"
     depends_on:
@@ -250,9 +252,7 @@ services:
         condition: service_healthy
     networks:
       - seedcore-network
-    volumes:
-      - ..:/app  # Mounts the project root into /app in the container
-      - ./artifacts:/data  # Mount artifacts directory for UUID access
+    # No bind mounts for standalone image build
     deploy:
       resources:
         limits:
@@ -263,20 +263,7 @@ services:
       timeout: 3s
       retries: 3
       start_period: 120s
-    command:
-      - /bin/sh
-      - -c
-      - |
-        echo "⏳ Waiting for Ray to be fully ready..."
-        sleep 10
-        echo "⏳ Seeding core databases …"
-        python -m scripts.populate_mlt_simple && \
-        echo "✅ Seeding complete, starting API" && \
-        if [ "$DEV_RELOAD" = "1" ]; then
-          uvicorn src.seedcore.telemetry.server:app --host 0.0.0.0 --port 8002 --reload
-        else
-          uvicorn src.seedcore.telemetry.server:app --host 0.0.0.0 --port 8002
-        fi
+    command: ["uvicorn","src.seedcore.telemetry.server:app","--host","0.0.0.0","--port","8002","--proxy-headers","--forwarded-allow-ips","*"]
 
   # ───────────────────────────────────────────────────────────────────── #
   # Observability stack

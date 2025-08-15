@@ -3,7 +3,7 @@ import asyncio
 import asyncpg
 
 async def check_database():
-    dsn = "postgresql://postgres:password@postgres:5432/postgres"
+    dsn = "postgresql://postgres:CHANGE_ME@postgresql:5432/postgres"
     
     try:
         conn = await asyncpg.connect(dsn)

@@ -20,7 +20,7 @@ from seedcore.memory.holon_fabric import HolonFabric
 
 # Get database connections from environment variables
 PG_DSN = os.getenv('PG_DSN')
-NEO4J_URI = os.getenv('NEO4J_URI')
+NEO4J_URI = os.getenv('NEO4J_URI') or os.getenv('NEO4J_BOLT_URL')
 NEO4J_USER = os.getenv('NEO4J_USER')
 NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD')
 

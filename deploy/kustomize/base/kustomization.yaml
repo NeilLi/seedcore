@@ -1,3 +1,11 @@
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: seedcore-env
+    envs:
+      - .env        # shared app env (NO RAY_ADDRESS here)
+
 resources:
   - raycluster.yaml
   - api-deploy.yaml

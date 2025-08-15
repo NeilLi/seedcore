@@ -293,7 +293,7 @@ class OrganismManager:
             new_organ = Organ.options(
                 name=organ_id, 
                 lifetime="detached",
-                num_cpus=1
+                num_cpus=0.5
             ).remote(
                 organ_id=organ_id,
                 organ_type=organ_type
@@ -346,7 +346,7 @@ class OrganismManager:
                             self.organs[organ_id] = Organ.options(
                                 name=organ_id, 
                                 lifetime="detached",
-                                num_cpus=1  # Ensure resource allocation
+                                num_cpus=0.5  # Ensure resource allocation
                             ).remote(
                                 organ_id=organ_id,
                                 organ_type=organ_type
@@ -412,7 +412,7 @@ class OrganismManager:
                             role_probs=initial_role_probs,
                             name=agent_id,
                             lifetime="detached",
-                            num_cpus=1,
+                            num_cpus=0.5,
                         )
 
                         # Retrieve the handle from Tier0 manager

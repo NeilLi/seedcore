@@ -46,7 +46,7 @@ class CognitiveResponse(BaseModel):
 @serve.deployment(
     num_replicas=2,
     ray_actor_options={
-        "num_cpus": 1,
+        "num_cpus": 0.5,
         "num_gpus": 0,  # Adjust based on your GPU availability
         "memory": 2 * 1024 * 1024 * 1024,  # 2GB memory
     }

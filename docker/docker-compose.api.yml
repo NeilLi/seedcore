@@ -2,15 +2,16 @@ services:
   seedcore-app:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.app
+      dockerfile: docker/Dockerfile.api
     image: seedcore-app:latest
     container_name: seedcore-app
     profiles: ["app"]
     working_dir: /app
     environment:
       PYTHONPATH: /app:/app/src
-      RAY_ADDRESS: ray://ray-head:10001
-      RAY_NAMESPACE: seedcore
+      RAY_ADDRESS: ray://seedcore-head-svc:10001
+      RAY_NAMESPACE: seedcore-dev
+      RAY_SERVE_ADDRESS: http://seedcore-head-svc:8000
       API_HOST: 0.0.0.0
       API_PORT: 8002
       SEEDCORE_NS: seedcore
@@ -24,7 +25,7 @@ services:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: password
     env_file:
-      - .env
+      - docker/.env
     ports:
       - "8003:8002"  # Map to different port to avoid conflicts
     depends_on:

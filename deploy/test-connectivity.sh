@@ -54,3 +54,4 @@ echo "3. Test API connectivity when ready"
 echo "4. Use port-forward to access services from your laptop"
 
 
+

@@ -22,7 +22,7 @@ class RedisCache:
         """Initialize Redis connection."""
         # Use environment variables if not provided
         import os
-        host = host or os.getenv("REDIS_HOST", "redis")
+        host = host or os.getenv("REDIS_HOST", "redis-master")
         port = port or int(os.getenv("REDIS_PORT", "6379"))
         db = db or int(os.getenv("REDIS_DB", "0"))
         self.redis_client = redis.Redis(

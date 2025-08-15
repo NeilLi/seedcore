@@ -1,254 +1,286 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# deploy-api.sh — Standalone API Deployment to Kind/Kubernetes
+# Minimal, manual-ops friendly. Matches style of your Ray setup script.
 set -euo pipefail
 
-echo "🚀 Deploying SeedCore API to Kubernetes"
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Function to print colored output
+# ------------------------------
+# Colors & status
+# ------------------------------
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 print_status() {
-    local status=$1
-    local message=$2
-    if [ "$status" = "OK" ]; then
-        echo -e "${GREEN}✅ $message${NC}"
-    elif [ "$status" = "WARN" ]; then
-        echo -e "${YELLOW}⚠️  $message${NC}"
-    elif [ "$status" = "INFO" ]; then
-        echo -e "${BLUE}ℹ️  $message${NC}"
-    else
-        echo -e "${RED}❌ $message${NC}"
-    fi
+  local status=$1; local message=$2
+  if [ "$status" = "OK" ]; then echo -e "${GREEN}✅ $message${NC}"
+  elif [ "$status" = "WARN" ]; then echo -e "${YELLOW}⚠️  $message${NC}"
+  elif [ "$status" = "INFO" ]; then echo -e "${BLUE}ℹ️  $message${NC}"
+  else echo -e "${RED}❌ $message${NC}"; fi
 }
 
-# Default values
-NAMESPACE=${1:-"seedcore-dev"}
-IMAGE_NAME="seedcore-app:latest"
-CLUSTER_NAME=${2:-"seedcore"}
+# ------------------------------
+# Config (env-overridable, + flags)
+# ------------------------------
+CLUSTER_NAME="${CLUSTER_NAME:-seedcore-dev}"
+NAMESPACE="${NAMESPACE:-seedcore-dev}"
+SERVICE_NAME="${SERVICE_NAME:-seedcore-api}"
+DEPLOY_NAME="${DEPLOY_NAME:-seedcore-api}"
+API_IMAGE="${API_IMAGE:-seedcore-api:kind}"     # build/tag locally, then load to kind
+REPLICAS="${REPLICAS:-1}"
+ENV_FILE="${ENV_FILE:-../docker/.env}"          # optional; used only if no shared ConfigMap/Secret
+SKIP_LOAD="${SKIP_LOAD:-0}"                     # 1 = skip 'kind load docker-image'
+PORT_FORWARD="${PORT_FORWARD:-0}"               # 1 = auto port-forward after deploy
+LOCAL_PORT="${LOCAL_PORT:-8002}"                # local port for port-forward
 
-# Check if kubectl is available
-if ! command -v kubectl &> /dev/null; then
-    print_status "ERROR" "kubectl is not installed. Please install it first."
-    exit 1
-fi
+# Env wiring mode (auto detects by default):
+#   auto  -> prefer shared Kustomize resources if present (seedcore-env + seedcore-client-env),
+#            else fall back to service-specific ConfigMap from ENV_FILE,
+#            else if Secret 'seedcore-env-secret' exists, use it.
+#   cm    -> force use of seedcore-env (+ optional seedcore-client-env if present)
+#   secret-> force use of seedcore-env-secret
+#   file  -> force create/use ${SERVICE_NAME}-config from ENV_FILE
+ENV_MODE="${ENV_MODE:-auto}"
 
-# Check if kind is available
-if ! command -v kind &> /dev/null; then
-    print_status "ERROR" "kind is not installed. Please install it first."
-    exit 1
-fi
+usage() {
+  cat <<USAGE
+Usage: $(basename "$0") [options]
+  -n, --namespace <ns>     Namespace (default: $NAMESPACE)
+  -c, --cluster <name>     Kind cluster name (default: $CLUSTER_NAME)
+  -i, --image <img:tag>    API image to deploy (default: $API_IMAGE)
+  -e, --env <path>         .env file to load (fallback ConfigMap) (default: $ENV_FILE)
+  -r, --replicas <n>       Replica count (default: $REPLICAS)
+      --skip-load          Skip 'kind load docker-image'
+      --port-forward       Port-forward service to localhost:\$LOCAL_PORT
+      --env-mode <m>       Env wiring: auto|cm|secret|file (default: $ENV_MODE)
+      --delete             Delete the API Deployment/Service/ConfigMap and exit
+  -h, --help               Show this help
+USAGE
+}
 
-# Check if namespace exists
-print_status "INFO" "Checking namespace $NAMESPACE..."
-if ! kubectl get namespace "$NAMESPACE" &> /dev/null; then
-    print_status "WARN" "Namespace $NAMESPACE does not exist. Creating it..."
-    kubectl create namespace "$NAMESPACE"
-    print_status "OK" "Namespace $NAMESPACE created"
-else
-    print_status "OK" "Namespace $NAMESPACE exists"
-fi
-
-# Check if image exists locally
-print_status "INFO" "Checking if image $IMAGE_NAME exists locally..."
-if ! docker images | grep -q "seedcore-app.*latest"; then
-    print_status "ERROR" "Image $IMAGE_NAME not found locally. Please build it first with:"
-    echo "   docker build -f docker/Dockerfile.app -t seedcore-app:latest ."
-    exit 1
-fi
-print_status "OK" "Image $IMAGE_NAME found locally"
-
-# Load image into kind cluster
-print_status "INFO" "Loading image $IMAGE_NAME into kind cluster $CLUSTER_NAME..."
-if kind load docker-image "$IMAGE_NAME" --name "$CLUSTER_NAME"; then
-    print_status "OK" "Image loaded into kind cluster successfully"
-else
-    print_status "ERROR" "Failed to load image into kind cluster"
-    exit 1
-fi
-
-# Check if Ray cluster is running
-print_status "INFO" "Checking if Ray cluster is running..."
-if ! kubectl get pods -n "$NAMESPACE" -l ray.io/cluster=seedcore --no-headers | grep -q Running; then
-    print_status "WARN" "Ray cluster does not appear to be running. Continuing anyway..."
-else
-    print_status "OK" "Ray cluster is running"
-fi
-
-# Check if data stores are running
-print_status "INFO" "Checking data store status..."
-DATA_STORES=("postgresql" "mysql" "redis" "neo4j")
-for store in "${DATA_STORES[@]}"; do
-    if kubectl get pods -n "$NAMESPACE" -l app="$store" --no-headers | grep -q Running; then
-        print_status "OK" "$store is running"
-    else
-        print_status "WARN" "$store is not running"
-    fi
+DELETE_ONLY=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--namespace) NAMESPACE="$2"; shift 2;;
+    -c|--cluster) CLUSTER_NAME="$2"; shift 2;;
+    -i|--image) API_IMAGE="$2"; shift 2;;
+    -e|--env) ENV_FILE="$2"; shift 2;;
+    -r|--replicas) REPLICAS="$2"; shift 2;;
+    --skip-load) SKIP_LOAD=1; shift;;
+    --port-forward) PORT_FORWARD=1; shift;;
+    --env-mode) ENV_MODE="$2"; shift 2;;
+    --delete) DELETE_ONLY=1; shift;;
+    -h|--help) usage; exit 0;;
+    --) shift; break;;
+    *) echo "Unknown arg: $1"; usage; exit 1;;
+  esac
 done
 
-# Check if seedcore-serve is already deployed (optional dependency)
-print_status "INFO" "Checking if seedcore-serve is deployed..."
-if kubectl get deployment seedcore-serve-dev -n "$NAMESPACE" &> /dev/null; then
-    print_status "OK" "seedcore-serve is deployed (optional dependency)"
-else
-    print_status "INFO" "seedcore-serve is not deployed (optional dependency)"
+print_status INFO "Namespace: $NAMESPACE | Cluster: kind-$CLUSTER_NAME | Image: $API_IMAGE | EnvMode: $ENV_MODE"
+
+# ------------------------------
+# Tool checks
+# ------------------------------
+command -v kubectl >/dev/null || { print_status ERROR "kubectl is not installed"; exit 1; }
+if [[ "$SKIP_LOAD" -eq 0 ]]; then
+  command -v kind >/dev/null || { print_status ERROR "kind is not installed (or set SKIP_LOAD=1)"; exit 1; }
 fi
 
-# Deploy seedcore-api
-print_status "INFO" "Deploying seedcore-api to namespace $NAMESPACE..."
+# ------------------------------
+# Smart image load (avoid disk bloat)
+# ------------------------------
+smart_kind_load() {
+  local img="$1" cluster="$2"
+  if [[ "$SKIP_LOAD" -eq 1 ]]; then return 0; fi
+  if ! kind get clusters | grep -q "^${cluster}\$"; then
+    print_status WARN "Kind cluster '$cluster' not found. Skipping image load."
+    return 0
+  fi
+  local digest
+  if ! digest=$(docker inspect --format='{{.Id}}' "$img" 2>/dev/null); then
+    print_status ERROR "Local image '$img' not found. Build it first."; exit 1
+  fi
+  for n in $(kind get nodes --name "$cluster"); do
+    if docker exec "$n" ctr -n k8s.io images ls | grep -q "$digest"; then
+      print_status INFO "Image already present on $n (digest match); skipping load."
+      return 0
+    fi
+  done
+  print_status INFO "Loading image ${img} into Kind cluster ${cluster}..."
+  kind load docker-image "${img}" --name "${cluster}"
+  print_status OK "Image loaded into Kind nodes"
+}
 
-cat <<EOF | kubectl -n "$NAMESPACE" apply -f -
+smart_kind_load "$API_IMAGE" "$CLUSTER_NAME"
+
+# ------------------------------
+# Ensure namespace
+# ------------------------------
+print_status INFO "Creating namespace $NAMESPACE (if not exists)..."
+kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+# ------------------------------
+# Delete path
+# ------------------------------
+if [[ "$DELETE_ONLY" -eq 1 ]]; then
+  print_status INFO "Deleting API resources in $NAMESPACE..."
+  kubectl -n "$NAMESPACE" delete deploy/"$DEPLOY_NAME" svc/"$SERVICE_NAME" configmap/"$SERVICE_NAME"-config --ignore-not-found
+  print_status OK "Deleted (if existed)."
+  exit 0
+fi
+
+# ------------------------------
+# Decide env wiring
+# ------------------------------
+use_shared_cm=false
+use_client_cm=false
+use_secret=false
+use_file_cm=false
+
+if [[ "$ENV_MODE" == "cm" ]]; then
+  use_shared_cm=true
+  use_client_cm=true
+elif [[ "$ENV_MODE" == "secret" ]]; then
+  use_secret=true
+elif [[ "$ENV_MODE" == "file" ]]; then
+  use_file_cm=true
+else
+  # auto-detect
+  if kubectl -n "$NAMESPACE" get configmap seedcore-env >/dev/null 2>&1; then
+    use_shared_cm=true
+  fi
+  if kubectl -n "$NAMESPACE" get configmap seedcore-client-env >/dev/null 2>&1; then
+    use_client_cm=true
+  fi
+  if ! $use_shared_cm && ! $use_client_cm; then
+    if kubectl -n "$NAMESPACE" get secret seedcore-env-secret >/dev/null 2>&1; then
+      use_secret=true
+    else
+      use_file_cm=true
+    fi
+  fi
+fi
+
+# Create fallback ConfigMap from ENV_FILE if needed
+if $use_file_cm; then
+  if [[ -f "$ENV_FILE" ]]; then
+    print_status INFO "Creating/Updating ConfigMap from $ENV_FILE ..."
+    kubectl -n "$NAMESPACE" create configmap "$SERVICE_NAME"-config \
+      --from-env-file="$ENV_FILE" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    print_status OK "ConfigMap '$SERVICE_NAME-config' updated"
+  else
+    print_status WARN "Env file '$ENV_FILE' not found; continuing with no env injection."
+  fi
+fi
+
+# ------------------------------
+# Build envFrom YAML fragments (safe)
+# ------------------------------
+env_from_yaml=""
+if $use_shared_cm; then
+  env_from_yaml="${env_from_yaml}
+            - configMapRef:
+                name: seedcore-env"
+fi
+if $use_client_cm; then
+  env_from_yaml="${env_from_yaml}
+            - configMapRef:
+                name: seedcore-client-env"
+fi
+if $use_secret; then
+  env_from_yaml="${env_from_yaml}
+            - secretRef:
+                name: seedcore-env-secret"
+fi
+if $use_file_cm; then
+  env_from_yaml="${env_from_yaml}
+            - configMapRef:
+                name: ${SERVICE_NAME}-config"
+fi
+
+ENV_FROM_BLOCK=""
+if [[ -n "${env_from_yaml// /}" ]]; then
+  ENV_FROM_BLOCK="          envFrom:${env_from_yaml}"
+fi
+
+# ------------------------------
+# Apply Deployment + Service
+# ------------------------------
+print_status INFO "Applying Deployment and Service..."
+cat <<EOF | kubectl apply -n "$NAMESPACE" -f -
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: seedcore-api-dev
-  labels: { app: seedcore-api }
+  name: ${DEPLOY_NAME}
+  labels: { app: ${SERVICE_NAME} }
 spec:
-  replicas: 1
-  selector: { matchLabels: { app: seedcore-api } }
+  replicas: ${REPLICAS}
+  selector:
+    matchLabels: { app: ${SERVICE_NAME} }
   template:
     metadata:
-      labels: { app: seedcore-api }
+      labels: { app: ${SERVICE_NAME} }
     spec:
       containers:
-      - name: api
-        image: seedcore-app:latest
-        imagePullPolicy: IfNotPresent
-        env:
-        - name: RAY_ADDRESS
-          value: ray://seedcore-head-svc:10001
-        - name: RAY_NAMESPACE
-          value: seedcore-dev
-        - name: SEEDCORE_NS
-          value: seedcore-dev
-        - name: API_HOST
-          value: "0.0.0.0"
-        - name: API_PORT
-          value: "8002"
-        - name: PYTHONPATH
-          value: /app:/app/src
-        # Database connections
-        - name: PG_DSN
-          value: postgresql://postgres:password@postgresql:5432/postgres
-        - name: MYSQL_DATABASE_URL
-          value: mysql+mysqlconnector://seedcore:password@mysql:3306/seedcore
-        - name: REDIS_HOST
-          value: redis-master
-        - name: REDIS_PORT
-          value: "6379"
-        - name: NEO4J_URI
-          value: bolt://neo4j:7687
-        - name: NEO4J_USER
-          value: neo4j
-        - name: NEO4J_PASSWORD
-          value: password
-        ports:
-        - containerPort: 8002
-          name: http
-        resources:
-          requests:
-            cpu: "200m"
-            memory: "256Mi"
-          limits:
-            cpu: "1"
-            memory: "512Mi"
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: http
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: http
-          initialDelaySeconds: 60
-          periodSeconds: 30
+        - name: ${SERVICE_NAME}
+          image: ${API_IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8002
+          # Minimal logging envs (app will default to stdout)
+          env:
+            - { name: DSP_LOG_TO_FILE,  value: "false" }
+            - { name: DSP_LOG_TO_STDOUT, value: "true" }
+            - { name: TMPDIR, value: "/tmp" }
+            - { name: TEMP,  value: "/tmp" }
+${ENV_FROM_BLOCK}
+          volumeMounts:
+            - name: logs-volume
+              mountPath: /tmp/seedcore-logs
+          # No probes here (manual operation). Logs tell the story.
+          # Note: No command/args override - use image ENTRYPOINT/CMD
+          resources: {}
+      volumes:
+        - name: logs-volume
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: seedcore-api-dev
-  labels: { app: seedcore-api }
+  name: ${SERVICE_NAME}
+  labels: { app: ${SERVICE_NAME} }
 spec:
-  selector: { app: seedcore-api }
-  ports:
-  - name: http
-    port: 80
-    targetPort: http
   type: ClusterIP
+  selector: { app: ${SERVICE_NAME} }
+  ports:
+    - name: http
+      port: 8002
+      targetPort: 8002
 EOF
 
-if [ $? -eq 0 ]; then
-    print_status "OK" "seedcore-api deployment applied successfully"
-else
-    print_status "ERROR" "Failed to apply seedcore-api deployment"
-    exit 1
+# ------------------------------
+# Rollout & info
+# ------------------------------
+print_status INFO "Waiting for Deployment rollout (give it a moment)..."
+kubectl -n "$NAMESPACE" rollout status deploy/"$DEPLOY_NAME" --timeout=180s || true
+
+print_status INFO "Pods:"
+kubectl -n "$NAMESPACE" get pods -l app="${SERVICE_NAME}" -o wide || true
+
+print_status INFO "Service:"
+kubectl -n "$NAMESPACE" get svc "${SERVICE_NAME}" || true
+
+echo
+print_status OK "Standalone API deployed as service '${SERVICE_NAME}' in namespace '${NAMESPACE}'"
+echo
+echo "🔧 Manual operations:"
+echo "  - Tail logs:    kubectl -n ${NAMESPACE} logs deploy/${DEPLOY_NAME} -f --tail=200"
+echo "  - Exec shell:   kubectl -n ${NAMESPACE} exec -it deploy/${DEPLOY_NAME} -- /bin/bash || /bin/sh"
+echo "  - Port-forward: kubectl -n ${NAMESPACE} port-forward svc/${SERVICE_NAME} ${LOCAL_PORT}:8002"
+echo "  - Health check: curl -sf http://127.0.0.1:${LOCAL_PORT}/health || true"
+echo "  - Delete:       $(basename "$0") --delete -n ${NAMESPACE}"
+echo
+
+# Optional: auto port-forward
+if [[ "$PORT_FORWARD" -eq 1 ]]; then
+  print_status INFO "Starting port-forward on localhost:${LOCAL_PORT} (Ctrl+C to stop)..."
+  kubectl -n "$NAMESPACE" port-forward svc/${SERVICE_NAME} ${LOCAL_PORT}:8002
 fi
-
-# Wait for deployment to be ready
-print_status "INFO" "Waiting for seedcore-api deployment to be ready..."
-kubectl wait --for=condition=available --timeout=300s deployment/seedcore-api-dev -n "$NAMESPACE"
-
-if [ $? -eq 0 ]; then
-    print_status "OK" "seedcore-api deployment is ready"
-else
-    print_status "WARN" "seedcore-api deployment may not be fully ready yet"
-fi
-
-# Check deployment status
-print_status "INFO" "Checking deployment status..."
-kubectl get deployment seedcore-api-dev -n "$NAMESPACE"
-kubectl get pods -n "$NAMESPACE" -l app=seedcore-api
-
-# Check service status
-print_status "INFO" "Checking service status..."
-kubectl get svc seedcore-api-dev -n "$NAMESPACE"
-
-# Show logs
-print_status "INFO" "Showing recent logs from seedcore-api..."
-kubectl logs -n "$NAMESPACE" deployment/seedcore-api-dev --tail=50
-
-# Check overall cluster status
-print_status "INFO" "Checking overall cluster status..."
-echo ""
-echo "📊 All Deployments in $NAMESPACE:"
-kubectl get deployments -n "$NAMESPACE"
-echo ""
-echo "📊 All Services in $NAMESPACE:"
-kubectl get svc -n "$NAMESPACE"
-echo ""
-echo "📊 All Pods in $NAMESPACE:"
-kubectl get pods -n "$NAMESPACE"
-
-echo ""
-print_status "OK" "🎉 seedcore-api deployment completed!"
-echo ""
-echo "📊 Deployment Status:"
-echo "   - Namespace: $NAMESPACE"
-echo "   - Deployment: seedcore-api-dev"
-echo "   - Service: seedcore-api-dev"
-echo "   - Port: 80 (internal) -> 8002 (container)"
-echo ""
-echo "🔧 Useful Commands:"
-echo "   - Watch pods: kubectl -n $NAMESPACE get pods -w"
-echo "   - Check logs: kubectl -n $NAMESPACE logs deployment/seedcore-api-dev -f"
-echo "   - Port forward: kubectl -n $NAMESPACE port-forward svc/seedcore-api-dev 8003:80"
-echo "   - Test health: kubectl -n $NAMESPACE exec -it \$(kubectl -n $NAMESPACE get pod -l app=seedcore-api -o jsonpath='{.items[0].metadata.name}') -- curl http://localhost:8002/health"
-echo ""
-echo "🚀 Next steps:"
-echo "   1. Monitor pod startup: kubectl -n $NAMESPACE get pods -w"
-echo "   2. Check for any errors in logs"
-echo "   3. Test the health endpoint once ready"
-echo "   4. Test API endpoints via port-forward"
-echo "   5. Verify Ray cluster connectivity"
-echo ""
-echo "🌐 Service Endpoints:"
-echo "   - seedcore-serve: http://seedcore-serve-dev.$NAMESPACE.svc.cluster.local:80"
-echo "   - seedcore-api: http://seedcore-api-dev.$NAMESPACE.svc.cluster.local:80"
-echo "   - Ray Dashboard: http://seedcore-head-svc.$NAMESPACE.svc.cluster.local:8265"
-
-

@@ -36,7 +36,7 @@ kustomize-delete:
 .PHONY: helm-api helm-serve helm-ray helm-delete
 helm-api: kubens secret
 	helm upgrade --install $(API_REL) ./helm/seedcore-api -n $(NAMESPACE) \
-	  --set image=$(REGISTRY)/seedcore-api:latest \
+	  	--set image=$(REGISTRY)/seedcore-api:kind \
 	  --set env.SEEDCORE_NS=$(NAMESPACE) \
 	  --set env.COG_APP_NAME=$(APP_NAME) \
 	  --set env.COG_MIN_READY=$(MIN_READY)

@@ -10,10 +10,12 @@ spec:
     spec:
       containers:
       - name: api
-        image: yourrepo/seedcore-api:latest
+        image: yourrepo/seedcore-api:kind
         ports: [{ containerPort: 8002, name: http }]
+        envFrom:
+          - configMapRef: { name: seedcore-env }         # shared
+          - configMapRef: { name: seedcore-client-env }  # client-only
         env:
-          - { name: RAY_ADDRESS, value: "ray://seedcore-head-svc:10001" }
           - { name: SEEDCORE_NS,  value: "seedcore-dev" }
           - { name: COG_APP_NAME, value: "seedcore-dev-dev-cognitive_core" }
           - name: OPENAI_API_KEY

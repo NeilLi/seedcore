@@ -31,10 +31,24 @@ command -v kubectl >/dev/null || { print_status "ERROR" "kubectl is not installe
 command -v helm >/dev/null || { print_status "ERROR" "helm is not installed."; exit 1; }
 
 # --- Cluster lifecycle ---
-
+echo "🔍 Checking existing cluster..."
+if kind get clusters | grep -q "^${CLUSTER_NAME}\$"; then
+  print_status "WARN" "Cluster ${CLUSTER_NAME} already exists"
+  read -p "Do you want to delete and recreate it? (y/N): " -r REPLY; echo
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    print_status "INFO" "Deleting existing cluster..."
+    kind delete cluster --name "$CLUSTER_NAME"
+  else
+    print_status "INFO" "Using existing cluster"
+  fi
+fi
 
 # Create Kind cluster if needed
-
+if ! kind get clusters | grep -q "^${CLUSTER_NAME}\$"; then
+  print_status "INFO" "Creating Kind cluster with kindest/node:v1.30.0..."
+  kind create cluster --name "$CLUSTER_NAME" --image kindest/node:v1.30.0 --config kind-config.yaml
+  print_status "OK" "Kind cluster created successfully"
+fi
 
 # Set context
 print_status "INFO" "Setting kubectl context..."
@@ -43,6 +57,32 @@ kubectl cluster-info --context "kind-$CLUSTER_NAME"
 # Namespace
 print_status "INFO" "Creating namespace $NAMESPACE..."
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+# --- Check for docker/.env and apply Ray-only Kustomize if available ---
+# This only deploys RayCluster (not API/Serve deployments)
+# The seedcore-env ConfigMap is created directly from docker/.env in the script
+KUSTOMIZE_DIR="${KUSTOMIZE_DIR:-deploy/kustomize/ray-only}"
+
+if [ ! -f "docker/.env" ]; then
+  print_status "ERROR" "docker/.env not found. Create it (copy from env.example) before running setup."
+  exit 1
+fi
+
+# Always create/update the seedcore-env ConfigMap from docker/.env first
+print_status "INFO" "Creating/updating seedcore-env ConfigMap from docker/.env..."
+kubectl -n "$NAMESPACE" create configmap seedcore-env \
+  --from-env-file=docker/.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+print_status "OK" "ConfigMap seedcore-env created/updated successfully"
+
+# Now apply Ray-only Kustomize if available
+if [ -d "$KUSTOMIZE_DIR" ]; then
+  print_status "INFO" "Applying Ray-only Kustomize at $KUSTOMIZE_DIR (RayCluster only)..."
+  kubectl apply -k "$KUSTOMIZE_DIR" -n "$NAMESPACE"
+  print_status "OK" "Ray-only Kustomize applied successfully"
+else
+  print_status "WARN" "Ray-only Kustomize not found; will use inline RayCluster manifest."
+fi
 
 # --- Load your Ray image into Kind nodes ---
 print_status "INFO" "Loading image ${RAY_IMAGE} into Kind cluster ${CLUSTER_NAME}..."
@@ -74,21 +114,44 @@ fi
 print_status "INFO" "Waiting for KubeRay operator to be ready..."
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kuberay-operator -n kuberay-system --timeout=300s
 
-# --- Create a Secret from the .env file ---
-ENV_FILE_PATH="../docker/.env"
-if [ -f "$ENV_FILE_PATH" ]; then
-  print_status "INFO" "Creating/Updating Kubernetes secret 'seedcore-env-secret' from ${ENV_FILE_PATH}..."
-  kubectl -n "${NAMESPACE}" create secret generic seedcore-env-secret \
-    --from-env-file="${ENV_FILE_PATH}" \
-    --dry-run=client -o yaml | kubectl apply -f -
-  print_status "OK" "Secret created successfully."
-else
-  print_status "WARN" "${ENV_FILE_PATH} not found. Skipping secret creation."
-fi
-
 # --- Deploy RayCluster using YOUR image for head & workers (name=seedcore => seedcore-head-svc) ---
 print_status "INFO" "Deploying Ray cluster (image: ${RAY_IMAGE})..."
-cat <<EOF | kubectl apply -n "${NAMESPACE}" -f -
+
+# Check if we already applied via Kustomize
+if [ -d "$KUSTOMIZE_DIR" ] && kubectl get raycluster seedcore -n "$NAMESPACE" >/dev/null 2>&1; then
+  print_status "INFO" "RayCluster already deployed via Kustomize, checking if image update is needed..."
+  
+  # Get current head image
+  CURRENT_IMAGE=$(kubectl get raycluster seedcore -n "$NAMESPACE" -o jsonpath='{.spec.headGroupSpec.template.spec.containers[0].image}')
+  
+  if [ "$CURRENT_IMAGE" != "${RAY_IMAGE}" ]; then
+    print_status "INFO" "Updating RayCluster head image from $CURRENT_IMAGE to ${RAY_IMAGE}..."
+    # Only update the head image, keep workers as rayproject/ray for compatibility
+    cat <<EOF | kubectl patch raycluster seedcore -n "$NAMESPACE" --type='merge' -p -
+{
+  "spec": {
+    "headGroupSpec": {
+      "template": {
+        "spec": {
+          "containers": [
+            {
+              "name": "ray-head",
+              "image": "${RAY_IMAGE}"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+EOF
+    print_status "OK" "RayCluster head image updated to ${RAY_IMAGE}"
+  else
+    print_status "INFO" "RayCluster head image is already ${RAY_IMAGE}, no update needed"
+  fi
+else
+  print_status "INFO" "Deploying RayCluster using inline manifest..."
+  cat <<EOF | kubectl apply -n "${NAMESPACE}" -f -
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
@@ -113,22 +176,19 @@ spec:
           - name: data-volume
             mountPath: /data
         containers:
-        - name: ray-head
-          image: "${RAY_IMAGE}"
-          imagePullPolicy: IfNotPresent
-          envFrom:
-          - secretRef:
-              name: seedcore-env-secret
-          volumeMounts:
-          - name: data-volume
-            mountPath: /data
-          resources:
-            requests:
-              cpu: "1000m"
-              memory: "2Gi"
-            limits:
-              cpu: "2000m"
-              memory: "4Gi"
+          - name: ray-head
+            image: "${RAY_IMAGE}"
+            imagePullPolicy: IfNotPresent
+            volumeMounts:
+            - name: data-volume
+              mountPath: /data
+            resources:
+              requests:
+                cpu: "1000m"
+                memory: "2Gi"
+              limits:
+                cpu: "2000m"
+                memory: "4Gi"
         # Define the data volume
         volumes:
         - name: data-volume
@@ -153,22 +213,19 @@ spec:
             - name: data-volume
               mountPath: /data
           containers:
-          - name: ray-worker
-            image: "${RAY_IMAGE}"
-            imagePullPolicy: IfNotPresent
-            envFrom:
-            - secretRef:
-                name: seedcore-env-secret
-            volumeMounts:
-            - name: data-volume
-              mountPath: /data
-            resources:
-              requests:
-                cpu: "750m"
-                memory: "3Gi"
-              limits:
-                cpu: "1500m"
-                memory: "3Gi"
+            - name: ray-worker
+              image: "${RAY_IMAGE}"
+              imagePullPolicy: IfNotPresent
+              volumeMounts:
+              - name: data-volume
+                mountPath: /data
+              resources:
+                requests:
+                  cpu: "750m"
+                  memory: "3Gi"
+                limits:
+                  cpu: "1500m"
+                  memory: "3Gi"
           # Define the data volume
           volumes:
           - name: data-volume
@@ -176,6 +233,8 @@ spec:
               path: /tmp/seedcore-data
               type: DirectoryOrCreate
 EOF
+  print_status "OK" "RayCluster deployed using inline manifest"
+fi
 
 # --- Wait for head pod Ready ---
 print_status "INFO" "Waiting for Ray head pod to be ready..."
@@ -236,9 +295,6 @@ spec:
         env:
         - name: NS
           value: "${NAMESPACE}"
-        envFrom:
-        - secretRef:
-            name: seedcore-env-secret
 EOF
 
 # Wait for the Job to complete, show logs, and clean up
@@ -253,7 +309,47 @@ else
 fi
 
 # --- Helm repos for data stores (add/update before install) ---
-#
+print_status "INFO" "Adding/Updating Helm repos for data stores..."
+helm repo add bitnami https://charts.bitnami.com/bitnami >/dev/null 2>&1 || true
+helm repo add neo4j https://helm.neo4j.com/neo4j >/dev/null 2>&1 || true
+helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
+helm repo update >/dev/null
+
+# --- Data Stores ---
+print_status "INFO" "Deploying data stores (PostgreSQL, MySQL, Redis, Neo4j)..."
+print_status "INFO" "This may take several minutes..."
+
+print_status "INFO" "Deploying PostgreSQL with pgvector..."
+helm upgrade --install postgresql ./helm/postgresql \
+  --namespace "$NAMESPACE" --wait --timeout 10m
+
+print_status "INFO" "Deploying MySQL..."
+helm upgrade --install mysql ./helm/mysql \
+  --namespace "$NAMESPACE" --wait --timeout 10m
+
+print_status "INFO" "Deploying Redis (Bitnami)..."
+helm upgrade --install redis bitnami/redis \
+  --namespace "$NAMESPACE" \
+  --set auth.enabled=false \
+  --set master.persistence.size=512Mi \
+  --set master.resources.requests.cpu=50m \
+  --set master.resources.requests.memory=64Mi \
+  --wait --timeout 10m
+
+print_status "INFO" "Deploying Neo4j..."
+helm upgrade --install neo4j neo4j/neo4j \
+  --namespace "$NAMESPACE" --wait --timeout 10m \
+  --set neo4j.name=neo4j \
+  --set neo4j.password=password \
+  --set neo4j.resources.requests.cpu=500m \
+  --set neo4j.resources.requests.memory=2Gi \
+  --set neo4j.resources.limits.cpu=1000m \
+  --set neo4j.resources.limits.memory=4Gi \
+  --set neo4j.volumeSize=2Gi \
+  --set volumes.data.mode=defaultStorageClass \
+  --set services.neo4j.enabled=false \
+  --set loadbalancer=exclude
 
 # --- Verify ---
 print_status "INFO" "Verifying all services are running..."

@@ -1,4 +1,4 @@
-image: yourrepo/seedcore-api:latest
+image: yourrepo/seedcore-api:kind
 replicaCount: 1
 service:
   type: ClusterIP

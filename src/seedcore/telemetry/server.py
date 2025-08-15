@@ -77,7 +77,8 @@ from ..agents.cognitive_core import (
     initialize_cognitive_core,
     get_cognitive_core
 )
-from ..serve.cognitive_serve import CognitiveCoreClient
+# Serve modules are now running as separate services
+# from ..serve.cognitive_serve import CognitiveCoreClient
 from ..energy.weights import EnergyWeights
 from ..energy.calculator import energy_and_grad
 from ..energy.state import UnifiedState, AgentSnapshot, OrganState, SystemState, MemoryVector
@@ -285,7 +286,7 @@ async def build_memory():
     
     # Get connection details from environment variables
     pg_dsn = os.getenv("PG_DSN")
-    neo4j_uri = os.getenv("NEO4J_URI")
+    neo4j_uri = os.getenv("NEO4J_URI") or os.getenv("NEO4J_BOLT_URL")
     neo4j_user = os.getenv("NEO4J_USER")
     neo4j_password = os.getenv("NEO4J_PASSWORD")
     
@@ -1943,18 +1944,23 @@ def mw_get_item(organ_id: str, item_id: str):
 # DSPy Cognitive Core Endpoints
 # =============================================================================
 
-# Global cognitive core client
+# Global cognitive core client (HTTP client to separate serve service)
 cognitive_client = None
 
 def get_cognitive_client():
-    """Get or create the cognitive core client."""
+    """Get or create the cognitive core client via HTTP."""
     global cognitive_client
     if cognitive_client is None:
         try:
-            cognitive_client = CognitiveCoreClient()
-            logger.info("✅ Cognitive core client initialized")
+            # Import here to avoid circular imports
+            import httpx
+            cognitive_client = httpx.AsyncClient(
+                base_url="http://seedcore-serve:8000",
+                timeout=30.0
+            )
+            logger.info("✅ Cognitive core HTTP client initialized")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize cognitive core client: {e}")
+            logger.warning(f"⚠️ Failed to initialize cognitive core HTTP client: {e}")
             cognitive_client = None
     return cognitive_client
 
@@ -2010,9 +2016,17 @@ async def reason_about_failure(incident_id: str, agent_id: str = None):
                 "confidence_score": result.get("confidence_score", 0.0)
             }
         
-        # Use Ray Serve client
-        result = await client.reason_about_failure(agent_id or "default_agent", incident_context)
-        return result
+        # Use HTTP client to separate serve service
+        try:
+            response = await client.post("/cognitive/reason-about-failure", json={
+                "agent_id": agent_id or "default_agent",
+                "incident_context": incident_context
+            })
+            result = response.json()
+            return result
+        except Exception as e:
+            logger.warning(f"⚠️ HTTP client call failed: {e}, using fallback")
+            # Continue with fallback logic below
         
     except Exception as e:
         logger.error(f"Error in failure reasoning: {e}")
@@ -2067,14 +2081,19 @@ async def plan_task(
                 "risk_assessment": result.get("risk_assessment", "")
             }
         
-        # Use Ray Serve client
-        result = await client.plan_task(
-            agent_id or "default_agent",
-            task_description,
-            agent_capabilities or {"capability_score": 0.5},
-            available_resources or {}
-        )
-        return result
+        # Use HTTP client to separate serve service
+        try:
+            response = await client.post("/cognitive/plan-task", json={
+                "agent_id": agent_id or "default_agent",
+                "task_description": task_description,
+                "agent_capabilities": agent_capabilities or {"capability_score": 0.5},
+                "available_resources": available_resources or {}
+            })
+            result = response.json()
+            return result
+        except Exception as e:
+            logger.warning(f"⚠️ HTTP client call failed: {e}, using fallback")
+            # Continue with fallback logic below
         
     except Exception as e:
         logger.error(f"Error in task planning: {e}")
@@ -2126,13 +2145,18 @@ async def make_decision(
                 "alternative_options": result.get("alternative_options", "")
             }
         
-        # Use Ray Serve client
-        result = await client.make_decision(
-            agent_id or "default_agent",
-            decision_context,
-            historical_data
-        )
-        return result
+        # Use HTTP client to separate serve service
+        try:
+            response = await client.post("/cognitive/make-decision", json={
+                "agent_id": agent_id or "default_agent",
+                "decision_context": decision_context,
+                "historical_data": historical_data or {}
+            })
+            result = response.json()
+            return result
+        except Exception as e:
+            logger.warning(f"⚠️ HTTP client call failed: {e}, using fallback")
+            # Continue with fallback logic below
         
     except Exception as e:
         logger.error(f"Error in decision making: {e}")
@@ -2186,14 +2210,19 @@ async def solve_problem(
                 "success_metrics": result.get("success_metrics", "")
             }
         
-        # Use Ray Serve client
-        result = await client.solve_problem(
-            agent_id or "default_agent",
-            problem_statement,
-            constraints,
-            available_tools
-        )
-        return result
+        # Use HTTP client to separate serve service
+        try:
+            response = await client.post("/cognitive/solve-problem", json={
+                "agent_id": agent_id or "default_agent",
+                "problem_statement": problem_statement,
+                "constraints": constraints,
+                "available_tools": available_tools
+            })
+            result = response.json()
+            return result
+        except Exception:  # Remove unused variable e
+            logger.warning(f"⚠️ HTTP client call failed, using fallback")
+            # Continue with fallback logic below
         
     except Exception as e:
         logger.error(f"Error in problem solving: {e}")
@@ -2244,13 +2273,18 @@ async def synthesize_memory(
                 "related_patterns": result.get("related_patterns", "")
             }
         
-        # Use Ray Serve client
-        result = await client.synthesize_memory(
-            agent_id or "default_agent",
-            memory_fragments,
-            synthesis_goal
-        )
-        return result
+        # Use HTTP client to separate serve service
+        try:
+            response = await client.post("/cognitive/synthesize-memory", json={
+                "agent_id": agent_id or "default_agent",
+                "memory_fragments": memory_fragments,
+                "synthesis_goal": synthesis_goal
+            })
+            result = response.json()
+            return result
+        except Exception:  # Remove unused variable e
+            logger.warning(f"⚠️ HTTP client call failed, using fallback")
+            # Continue with fallback logic below
         
     except Exception as e:
         logger.error(f"Error in memory synthesis: {e}")
@@ -2304,14 +2338,19 @@ async def assess_capabilities(
                 "priority_recommendations": result.get("priority_recommendations", "")
             }
         
-        # Use Ray Serve client
-        result = await client.assess_capabilities(
-            agent_id or "default_agent",
-            performance_data,
-            current_capabilities,
-            target_capabilities
-        )
-        return result
+        # Use HTTP client to separate serve service
+        try:
+            response = await client.post("/cognitive/assess-capabilities", json={
+                "agent_id": agent_id or "default_agent",
+                "performance_data": performance_data,
+                "current_capabilities": current_capabilities,
+                "target_capabilities": target_capabilities
+            })
+            result = response.json()
+            return result
+        except Exception:  # Remove unused variable e
+            logger.warning(f"⚠️ HTTP client call failed, using fallback")
+            # Continue with fallback logic below
         
     except Exception as e:
         logger.error(f"Error in capability assessment: {e}")

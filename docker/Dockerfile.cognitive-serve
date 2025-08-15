@@ -1,0 +1,46 @@
+# docker/Dockerfile.cognitive-serve
+FROM rayproject/ray:2.33.0-py310
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+ARG BUILD_DATE
+ARG VCS_REF
+LABEL org.opencontainers.image.title="seedcore-cognitive-serve" \
+      org.opencontainers.image.description="SeedCore Cognitive Service on Ray" \
+      org.opencontainers.image.version="2.33.0-py310" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="seedcore"
+
+# ---- Python deps ----
+COPY docker/requirements-minimal.txt /tmp/requirements.txt
+RUN python -m pip install --upgrade pip wheel && \
+    PIP_NO_CACHE_DIR=1 pip install -r /tmp/requirements.txt
+
+# ---- App files ----
+WORKDIR /app
+COPY --chown=ray:ray src/ ./src/
+COPY --chown=ray:ray scripts/ ./scripts/
+COPY --chown=ray:ray docker/ ./docker/
+COPY --chown=ray:ray docker/cognitive_serve_entrypoint.py /app/cognitive_serve_entrypoint.py
+
+# ---- Runtime env ----
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app:/app/src \
+    PATH="/home/ray/.local/bin:${PATH}" \
+    RAY_USAGE_STATS_ENABLED=0
+
+EXPOSE 8000
+USER ray
+
+# ✅ Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=10 \
+  CMD ["python","-c","import urllib.request,sys; \
+try: \
+  r=urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5); \
+  sys.exit(0 if r.getcode()==200 else 1) \
+except Exception: \
+  sys.exit(1)"]
+
+CMD ["python", "/app/cognitive_serve_entrypoint.py"]

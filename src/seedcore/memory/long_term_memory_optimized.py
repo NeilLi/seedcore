@@ -16,12 +16,12 @@ class LongTermMemoryManagerOptimized:
         start_time = time.time()
         
         self.pg_store = PgVectorStoreOptimized(
-            os.getenv("PG_DSN", "postgresql://postgres:password@postgres:5432/postgres"),
+            os.getenv("PG_DSN", "postgresql://postgres:CHANGE_ME@postgresql:5432/postgres"),
             pool_size=10
         )
         
         self.neo4j_graph = Neo4jGraph(
-            os.getenv("NEO4J_URI", "bolt://neo4j:7687"),
+            os.getenv("NEO4J_URI") or os.getenv("NEO4J_BOLT_URL", "bolt://neo4j:7687"),
             auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "password"))
         )
         

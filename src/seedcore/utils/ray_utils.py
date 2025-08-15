@@ -36,38 +36,77 @@ def _parse_ray_url(ray_url: str) -> Tuple[str, int]:
 
 def resolve_ray_address() -> Optional[str]:
     """Resolve a sensible default RAY_ADDRESS for both Kubernetes and Docker Compose.
-
-    Precedence:
+    
+    This function implements the new pattern where:
     1) Respect explicit RAY_ADDRESS if set
-    2) If running in Kubernetes (service account mounted), prefer seedcore-dev-head-svc
-    3) If Docker Compose hostname is available, prefer ray-head
-    4) Fallback candidates: localhost
+    2) For head/worker pods: return None or "auto" 
+    3) For client pods: derive from RAY_HOST/RAY_PORT if available
+    4) Fallback to localhost for development
     """
-    # 1) Respect explicit env if provided
+    # Check for explicit RAY_ADDRESS first
     explicit = os.getenv("RAY_ADDRESS")
     if explicit:
+        logger.debug(f"Using explicit RAY_ADDRESS: {explicit}")
         return explicit
+    
+    # Check if we're in a head/worker pod (should not set RAY_ADDRESS)
+    # This is indicated by RAY_ADDRESS being unset or "auto"
+    ray_address = os.getenv("RAY_ADDRESS")
+    if not ray_address or ray_address == "auto":
+        logger.debug("In head/worker pod - RAY_ADDRESS should be unset or 'auto'")
+        return ray_address or "auto"
+    
+    # For client pods, derive from RAY_HOST/RAY_PORT
+    host = os.getenv("RAY_HOST")
+    port = os.getenv("RAY_PORT")
+    
+    if host and port:
+        derived_address = f"ray://{host}:{port}"
+        logger.debug(f"Derived RAY_ADDRESS from RAY_HOST/RAY_PORT: {derived_address}")
+        return derived_address
+    
+    # Fallback for development
+    logger.warning("RAY_ADDRESS not set and RAY_HOST/RAY_PORT not available, using localhost")
+    return "ray://localhost:10001"
 
-    candidates = []
 
-    # 2) Detect Kubernetes via service account mount
-    if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
-        candidates.append("ray://seedcore-dev-head-svc:10001")
-        # Also try fully qualified DNS to be safe
-        candidates.append("ray://seedcore-dev-head-svc.seedcore-dev.svc.cluster.local:10001")
-
-    # 3) Docker Compose common hostname
-    candidates.append("ray://ray-head:10001")
-
-    # 4) Localhost fallback
-    candidates.append("ray://localhost:10001")
-
-    for candidate in candidates:
-        host, port = _parse_ray_url(candidate)
-        if _can_connect_tcp(host, port):
-            return candidate
-
-    return None
+def init_ray_with_smart_defaults() -> bool:
+    """Initialize Ray with smart defaults based on the new configuration pattern.
+    
+    This function automatically handles the different pod roles:
+    - Head/worker pods: use "auto" or unset
+    - Client pods: use derived or explicit RAY_ADDRESS
+    """
+    try:
+        # Check if Ray is already initialized
+        if ray.is_initialized():
+            logger.info("Ray is already initialized")
+            return True
+        
+        ray_address = resolve_ray_address()
+        namespace = os.getenv("RAY_NAMESPACE")
+        
+        if ray_address and ray_address != "auto":
+            logger.info(f"Initializing Ray with address: {ray_address}, namespace: {namespace}")
+            ray.init(
+                address=ray_address,
+                namespace=namespace,
+                ignore_reinit_error=True
+            )
+        else:
+            logger.info("Initializing Ray locally (head/worker mode)")
+            ray.init(
+                address="auto",
+                namespace=namespace,
+                ignore_reinit_error=True
+            )
+        
+        logger.info("Ray initialization successful")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize Ray: {e}")
+        return False
 
 
 def init_ray(

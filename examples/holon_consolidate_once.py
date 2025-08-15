@@ -37,7 +37,7 @@ def main():
     parser.add_argument("--batch", type=int, default=10)
     parser.add_argument("--ray", default=os.getenv("RAY_ADDRESS", "ray://ray-head:10001"))
     parser.add_argument("--pg_dsn", default=os.getenv("PG_DSN"))
-    parser.add_argument("--neo_uri", default=os.getenv("NEO4J_URI", "bolt://neo4j:7687"))
+    parser.add_argument("--neo_uri", default=os.getenv("NEO4J_URI") or os.getenv("NEO4J_BOLT_URL", "bolt://neo4j:7687"))
     parser.add_argument("--neo_user", default=os.getenv("NEO4J_USER", "neo4j"))
     parser.add_argument("--neo_pass", default=os.getenv("NEO4J_PASSWORD", "password"))
     args = parser.parse_args()

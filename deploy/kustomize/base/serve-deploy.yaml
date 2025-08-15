@@ -13,13 +13,11 @@ spec:
       - name: serve
         image: seedcore-serve:latest     # or seedcore-app:latest if you consolidate
         imagePullPolicy: IfNotPresent
+        envFrom:
+          - configMapRef: { name: seedcore-env }         # shared only
         env:
         - name: PYTHONPATH
           value: /app:/app/src
-        - name: RAY_ADDRESS
-          value: ray://seedcore-dev-head-svc:10001   # KubeRay head client port
-        - name: RAY_NAMESPACE
-          value: seedcore-dev
         - name: SERVE_HTTP_HOST
           value: "0.0.0.0"
         - name: SERVE_HTTP_PORT

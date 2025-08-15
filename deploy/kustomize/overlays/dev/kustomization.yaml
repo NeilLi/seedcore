@@ -5,6 +5,17 @@ nameSuffix: -dev
 commonLabels: { stage: dev }
 commonAnnotations: { seedcore.io/stage: dev }
 
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: seedcore-client-env
+    literals:
+      - RAY_ADDRESS=ray://seedcore-head-svc:10001
+      - RAY_NAMESPACE=seedcore-dev
+      - RAY_SERVE_ADDRESS=http://seedcore-head-svc:8000
+      - RAY_DASHBOARD_ADDRESS=http://seedcore-head-svc:8265
+
 resources:
   - ../../base
 
@@ -22,9 +33,6 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 1
-      - op: replace
-        path: /spec/template/spec/containers/0/env/0/value
-        value: ray://seedcore-dev-head-svc:10001
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
@@ -33,9 +41,6 @@ patches:
         value: { name: SEEDCORE_OPTIONAL_BACKENDS, value: "true" }
   - target: { kind: Deployment, name: seedcore-api }
     patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/env/0/value
-        value: ray://seedcore-dev-head-svc:10001
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
