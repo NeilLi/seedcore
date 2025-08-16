@@ -25,7 +25,7 @@ def monitor_actors():
         
         # Import required modules
         try:
-            from src.seedcore.memory.working_memory import get_miss_tracker, get_shared_cache
+            from src.seedcore.bootstrap import get_miss_tracker, get_shared_cache
             from src.seedcore.agents.observer_agent import ObserverAgent
         except ImportError as e:
             print(f"⚠️  Could not import seedcore modules: {e}")
@@ -84,7 +84,7 @@ def monitor_actors():
         
         # MwStore
         try:
-            from src.seedcore.memory.working_memory import get_mw_store
+            from src.seedcore.bootstrap import get_mw_store
             mw_store = get_mw_store()
             actors_status["MwStore"] = {
                 "status": "✅ Running",

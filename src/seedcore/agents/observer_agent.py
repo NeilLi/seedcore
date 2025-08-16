@@ -16,7 +16,7 @@ if not logger.handlers:
     handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
     logger.addHandler(handler)
 
-from ..memory.working_memory import get_miss_tracker, get_shared_cache
+from ..bootstrap import get_miss_tracker, get_shared_cache
 from ..memory.long_term_memory import LongTermMemoryManager
 
 @ray.remote
@@ -67,7 +67,7 @@ class ObserverAgent:
         """Async bootstrap, must be called once from the driver."""
         # Safe to await here
         from ..memory.long_term_memory import LongTermMemoryManager
-        from ..memory.working_memory import get_miss_tracker, get_shared_cache
+        from ..bootstrap import get_miss_tracker, get_shared_cache
 
         self._ltm = LongTermMemoryManager()
         self._miss = get_miss_tracker()

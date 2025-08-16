@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy-api.sh — Standalone API Deployment to Kind/Kubernetes
+# setup-api.sh — Standalone API Deployment to Kind/Kubernetes
 # Minimal, manual-ops friendly. Matches style of your Ray setup script.
 set -euo pipefail
 
@@ -225,7 +225,6 @@ spec:
           ports:
             - name: http
               containerPort: 8002
-          # Minimal logging envs (app will default to stdout)
           env:
             - { name: DSP_LOG_TO_FILE,  value: "false" }
             - { name: DSP_LOG_TO_STDOUT, value: "true" }
@@ -235,12 +234,17 @@ ${ENV_FROM_BLOCK}
           volumeMounts:
             - name: logs-volume
               mountPath: /tmp/seedcore-logs
-          # No probes here (manual operation). Logs tell the story.
-          # Note: No command/args override - use image ENTRYPOINT/CMD
-          resources: {}
+            # <<< ADD THIS MOUNT FOR YOUR PROJECT CODE
+            - name: project-source-volume
+              mountPath: /app
       volumes:
         - name: logs-volume
           emptyDir: {}
+        # <<< ADD THIS VOLUME DEFINITION FOR YOUR PROJECT CODE
+        - name: project-source-volume
+          hostPath:
+            path: /project # This MUST match the containerPath from your kind-config.yaml
+            type: Directory
 ---
 apiVersion: v1
 kind: Service

@@ -1,6 +1,7 @@
 import ray
 import json
-from src.seedcore.memory.working_memory import MwManager, get_miss_tracker
+from src.seedcore.memory.working_memory import MwManager
+from src.seedcore.bootstrap import get_miss_tracker
 from src.seedcore.utils.ray_utils import init_ray
 
 def test_hot_items():

@@ -54,3 +54,4 @@ exec python -m uvicorn src.seedcore.telemetry.server:app \
     --proxy-headers \
     --forwarded-allow-ips "*"
 
+

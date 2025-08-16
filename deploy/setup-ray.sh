@@ -115,8 +115,8 @@ kubectl -n "${NAMESPACE}" get rayservice "${RS_NAME}"
 print_status "INFO" "Waiting for RayService head pod to be created..."
 for i in {1..120}; do
   COUNT=$(kubectl -n "${NAMESPACE}" get pods \
-    -l "ray.io/node-type=head,ray.io/ray-service-name=${RS_NAME}" \
-    --no-headers 2>/dev/null | wc -l)
+    -l "ray.io/node-type=head" \
+    --no-headers 2>/dev/null | grep -c "${RS_NAME}" || echo "0")
   if [ "$COUNT" -ge 1 ]; then break; fi
   sleep 5
 done
@@ -127,14 +127,25 @@ if [ "${COUNT:-0}" -lt 1 ]; then
 fi
 
 print_status "INFO" "Waiting for RayService head pod to be Ready..."
-kubectl -n "${NAMESPACE}" wait --for=condition=ready pod \
-  -l "ray.io/node-type=head,ray.io/ray-service-name=${RS_NAME}" --timeout=900s
+# Get the actual cluster name from the pod labels
+CLUSTER_NAME_FROM_POD=$(kubectl -n "${NAMESPACE}" get pods \
+  -l "ray.io/node-type=head" \
+  --no-headers | grep "${RS_NAME}" | head -n1 | awk '{print $1}' | sed 's/-head-.*$//')
+if [ -n "${CLUSTER_NAME_FROM_POD}" ]; then
+  kubectl -n "${NAMESPACE}" wait --for=condition=ready pod \
+    -l "ray.io/node-type=head,ray.io/cluster=${CLUSTER_NAME_FROM_POD}" --timeout=900s
+else
+  print_status "ERROR" "Could not determine cluster name from pods"
+  exit 1
+fi
 
 # Optional: wait for at least one worker if replicas > 0
 print_status "INFO" "Waiting for RayService worker pod(s) to be Ready (if any)..."
-kubectl wait --for=condition=ready pod \
-  -l "ray.io/node-type=worker,ray.io/cluster=${RS_NAME}" \
-  -n "${NAMESPACE}" --timeout=600s || true
+if [ -n "${CLUSTER_NAME_FROM_POD}" ]; then
+  kubectl wait --for=condition=ready pod \
+    -l "ray.io/node-type=worker,ray.io/cluster=${CLUSTER_NAME_FROM_POD}" \
+    -n "${NAMESPACE}" --timeout=600s || true
+fi
 
 # Discover the generated RayCluster name
 print_status "INFO" "Discovering generated RayCluster name..."
@@ -145,29 +156,34 @@ kubectl -n "${NAMESPACE}" get rayservice "${RS_NAME}" \
 print_status "INFO" "RayService status (summary):"
 kubectl -n "${NAMESPACE}" get rayservice "${RS_NAME}" -o yaml | sed -n '/^status:/,$p' | head -n 120 || true
 
-print_status "INFO" "Pods (selector: ray.io/cluster=${RS_NAME}):"
-kubectl get pods -n "${NAMESPACE}" -l ray.io/cluster="${RS_NAME}"
+print_status "INFO" "Pods (selector: ray.io/cluster=${CLUSTER_NAME_FROM_POD}):"
+kubectl get pods -n "${NAMESPACE}" -l ray.io/cluster="${CLUSTER_NAME_FROM_POD}"
 
-print_status "INFO" "Services (selector: ray.io/cluster=${RS_NAME}):"
-kubectl get svc -n "${NAMESPACE}" -l ray.io/cluster="${RS_NAME}"
+print_status "INFO" "Services (selector: ray.io/cluster=${CLUSTER_NAME_FROM_POD}):"
+kubectl get svc -n "${NAMESPACE}" -l ray.io/cluster="${CLUSTER_NAME_FROM_POD}"
 
-# ---------- Port-forward helpers ----------
-HEAD_SVC="$(kubectl -n "${NAMESPACE}" get svc \
-  -l ray.io/cluster="${RS_NAME}",ray.io/node-type=head \
-  -o jsonpath='{.items[0].metadata.name}')"
+# --- Discover Services (prefer RayService-managed stable names)
+STABLE_HEAD_SVC="${RS_NAME}-head-svc"
+STABLE_SERVE_SVC="${RS_NAME}-serve-svc"
 
-if [ -n "${HEAD_SVC}" ]; then
-  echo
-  print_status "OK" "Head service detected: ${HEAD_SVC}"
-  echo "🔌 Port-forward commands (run in separate terminals):"
-  echo "  - Dashboard: kubectl -n ${NAMESPACE} port-forward svc/${HEAD_SVC} 8265:8265"
-  echo "  - Serve HTTP: kubectl -n ${NAMESPACE} port-forward svc/${HEAD_SVC} 8001:8000"
-  echo
-  echo "🩺 Health check (if your Serve app exposes /health):"
-  echo "  - curl -fsS http://127.0.0.1:8001/health || true"
+if kubectl -n "${NAMESPACE}" get svc "${STABLE_HEAD_SVC}" >/dev/null 2>&1; then
+  HEAD_SVC="${STABLE_HEAD_SVC}"
 else
-  print_status "WARN" "No head service found via labels; verify RayService name (${RS_NAME}) and namespace (${NAMESPACE})."
+  # Fallback: cluster-specific head svc (during early init)
+  HEAD_SVC="$(kubectl -n "${NAMESPACE}" get svc \
+    -l "ray.io/cluster=${CLUSTER_NAME_FROM_POD}",ray.io/node-type=head \
+    -o jsonpath='{.items[0].metadata.name}')"
 fi
+
+echo
+print_status "OK" "Head service (stable): ${HEAD_SVC}"
+print_status "OK" "Serve service (stable): ${STABLE_SERVE_SVC}"
+
+# --- Port-forwards (separate mgmt vs app)
+echo "🔌 Port-forward (run in separate terminals):"
+echo "  - Dashboard: kubectl -n ${NAMESPACE} port-forward svc/${HEAD_SVC} 8265:8265"
+echo "  - Ray Client: kubectl -n ${NAMESPACE} port-forward svc/${HEAD_SVC} 10001:10001"
+echo "  - Serve HTTP: kubectl -n ${NAMESPACE} port-forward svc/${STABLE_SERVE_SVC} 8001:8000"
 
 # ---------- Final summary ----------
 echo
