@@ -7,7 +7,7 @@ the Ray Serve application deployment graph for the standalone serve pod.
 
 from src.seedcore.ml.serve_app import create_serve_app
 
-def build_app():
+def build_app(config: dict = None):
     """
     Build and return the SeedCore Ray Serve application.
     
@@ -17,6 +17,9 @@ def build_app():
     - Predictive scaling models
     - XGBoost distributed training and inference
     
+    Args:
+        config: Configuration dictionary (required by Ray Serve, can be None)
+        
     Returns:
         A Ray Serve deployment that can be deployed with serve.run()
     """
