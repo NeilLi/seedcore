@@ -6,9 +6,11 @@ Minimal Ray Serve test to debug proxy actor issues
 import ray
 from ray import serve
 import time
+import os
 
-# Initialize Ray
-ray.init(address="auto", namespace="serve")
+# Get namespace from environment, default to "seedcore-dev" for consistency
+ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+ray.init(address="auto", namespace=ray_namespace)
 
 # Create a simple FastAPI app
 from fastapi import FastAPI

@@ -17,6 +17,7 @@ Tier 0 Memory Manager
 Manages Ray agents and collects heartbeats for the meta-controller.
 """
 
+import os
 import ray
 import time
 import asyncio
@@ -271,18 +272,27 @@ class Tier0MemoryManager:
             self.heartbeats.setdefault(agent_id, {})
             self.agent_stats.setdefault(agent_id, {})
 
-    def _ensure_ray(self):
-        import os
-        try:
-            if not ray.is_initialized():
-                ray_address = os.getenv("RAY_ADDRESS", "auto")
-                ray_namespace = os.getenv("RAY_NAMESPACE", "seedcore")
-                ray.init(address=ray_address, ignore_reinit_error=True, namespace=ray_namespace)
-        except Exception:
-            # As a last resort, try local init (useful in dev)
-            if not ray.is_initialized():
-                ray_namespace = os.getenv("RAY_NAMESPACE", "seedcore")
-                ray.init(ignore_reinit_error=True, namespace=ray_namespace)
+    def _ensure_ray(self, ray_address: Optional[str] = None, ray_namespace: Optional[str] = None):
+        """Ensure Ray is initialized with the correct address and namespace."""
+        if ray.is_initialized():
+            return
+            
+        # Get namespace from environment, default to "seedcore-dev" for consistency
+        if ray_namespace is None:
+            ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+        
+        # Get Ray connection parameters from environment
+        if ray_address is None:
+            ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
+            ray_port = os.getenv("RAY_PORT", "10001")
+            ray_address = f"ray://{ray_host}:{ray_port}"
+        
+        if ray_address and ray_address != "ray://seedcore-svc-head-svc:10001":
+            ray.init(address=ray_address, ignore_reinit_error=True, namespace=ray_namespace)
+            logger.info(f"✅ Ray initialized with remote address: {ray_address}, namespace: {ray_namespace}")
+        else:
+            ray.init(ignore_reinit_error=True, namespace=ray_namespace)
+            logger.info(f"✅ Ray initialized locally, namespace: {ray_namespace}")
 
     def _refresh_agents_from_cluster(self) -> None:
         """Discover and attach existing RayAgent actors from the Ray cluster.

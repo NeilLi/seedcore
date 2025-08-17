@@ -95,7 +95,9 @@ class SeedCoreHealthService:
         # Initialize Ray if not already done
         try:
             if not ray.is_initialized():
-                ray.init(address="auto", namespace="seedcore")
+                # Get namespace from environment, default to "seedcore-dev" for consistency
+                ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+                ray.init(address="auto", namespace=ray_namespace)
                 logger.info("✅ Ray initialized successfully")
             else:
                 logger.info("✅ Ray already initialized")

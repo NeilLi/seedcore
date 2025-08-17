@@ -37,11 +37,10 @@ def _parse_ray_url(ray_url: str) -> Tuple[str, int]:
 def resolve_ray_address() -> Optional[str]:
     """Resolve a sensible default RAY_ADDRESS for both Kubernetes and Docker Compose.
     
-    This function implements the new pattern where:
+    Priority order:
     1) Respect explicit RAY_ADDRESS if set
-    2) For head/worker pods: return None or "auto" 
-    3) For client pods: derive from RAY_HOST/RAY_PORT if available
-    4) Fallback to localhost for development
+    2) Derive from RAY_HOST + RAY_PORT if available
+    3) Fall back to localhost for development
     """
     # Check for explicit RAY_ADDRESS first
     explicit = os.getenv("RAY_ADDRESS")
@@ -50,24 +49,17 @@ def resolve_ray_address() -> Optional[str]:
         return explicit
     
     # Check if we're in a head/worker pod (should not set RAY_ADDRESS)
-    # This is indicated by RAY_ADDRESS being unset or "auto"
-    ray_address = os.getenv("RAY_ADDRESS")
-    if not ray_address or ray_address == "auto":
-        logger.debug("In head/worker pod - RAY_ADDRESS should be unset or 'auto'")
-        return ray_address or "auto"
+    # This is indicated by RAY_HOST being unset or pointing to localhost
+    ray_host = os.getenv("RAY_HOST")
+    if not ray_host or ray_host in ["localhost", "127.0.0.1"]:
+        logger.debug("In head/worker pod - RAY_HOST indicates local operation")
+        return "auto"
     
-    # For client pods, derive from RAY_HOST/RAY_PORT
-    host = os.getenv("RAY_HOST")
-    port = os.getenv("RAY_PORT")
-    
-    if host and port:
-        derived_address = f"ray://{host}:{port}"
-        logger.debug(f"Derived RAY_ADDRESS from RAY_HOST/RAY_PORT: {derived_address}")
-        return derived_address
-    
-    # Fallback for development
-    logger.warning("RAY_ADDRESS not set and RAY_HOST/RAY_PORT not available, using localhost")
-    return "ray://localhost:10001"
+    # Derive address from RAY_HOST + RAY_PORT
+    ray_port = os.getenv("RAY_PORT", "10001")
+    derived_address = f"ray://{ray_host}:{ray_port}"
+    logger.debug(f"Derived RAY_ADDRESS from RAY_HOST/RAY_PORT: {derived_address}")
+    return derived_address
 
 
 def init_ray_with_smart_defaults() -> bool:
@@ -109,67 +101,47 @@ def init_ray_with_smart_defaults() -> bool:
         return False
 
 
-def init_ray(
-    host: Optional[str] = None,
-    port: int = 10001,
-    password: Optional[str] = None,
-    force_reinit: bool = False
-) -> bool:
-    """
-    Initialize Ray connection using configuration.
+def init_ray(namespace: Optional[str] = None, ray_address: Optional[str] = None) -> bool:
+    """Initialize Ray with the specified namespace and address.
     
     Args:
-        host: Remote host (if None, uses environment or local)
-        port: Ray port (default: 10001)
-        password: Ray password (if needed)
-        force_reinit: Force reinitialization even if already connected
-        
+        namespace: Ray namespace to use (defaults to environment variable)
+        ray_address: Ray cluster address (optional, will derive from RAY_HOST/RAY_PORT if not provided)
+    
     Returns:
-        bool: True if initialization successful, False otherwise
+        True if Ray was initialized successfully, False otherwise
     """
     try:
-        # Try environment-specific resolution first
-        # Check if Ray is already initialized
-        if ray.is_initialized() and not force_reinit:
-            logger.info("Ray is already initialized")
+        if ray.is_initialized():
+            logger.info("✅ Ray is already initialized")
             return True
         
-        # Get Ray address from environment variable (Ray 2.20 compatibility)
-        ray_address = os.getenv("RAY_ADDRESS") or resolve_ray_address()
+        # Get namespace from environment, default to "seedcore-dev" for consistency
+        if namespace is None:
+            namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
         
-        if ray_address:
-            # Use the environment variable directly
-            logger.info(f"Initializing Ray with RAY_ADDRESS: {ray_address}")
-            ray.init(address=ray_address, ignore_reinit_error=True, namespace="seedcore")
-        elif host:
-            # Configure Ray if host is provided
-            configure_ray_remote(host, port, password)
-            logger.info(f"Configured Ray for remote connection: {host}:{port}")
-            
-            # Get current configuration
-            config = get_ray_config()
-            connection_args = config.get_connection_args()
-            ray.init(**connection_args)
+        # Get Ray address from environment or derive from RAY_HOST/RAY_PORT
+        if ray_address is None:
+            ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
+            ray_port = os.getenv("RAY_PORT", "10001")
+            ray_address = f"ray://{ray_host}:{ray_port}"
+        
+        if ray_address and ray_address != "ray://seedcore-svc-head-svc:10001":
+            logger.info(f"Initializing Ray with address: {ray_address}")
+            ray.init(
+                address=ray_address,
+                ignore_reinit_error=True,
+                namespace=namespace
+            )
         else:
-            # Get current configuration
-            config = get_ray_config()
-            
-            # Get connection arguments
-            connection_args = config.get_connection_args()
-            
-            # Initialize Ray
-            if config.is_configured():
-                logger.info(f"Initializing Ray with: {config}")
-                ray.init(**connection_args)
-            else:
-                logger.info("Initializing Ray locally")
-                ray.init(ignore_reinit_error=True, namespace="seedcore")
+            logger.info(f"Initializing Ray locally with namespace: {namespace}")
+            ray.init(ignore_reinit_error=True, namespace=namespace)
         
-        logger.info("Ray initialization successful")
+        logger.info("✅ Ray initialized successfully")
         return True
         
     except Exception as e:
-        logger.error(f"Failed to initialize Ray: {e}")
+        logger.error(f"❌ Failed to initialize Ray: {e}")
         return False
 
 
@@ -231,4 +203,44 @@ def test_ray_connection() -> bool:
         
     except Exception as e:
         logger.error(f"Ray connection test failed: {e}")
+        return False 
+
+
+def ensure_ray_initialized(ray_address: Optional[str] = None, ray_namespace: Optional[str] = None) -> bool:
+    """Ensure Ray is initialized with the specified namespace and address.
+    
+    Args:
+        ray_address: Ray cluster address (optional, will derive from RAY_HOST/RAY_PORT if not provided)
+        ray_namespace: Ray namespace to use (defaults to environment variable)
+    
+    Returns:
+        True if Ray was initialized successfully, False otherwise
+    """
+    try:
+        if ray.is_initialized():
+            logger.info("✅ Ray is already initialized")
+            return True
+        
+        # Get namespace from environment, default to "seedcore-dev" for consistency
+        if ray_namespace is None:
+            ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+        
+        # Get Ray address from environment or derive from RAY_HOST/RAY_PORT
+        if ray_address is None:
+            ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
+            ray_port = os.getenv("RAY_PORT", "10001")
+            ray_address = f"ray://{ray_host}:{ray_port}"
+        
+        if ray_address and ray_address != "ray://seedcore-svc-head-svc:10001":
+            logger.info(f"Initializing Ray with address: {ray_address}")
+            ray.init(address=ray_address, ignore_reinit_error=True, namespace=ray_namespace)
+        else:
+            logger.info(f"Initializing Ray locally with namespace: {ray_namespace}")
+            ray.init(ignore_reinit_error=True, namespace=ray_namespace)
+        
+        logger.info("✅ Ray initialized successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Ray: {e}")
         return False 

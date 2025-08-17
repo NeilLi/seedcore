@@ -28,14 +28,16 @@ async def run_scenario():
     # 1. Create a pool of worker agents and one observer agent
     workers = [RayAgent.remote(agent_id=f"Worker-{i}") for i in range(NUM_WORKER_AGENTS)]
     
-    # Try to get existing observer or create new one with fixed name
+    # Get namespace from environment, default to "seedcore-dev" for consistency
+    ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+    
     try:
-        observer = ray.get_actor("observer", namespace="seedcore")
-        print("✅ Using existing observer agent.")
-    except ValueError:
-        # Create new observer with fixed name (no timestamp)
-        observer = ObserverAgent.options(name="observer", namespace="seedcore", lifetime="detached").remote()
-        print("✅ Created new observer agent.")
+        # Try to get existing observer
+        observer = ray.get_actor("observer", namespace=ray_namespace)
+        print("✅ ObserverAgent: Found existing instance")
+    except Exception:
+        # Create new observer if none exists
+        observer = ObserverAgent.options(name="observer", namespace=ray_namespace, lifetime="detached").remote()
     
     print(f"✅ Created {len(workers)} worker agents and 1 observer agent.")
     

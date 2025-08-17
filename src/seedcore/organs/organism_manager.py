@@ -109,28 +109,44 @@ class OrganismManager:
         self._initialized = False
         
         # Initialize Ray connection if not already initialized
-        self._ensure_ray_initialized()
+        self._ensure_ray()
+
+        # Bootstrap required singleton actors (mw, miss_tracker, shared_cache)
+        try:
+            from ..bootstrap import bootstrap_actors
+            logger.info("🚀 Bootstrapping required singleton actors...")
+            bootstrap_actors()
+            logger.info("✅ Singleton actors bootstrapped successfully")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to bootstrap singleton actors: {e}")
+            logger.warning("⚠️ Agents may have limited functionality without memory managers")
 
         # COA §6: Initialize routing components
         self.ocps = OCPSValve()
         self.routing = RoutingTable()
         self.organ_interfaces: Dict[str, StandardizedOrganInterface] = {}
 
-    def _ensure_ray_initialized(self):
+    def _ensure_ray(self):
         """Ensure Ray is properly initialized with the correct address."""
         import os
         
         try:
             if not ray.is_initialized():
-                # Get Ray address from environment
-                ray_address = os.getenv("RAY_ADDRESS")
-                if ray_address:
-                    logger.info(f"Initializing Ray with address: {ray_address}")
-                    ray.init(address=ray_address, ignore_reinit_error=True, namespace="seedcore")
+                # Get Ray connection parameters from environment
+                ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
+                ray_port = os.getenv("RAY_PORT", "10001")
+                ray_address = f"ray://{ray_host}:{ray_port}"
+                
+                # Get namespace from environment, default to "seedcore-dev" for consistency
+                ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+                
+                if ray_address and ray_address != "ray://seedcore-svc-head-svc:10001":
+                    logger.info(f"Initializing Ray with address: {ray_address}, namespace: {ray_namespace}")
+                    ray.init(address=ray_address, ignore_reinit_error=True, namespace=ray_namespace)
                     logger.info("✅ Ray initialized successfully with remote address")
                 else:
-                    logger.warning("RAY_ADDRESS not set, initializing Ray locally")
-                    ray.init(ignore_reinit_error=True, namespace="seedcore")
+                    logger.warning("RAY_HOST/RAY_PORT not set, initializing Ray locally")
+                    ray.init(ignore_reinit_error=True, namespace=ray_namespace)
                     logger.info("✅ Ray initialized locally")
             else:
                 logger.info("✅ Ray is already initialized")
@@ -647,7 +663,7 @@ class OrganismManager:
                 logger.info(f"🔄 Attempt {attempt + 1}/{max_retries} to initialize organism...")
                 
                 # Ensure Ray is properly initialized before proceeding
-                self._ensure_ray_initialized()
+                self._ensure_ray()
                 
                 # Check Ray cluster health before proceeding
                 self._check_ray_cluster_health()

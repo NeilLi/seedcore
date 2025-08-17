@@ -25,7 +25,10 @@ from .memory.working_memory import MissTracker, SharedCache, MwStore  # type: ig
 @dataclass(frozen=True)
 class _Cfg:
     default_namespace: str = os.getenv("SEEDCORE_DEFAULT_NAMESPACE", "seedcore-dev")
-    ray_address: str = os.getenv("RAY_ADDRESS", "auto")
+    # Use RAY_HOST and RAY_PORT to construct the address, fallback to RAY_ADDRESS, then "auto"
+    ray_host: str = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
+    ray_port: str = os.getenv("RAY_PORT", "10001")
+    ray_address: str = os.getenv("RAY_ADDRESS", f"ray://{os.getenv('RAY_HOST', 'seedcore-svc-head-svc')}:{os.getenv('RAY_PORT', '10001')}")
 
 CFG = _Cfg()
 

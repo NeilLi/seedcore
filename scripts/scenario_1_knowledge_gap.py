@@ -23,14 +23,24 @@ def load_holon_uuid():
 
 FACT_TO_FIND = load_holon_uuid()
 
-RAY_ADDRESS = os.getenv("RAY_ADDRESS", "ray://ray-head:10001")
-
 async def run_scenario():
     print("🚀 Starting Scenario 1: Collaborative Task with Knowledge Gap")
     print("=" * 80)
     
     try:
-        ray.init(address=RAY_ADDRESS, ignore_reinit_error=True)
+        # Initialize Ray
+        # Get Ray connection parameters from environment
+        ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
+        ray_port = os.getenv("RAY_PORT", "10001")
+        ray_address = f"ray://{ray_host}:{ray_port}"
+        
+        # Get namespace from environment, default to "seedcore-dev" for consistency
+        ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+        
+        print(f"🔗 Connecting to Ray at: {ray_address}")
+        print(f"🏷️ Using namespace: {ray_namespace}")
+        
+        ray.init(address=ray_address, ignore_reinit_error=True)
         print("✅ Ray initialized successfully")
     except Exception as e:
         print(f"❌ Failed to initialize Ray: {e}")

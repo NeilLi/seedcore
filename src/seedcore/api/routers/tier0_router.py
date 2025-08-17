@@ -163,7 +163,8 @@ async def debug_agent_discovery():
     try:
         if not ray.is_initialized():
             addr = os.getenv("RAY_ADDRESS", "auto")
-            ns = os.getenv("RAY_NAMESPACE", "seedcore")
+            # Get namespace from environment, default to "seedcore-dev" for consistency
+            ns = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
             ray.init(address=addr, ignore_reinit_error=True, namespace=ns)
             details["ray"]["initialized"] = True
             details["ray"]["namespace"] = ns

@@ -113,7 +113,9 @@ def monitor_actors():
         
         try:
             # Try to get existing ObserverAgent
-            observer = ray.get_actor("ObserverAgent", namespace="seedcore")
+            # Get namespace from environment, default to "seedcore-dev" for consistency
+            ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+            observer = ray.get_actor("ObserverAgent", namespace=ray_namespace)
             print("✅ ObserverAgent: Found existing instance")
             
             # Try to get status

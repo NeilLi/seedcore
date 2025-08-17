@@ -18,8 +18,21 @@ def analyze_job_details():
     print("=" * 70)
     
     # Initialize Ray
-    if not ray.is_initialized():
-        ray.init(address="ray://ray-head:10001", namespace="seedcore")
+    # Get namespace from environment, default to "seedcore-dev" for consistency
+    ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+    
+    # Get Ray address from environment variables, with fallback to the actual service name
+    # Note: RAY_HOST env var is set to 'seedcore-head-svc' but actual service is 'seedcore-svc-head-svc'
+    # Override the incorrect environment variable with the correct service name
+    ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc") # Use correct service name directly
+    ray_port = os.getenv("RAY_PORT", "10001")
+    ray_address = f"ray://{ray_host}:{ray_port}"
+    
+    print(f"🔗 Connecting to Ray at: {ray_address}")
+    print(f"🏷️ Using namespace: {ray_namespace}")
+    print(f"ℹ️ Note: Using correct service name '{ray_host}' (env var RAY_HOST='{os.getenv('RAY_HOST', 'Not set')}' was incorrect)")
+    
+    ray.init(address=ray_address, namespace=ray_namespace)
     
     # 1. Get current Ray context and job information
     print("\n📊 RAY CONTEXT ANALYSIS:")

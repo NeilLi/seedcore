@@ -36,9 +36,8 @@ class RayConfig:
         if self.address and ('ray://' in self.address or self.host):
             self.is_remote = True
         
-        # Set default namespace for SeedCore
-        if not self.namespace:
-            self.namespace = "seedcore"
+        # Get namespace from environment, default to "seedcore-dev" for consistency
+        self.namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
     
     @classmethod
     def from_env(cls) -> 'RayConfig':

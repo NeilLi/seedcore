@@ -58,7 +58,9 @@ def monitor_cluster_live():
             actor_names = ['ObserverAgent', 'MissTracker', 'SharedCache', 'MwStore']
             for name in actor_names:
                 try:
-                    actor = ray.get_actor(name, namespace='seedcore')
+                    # Get namespace from environment, default to "seedcore-dev" for consistency
+                    ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+                    actor = ray.get_actor(name, namespace=ray_namespace)
                     print(f"✅ {name}: Running")
                     
                     # Try to get status for specific actors

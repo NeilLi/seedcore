@@ -1,0 +1,27 @@
+# Set default behavior to automatically normalize line endings
+* text=auto
+
+# Explicitly set line endings for specific file types
+*.yaml text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.tpl text eol=lf
+
+# Helm charts and deployment files
+deploy/helm/**/*.yaml text eol=lf
+deploy/helm/**/*.yml text eol=lf
+deploy/helm/**/*.tpl text eol=lf
+deploy/keda/**/*.yaml text eol=lf
+docker/**/*.sh text eol=lf
+docker/**/*.py text eol=lf
+
+# Binary files should not be modified
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary

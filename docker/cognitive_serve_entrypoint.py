@@ -343,7 +343,9 @@ class CognitiveService:
         # Initialize Ray if not already done
         try:
             if not ray.is_initialized():
-                ray.init(address=RAY_ADDR, namespace=RAY_NS)
+                print(f"🔗 Connecting to Ray at: {ray_address}")
+                print(f"🏷️ Using namespace: {ray_namespace}")
+                ray.init(address=ray_address, namespace=ray_namespace)
                 print("✅ Ray initialized successfully")
             else:
                 print("✅ Ray already initialized")
@@ -361,8 +363,10 @@ def main():
     try:
         # Initialize Ray
         if not ray.is_initialized():
-            ray.init(address=RAY_ADDR, namespace=RAY_NS)
-            print(f"✅ Ray initialized at {RAY_ADDR}")
+            print(f"🔗 Connecting to Ray at: {ray_address}")
+            print(f"🏷️ Using namespace: {ray_namespace}")
+            ray.init(address=ray_address, namespace=ray_namespace)
+            print(f"✅ Ray initialized at {ray_address}")
         
         # Start Serve
         serve.start(

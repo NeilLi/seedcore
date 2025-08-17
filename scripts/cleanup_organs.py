@@ -6,6 +6,7 @@ Script to clean up existing organs and recreate them with the new 1-agent-per-or
 import ray
 import asyncio
 import time
+import os
 
 async def cleanup_and_recreate_organs():
     """Clean up existing organs and recreate them with new configuration."""
@@ -13,8 +14,17 @@ async def cleanup_and_recreate_organs():
     print("🔧 Cleaning up existing organs...")
     
     # Initialize Ray
-    if not ray.is_initialized():
-        ray.init(address="ray://ray-head:10001", namespace="seedcore")
+    # Get namespace from environment, default to "seedcore-dev" for consistency
+    ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+    
+    # Get Ray address from environment variables, with fallback to the actual service name
+    # Note: RAY_HOST env var is set to 'seedcore-head-svc' but actual service is 'seedcore-svc-head-svc'
+    ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
+    ray_port = os.getenv("RAY_PORT", "10001")
+    ray_address = f"ray://{ray_host}:{ray_port}"
+    
+    print(f"🔗 Connecting to Ray at: {ray_address}")
+    ray.init(address=ray_address, namespace=ray_namespace)
     
     # List of organ names to clean up
     organ_names = ["cognitive_organ_1", "actuator_organ_1", "utility_organ_1"]
