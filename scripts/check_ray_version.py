@@ -41,7 +41,7 @@ def check_ray_version():
             # Check if we can get cluster version info
             try:
                 # This might work in newer Ray versions
-                cluster_info = ray.get_runtime_context().get_cluster_metadata()
+                cluster_info = getattr(ray.get_runtime_context(), 'cluster_metadata', None)
                 if cluster_info and 'ray_version' in cluster_info:
                     print(f"   🎯 Cluster Ray Version: {cluster_info['ray_version']}")
             except:

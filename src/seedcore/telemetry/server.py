@@ -206,41 +206,87 @@ async def startup_event():
     """Initialize services on startup."""
     global mw_cache, MEMORY_SYSTEM
     
+    logging.info("🚀 FastAPI startup event triggered")
+    logging.info("🔍 Starting service initialization...")
+    
     # Initialize memory system
-    MEMORY_SYSTEM = SharedMemorySystem()
-    app.state.mem = MEMORY_SYSTEM
+    try:
+        MEMORY_SYSTEM = SharedMemorySystem()
+        app.state.mem = MEMORY_SYSTEM
+        logging.info("✅ Memory system initialized")
+    except Exception as e:
+        logging.error(f"❌ Failed to initialize memory system: {e}")
     
     # Initialize Ray with flexible configuration
     try:
+        logging.info("🔍 Checking Ray configuration...")
         ray_config = get_ray_config()
+        logging.info(f"Ray config result: {ray_config}")
+        
         if ray_config.is_configured():
-            logging.info(f"Initializing Ray with configuration: {ray_config}")
+            logging.info(f"✅ Ray is configured: {ray_config}")
             
             # Check if Ray is already initialized to avoid double initialization
             if not ray.is_initialized():
+                logging.info("🔍 Ray not initialized, attempting initialization...")
                 success = init_ray()
                 if success:
-                    logging.info("Ray initialization successful")
+                    logging.info("✅ Ray initialization successful")
                     cluster_info = get_ray_cluster_info()
                     logging.info(f"Ray cluster info: {cluster_info}")
                 else:
-                    logging.warning("Ray initialization failed, continuing without Ray")
+                    logging.error("❌ Ray initialization failed, continuing without Ray")
             else:
-                logging.info("Ray is already initialized, skipping initialization")
+                logging.info("✅ Ray is already initialized, skipping initialization")
                 cluster_info = get_ray_cluster_info()
                 logging.info(f"Ray cluster info: {cluster_info}")
             
             # Initialize the COA organism after Ray is ready
             try:
+                logging.info("🚀 Starting COA organism initialization...")
+                logging.info(f"🔍 Organism manager state: initialized={organism_manager._initialized}")
+                logging.info(f"🔍 Organism manager organs: {list(organism_manager.organs.keys())}")
+                logging.info(f"🔍 Organism manager configs: {len(organism_manager.organ_configs)}")
+                logging.info(f"🔍 Organism manager config details: {organism_manager.organ_configs}")
+                
+                # Check if organism manager has the right methods
+                logging.info(f"🔍 Organism manager methods: {[method for method in dir(organism_manager) if not method.startswith('_')]}")
+                
                 await organism_manager.initialize_organism()
                 app.state.organism = organism_manager
                 logging.info("✅ COA organism initialized successfully")
+                logging.info(f"🔍 Final organism state: initialized={organism_manager._initialized}")
+                logging.info(f"🔍 Final organism organs: {list(organism_manager.organs.keys())}")
+                
+                # Verify organs are accessible
+                for organ_id in organism_manager.organs:
+                    try:
+                        organ = organism_manager.organs[organ_id]
+                        status = ray.get(organ.get_status.remote())
+                        logging.info(f"✅ Organ {organ_id} accessible: {status}")
+                    except Exception as e:
+                        logging.error(f"❌ Failed to access organ {organ_id}: {e}")
+                        
             except Exception as e:
                 logging.error(f"❌ Failed to initialize COA organism: {e}")
+                logging.error(f"❌ Exception type: {type(e)}")
+                import traceback
+                logging.error(f"❌ Traceback: {traceback.format_exc()}")
         else:
-            logging.info("Ray not configured, skipping Ray initialization")
+            logging.warning("⚠️ Ray not configured, skipping Ray initialization")
+            logging.info(f"Ray config details: {ray_config}")
     except Exception as e:
-        logging.error(f"Error during Ray initialization: {e}")
+        logging.error(f"❌ Error during Ray initialization: {e}")
+        import traceback
+        logging.error(f"❌ Traceback: {traceback.format_exc()}")
+    
+    # Start consolidator loop
+    try:
+        import asyncio
+        asyncio.create_task(start_consolidator())
+        logging.info("✅ Consolidator loop started")
+    except Exception as e:
+        logging.error(f"❌ Failed to start consolidator loop: {e}")
     
     # Start consolidator loop
     import asyncio
@@ -664,7 +710,12 @@ async def energy_gradient():
             
             # Create energy ledger with real data
             ledger = EnergyLedger()
-            ledger.terms = energy_terms
+            # Update ledger with energy terms (terms is a read-only property)
+            ledger.pair = energy_terms.pair
+            ledger.hyper = energy_terms.hyper
+            ledger.entropy = energy_terms.entropy
+            ledger.reg = energy_terms.reg
+            ledger.mem = energy_terms.mem
             
             # Add some pair stats for demonstration
             if len(agents) >= 2:

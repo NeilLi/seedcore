@@ -23,9 +23,14 @@ import logging
 import asyncio
 import time
 import ray
+import os
+import concurrent.futures
+import traceback
+import random
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Tuple, Set
+from ray.util.state import list_actors, list_nodes
 
 from .base import Organ
 from ..agents import tier0_manager
@@ -128,7 +133,6 @@ class OrganismManager:
 
     def _ensure_ray(self):
         """Ensure Ray is properly initialized with the correct address."""
-        import os
         
         try:
             if not ray.is_initialized():
@@ -140,19 +144,68 @@ class OrganismManager:
                 # Get namespace from environment, default to "seedcore-dev" for consistency
                 ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
                 
-                if ray_address and ray_address != "ray://seedcore-svc-head-svc:10001":
-                    logger.info(f"Initializing Ray with address: {ray_address}, namespace: {ray_namespace}")
+                # Always try to connect to the remote Ray cluster first
+                logger.info(f"Attempting to connect to Ray cluster at: {ray_address}")
+                try:
                     ray.init(address=ray_address, ignore_reinit_error=True, namespace=ray_namespace)
                     logger.info("✅ Ray initialized successfully with remote address")
-                else:
-                    logger.warning("RAY_HOST/RAY_PORT not set, initializing Ray locally")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to connect to remote Ray cluster: {e}")
+                    logger.warning("⚠️ Falling back to local Ray initialization")
                     ray.init(ignore_reinit_error=True, namespace=ray_namespace)
                     logger.info("✅ Ray initialized locally")
             else:
                 logger.info("✅ Ray is already initialized")
+                
+            # Verify namespace is correct and force if needed
+            self._verify_and_enforce_namespace()
+            
         except Exception as e:
             logger.error(f"❌ Failed to initialize Ray: {e}")
             raise
+    
+    def _verify_and_enforce_namespace(self):
+        """Verify that Ray is using the correct namespace and enforce if needed."""
+        try:
+            expected_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+            runtime_context = ray.get_runtime_context()
+            current_namespace = getattr(runtime_context, 'namespace', 'unknown')
+            
+            logger.info(f"🔍 Namespace verification: expected='{expected_namespace}', current='{current_namespace}'")
+            
+            if current_namespace != expected_namespace:
+                logger.warning(f"⚠️  WARNING: Ray namespace mismatch!")
+                logger.warning(f"   Expected: {expected_namespace}")
+                logger.warning(f"   Current:  {current_namespace}")
+                logger.warning(f"   This may cause actors to be created in the wrong namespace")
+                
+                # Try to force namespace by reinitializing Ray
+                if current_namespace == 'unknown' or current_namespace != expected_namespace:
+                    logger.info(f"🔄 Attempting to force correct namespace by reinitializing Ray...")
+                    try:
+                        ray.shutdown()
+                        
+                        # Try to reconnect to the remote cluster with correct namespace
+                        ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
+                        ray_port = os.getenv("RAY_PORT", "10001")
+                        ray_address = f"ray://{ray_host}:{ray_port}"
+                        
+                        ray.init(address=ray_address, namespace=expected_namespace, ignore_reinit_error=True)
+                        new_runtime_context = ray.get_runtime_context()
+                        new_namespace = getattr(new_runtime_context, 'namespace', 'unknown')
+                        logger.info(f"🔧 Ray reinitialized with namespace: {new_namespace}")
+                        
+                        if new_namespace == expected_namespace:
+                            logger.info("✅ Successfully forced correct namespace")
+                        else:
+                            logger.error(f"❌ Failed to force correct namespace: {new_namespace}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to reinitialize Ray: {e}")
+            else:
+                logger.info("✅ Ray namespace is correct")
+                
+        except Exception as e:
+            logger.warning(f"⚠️  Could not verify/enforce namespace: {e}")
 
     def _load_config(self, config_path: str):
         """Loads the organism configuration from a YAML file."""
@@ -175,11 +228,6 @@ class OrganismManager:
     def _check_ray_cluster_health(self):
         """Check Ray cluster health and log diagnostic information."""
         try:
-            import ray
-            from ray.util.state import list_actors, list_nodes
-            
-            logger.info("🔍 Checking Ray cluster health...")
-            
             # Check cluster resources
             cluster_resources = ray.cluster_resources()
             available_resources = ray.available_resources()
@@ -234,9 +282,6 @@ class OrganismManager:
     async def _cleanup_dead_actors(self):
         """Clean up dead Ray actors to prevent accumulation."""
         try:
-            import ray
-            from ray.util.state import list_actors
-            
             # Check if Ray is initialized before trying to list actors
             if not ray.is_initialized():
                 logger.info("Ray not initialized, skipping dead actor cleanup")
@@ -272,9 +317,6 @@ class OrganismManager:
     def _test_organ_health(self, organ_handle, organ_id: str) -> bool:
         """Test if an organ actor is healthy and responsive."""
         try:
-            import concurrent.futures
-            import ray
-            
             # Test with a timeout using ThreadPoolExecutor since get_status is synchronous
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(
@@ -294,8 +336,6 @@ class OrganismManager:
             
             # Try to kill the dead actor first
             try:
-                import ray
-                from ray.util.state import list_actors
                 actors = list_actors()
                 for actor in actors:
                     if actor.name == organ_id and actor.state == "DEAD":
@@ -305,15 +345,62 @@ class OrganismManager:
             except Exception as e:
                 logger.warning(f"Could not kill dead actor {organ_id}: {e}")
             
-            # Create new organ
-            new_organ = Organ.options(
-                name=organ_id, 
-                lifetime="detached",
-                num_cpus=0.5
-            ).remote(
-                organ_id=organ_id,
-                organ_type=organ_type
-            )
+            # Get the expected namespace from environment variables
+            ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+            logger.info(f"🔧 Creating organ in namespace: {ray_namespace}")
+            
+            # Try multiple approaches to ensure namespace is respected
+            organ_created = False
+            
+            # Approach 1: Use Organ.options with explicit namespace
+            try:
+                logger.info(f"🔧 Attempting to create organ with explicit namespace: {ray_namespace}")
+                new_organ = Organ.options(
+                    name=organ_id, 
+                    lifetime="detached",
+                    num_cpus=0.1,
+                    namespace=ray_namespace
+                ).remote(
+                    organ_id=organ_id,
+                    organ_type=organ_type
+                )
+                organ_created = True
+                logger.info(f"✅ Created new organ with explicit namespace: {organ_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to create organ with explicit namespace: {e}")
+            
+            # Approach 2: Use Organ.options without namespace (should inherit)
+            if not organ_created:
+                try:
+                    logger.info(f"🔧 Attempting to create organ without namespace (should inherit)")
+                    new_organ = Organ.options(
+                        name=organ_id, 
+                        lifetime="detached",
+                        num_cpus=0.1
+                    ).remote(
+                        organ_id=organ_id,
+                        organ_type=organ_type
+                    )
+                    organ_created = True
+                    logger.info(f"✅ Created new organ without namespace (inherited): {organ_id}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to create organ without namespace: {e}")
+            
+            # Approach 3: Use Organ.remote directly (last resort)
+            if not organ_created:
+                try:
+                    logger.info(f"🔧 Attempting to create organ with direct remote call")
+                    new_organ = Organ.remote(
+                        organ_id=organ_id,
+                        organ_type=organ_type
+                    )
+                    organ_created = True
+                    logger.info(f"✅ Created new organ with direct remote: {organ_id}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to create organ with direct remote: {e}")
+            
+            if not organ_created:
+                raise Exception(f"All approaches to recreate organ {organ_id} failed")
             
             # Test the new organ
             if self._test_organ_health(new_organ, organ_id):
@@ -330,9 +417,14 @@ class OrganismManager:
 
     def _create_organs(self):
         """Creates the organ actors as defined in the configuration."""
+        logger.info(f"🏗️ Starting organ creation process...")
+        logger.info(f"📋 Organ configs loaded: {len(self.organ_configs)}")
+        logger.info(f"🔍 Current organs: {list(self.organs.keys())}")
+        
         for config in self.organ_configs:
             organ_id = config['id']
             organ_type = config['type']
+            logger.info(f"🔍 Processing organ config: {organ_id} (Type: {organ_type})")
             
             if organ_id not in self.organs:
                 try:
@@ -355,19 +447,63 @@ class OrganismManager:
                     except ValueError:
                         # Create new organ if it doesn't exist (idempotent semantics)
                         logger.info(f"🚀 Creating new organ: {organ_id} (Type: {organ_type})")
+                        logger.info(f"🔧 Ray initialized: {ray.is_initialized()}")
+                        # Get the expected namespace from environment variables
+                        ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+                        logger.info(f"🔧 Expected Ray namespace: {ray_namespace}")
+                        
+                        # Try multiple approaches to ensure namespace is respected
+                        organ_created = False
+                        
+                        # Approach 1: Use Organ.options with explicit namespace
                         try:
-                            existing_organ = ray.get_actor(organ_id)
-                            self.organs[organ_id] = existing_organ
-                        except ValueError:
+                            logger.info(f"🔧 Attempting to create organ with explicit namespace: {ray_namespace}")
                             self.organs[organ_id] = Organ.options(
                                 name=organ_id, 
                                 lifetime="detached",
-                                num_cpus=0.5  # Ensure resource allocation
+                                num_cpus=0.1,
+                                namespace=ray_namespace
                             ).remote(
                                 organ_id=organ_id,
                                 organ_type=organ_type
                             )
-                        logger.info(f"✅ Created new Organ: {organ_id} (Type: {organ_type})")
+                            organ_created = True
+                            logger.info(f"✅ Created new Organ with explicit namespace: {organ_id}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Failed to create organ with explicit namespace: {e}")
+                        
+                        # Approach 2: Use Organ.options without namespace (should inherit)
+                        if not organ_created:
+                            try:
+                                logger.info(f"🔧 Attempting to create organ without namespace (should inherit)")
+                                self.organs[organ_id] = Organ.options(
+                                    name=organ_id, 
+                                    lifetime="detached",
+                                    num_cpus=0.1
+                                ).remote(
+                                    organ_id=organ_id,
+                                    organ_type=organ_type
+                                )
+                                organ_created = True
+                                logger.info(f"✅ Created new Organ without namespace (inherited): {organ_id}")
+                            except Exception as e:
+                                logger.warning(f"⚠️ Failed to create organ without namespace: {e}")
+                        
+                        # Approach 3: Use Organ.remote directly (last resort)
+                        if not organ_created:
+                            try:
+                                logger.info(f"🔧 Attempting to create organ with direct remote call")
+                                self.organs[organ_id] = Organ.remote(
+                                    organ_id=organ_id,
+                                    organ_type=organ_type
+                                )
+                                organ_created = True
+                                logger.info(f"✅ Created new Organ with direct remote: {organ_id}")
+                            except Exception as e:
+                                logger.error(f"❌ Failed to create organ with direct remote: {e}")
+                        
+                        if not organ_created:
+                            raise Exception(f"All approaches to create organ {organ_id} failed")
                         
                         # Test the new organ
                         if not self._test_organ_health(self.organs[organ_id], organ_id):
@@ -376,7 +512,67 @@ class OrganismManager:
                             
                 except Exception as e:
                     logger.error(f"❌ Failed to create/get organ {organ_id}: {e}")
+                    logger.error(f"❌ Exception type: {type(e)}")
+                    logger.error(f"❌ Exception details: {str(e)}")
+                    logger.error(f"❌ Traceback: {traceback.format_exc()}")
                     raise
+            else:
+                logger.info(f"✅ Organ {organ_id} already exists in self.organs")
+        
+        logger.info(f"🏗️ Organ creation process completed. Total organs: {len(self.organs)}")
+        logger.info(f"🔍 Final organs: {list(self.organs.keys())}")
+        
+        # Verify namespace consistency
+        logger.info(f"🔍 Verifying namespace consistency...")
+        try:
+            # Get the expected namespace from environment variables
+            ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+            logger.info(f"🔍 Expected Ray namespace: {ray_namespace}")
+            
+            # First, verify namespace using our direct actor handles (more reliable)
+            logger.info(f"🔍 Verifying namespace using direct actor handles...")
+            for organ_id, organ_handle in self.organs.items():
+                try:
+                    # Get the actor's runtime context to verify namespace
+                    runtime_context = organ_handle._actor_ref._runtime_context
+                    actor_namespace = getattr(runtime_context, 'namespace', 'unknown')
+                    logger.info(f"   - {organ_id}: namespace='{actor_namespace}' (via handle)")
+                    
+                    if actor_namespace == 'unknown':
+                        logger.warning(f"⚠️  WARNING: Organ {organ_id} is in 'unknown' namespace!")
+                        logger.warning(f"   This may cause issues with actor discovery")
+                    elif actor_namespace != ray_namespace:
+                        logger.warning(f"⚠️  WARNING: Organ {organ_id} is in namespace '{actor_namespace}' != '{ray_namespace}'")
+                    else:
+                        logger.info(f"   ✅ Organ {organ_id} is in correct namespace '{actor_namespace}'")
+                except Exception as e:
+                    logger.warning(f"⚠️  Could not verify namespace for {organ_id}: {e}")
+            
+            # Also try to verify using Ray state API (may have timing issues)
+            logger.info(f"🔍 Verifying namespace using Ray state API...")
+            try:
+                all_actors = list_actors()
+                organ_actors = [a for a in all_actors if getattr(a, 'name', '') in [config['id'] for config in self.organ_configs]]
+                
+                if not organ_actors:
+                    logger.info("ℹ️  No organ actors found in Ray state API - this is normal for newly created actors")
+                else:
+                    for actor in organ_actors:
+                        name = getattr(actor, 'name', 'unknown')
+                        namespace = getattr(actor, 'namespace', 'unknown')
+                        logger.info(f"   - {name}: namespace='{namespace}' (via state API)")
+                        
+                        if namespace == 'unknown':
+                            logger.info(f"ℹ️  Organ {name} shows 'unknown' namespace in state API (this may be normal)")
+                        elif namespace != ray_namespace:
+                            logger.warning(f"⚠️  WARNING: Organ {name} is in namespace '{namespace}' != '{ray_namespace}' in state API")
+                        else:
+                            logger.info(f"   ✅ Organ {name} is in correct namespace '{namespace}' in state API")
+            except Exception as e:
+                logger.warning(f"⚠️  Could not verify namespace using Ray state API: {e}")
+                    
+        except Exception as e:
+            logger.warning(f"⚠️  Could not verify namespace consistency: {e}")
 
     async def _create_and_distribute_agents(self):
         """Creates agents and registers them with their designated organs."""
@@ -428,7 +624,7 @@ class OrganismManager:
                             role_probs=initial_role_probs,
                             name=agent_id,
                             lifetime="detached",
-                            num_cpus=0.5,
+                            num_cpus=0.1,
                         )
 
                         # Retrieve the handle from Tier0 manager
@@ -566,7 +762,6 @@ class OrganismManager:
         if not self.organs:
             raise RuntimeError("No organs available")
             
-        import random
         organ_id = random.choice(list(self.organs.keys()))
         return await self.execute_task_on_organ(organ_id, task)
 
@@ -694,7 +889,6 @@ class OrganismManager:
                 
                 if attempt < max_retries - 1:
                     logger.info(f"⏳ Waiting {retry_delay} seconds before retry...")
-                    import asyncio
                     await asyncio.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                 else:

@@ -21,7 +21,7 @@ spec:
         dashboard-host: "0.0.0.0"
         dashboard-port: "8265"
         ray-client-server-port: "10001"
-        num-cpus: "1"
+        num-cpus: "2"
       template:
         spec:
           containers:
@@ -30,6 +30,12 @@ spec:
             imagePullPolicy: IfNotPresent
             envFrom:
             - secretRef: { name: seedcore-env-secret }
+            # ✅ Ensure Ray namespace is set via environment variable
+            env:
+            - name: RAY_NAMESPACE
+              value: "seedcore-dev"
+            - name: SEEDCORE_NS
+              value: "seedcore-dev"
             ports:                   # 👈 NAME YOUR PORTS
               - name: gcs
                 containerPort: 6379
@@ -81,7 +87,7 @@ spec:
     - groupName: small
       replicas: 1
       rayStartParams:
-        num-cpus: "1"
+        num-cpus: "2"
       template:
         spec:
           containers:
@@ -90,7 +96,12 @@ spec:
             imagePullPolicy: IfNotPresent
             envFrom:
             - secretRef: { name: seedcore-env-secret }
-            # --- ✅ worker probes: raylet-only, no :8000 checks here ---
+            # ✅ Ensure Ray namespace is set via environment variable
+            env:
+            - name: RAY_NAMESPACE
+              value: "seedcore-dev"
+            - name: SEEDCORE_NS
+              value: "seedcore-dev"
             readinessProbe:
               exec:
                 command:

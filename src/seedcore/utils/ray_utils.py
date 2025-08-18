@@ -126,16 +126,20 @@ def init_ray(namespace: Optional[str] = None, ray_address: Optional[str] = None)
             ray_port = os.getenv("RAY_PORT", "10001")
             ray_address = f"ray://{ray_host}:{ray_port}"
         
-        if ray_address and ray_address != "ray://seedcore-svc-head-svc:10001":
-            logger.info(f"Initializing Ray with address: {ray_address}")
+        # Always try to connect to the remote Ray cluster first
+        logger.info(f"Attempting to connect to Ray cluster at: {ray_address}")
+        try:
             ray.init(
                 address=ray_address,
                 ignore_reinit_error=True,
                 namespace=namespace
             )
-        else:
-            logger.info(f"Initializing Ray locally with namespace: {namespace}")
+            logger.info("✅ Ray initialized successfully with remote address")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to connect to remote Ray cluster: {e}")
+            logger.warning("⚠️ Falling back to local Ray initialization")
             ray.init(ignore_reinit_error=True, namespace=namespace)
+            logger.info("✅ Ray initialized locally")
         
         logger.info("✅ Ray initialized successfully")
         return True
@@ -231,12 +235,16 @@ def ensure_ray_initialized(ray_address: Optional[str] = None, ray_namespace: Opt
             ray_port = os.getenv("RAY_PORT", "10001")
             ray_address = f"ray://{ray_host}:{ray_port}"
         
-        if ray_address and ray_address != "ray://seedcore-svc-head-svc:10001":
-            logger.info(f"Initializing Ray with address: {ray_address}")
+        # Always try to connect to the remote Ray cluster first
+        logger.info(f"Attempting to connect to Ray cluster at: {ray_address}")
+        try:
             ray.init(address=ray_address, ignore_reinit_error=True, namespace=ray_namespace)
-        else:
-            logger.info(f"Initializing Ray locally with namespace: {ray_namespace}")
+            logger.info("✅ Ray initialized successfully with remote address")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to connect to remote Ray cluster: {e}")
+            logger.warning("⚠️ Falling back to local Ray initialization")
             ray.init(ignore_reinit_error=True, namespace=ray_namespace)
+            logger.info("✅ Ray initialized locally")
         
         logger.info("✅ Ray initialized successfully")
         return True

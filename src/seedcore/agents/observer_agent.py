@@ -39,7 +39,7 @@ class ObserverAgent:
                     import ray, os
                     # pid is cheap; actor‑id is available only inside a task/actor.
                     try:
-                        actor = ray.get_runtime_context().get_actor_id() \
+                        actor = getattr(ray.get_runtime_context(), 'actor_id', '') \
                                  if ray.is_initialized() else ""
                         record.actor_id = actor[:8] if actor else "-"
                     except:

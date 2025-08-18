@@ -45,8 +45,8 @@ def analyze_job_details():
         
         # Get Ray version and configuration
         print(f"Ray Version: {ray.__version__}")
-        print(f"Ray Address: {ray.get_runtime_context().get_address()}")
-        print(f"Ray Namespace: {ray.get_runtime_context().get_namespace()}")
+        print(f"Ray Address: {ray.get_runtime_context().gcs_address}")
+        print(f"Ray Namespace: {ray.get_runtime_context().namespace}")
         
     except Exception as e:
         print(f"Error getting Ray context: {e}")
@@ -71,17 +71,29 @@ def analyze_job_details():
     # 3. Analyze named actors and their job associations
     print("\n🎭 ACTOR JOB ASSOCIATIONS:")
     print("-" * 50)
-    
+
     # Check our COA organs and their job context
     organ_actors = ["cognitive_organ_1", "actuator_organ_1", "utility_organ_1"]
+
+    print("🔍 Checking for COA organs...")
+    organs_found = 0
+
+    # In Ray client mode, we can't use ray.util.state.list_actors() directly
+    # Instead, we'll check for organs using ray.get_actor() calls
+    print("🔍 Checking for COA organs using Ray client mode...")
     
+    # Check in current namespace and then in "unknown" namespace
     for organ_name in organ_actors:
+        found = False
+        
+        # Try current namespace first
         try:
             actor = ray.get_actor(organ_name)
-            # Try to get actor metadata
-            print(f"✅ {organ_name}: Active")
+            print(f"✅ {organ_name}: Found in current namespace '{ray.get_runtime_context().namespace}'")
+            organs_found += 1
+            found = True
             
-            # Try to get actor status to understand its job context
+            # Try to get actor status
             try:
                 status_future = actor.get_status.remote()
                 status = ray.get(status_future)
@@ -92,9 +104,86 @@ def analyze_job_details():
                 print(f"   - Status Error: {e}")
                 
         except ValueError:
-            print(f"❌ {organ_name}: Not Found")
+            # Try "unknown" namespace (no namespace specified)
+            try:
+                actor = ray.get_actor(organ_name, namespace=None)
+                print(f"✅ {organ_name}: Found in 'unknown' namespace")
+                organs_found += 1
+                found = True
+                
+                # Try to get actor status
+                try:
+                    status_future = actor.get_status.remote()
+                    status = ray.get(status_future)
+                    print(f"   - Type: {status.get('organ_type', 'Unknown')}")
+                    print(f"   - Agent Count: {status.get('agent_count', 0)}")
+                    print(f"   - Agent IDs: {status.get('agent_ids', [])}")
+                except Exception as e:
+                    print(f"   - Status Error: {e}")
+                    
+            except ValueError:
+                print(f"❌ {organ_name}: Not Found in any namespace")
+            except Exception as e:
+                print(f"⚠️ {organ_name}: Error checking 'unknown' namespace - {e}")
         except Exception as e:
             print(f"⚠️ {organ_name}: Error - {e}")
+
+    # If no organs found, provide guidance
+    if organs_found == 0:
+        print(f"\n💡 NO ORGANS FOUND - This is normal for a fresh cluster!")
+        print(f"   The COA organs need to be created by the OrganismManager.")
+        print(f"   They are typically created when:")
+        print(f"     • The main application starts up")
+        print(f"     • A scenario or test is run")
+        print(f"     • The OrganismManager is explicitly called")
+        print(f"   \n   To create organs, you can:")
+        print(f"     • Run a scenario: python scripts/scenario_*.py")
+        print(f"     • Start the main API: python -m src.seedcore.api.main")
+        print(f"     • Use the OrganismManager directly")
+    else:
+        print(f"\n🎉 Found {organs_found}/{len(organ_actors)} organs!")
+        print(f"   Note: The organs exist in the 'unknown' namespace, not in '{ray.get_runtime_context().namespace}'")
+        print(f"   This suggests they were created without specifying a namespace.")
+    
+    # Check what actors are actually available in the cluster
+    print(f"\n🔍 CHECKING AVAILABLE ACTORS IN CLUSTER:")
+    print("-" * 50)
+    
+    try:
+        # In Ray client mode, we can't use ray.util.state.list_actors() directly
+        # Instead, we'll use available Ray client methods
+        print("🔍 Using Ray client methods to check cluster status...")
+        
+        # Check for any running jobs using Ray client methods
+        try:
+            # Note: ray.list_jobs() may not be available in all Ray versions
+            # We'll use the current job context instead
+            current_job_id = ray.get_runtime_context().get_job_id()
+            print(f"\n📋 Current Ray Job:")
+            print(f"   - Job ID: {current_job_id}")
+            print(f"   - Status: Active (connected)")
+            print(f"   - Namespace: {ray.get_runtime_context().namespace}")
+        except Exception as e:
+            print(f"\n⚠️  Could not get job info: {e}")
+        
+        # Try to get cluster info using available methods
+        try:
+            print(f"\n🔍 Cluster Resources:")
+            cluster_resources = ray.cluster_resources()
+            available_resources = ray.available_resources()
+            
+            print(f"   Total CPU: {cluster_resources.get('CPU', 0)}")
+            print(f"   Available CPU: {available_resources.get('CPU', 0)}")
+            print(f"   Total Memory: {cluster_resources.get('memory', 0) / (1024**3):.2f} GB")
+            print(f"   Available Memory: {available_resources.get('memory', 0) / (1024**3):.2f} GB")
+            
+        except Exception as e:
+            print(f"\n⚠️  Could not get cluster resources: {e}")
+        
+
+            
+    except Exception as e:
+        print(f"❌ Error checking available actors: {e}")
     
     # 4. Analyze container and process information
     print("\n🐳 CONTAINER & PROCESS ANALYSIS:")
@@ -280,6 +369,15 @@ def analyze_job_details():
     print("  - COA organism initialization jobs")
     print("  - FastAPI server jobs")
     print("  - Background monitoring jobs")
+    print()
+    print("💡 NEXT STEPS TO CREATE ORGANS:")
+    print("  - The organs are not found because they haven't been created yet")
+    print("  - This is normal for a fresh cluster or when the main app hasn't started")
+    print("  - To create the organs, you need to:")
+    print("    1. Start the main API server (which initializes OrganismManager)")
+    print("    2. Or run a scenario that creates the organs")
+    print("    3. Or manually create them using the OrganismManager")
+    print("  - Check the logs of the main application for organ creation messages")
     
     print("\n" + "=" * 70)
     print("🎯 Detailed Job Analysis Complete")

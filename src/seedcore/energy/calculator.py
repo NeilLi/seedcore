@@ -72,8 +72,8 @@ def on_pair_success(event: Dict[str, Any], ledger: EnergyLedger):
     
     stats['sim'] = event['sim']
     # Update the ledger (subtracting because lower energy is better)
-    delta = (stats['w'] * stats['sim']) - ledger.terms.pair
-    ledger.terms.pair += delta
+    delta = (stats['w'] * stats['sim']) - ledger.pair
+    ledger.pair += delta
 
 
 def on_hyper_exec(event: Dict[str, Any], ledger: EnergyLedger):
@@ -85,13 +85,13 @@ def on_hyper_exec(event: Dict[str, Any], ledger: EnergyLedger):
 def on_role_update(event: Dict[str, Any], ledger: EnergyLedger, alpha: float):
     """Update entropy term when agent roles change."""
     delta = -alpha * (event['H_new'] - event['H_prev'])
-    ledger.terms.entropy += delta
+    ledger.entropy += delta
 
 
 def on_state_update(event: Dict[str, Any], ledger: EnergyLedger, lambda_reg: float):
     """Update regularization term when agent embeddings change."""
     delta = lambda_reg * (event['norm2_new'] - event['norm2_old'])
-    ledger.terms.reg += delta
+    ledger.reg += delta
 
 
 def on_mem_event(event: Dict[str, Any], ledger: EnergyLedger, beta_mem: float):
@@ -107,7 +107,7 @@ def on_mem_event(event: Dict[str, Any], ledger: EnergyLedger, beta_mem: float):
     else:
         delta = beta_mem * base_cost
     
-    ledger.terms.mem += delta
+    ledger.mem += delta
 
 
 def calculate_energy(state: Dict[str, Any]) -> EnergyTerms:

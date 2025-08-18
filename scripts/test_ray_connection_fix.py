@@ -107,8 +107,8 @@ def test_ray_connection():
         # Test basic functionality
         print("🧪 Testing Ray functionality...")
         runtime_context = ray.get_runtime_context()
-        print(f"   - Ray Address: {runtime_context.get_address()}")
-        print(f"   - Ray Namespace: {getattr(runtime_context, 'namespace', 'unknown')}")
+        print(f"   - Ray Address: {runtime_context.gcs_address}")
+        print(f"   - Ray Namespace: {runtime_context.namespace}")
         
         # Check cluster resources
         try:
