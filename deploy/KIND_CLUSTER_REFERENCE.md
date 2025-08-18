@@ -76,6 +76,55 @@ This document provides a comprehensive reference for working with the Seedcore K
 - **Cluster IP**: `10.96.171.126`
 - **Port**: `8000`
 
+## RayService Architecture: Understanding Dual Head Services
+
+**Short answer: they're not duplicates or a bug. RayService intentionally gives you two head Services:**
+
+1. **A per-cluster head Service** for the *actual* RayCluster it spins up (name has a random suffix, e.g. `seedcore-svc-2jd2t-head-svc`).
+2. **A stable head Service** that **RayService** manages (no suffix, e.g. `seedcore-svc-head-svc`) whose selector is switched to the current active cluster during upgrades/failover, so you always have a consistent DNS name.
+
+Because RayService does zero-downtime upgrades by creating a new RayCluster and then **retargeting the stable Service's selector** once the new cluster is ready, you'll typically see *both* Services at the same time. That's by design.
+
+### What each Service is for
+
+* `seedcore-svc-2jd2t-head-svc` (suffix): auto-created with the underlying **RayCluster**; exposes the head pod ports directly for that one cluster instance.
+* `seedcore-svc-head-svc` (no suffix): **RayService-managed stable head Service**; its selector is moved to whichever RayCluster is active. Use this for things like dashboard (8265) and Ray Client (10001) so your integrations don't break during upgrades.
+
+You should also see a third Service once Serve is healthy: `seedcore-svc-serve-svc` (stable Serve frontdoor for HTTP 8000). With your `proxy_location: HeadOnly`, that Service will route to the head node's proxy. If it hasn't appeared yet, it usually means the Serve app isn't "healthy and ready" yet.
+
+### How to confirm (handy commands)
+
+```bash
+# See the RayService-managed stable Services
+kubectl get svc -n seedcore-dev | grep 'seedcore-svc-.*-svc'
+
+# Inspect selectors to observe retargeting during updates
+kubectl describe svc -n seedcore-dev seedcore-svc-head-svc
+kubectl describe svc -n seedcore-dev seedcore-svc-serve-svc
+
+# List the RayClusters RayService created (one will have a suffix)
+kubectl get raycluster -n seedcore-dev
+```
+
+Docs note that RayService switches the **stable** head Service's selector to the new RayCluster when it's ready, which is why both the stable and per-cluster Services exist simultaneously.
+
+### Customizing (if you want)
+
+* You can customize the **spec of the head/serve Services** (type, ports, annotations, etc.) via CRD fields (e.g., `headService` / `serveService` in newer KubeRay), but the stable/per-cluster split remains—it's fundamental to RayService HA & upgrades.
+
+### TL;DR guidance for your manifest
+
+* Keep using **`seedcore-svc-head-svc`** for dashboard (8265) and Ray Client (10001).
+* Send HTTP traffic to **`seedcore-svc-serve-svc`** once your Serve app is ready.
+* Ignore the suffixed `*-head-svc` in app integrations; it's for the current RayCluster instance and will be replaced on upgrades.
+
+**References:**
+- [RayCluster Quickstart](https://docs.ray.io/en/latest/cluster/kubernetes/getting-started/raycluster-quick-start.html)
+- [RayService User Guide](https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/rayservice.html)
+- [RayCluster Configuration](https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/config.html)
+- [RayService Quickstart](https://docs.ray.io/en/latest/cluster/kubernetes/getting-started/rayservice-quick-start.html)
+- [KubeRay Changelog](https://github.com/ray-project/kuberay/blob/master/CHANGELOG.md)
+
 ## Port Forwarding
 
 ### Current Port Forwarding Script
