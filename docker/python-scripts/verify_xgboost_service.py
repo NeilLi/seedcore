@@ -16,6 +16,16 @@ from pathlib import Path
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
 
+def get_service_url():
+    """Get service URL based on environment."""
+    # Check if we're running in seedcore-api pod
+    if os.getenv('SEEDCORE_API_ADDRESS'):
+        # We're in the seedcore-api pod, use internal service names
+        return "http://seedcore-svc-serve-svc:8000"
+    else:
+        # Local development or ray head pod
+        return "http://localhost:8000"
+
 def verify_xgboost_service():
     """Verify XGBoost service functionality."""
     
@@ -64,9 +74,12 @@ def verify_xgboost_service():
     
     # Check 4: API Endpoints
     print("\n4️⃣ Testing API endpoints...")
+    base_url = get_service_url()
+    print(f"🔗 Testing API at: {base_url}")
+    
     try:
         # Test health endpoint
-        response = requests.get("http://localhost:8000/health", timeout=5)
+        response = requests.get(f"{base_url}/health", timeout=5)
         if response.status_code == 200:
             health_data = response.json()
             xgboost_status = health_data.get('models', {}).get('xgboost_service', 'unknown')
@@ -76,14 +89,14 @@ def verify_xgboost_service():
             return False
         
         # Test XGBoost endpoints
-        response = requests.get("http://localhost:8000/xgboost/list_models", timeout=5)
+        response = requests.get(f"{base_url}/xgboost/list_models", timeout=5)
         if response.status_code == 200:
             print("✅ XGBoost list_models endpoint working")
         else:
             print(f"❌ XGBoost list_models endpoint failed: {response.status_code}")
             return False
         
-        response = requests.get("http://localhost:8000/xgboost/model_info", timeout=5)
+        response = requests.get(f"{base_url}/xgboost/model_info", timeout=5)
         if response.status_code == 200:
             print("✅ XGBoost model_info endpoint working")
         else:
@@ -137,7 +150,8 @@ def main():
         print("   - Prediction: POST /xgboost/predict")
         print("   - Batch Prediction: POST /xgboost/batch_predict")
         print("   - Model Management: GET /xgboost/list_models, /xgboost/model_info")
-        print("\n🔗 Access the API at: http://localhost:8000")
+        base_url = get_service_url()
+        print(f"\n🔗 Access the API at: {base_url}")
     else:
         print("\n❌ XGBoost service verification failed!")
         print("   Please check the error messages above.")

@@ -70,13 +70,17 @@ class XGBoostService:
     - Integration with SeedCore ML pipeline
     """
     
-    def __init__(self, model_storage_path: str = "/data/models"):
+    def __init__(self, model_storage_path: str = None):
         """
         Initialize XGBoost service.
         
         Args:
-            model_storage_path: Path to store trained models
+            model_storage_path: Path to store trained models. If None, uses XGB_STORAGE_PATH env var or defaults to /app/data/models
         """
+        if model_storage_path is None:
+            # Get from environment variable, with fallback to default
+            model_storage_path = os.getenv("XGB_STORAGE_PATH", "/app/data/models")
+        
         self.model_storage_path = Path(model_storage_path)
         self.model_storage_path.mkdir(parents=True, exist_ok=True)
         
@@ -660,5 +664,7 @@ def get_xgboost_service() -> XGBoostService:
     """Get or create global XGBoost service instance."""
     global _xgboost_service
     if _xgboost_service is None:
-        _xgboost_service = XGBoostService()
+        # Get storage path from environment variable
+        storage_path = os.getenv("XGB_STORAGE_PATH", "/app/data/models")
+        _xgboost_service = XGBoostService(model_storage_path=storage_path)
     return _xgboost_service 

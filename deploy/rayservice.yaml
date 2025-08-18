@@ -36,6 +36,8 @@ spec:
               value: "seedcore-dev"
             - name: SEEDCORE_NS
               value: "seedcore-dev"
+            - name: XGB_STORAGE_PATH
+              value: "/app/data/models"
             ports:                   # 👈 NAME YOUR PORTS
               - name: gcs
                 containerPort: 6379
@@ -47,6 +49,20 @@ spec:
                 containerPort: 8000
               - name: metrics
                 containerPort: 8080
+            resources:
+              requests:
+                cpu: "500m"
+                memory: "1Gi"
+              limits:
+                cpu: "2"
+                memory: "4Gi"
+            volumeMounts:
+              # This is your existing mount for the PVC
+              - name: xgb-model-storage
+                mountPath: /app/data
+              # 👇 ADD THIS SECTION TO MOUNT THE VOLUME
+              - name: project-source-volume
+                mountPath: /project
             startupProbe:
               exec:
                 command:
@@ -76,12 +92,14 @@ spec:
               timeoutSeconds: 2
               failureThreshold: 120
               successThreshold: 1
-          # hostPath volume (optional; keep only if you need it)
           volumes:
-          - name: data-volume
-            hostPath:
-              path: /tmp/seedcore-data
-              type: DirectoryOrCreate
+            - name: project-source-volume # <-- Must match name above
+              hostPath:
+                path: /project # <-- Must match the path inside the KinD node
+                type: DirectoryOrCreate
+            - name: xgb-model-storage
+              persistentVolumeClaim:
+                claimName: xgb-pvc
 
     workerGroupSpecs:
     - groupName: small
@@ -102,6 +120,18 @@ spec:
               value: "seedcore-dev"
             - name: SEEDCORE_NS
               value: "seedcore-dev"
+            - name: XGB_STORAGE_PATH
+              value: "/app/data/models"
+            resources:
+              requests:
+                cpu: "500m"
+                memory: "1Gi"
+              limits:
+                cpu: "2"
+                memory: "4Gi"
+            volumeMounts:
+              - name: xgb-model-storage
+                mountPath: /app/data
             readinessProbe:
               exec:
                 command:
@@ -127,3 +157,6 @@ spec:
             hostPath:
               path: /tmp/seedcore-data
               type: DirectoryOrCreate
+          - name: xgb-model-storage
+            persistentVolumeClaim:
+              claimName: xgb-pvc

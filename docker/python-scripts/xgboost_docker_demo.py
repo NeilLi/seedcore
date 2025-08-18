@@ -51,10 +51,23 @@ def print_step(step: str):
     print(f"{'-'*40}")
 
 
+def get_service_url():
+    """Get service URL based on environment."""
+    # Check if we're running in seedcore-api pod
+    if os.getenv('SEEDCORE_API_ADDRESS'):
+        # We're in the seedcore-api pod, use internal service names
+        return "http://seedcore-svc-serve-svc:8000"
+    else:
+        # Local development or ray head pod
+        return "http://localhost:8000"
+
 def check_service_health() -> bool:
     """Check if the ML service is healthy."""
+    base_url = get_service_url()
+    print(f"🔗 Checking service health at: {base_url}")
+    
     try:
-        response = requests.get("http://localhost:8000/health", timeout=5)
+        response = requests.get(f"{base_url}/health", timeout=5)
         if response.status_code == 200:
             health_data = response.json()
             print(f"✅ Service is healthy")
@@ -96,8 +109,9 @@ def method1_auto_fabricate_data() -> str:
     }
     
     print("📤 Training with auto-generated data...")
+    base_url = get_service_url()
     response = requests.post(
-        "http://localhost:8000/xgboost/train",
+        f"{base_url}/xgboost/train",
         json=train_request,
         timeout=300
     )
@@ -285,8 +299,9 @@ def train_xgboost_model(data_source: str, model_name: str) -> Optional[str]:
     print(f"   Model name: {model_name}")
     print(f"   Workers: {train_request['training_config']['num_workers']}")
     
+    base_url = get_service_url()
     response = requests.post(
-        "http://localhost:8000/xgboost/train",
+        f"{base_url}/xgboost/train",
         json=train_request,
         timeout=300
     )
@@ -308,8 +323,9 @@ def train_xgboost_model(data_source: str, model_name: str) -> Optional[str]:
 def get_latest_model_path() -> Optional[str]:
     """Get the path of the latest model."""
     try:
-        # Use localhost:8000 for ML service endpoints (same container)
-        response = requests.get("http://localhost:8000/xgboost/list_models", timeout=15)
+        # Use the appropriate service URL based on environment
+        base_url = get_service_url()
+        response = requests.get(f"{base_url}/xgboost/list_models", timeout=15)
         if response.status_code == 200:
             models = response.json().get("models", [])
             if models:
@@ -455,8 +471,9 @@ def test_batch_prediction(model_path: str) -> bool:
     }
     
     print("📤 Running batch prediction...")
-    response = requests.post(
-        "http://localhost:8000/xgboost/batch_predict",
+            base_url = get_service_url()
+        response = requests.post(
+            f"{base_url}/xgboost/batch_predict",
         json=batch_request,
         timeout=180
     )
@@ -481,7 +498,8 @@ def monitor_operational_metrics() -> None:
     try:
         # Check Ray dashboard status
         print("🔍 Checking Ray cluster status...")
-        response = requests.get("http://localhost:8000/ray/status", timeout=5)
+        base_url = get_service_url()
+        response = requests.get(f"{base_url}/ray/status", timeout=5)
         if response.status_code == 200:
             ray_status = response.json()
             print(f"✅ Ray cluster healthy")
@@ -502,7 +520,8 @@ def monitor_operational_metrics() -> None:
         
         # Check model list
         print("🔍 Checking available models...")
-        response = requests.get("http://localhost:8000/xgboost/list_models", timeout=10)
+        base_url = get_service_url()
+        response = requests.get(f"{base_url}/xgboost/list_models", timeout=10)
         if response.status_code == 200:
             models_data = response.json()
             models = models_data.get("models", [])

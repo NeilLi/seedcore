@@ -20,12 +20,60 @@ sys.path.insert(0, '/app/src')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def setup_storage_path():
+    """Setup and verify the XGBoost storage path."""
+    
+    # Get storage path from environment variable, default to writable location
+    default_storage = Path(os.getenv("XGB_STORAGE_PATH", "/app/data/models"))
+    print(f"📁 Setting up XGBoost storage path: {default_storage}")
+    
+    try:
+        # Create the storage directory if it doesn't exist
+        default_storage.mkdir(parents=True, exist_ok=True)
+        
+        # Test if the directory is writable
+        test_file = default_storage / ".write_test"
+        test_file.write_text("test")
+        test_file.unlink()  # Clean up test file
+        
+        print(f"✅ Storage path is writable: {default_storage}")
+        return default_storage
+        
+    except Exception as e:
+        print(f"⚠️ Warning: Could not write to {default_storage}: {e}")
+        
+        # Fallback to /app/data/models if the configured path is not writable
+        fallback_path = Path("/app/data/models")
+        print(f"🔄 Falling back to fallback path: {fallback_path}")
+        
+        try:
+            fallback_path.mkdir(parents=True, exist_ok=True)
+            test_file = fallback_path / ".write_test"
+            test_file.write_text("test")
+            test_file.unlink()
+            
+            print(f"✅ Fallback storage path is writable: {fallback_path}")
+            return fallback_path
+            
+        except Exception as fallback_error:
+            print(f"❌ Error: Both storage paths are not writable")
+            print(f"   Primary: {default_storage} - {e}")
+            print(f"   Fallback: {fallback_path} - {fallback_error}")
+            raise RuntimeError("No writable storage path available for XGBoost models")
+
 def init_xgboost_service():
     """Initialize the XGBoost service."""
     
     print("🔧 Initializing XGBoost Service...")
     
     try:
+        # Setup storage path first
+        storage_path = setup_storage_path()
+        
+        # Set environment variable for the service to use
+        os.environ["XGB_STORAGE_PATH"] = str(storage_path)
+        print(f"🔧 Set XGB_STORAGE_PATH environment variable to: {storage_path}")
+        
         # Import and initialize XGBoost service
         from seedcore.ml.models.xgboost_service import get_xgboost_service
         
@@ -72,6 +120,7 @@ def main():
     print("🔍 Environment Check:")
     print(f"   RAY_ADDRESS: {os.getenv('RAY_ADDRESS', 'Not set')}")
     print(f"   PYTHONPATH: {os.getenv('PYTHONPATH', 'Not set')}")
+    print(f"   XGB_STORAGE_PATH: {os.getenv('XGB_STORAGE_PATH', 'Not set (will use default)')}")
     print(f"   Working Directory: {os.getcwd()}")
     print()
     

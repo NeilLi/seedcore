@@ -16,6 +16,16 @@ import os
 # Add the app directory to Python path
 sys.path.insert(0, '/app')
 
+def get_service_url():
+    """Get service URL based on environment."""
+    # Check if we're running in seedcore-api pod
+    if os.getenv('SEEDCORE_API_ADDRESS'):
+        # We're in the seedcore-api pod, use internal service names
+        return "http://seedcore-svc-serve-svc:8000"
+    else:
+        # Local development or ray head pod
+        return "http://localhost:8000"
+
 def print_step(step: str):
     """Print a formatted step."""
     print(f"\n📋 {step}")
@@ -25,8 +35,11 @@ def test_service_health():
     """Test if the ML service is healthy."""
     print_step("Testing Service Health")
     
+    base_url = get_service_url()
+    print(f"🔗 Testing service at: {base_url}")
+    
     try:
-        response = requests.get("http://localhost:8000/health", timeout=10)
+        response = requests.get(f"{base_url}/health", timeout=10)
         if response.status_code == 200:
             health_data = response.json()
             print(f"✅ Service is healthy")
@@ -89,9 +102,10 @@ def test_simple_training():
     }
     
     print("📤 Training simple model...")
+    base_url = get_service_url()
     try:
         response = requests.post(
-            "http://localhost:8000/xgboost/train",
+            f"{base_url}/xgboost/train",
             json=train_request,
             timeout=120  # 2 minutes timeout
         )
@@ -117,7 +131,8 @@ def test_model_management():
     
     try:
         # List models
-        response = requests.get("http://localhost:8000/xgboost/list_models", timeout=10)
+        base_url = get_service_url()
+        response = requests.get(f"{base_url}/xgboost/list_models", timeout=10)
         if response.status_code == 200:
             models_data = response.json()
             models = models_data.get("models", [])
@@ -150,8 +165,9 @@ def test_simple_prediction(model_path):
     }
     
     try:
+        base_url = get_service_url()
         response = requests.post(
-            "http://localhost:8000/xgboost/predict",
+            f"{base_url}/xgboost/predict",
             json=predict_request,
             timeout=30
         )
@@ -179,7 +195,7 @@ def test_energy_logging():
         "organ": "utility",
         "metric": "test_prediction",
         "value": 0.75,
-        "model_path": "/data/models/test_model.xgb",
+        "model_path": "/app/data/models/test_model.xgb",
         "success": True,
         "prediction_count": 1,
         "success_rate": 1.0

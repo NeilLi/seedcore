@@ -6,6 +6,7 @@ This script demonstrates the new hyperparameter tuning functionality
 using Ray Tune, integrated with the Cognitive Organism Architecture.
 """
 
+import os
 import requests
 import json
 import time
@@ -19,9 +20,20 @@ logger = logging.getLogger(__name__)
 class XGBoostTuningDemo:
     """Demo class for XGBoost hyperparameter tuning functionality."""
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
-        self.base_url = base_url
+    def __init__(self, base_url: str = None):
+        if base_url is None:
+            # Auto-detect service URL based on environment
+            if os.getenv('SEEDCORE_API_ADDRESS'):
+                # We're in the seedcore-api pod, use internal service names
+                self.base_url = "http://seedcore-svc-serve-svc:8000"
+            else:
+                # Local development
+                self.base_url = "http://localhost:8000"
+        else:
+            self.base_url = base_url
+        
         self.session = requests.Session()
+        logger.info(f"🔗 Using ML service at: {self.base_url}")
     
     def test_basic_training(self) -> bool:
         """Test basic XGBoost training to ensure the service is working."""

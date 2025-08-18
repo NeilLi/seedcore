@@ -15,6 +15,16 @@ from pathlib import Path
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
 
+def get_service_url():
+    """Get service URL based on environment."""
+    # Check if we're running in seedcore-api pod
+    if os.getenv('SEEDCORE_API_ADDRESS'):
+        # We're in the seedcore-api pod, use internal service names
+        return "http://seedcore-svc-serve-svc:8000"
+    else:
+        # Local development or ray head pod
+        return "http://localhost:8000"
+
 def test_xgboost_service_in_docker():
     """Test the XGBoost service functionality within Docker environment."""
     
@@ -25,7 +35,7 @@ def test_xgboost_service_in_docker():
         from seedcore.ml.models.xgboost_service import XGBoostService, XGBoostConfig, TrainingConfig
         
         # Use the shared data directory for models
-        model_storage = "/data/models"
+        model_storage = "/app/data/models"
         print(f"📁 Using model storage: {model_storage}")
         
         # Initialize service
@@ -97,9 +107,12 @@ def test_api_endpoints_in_docker():
     try:
         import requests
         
+        base_url = get_service_url()
+        print(f"🔗 Testing API at: {base_url}")
+        
         # Test health endpoint
         print("\n1️⃣ Testing Health Endpoint...")
-        response = requests.get("http://localhost:8000/health", timeout=5)
+        response = requests.get(f"{base_url}/health", timeout=5)
         if response.status_code == 200:
             print("✅ Health endpoint working")
             health_data = response.json()
@@ -112,7 +125,7 @@ def test_api_endpoints_in_docker():
         print("\n2️⃣ Testing XGBoost Endpoints...")
         
         # Test model listing
-        response = requests.get("http://localhost:8000/xgboost/list_models", timeout=5)
+        response = requests.get(f"{base_url}/xgboost/list_models", timeout=5)
         if response.status_code == 200:
             print("✅ Model listing endpoint working")
             models_data = response.json()
@@ -121,7 +134,7 @@ def test_api_endpoints_in_docker():
             print(f"❌ Model listing failed: {response.status_code}")
         
         # Test model info
-        response = requests.get("http://localhost:8000/xgboost/model_info", timeout=5)
+        response = requests.get(f"{base_url}/xgboost/model_info", timeout=5)
         if response.status_code == 200:
             print("✅ Model info endpoint working")
             info_data = response.json()
@@ -149,6 +162,9 @@ def test_xgboost_training_via_api():
     try:
         import requests
         
+        base_url = get_service_url()
+        print(f"🔗 Testing API at: {base_url}")
+        
         # Prepare training request
         train_request = {
             "use_sample_data": True,
@@ -171,7 +187,7 @@ def test_xgboost_training_via_api():
         
         print("📤 Sending training request...")
         response = requests.post(
-            "http://localhost:8000/xgboost/train",
+            f"{base_url}/xgboost/train",
             json=train_request,
             headers={"Content-Type": "application/json"},
             timeout=60  # Longer timeout for training
@@ -192,7 +208,7 @@ def test_xgboost_training_via_api():
             }
             
             predict_response = requests.post(
-                "http://localhost:8000/xgboost/predict",
+                f"{base_url}/xgboost/predict",
                 json=predict_request,
                 headers={"Content-Type": "application/json"},
                 timeout=10

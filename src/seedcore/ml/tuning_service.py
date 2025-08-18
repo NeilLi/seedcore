@@ -121,7 +121,7 @@ class HyperparameterTuningService:
     - Integration with SeedCore ML pipeline
     """
     
-    def __init__(self, model_storage_path: str = "/data/models"):
+    def __init__(self, model_storage_path: str = "/app/data/models"):
         """
         Initialize the hyperparameter tuning service.
         
