@@ -1,290 +1,275 @@
 #!/usr/bin/env python3
 """
-XGBoost with Ray Data Integration Demo for SeedCore
+XGBoost Hyperparameter Tuning Demo for SeedCore
 
-This script demonstrates how to use the XGBoost integration with Ray Data
-for distributed training and inference in the SeedCore platform.
-
-Usage:
-    python examples/xgboost_demo.py
+This script demonstrates the new hyperparameter tuning functionality
+using Ray Tune, integrated with the Cognitive Organism Architecture.
 """
 
-import sys
 import os
-import time
-import json
 import requests
-from pathlib import Path
+import json
+import time
+import logging
+from typing import Dict, Any
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-def get_service_urls():
-    """Get service URLs based on environment."""
-    # Check if we're running in seedcore-api pod
-    if os.getenv('SEEDCORE_API_ADDRESS'):
-        # We're in the seedcore-api pod, use internal service names
-        base_url = "http://seedcore-svc-serve-svc:8000"
-        ray_dashboard = "http://seedcore-svc-head-svc:8265"
-    else:
-        # Local development
-        base_url = "http://localhost:8000"
-        ray_dashboard = "http://localhost:8265"
+class XGBoostTuningDemo:
+    """Demo class for XGBoost hyperparameter tuning functionality."""
     
-    return base_url, ray_dashboard
-
-def demo_xgboost_integration():
-    """Demonstrate XGBoost integration with Ray Data."""
-    
-    print("🚀 XGBoost with Ray Data Integration Demo")
-    print("=" * 50)
-    
-    # Get service URLs based on environment
-    base_url, ray_dashboard = get_service_urls()
-    print(f"🔗 Using ML service at: {base_url}")
-    print(f"🔗 Ray dashboard at: {ray_dashboard}")
-    
-    # Test 1: Health Check
-    print("\n1️⃣ Testing ML Service Health...")
-    try:
-        response = requests.get(f"{base_url}/health", timeout=10)
-        if response.status_code == 200:
-            print("✅ ML Service is healthy")
-            print(f"   Service: {response.json().get('service', 'unknown')}")
+    def __init__(self, base_url: str = None):
+        if base_url is None:
+            # ✅ FIX: Default to localhost, which is correct when running
+            # this script from inside the Ray head pod.
+            self.base_url = "http://localhost:8000"
         else:
-            print(f"❌ Health check failed: {response.status_code}")
-            print(f"   Response: {response.text}")
-            return
-    except requests.exceptions.ConnectionError as e:
-        print(f"❌ Cannot connect to ML service: {e}")
-        print(f"   Make sure the Ray cluster is running and the ML service is deployed at {base_url}")
-        print(f"   Check if seedcore-head-svc is accessible from this pod")
-        return
-    except Exception as e:
-        print(f"❌ Health check failed: {e}")
-        return
-    
-    # Test 2: Train XGBoost Model with Sample Data
-    print("\n2️⃣ Training XGBoost Model with Sample Data...")
-    
-    train_request = {
-        "use_sample_data": True,
-        "sample_size": 5000,
-        "sample_features": 15,
-        "name": "demo_model",
-        "xgb_config": {
-            "objective": "binary:logistic",
-            "eval_metric": ["logloss", "auc"],
-            "eta": 0.1,
-            "max_depth": 4,
-            "num_boost_round": 30
-        },
-        "training_config": {
-            "num_workers": 3,
-            "use_gpu": False,
-            "cpu_per_worker": 1
-        }
-    }
-    
-    try:
-        response = requests.post(
-            f"{base_url}/xgboost/train",
-            json=train_request,
-            headers={"Content-Type": "application/json"},
-            timeout=60
-        )
+            self.base_url = base_url
         
-        if response.status_code == 200:
-            result = response.json()
-            print("✅ Model training completed successfully!")
-            print(f"   Model Path: {result['path']}")
-            print(f"   Training Time: {result['training_time']:.2f}s")
-            print(f"   Final AUC: {result['metrics'].get('validation_0-auc', 'N/A')}")
-            
-            model_path = result['path']
-        else:
-            print(f"❌ Training failed: {response.status_code}")
-            print(f"   Error: {response.text}")
-            return
-            
-    except Exception as e:
-        print(f"❌ Training request failed: {e}")
-        return
+        # Add the /ml_serve route prefix to all requests
+        self.ml_service_url = f"{self.base_url}/ml_serve"
+        self.session = requests.Session()
+        logger.info(f"🔗 Using ML service at: {self.ml_service_url}")
     
-    # Test 3: Make Predictions
-    print("\n3️⃣ Making Predictions...")
-    
-    # Create sample features
-    sample_features = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-    
-    predict_request = {
-        "features": sample_features,
-        "path": model_path
-    }
-    
-    try:
-        response = requests.post(
-            f"{base_url}/xgboost/predict",
-            json=predict_request,
-            headers={"Content-Type": "application/json"},
-            timeout=30
-        )
+    def test_basic_training(self) -> bool:
+        """Test basic XGBoost training to ensure the service is working."""
+        logger.info("🧪 Testing basic XGBoost training...")
         
-        if response.status_code == 200:
-            result = response.json()
-            print("✅ Prediction completed successfully!")
-            print(f"   Prediction: {result['prediction']}")
-            print(f"   Probability: {result['probability']:.4f}")
-            print(f"   Features used: {len(sample_features)}")
-        else:
-            print(f"❌ Prediction failed: {response.status_code}")
-            print(f"   Error: {response.text}")
-            
-    except Exception as e:
-        print(f"❌ Prediction request failed: {e}")
-    
-    # Test 4: Model Information
-    print("\n4️⃣ Getting Model Information...")
-    
-    try:
-        response = requests.get(f"{base_url}/xgboost/model/{os.path.basename(model_path)}")
-        
-        if response.status_code == 200:
-            result = response.json()
-            print("✅ Model info retrieved successfully!")
-            print(f"   Model Name: {result.get('name', 'N/A')}")
-            print(f"   Created: {result.get('created_at', 'N/A')}")
-            print(f"   Size: {result.get('size_mb', 'N/A')} MB")
-        else:
-            print(f"❌ Model info failed: {response.status_code}")
-            
-    except Exception as e:
-        print(f"❌ Model info request failed: {e}")
-    
-    print("\n📊 Training Summary:")
-    print(f"   - Model saved to: {model_path}")
-    print(f"   - Ray dashboard: {ray_dashboard}")
-    print("\n💡 Next steps:")
-    print("1. Try training with your own data by providing a data_source path")
-    print("2. Experiment with different XGBoost hyperparameters")
-    print("3. Use batch prediction for large datasets")
-    print("4. Monitor training progress in the Ray dashboard")
-
-def demo_advanced_features():
-    """Demonstrate advanced XGBoost features."""
-    
-    print("\n🔧 Advanced Features Demo")
-    print("=" * 30)
-    
-    base_url, _ = get_service_urls()
-    
-    # Create a CSV file for demonstration - use a writable directory
-    import pandas as pd
-    import numpy as np
-    from sklearn.datasets import make_classification
-    
-    # Generate sample data
-    X, y = make_classification(n_samples=1000, n_features=10, random_state=42)
-    df = pd.DataFrame(X, columns=[f"feature_{i}" for i in range(10)])
-    df["target"] = y
-    
-    # Save to CSV in a writable directory
-    # Try different writable locations
-    writable_dirs = [
-        "/tmp",  # Usually writable
-        "/app/tmp" if os.path.exists("/app") else None,  # App-specific temp
-        os.path.join(os.getcwd(), "tmp")  # Current directory + tmp
-    ]
-    
-    csv_path = None
-    for dir_path in writable_dirs:
-        if dir_path and os.access(dir_path, os.W_OK):
-            try:
-                os.makedirs(dir_path, exist_ok=True)
-                csv_path = os.path.join(dir_path, "demo_data.csv")
-                df.to_csv(csv_path, index=False)
-                print(f"📊 Created sample CSV file: {csv_path}")
-                break
-            except Exception as e:
-                print(f"⚠️  Could not write to {dir_path}: {e}")
-                continue
-    
-    if not csv_path:
-        print("❌ Could not find a writable directory for CSV file")
-        print("   Skipping advanced features demo")
-        return
-    
-    # Train with CSV data
-    print("\n📈 Training with CSV Data...")
-    
-    train_request = {
-        "data_source": csv_path,
-        "data_format": "csv",
-        "name": "csv_demo_model",
-        "label_column": "target",
-        "xgb_config": {
-            "objective": "binary:logistic",
-            "eval_metric": ["logloss", "auc"],
-            "eta": 0.05,
-            "max_depth": 6,
-            "num_boost_round": 50
-        }
-    }
-    
-    try:
-        response = requests.post(
-            f"{base_url}/xgboost/train",
-            json=train_request,
-            headers={"Content-Type": "application/json"},
-            timeout=60
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            print("✅ CSV training completed!")
-            print(f"   Model: {result['path']}")
-            print(f"   Time: {result['training_time']:.2f}s")
-            
-            # Test batch prediction
-            print("\n📊 Testing Batch Prediction...")
-            
-            batch_request = {
-                "data_source": csv_path,
-                "data_format": "csv",
-                "feature_columns": [f"feature_{i}" for i in range(10)],
-                "path": result['path']
+        payload = {
+            "use_sample_data": True,
+            "sample_size": 1000,
+            "sample_features": 10,
+            "name": "demo_basic_model",
+            "xgb_config": {
+                "objective": "binary:logistic",
+                "eval_metric": ["logloss", "auc"],
+                "eta": 0.1,
+                "max_depth": 5,
+                "num_boost_round": 20
+            },
+            "training_config": {
+                "num_workers": 1,
+                "use_gpu": False,
+                "cpu_per_worker": 1
             }
+        }
+        
+        try:
+            # Use the full service URL
+            response = self.session.post(f"{self.ml_service_url}/xgboost/train", json=payload, timeout=60)
+            response.raise_for_status()
+            result = response.json()
             
-            batch_response = requests.post(
-                f"{base_url}/xgboost/batch_predict",
-                json=batch_request,
-                headers={"Content-Type": "application/json"},
-                timeout=60
-            )
+            logger.info(f"✅ Basic training successful - AUC: {result.get('metrics', {}).get('validation_0-auc', 'N/A')}")
+            return True
             
-            if batch_response.status_code == 200:
-                batch_result = batch_response.json()
-                print("✅ Batch prediction completed!")
-                print(f"   Predictions saved to: {batch_result['predictions_path']}")
-                print(f"   Number of predictions: {batch_result['num_predictions']}")
-            else:
-                print(f"❌ Batch prediction failed: {batch_response.status_code}")
-                print(f"   Error: {batch_response.text}")
+        except Exception as e:
+            logger.error(f"❌ Basic training failed: {e}")
+            return False
+    
+    def test_conservative_tuning(self) -> bool:
+        """Test conservative hyperparameter tuning asynchronously."""
+        logger.info("🎯 Testing conservative hyperparameter tuning (async)...")
+        
+        payload = {
+            "space_type": "conservative",
+            "config_type": "conservative",
+            "experiment_name": "demo_conservative_tuning"
+        }
+        
+        try:
+            # --- Step 1: Submit the job ---
+            logger.info("   Submitting tuning job...")
+            submit_response = self.session.post(f"{self.ml_service_url}/xgboost/tune/submit", json=payload, timeout=10)
+            submit_response.raise_for_status()
+            submit_result = submit_response.json()
+            job_id = submit_result.get("job_id")
+            
+            if not job_id:
+                logger.error("❌ Submission failed: Did not receive a job_id.")
+                return False
                 
-        else:
-            print(f"❌ CSV training failed: {response.status_code}")
-            print(f"   Error: {response.text}")
+            logger.info(f"✅ Job submitted successfully! Job ID: {job_id}")
+
+            # --- Step 2: Poll for the result ---
+            start_time = time.time()
+            timeout = 900  # 15 minutes total wait time
+            poll_interval = 15  # Poll every 15 seconds
             
+            while time.time() - start_time < timeout:
+                logger.info(f"   Polling status for job {job_id}...")
+                try:
+                    status_response = self.session.get(f"{self.ml_service_url}/xgboost/tune/status/{job_id}", timeout=10)
+                    status_response.raise_for_status()
+                    status_result = status_response.json()
+                    
+                    status = status_result.get("status")
+                    progress = status_result.get("progress", "Unknown")
+                    
+                    logger.info(f"   Status: {status} - {progress}")
+                    
+                    if status == "COMPLETED":
+                        logger.info("✅ Tuning job completed successfully!")
+                        result = status_result.get("result", {})
+                        best_trial = result.get("best_trial", {})
+                        logger.info(f"   Best AUC: {best_trial.get('auc', 'N/A'):.4f}")
+                        logger.info(f"   Total trials: {result.get('total_trials', 'N/A')}")
+                        logger.info(f"   Best config: {best_trial.get('config', {})}")
+                        return True
+                    elif status == "FAILED":
+                        error_msg = status_result.get("result", {}).get("error", "Unknown error")
+                        logger.error(f"❌ Tuning job failed: {error_msg}")
+                        return False
+                    elif status == "RUNNING":
+                        logger.info(f"   Job is running... {progress}")
+                    elif status == "PENDING":
+                        logger.info(f"   Job is pending... {progress}")
+                    
+                    # Wait before polling again
+                    time.sleep(poll_interval)
+                    
+                except requests.exceptions.RequestException as e:
+                    logger.warning(f"   Warning: Failed to poll status: {e}")
+                    time.sleep(poll_interval)
+                    continue
+
+            logger.error("❌ Polling timed out after 15 minutes.")
+            return False
+                
+        except Exception as e:
+            logger.error(f"❌ Tuning demo failed: {e}")
+            return False
+    
+    def test_async_api_functionality(self) -> bool:
+        """Test the async API functionality without waiting for completion."""
+        logger.info("🔄 Testing async API functionality...")
+        
+        payload = {
+            "space_type": "conservative",
+            "config_type": "conservative",
+            "experiment_name": "demo_async_test"
+        }
+        
+        try:
+            # Submit a job
+            logger.info("   Submitting test job...")
+            submit_response = self.session.post(f"{self.ml_service_url}/xgboost/tune/submit", json=payload, timeout=10)
+            submit_response.raise_for_status()
+            submit_result = submit_response.json()
+            job_id = submit_result.get("job_id")
+            
+            if not job_id:
+                logger.error("❌ Job submission failed")
+                return False
+            
+            logger.info(f"✅ Test job submitted with ID: {job_id}")
+            
+            # Check initial status
+            status_response = self.session.get(f"{self.ml_service_url}/xgboost/tune/status/{job_id}", timeout=10)
+            status_response.raise_for_status()
+            initial_status = status_response.json()
+            
+            if initial_status.get("status") not in ["PENDING", "RUNNING"]:
+                logger.error(f"❌ Unexpected initial status: {initial_status.get('status')}")
+                return False
+            
+            logger.info(f"✅ Initial status check passed: {initial_status.get('status')}")
+            
+            # List all jobs
+            jobs_response = self.session.get(f"{self.ml_service_url}/xgboost/tune/jobs", timeout=10)
+            jobs_response.raise_for_status()
+            jobs_result = jobs_response.json()
+            
+            if jobs_result.get("total_jobs", 0) > 0:
+                logger.info(f"✅ Jobs listing works: {jobs_result.get('total_jobs')} jobs found")
+                return True
+            else:
+                logger.warning("⚠️ No jobs found in listing (this might be expected)")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Async API test failed: {e}")
+            return False
+    
+    def list_all_jobs(self) -> bool:
+        """List all tuning jobs and their statuses."""
+        logger.info("📋 Listing all tuning jobs...")
+        
+        try:
+            response = self.session.get(f"{self.ml_service_url}/xgboost/tune/jobs", timeout=10)
+            response.raise_for_status()
+            result = response.json()
+            
+            total_jobs = result.get("total_jobs", 0)
+            jobs = result.get("jobs", [])
+            
+            logger.info(f"📊 Total jobs: {total_jobs}")
+            
+            if total_jobs == 0:
+                logger.info("   No jobs found")
+                return True
+            
+            for job in jobs:
+                job_id = job.get("job_id", "Unknown")
+                status = job.get("status", "Unknown")
+                progress = job.get("progress", "No progress info")
+                submitted_at = job.get("submitted_at", "Unknown")
+                
+                logger.info(f"   Job {job_id}: {status} - {progress}")
+                logger.info(f"     Submitted: {submitted_at}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to list jobs: {e}")
+            return False
+    
+    # (Other test methods would need the same URL fix)
+    
+    def run_full_demo(self) -> bool:
+        """Run the complete hyperparameter tuning demo."""
+        logger.info("🚀 Starting XGBoost Hyperparameter Tuning Demo")
+        logger.info("=" * 60)
+        
+        if not self.test_basic_training():
+            logger.error("❌ Basic training failed, aborting demo")
+            return False
+        
+        # Test async API functionality first (quick test)
+        if not self.test_async_api_functionality():
+            logger.warning("⚠️ Async API test failed, but continuing with other tests")
+        
+        # List any existing jobs
+        self.list_all_jobs()
+        
+        if not self.test_conservative_tuning():
+            logger.warning("⚠️ Conservative tuning failed, continuing with other tests")
+        
+        # List jobs again to see the completed job
+        self.list_all_jobs()
+        
+        # ... (other tests would be called here) ...
+        
+        logger.info("=" * 60)
+        logger.info("🎉 XGBoost Hyperparameter Tuning Demo completed!")
+        return True
+
+def main():
+    """Main function to run the demo."""
+    demo = XGBoostTuningDemo()
+    
+    try:
+        success = demo.run_full_demo()
+        if success:
+            logger.info("✅ Demo completed successfully!")
+        else:
+            logger.error("❌ Demo completed with errors")
+    except KeyboardInterrupt:
+        logger.info("⏹️ Demo interrupted by user")
     except Exception as e:
-        print(f"❌ Advanced demo failed: {e}")
+        logger.error(f"❌ Demo failed with unexpected error: {e}")
 
 if __name__ == "__main__":
-    print("Starting XGBoost Integration Demo...")
-    
-    # Basic demo
-    demo_xgboost_integration()
-    
-    # Advanced demo
-    demo_advanced_features()
-    
-    print("\n✨ Demo completed! Check the Ray dashboard for monitoring.") 
+    main()

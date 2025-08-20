@@ -33,8 +33,9 @@ def tune_xgb_trainable(config: Dict[str, Any]) -> None:
     Args:
         config: Hyperparameter configuration sampled by Ray Tune
     """
-    # Generate a simple trial ID for logging
-    trial_id = f"trial_{int(time.time() * 1000) % 10000}"
+    # Get the actual trial ID from Ray Tune
+    from ray import tune
+    trial_id = tune.get_trial_id() if hasattr(tune, 'get_trial_id') else f"trial_{int(time.time() * 1000) % 10000}"
     
     try:
         logger.info(f"🚀 Starting trial {trial_id} with config: {config}")
@@ -163,7 +164,10 @@ class HyperparameterTuningService:
         config_type: str = "default",
         custom_search_space: Optional[Dict[str, Any]] = None,
         custom_tune_config: Optional[Dict[str, Any]] = None,
-        experiment_name: str = "xgboost_tuning"
+        experiment_name: str = "xgboost_tuning",
+        progress_callback: Optional[callable] = None,
+        status_actor_handle=None,
+        job_id: str = None
     ) -> Dict[str, Any]:
         """
         Run a hyperparameter tuning sweep using Ray Tune.
@@ -174,12 +178,19 @@ class HyperparameterTuningService:
             custom_search_space: Custom search space (overrides space_type)
             custom_tune_config: Custom tuning config (overrides config_type)
             experiment_name: Name for the tuning experiment
+            progress_callback: Optional callback function for progress updates
+            status_actor_handle: Optional Ray actor handle for direct status updates
+            job_id: Optional job ID for status updates
             
         Returns:
             Dictionary containing tuning results and best model information
         """
         try:
             logger.info(f"🎯 Starting hyperparameter tuning sweep: {experiment_name}")
+            
+            if progress_callback:
+                progress_callback("Initializing Ray Tune...")
+            
             logger.info(f"🔍 Ray initialized: {ray.is_initialized()}")
             if ray.is_initialized():
                 logger.info(f"🔍 Ray address: {ray.get_runtime_context().gcs_address}")
@@ -197,6 +208,9 @@ class HyperparameterTuningService:
             logger.info(f"⚙️ Tuning config type: {config_type}")
             logger.info(f"🔍 Number of samples: {tune_config_dict['num_samples']}")
             
+            if progress_callback:
+                progress_callback(f"Configuring search space with {tune_config_dict['num_samples']} trials...")
+            
             # Create ASHA scheduler for early stopping
             scheduler = ASHAScheduler(
                 metric="mean_accuracy",
@@ -208,6 +222,9 @@ class HyperparameterTuningService:
             
             # Create search algorithm
             search_alg = BasicVariantGenerator(max_concurrent=tune_config_dict["max_concurrent_trials"])
+            
+            if progress_callback:
+                progress_callback("Starting tuning sweep...")
             
             # Configure the tuner
             # Note: In modern Ray Tune, experiment name and local_dir are handled differently
@@ -228,6 +245,10 @@ class HyperparameterTuningService:
             logger.info("🚀 Starting tuning sweep...")
             logger.info(f"📁 Experiment name: {experiment_name}")
             results = tuner.fit()
+            total_trials = len(results)
+            
+            if progress_callback:
+                progress_callback("Tuning sweep completed, analyzing results...")
             
             # Get the best result
             best_result = results.get_best_result(metric="mean_accuracy", mode="max")
@@ -235,11 +256,45 @@ class HyperparameterTuningService:
             logger.info(f"🏆 Best trial achieved AUC: {best_result.metrics.get('mean_accuracy', 0):.4f}")
             logger.info(f"📈 Best trial config: {best_result.config}")
             
+            if progress_callback:
+                progress_callback("Promoting best model...")
+            
             # Promote the best model
             promotion_result = self._promote_best_model(best_result, experiment_name)
             
+            if progress_callback:
+                progress_callback("Logging tuning results...")
+            
             # Log successful tuning to flashbulb memory
-            self._log_tuning_success(best_result, experiment_name, promotion_result)
+            self._log_tuning_success(best_result, experiment_name, promotion_result, total_trials)
+            
+            if progress_callback:
+                progress_callback("Tuning sweep completed successfully!")
+            
+            # If we have a status actor handle, update the final status directly
+            if status_actor_handle and job_id:
+                try:
+                    ray.get(status_actor_handle.set_status.remote(job_id, {
+                        "status": "COMPLETED",
+                        "result": {
+                            "status": "success",
+                            "experiment_name": experiment_name,
+                            "best_trial": {
+                                "trial_id": best_result.metrics.get("trial_id"),
+                                "auc": best_result.metrics.get("mean_accuracy"),
+                                "logloss": best_result.metrics.get("logloss"),
+                                "training_time": best_result.metrics.get("training_time"),
+                                "config": best_result.config,
+                            },
+                            "promotion": promotion_result,
+                            "total_trials": total_trials,
+                            "experiment_path": str(best_result.path) if hasattr(best_result, 'path') else "~/ray_results"
+                        },
+                        "progress": "Tuning sweep completed successfully"
+                    }))
+                    logger.info(f"✅ Direct status update sent to actor for job {job_id}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to send direct status update to actor: {e}")
             
             return {
                 "status": "success",
@@ -252,17 +307,29 @@ class HyperparameterTuningService:
                     "config": best_result.config,
                 },
                 "promotion": promotion_result,
-                "total_trials": len(results),
+                "total_trials": total_trials,
                 "experiment_path": str(best_result.path) if hasattr(best_result, 'path') else "~/ray_results"
             }
             
         except Exception as e:
-            logger.error(f"❌ Tuning sweep failed: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "experiment_name": experiment_name
-            }
+            error_msg = f"Tuning sweep failed: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            if progress_callback:
+                progress_callback(f"Error: {error_msg}")
+            
+            # If we have a status actor handle, update the error status directly
+            if status_actor_handle and job_id:
+                try:
+                    ray.get(status_actor_handle.set_status.remote(job_id, {
+                        "status": "FAILED",
+                        "result": {"error": error_msg},
+                        "progress": f"Tuning sweep failed: {error_msg}"
+                    }))
+                    logger.info(f"✅ Direct error status update sent to actor for job {job_id}")
+                except Exception as actor_error:
+                    logger.warning(f"⚠️ Failed to send direct error status update to actor: {actor_error}")
+            
+            raise Exception(error_msg)
     
     def _promote_best_model(self, best_result, experiment_name: str) -> Dict[str, Any]:
         """
@@ -277,16 +344,58 @@ class HyperparameterTuningService:
         """
         try:
             # Get the best model path from the trial
-            trial_id = best_result.metrics.get("trial_id", "unknown")
+            # Ray Tune stores the trial ID in the result object
+            trial_id = getattr(best_result, 'trial_id', None)
+            if not trial_id:
+                # Fallback: try to extract from metrics or generate a unique ID
+                trial_id = best_result.metrics.get("trial_id", f"trial_{int(time.time() * 1000) % 10000}")
+            
             best_model_name = f"tune_trial_{trial_id}"
             
             # Source model path (from the trial)
-            source_model_path = self.model_storage_path / best_model_name / "model.xgb"
+            # Ray Tune stores the trial path in the result object
+            trial_path = getattr(best_result, 'path', None)
+            if trial_path:
+                # Use the actual trial path from Ray Tune
+                source_model_path = Path(trial_path) / "model.xgb"
+            else:
+                # Fallback to our storage path
+                source_model_path = self.model_storage_path / best_model_name / "model.xgb"
             
             # Define a stable, "blessed" path for the best model
             blessed_model_name = f"utility_risk_model_latest"
             blessed_model_path = self.model_storage_path / blessed_model_name / "model.xgb"
             blessed_model_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Fix race condition: Wait for model file to be available with retry logic
+            max_retries = 10
+            retry_delay = 2  # seconds
+            
+            for attempt in range(max_retries):
+                if source_model_path.exists():
+                    # File exists, proceed with promotion
+                    break
+                else:
+                    logger.info(f"   Waiting for model file (attempt {attempt + 1}/{max_retries}): {source_model_path}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        # Also check for alternative model file locations
+                        if trial_path:
+                            trial_dir = Path(trial_path)
+                            if trial_dir.exists():
+                                # Look for any .xgb files in the trial directory
+                                model_files = list(trial_dir.glob("*.xgb"))
+                                if model_files:
+                                    source_model_path = model_files[0]
+                                    logger.info(f"   Found alternative model file: {source_model_path}")
+                                    break
+            else:
+                # All retries exhausted
+                logger.error(f"❌ Model file not found after {max_retries} retries: {source_model_path}")
+                return {
+                    "status": "error",
+                    "error": f"Model file not found after {max_retries} retries: {source_model_path}"
+                }
             
             # Copy the model to the stable path
             if source_model_path.exists():
@@ -319,6 +428,31 @@ class HyperparameterTuningService:
                 }
             else:
                 logger.error(f"❌ Source model not found: {source_model_path}")
+                logger.error(f"   Trial path: {trial_path}")
+                logger.error(f"   Trial ID: {trial_id}")
+                logger.error(f"   Best result type: {type(best_result)}")
+                logger.error(f"   Best result attributes: {dir(best_result)}")
+                
+                # Try to find any model files in the trial directory
+                if trial_path:
+                    trial_dir = Path(trial_path)
+                    if trial_dir.exists():
+                        model_files = list(trial_dir.glob("*.xgb"))
+                        logger.info(f"   Found model files in trial directory: {model_files}")
+                        
+                        if model_files:
+                            # Use the first model file found
+                            source_model_path = model_files[0]
+                            shutil.copy2(source_model_path, blessed_model_path)
+                            logger.info(f"✅ Model promoted from alternative path: {source_model_path}")
+                            
+                            return {
+                                "status": "success",
+                                "source_path": str(source_model_path),
+                                "blessed_path": str(blessed_model_path),
+                                "note": "Used alternative model path"
+                            }
+                
                 return {
                     "status": "error",
                     "error": f"Source model not found: {source_model_path}"
@@ -349,7 +483,7 @@ class HyperparameterTuningService:
             logger.error(f"❌ Failed to get tuning history: {e}")
             return []
     
-    def _log_tuning_success(self, best_result, experiment_name: str, promotion_result: Dict[str, Any]) -> None:
+    def _log_tuning_success(self, best_result, experiment_name: str, promotion_result: Dict[str, Any], total_trials: int) -> None:
         """
         Log a successful tuning run to flashbulb memory.
         
@@ -377,7 +511,7 @@ class HyperparameterTuningService:
                 "best_params": best_result.config,
                 "trial_id": best_result.metrics.get("trial_id"),
                 "promotion_status": promotion_result.get("status"),
-                "total_trials": len(best_result.metrics) if hasattr(best_result, 'metrics') else 0
+                "total_trials": total_trials
             }
             
             # Calculate salience score based on performance improvement

@@ -10,7 +10,7 @@ This module provides a Ray Serve application that deploys:
 
 import ray
 from ray import serve
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
 import json
 import logging
@@ -18,15 +18,152 @@ import time
 import requests
 import httpx
 import os
+import uuid
+import asyncio
+import math
+import concurrent.futures
+import threading
+from typing import Tuple
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Create a thread pool executor for running CPU-intensive tuning jobs
+thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+
+@ray.remote
+class StatusActor:
+    """Ray Actor for managing shared job status state across threads and processes."""
+    
+    def __init__(self):
+        self.job_status = {}
+        self._lock = threading.RLock()
+    
+    def set_status(self, job_id: str, payload: Dict[str, Any]) -> None:
+        """Set the status for a specific job."""
+        with self._lock:
+            # Preserve submitted_at if the update doesn't include it
+            existing = self.job_status.get(job_id)
+            if existing and "submitted_at" in existing and "submitted_at" not in payload:
+                payload = dict(payload)
+                payload["submitted_at"] = existing["submitted_at"]
+            self.job_status[job_id] = payload
+    
+    def get_status(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Get the status for a specific job."""
+        with self._lock:
+            return self.job_status.get(job_id)
+    
+    def get_all_statuses(self) -> Dict[str, Dict[str, Any]]:
+        """Get all job statuses."""
+        with self._lock:
+            return self.job_status.copy()
+    
+    def delete_job(self, job_id: str) -> bool:
+        """Delete a job status."""
+        with self._lock:
+            if job_id in self.job_status:
+                del self.job_status[job_id]
+                return True
+            return False
+    
+    def clear_all(self) -> None:
+        """Clear all job statuses."""
+        with self._lock:
+            self.job_status.clear()
+
+def sanitize_json(data):
+    """
+    Recursively cleans a dictionary or list to make it JSON compliant.
+    Replaces NaN, Infinity, and -Infinity with None.
+    
+    Args:
+        data: The data to sanitize (dict, list, or primitive type)
+        
+    Returns:
+        Sanitized data that is JSON compliant
+    """
+    if isinstance(data, dict):
+        return {k: sanitize_json(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [sanitize_json(i) for i in data]
+    elif isinstance(data, float):
+        if math.isnan(data):
+            logger.debug(f"Replacing NaN with None in JSON sanitization")
+            return None
+        elif math.isinf(data):
+            logger.debug(f"Replacing {data} with None in JSON sanitization")
+            return None
+        return data
+    elif isinstance(data, np.floating):
+        # Handle numpy float types
+        if np.isnan(data) or np.isinf(data):
+            logger.debug(f"Replacing numpy {data} with None in JSON sanitization")
+            return None
+        return float(data)
+    elif isinstance(data, np.integer):
+        # Handle numpy integer types
+        return int(data)
+    elif isinstance(data, np.ndarray):
+        # Handle numpy arrays
+        return sanitize_json(data.tolist())
+    return data
+
 # Create FastAPI app for ML services
 ml_app = FastAPI()
+
+# Global status actor for shared job state (initialized in MLService.__init__)
+status_actor = None
+
+# Local in-process fallback (works even if actor is unavailable)
+_local_status: Dict[str, Dict[str, Any]] = {}
+_local_lock = threading.RLock()
+
+def _status_set_local(job_id: str, payload: Dict[str, Any]) -> None:
+    with _local_lock:
+        _local_status[job_id] = payload
+
+def _status_get_local(job_id: str) -> Optional[Dict[str, Any]]:
+    with _local_lock:
+        return _local_status.get(job_id)
+
+def _status_all_local() -> Dict[str, Dict[str, Any]]:
+    with _local_lock:
+        return dict(_local_status)
+
+def _status_set(job_id: str, payload: Dict[str, Any]) -> None:
+    """Sync helper: try actor first, fallback to local dict."""
+    global status_actor
+    if status_actor:
+        try:
+            ray.get(status_actor.set_status.remote(job_id, payload))
+            return
+        except Exception as e:
+            logger.error(f"StatusActor.set failed (falling back): {e}")
+    _status_set_local(job_id, payload)
+
+def _status_get(job_id: str) -> Optional[Dict[str, Any]]:
+    """Sync helper: try actor first, fallback to local dict."""
+    global status_actor
+    if status_actor:
+        try:
+            return ray.get(status_actor.get_status.remote(job_id))
+        except Exception as e:
+            logger.error(f"StatusActor.get failed (falling back): {e}")
+    return _status_get_local(job_id)
+
+def _status_all() -> Dict[str, Dict[str, Any]]:
+    """Sync helper: try actor first, fallback to local dict."""
+    global status_actor
+    if status_actor:
+        try:
+            return ray.get(status_actor.get_all_statuses.remote())
+        except Exception as e:
+            logger.error(f"StatusActor.get_all_statuses failed (falling back): {e}")
+    return _status_all_local()
 
 @ml_app.get("/")
 async def root():
@@ -49,6 +186,11 @@ async def root():
                 "model_info": "/xgboost/model_info",
                 "delete_model": "/xgboost/delete_model",
                 "tune": "/xgboost/tune",
+                "tune_async": {
+                    "submit": "/xgboost/tune/submit",
+                    "status": "/xgboost/tune/status/{job_id}",
+                    "list_jobs": "/xgboost/tune/jobs"
+                },
                 "refresh_model": "/xgboost/refresh_model"
             }
         }
@@ -265,7 +407,10 @@ async def train_xgboost_model(request: Dict[str, Any]):
             model_name=train_request.name
         )
         
-        return TrainModelResponse(**result)
+        # Sanitize the result to ensure JSON compliance
+        sanitized_result = sanitize_json(result)
+        
+        return TrainModelResponse(**sanitized_result)
         
     except Exception as e:
         logger.error(f"Error in XGBoost training: {e}")
@@ -299,9 +444,12 @@ async def predict_xgboost(request: Dict[str, Any]):
         else:
             prediction = [float(p) for p in predictions]
         
+        # Sanitize the prediction to ensure JSON compliance
+        sanitized_prediction = sanitize_json(prediction)
+        
         return PredictResponse(
             status="success",
-            prediction=prediction,
+            prediction=sanitized_prediction,
             path=xgb_service.current_model_path or "unknown"
         )
         
@@ -474,11 +622,109 @@ async def run_tuning_sweep(request: Dict[str, Any]):
             experiment_name=tune_request.experiment_name
         )
         
-        return TuneResponse(**result)
+        # Sanitize the result to ensure JSON compliance
+        sanitized_result = sanitize_json(result)
+        
+        return TuneResponse(**sanitized_result)
         
     except Exception as e:
         logger.error(f"Error in XGBoost tuning: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@ray.remote
+def _run_tuning_job_task(status_actor_handle, job_id: str, request: Dict[str, Any]):
+    """Ray Task that runs the actual tuning job in the background."""
+    stop_heartbeat = threading.Event()
+    start_ts = time.time()
+
+    def _heartbeat():
+        """Inner function for the heartbeat thread."""
+        while not stop_heartbeat.wait(5): # Wait for 5 seconds
+            try:
+                elapsed = int(time.time() - start_ts)
+                _status_set(job_id, {
+                    "status": "RUNNING", "result": None,
+                    "progress": f"Running... {elapsed}s elapsed"
+                })
+            except Exception as e:
+                logger.warning(f"Heartbeat for job {job_id} failed: {e}")
+
+    heartbeat_thread = threading.Thread(target=_heartbeat, daemon=True)
+    heartbeat_thread.start()
+
+    try:
+        from src.seedcore.ml.tuning_service import get_tuning_service
+
+        tuning_service = get_tuning_service()
+        result = tuning_service.run_tuning_sweep(
+            space_type=request.get("space_type", "default"),
+            config_type=request.get("config_type", "default"),
+            experiment_name=request.get("experiment_name", f"async_tuning_{job_id}")
+        )
+
+        sanitized_result = sanitize_json(result)
+        _status_set(job_id, {
+            "status": "COMPLETED",
+            "result": sanitized_result,
+            "progress": "Tuning sweep completed successfully"
+        })
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"❌ Async tuning job {job_id} failed: {error_msg}")
+        _status_set(job_id, {
+            "status": "FAILED",
+            "result": {"error": error_msg},
+            "progress": f"Tuning sweep failed: {error_msg}"
+        })
+    finally:
+        stop_heartbeat.set()
+
+@ml_app.post("/xgboost/tune/submit")
+async def submit_tuning_job(request: Dict[str, Any], background_tasks: BackgroundTasks):
+    """Submit a tuning job asynchronously by launching a Ray Task."""
+    job_id = f"tune-{uuid.uuid4().hex[:8]}"
+
+    try:
+        # Initialize job status (actor or local fallback)
+        await asyncio.to_thread(_status_set, job_id, {
+            "status": "PENDING",
+            "result": None,
+            "progress": "Job submitted, waiting to start...",
+            "submitted_at": time.time()
+        })
+
+        # Offload to a background thread; never blocks the event loop.
+        asyncio.create_task(asyncio.to_thread(_run_tuning_job_task, status_actor, job_id, request))
+
+    except Exception as e:
+        logger.error(f"Failed to submit tuning job {job_id}: {e}")
+        # Attempt to mark the job as failed if submission fails after status creation
+        try:
+            await asyncio.to_thread(_status_set, job_id, {
+                "status": "FAILED",
+                "result": {"error": f"Submission error: {e}"},
+                "progress": "Failed to launch job task."
+            })
+        finally:
+            raise HTTPException(status_code=500, detail=f"Failed to submit job: {e}")
+
+    return {"status": "submitted", "job_id": job_id}
+
+@ml_app.get("/xgboost/tune/status/{job_id}")
+async def get_tuning_status(job_id: str):
+    """Check the status of a tuning job (actor or local fallback)."""
+    status = await asyncio.to_thread(_status_get, job_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Job ID not found")
+
+    return sanitize_json(status)
+
+@ml_app.get("/xgboost/tune/jobs")
+async def list_tuning_jobs():
+    """List all tuning jobs and their statuses (actor or local fallback)."""
+    all_statuses = await asyncio.to_thread(_status_all)
+    return {"total_jobs": len(all_statuses), "jobs": sanitize_json(list(all_statuses.values()))}
 
 @ml_app.post("/xgboost/refresh_model")
 async def refresh_xgboost_model():
@@ -638,6 +884,7 @@ async def promote_xgboost_model(request: Dict[str, Any]):
 
 @serve.deployment(
     num_replicas=1,
+    max_ongoing_requests=1,  # serialize within replica; avoids races
     ray_actor_options={"num_cpus": 0.1, "num_gpus": 0, "memory": 200000000}
 )
 @serve.ingress(ml_app)
@@ -646,6 +893,31 @@ class MLService:
     
     def __init__(self):
         logger.info("✅ MLService initialized successfully")
+        
+        # Initialize the status actor for shared job state
+        global status_actor
+        try:
+            # Resolve a stable Ray namespace to avoid drift across workers
+            ns = None
+            try:
+                ns = ray.get_runtime_context().namespace
+            except Exception:
+                ns = os.getenv("RAY_NAMESPACE", None)
+            # Try to get existing status actor or create new one in the same namespace
+            try:
+                status_actor = ray.get_actor("job_status_actor", namespace=ns)
+                logger.info(f"✅ Connected to existing status actor (ns={ns})")
+            except Exception:
+                status_actor = StatusActor.options(
+                    name="job_status_actor",
+                    lifetime="detached",
+                    namespace=ns
+                ).remote()
+                logger.info(f"✅ Created new status actor (ns={ns})")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize status actor: {e}")
+            status_actor = None
+        
         # Initialize models lazily to avoid startup issues
         self._salience_scorer = None
         self._xgboost_service = None
@@ -682,8 +954,9 @@ class MLService:
                 self._xgboost_service = None
         return self._xgboost_service
 
-def create_serve_app():
+def create_serve_app(args: Dict[str, Any]):
     """Create a single Ray Serve deployment."""
+    # The 'args' parameter is not used here, but is required by the RayService API.
     try:
         # Create a single deployment with FastAPI ingress
         ml_service = MLService.bind()
@@ -798,5 +1071,5 @@ class SalienceServiceClient:
 
 if __name__ == "__main__":
     # For direct execution
-    app = create_serve_app()
+    app = create_serve_app({})
     serve.run(app) 

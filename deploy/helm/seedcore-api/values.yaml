@@ -4,7 +4,7 @@ service:
   type: ClusterIP
   port: 80
 env:
-  RAY_ADDRESS: ray://seedcore-head-svc:10001
+  RAY_ADDRESS: ray://seedcore-svc-head-svc:10001
   SEEDCORE_NS: seedcore-dev
   COG_APP_NAME: seedcore-dev-dev-cognitive_core
   COG_MIN_READY: "1"

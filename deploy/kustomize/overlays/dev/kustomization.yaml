@@ -11,10 +11,10 @@ generatorOptions:
 configMapGenerator:
   - name: seedcore-client-env
     literals:
-      - RAY_ADDRESS=ray://seedcore-head-svc:10001
+      - RAY_ADDRESS=ray://seedcore-svc-head-svc:10001
       - RAY_NAMESPACE=seedcore-dev
-      - RAY_SERVE_ADDRESS=http://seedcore-head-svc:8000
-      - RAY_DASHBOARD_ADDRESS=http://seedcore-head-svc:8265
+      - RAY_SERVE_ADDRESS=http://seedcore-svc-head-svc:8000
+      - RAY_DASHBOARD_ADDRESS=http://seedcore-svc-head-svc:8265
 
 resources:
   - ../../base

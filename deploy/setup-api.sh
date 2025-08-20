@@ -157,6 +157,18 @@ else
   fi
 fi
 
+# Update shared ConfigMap if in use
+if $use_shared_cm && [[ -f "$ENV_FILE" ]]; then
+  print_status INFO "Updating seedcore-env from $ENV_FILE ..."
+  kubectl -n "$NAMESPACE" create configmap seedcore-env \
+    --from-env-file="$ENV_FILE" \
+    -o yaml --dry-run=client | kubectl apply -f -
+  print_status OK "ConfigMap 'seedcore-env' updated"
+
+  # Optional: trigger pods to reload envs
+  # kubectl -n "$NAMESPACE" rollout restart deployment "$SERVICE_NAME"
+fi
+
 # Create fallback ConfigMap from ENV_FILE if needed
 if $use_file_cm; then
   if [[ -f "$ENV_FILE" ]]; then

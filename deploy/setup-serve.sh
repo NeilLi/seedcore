@@ -183,7 +183,7 @@ print_status "OK" "Serve service (stable): ${STABLE_SERVE_SVC}"
 echo "🔌 Port-forward (run in separate terminals):"
 echo "  - Dashboard: kubectl -n ${NAMESPACE} port-forward svc/${HEAD_SVC} 8265:8265"
 echo "  - Ray Client: kubectl -n ${NAMESPACE} port-forward svc/${HEAD_SVC} 10001:10001"
-echo "  - Serve HTTP: kubectl -n ${NAMESPACE} port-forward svc/${STABLE_SERVE_SVC} 8001:8000"
+echo "  - Serve HTTP: kubectl -n ${NAMESPACE} port-forward svc/${STABLE_SERVE_SVC} 8000:8000"
 
 # ---------- Final summary ----------
 echo

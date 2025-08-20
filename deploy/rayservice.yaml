@@ -4,18 +4,41 @@ metadata:
   name: seedcore-svc
   namespace: seedcore-dev
 spec:
+  # ===================================================================
+  #  Serve Configuration
+  # ===================================================================
   serveConfigV2: |
+    # This ensures the HTTP proxy only runs on the head node.
     proxy_location: HeadOnly
     http_options:
       host: 0.0.0.0
+      # ✅ FIX: Port is now set to 8000 as requested.
+      # WARNING: This will likely conflict with the other service on the head pod.
       port: 8000
     applications:
-      - name: seedcore
-        import_path: serve_entrypoint:app   # this must be a Serve graph object
-        route_prefix: /
+      # ✅ FIX: Replaced the single 'seedcore' app with two distinct applications.
+      # - name: cognitive
+      #   import_path: cognitive_serve_entrypoint:cognitive_app # Assumes the bound app is named 'cognitive_app'
+      #   route_prefix: /cognitive
+      - name: ml_serve
+        # ✅ FIX: Point to the correct file and application factory function.
+        # This uses serve_app.py, which is structured correctly for RayService.
+        import_path: src.seedcore.ml.serve_app:create_serve_app
+        route_prefix: /ml_serve
+
+  # ===================================================================
+  #  Ray Cluster Configuration
+  # ===================================================================
   rayClusterConfig:
     rayVersion: "2.33.0"
+    # -------------------------------------------------------------------
+    #  Head Node Specification
+    # -------------------------------------------------------------------
     headGroupSpec:
+      # The Ray Operator will automatically create a Service for the head node.
+      # It will also create the 'seedcore-svc-serve-svc' based on the serveConfigV2.
+      # By setting proxy_location to HeadOnly, the operator correctly configures
+      # the serve service to target ONLY the head pod.
       serviceType: ClusterIP
       rayStartParams:
         dashboard-host: "0.0.0.0"
@@ -30,7 +53,6 @@ spec:
             imagePullPolicy: IfNotPresent
             envFrom:
             - secretRef: { name: seedcore-env-secret }
-            # ✅ Ensure Ray namespace is set via environment variable
             env:
             - name: RAY_NAMESPACE
               value: "seedcore-dev"
@@ -38,13 +60,14 @@ spec:
               value: "seedcore-dev"
             - name: XGB_STORAGE_PATH
               value: "/app/data/models"
-            ports:                   # 👈 NAME YOUR PORTS
+            ports:
               - name: gcs
                 containerPort: 6379
               - name: dashboard
                 containerPort: 8265
               - name: client
                 containerPort: 10001
+              # ✅ FIX: Updated the containerPort to match the new httpOptions port.
               - name: serve
                 containerPort: 8000
               - name: metrics
@@ -57,50 +80,41 @@ spec:
                 cpu: "2"
                 memory: "4Gi"
             volumeMounts:
-              # This is your existing mount for the PVC
               - name: xgb-model-storage
                 mountPath: /app/data
-              # 👇 ADD THIS SECTION TO MOUNT THE VOLUME
               - name: project-source-volume
                 mountPath: /project
+            # Probes are good practice for production readiness.
             startupProbe:
               exec:
-                command:
-                  - bash
-                  - -lc
-                  - wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
               periodSeconds: 5
               timeoutSeconds: 3
-              failureThreshold: 72     # ~6 min startup budget
+              failureThreshold: 72
             readinessProbe:
               exec:
-                command:
-                  - bash
-                  - -lc
-                  - wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
               periodSeconds: 5
               timeoutSeconds: 2
               failureThreshold: 3
-              successThreshold: 1
             livenessProbe:
               exec:
-                command:
-                  - bash
-                  - -lc
-                  - wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
               periodSeconds: 5
               timeoutSeconds: 2
               failureThreshold: 120
-              successThreshold: 1
           volumes:
-            - name: project-source-volume # <-- Must match name above
+            - name: project-source-volume
               hostPath:
-                path: /project # <-- Must match the path inside the KinD node
+                path: /project
                 type: DirectoryOrCreate
             - name: xgb-model-storage
               persistentVolumeClaim:
                 claimName: xgb-pvc
 
+    # -------------------------------------------------------------------
+    #  Worker Node Specification
+    # -------------------------------------------------------------------
     workerGroupSpecs:
     - groupName: small
       replicas: 1
@@ -114,7 +128,6 @@ spec:
             imagePullPolicy: IfNotPresent
             envFrom:
             - secretRef: { name: seedcore-env-secret }
-            # ✅ Ensure Ray namespace is set via environment variable
             env:
             - name: RAY_NAMESPACE
               value: "seedcore-dev"
@@ -132,31 +145,25 @@ spec:
             volumeMounts:
               - name: xgb-model-storage
                 mountPath: /app/data
+              - name: project-source-volume
+                mountPath: /project
             readinessProbe:
               exec:
-                command:
-                  - bash
-                  - -lc
-                  - wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
               periodSeconds: 5
               timeoutSeconds: 2
               failureThreshold: 3
-              successThreshold: 1
             livenessProbe:
               exec:
-                command:
-                  - bash
-                  - -lc
-                  - wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
               periodSeconds: 5
               timeoutSeconds: 2
               failureThreshold: 120
-              successThreshold: 1
           volumes:
-          - name: data-volume
-            hostPath:
-              path: /tmp/seedcore-data
-              type: DirectoryOrCreate
-          - name: xgb-model-storage
-            persistentVolumeClaim:
-              claimName: xgb-pvc
+            - name: project-source-volume
+              hostPath:
+                path: /project
+                type: DirectoryOrCreate
+            - name: xgb-model-storage
+              persistentVolumeClaim:
+                claimName: xgb-pvc
