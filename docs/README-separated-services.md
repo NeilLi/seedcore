@@ -15,7 +15,7 @@ Previously, the serve modules (`cognitive_serve.py`, `simple_app.py`, `resource_
 - **Entrypoint**: `api_entrypoint_simple.sh`
 - **Dependencies**: None on serve modules
 
-### 2. Cognitive Serve Service (`seedcore-cognitive-serve`)
+### 2. Cognitive Serve Service (`sc_cognitive-serve`)
 - **Purpose**: Cognitive reasoning and AI services
 - **Port**: 8002 (mapped from internal 8000)
 - **Dockerfile**: `Dockerfile.cognitive-serve`
@@ -74,7 +74,7 @@ result = await client.reason_about_failure(...)
 
 # After (loosely coupled)
 import httpx
-client = httpx.AsyncClient(base_url="http://seedcore-cognitive-serve:8000")
+client = httpx.AsyncClient(base_url="http://sc_cognitive-serve:8000")
 response = await client.post("/cognitive/reason-about-failure", json={...})
 result = response.json()
 ```
@@ -146,7 +146,7 @@ Each service has its own health check endpoint:
 ### Service Not Starting
 1. Check if Ray cluster is healthy: `docker-compose --profile ray ps`
 2. Verify database connections are working
-3. Check service logs: `docker logs seedcore-cognitive-serve`
+3. Check service logs: `docker logs sc_cognitive-serve`
 
 ### Communication Issues
 1. Verify network connectivity between services

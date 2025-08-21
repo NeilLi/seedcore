@@ -23,6 +23,8 @@ WORKER_REPLICAS="${WORKER_REPLICAS:-1}"
 # RayService bits
 RAYSERVICE_FILE="${RAYSERVICE_FILE:-rayservice.yaml}"  # path to your RayService YAML
 RS_NAME="${RS_NAME:-seedcore-svc}"                      # metadata.name inside rayservice.yaml
+# ✅ ADDED: Path to your new stable service definition
+STABLE_SERVE_SVC_FILE="${STABLE_SERVE_SVC_FILE:-serve-svc.yaml}"
 
 # Optional CLI: setup-kind-ray.sh [namespace] [cluster_name] [image] [rayservice_file] [rayservice_name]
 if [[ $# -ge 1 ]]; then NAMESPACE="$1"; fi
@@ -147,6 +149,15 @@ if [ -n "${CLUSTER_NAME_FROM_POD}" ]; then
     -n "${NAMESPACE}" --timeout=600s || true
 fi
 
+# ✅ ADDED: ---------- Deploy user-managed stable Serve Service ----------
+if [ -f "${STABLE_SERVE_SVC_FILE}" ]; then
+  print_status "INFO" "Applying stable Serve Service from ${STABLE_SERVE_SVC_FILE}..."
+  kubectl apply -n "${NAMESPACE}" -f "${STABLE_SERVE_SVC_FILE}"
+else
+  print_status "WARN" "Stable Serve Service file '${STABLE_SERVE_SVC_FILE}' not found. Skipping."
+fi
+
+
 # Discover the generated RayCluster name
 print_status "INFO" "Discovering generated RayCluster name..."
 kubectl -n "${NAMESPACE}" get rayservice "${RS_NAME}" \
@@ -162,12 +173,17 @@ kubectl get pods -n "${NAMESPACE}" -l ray.io/cluster="${CLUSTER_NAME_FROM_POD}"
 print_status "INFO" "Services (selector: ray.io/cluster=${CLUSTER_NAME_FROM_POD}):"
 kubectl get svc -n "${NAMESPACE}" -l ray.io/cluster="${CLUSTER_NAME_FROM_POD}"
 
-# --- Discover Services (prefer RayService-managed stable names)
-STABLE_HEAD_SVC="${RS_NAME}-head-svc"
-STABLE_SERVE_SVC="${RS_NAME}-serve-svc"
+# ✅ UPDATED: --- Discover Services ---
+# The operator creates these services automatically
+OPERATOR_HEAD_SVC="${RS_NAME}-head-svc"
+OPERATOR_SERVE_SVC="${RS_NAME}-serve-svc" # This one has the selector issue
 
-if kubectl -n "${NAMESPACE}" get svc "${STABLE_HEAD_SVC}" >/dev/null 2>&1; then
-  HEAD_SVC="${STABLE_HEAD_SVC}"
+# This is our user-managed, truly stable service. The name comes from your serve-svc.yaml
+USER_STABLE_SERVE_SVC="seedcore-svc-stable-svc"
+
+# For dashboard and client, the operator-managed head service is fine
+if kubectl -n "${NAMESPACE}" get svc "${OPERATOR_HEAD_SVC}" >/dev/null 2>&1; then
+  HEAD_SVC="${OPERATOR_HEAD_SVC}"
 else
   # Fallback: cluster-specific head svc (during early init)
   HEAD_SVC="$(kubectl -n "${NAMESPACE}" get svc \
@@ -176,14 +192,15 @@ else
 fi
 
 echo
-print_status "OK" "Head service (stable): ${HEAD_SVC}"
-print_status "OK" "Serve service (stable): ${STABLE_SERVE_SVC}"
+print_status "OK" "Head service (for dashboard/client): ${HEAD_SVC}"
+print_status "WARN" "Operator-managed Serve service (unstable selector): ${OPERATOR_SERVE_SVC}"
+print_status "OK" "User-managed stable Serve service (recommended): ${USER_STABLE_SERVE_SVC}"
 
-# --- Port-forwards (separate mgmt vs app)
+# ✅ UPDATED: --- Port-forwards ---
 echo "🔌 Port-forward (run in separate terminals):"
 echo "  - Dashboard: kubectl -n ${NAMESPACE} port-forward svc/${HEAD_SVC} 8265:8265"
 echo "  - Ray Client: kubectl -n ${NAMESPACE} port-forward svc/${HEAD_SVC} 10001:10001"
-echo "  - Serve HTTP: kubectl -n ${NAMESPACE} port-forward svc/${STABLE_SERVE_SVC} 8000:8000"
+echo "  - Serve HTTP (use the stable service): kubectl -n ${NAMESPACE} port-forward svc/${USER_STABLE_SERVE_SVC} 8000:8000"
 
 # ---------- Final summary ----------
 echo
@@ -199,4 +216,5 @@ echo
 echo "🔧 Useful:"
 echo "   - List pods:        kubectl get pods -n ${NAMESPACE} -w"
 echo "   - RayService YAML:  kubectl -n ${NAMESPACE} get rayservice ${RS_NAME} -o yaml"
+echo "   - Stable Serve SVC: kubectl -n ${NAMESPACE} describe svc ${USER_STABLE_SERVE_SVC}"
 echo "   - Delete cluster:   kind delete cluster --name ${CLUSTER_NAME}"

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Cognitive Serve Entrypoint for SeedCore
+docker/cognitive_serve_entrypoint.py
 
 This service runs the cognitive core and related reasoning services
 as a separate Ray Serve deployment, independent of the main API.
@@ -63,18 +64,14 @@ app = FastAPI(title="SeedCore Cognitive Service", version="1.0.0")
 # Ray Serve Deployment: Replica-Warm Isolation Pattern
 # --------------------------------------------------------------------------
 @serve.deployment(
-    # Name of the deployment within the application
-    name="CognitiveServiceDeployment",
-    # Tune replica count via environment variable for flexibility
+    name="CognitiveService",
     num_replicas=int(os.getenv("COG_SVC_REPLICAS", "1")),
-    # The key to stability: ensures only one request runs at a time per replica
-    max_ongoing_requests=1,
+    max_ongoing_requests=1,  # one request per replica at a time
     ray_actor_options={
-        # Tune CPU allocation per replica via environment variable
-        "num_cpus": int(os.getenv("COG_SVC_NUM_CPUS", "1")),
-        "num_gpus": 0,
-        # Pin the service to the head node for stability
-        # "resources": {"node:__internal_head__": 0.01},
+        "num_cpus": float(os.getenv("COG_SVC_NUM_CPUS", "1")),  # allow 0.5 etc.
+        "num_gpus": float(os.getenv("COG_SVC_NUM_GPUS", "0")),
+        # Pin replicas to the head node resource set by RAY_OVERRIDE_RESOURCES
+        "resources": {"head_node": 0.001},
     },
 )
 @serve.ingress(app)
@@ -92,7 +89,7 @@ class CognitiveService:
     @app.get("/health")
     async def health(self):
         """Health check endpoint."""
-        return {"status": "healthy", "service": "seedcore-cognitive-warm-replica"}
+        return {"status": "healthy", "service": "sc_cognitive-warm-replica"}
 
     @app.get("/")
     async def root(self):
@@ -210,7 +207,7 @@ def main():
         # Deploy the application with a unique name and route prefix
         serve.run(
             cognitive_app,
-            name="seedcore-cognitive",
+            name="sc_cognitive",
             route_prefix="/cognitive"
         )
         print("✅ Cognitive service application is running.")

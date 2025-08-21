@@ -6,15 +6,16 @@ metadata:
 spec:
   # ===================================================================
   #  Serve Configuration
-  # ===================================================================
+  # ===================================================================  
   serveConfigV2: |
     # This ensures the HTTP proxy only runs on the head node.
-    proxy_location: HeadOnly
+    # proxy_location: HeadOnly
     http_options:
       host: 0.0.0.0
       # ✅ FIX: Port is now set to 8000 as requested.
       # WARNING: This will likely conflict with the other service on the head pod.
       port: 8000
+      location: HeadOnly
     applications:
       # ✅ FIX: Replaced the single 'seedcore' app with two distinct applications.
       # - name: cognitive
@@ -45,6 +46,7 @@ spec:
         dashboard-port: "8265"
         ray-client-server-port: "10001"
         num-cpus: "2"
+
       template:
         spec:
           containers:
@@ -54,6 +56,8 @@ spec:
             envFrom:
             - secretRef: { name: seedcore-env-secret }
             env:
+            - name: RAY_OVERRIDE_RESOURCES
+              value: '{"head_node": 1}'
             - name: RAY_NAMESPACE
               value: "seedcore-dev"
             - name: SEEDCORE_NS
@@ -75,10 +79,10 @@ spec:
             resources:
               requests:
                 cpu: "500m"
-                memory: "1Gi"
+                memory: "4Gi"
               limits:
                 cpu: "2"
-                memory: "4Gi"
+                memory: "8Gi"
             volumeMounts:
               - name: xgb-model-storage
                 mountPath: /app/data

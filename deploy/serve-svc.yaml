@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  # A new, stable name for your service
+  name: seedcore-svc-stable-svc
+  namespace: seedcore-dev
+spec:
+  selector:
+    # This selector is specific and will ONLY match the head pod,
+    # resolving the intermittent connection issue permanently.
+    ray.io/is-ray-node: "yes"
+    ray.io/node-type: head
+  ports:
+    - name: serve
+      protocol: TCP
+      port: 8000
+      targetPort: 8000

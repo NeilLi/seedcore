@@ -45,7 +45,7 @@ The DSPy integration has been significantly enhanced with new examples, optimize
 
 ### 2. Namespace Management
 - **Problem**: Inconsistent naming with serve_entrypoint.py
-- **Solution**: Consistent app naming (`seedcore-cognitive`)
+- **Solution**: Consistent app naming (`sc_cognitive`)
 - **Result**: Proper integration with existing infrastructure
 
 ### 3. Health Monitoring

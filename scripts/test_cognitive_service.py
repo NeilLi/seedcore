@@ -158,7 +158,7 @@ def test_error_handling():
     total_count = 2
     
     # Test with missing required fields
-    invalid_data = {"agent_id": ""}  # Missing required agent_id
+    invalid_data = {"incident_context": {}} # This is correct, agent_id is missing
     
     # Test with invalid data
     if test_endpoint("POST", "/reason-about-failure", invalid_data, expected_status=422):

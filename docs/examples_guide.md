@@ -133,7 +133,7 @@ docker exec -it seedcore-api python examples/optimized_dspy_integration_example.
 ┌─────────────────────────────────────────────────────────────┐
 │                    Optimized Deployment                     │
 ├─────────────────────────────────────────────────────────────┤
-│  App Name: "seedcore-cognitive"                            │
+│  App Name: "sc_cognitive"                            │
 │  Route Prefix: "/cognitive"                                │
 │  Namespace: Default (consistent with serve_entrypoint.py)  │
 │  Health Endpoint: "/cognitive/health"                      │
@@ -161,16 +161,16 @@ docker exec -it seedcore-api python examples/optimized_dspy_integration_example.
 
 === Example 2: Optimized Ray Serve Deployment ===
 🔍 Existing applications: ['seedcore-ml']
-📝 Cognitive app 'seedcore-cognitive' not found, will deploy
-🚀 Deploying cognitive core as 'seedcore-cognitive'...
+📝 Cognitive app 'sc_cognitive' not found, will deploy
+🚀 Deploying cognitive core as 'sc_cognitive'...
 ✅ Connected to Ray cluster at ray://ray-head:10001
 ✅ Serve is running
 ⏳ Waiting for cognitive core deployment to be ready...
-✅ Cognitive core deployed successfully as 'seedcore-cognitive'
+✅ Cognitive core deployed successfully as 'sc_cognitive'
    Route: /cognitive
    Health: http://localhost:8000/cognitive/health
 
-✅ Created cognitive core client for 'seedcore-cognitive'
+✅ Created cognitive core client for 'sc_cognitive'
 
 🔍 Ray Serve Failure Analysis Result:
   Success: True
@@ -180,10 +180,10 @@ docker exec -it seedcore-api python examples/optimized_dspy_integration_example.
   Proposed Solution: To prevent recurrence, the agent's capability should be enhanced...
 
 📊 Deployment Status:
-  App: seedcore-cognitive
+  App: sc_cognitive
   Status: RUNNING
   Route: /cognitive
-  Deployments: ['seedcore-cognitive']
+  Deployments: ['sc_cognitive']
 
 🎉 Optimized DSPy integration example completed!
 ```

@@ -62,7 +62,7 @@ print_status "INFO" "Configuration:"
 echo "  - Ray Client Address: ${RAY_ADDRESS:-ray://seedcore-svc-head-svc:10001}"
 echo "  - Ray Namespace: ${RAY_NAMESPACE:-seedcore-dev}"
 echo "  - Ray Serve URL: ${RAY_SERVE_URL:-http://seedcore-svc-serve-svc:8000}"
-echo "  - Cognitive App Name: ${COG_APP_NAME:-seedcore-cognitive}"
+echo "  - Cognitive App Name: ${COG_APP_NAME:-sc_cognitive}"
 
 # Test import of the entrypoint
 print_status "INFO" "Testing cognitive service entrypoint import..."

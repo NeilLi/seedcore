@@ -36,7 +36,7 @@ from seedcore.serve.cognitive_serve import (
 from seedcore.config.llm_config import configure_llm_openai
 
 # Configuration constants
-COGNITIVE_APP_NAME = "seedcore-cognitive"  # Use consistent naming with serve_entrypoint
+COGNITIVE_APP_NAME = "sc_cognitive"  # Use consistent naming with serve_entrypoint
 COGNITIVE_ROUTE_PREFIX = "/cognitive"      # Dedicated route prefix
 MAX_DEPLOY_RETRIES = 30
 DELAY = 2
