@@ -7,7 +7,7 @@ spec:
     serviceType: ClusterIP
     rayStartParams:
       dashboard-host: "0.0.0.0"
-      port: "6380"
+      port: "6379"
     template:
       spec:
         containers:
@@ -15,7 +15,7 @@ spec:
           image: {{ .Values.head.image }}
           ports:
           - name: gcs
-            containerPort: 6380
+            containerPort: 6379
           - name: client
             containerPort: 10001
           - name: dashboard
