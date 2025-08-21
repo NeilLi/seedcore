@@ -26,10 +26,14 @@ print_status() {
 
 print_status "INFO" "Deploying Cognitive Service from API pod to Ray head node..."
 
-# Check if we're in the right directory
-if [ ! -f "cognitive_serve_entrypoint.py" ]; then
-    print_status "ERROR" "cognitive_serve_entrypoint.py not found in current directory"
-    print_status "INFO" "Please run this script from the docker/ directory"
+# Get the script directory and project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+COGNITIVE_ENTRYPOINT="$PROJECT_ROOT/entrypoints/cognitive_entrypoint.py"
+
+# Check if the cognitive entrypoint exists
+if [ ! -f "$COGNITIVE_ENTRYPOINT" ]; then
+    print_status "ERROR" "Cognitive entrypoint not found at: $COGNITIVE_ENTRYPOINT"
     exit 1
 fi
 
@@ -66,7 +70,7 @@ echo "  - Cognitive App Name: ${COG_APP_NAME:-sc_cognitive}"
 
 # Test import of the entrypoint
 print_status "INFO" "Testing cognitive service entrypoint import..."
-if python3 -c "import sys; sys.path.insert(0, '/app'); sys.path.insert(0, '/app/src'); import cognitive_serve_entrypoint" 2>/dev/null; then
+if python3 -c "import sys; sys.path.insert(0, '$(dirname "$COGNITIVE_ENTRYPOINT")'); import cognitive_entrypoint" 2>/dev/null; then
     print_status "OK" "Cognitive service entrypoint can be imported successfully"
 else
     print_status "WARN" "Cognitive service entrypoint import test failed. Attempting to run anyway..."
@@ -79,4 +83,4 @@ print_status "INFO" "From any pod in the cluster, test with:"
 print_status "INFO" "  curl http://seedcore-svc-serve-svc:8000/cognitive/health"
 print_status "INFO" "Press Ctrl+C to stop the deployment driver."
 
-exec python3 cognitive_serve_entrypoint.py
+exec python3 "$COGNITIVE_ENTRYPOINT"

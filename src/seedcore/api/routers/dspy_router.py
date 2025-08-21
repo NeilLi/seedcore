@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 import os
 from ray import serve
 
-from ...cognitive.dspy_client import for_env
+from ...cognitive import for_env
 
 
 router = APIRouter(prefix="/cog", tags=["cognitive"])

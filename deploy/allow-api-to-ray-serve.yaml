@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-to-ray-serve
+  namespace: seedcore-dev
+spec:
+  podSelector:
+    matchLabels:
+      ray.io/is-ray-node: "yes"
+      ray.io/group: headgroup
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: seedcore-api
+    ports:
+    - protocol: TCP
+      port: 8000 # For HTTP
+    # ✅ ADDED: Also allow traffic to the Ray Client port
+    - protocol: TCP
+      port: 10001 # For Ray Client

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional
 
-from ..cognitive.dspy_client import for_env
+from ..cognitive import for_env
 
 
 class RayAgentCognitiveIntegration:

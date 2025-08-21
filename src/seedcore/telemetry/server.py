@@ -2419,9 +2419,30 @@ async def get_dspy_status():
         client = get_cognitive_client()
         cognitive_core = get_cognitive_core()
         
+        # Check Ray Serve cognitive core availability
+        ray_serve_cognitive_available = False
+        try:
+            logger.info("Checking Ray Serve cognitive core availability...")
+            if client:
+                logger.info("HTTP client available, checking cognitive core deployment...")
+                # Use our enhanced client to check if the cognitive core is deployed
+                from ..cognitive import for_env
+                logger.info("Successfully imported for_env from cognitive module")
+                dspy_client = for_env()
+                logger.info("Successfully created DSpy client")
+                ray_serve_cognitive_available = dspy_client.is_deployed()
+                logger.info(f"Ray Serve cognitive core deployed: {ray_serve_cognitive_available}")
+            else:
+                logger.info("HTTP client not available, skipping Ray Serve check")
+        except Exception as e:
+            logger.error(f"Error checking Ray Serve cognitive core: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+        
         return {
             "success": True,
             "cognitive_core_available": cognitive_core is not None,
+            "ray_serve_cognitive_available": ray_serve_cognitive_available,
             "serve_client_available": client is not None,
             "supported_task_types": [task.value for task in CognitiveTaskType],
             "timestamp": time.time()
