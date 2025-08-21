@@ -26,7 +26,6 @@ WORKDIR /app
 COPY --chown=ray:ray src/ ./src/
 COPY --chown=ray:ray scripts/ ./scripts/
 COPY --chown=ray:ray docker/ ./docker/
-COPY --chown=ray:ray docker/serve_entrypoint.py /app/serve_entrypoint.py
 
 # ---- Runtime env ----
 ENV PYTHONUNBUFFERED=1 \
@@ -48,4 +47,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=10 \
 try:\n r=urllib.request.urlopen(u, timeout=5); sys.exit(0 if r.getcode()==200 else 1)\nexcept Exception:\n sys.exit(1)"]
 
 
-CMD ["python", "/app/serve_entrypoint.py"]
