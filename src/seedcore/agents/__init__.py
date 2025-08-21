@@ -20,11 +20,13 @@ from .base import Agent
 from .lifecycle import evaluate_lifecycle
 from .ray_actor import RayAgent
 from .tier0_manager import Tier0MemoryManager, tier0_manager
+from .integration import RayAgentCognitiveIntegration
 
 __all__ = [
     'Agent',
     'evaluate_lifecycle', 
     'RayAgent',
     'Tier0MemoryManager',
-    'tier0_manager'
+    'tier0_manager',
+    'RayAgentCognitiveIntegration'
 ]
