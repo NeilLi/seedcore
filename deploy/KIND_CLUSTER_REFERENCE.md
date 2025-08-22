@@ -186,7 +186,8 @@ kubectl -n seedcore-dev port-forward svc/redis-master 6379:6379
 ```
 
 ## Environment Variables
-Key environment variables from `k8s.dev.env`:
+docker/.env
+docker/env.example
 
 ```bash
 SEEDCORE_NS=seedcore-dev

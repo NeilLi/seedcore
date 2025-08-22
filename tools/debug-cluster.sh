@@ -45,45 +45,55 @@ fi
 echo "📋 Kind clusters:"
 kind get clusters
 
-# Check if our cluster exists
+# Check if our cluster exists (using flexible matching)
 if kind get clusters | grep -q "$CLUSTER_NAME"; then
-    print_status "OK" "Cluster $CLUSTER_NAME exists"
+    print_status "OK" "Cluster matching '$CLUSTER_NAME' exists"
+    
+    # Find the actual cluster name (in case it has a suffix like -dev, -test)
+    ACTUAL_CLUSTER_NAME=$(kind get clusters | grep "$CLUSTER_NAME" | head -1)
+    echo "📋 Using cluster: $ACTUAL_CLUSTER_NAME"
     
     # Check cluster nodes
     echo "📋 Cluster nodes:"
-    kind get nodes --name "$CLUSTER_NAME"
+    kind get nodes --name "$ACTUAL_CLUSTER_NAME"
     
     # Check Docker containers
-    echo "📋 Docker containers for $CLUSTER_NAME:"
-    docker ps -a | grep "$CLUSTER_NAME" || echo "No containers found"
+    echo "📋 Docker containers for $ACTUAL_CLUSTER_NAME:"
+    docker ps -a | grep "$ACTUAL_CLUSTER_NAME" || echo "No containers found"
     
-    # Check if control plane is running
-    if docker ps | grep -q "${CLUSTER_NAME}-control-plane"; then
-        print_status "OK" "Control plane container is running"
+    # Check if control plane is running (using flexible matching)
+    CONTROL_PLANE=$(docker ps --format '{{.Names}}' | grep "${CLUSTER_NAME}.*-control-plane" || true)
+    if [ -n "$CONTROL_PLANE" ]; then
+        print_status "OK" "Control plane container is running: $CONTROL_PLANE"
         
         # Check cluster info
         echo "📋 Cluster info:"
-        kubectl cluster-info --context "kind-$CLUSTER_NAME" || print_status "WARN" "Cannot get cluster info"
+        kubectl cluster-info --context "kind-$ACTUAL_CLUSTER_NAME" || print_status "WARN" "Cannot get cluster info"
         
         # Check nodes
         echo "📋 Kubernetes nodes:"
-        kubectl get nodes --context "kind-$CLUSTER_NAME" || print_status "WARN" "Cannot get nodes"
+        kubectl get nodes --context "kind-$ACTUAL_CLUSTER_NAME" || print_status "WARN" "Cannot get nodes"
         
         # Check namespaces
         echo "📋 Namespaces:"
-        kubectl get namespaces --context "kind-$CLUSTER_NAME" || print_status "WARN" "Cannot get namespaces"
+        kubectl get namespaces --context "kind-$ACTUAL_CLUSTER_NAME" || print_status "WARN" "Cannot get namespaces"
         
     else
         print_status "ERROR" "Control plane container is NOT running"
         echo "📋 Stopped containers:"
         docker ps -a | grep "$CLUSTER_NAME"
         
-        # Check container logs
+        # Check container logs (using flexible matching)
         echo "📋 Control plane container logs:"
-        docker logs "${CLUSTER_NAME}-control-plane" 2>/dev/null || echo "Cannot get logs"
+        STOPPED_CONTROL_PLANE=$(docker ps -a --format '{{.Names}}' | grep "${CLUSTER_NAME}.*-control-plane" || true)
+        if [ -n "$STOPPED_CONTROL_PLANE" ]; then
+            docker logs "$STOPPED_CONTROL_PLANE" 2>/dev/null || echo "Cannot get logs"
+        else
+            echo "Control plane container not found"
+        fi
     fi
 else
-    print_status "WARN" "Cluster $CLUSTER_NAME does not exist"
+    print_status "WARN" "Cluster matching '$CLUSTER_NAME' does not exist"
 fi
 
 # Check system resources

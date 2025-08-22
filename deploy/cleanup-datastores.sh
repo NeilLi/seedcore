@@ -1,35 +1,87 @@
 #!/bin/bash
 
-# Cleanup Data Stores from Kubernetes Cluster
-# This script removes PostgreSQL, MySQL, Redis, and Neo4j deployments
+# Safer Cleanup Script for Kubernetes Data Stores
+# Removes Neo4j, Redis, MySQL, and PostgreSQL Helm releases
+# Optional: Remove Persistent Volume Claims (PVCs)
+#
+# Usage:
+#   ./cleanup-datastores.sh [namespace] [--with-pvc] [--dry-run]
+#
+# Examples:
+#   ./cleanup-datastores.sh
+#   ./cleanup-datastores.sh seedcore-staging --with-pvc
+#   ./cleanup-datastores.sh my-namespace --dry-run
 
-set -e
+set -euo pipefail
 
-echo "🧹 Cleaning up data stores from Kubernetes cluster..."
+# ---------------------------
+# Parse arguments
+# ---------------------------
+NAMESPACE=${1:-seedcore-dev}
+WITH_PVC=false
+DRY_RUN=false
 
-# Remove Neo4j
-echo "🗑️  Removing Neo4j..."
-helm uninstall neo4j -n seedcore-dev --wait || true
+for arg in "$@"; do
+  case "$arg" in
+    --with-pvc) WITH_PVC=true ;;
+    --dry-run)  DRY_RUN=true ;;
+  esac
+done
 
-# Remove Redis
-echo "🗑️  Removing Redis..."
-helm uninstall redis -n seedcore-dev --wait || true
+echo "🧹 Cleaning up data stores in namespace: ${NAMESPACE}"
+if [ "$DRY_RUN" = true ]; then
+  echo "⚠️  Dry-run mode enabled: no resources will actually be deleted."
+fi
 
-# Remove MySQL
-echo "🗑️  Removing MySQL..."
-helm uninstall mysql -n seedcore-dev --wait || true
+# ---------------------------
+# Preconditions
+# ---------------------------
+if ! command -v helm &> /dev/null; then
+  echo "❌ helm not found. Please install Helm before running this script."
+  exit 1
+fi
 
-# Remove PostgreSQL
-echo "🗑️  Removing PostgreSQL..."
-helm uninstall postgresql -n seedcore-dev --wait || true
+if ! command -v kubectl &> /dev/null; then
+  echo "❌ kubectl not found. Please install kubectl before running this script."
+  exit 1
+fi
 
-# Remove PVCs (optional - uncomment if you want to remove data)
-# echo "🗑️  Removing Persistent Volume Claims..."
-# kubectl delete pvc -n seedcore-dev -l app.kubernetes.io/name || true
+# ---------------------------
+# Function to uninstall Helm releases
+# ---------------------------
+uninstall_release() {
+  local release=$1
+  echo "🗑️  Removing $release..."
+  if [ "$DRY_RUN" = true ]; then
+    echo "   → Would run: helm uninstall $release -n $NAMESPACE --wait"
+  else
+    helm uninstall "$release" -n "$NAMESPACE" --wait || echo "   ⚠️  $release not found, skipping."
+  fi
+}
 
-echo "✅ All data stores cleaned up successfully!"
-echo ""
-echo "⚠️  Note: Persistent Volume Claims (PVCs) were not removed by default."
-echo "   If you want to remove all data, uncomment the PVC removal line in this script."
+# ---------------------------
+# Cleanup Helm releases
+# ---------------------------
+uninstall_release "neo4j"
+uninstall_release "redis"
+uninstall_release "mysql"
+uninstall_release "postgresql"
 
+# ---------------------------
+# Optional PVC cleanup
+# ---------------------------
+if [ "$WITH_PVC" = true ]; then
+  echo "🗑️  Removing Persistent Volume Claims in namespace: $NAMESPACE..."
+  if [ "$DRY_RUN" = true ]; then
+    echo "   → Would run: kubectl delete pvc -n $NAMESPACE -l app.kubernetes.io/name"
+  else
+    kubectl delete pvc -n "$NAMESPACE" -l app.kubernetes.io/name || echo "   ⚠️  No PVCs found."
+  fi
+else
+  echo "⚠️  PVCs were not removed. Use --with-pvc if you want to delete volumes (this will delete stored data)."
+fi
 
+# ---------------------------
+# Done
+# ---------------------------
+echo "✅ Cleanup complete for namespace: $NAMESPACE"
