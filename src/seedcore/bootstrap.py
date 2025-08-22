@@ -10,15 +10,14 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
 import ray
-# SOLUTION: Ray connection is now handled centrally by ray_connector.py
 
 # Import the ACTOR CLASSES (must be decorated with @ray.remote)
 from .memory.working_memory import MissTracker, SharedCache, MwStore  # type: ignore
-
 
 # -----------------------------------------------------------------------------
 # Config & logging
@@ -41,10 +40,13 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 logger.propagate = True
 
-
 # -----------------------------------------------------------------------------
 # Namespace helpers
 # -----------------------------------------------------------------------------
+
+def _resolve_ns() -> str:
+    """Single source of truth for the Ray namespace."""
+    return os.getenv("RAY_NAMESPACE") or os.getenv("SEEDCORE_NS") or "seedcore-dev"
 
 def get_ray_namespace() -> str:
     """Prefer explicit env, else Ray runtime context, else a default value."""
@@ -59,7 +61,6 @@ def get_ray_namespace() -> str:
         pass
     return CFG.default_namespace
 
-
 def _ensure_ray(namespace: Optional[str]) -> None:
     # SOLUTION: Ray connection is now handled centrally by ray_connector.py
     # This function is kept for compatibility but no longer initializes Ray
@@ -68,65 +69,43 @@ def _ensure_ray(namespace: Optional[str]) -> None:
         raise RuntimeError("Ray not initialized - application startup issue")
     logger.info("✅ Ray connection verified (namespace=%s)", namespace)
 
+def _ready_ping(handle) -> None:
+    """Best-effort readiness ping on a freshly created actor."""
+    for _ in range(10):
+        try:
+            # Try a conventional 'ready' or 'ping' method if present.
+            if hasattr(handle, "ready"):
+                ray.get(handle.ready.remote(), timeout=2)
+            elif hasattr(handle, "ping"):
+                ray.get(handle.ping.remote(), timeout=2)
+            # If neither exists, just attempt a no-op get to force resolution.
+            else:
+                ray.wait([handle.__ray_terminate__.remote()], timeout=0)  # schedules nothing; just resolves ref
+            return
+        except Exception:
+            time.sleep(0.5)
 
 # -----------------------------------------------------------------------------
 # Core: get-or-create for named detached actors
 # -----------------------------------------------------------------------------
 
-def _get_or_create(actor_cls: Any, name: str, **options: Any):
-    """Return a handle to a named, detached actor in our namespace. Create if absent.
-
-    Race-safe across many concurrent callers. If Ray supports `get_if_exists`,
-    use it for idempotent creation; otherwise fall back to create+lookup.
+def _get_or_create(actor_cls, name: str, *args, **kwargs):
     """
-    ns = get_ray_namespace()
-    logger.info(f"🔍 Creating actor '{name}' in namespace '{ns}'")
-    
-    _ensure_ray(ns)
-
-    # Fast path: already exists
+    Idempotent get-or-create for detached, named actors.
+    Works in Ray Client mode; always uses the resolved namespace.
+    """
+    ns = _resolve_ns()
     try:
-        logger.info(f"🔍 Checking if actor '{name}' already exists...")
-        existing_actor = ray.get_actor(name, namespace=ns)
-        logger.info(f"✅ Actor '{name}' already exists: {existing_actor}")
-        return existing_actor
-    except Exception as e:
-        logger.info(f"🔍 Actor '{name}' not found: {e}")
-
-    # Try to create (idempotent if get_if_exists is available)
-    try:
-        logger.info(f"🚀 Creating actor '{name}' with class {actor_cls.__name__}...")
-        actor_handle = (
-            actor_cls.options(
-                name=name, namespace=ns, lifetime="detached", get_if_exists=True, **options
-            ).remote()
-        )
-        logger.info(f"✅ Successfully created actor '{name}': {actor_handle}")
-        return actor_handle
-    except TypeError:
-        # Older Ray without get_if_exists
-        logger.info(f"⚠️ Ray version doesn't support get_if_exists, falling back...")
+        return ray.get_actor(name, namespace=ns)
+    except Exception:
+        logging.info("Creating missing actor '%s' in namespace '%s'...", name, ns)
+        # Support both @ray.remote-decorated classes and plain classes.
         try:
-            handle = actor_cls.options(name=name, namespace=ns, lifetime="detached", **options).remote()
-            logger.info(f"✅ Created actor '{name}' (fallback): {handle}")
-            return handle
-        except Exception as e:
-            logger.info(f"⚠️ Failed to create actor '{name}' (fallback): {e}")
-            # Lost the race: someone else created it
-            try:
-                return ray.get_actor(name, namespace=ns)
-            except Exception as get_e:
-                logger.error(f"❌ Failed to get actor '{name}' after creation failure: {get_e}")
-                raise
-    except Exception as e:
-        logger.error(f"❌ Failed to create actor '{name}': {e}")
-        # Lost the race or transient error
-        try:
-            return ray.get_actor(name, namespace=ns)
-        except Exception as get_e:
-            logger.error(f"❌ Failed to get actor '{name}' after creation failure: {get_e}")
-            raise
-
+            handle = actor_cls.options(name=name, lifetime="detached", namespace=ns).remote(*args, **kwargs)
+        except AttributeError:
+            handle = ray.remote(actor_cls).options(name=name, lifetime="detached", namespace=ns).remote(*args, **kwargs)
+        _ready_ping(handle)
+        return handle
 
 # -----------------------------------------------------------------------------
 # Bootstrap & accessors
@@ -134,8 +113,14 @@ def _get_or_create(actor_cls: Any, name: str, **options: Any):
 
 def bootstrap_actors():
     """Ensure all singleton actors exist; return handles as a tuple."""
-    logger.info("🚀 Starting bootstrap of singleton actors...")
+    # Early return if bootstrap is optional and environment variable is set
+    if os.getenv("SEEDCORE_BOOTSTRAP_OPTIONAL") == "1":
+        logger.info("🚀 Bootstrap optional - skipping singleton actor creation")
+        return None, None, None
     
+    ns = _resolve_ns()
+    logger.info("Bootstrapping singletons in namespace %s", ns)
+
     try:
         logger.info("🔍 Creating miss_tracker actor...")
         miss_tracker = _get_or_create(MissTracker, "miss_tracker")
@@ -158,20 +143,16 @@ def bootstrap_actors():
         logger.error(f"❌ Traceback: {traceback.format_exc()}")
         raise
 
-
 # Convenience accessors (match names used elsewhere in the codebase)
 
 def get_miss_tracker():
     return _get_or_create(MissTracker, "miss_tracker")
 
-
 def get_shared_cache():
     return _get_or_create(SharedCache, "shared_cache")
 
-
 def get_mw_store():  # note: **mw**, not mv
     return _get_or_create(MwStore, "mw")
-
 
 __all__ = [
     "bootstrap_actors",
@@ -179,4 +160,5 @@ __all__ = [
     "get_shared_cache",
     "get_mw_store",
     "get_ray_namespace",
+    "_resolve_ns",
 ]

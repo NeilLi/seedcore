@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${DEPLOY_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${SERVICE_NAME}
+spec:
+  replicas: ${REPLICAS}
+  selector:
+    matchLabels:
+      app: ${SERVICE_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${SERVICE_NAME}
+    spec:
+      containers:
+        - name: ${SERVICE_NAME}
+          image: ${API_IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8002
+          env:
+            - name: DSP_LOG_TO_FILE
+              value: "false"
+            - name: DSP_LOG_TO_STDOUT
+              value: "true"
+            - name: TMPDIR
+              value: "/tmp"
+            - name: TEMP
+              value: "/tmp"
+            - name: RAY_ADDRESS
+              value: "ray://${RAY_HEAD_SVC}:${RAY_HEAD_PORT}"
+            - name: SEEDCORE_NS
+              value: "${SEEDCORE_NS}"
+            - name: SEEDCORE_API_ADDRESS
+              value: "127.0.0.1:8002"
+            - name: SEEDCORE_SKIP_EAGER_RAY
+              value: "1"
+            - name: SEEDCORE_BOOTSTRAP_OPTIONAL
+              value: "1"
+          # Optional, safe: these are ignored if missing due to 'optional: true'
+          envFrom:
+            - configMapRef:
+                name: seedcore-env
+                optional: true
+            - configMapRef:
+                name: seedcore-client-env
+                optional: true
+            - configMapRef:
+                name: ${SERVICE_NAME}-config
+                optional: true
+            - secretRef:
+                name: seedcore-env-secret
+                optional: true
+          volumeMounts:
+            - name: logs-volume
+              mountPath: /tmp/seedcore-logs
+            # (dev-only) mount your project source into /app
+            - name: project-source-volume
+              mountPath: /app
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8002
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            timeoutSeconds: 1
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            failureThreshold: 60    # ~60 * 1s = 1 minute runway
+            periodSeconds: 1
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+      volumes:
+        - name: logs-volume
+          emptyDir: {}
+        # (dev on kind) this path must exist on kind node (see your kind config)
+        - name: project-source-volume
+          hostPath:
+            path: ${HOSTPATH_PROJECT}
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${SERVICE_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${SERVICE_NAME}
+spec:
+  type: ClusterIP
+  selector:
+    app: ${SERVICE_NAME}
+  ports:
+    - name: http
+      port: 8002
+      targetPort: 8002
+

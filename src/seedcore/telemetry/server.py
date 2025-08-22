@@ -26,6 +26,7 @@ import random
 import uuid
 import ray
 from fastapi import FastAPI, Depends, HTTPException, Request  # type: ignore
+from fastapi.responses import JSONResponse
 from collections import deque
 from typing import List, Dict, Any
 import time
@@ -39,9 +40,24 @@ from ..control.slow_loop import slow_loop_update_roles, slow_loop_update_roles_s
 from ..control.mem_loop import adaptive_mem_update, estimate_memory_gradient, get_memory_metrics
 from ..organs.base import Organ
 from ..organs.registry import OrganRegistry
-from ..organs import organism_manager as organism_manager_module
+# Safe import to avoid shadowing issues in organs.__init__.py
+from importlib import import_module
+
+try:
+    om_mod = import_module("src.seedcore.organs.organism_manager")  # explicit submodule
+    OrganismManager = getattr(om_mod, "OrganismManager")
+except Exception as e:
+    logging.critical("❌ Cannot import OrganismManager: %s", e)
+    OrganismManager = None  # type: ignore
+
 from ..agents.base import Agent
-from ..agents import RayAgent, Tier0MemoryManager, tier0_manager
+from ..agents import RayAgent
+# Conditional import to prevent eager Ray connections
+if os.getenv("SEEDCORE_SKIP_EAGER_RAY", "0") != "1":
+    from ..agents import Tier0MemoryManager, tier0_manager
+else:
+    Tier0MemoryManager = None
+    tier0_manager = None
 from ..memory.system import SharedMemorySystem
 from ..memory.adaptive_loop import (
     calculate_dynamic_mem_util, 
@@ -68,7 +84,7 @@ from ..api.routers.tier0_router import router as tier0_router
 from ..api.routers.energy_router import router as energy_router
 from ..api.routers.holon_router import router as holon_router
 from ..config.ray_config import get_ray_config
-from ..utils.ray_utils import ensure_ray_initialized
+from ..utils.ray_utils import ensure_ray_initialized, is_ray_available
 from ..utils.ray_connector import (
     connect, is_connected, get_connection_info, wait_for_ray_ready
 )
@@ -156,9 +172,23 @@ async def lifespan(app: FastAPI):
             logging.warning(f"   - Ray diagnostics failed: {e}")
         
         # Verify Ray is fully connected and ready
-        if is_connected():
+        if is_ray_available():
             ray_ready = True
             logging.info("   - ✅ Ray connection verified and ready.")
+            
+            # Initialize Janitor actor for cluster maintenance
+            try:
+                from ..maintenance.janitor import Janitor
+                try:
+                    janitor = ray.get_actor("seedcore_janitor")  # reuse if exists
+                    logging.info("   - ✅ Janitor actor already exists")
+                except Exception:
+                    janitor = Janitor.options(name="seedcore_janitor", lifetime="detached", num_cpus=0).remote()
+                    logging.info("   - ✅ Janitor actor created successfully")
+                app.state.janitor = janitor
+            except Exception as e:
+                logging.warning(f"   - ⚠️ Failed to initialize Janitor actor: {e}")
+                app.state.janitor = None
         else:
             logging.info("   - ⏳ Waiting up to 5s for Ray to become ready...")
             if wait_for_ray_ready(max_wait_seconds=5):
@@ -173,14 +203,17 @@ async def lifespan(app: FastAPI):
     if ray_ready:
         logging.info("   - Step 2: Initializing OrganismManager...")
         try:
-            # Create the instance now that Ray is connected.
-            organism_manager_module.organism_manager = organism_manager_module.OrganismManager()
-            # Initialize it (this will create actors).
-            await organism_manager_module.organism_manager.initialize_organism()
-            app.state.organism = organism_manager_module.organism_manager
+            if OrganismManager is None:
+                raise ImportError(
+                    "organs.organism_manager not importable (shadowed by package attr?). "
+                    "Ensure src/seedcore/organs/__init__.py does NOT define 'organism_manager'."
+                )
+            om = OrganismManager()
+            await om.initialize_organism()
+            app.state.organism = om              # store ONLY on app.state
             logging.info("   - ✅ OrganismManager initialized.")
         except Exception as e:
-            logging.error(f"   - ❌ Failed to initialize COA organism: {e}", exc_info=True)
+            logging.error("   - ❌ Failed to initialize COA organism: %s", e, exc_info=True)
     else:
         logging.warning("   - ⚠️ Skipping OrganismManager initialization due to Ray connection issues")
         
@@ -252,7 +285,16 @@ async def lifespan(app: FastAPI):
     logging.info("   - Step 8: Starting Metrics Integration...")
     try:
         from .metrics_integration import start_metrics_integration
-        base_url = os.getenv("SEEDCORE_API_ADDRESS", "localhost:8002")
+        base_url = os.getenv("SEEDCORE_API_ADDRESS", "127.0.0.1:8002")
+        
+        # Avoid hairpin to our own Service inside the same Pod
+        svc_names = {
+            os.getenv("SERVICE_NAME", "seedcore-api"),
+            f'{os.getenv("SERVICE_NAME", "seedcore-api")}.{os.getenv("NAMESPACE", "default")}.svc',
+        }
+        if any(str(base_url).startswith(name) for name in svc_names):
+            base_url = "127.0.0.1:8002"
+        
         if not base_url.startswith("http"):
             base_url = f"http://{base_url}"
         asyncio.create_task(start_metrics_integration(
@@ -306,9 +348,60 @@ from ..api.routers.ocps_router import router as ocps_router
 from ..api.routers.dspy_router import router as dspy_router
 app.include_router(ocps_router)
 app.include_router(dspy_router)
+
+# --- Readiness Probe ---
+def _readiness_check():
+    reasons = []
+
+    # 1) Ray must be connected
+    if not is_ray_available():
+        reasons.append("ray:not_connected")
+
+    # 2) OrganismManager must be initialized and attached to app.state
+    om = getattr(app.state, "organism", None)
+    if om is None:
+        reasons.append("organism_manager:not_initialized")
+    else:
+        # If your OrganismManager exposes a flag, check it (safe no-op if absent)
+        initialized = getattr(om, "initialized", True)
+        if isinstance(initialized, bool) and not initialized:
+            reasons.append("organism_manager:initialized_false")
+
+    return reasons
+
+@app.get("/readyz", include_in_schema=False)
+async def readyz():
+    ray_ok = is_ray_available()
+    organism_ok = hasattr(app.state, "organism") and app.state.organism is not None
+    status = 200 if (ray_ok and organism_ok) else 503
+    return JSONResponse(
+        {"ray_ok": ray_ok, "organism_ok": bool(organism_ok)},
+        status_code=status,
+    )
+
+# Optional: HEAD variant (saves bandwidth/log noise for k8s probes)
+@app.head("/readyz", include_in_schema=False)
+async def readyz_head():
+    reasons = _readiness_check()
+    return JSONResponse(status_code=200 if not reasons else 503, content=None)
+
 # --- Unified State Builder ---
+def _get_tier0_manager():
+    """Safely get tier0_manager, importing it if needed."""
+    if tier0_manager is not None:
+        return tier0_manager
+    
+    # Import it now if it wasn't imported earlier
+    try:
+        from ..agents import tier0_manager as tm
+        return tm
+    except Exception:
+        return None
+
 def _get_ma_stats() -> dict:
     try:
+        if tier0_manager is None:
+            return {"count": 0, "error": "tier0_manager_not_available"}
         return {"count": len(tier0_manager.list_agents())}
     except Exception:
         return {}
@@ -336,9 +429,19 @@ def _get_mfb_stats() -> dict:
 
 
 def build_unified_state(agent_ids: list[str]) -> UnifiedState:
+    tm = _get_tier0_manager()
+    if tm is None:
+        # Return empty state if tier0_manager is not available
+        return UnifiedState(
+            agents={}, 
+            organs={}, 
+            system=SystemState(E_patterns=np.array([])), 
+            memory=MemoryVector(ma={}, mw={}, mlt={}, mfb={})
+        )
+    
     agents: dict[str, AgentSnapshot] = {}
     for agent_id in agent_ids:
-        ag = tier0_manager.get_agent(agent_id)
+        ag = tm.get_agent(agent_id)
         if not ag:
             continue
         hb = ray.get(ag.get_heartbeat.remote())
@@ -2467,6 +2570,52 @@ async def get_dspy_status():
             "error": str(e),
             "timestamp": time.time()
         }
+
+# --- Maintenance Endpoints ---
+@app.get("/maintenance/status", include_in_schema=False)
+async def maintenance_status():
+    """Get maintenance status and cluster health info."""
+    try:
+        if not hasattr(app.state, "janitor") or app.state.janitor is None:
+            return {"status": "janitor_not_available"}
+        
+        status = ray.get(app.state.janitor.status.remote())
+        return status
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+@app.post("/maintenance/cleanup", include_in_schema=False)
+async def maintenance_cleanup(request: Request):
+    """Trigger cluster cleanup of dead actors."""
+    try:
+        if not hasattr(app.state, "janitor") or app.state.janitor is None:
+            return {"error": "Janitor actor not available"}
+        
+        data = await request.json()
+        prefix = data.get("prefix") if data else None
+        
+        result = ray.get(app.state.janitor.reap.remote(prefix=prefix))
+        return {
+            "success": True,
+            "result": result
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/maintenance/dead-actors", include_in_schema=False)
+async def list_dead_actors(prefix: str = None):
+    """List dead actors in the cluster."""
+    try:
+        if not hasattr(app.state, "janitor") or app.state.janitor is None:
+            return {"error": "Janitor actor not available"}
+        
+        dead_actors = ray.get(app.state.janitor.list_dead_named.remote(prefix=prefix))
+        return {
+            "dead_actors": dead_actors,
+            "count": len(dead_actors)
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 

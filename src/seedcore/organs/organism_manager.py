@@ -198,20 +198,31 @@ class OrganismManager:
             raise  # Re-raise to trigger retry mechanism
 
     async def _cleanup_dead_actors(self):
-        """Clean up dead Ray actors to prevent accumulation."""
+        """Clean up dead Ray actors using the Janitor actor for cluster-side cleanup."""
         try:
-            # Check if Ray is initialized before trying to list actors
             if not ray.is_initialized():
-                logger.info("Ray not initialized, skipping dead actor cleanup")
                 return
             
-            # Note: list_actors() is not available with Ray client connections
-            # We can only clean up actors we have handles to
-            logger.info("⚠️ Dead actor cleanup limited with Ray client connections")
-            logger.info("⚠️ Only actors with known handles can be cleaned up")
+            jan = None
+            try:
+                jan = ray.get_actor("seedcore_janitor")
+            except Exception:
+                logger.debug("Janitor actor not available; skipping cluster cleanup")
             
+            if jan:
+                try:
+                    res = ray.get(jan.reap.remote(prefix=None))  # Clean up all dead actors
+                    if res.get("count"):
+                        logger.info("Cluster cleanup removed %d dead actors: %s", res["count"], res["reaped"])
+                    else:
+                        logger.debug("No dead actors found to clean up")
+                except Exception as e:
+                    logger.debug("Cluster cleanup failed: %s", e)
+            else:
+                logger.debug("Janitor actor not available; skipping cluster cleanup")
+                
         except Exception as e:
-            logger.warning(f"Could not clean up dead actors: {e}")
+            logger.debug("Cluster cleanup skipped: %s", e)
 
     def _test_organ_health(self, organ_handle, organ_id: str) -> bool:
         """Test if an organ actor is healthy and responsive."""
