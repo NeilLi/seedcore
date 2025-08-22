@@ -4,15 +4,19 @@ import time
 import ray
 from fastapi import APIRouter, HTTPException, Request
 
-from ...organs.organism_manager import organism_manager
+# SOLUTION: Remove module-level import to avoid accessing organism_manager before initialization
+# from ...organs.organism_manager import organism_manager
 
 
 router = APIRouter()
 
 
 def _get_manager_from_request(request: Request):
+    """Get the organism manager from the request's app state."""
     org = getattr(request.app.state, "organism", None)
-    return org if org is not None else organism_manager
+    if org is None:
+        raise HTTPException(status_code=503, detail="Organism not yet initialized. Please wait for startup to complete.")
+    return org
 
 
 @router.get("/organism/status")
@@ -29,27 +33,28 @@ async def get_organism_status(request: Request) -> Dict[str, Any]:
 
 
 @router.post("/organism/execute/{organ_id}")
-async def execute_task_on_organ(organ_id: str, request: Dict[str, Any]) -> Dict[str, Any]:
+async def execute_task_on_organ(organ_id: str, request: Request, task_request: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        # Use global singleton to execute tasks; app state is set during startup
-        if not organism_manager.is_initialized():
+        org = _get_manager_from_request(request)
+        if not org.is_initialized():
             return {"success": False, "error": "Organism not initialized"}
 
-        task_data = request.get("task_data", {})
-        result = await organism_manager.execute_task_on_organ(organ_id, task_data)
+        task_data = task_request.get("task_data", {})
+        result = await org.execute_task_on_organ(organ_id, task_data)
         return result
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 @router.post("/organism/execute/random")
-async def execute_task_on_random_organ(request: Dict[str, Any]) -> Dict[str, Any]:
+async def execute_task_on_random_organ(request: Request, task_request: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        if not organism_manager.is_initialized():
+        org = _get_manager_from_request(request)
+        if not org.is_initialized():
             return {"success": False, "error": "Organism not initialized"}
 
-        task_data = request.get("task_data", {})
-        result = await organism_manager.execute_task_on_random_organ(task_data)
+        task_data = task_request.get("task_data", {})
+        result = await org.execute_task_on_random_organ(task_data)
         return result
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -87,14 +92,12 @@ async def get_organism_summary(request: Request) -> Dict[str, Any]:
 @router.post("/organism/initialize")
 async def initialize_organism(request: Request) -> Dict[str, Any]:
     try:
-        # Always use global manager; server startup also assigns it to app.state
-        if organism_manager.is_initialized():
-            # Ensure app state reflects global manager
-            setattr(request.app.state, "organism", organism_manager)
+        # Always use app state organism manager
+        org = _get_manager_from_request(request)
+        if org.is_initialized():
             return {"success": True, "message": "Organism already initialized"}
 
-        await organism_manager.initialize_organism()
-        setattr(request.app.state, "organism", organism_manager)
+        await org.initialize_organism()
         return {"success": True, "message": "Organism initialized successfully"}
     except Exception as e:
         return {"success": False, "error": str(e)}

@@ -9,6 +9,7 @@ import ray
 import requests
 import logging
 import time
+from ..utils.ray_utils import ensure_ray_initialized
 import json
 import shutil
 from pathlib import Path
@@ -134,21 +135,11 @@ class HyperparameterTuningService:
         
         # Initialize Ray if not already initialized
         if not ray.is_initialized():
-            try:
-                # Try to connect to existing Ray cluster
-                ray.init(address="ray://localhost:10001", log_to_driver=False)
-                logger.info("✅ Connected to existing Ray cluster")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to connect to existing Ray cluster: {e}")
-                try:
-                    # Try alternative address format
-                    ray.init(address="localhost:10001", log_to_driver=False)
-                    logger.info("✅ Connected to Ray cluster with alternative address")
-                except Exception as e2:
-                    logger.warning(f"⚠️ Failed to connect with alternative address: {e2}")
-                    # Fallback to local initialization
-                    ray.init()
-                    logger.info("✅ Initialized local Ray instance")
+            # Use the centralized Ray initialization utility
+            ray_address = os.getenv("RAY_ADDRESS", "ray://localhost:10001")
+            if not ensure_ray_initialized(ray_address=ray_address):
+                raise RuntimeError("Failed to initialize Ray connection")
+            logger.info("✅ Ray connection established successfully")
         
         # Initialize flashbulb client for logging high-impact events
         try:

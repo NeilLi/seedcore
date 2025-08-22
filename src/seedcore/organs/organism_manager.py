@@ -31,11 +31,12 @@ import time
 import ray
 import os
 import concurrent.futures
+# SOLUTION: Ray connection is now handled centrally by ray_connector.py
 import traceback
 import random
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Optional, Tuple, Set, TYPE_CHECKING
 # Note: ray.util.state APIs don't work with Ray client connections
 # from ray.util.state import list_actors, list_nodes
 
@@ -120,99 +121,19 @@ class OrganismManager:
         self._load_config(config_path)
         self._initialized = False
         
-        # Initialize Ray connection if not already initialized
-        self._ensure_ray()
-
-        # Bootstrap required singleton actors (mw, miss_tracker, shared_cache)
-        try:
-            from ..bootstrap import bootstrap_actors
-            logger.info("🚀 Bootstrapping required singleton actors...")
-            bootstrap_actors()
-            logger.info("✅ Singleton actors bootstrapped successfully")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to bootstrap singleton actors: {e}")
-            logger.warning("⚠️ Agents may have limited functionality without memory managers")
-
-        # COA §6: Initialize routing components
+        # Initialize routing components (these don't depend on Ray)
         self.ocps = OCPSValve()
         self.routing = RoutingTable()
         self.organ_interfaces: Dict[str, StandardizedOrganInterface] = {}
-
-    def _ensure_ray(self):
-        """Ensure Ray is properly initialized with the correct address."""
         
-        try:
-            if not ray.is_initialized():
-                # Get Ray connection parameters from environment
-                ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
-                ray_port = os.getenv("RAY_PORT", "10001")
-                ray_address = f"ray://{ray_host}:{ray_port}"
-                
-                # Get namespace from environment, default to "seedcore-dev" for consistency
-                ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-                
-                # Always try to connect to the remote Ray cluster first
-                logger.info(f"Attempting to connect to Ray cluster at: {ray_address}")
-                try:
-                    ray.init(address=ray_address, ignore_reinit_error=True, namespace=ray_namespace)
-                    logger.info("✅ Ray initialized successfully with remote address")
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to connect to remote Ray cluster: {e}")
-                    logger.warning("⚠️ Falling back to local Ray initialization")
-                    ray.init(ignore_reinit_error=True, namespace=ray_namespace)
-                    logger.info("✅ Ray initialized locally")
-            else:
-                logger.info("✅ Ray is already initialized")
-                
-            # Verify namespace is correct and force if needed
-            self._verify_and_enforce_namespace()
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Ray: {e}")
-            raise
+        # Note: Ray-dependent initialization is now handled in initialize_organism()
+        # This constructor is safe to call before Ray is ready
+
+    # SOLUTION: Ray connection is now handled centrally by ray_connector.py
+    # This method is no longer needed and has been removed.
     
-    def _verify_and_enforce_namespace(self):
-        """Verify that Ray is using the correct namespace and enforce if needed."""
-        try:
-            expected_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-            runtime_context = ray.get_runtime_context()
-            current_namespace = getattr(runtime_context, 'namespace', 'unknown')
-            
-            logger.info(f"🔍 Namespace verification: expected='{expected_namespace}', current='{current_namespace}'")
-            
-            if current_namespace != expected_namespace:
-                logger.warning(f"⚠️  WARNING: Ray namespace mismatch!")
-                logger.warning(f"   Expected: {expected_namespace}")
-                logger.warning(f"   Current:  {current_namespace}")
-                logger.warning(f"   This may cause actors to be created in the wrong namespace")
-                
-                # Try to force namespace by reinitializing Ray
-                if current_namespace == 'unknown' or current_namespace != expected_namespace:
-                    logger.info(f"🔄 Attempting to force correct namespace by reinitializing Ray...")
-                    try:
-                        ray.shutdown()
-                        
-                        # Try to reconnect to the remote cluster with correct namespace
-                        ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
-                        ray_port = os.getenv("RAY_PORT", "10001")
-                        ray_address = f"ray://{ray_host}:{ray_port}"
-                        
-                        ray.init(address=ray_address, namespace=expected_namespace, ignore_reinit_error=True)
-                        new_runtime_context = ray.get_runtime_context()
-                        new_namespace = getattr(new_runtime_context, 'namespace', 'unknown')
-                        logger.info(f"🔧 Ray reinitialized with namespace: {new_namespace}")
-                        
-                        if new_namespace == expected_namespace:
-                            logger.info("✅ Successfully forced correct namespace")
-                        else:
-                            logger.error(f"❌ Failed to force correct namespace: {new_namespace}")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to reinitialize Ray: {e}")
-            else:
-                logger.info("✅ Ray namespace is correct")
-                
-        except Exception as e:
-            logger.warning(f"⚠️  Could not verify/enforce namespace: {e}")
+    # SOLUTION: Namespace verification is now handled centrally by ray_connector.py
+    # This method is no longer needed and has been removed.
 
     def _load_config(self, config_path: str):
         """Loads the organism configuration from a YAML file."""
@@ -235,7 +156,7 @@ class OrganismManager:
     def _check_ray_cluster_health(self):
         """Check Ray cluster health and log diagnostic information."""
         try:
-            # Check cluster resources
+            # Check cluster resources (available with Ray client)
             cluster_resources = ray.cluster_resources()
             available_resources = ray.available_resources()
             
@@ -252,33 +173,23 @@ class OrganismManager:
             if available_cpu < 1.0:
                 logger.warning(f"⚠️ Low CPU availability: {available_cpu}/{total_cpu} CPUs available")
             
-            # Check nodes
+            # Note: list_nodes() and list_actors() are not available with Ray client connections
+            # We can only check basic cluster resources and test actor communication
+            
+            # Test basic Ray functionality with a simple remote task
             try:
-                nodes = list_nodes()
-                logger.info(f"🖥️ Ray nodes: {len(nodes)} total")
-                alive_nodes = 0
-                for node in nodes:
-                    if node.state == "ALIVE":
-                        alive_nodes += 1
-                    logger.info(f"   - Node {node.node_id}: {node.state} (CPU: {node.cpu_count})")
+                @ray.remote
+                def _health_check_task():
+                    return "healthy"
                 
-                if alive_nodes == 0:
-                    raise Exception("No alive nodes in Ray cluster")
+                result = ray.get(_health_check_task.remote())
+                if result == "healthy":
+                    logger.info("✅ Ray remote task execution test passed")
+                else:
+                    logger.warning(f"⚠️ Ray remote task test returned unexpected result: {result}")
                     
             except Exception as e:
-                logger.warning(f"Could not list nodes: {e}")
-            
-            # Check actors
-            try:
-                actors = list_actors()
-                logger.info(f"🎭 Ray actors: {len(actors)} total")
-                dead_actors = [actor for actor in actors if actor.state == "DEAD"]
-                if dead_actors:
-                    logger.warning(f"⚠️ Found {len(dead_actors)} dead actors")
-                    for actor in dead_actors[:5]:  # Log first 5 dead actors
-                        logger.warning(f"   - Dead actor: {actor.actor_id} ({actor.class_name})")
-            except Exception as e:
-                logger.warning(f"Could not list actors: {e}")
+                logger.warning(f"Ray remote task test failed: {e}")
                 
             logger.info("✅ Ray cluster health check completed")
             
@@ -294,30 +205,11 @@ class OrganismManager:
                 logger.info("Ray not initialized, skipping dead actor cleanup")
                 return
             
-            # Get all actors with timeout
-            try:
-                actors = list_actors()
-                dead_actors = [actor for actor in actors if actor.state == "DEAD"]
-                
-                if dead_actors:
-                    logger.info(f"🧹 Found {len(dead_actors)} dead actors, cleaning up...")
-                    
-                    for actor in dead_actors:
-                        try:
-                            if hasattr(actor, 'actor_id'):
-                                # Try to kill the dead actor
-                                ray.kill(actor.actor_id)
-                                logger.debug(f"🗑️ Cleaned up dead actor: {actor.actor_id}")
-                        except Exception as e:
-                            logger.debug(f"Could not clean up dead actor {actor.actor_id}: {e}")
-                            
-                    logger.info(f"✅ Cleaned up {len(dead_actors)} dead actors")
-                else:
-                    logger.info("✅ No dead actors found")
-                    
-            except Exception as e:
-                logger.warning(f"Could not list actors: {e}")
-                
+            # Note: list_actors() is not available with Ray client connections
+            # We can only clean up actors we have handles to
+            logger.info("⚠️ Dead actor cleanup limited with Ray client connections")
+            logger.info("⚠️ Only actors with known handles can be cleaned up")
+            
         except Exception as e:
             logger.warning(f"Could not clean up dead actors: {e}")
 
@@ -876,15 +768,26 @@ class OrganismManager:
             
         logger.info("🚀 Initializing the Cognitive Organism...")
         
+        # Verify Ray is ready before proceeding
+        if not ray.is_initialized():
+            raise RuntimeError("Ray is not initialized. Please ensure Ray connection is established before calling initialize_organism.")
+        
+        # Bootstrap required singleton actors
+        try:
+            logger.info("🚀 Bootstrapping required singleton actors...")
+            from ..bootstrap import bootstrap_actors
+            bootstrap_actors()
+            logger.info("✅ Singleton actors bootstrapped successfully")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to bootstrap singleton actors: {e}", exc_info=True)
+            logger.warning("⚠️ Agents may have limited functionality without memory managers")
+        
         max_retries = 3
         retry_delay = 10  # seconds
         
         for attempt in range(max_retries):
             try:
                 logger.info(f"🔄 Attempt {attempt + 1}/{max_retries} to initialize organism...")
-                
-                # Ensure Ray is properly initialized before proceeding
-                self._ensure_ray()
                 
                 # Check Ray cluster health before proceeding
                 self._check_ray_cluster_health()
@@ -931,4 +834,5 @@ class OrganismManager:
         logger.info("✅ Organism shutdown complete")
 
 # Global instance for easy access from the API server
-organism_manager = OrganismManager() 
+# SOLUTION: Lazy initialization - this will be created by FastAPI lifespan after Ray is connected
+organism_manager: Optional[OrganismManager] = None 

@@ -7,6 +7,7 @@ This provides basic health monitoring without requiring full database connection
 import ray
 from ray import serve
 from fastapi import FastAPI
+from ..utils.ray_utils import ensure_ray_initialized
 import logging
 import os
 from typing import Dict, Any
@@ -97,7 +98,8 @@ class SeedCoreHealthService:
             if not ray.is_initialized():
                 # Get namespace from environment, default to "seedcore-dev" for consistency
                 ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-                ray.init(address="auto", namespace=ray_namespace)
+                if not ensure_ray_initialized(ray_namespace=ray_namespace):
+                    raise RuntimeError(f"Failed to initialize Ray connection (namespace={ray_namespace})")
                 logger.info("✅ Ray initialized successfully")
             else:
                 logger.info("✅ Ray already initialized")

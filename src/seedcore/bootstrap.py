@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import ray
+# SOLUTION: Ray connection is now handled centrally by ray_connector.py
 
 # Import the ACTOR CLASSES (must be decorated with @ray.remote)
 from .memory.working_memory import MissTracker, SharedCache, MwStore  # type: ignore
@@ -60,11 +61,12 @@ def get_ray_namespace() -> str:
 
 
 def _ensure_ray(namespace: Optional[str]) -> None:
-    if ray.is_initialized():
-        return
-    # Initialize Ray if we are in a fresh driver process.
-    ray.init(address=CFG.ray_address, namespace=namespace)
-    logger.info("Ray initialized (address=%s, namespace=%s)", CFG.ray_address, namespace)
+    # SOLUTION: Ray connection is now handled centrally by ray_connector.py
+    # This function is kept for compatibility but no longer initializes Ray
+    if not ray.is_initialized():
+        logger.critical("❌ Ray not initialized. This should not happen - Ray should be initialized at application startup.")
+        raise RuntimeError("Ray not initialized - application startup issue")
+    logger.info("✅ Ray connection verified (namespace=%s)", namespace)
 
 
 # -----------------------------------------------------------------------------
@@ -78,32 +80,52 @@ def _get_or_create(actor_cls: Any, name: str, **options: Any):
     use it for idempotent creation; otherwise fall back to create+lookup.
     """
     ns = get_ray_namespace()
+    logger.info(f"🔍 Creating actor '{name}' in namespace '{ns}'")
+    
     _ensure_ray(ns)
 
     # Fast path: already exists
     try:
-        return ray.get_actor(name, namespace=ns)
-    except Exception:
-        pass
+        logger.info(f"🔍 Checking if actor '{name}' already exists...")
+        existing_actor = ray.get_actor(name, namespace=ns)
+        logger.info(f"✅ Actor '{name}' already exists: {existing_actor}")
+        return existing_actor
+    except Exception as e:
+        logger.info(f"🔍 Actor '{name}' not found: {e}")
 
     # Try to create (idempotent if get_if_exists is available)
     try:
-        return (
+        logger.info(f"🚀 Creating actor '{name}' with class {actor_cls.__name__}...")
+        actor_handle = (
             actor_cls.options(
                 name=name, namespace=ns, lifetime="detached", get_if_exists=True, **options
             ).remote()
         )
+        logger.info(f"✅ Successfully created actor '{name}': {actor_handle}")
+        return actor_handle
     except TypeError:
         # Older Ray without get_if_exists
+        logger.info(f"⚠️ Ray version doesn't support get_if_exists, falling back...")
         try:
             handle = actor_cls.options(name=name, namespace=ns, lifetime="detached", **options).remote()
+            logger.info(f"✅ Created actor '{name}' (fallback): {handle}")
             return handle
-        except Exception:
+        except Exception as e:
+            logger.info(f"⚠️ Failed to create actor '{name}' (fallback): {e}")
             # Lost the race: someone else created it
-            return ray.get_actor(name, namespace=ns)
-    except Exception:
+            try:
+                return ray.get_actor(name, namespace=ns)
+            except Exception as get_e:
+                logger.error(f"❌ Failed to get actor '{name}' after creation failure: {get_e}")
+                raise
+    except Exception as e:
+        logger.error(f"❌ Failed to create actor '{name}': {e}")
         # Lost the race or transient error
-        return ray.get_actor(name, namespace=ns)
+        try:
+            return ray.get_actor(name, namespace=ns)
+        except Exception as get_e:
+            logger.error(f"❌ Failed to get actor '{name}' after creation failure: {get_e}")
+            raise
 
 
 # -----------------------------------------------------------------------------
@@ -112,10 +134,29 @@ def _get_or_create(actor_cls: Any, name: str, **options: Any):
 
 def bootstrap_actors():
     """Ensure all singleton actors exist; return handles as a tuple."""
-    miss_tracker = _get_or_create(MissTracker, "miss_tracker")
-    shared_cache = _get_or_create(SharedCache, "shared_cache")
-    mw_store = _get_or_create(MwStore, "mw")
-    return miss_tracker, shared_cache, mw_store
+    logger.info("🚀 Starting bootstrap of singleton actors...")
+    
+    try:
+        logger.info("🔍 Creating miss_tracker actor...")
+        miss_tracker = _get_or_create(MissTracker, "miss_tracker")
+        logger.info(f"✅ miss_tracker created: {miss_tracker}")
+        
+        logger.info("🔍 Creating shared_cache actor...")
+        shared_cache = _get_or_create(SharedCache, "shared_cache")
+        logger.info(f"✅ shared_cache created: {shared_cache}")
+        
+        logger.info("🔍 Creating mw_store actor...")
+        mw_store = _get_or_create(MwStore, "mw")
+        logger.info(f"✅ mw_store created: {mw_store}")
+        
+        logger.info("🎉 All singleton actors bootstrapped successfully!")
+        return miss_tracker, shared_cache, mw_store
+        
+    except Exception as e:
+        logger.error(f"❌ Bootstrap failed: {e}")
+        import traceback
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
+        raise
 
 
 # Convenience accessors (match names used elsewhere in the codebase)

@@ -15,6 +15,7 @@ from typing import Any, Dict, Mapping, Optional
 import ray
 from ray import serve
 from ray.exceptions import RayActorError
+from seedcore.utils.ray_utils import ensure_ray_initialized
 
 JSONDict = Dict[str, Any]
 
@@ -103,74 +104,11 @@ class DSpyCognitiveClient:
         
         self._logger.info("Connecting to Ray cluster...")
         
-        # Check if Ray is already initialized (possibly by serve import)
-        if ray.is_initialized():
-            self._logger.info("Ray already initialized, checking connection...")
-            try:
-                runtime_context = ray.get_runtime_context()
-                self._logger.info("Existing Ray runtime context: %s", runtime_context)
-                
-                # Check if we're connected to the right cluster
-                if hasattr(runtime_context, 'worker') and hasattr(runtime_context.worker, 'worker_id'):
-                    worker_id = runtime_context.worker.worker_id
-                    self._logger.info("Connected to Ray worker: %s", worker_id)
-                    
-                    # If we're connected to a local worker, try to reconnect to remote cluster
-                    if '127.0.0.1' in str(worker_id) or 'localhost' in str(worker_id):
-                        self._logger.warning("Connected to local Ray instance, attempting to reconnect to remote cluster...")
-                        ray.shutdown()
-                        self._logger.info("Local Ray instance shut down, reconnecting to remote cluster...")
-                        ray.init(address=self.config.ray_address, ignore_reinit_error=True, namespace=_env_ns())
-                        self._logger.info("Successfully reconnected to remote Ray cluster")
-                    else:
-                        self._logger.info("Already connected to remote Ray cluster")
-                else:
-                    self._logger.info("Ray runtime context doesn't have worker info")
-                    
-            except Exception as e:
-                self._logger.warning("Error checking existing Ray connection: %s", e)
-                # Try to reconnect to remote cluster
-                try:
-                    ray.shutdown()
-                    self._logger.info("Reconnecting to remote Ray cluster...")
-                    ray.init(address=self.config.ray_address, ignore_reinit_error=True, namespace=_env_ns())
-                    self._logger.info("Successfully reconnected to remote Ray cluster")
-                except Exception as reconnect_e:
-                    self._logger.error("Failed to reconnect to remote Ray cluster: %s", reconnect_e)
-                    raise ConnectionError(f"Failed to connect to Ray cluster at {self.config.ray_address}: {reconnect_e}")
-        else:
-            try:
-                self._logger.info("Initializing Ray with address: %s, namespace: %s", self.config.ray_address, _env_ns())
-                self._logger.info("Ray environment variables: RAY_HOST=%s, RAY_PORT=%s, RAY_NAMESPACE=%s", 
-                                os.getenv('RAY_HOST'), os.getenv('RAY_PORT'), os.getenv('RAY_NAMESPACE'))
-                
-                # Try to connect to remote Ray cluster
-                ray.init(address=self.config.ray_address, ignore_reinit_error=True, namespace=_env_ns())
-                
-                # Verify we're connected to the remote cluster
-                runtime_context = ray.get_runtime_context()
-                self._logger.info("Ray runtime context: %s", runtime_context)
-                if hasattr(runtime_context, 'worker') and hasattr(runtime_context.worker, 'worker_id'):
-                    self._logger.info("Ray cluster address: %s", runtime_context.worker.worker_id)
-                
-                self._logger.info("Ray initialized successfully")
-            except Exception as e:
-                self._logger.error("Failed to initialize Ray with address %s: %s", self.config.ray_address, e)
-                self._logger.error("Exception type: %s", type(e).__name__)
-                import traceback
-                self._logger.error("Full traceback: %s", traceback.format_exc())
-                # Don't fall back to local Ray initialization in production
-                # This would cause the client to look for applications in the wrong place
-                raise ConnectionError(f"Failed to connect to Ray cluster at {self.config.ray_address}: {e}")
+        # Use the centralized Ray initialization utility
+        if not ensure_ray_initialized(ray_address=self.config.ray_address, ray_namespace=_env_ns()):
+            raise ConnectionError(f"Failed to connect to Ray cluster at {self.config.ray_address}")
         
-        try:
-            self._logger.info("Connecting to Ray Serve...")
-            # In newer Ray versions, serve.connect() is not needed
-            # The connection is established when ray.init() succeeds
-            self._logger.info("Ray Serve connection established")
-        except Exception as exc:
-            self._logger.warning("Ray Serve connection warning: %s", exc)
-        
+        self._logger.info("Ray connection established successfully")
         self._is_connected = True
         self._logger.info("Connection setup completed")
 

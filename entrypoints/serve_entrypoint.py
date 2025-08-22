@@ -16,6 +16,7 @@ import traceback
 import ray
 from ray import serve
 from fastapi import FastAPI, Request
+from seedcore.utils.ray_utils import ensure_ray_initialized
 
 # Add the app directory to Python path
 sys.path.insert(0, '/app')
@@ -161,7 +162,9 @@ def main():
     # Connect to Ray
     try:
         log(f"Connecting to Ray at {RAY_ADDR} (namespace={RAY_NS})")
-        ray.init(address=RAY_ADDR, namespace=RAY_NS, runtime_env=runtime_env)
+        if not ensure_ray_initialized(ray_address=RAY_ADDR, ray_namespace=RAY_NS, runtime_env=runtime_env):
+            err("Failed to connect to Ray")
+            sys.exit(1)
         log("✅ Connected to Ray successfully")
     except Exception as e:
         err(f"Failed to connect to Ray: {e}")

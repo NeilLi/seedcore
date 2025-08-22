@@ -21,6 +21,7 @@ import os
 import ray
 import time
 import asyncio
+from ..utils.ray_utils import ensure_ray_initialized
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
 import logging
@@ -120,6 +121,9 @@ class Tier0MemoryManager:
             return agent_id
         
         try:
+            # Ensure Ray is initialized before creating actors
+            self._ensure_ray()
+            
             # Create the Ray actor
             options_kwargs: Dict[str, Any] = {}
             # Use a stable, detached, named actor when options are provided
@@ -135,8 +139,15 @@ class Tier0MemoryManager:
                 options_kwargs["num_gpus"] = num_gpus
             if resources:
                 options_kwargs["resources"] = resources
+            
+            # Set namespace if provided, otherwise use environment default
             if namespace:
                 options_kwargs["namespace"] = namespace
+            else:
+                # Get namespace from environment
+                env_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+                if env_namespace:
+                    options_kwargs["namespace"] = env_namespace
 
             if options_kwargs:
                 agent_handle = RayAgent.options(**options_kwargs).remote(
@@ -156,6 +167,15 @@ class Tier0MemoryManager:
             
         except Exception as e:
             logger.error(f"Failed to create agent {agent_id}: {e}")
+            # Log additional debugging information
+            logger.error(f"Ray initialized: {ray.is_initialized()}")
+            if ray.is_initialized():
+                try:
+                    runtime_context = ray.get_runtime_context()
+                    logger.error(f"Ray namespace: {getattr(runtime_context, 'namespace', 'unknown')}")
+                    logger.error(f"Ray address: {getattr(runtime_context, 'gcs_address', 'unknown')}")
+                except Exception as ctx_e:
+                    logger.error(f"Failed to get Ray context: {ctx_e}")
             raise
     
     def create_agents_batch(self, agent_configs: List[Dict[str, Any]]) -> List[str]:
@@ -275,6 +295,7 @@ class Tier0MemoryManager:
     def _ensure_ray(self, ray_address: Optional[str] = None, ray_namespace: Optional[str] = None):
         """Ensure Ray is initialized with the correct address and namespace."""
         if ray.is_initialized():
+            logger.debug("Ray is already initialized, skipping connection")
             return
             
         # Get namespace from environment, default to "seedcore-dev" for consistency
@@ -287,16 +308,11 @@ class Tier0MemoryManager:
             ray_port = os.getenv("RAY_PORT", "10001")
             ray_address = f"ray://{ray_host}:{ray_port}"
         
-        # Always try to connect to the remote Ray cluster first
+        # Use the centralized Ray initialization utility
         logger.info(f"Attempting to connect to Ray cluster at: {ray_address}")
-        try:
-            ray.init(address=ray_address, ignore_reinit_error=True, namespace=ray_namespace)
-            logger.info(f"✅ Ray initialized with remote address: {ray_address}, namespace: {ray_namespace}")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to connect to remote Ray cluster: {e}")
-            logger.warning("⚠️ Falling back to local Ray initialization")
-            ray.init(ignore_reinit_error=True, namespace=ray_namespace)
-            logger.info(f"✅ Ray initialized locally, namespace: {ray_namespace}")
+        if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
+            raise RuntimeError(f"Failed to initialize Ray connection (address={ray_address}, namespace={ray_namespace})")
+        logger.info(f"✅ Ray connection established successfully")
 
     def _refresh_agents_from_cluster(self) -> None:
         """Discover and attach existing RayAgent actors from the Ray cluster.

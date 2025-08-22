@@ -242,6 +242,8 @@ spec:
             - { name: DSP_LOG_TO_STDOUT, value: "true" }
             - { name: TMPDIR, value: "/tmp" }
             - { name: TEMP,  value: "/tmp" }
+            - { name: RAY_ADDRESS, value: "ray://seedcore-svc-head-svc:10001" }
+            - { name: SEEDCORE_NS, value: "seedcore-dev" }
 ${ENV_FROM_BLOCK}
           volumeMounts:
             - name: logs-volume

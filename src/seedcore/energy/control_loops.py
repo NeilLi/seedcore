@@ -25,7 +25,8 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
 from .ledger import EnergyLedger
-from ..organs.organism_manager import organism_manager
+# SOLUTION: Remove module-level import to avoid accessing organism_manager before initialization
+# from ..organs.organism_manager import organism_manager
 
 logger = logging.getLogger(__name__)
 
@@ -310,17 +311,25 @@ class SlowPSOLoop:
         L_tot = min(0.999, (p_fast * 1.0 + (1.0 - p_fast) * beta_meta) * rho * beta_mem)
         return L_tot
 
-# Global instance
-slow_psoloop = SlowPSOLoop(EnergyLedger(), organism_manager)
+# Global instance - lazy initialization to avoid accessing organism_manager before it's ready
+_slow_psoloop_instance = None
+
+def get_slow_psoloop_instance():
+    """Get the global slow PSO loop instance with lazy initialization."""
+    global _slow_psoloop_instance
+    if _slow_psoloop_instance is None:
+        # Lazy import to avoid circular dependencies
+        from ..organs.organism_manager import organism_manager
+        if organism_manager is None:
+            raise RuntimeError("OrganismManager not yet initialized. Please wait for startup to complete.")
+        _slow_psoloop_instance = SlowPSOLoop(EnergyLedger(), organism_manager)
+    return _slow_psoloop_instance
 
 def start_slow_psoloop():
     """Start the global slow PSO loop instance."""
-    slow_psoloop.start()
+    get_slow_psoloop_instance().start()
 
 def stop_slow_psoloop():
     """Stop the global slow PSO loop instance."""
-    slow_psoloop.stop()
-
-def get_slow_psoloop_instance():
-    """Get the global slow PSO loop instance."""
-    return slow_psoloop 
+    if _slow_psoloop_instance is not None:
+        _slow_psoloop_instance.stop() 

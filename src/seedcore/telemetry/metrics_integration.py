@@ -4,6 +4,8 @@ Metrics Integration Service
 This service automatically updates Prometheus metrics by polling the rich API endpoints
 and converting the data into Prometheus format. This leverages the existing comprehensive
 API endpoints without requiring additional instrumentation.
+
+When running on the same server, it can access app state directly for better performance.
 """
 
 import asyncio
@@ -25,19 +27,29 @@ class MetricsIntegrationService:
     
     This approach leverages the rich API endpoints we already have instead of
     instrumenting every component individually.
+    
+    When running on the same server, it can access app state directly for better performance.
     """
     
-    def __init__(self, base_url: str = "http://localhost:80", update_interval: int = 30):
+    def __init__(self, base_url: str = "http://localhost:80", update_interval: int = 30, app_state=None):
         self.base_url = base_url.rstrip('/')
         self.update_interval = update_interval
+        self.app_state = app_state  # FastAPI app state for local access
         self.session: Optional[aiohttp.ClientSession] = None
         self.running = False
         
+        # Check if we're running locally (same server)
+        # Normalize base_url for comparison
+        normalized_url = base_url.lower().replace('http://', '').replace('https://', '')
+        self.is_local = normalized_url in ["localhost:80", "localhost:8002", "127.0.0.1:80", "127.0.0.1:8002", "0.0.0.0:8002"]
+        
     async def start(self):
         """Start the metrics integration service."""
-        self.session = aiohttp.ClientSession()
+        if not self.is_local:
+            self.session = aiohttp.ClientSession()
+        
         self.running = True
-        logger.info(f"🚀 Starting Metrics Integration Service (interval: {self.update_interval}s)")
+        logger.info(f"🚀 Starting Metrics Integration Service (interval: {self.update_interval}s, mode: {'local' if self.is_local else 'remote'})")
         
         while self.running:
             try:
@@ -56,6 +68,63 @@ class MetricsIntegrationService:
     
     async def _fetch_endpoint(self, endpoint: str) -> Optional[Dict[str, Any]]:
         """Fetch data from an API endpoint with metrics tracking."""
+        if self.is_local and self.app_state:
+            # Use local app state for better performance
+            return await self._get_local_data(endpoint)
+        elif self.session:
+            # Use HTTP calls for remote services
+            return await self._fetch_remote_endpoint(endpoint)
+        else:
+            logger.warning(f"Cannot fetch {endpoint}: no session or app state available")
+            return None
+    
+    async def _get_local_data(self, endpoint: str) -> Optional[Dict[str, Any]]:
+        """Get data from local app state instead of HTTP calls."""
+        try:
+            if endpoint == "/energy/gradient":
+                # Access energy data from app state
+                if hasattr(self.app_state, 'energy_weights'):
+                    return {"energy_weights": self.app_state.energy_weights}
+                return {"energy_weights": None}
+                
+            elif endpoint == "/tier0/agents/state":
+                # Access agent data from app state
+                if hasattr(self.app_state, 'organism') and self.app_state.organism:
+                    try:
+                        # Get agent states from organism manager
+                        agent_states = {}
+                        # This would need to be implemented based on your agent structure
+                        return {"agents": agent_states}
+                    except Exception as e:
+                        logger.debug(f"Could not get agent states: {e}")
+                        return {"agents": {}}
+                return {"agents": {}}
+                
+            elif endpoint == "/system/status":
+                # Access system status from app state
+                status = {
+                    "ray_connected": hasattr(self.app_state, 'organism') and self.app_state.organism is not None,
+                    "memory_system": hasattr(self.app_state, 'mem'),
+                    "organism_initialized": hasattr(self.app_state, 'organism') and getattr(self.app_state.organism, '_initialized', False) if self.app_state.organism else False
+                }
+                return status
+                
+            elif endpoint == "/energy/monitor":
+                # Access energy monitoring data from app state
+                if hasattr(self.app_state, 'energy_weights'):
+                    return {"energy_weights_available": True}
+                return {"energy_weights_available": False}
+                
+            else:
+                logger.warning(f"Unknown local endpoint: {endpoint}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting local data for {endpoint}: {e}")
+            return None
+    
+    async def _fetch_remote_endpoint(self, endpoint: str) -> Optional[Dict[str, Any]]:
+        """Fetch data from a remote API endpoint with metrics tracking."""
         if not self.session:
             return None
             
@@ -116,12 +185,12 @@ class MetricsIntegrationService:
 # Global instance
 _metrics_service: Optional[MetricsIntegrationService] = None
 
-async def start_metrics_integration(base_url: str = "http://localhost:80", update_interval: int = 30):
+async def start_metrics_integration(base_url: str = "http://localhost:80", update_interval: int = 30, app_state=None):
     """Start the global metrics integration service."""
     global _metrics_service
     
     if _metrics_service is None:
-        _metrics_service = MetricsIntegrationService(base_url, update_interval)
+        _metrics_service = MetricsIntegrationService(base_url, update_interval, app_state)
         await _metrics_service.start()
 
 async def stop_metrics_integration():

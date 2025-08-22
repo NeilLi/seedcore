@@ -1,6 +1,7 @@
 import os
 import logging
 from typing import Optional
+from .ray_utils import ensure_ray_initialized
 
 logger = logging.getLogger(__name__)
 
@@ -50,25 +51,13 @@ def init_ray_with_smart_defaults():
     - Head/worker pods: use "auto" or unset
     - Client pods: use derived or explicit RAY_ADDRESS
     """
-    import ray
-    
     ray_address = resolve_ray_address()
     namespace = get_ray_namespace()
     
-    if ray_address:
-        logger.info(f"Initializing Ray with address: {ray_address}, namespace: {namespace}")
-        ray.init(
-            address=ray_address,
-            namespace=namespace,
-            ignore_reinit_error=True
-        )
-    else:
-        logger.info("Initializing Ray locally (head/worker mode)")
-        ray.init(
-            address="auto",
-            namespace=namespace,
-            ignore_reinit_error=True
-        )
+    if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=namespace):
+        raise RuntimeError(f"Failed to initialize Ray connection (address={ray_address}, namespace={namespace})")
+    
+    logger.info("✅ Ray connection established successfully")
 
 def get_ray_serve_address() -> Optional[str]:
     """Get the Ray Serve address from environment variables."""

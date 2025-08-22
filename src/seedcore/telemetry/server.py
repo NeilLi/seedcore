@@ -29,6 +29,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request  # type: ignore
 from collections import deque
 from typing import List, Dict, Any
 import time
+from contextlib import asynccontextmanager
 # import redis
 from ..telemetry.stats import StatsCollector
 from ..energy.api import energy_gradient_payload, _ledger
@@ -38,7 +39,7 @@ from ..control.slow_loop import slow_loop_update_roles, slow_loop_update_roles_s
 from ..control.mem_loop import adaptive_mem_update, estimate_memory_gradient, get_memory_metrics
 from ..organs.base import Organ
 from ..organs.registry import OrganRegistry
-from ..organs.organism_manager import organism_manager
+from ..organs import organism_manager as organism_manager_module
 from ..agents.base import Agent
 from ..agents import RayAgent, Tier0MemoryManager, tier0_manager
 from ..memory.system import SharedMemorySystem
@@ -67,7 +68,10 @@ from ..api.routers.tier0_router import router as tier0_router
 from ..api.routers.energy_router import router as energy_router
 from ..api.routers.holon_router import router as holon_router
 from ..config.ray_config import get_ray_config
-from ..utils.ray_utils import init_ray, get_ray_cluster_info, is_ray_available
+from ..utils.ray_utils import ensure_ray_initialized
+from ..utils.ray_connector import (
+    connect, is_connected, get_connection_info, wait_for_ray_ready
+)
 
 # NEW: Import DSPy cognitive core
 from ..agents.cognitive_core import (
@@ -110,7 +114,188 @@ ENERGY_WEIGHTS: EnergyWeights | None = None
 # In-memory Tier-1 cache (Mw) for demonstration
 mw_cache = {}  # This should be updated by your memory system as needed
 
-app = FastAPI()
+# ✅ SOLUTION: Consolidate all startup logic into a single lifespan manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- STARTUP LOGIC ---
+    logging.info("🚀 FastAPI startup sequence initiated.")
+
+    # 1. Connect to Ray ONCE.
+    ray_ready = False
+    logging.info("   - Step 1: Connecting to Ray cluster...")
+    try:
+        connect()  # idempotent
+        logging.info("   - ✅ Ray connect() returned.")
+        connection_info = get_connection_info()
+        logging.info(f"   - Ray connection info: {connection_info}")
+        
+        # Additional Ray diagnostics
+        try:
+            if ray.is_initialized():
+                runtime_context = ray.get_runtime_context()
+                logging.info(f"   - Ray runtime context: namespace={getattr(runtime_context, 'namespace', 'unknown')}")
+                
+                # Try to get cluster resources
+                try:
+                    cluster_resources = ray.cluster_resources()
+                    available_resources = ray.available_resources()
+                    logging.info(f"   - Cluster resources: {cluster_resources}")
+                    logging.info(f"   - Available resources: {available_resources}")
+                except Exception as e:
+                    logging.warning(f"   - Could not get cluster resources: {e}")
+                
+                # Try to list some actors
+                try:
+                    # Note: list_actors() might not work with Ray client connections
+                    logging.info("   - Ray client connection detected")
+                except Exception as e:
+                    logging.debug(f"   - Actor listing not available: {e}")
+            else:
+                logging.warning("   - Ray is not initialized after connect() call")
+        except Exception as e:
+            logging.warning(f"   - Ray diagnostics failed: {e}")
+        
+        # Verify Ray is fully connected and ready
+        if is_connected():
+            ray_ready = True
+            logging.info("   - ✅ Ray connection verified and ready.")
+        else:
+            logging.info("   - ⏳ Waiting up to 5s for Ray to become ready...")
+            if wait_for_ray_ready(max_wait_seconds=5):
+                ray_ready = True
+                logging.info("   - ✅ Ray connection verified after waiting.")
+            if not ray_ready:
+                logging.warning("   - ⚠️ Ray connection verification failed, but continuing...")
+    except Exception as e:
+        logging.critical(f"   - ❌ Ray connection failed: {e}. Some features will be disabled.")
+
+    # 2. Initialize critical components that depend on Ray.
+    if ray_ready:
+        logging.info("   - Step 2: Initializing OrganismManager...")
+        try:
+            # Create the instance now that Ray is connected.
+            organism_manager_module.organism_manager = organism_manager_module.OrganismManager()
+            # Initialize it (this will create actors).
+            await organism_manager_module.organism_manager.initialize_organism()
+            app.state.organism = organism_manager_module.organism_manager
+            logging.info("   - ✅ OrganismManager initialized.")
+        except Exception as e:
+            logging.error(f"   - ❌ Failed to initialize COA organism: {e}", exc_info=True)
+    else:
+        logging.warning("   - ⚠️ Skipping OrganismManager initialization due to Ray connection issues")
+        
+    # 3. Initialize memory system
+    logging.info("   - Step 3: Initializing Memory System...")
+    try:
+        global MEMORY_SYSTEM
+        MEMORY_SYSTEM = SharedMemorySystem()
+        app.state.mem = MEMORY_SYSTEM
+        logging.info("   - ✅ Memory system initialized")
+    except Exception as e:
+        logging.error(f"   - ❌ Failed to initialize memory system: {e}")
+    
+    # 4. Initialize Holon Fabric
+    logging.info("   - Step 4: Initializing Holon Fabric...")
+    try:
+        await build_memory()
+        logging.info("   - ✅ Holon Fabric initialized")
+    except Exception as e:
+        logging.error(f"   - ❌ Failed to initialize Holon Fabric: {e}")
+    
+    # 5. Start consolidator loop (depends on Ray for some operations)
+    logging.info("   - Step 5: Starting Consolidator Loop...")
+    try:
+        asyncio.create_task(start_consolidator())
+        logging.info("   - ✅ Consolidator loop started")
+    except Exception as e:
+        logging.error(f"   - ❌ Failed to start consolidator loop: {e}")
+    
+    # 6. Initialize energy ledger
+    logging.info("   - Step 6: Initializing Energy Ledger...")
+    try:
+        store = EnergyLedgerStore({"enabled": True})
+        backend = (store.cfg.get("backend") or "").lower()
+        if backend in ("fs", "s3"):
+            logging.info(f"   - Rebuilding energy balances from ledger (backend={backend})")
+            store.rebuild_balances()
+        logging.info("   - ✅ Energy ledger initialized")
+    except Exception as e:
+        logging.error(f"   - ❌ Failed to initialize energy ledger: {e}")
+    
+    # 7. Initialize ENERGY_WEIGHTS (depends on Ray for agent management)
+    if ray_ready:
+        logging.info("   - Step 7: Initializing Energy Weights...")
+        try:
+            global ENERGY_WEIGHTS
+            from ..agents.tier0_manager import Tier0MemoryManager
+            tier0_mgr = Tier0MemoryManager()
+            agent_ids = tier0_mgr.list_agents()
+            if agent_ids and ENERGY_WEIGHTS is None:
+                n = len(agent_ids)
+                # Start with zeros; learn from PairStats
+                ENERGY_WEIGHTS = EnergyWeights(
+                    W_pair=np.zeros((n, n), dtype=np.float32),
+                    W_hyper=np.zeros((0,), dtype=np.float32),
+                    alpha_entropy=0.1,
+                    lambda_reg=0.01,
+                    beta_mem=0.05,
+                )
+                ENERGY_WEIGHTS.project()
+                app.state.energy_weights = ENERGY_WEIGHTS
+            logging.info("   - ✅ Energy weights initialized")
+        except Exception as e:
+            logging.error(f"   - ❌ Failed to initialize ENERGY_WEIGHTS: {e}")
+    else:
+        logging.warning("   - ⚠️ Skipping Energy Weights initialization due to Ray connection issues")
+    
+    # 8. Start metrics integration
+    logging.info("   - Step 8: Starting Metrics Integration...")
+    try:
+        from .metrics_integration import start_metrics_integration
+        base_url = os.getenv("SEEDCORE_API_ADDRESS", "localhost:8002")
+        if not base_url.startswith("http"):
+            base_url = f"http://{base_url}"
+        asyncio.create_task(start_metrics_integration(
+            base_url=base_url,
+            update_interval=30,
+            app_state=app.state  # Pass app state for local access
+        ))
+        logging.info("   - ✅ Metrics integration started")
+    except Exception as e:
+        logging.error(f"   - ❌ Failed to start metrics integration: {e}")
+    
+    # 9. Sync counters
+    logging.info("   - Step 9: Syncing Counters...")
+    try:
+        await sync_counters()
+        logging.info("   - ✅ Counters synced")
+    except Exception as e:
+        logging.error(f"   - ❌ Failed to sync counters: {e}")
+    
+    logging.info("✅ FastAPI application startup complete.")
+    yield
+    
+    # --- SHUTDOWN LOGIC ---
+    logging.info("🛑 FastAPI shutdown sequence initiated.")
+    
+    # Cleanup memory connections
+    try:
+        await cleanup_memory()
+        logging.info("   - ✅ Memory cleanup completed")
+    except Exception as e:
+        logging.error(f"   - ❌ Memory cleanup failed: {e}")
+    
+    # Shutdown Ray
+    if ray.is_initialized():
+        ray.shutdown()
+        logging.info("   - ✅ Ray shutdown completed")
+    
+    logging.info("✅ FastAPI shutdown complete.")
+
+# Create FastAPI app with lifespan manager
+app = FastAPI(lifespan=lifespan)
+
+# Include all routers
 app.include_router(mfb_router)
 app.include_router(salience_router)
 app.include_router(organism_router)
@@ -201,130 +386,8 @@ RHO_CLIP: float = float(os.getenv("SEEDCORE_RHO_CLIP", "0.95"))
 BETA_TOK: float = float(os.getenv("SEEDCORE_BETA_TOK", "0.0"))
 PROMOTION_LTOT_CAP: float = float(os.getenv("SEEDCORE_PROMOTION_LTOT_CAP", "0.98"))
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize services on startup."""
-    global mw_cache, MEMORY_SYSTEM
-    
-    logging.info("🚀 FastAPI startup event triggered")
-    logging.info("🔍 Starting service initialization...")
-    
-    # Initialize memory system
-    try:
-        MEMORY_SYSTEM = SharedMemorySystem()
-        app.state.mem = MEMORY_SYSTEM
-        logging.info("✅ Memory system initialized")
-    except Exception as e:
-        logging.error(f"❌ Failed to initialize memory system: {e}")
-    
-    # Initialize Ray with flexible configuration
-    try:
-        logging.info("🔍 Checking Ray configuration...")
-        ray_config = get_ray_config()
-        logging.info(f"Ray config result: {ray_config}")
-        
-        if ray_config.is_configured():
-            logging.info(f"✅ Ray is configured: {ray_config}")
-            
-            # Check if Ray is already initialized to avoid double initialization
-            if not ray.is_initialized():
-                logging.info("🔍 Ray not initialized, attempting initialization...")
-                success = init_ray()
-                if success:
-                    logging.info("✅ Ray initialization successful")
-                    cluster_info = get_ray_cluster_info()
-                    logging.info(f"Ray cluster info: {cluster_info}")
-                else:
-                    logging.error("❌ Ray initialization failed, continuing without Ray")
-            else:
-                logging.info("✅ Ray is already initialized, skipping initialization")
-                cluster_info = get_ray_cluster_info()
-                logging.info(f"Ray cluster info: {cluster_info}")
-            
-            # Initialize the COA organism after Ray is ready
-            try:
-                logging.info("🚀 Starting COA organism initialization...")
-                logging.info(f"🔍 Organism manager state: initialized={organism_manager._initialized}")
-                logging.info(f"🔍 Organism manager organs: {list(organism_manager.organs.keys())}")
-                logging.info(f"🔍 Organism manager configs: {len(organism_manager.organ_configs)}")
-                logging.info(f"🔍 Organism manager config details: {organism_manager.organ_configs}")
-                
-                # Check if organism manager has the right methods
-                logging.info(f"🔍 Organism manager methods: {[method for method in dir(organism_manager) if not method.startswith('_')]}")
-                
-                await organism_manager.initialize_organism()
-                app.state.organism = organism_manager
-                logging.info("✅ COA organism initialized successfully")
-                logging.info(f"🔍 Final organism state: initialized={organism_manager._initialized}")
-                logging.info(f"🔍 Final organism organs: {list(organism_manager.organs.keys())}")
-                
-                # Verify organs are accessible
-                for organ_id in organism_manager.organs:
-                    try:
-                        organ = organism_manager.organs[organ_id]
-                        status = ray.get(organ.get_status.remote())
-                        logging.info(f"✅ Organ {organ_id} accessible: {status}")
-                    except Exception as e:
-                        logging.error(f"❌ Failed to access organ {organ_id}: {e}")
-                        
-            except Exception as e:
-                logging.error(f"❌ Failed to initialize COA organism: {e}")
-                logging.error(f"❌ Exception type: {type(e)}")
-                import traceback
-                logging.error(f"❌ Traceback: {traceback.format_exc()}")
-        else:
-            logging.warning("⚠️ Ray not configured, skipping Ray initialization")
-            logging.info(f"Ray config details: {ray_config}")
-    except Exception as e:
-        logging.error(f"❌ Error during Ray initialization: {e}")
-        import traceback
-        logging.error(f"❌ Traceback: {traceback.format_exc()}")
-    
-    # Start consolidator loop
-    try:
-        import asyncio
-        asyncio.create_task(start_consolidator())
-        logging.info("✅ Consolidator loop started")
-    except Exception as e:
-        logging.error(f"❌ Failed to start consolidator loop: {e}")
-    
-    # Start consolidator loop
-    import asyncio
-    asyncio.create_task(start_consolidator())
-    logging.info("Consolidator loop started")
 
-    # Energy ledger: if FS/S3-like backend is configured, rebuild balances at startup
-    try:
-        store = EnergyLedgerStore({"enabled": True})
-        backend = (store.cfg.get("backend") or "").lower()
-        if backend in ("fs", "s3"):
-            logging.info("Rebuilding energy balances from ledger (backend=%s)", backend)
-            store.rebuild_balances()
-    except Exception:
-        logging.exception("Failed energy ledger rebuild on startup")
 
-    # Initialize ENERGY_WEIGHTS once agents are available
-    try:
-        global ENERGY_WEIGHTS
-        from ..agents.tier0_manager import Tier0MemoryManager
-        tier0_mgr = Tier0MemoryManager()
-        agent_ids = tier0_mgr.list_agents()
-        if agent_ids and ENERGY_WEIGHTS is None:
-            n = len(agent_ids)
-            # Start with zeros; learn from PairStats
-            ENERGY_WEIGHTS = EnergyWeights(
-                W_pair=np.zeros((n, n), dtype=np.float32),
-                W_hyper=np.zeros((0,), dtype=np.float32),
-                alpha_entropy=0.1,
-                lambda_reg=0.01,
-                beta_mem=0.05,
-            )
-            ENERGY_WEIGHTS.project()
-            app.state.energy_weights = ENERGY_WEIGHTS
-    except Exception:
-        logging.exception("Failed to initialize ENERGY_WEIGHTS")
-
-@app.on_event("startup")
 async def build_memory():
     """Initialize the Holon Fabric on server startup"""
     global holon_fabric
@@ -372,7 +435,6 @@ async def build_memory():
     
     print(f"Holon Fabric initialized with PG_DSN={pg_dsn}, NEO4J_URI={neo4j_uri}")
 
-@app.on_event("startup")
 async def start_consolidator():
     import asyncio, time
     async def loop():
@@ -397,7 +459,6 @@ async def start_consolidator():
     print("⇢ CONSOLIDATOR TASK SCHEDULED")
     asyncio.create_task(loop())
 
-@app.on_event("startup")
 async def sync_counters():
     import asyncpg  # type: ignore
     pg_dsn = os.getenv("PG_DSN")
@@ -414,48 +475,8 @@ async def sync_counters():
     finally:
         await c.close()
 
-@app.on_event("startup")
-async def start_metrics_integration():
-    """Start the metrics integration service on startup."""
-    try:
-        from .metrics_integration import start_metrics_integration
-        import asyncio
-        import logging
-        
-        logger = logging.getLogger(__name__)
-        
-        # Start metrics integration in background
-        # Use SEEDCORE_API_ADDRESS for internal container communication
-        base_url = os.getenv("SEEDCORE_API_ADDRESS", "localhost:8002")
-        if not base_url.startswith("http"):
-            base_url = f"http://{base_url}"
-            
-        logger.info(f"🔗 Metrics integration using base_url: {base_url}")
-        
-        asyncio.create_task(start_metrics_integration(
-            base_url=base_url,  # Use internal API service address
-            update_interval=30  # Update every 30 seconds
-        ))
-        logger.info("🚀 Started metrics integration service")
-    except Exception as e:
-        logger = logging.getLogger(__name__)
-        logger.error(f"Failed to start metrics integration: {e}")
 
-@app.on_event("shutdown")
-async def stop_metrics_integration():
-    """Stop the metrics integration service on shutdown."""
-    try:
-        from .metrics_integration import stop_metrics_integration
-        import logging
-        
-        logger = logging.getLogger(__name__)
-        await stop_metrics_integration()
-        logger.info("🛑 Stopped metrics integration service")
-    except Exception as e:
-        logger = logging.getLogger(__name__)
-        logger.error(f"Failed to stop metrics integration: {e}")
 
-@app.on_event("shutdown")
 async def cleanup_memory():
     """Cleanup connections on server shutdown"""
     global holon_fabric
@@ -661,7 +682,7 @@ async def energy_gradient():
         
         # Initialize Ray if not already done
         if not ray.is_initialized():
-            ray.init(address="auto", ignore_reinit_error=True)
+            ensure_ray_initialized()
         
         # Get Tier0 manager instance (create if needed)
         tier0_manager = Tier0MemoryManager()
@@ -920,7 +941,7 @@ def energy_calibrate():
         
         # Initialize Ray if not already done
         if not ray.is_initialized():
-            ray.init(address="auto", ignore_reinit_error=True)
+            ensure_ray_initialized()
         
         # Get Tier0 manager
         tier0_manager = Tier0MemoryManager()
@@ -1058,7 +1079,7 @@ def _build_energy_health_payload():
 
     # Initialize Ray if not already done
     if not ray.is_initialized():
-        ray.init(address="auto", ignore_reinit_error=True)
+        ensure_ray_initialized()
 
     # Get Tier0 manager for real agent data
     tier0_manager = Tier0MemoryManager()
@@ -1202,7 +1223,7 @@ def energy_monitor():
         
         # Initialize Ray if not already done
         if not ray.is_initialized():
-            ray.init(address="auto", ignore_reinit_error=True)
+            ensure_ray_initialized()
         
         # Get Tier0 manager
         tier0_manager = Tier0MemoryManager()
@@ -1343,11 +1364,9 @@ def get_agents_state() -> Dict:
         from ..agents import tier0_manager
         import ray
         
-        # Ensure Ray is initialized with correct env namespace/address
-        try:
-            tier0_manager._ensure_ray()  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        # Ensure Ray connection (idempotent)
+        if not ray.is_initialized():
+            ensure_ray_initialized()
         
         all_agents = []
 
@@ -1430,7 +1449,7 @@ def system_status():
         
         # Initialize Ray if not already done
         if not ray.is_initialized():
-            ray.init(address="auto", ignore_reinit_error=True)
+            ensure_ray_initialized()
         
         # Get Tier0 manager for real agent data
         tier0_manager = Tier0MemoryManager()
@@ -1925,11 +1944,11 @@ async def ray_status():
     """Get Ray cluster status and configuration."""
     try:
         config = get_ray_config()
-        cluster_info = get_ray_cluster_info()
+        cluster_info = get_connection_info()
         
         return {
             "ray_configured": config.is_configured(),
-            "ray_available": is_ray_available(),
+            "ray_available": is_connected(),
             "config": str(config),
             "cluster_info": cluster_info
         }
@@ -1950,12 +1969,14 @@ async def ray_connect(request: dict):
         from ..config.ray_config import configure_ray_remote
         configure_ray_remote(host, port, password)
         
-        success = init_ray(force_reinit=True)
+        # Force reconnect (idempotent)
+        connect()
+        success = is_connected()
         if success:
             return {
                 "success": True,
                 "message": f"Connected to Ray at {host}:{port}",
-                "cluster_info": get_ray_cluster_info()
+                "cluster_info": get_connection_info()
             }
         else:
             return {"error": "Failed to connect to Ray cluster"}
@@ -2029,27 +2050,18 @@ async def reason_about_failure(incident_id: str, agent_id: str = None):
     """
     try:
         client = get_cognitive_client()
+        # Build incident context once so both branches have it
+        incident_context = {
+            "incident_id": incident_id,
+            "error_message": "Task execution failed",
+            "agent_state": {"capability_score": 0.5, "memory_utilization": 0.3, "tasks_processed": 10},
+            "task_context": {"task_type": "data_processing", "complexity": 0.7, "timestamp": time.time()},
+        }
         if not client:
             # Fallback to direct cognitive core if client not available
             cognitive_core = get_cognitive_core()
             if not cognitive_core:
                 cognitive_core = initialize_cognitive_core()
-            
-            # Create mock incident context for demonstration
-            incident_context = {
-                "incident_id": incident_id,
-                "error_message": "Task execution failed",
-                "agent_state": {
-                    "capability_score": 0.5,
-                    "memory_utilization": 0.3,
-                    "tasks_processed": 10
-                },
-                "task_context": {
-                    "task_type": "data_processing",
-                    "complexity": 0.7,
-                    "timestamp": time.time()
-                }
-            }
             
             context = CognitiveContext(
                 agent_id=agent_id or "default_agent",

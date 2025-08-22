@@ -25,7 +25,8 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
 from ..energy.api import _ledger
-from ..organs.organism_manager import organism_manager
+# SOLUTION: Remove module-level import to avoid accessing organism_manager before initialization
+# from ..organs.organism_manager import organism_manager
 
 logger = logging.getLogger(__name__)
 
@@ -294,17 +295,25 @@ class HourlyFlywheel:
             logger.error(f"Error getting flywheel stats: {e}")
             return {"error": str(e)}
 
-# Global flywheel instance
-flywheel = HourlyFlywheel(organism_manager, _ledger)
+# Global flywheel instance - lazy initialization to avoid accessing organism_manager before it's ready
+_flywheel_instance = None
+
+def get_flywheel_instance():
+    """Get the global flywheel instance with lazy initialization."""
+    global _flywheel_instance
+    if _flywheel_instance is None:
+        # Lazy import to avoid circular dependencies
+        from ..organs.organism_manager import organism_manager
+        if organism_manager is None:
+            raise RuntimeError("OrganismManager not yet initialized. Please wait for startup to complete.")
+        _flywheel_instance = HourlyFlywheel(organism_manager, _ledger)
+    return _flywheel_instance
 
 async def start_flywheel():
     """Start the global flywheel instance."""
-    await flywheel.start()
+    await get_flywheel_instance().start()
 
 async def stop_flywheel():
     """Stop the global flywheel instance."""
-    await flywheel.stop()
-
-def get_flywheel_instance():
-    """Get the global flywheel instance."""
-    return flywheel 
+    if _flywheel_instance is not None:
+        await _flywheel_instance.stop() 

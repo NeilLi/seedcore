@@ -17,6 +17,7 @@ from typing import Dict, Any, Optional
 import ray
 from ray import serve
 from fastapi import FastAPI
+from seedcore.utils.ray_utils import ensure_ray_initialized
 from pydantic import BaseModel
 
 # Add the project root to Python path
@@ -198,8 +199,9 @@ def main():
     """Main entrypoint for the cognitive serve service."""
     print("🚀 Starting deployment driver for Cognitive Service...")
     try:
-        if not ray.is_initialized():
-            ray.init(address=RAY_ADDR, namespace=RAY_NS)
+        if not ensure_ray_initialized(ray_address=RAY_ADDR, ray_namespace=RAY_NS):
+            print("❌ Failed to initialize Ray connection")
+            sys.exit(1)
 
         # The application is defined by binding the deployment class
         cognitive_app = CognitiveService.bind()

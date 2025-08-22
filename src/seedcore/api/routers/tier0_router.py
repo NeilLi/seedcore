@@ -1,7 +1,9 @@
 from typing import Dict, Any
 import time
+import os
 import ray
 from fastapi import APIRouter
+from seedcore.utils.ray_utils import ensure_ray_initialized
 
 from ...agents import Tier0MemoryManager, tier0_manager
 
@@ -161,13 +163,11 @@ async def debug_agent_discovery():
 
     # Ensure Ray connected
     try:
-        if not ray.is_initialized():
-            addr = os.getenv("RAY_ADDRESS", "auto")
-            # Get namespace from environment, default to "seedcore-dev" for consistency
-            ns = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-            ray.init(address=addr, ignore_reinit_error=True, namespace=ns)
+        if ensure_ray_initialized():
             details["ray"]["initialized"] = True
-            details["ray"]["namespace"] = ns
+            details["ray"]["namespace"] = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+        else:
+            details["ray"]["error"] = "Failed to connect to Ray"
     except Exception as e:
         details["ray"]["error"] = str(e)
 

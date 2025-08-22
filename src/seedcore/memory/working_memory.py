@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import ray
+from ..utils.ray_utils import ensure_ray_initialized
 
 try:
     # Prefer the project-provided namespace helper if available
@@ -138,7 +139,8 @@ class SharedCache:
 def _ensure_ray(namespace: Optional[str]) -> None:
     if ray.is_initialized():
         return
-    ray.init(address=CONFIG.ray_address, namespace=namespace)
+    if not ensure_ray_initialized(ray_address=CONFIG.ray_address, ray_namespace=namespace):
+        raise RuntimeError(f"Failed to initialize Ray (address={CONFIG.ray_address}, namespace={namespace})")
     logger.info(
         "Ray initialized: address=%s namespace=%s",
         CONFIG.ray_address,

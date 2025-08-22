@@ -1,151 +1,92 @@
 """
 Ray utility functions for SeedCore.
-Provides flexible Ray initialization and connection management.
+Provides centralized, robust Ray initialization and connection management.
 """
 
 import os
-import socket
 import ray
 import logging
-from typing import Optional, Tuple
-from ..config.ray_config import get_ray_config, configure_ray_remote, configure_ray_local
+from typing import Optional, Any, Dict
 
-logger = logging.getLogger(__name__)
+# Use a module-level flag for a fast path to avoid repeated checks.
+_RAY_INITIALIZED = False
 
-
-def _can_connect_tcp(host: str, port: int, timeout_seconds: float = 0.5) -> bool:
-    """Return True if a TCP connection can be established to host:port within timeout."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout_seconds):
-            return True
-    except Exception:
-        return False
-
-
-def _parse_ray_url(ray_url: str) -> Tuple[str, int]:
-    """Parse a ray://host:port URL into (host, port). Defaults port to 10001 if missing."""
-    try:
-        without_scheme = ray_url.replace("ray://", "", 1)
-        if ":" in without_scheme:
-            host_str, port_str = without_scheme.rsplit(":", 1)
-            return host_str, int(port_str)
-        return without_scheme, 10001
-    except Exception:
-        return ray_url, 10001
-
-
-def resolve_ray_address() -> Optional[str]:
-    """Resolve a sensible default RAY_ADDRESS for both Kubernetes and Docker Compose.
-    
-    Priority order:
-    1) Respect explicit RAY_ADDRESS if set
-    2) Derive from RAY_HOST + RAY_PORT if available
-    3) Fall back to localhost for development
+def ensure_ray_initialized(
+    ray_address: Optional[str] = None,
+    ray_namespace: Optional[str] = "seedcore-dev",
+    force_reinit: bool = False,
+    **init_kwargs: Any
+) -> bool:
     """
-    # Check for explicit RAY_ADDRESS first
-    explicit = os.getenv("RAY_ADDRESS")
-    if explicit:
-        logger.debug(f"Using explicit RAY_ADDRESS: {explicit}")
-        return explicit
-    
-    # Check if we're in a head/worker pod (should not set RAY_ADDRESS)
-    # This is indicated by RAY_HOST being unset or pointing to localhost
-    ray_host = os.getenv("RAY_HOST")
-    if not ray_host or ray_host in ["localhost", "127.0.0.1"]:
-        logger.debug("In head/worker pod - RAY_HOST indicates local operation")
-        return "auto"
-    
-    # Derive address from RAY_HOST + RAY_PORT
-    ray_port = os.getenv("RAY_PORT", "10001")
-    derived_address = f"ray://{ray_host}:{ray_port}"
-    logger.debug(f"Derived RAY_ADDRESS from RAY_HOST/RAY_PORT: {derived_address}")
-    return derived_address
+    Connects to Ray if not already connected. Idempotent and environment-aware.
 
+    This is the single source of truth for all Ray connections.
 
-def init_ray_with_smart_defaults() -> bool:
-    """Initialize Ray with smart defaults based on the new configuration pattern.
-    
-    This function automatically handles the different pod roles:
-    - Head/worker pods: use "auto" or unset
-    - Client pods: use derived or explicit RAY_ADDRESS
+    Args:
+        ray_address: Optional Ray cluster address to connect to
+        ray_namespace: Optional Ray namespace to use
+        force_reinit: If True, force reinitialize Ray even if already connected
+        **init_kwargs: Additional Ray initialization arguments (e.g., runtime_env)
+
+    Behavior:
+    1. If already connected and force_reinit=False, does nothing.
+    2. If force_reinit=True, shuts down existing connection and reconnects.
+    3. If RAY_ADDRESS env var is set, connects as a client to that address.
+    4. If RAY_ADDRESS is not set, connects with address="auto" to join the
+       existing cluster (for code running inside Ray pods) or start a local one.
     """
+    global _RAY_INITIALIZED
+    
+    # Handle force reinit
+    if force_reinit and ray.is_initialized():
+        logging.info("Force reinit requested, shutting down existing Ray connection")
+        ray.shutdown()
+        _RAY_INITIALIZED = False
+    
+    if _RAY_INITIALIZED:
+        return True
+
+    if ray.is_initialized():
+        _RAY_INITIALIZED = True
+        return True
+
+    # Use the provided address, fall back to environment variable, then to "auto"
+    address_to_use = ray_address or os.getenv("RAY_ADDRESS") or "auto"
+    
+    logging.info(f"Ray not initialized. Attempting to connect with address='{address_to_use}'...")
+
     try:
-        # Check if Ray is already initialized
-        if ray.is_initialized():
-            logger.info("Ray is already initialized")
-            return True
-        
-        ray_address = resolve_ray_address()
-        namespace = os.getenv("RAY_NAMESPACE")
-        
-        if ray_address and ray_address != "auto":
-            logger.info(f"Initializing Ray with address: {ray_address}, namespace: {namespace}")
+        # For Ray Client, strip runtime_env (not applied) to avoid warnings.
+        init_kwargs = dict(init_kwargs or {})
+        if address_to_use.startswith("ray://"):
+            init_kwargs.pop("runtime_env", None)
             ray.init(
-                address=ray_address,
-                namespace=namespace,
-                ignore_reinit_error=True
+                address=address_to_use,
+                namespace=ray_namespace,
+                ignore_reinit_error=True,
+                logging_level=logging.WARNING,
+                allow_multiple=True,
+                **init_kwargs,
             )
         else:
-            logger.info("Initializing Ray locally (head/worker mode)")
+            # Local/auto mode can accept runtime_env, working_dir, etc.
             ray.init(
-                address="auto",
-                namespace=namespace,
-                ignore_reinit_error=True
-            )
-        
-        logger.info("Ray initialization successful")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize Ray: {e}")
-        return False
-
-
-def init_ray(namespace: Optional[str] = None, ray_address: Optional[str] = None) -> bool:
-    """Initialize Ray with the specified namespace and address.
-    
-    Args:
-        namespace: Ray namespace to use (defaults to environment variable)
-        ray_address: Ray cluster address (optional, will derive from RAY_HOST/RAY_PORT if not provided)
-    
-    Returns:
-        True if Ray was initialized successfully, False otherwise
-    """
-    try:
-        if ray.is_initialized():
-            logger.info("✅ Ray is already initialized")
-            return True
-        
-        # Get namespace from environment, default to "seedcore-dev" for consistency
-        if namespace is None:
-            namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-        
-        # Get Ray address from environment or derive from RAY_HOST/RAY_PORT
-        if ray_address is None:
-            ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
-            ray_port = os.getenv("RAY_PORT", "10001")
-            ray_address = f"ray://{ray_host}:{ray_port}"
-        
-        # Always try to connect to the remote Ray cluster first
-        logger.info(f"Attempting to connect to Ray cluster at: {ray_address}")
-        try:
-            ray.init(
-                address=ray_address,
+                address=address_to_use,
+                namespace=ray_namespace,
                 ignore_reinit_error=True,
-                namespace=namespace
+                logging_level=logging.WARNING,
+                **init_kwargs,
             )
-            logger.info("✅ Ray initialized successfully with remote address")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to connect to remote Ray cluster: {e}")
-            logger.warning("⚠️ Falling back to local Ray initialization")
-            ray.init(ignore_reinit_error=True, namespace=namespace)
-            logger.info("✅ Ray initialized locally")
-        
-        logger.info("✅ Ray initialized successfully")
+        _RAY_INITIALIZED = True
+        logging.info("Successfully connected to Ray.")
         return True
-        
     except Exception as e:
-        logger.error(f"❌ Failed to initialize Ray: {e}")
+        # Check if the error is about already being connected
+        if "already connected" in str(e).lower() or "allow_multiple" in str(e).lower():
+            logging.info("Ray is already connected to the cluster, marking as initialized")
+            _RAY_INITIALIZED = True
+            return True
+        logging.error(f"Failed to connect to Ray at address '{address_to_use}': {e}", exc_info=True)
         return False
 
 
@@ -154,9 +95,9 @@ def shutdown_ray() -> None:
     try:
         if ray.is_initialized():
             ray.shutdown()
-            logger.info("Ray shutdown successful")
+            logging.info("Ray shutdown successful")
     except Exception as e:
-        logger.error(f"Error during Ray shutdown: {e}")
+        logging.error(f"Error during Ray shutdown: {e}")
 
 
 def is_ray_available() -> bool:
@@ -182,7 +123,6 @@ def get_ray_cluster_info() -> dict:
             "cluster_resources": dict(resources),
             "available_resources": dict(available),
             "nodes": len(ray.nodes()),
-            "config": str(get_ray_config())
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -191,10 +131,8 @@ def get_ray_cluster_info() -> dict:
 def test_ray_connection() -> bool:
     """Test Ray connection with a simple task."""
     try:
-        if not ray.is_initialized():
-            logger.warning("Ray not initialized, attempting to initialize...")
-            if not init_ray():
-                return False
+        if not ensure_ray_initialized():
+            return False
         
         # Test with a simple remote function
         @ray.remote
@@ -202,53 +140,9 @@ def test_ray_connection() -> bool:
             return "Ray connection test successful"
         
         result = ray.get(test_function.remote())
-        logger.info(f"Ray connection test: {result}")
+        logging.info(f"Ray connection test: {result}")
         return True
         
     except Exception as e:
-        logger.error(f"Ray connection test failed: {e}")
-        return False 
-
-
-def ensure_ray_initialized(ray_address: Optional[str] = None, ray_namespace: Optional[str] = None) -> bool:
-    """Ensure Ray is initialized with the specified namespace and address.
-    
-    Args:
-        ray_address: Ray cluster address (optional, will derive from RAY_HOST/RAY_PORT if not provided)
-        ray_namespace: Ray namespace to use (defaults to environment variable)
-    
-    Returns:
-        True if Ray was initialized successfully, False otherwise
-    """
-    try:
-        if ray.is_initialized():
-            logger.info("✅ Ray is already initialized")
-            return True
-        
-        # Get namespace from environment, default to "seedcore-dev" for consistency
-        if ray_namespace is None:
-            ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-        
-        # Get Ray address from environment or derive from RAY_HOST/RAY_PORT
-        if ray_address is None:
-            ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
-            ray_port = os.getenv("RAY_PORT", "10001")
-            ray_address = f"ray://{ray_host}:{ray_port}"
-        
-        # Always try to connect to the remote Ray cluster first
-        logger.info(f"Attempting to connect to Ray cluster at: {ray_address}")
-        try:
-            ray.init(address=ray_address, ignore_reinit_error=True, namespace=ray_namespace)
-            logger.info("✅ Ray initialized successfully with remote address")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to connect to remote Ray cluster: {e}")
-            logger.warning("⚠️ Falling back to local Ray initialization")
-            ray.init(ignore_reinit_error=True, namespace=ray_namespace)
-            logger.info("✅ Ray initialized locally")
-        
-        logger.info("✅ Ray initialized successfully")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize Ray: {e}")
+        logging.error(f"Ray connection test failed: {e}")
         return False 

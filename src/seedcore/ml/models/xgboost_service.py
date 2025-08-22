@@ -8,6 +8,7 @@ It integrates seamlessly with the existing SeedCore ML service architecture.
 import ray
 import pandas as pd
 import numpy as np
+from ...utils.ray_utils import ensure_ray_initialized
 import xgboost as xgb
 import logging
 import time
@@ -87,28 +88,11 @@ class XGBoostService:
         # Initialize Ray if not already initialized
         # When running in the Ray head container, we should connect to the existing Ray instance
         if not ray.is_initialized():
-            # Check if we're in the Ray head container by looking for Ray processes
-            import subprocess
-            try:
-                result = subprocess.run(['ps', 'aux'], capture_output=True, text=True)
-                if 'ray' in result.stdout and ('gcs_server' in result.stdout or 'raylet' in result.stdout):
-                    # We're in the head container, connect to the existing Ray instance
-                    ray.init()
-                    logger.info("✅ Connected to existing Ray instance in head container")
-                else:
-                    # We're in a worker or external environment, connect via RAY_ADDRESS
-                    ray_address = os.getenv("RAY_ADDRESS")
-                    if ray_address:
-                        ray.init(address=ray_address, log_to_driver=False)
-                        logger.info(f"✅ Connected to Ray cluster at {ray_address}")
-                    else:
-                        # Fallback to local initialization if RAY_ADDRESS not set
-                        ray.init()
-                        logger.info("✅ Connected to local Ray instance")
-            except Exception:
-                # Fallback to simple initialization
-                ray.init()
-                logger.info("✅ Connected to Ray instance (fallback)")
+            # Use the centralized Ray initialization utility
+            ray_address = os.getenv("RAY_ADDRESS")
+            if not ensure_ray_initialized(ray_address=ray_address):
+                raise RuntimeError("Failed to initialize Ray connection")
+            logger.info("✅ Ray connection established successfully")
         else:
             logger.info("✅ Ray is already initialized, skipping initialization")
         
