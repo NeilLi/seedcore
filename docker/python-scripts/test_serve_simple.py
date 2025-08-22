@@ -10,7 +10,15 @@ import os
 
 # Get namespace from environment, default to "seedcore-dev" for consistency
 ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-ray.init(address="auto", namespace=ray_namespace)
+
+# Add src to path for imports
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+
+from seedcore.utils.ray_utils import ensure_ray_initialized
+if not ensure_ray_initialized(ray_namespace=ray_namespace):
+    raise RuntimeError("Failed to connect to Ray cluster")
 
 # Create a simple FastAPI app
 from fastapi import FastAPI

@@ -35,10 +35,15 @@ def ensure_sys_path():
 
 def connect_ray():
     import ray
+    from seedcore.utils.ray_utils import ensure_ray_initialized
+    
     ray_address = os.getenv("RAY_ADDRESS", "auto")
     ray_namespace = os.getenv("RAY_NAMESPACE", "seedcore")
+    
     if not ray.is_initialized():
-        ray.init(address=ray_address, ignore_reinit_error=True, namespace=ray_namespace)
+        if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
+            raise RuntimeError("Failed to connect to Ray cluster")
+    
     return ray
 
 

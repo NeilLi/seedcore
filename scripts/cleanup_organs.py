@@ -24,7 +24,10 @@ async def cleanup_and_recreate_organs():
     ray_address = f"ray://{ray_host}:{ray_port}"
     
     print(f"🔗 Connecting to Ray at: {ray_address}")
-    ray.init(address=ray_address, namespace=ray_namespace)
+    from seedcore.utils.ray_utils import ensure_ray_initialized
+    if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
+        print("❌ Failed to connect to Ray cluster")
+        return
     
     # List of organ names to clean up
     organ_names = ["cognitive_organ_1", "actuator_organ_1", "utility_organ_1"]

@@ -26,7 +26,10 @@ def analyze_ray_cluster():
     ray_address = f"ray://{ray_host}:{ray_port}"
     
     print(f"🔗 Connecting to Ray at: {ray_address}")
-    ray.init(address=ray_address, namespace=ray_namespace)
+    from seedcore.utils.ray_utils import ensure_ray_initialized
+    if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
+        print("❌ Failed to connect to Ray cluster")
+        return False
     
     # 1. Cluster Resources
     print("\n📊 Cluster Resources:")

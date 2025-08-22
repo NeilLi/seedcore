@@ -16,6 +16,13 @@ import time
 import base64
 import requests
 import ray
+from pathlib import Path
+import sys
+
+# Add src to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from seedcore.utils.ray_utils import ensure_ray_initialized
 
 
 def decode_blob(enc: dict):
@@ -35,7 +42,7 @@ def main():
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--tau", type=float, default=0.3)
     parser.add_argument("--batch", type=int, default=10)
-    parser.add_argument("--ray", default=os.getenv("RAY_ADDRESS", "ray://ray-head:10001"))
+    parser.add_argument("--ray", default=os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001"))
     parser.add_argument("--pg_dsn", default=os.getenv("PG_DSN"))
     parser.add_argument("--neo_uri", default=os.getenv("NEO4J_URI") or os.getenv("NEO4J_BOLT_URL", "bolt://neo4j:7687"))
     parser.add_argument("--neo_user", default=os.getenv("NEO4J_USER", "neo4j"))
@@ -63,9 +70,10 @@ def main():
 
     print(f"Snapshot size: {len(mw)}")
 
-    # 2) Connect to Ray
+    # 2) Connect to Ray using centralized utility
     print(f"Connecting to Ray at {args.ray} ...")
-    ray.init(address=args.ray, ignore_reinit_error=True)
+    if not ensure_ray_initialized(ray_address=args.ray):
+        raise SystemExit("Failed to connect to Ray cluster")
 
     # 3) Submit consolidation worker
     from src.seedcore.memory.consolidation_task import consolidation_worker

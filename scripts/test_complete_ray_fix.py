@@ -52,7 +52,10 @@ def test_ray_connection():
             time.sleep(1)
         
         # Attempt connection
-        ray.init(address=ray_address, namespace=ray_namespace)
+        from seedcore.utils.ray_utils import ensure_ray_initialized
+        if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
+            print("❌ Failed to connect to Ray cluster")
+            return False
         print("✅ Ray connection established successfully!")
         
         # Test basic functionality

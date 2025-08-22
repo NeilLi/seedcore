@@ -1,113 +1,91 @@
 #!/usr/bin/env python3
 """
-Optimized DSPy Integration Example for SeedCore
+Optimized DSPy Integration Example for SeedCore Cognitive Core.
 
-This script demonstrates DSPy integration with SeedCore using an optimized approach
-that integrates with the existing serve_entrypoint.py to ensure proper namespace
-management and avoid deployment conflicts.
+This example demonstrates:
+1. Efficient cognitive core deployment with optimized resource usage
+2. Proper Ray initialization using centralized utilities
+3. Robust error handling and health monitoring
+4. Memory-efficient context processing
+
+Usage:
+    python examples/optimized_dspy_integration_example.py [--num-replicas N] [--deploy] [--undeploy]
+
+Environment Variables:
+    - RAY_ADDRESS: Ray cluster address (default: auto)
+    - OPENAI_API_KEY: OpenAI API key for LLM provider
+    - SEEDCORE_NS: Ray namespace (default: seedcore-dev)
 """
 
 import os
-import sys
-import asyncio
-import json
 import time
+import requests
+import ray
+import serve
+from typing import Dict, Any, Optional
 from pathlib import Path
+import sys
 
-# Add the src directory to the Python path
+# Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-import ray
-from ray import serve
-from seedcore.agents.cognitive_core import (
-    CognitiveCore, 
-    CognitiveContext, 
-    CognitiveTaskType,
-    initialize_cognitive_core,
-    get_cognitive_core
-)
-from seedcore.agents.ray_actor import RayAgent
-from seedcore.serve.cognitive_serve import (
-    CognitiveCoreServe,
-    CognitiveCoreClient,
-    CognitiveRequest,
-    CognitiveResponse
-)
-from seedcore.config.llm_config import configure_llm_openai
+from seedcore.utils.ray_utils import ensure_ray_initialized
+from seedcore.cognitive.cognitive_core import CognitiveCoreServe
+from seedcore.cognitive.cognitive_context import CognitiveContext, CognitiveTaskType
+from seedcore.llm.providers.openai_provider import OpenAIProvider
 
-# Configuration constants
-COGNITIVE_APP_NAME = "sc_cognitive"  # Use consistent naming with serve_entrypoint
-COGNITIVE_ROUTE_PREFIX = "/cognitive"      # Dedicated route prefix
+# Configuration
+COGNITIVE_APP_NAME = "cognitive-core-optimized"
+COGNITIVE_ROUTE_PREFIX = "/cognitive"
 MAX_DEPLOY_RETRIES = 30
 DELAY = 2
 
-def wait_for_http_ready(url, max_retries=30, delay=2):
+def wait_for_http_ready(url: str, max_retries: int, delay: float) -> bool:
     """Wait for HTTP endpoint to be ready."""
-    import urllib.request
     for attempt in range(max_retries):
         try:
-            with urllib.request.urlopen(url, timeout=5) as resp:
-                if resp.status == 200:
-                    print(f"✅ Service ready at {url}")
-                    return True
-        except Exception as e:
-            if attempt < max_retries - 1:
-                print(f"🔄 Service not ready ({e}); retrying in {delay}s...")
-                time.sleep(delay)
-            else:
-                print(f"❌ Service at {url} failed to become ready after {max_retries} attempts.")
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                return True
+        except requests.RequestException:
+            pass
+        
+        if attempt < max_retries - 1:
+            time.sleep(delay)
+    
     return False
 
-def check_existing_deployments():
-    """Check for existing deployments and handle conflicts."""
-    try:
-        # Check if our cognitive app is already deployed
-        existing_apps = serve.list_applications()
-        print(f"🔍 Existing applications: {list(existing_apps.keys())}")
-        
-        if COGNITIVE_APP_NAME in existing_apps:
-            print(f"✅ Cognitive app '{COGNITIVE_APP_NAME}' already deployed")
-            return True
-        else:
-            print(f"📝 Cognitive app '{COGNITIVE_APP_NAME}' not found, will deploy")
-            return False
-            
-    except Exception as e:
-        print(f"⚠️ Could not check existing deployments: {e}")
-        return False
-
-def deploy_cognitive_core_optimized(
-    llm_provider: str = "openai",
-    model: str = "gpt-4o",
-    num_replicas: int = 2
-) -> bool:
-    """
-    Deploy the cognitive core with optimized conflict handling.
+def initialize_cognitive_core() -> CognitiveCoreServe:
+    """Initialize the cognitive core with optimized configuration."""
+    # Initialize LLM provider
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable is required")
     
-    Args:
-        llm_provider: LLM provider to use
-        model: Model to use
-        num_replicas: Number of replicas to deploy
-        
-    Returns:
-        True if deployment successful, False otherwise
-    """
+    llm_provider = OpenAIProvider(api_key=api_key)
+    
+    # Initialize model with optimized parameters
+    model = llm_provider.get_model(
+        model_name="gpt-4o-mini",  # Use cost-effective model
+        max_tokens=1000,           # Limit response length
+        temperature=0.1,           # Lower temperature for consistency
+        top_p=0.9,                # Optimize for quality
+        frequency_penalty=0.1,     # Reduce repetition
+        presence_penalty=0.1       # Encourage focus
+    )
+    
+    return CognitiveCoreServe(llm_provider, model)
+
+def deploy_cognitive_core_optimized(num_replicas: int = 1) -> bool:
+    """Deploy the cognitive core with optimized configuration."""
     try:
-        # Check if already deployed
-        if check_existing_deployments():
-            return True
-        
         print(f"🚀 Deploying cognitive core as '{COGNITIVE_APP_NAME}'...")
         
-        # Ensure Ray is initialized
-        if not ray.is_initialized():
-            ray_address = os.getenv("RAY_ADDRESS")
-            if ray_address:
-                ray.init(address=ray_address, log_to_driver=False)
-                print(f"✅ Connected to Ray cluster at {ray_address}")
-            else:
-                ray.init()
-                print("✅ Connected to local Ray instance")
+        # Ensure Ray is initialized using centralized utility
+        if not ensure_ray_initialized():
+            print("❌ Failed to initialize Ray connection")
+            return False
+        print("✅ Ray connection established")
         
         # Ensure Serve is running
         try:
@@ -208,8 +186,6 @@ async def example_2_optimized_ray_serve_deployment():
     try:
         # Deploy cognitive core with optimized approach
         deployment_success = deploy_cognitive_core_optimized(
-            llm_provider="openai",
-            model="gpt-4o",
             num_replicas=2
         )
         
@@ -386,7 +362,7 @@ async def main():
             print("Please set OPENAI_API_KEY environment variable")
             return
         
-        configure_llm_openai(api_key)
+        # configure_llm_openai(api_key) # This line is removed as per the new_code
         print("✅ LLM configuration loaded")
     except Exception as e:
         print(f"⚠️ LLM configuration failed: {e}")

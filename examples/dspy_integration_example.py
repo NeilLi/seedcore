@@ -189,7 +189,9 @@ async def example_4_ray_agent_integration():
     try:
         # Initialize Ray if not already done
         if not ray.is_initialized():
-            ray.init(ignore_reinit_error=True)
+            from seedcore.utils.ray_utils import ensure_ray_initialized
+            if not ensure_ray_initialized():
+                raise RuntimeError("Failed to initialize Ray connection")
         
         # Create a Ray agent
         agent = RayAgent.remote("cognitive_agent_001", {'E': 0.7, 'S': 0.2, 'O': 0.1})

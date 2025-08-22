@@ -32,7 +32,10 @@ def analyze_job_details():
     print(f"🏷️ Using namespace: {ray_namespace}")
     print(f"ℹ️ Note: Using correct service name '{ray_host}' (env var RAY_HOST='{os.getenv('RAY_HOST', 'Not set')}' was incorrect)")
     
-    ray.init(address=ray_address, namespace=ray_namespace)
+    from seedcore.utils.ray_utils import ensure_ray_initialized
+    if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
+        print("❌ Failed to connect to Ray cluster")
+        return False
     
     # 1. Get current Ray context and job information
     print("\n📊 RAY CONTEXT ANALYSIS:")

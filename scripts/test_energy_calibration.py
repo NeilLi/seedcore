@@ -50,7 +50,10 @@ def run_energy_calibration(num_tasks: int = 100, num_agents: int = 5):
     
     # Initialize Ray
     if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True)
+        from seedcore.utils.ray_utils import ensure_ray_initialized
+        if not ensure_ray_initialized():
+            print("❌ Failed to initialize Ray connection")
+            return None, None
     
     # Create tier0 manager and agents
     tier0_manager = Tier0MemoryManager()

@@ -62,7 +62,10 @@ def test_ray_initialization():
         
         if not ray.is_initialized():
             logger.info(f"Initializing Ray with namespace: {effective_namespace}")
-            ray.init(address="auto", namespace=effective_namespace)
+            from seedcore.utils.ray_utils import ensure_ray_initialized
+            if not ensure_ray_initialized(ray_namespace=effective_namespace):
+                logger.error("❌ Failed to initialize Ray connection")
+                return False
         else:
             logger.info("Ray already initialized")
         
@@ -95,7 +98,10 @@ def test_agent_creation():
             seedcore_ns = os.getenv("SEEDCORE_NS")
             ray_namespace = os.getenv("RAY_NAMESPACE")
             effective_namespace = ray_namespace or seedcore_ns or "seedcore-dev"
-            ray.init(address="auto", namespace=effective_namespace)
+            from seedcore.utils.ray_utils import ensure_ray_initialized
+            if not ensure_ray_initialized(ray_namespace=effective_namespace):
+                logger.error("❌ Failed to initialize Ray connection")
+                return False
         
         # Create Tier0 manager
         tier0_manager = Tier0MemoryManager()

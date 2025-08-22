@@ -15,7 +15,10 @@ def monitor_cluster_live():
     try:
         # Initialize Ray connection
         if not ray.is_initialized():
-            ray.init(address="ray://ray-head:10001", ignore_reinit_error=True)
+            from seedcore.utils.ray_utils import ensure_ray_initialized
+            if not ensure_ray_initialized(ray_address="ray://seedcore-svc-head-svc:10001"):
+                print("❌ Failed to connect to Ray cluster")
+                return False
             print("🔌 Connected to Ray cluster...")
         
         print("🔍 Ray Cluster Live Monitor")
@@ -116,9 +119,9 @@ def monitor_cluster_live():
                 print(f"Error getting performance data: {e}")
             print()
             
-            print("💡 Tips:")
-            print("  • Access dashboard at http://localhost:8265")
-            print("  • Run 'docker logs -f ray-head' for detailed logs")
+            print("💡 Commands:")
+            print("  • Check actors: docker compose exec seedcore-svc-head-svc ray list actors")
+            print("  • Run 'docker logs -f seedcore-svc-head-svc' for detailed logs")
             print("  • Press Ctrl+C to stop monitoring")
             
             # Wait before next update

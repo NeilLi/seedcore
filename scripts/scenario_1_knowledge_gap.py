@@ -40,7 +40,10 @@ async def run_scenario():
         print(f"🔗 Connecting to Ray at: {ray_address}")
         print(f"🏷️ Using namespace: {ray_namespace}")
         
-        ray.init(address=ray_address, ignore_reinit_error=True)
+        from seedcore.utils.ray_utils import ensure_ray_initialized
+        if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
+            print("❌ Failed to connect to Ray cluster")
+            return
         print("✅ Ray initialized successfully")
     except Exception as e:
         print(f"❌ Failed to initialize Ray: {e}")

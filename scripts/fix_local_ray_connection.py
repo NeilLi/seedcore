@@ -58,7 +58,10 @@ def test_ray_connection():
         logger.info(f"🔗 Attempting to connect to Ray at: {ray_address}")
         logger.info(f"🏷️ Using namespace: {namespace}")
         
-        ray.init(address=ray_address, namespace=namespace, ignore_reinit_error=True)
+        from seedcore.utils.ray_utils import ensure_ray_initialized
+        if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=namespace):
+            logger.error("❌ Failed to connect to Ray cluster")
+            return False
         
         # Check runtime context
         runtime_context = ray.get_runtime_context()

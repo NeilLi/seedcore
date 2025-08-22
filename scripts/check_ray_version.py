@@ -12,7 +12,10 @@ def check_ray_version():
     try:
         # Initialize Ray connection
         if not ray.is_initialized():
-            ray.init(address="ray://ray-head:10001", ignore_reinit_error=True)
+            from seedcore.utils.ray_utils import ensure_ray_initialized
+            if not ensure_ray_initialized(ray_address="ray://seedcore-svc-head-svc:10001"):
+                print("❌ Failed to connect to Ray cluster")
+                return False
             print("🔌 Connected to Ray cluster...")
         
         print("🔍 Ray Version Check")

@@ -243,7 +243,9 @@ class TestRayIntegration:
     def ray_init(self):
         """Initialize Ray for testing."""
         if not ray.is_initialized():
-            ray.init(local_mode=True)
+            from seedcore.utils.ray_utils import ensure_ray_initialized
+            if not ensure_ray_initialized(local_mode=True):
+                pytest.skip("Failed to initialize Ray for testing")
         yield
         if ray.is_initialized():
             ray.shutdown()

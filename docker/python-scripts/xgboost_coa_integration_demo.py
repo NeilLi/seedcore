@@ -344,7 +344,15 @@ def test_utility_predictor_actor() -> bool:
     try:
         # Initialize Ray if not already done
         if not ray.is_initialized():
-            ray.init(address="ray://localhost:10001")
+            # Add src to path for imports
+            import sys
+            from pathlib import Path
+            sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+            
+            from seedcore.utils.ray_utils import ensure_ray_initialized
+            if not ensure_ray_initialized(ray_address="ray://localhost:10001"):
+                print("❌ Failed to connect to Ray cluster")
+                return False
         
         # Get the utility predictor actor
         predictor = get_utility_predictor(refresh_interval_hours=1)

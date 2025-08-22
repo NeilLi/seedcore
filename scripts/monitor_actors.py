@@ -15,7 +15,10 @@ def monitor_actors():
     try:
         # Initialize Ray connection
         if not ray.is_initialized():
-            ray.init(address="ray://ray-head:10001", ignore_reinit_error=True)
+            from seedcore.utils.ray_utils import ensure_ray_initialized
+            if not ensure_ray_initialized(ray_address="ray://seedcore-svc-head-svc:10001"):
+                print("❌ Failed to connect to Ray cluster")
+                return False
             print("🔌 Connected to Ray cluster...")
         
         print("🔍 Ray Actor Monitor")
@@ -151,11 +154,10 @@ def monitor_actors():
             print(f"   ❌ Error getting cluster info: {str(e)[:50]}")
         
         print()
-        print("💡 Tips:")
-        print("   • Run 'python -m scripts.scenario_3_proactive_caching' to create ObserverAgent")
-        print("   • Check logs with 'docker compose logs ray-head'")
-        print("   • Monitor real-time with 'docker compose logs -f ray-head'")
-        print("   • Access dashboard at http://localhost:8265")
+        print("💡 Commands:")
+        print("   • Check actors: docker compose exec seedcore-svc-head-svc ray list actors")
+        print("   • View logs: docker compose logs seedcore-svc-head-svc")
+        print("   • Monitor real-time with 'docker compose logs -f seedcore-svc-head-svc'")
         
     except Exception as e:
         print(f"❌ Error: {e}")

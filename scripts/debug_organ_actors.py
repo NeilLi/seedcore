@@ -35,7 +35,9 @@ async def test_organ_actors():
         ray_address = f"ray://{ray_host}:{ray_port}"
         
         print(f"🔗 Connecting to Ray at: {ray_address}")
-        ray.init(address=ray_address, namespace=ray_namespace)
+        from seedcore.utils.ray_utils import ensure_ray_initialized
+        if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
+            raise RuntimeError("Failed to connect to Ray cluster")
         logger.info("✅ Ray initialized")
     
     # Get the organism manager

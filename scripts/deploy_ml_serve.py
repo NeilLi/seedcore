@@ -24,7 +24,10 @@ def check_ray_cluster():
     try:
         # Try to connect to Ray
         if not ray.is_initialized():
-            ray.init(address="ray://seedcore-ray-head:10001")
+            from seedcore.utils.ray_utils import ensure_ray_initialized
+            if not ensure_ray_initialized(ray_address="ray://seedcore-svc-head-svc:10001"):
+                print("❌ Failed to connect to Ray cluster")
+                return False
         
         # Check cluster status
         cluster_resources = ray.cluster_resources()

@@ -22,7 +22,10 @@ def test_ray_connection():
     try:
         if not ray.is_initialized():
             # Try to connect to Ray
-            ray.init(address="ray://localhost:10001", log_to_driver=False)
+            from seedcore.utils.ray_utils import ensure_ray_initialized
+            if not ensure_ray_initialized(ray_address="ray://localhost:10001"):
+                logger.error("❌ Failed to connect to Ray cluster")
+                return False
             logger.info("✅ Connected to Ray cluster")
         else:
             logger.info("✅ Ray already initialized")

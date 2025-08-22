@@ -258,7 +258,10 @@ async def main():
     
     # Initialize Ray
     if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True)
+        from seedcore.utils.ray_utils import ensure_ray_initialized
+        if not ensure_ray_initialized():
+            print("❌ Failed to initialize Ray connection")
+            return False
     
     try:
         # Run tests
