@@ -42,9 +42,9 @@ def test_service_connectivity():
     
     # Test Ray head service
     services = [
-        ("Ray Head ML Service", "http://seedcore-head-svc:8000/health"),
-        ("Ray Head Dashboard", "http://seedcore-head-svc:8265"),
-        ("Localhost ML Service", "http://localhost:8000/health"),
+        ("Ray Head ML Service", "http://seedcore-svc-stable-svc:8000/ml/health"),
+        ("Ray Head Dashboard", "http://seedcore-svc-head-svc:8265"),
+        ("Localhost ML Service", "http://localhost:8000/ml/health"),
         ("Localhost Dashboard", "http://localhost:8265")
     ]
     
@@ -73,9 +73,7 @@ def test_writable_directories():
     
     test_dirs = [
         "/tmp",
-        "/app/tmp" if os.path.exists("/app") else None,
-        os.path.join(os.getcwd(), "tmp"),
-        "/data"
+        "/app/data"
     ]
     
     for dir_path in test_dirs:
