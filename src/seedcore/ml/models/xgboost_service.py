@@ -133,7 +133,8 @@ class XGBoostService:
         # Convert to Ray Dataset
         dataset = ray.data.from_pandas(df)
         
-        logger.info(f"✅ Created Ray Dataset with {dataset.count()} samples")
+        peek = dataset.take(1)
+        logger.info(f"✅ Created Ray Dataset (peeked {len(peek)} rows)")
         return dataset
     
     def load_dataset_from_source(self, source_path: str, format: str = "auto") -> ray.data.Dataset:
@@ -165,7 +166,8 @@ class XGBoostService:
             else:
                 raise ValueError(f"Unsupported format: {format}")
             
-            logger.info(f"✅ Loaded dataset with {dataset.count()} samples")
+            peek = dataset.take(1)
+            logger.info(f"✅ Loaded dataset (peeked {len(peek)} rows)")
             return dataset
             
         except Exception as e:
@@ -234,6 +236,7 @@ class XGBoostService:
                 "eval_metric": xgb_config.eval_metric,
                 "eta": xgb_config.eta,
                 "max_depth": xgb_config.max_depth,
+                "nthread": int(os.getenv("XGB_THREADS", "4")),
             }
             
             # Convert Ray Dataset to RayDMatrix
@@ -270,12 +273,20 @@ class XGBoostService:
                 import xgboost as xgb
                 import pandas as pd
                 
-                # Convert Ray Dataset to pandas DataFrame for local training
-                logger.info("Converting Ray Dataset to pandas DataFrame...")
-                df_list = dataset.take_all()
-                # Convert each item to DataFrame if it's a dict
-                df_list = [pd.DataFrame([item]) if isinstance(item, dict) else item for item in df_list]
-                df = pd.concat(df_list, ignore_index=True)
+                # Fallback to local training (bounded)
+                import pandas as pd
+                max_local_rows = int(os.getenv("XGB_LOCAL_MAX_ROWS", "200000"))  # ~200k by default
+                logger.info(f"Local training: capping rows at {max_local_rows:,}")
+
+                # Efficiently build a DataFrame up to N rows
+                rows_accum = 0
+                df_parts = []
+                for batch in dataset.iter_batches(batch_size=8192, batch_format="pandas"):
+                    df_parts.append(batch)
+                    rows_accum += len(batch)
+                    if rows_accum >= max_local_rows:
+                        break
+                df = pd.concat(df_parts, ignore_index=True)
                 
                 # Prepare data for XGBoost
                 X = df.drop(columns=[label_column])
@@ -333,13 +344,6 @@ class XGBoostService:
                 result = MockResult(bst, eval_results)
                 logger.info("✅ Local training completed successfully")
             
-            # Save model
-            model_path = self._save_model(result, model_name)
-            
-            # Update service state
-            self.current_model = result
-            self.current_model_path = model_path
-            
             # Extract metrics from training result
             metrics = {"status": "completed"}
             if hasattr(result, 'eval_results') and result.eval_results:
@@ -350,10 +354,10 @@ class XGBoostService:
                             if values:  # Get the last (best) value
                                 metrics[f"validation_{metric_name}"] = values[-1]
             
-            # Store metadata
+            # Build metadata before saving
             self.model_metadata = {
                 "name": model_name,
-                "path": str(model_path),
+                "path": "",  # filled below
                 "training_time": time.time() - start_time,
                 "metrics": metrics,
                 "feature_columns": feature_columns,  # Store feature columns for validation
@@ -362,6 +366,14 @@ class XGBoostService:
                     "training_config": training_config.__dict__
                 }
             }
+            
+            # Save model with metadata
+            model_path = self._save_model(result, model_name, self.model_metadata)
+            
+            # Update service state
+            self.current_model = result
+            self.current_model_path = model_path
+            self.model_metadata["path"] = str(model_path)
             
             logger.info(f"✅ Training completed in {self.model_metadata['training_time']:.2f}s")
             logger.info(f"Model saved to: {model_path}")
@@ -379,20 +391,13 @@ class XGBoostService:
             logger.error(f"❌ Training failed: {e}")
             raise
     
-    def _save_model(self, result, model_name: str) -> Path:
-        """Save trained model to storage."""
+    def _save_model(self, result, model_name: str, metadata: Dict[str, Any]) -> Path:
         model_dir = self.model_storage_path / model_name
         model_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save XGBoost model
         model_path = model_dir / "model.xgb"
         result.save_model(str(model_path))
-        
-        # Save metadata
-        metadata_path = model_dir / "metadata.json"
-        with open(metadata_path, 'w') as f:
-            json.dump(self.model_metadata, f, indent=2)
-        
+        with open(model_dir / "metadata.json", "w") as f:
+            json.dump(metadata, f, indent=2)
         return model_path
     
     def load_model(self, model_path: str) -> bool:
@@ -436,7 +441,8 @@ class XGBoostService:
         """
         try:
             # Look for the latest promoted model
-            blessed_model_path = self.model_storage_path / "utility_risk_model_latest" / "model.xgb"
+            blessed = os.getenv("XGB_BLESSED_DIR", "utility_risk_model_latest")
+            blessed_model_path = self.model_storage_path / blessed / "model.xgb"
             
             if blessed_model_path.exists():
                 logger.info(f"🔄 Refreshing model to latest promoted version: {blessed_model_path}")
@@ -463,44 +469,22 @@ class XGBoostService:
             raise ValueError("No model loaded. Please load a model first.")
         
         try:
-            # Convert input to DMatrix
+            # normalize → float32 ndarray
             if isinstance(features, list):
                 features = np.array(features)
-            
-            if isinstance(features, pd.DataFrame):
+            elif isinstance(features, pd.DataFrame):
                 features = features.values
-            
-            # Ensure 2D array
+            features = np.asarray(features, dtype=np.float32)
             if features.ndim == 1:
                 features = features.reshape(1, -1)
-            
-            # Get actual feature names from the loaded XGBoost model
-            if hasattr(self.current_model, 'feature_names') and self.current_model.feature_names:
-                feature_names = self.current_model.feature_names
-                if len(feature_names) != features.shape[1]:
-                    logger.warning(f"⚠️  Feature count mismatch: expected {len(feature_names)}, got {features.shape[1]}")
-                    # Fallback to default names
-                    feature_names = [f"feature_{i}" for i in range(features.shape[1])]
-            else:
-                # Fallback to metadata if model doesn't have feature names
-                if hasattr(self, 'model_metadata') and self.model_metadata.get('feature_columns'):
-                    feature_names = self.model_metadata['feature_columns']
-                    if len(feature_names) != features.shape[1]:
-                        logger.warning(f"⚠️  Feature count mismatch: expected {len(feature_names)}, got {features.shape[1]}")
-                        # Fallback to default names
-                        feature_names = [f"feature_{i}" for i in range(features.shape[1])]
-                else:
-                    # Create default feature names
-                    n_features = features.shape[1]
-                    feature_names = [f"feature_{i}" for i in range(n_features)]
-            
-            # Create DMatrix with feature names
-            dmatrix = xgb.DMatrix(features, feature_names=feature_names)
-            
-            # Make prediction
-            predictions = self.current_model.predict(dmatrix)
-            
-            return predictions
+
+            try:
+                return self.current_model.inplace_predict(features)
+            except Exception:
+                # Fallback to DMatrix if model lacks inplace support
+                import xgboost as xgb
+                dmat = xgb.DMatrix(features)
+                return self.current_model.predict(dmat)
             
         except Exception as e:
             logger.error(f"❌ Prediction failed: {e}")
@@ -561,30 +545,20 @@ class XGBoostService:
         
         logger.info(f"📊 Batch prediction with {len(feature_columns)} features: {feature_columns[:5]}{'...' if len(feature_columns) > 5 else ''}")
         
-        def predict_batch(batch):
-            """Predict on a batch of data."""
+        def _predict_batch(df):
             import pandas as pd
-            
-            # Convert batch to pandas DataFrame if it's not already
-            if not isinstance(batch, pd.DataFrame):
-                batch = pd.DataFrame(batch)
-            
-            # Extract features and make predictions
-            try:
-                features = batch[feature_columns].values
-                predictions = self.predict(features)
-                batch['predictions'] = predictions
-            except Exception as e:
-                logger.error(f"❌ Batch prediction failed: {e}")
-                logger.error(f"Batch type: {type(batch)}")
-                logger.error(f"Feature columns: {feature_columns}")
-                logger.error(f"Available columns: {list(batch.columns) if hasattr(batch, 'columns') else 'No columns'}")
-                raise
-            
-            return batch
+            if not isinstance(df, pd.DataFrame):
+                df = pd.DataFrame(df)
+            feats = df[feature_columns].to_numpy(dtype=np.float32, copy=False)
+            df["predictions"] = self.current_model.inplace_predict(feats)
+            return df
         
         # Apply prediction to dataset
-        result_dataset = dataset.map_batches(predict_batch)
+        result_dataset = dataset.map_batches(
+            _predict_batch,
+            batch_format="pandas",
+            # num_cpus per task can be tuned; let Ray decide or set via env
+        )
         
         return result_dataset
     

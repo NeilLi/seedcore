@@ -87,7 +87,7 @@ spec:
               - name: xgb-model-storage
                 mountPath: /app/data
               - name: project-source-volume
-                mountPath: /project
+                mountPath: /app
             # Probes are good practice for production readiness.
             startupProbe:
               exec:
@@ -150,7 +150,7 @@ spec:
               - name: xgb-model-storage
                 mountPath: /app/data
               - name: project-source-volume
-                mountPath: /project
+                mountPath: /app
             readinessProbe:
               exec:
                 command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]

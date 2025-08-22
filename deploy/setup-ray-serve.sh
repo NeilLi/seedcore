@@ -24,7 +24,7 @@ WORKER_REPLICAS="${WORKER_REPLICAS:-1}"
 RAYSERVICE_FILE="${RAYSERVICE_FILE:-rayservice.yaml}"  # path to your RayService YAML
 RS_NAME="${RS_NAME:-seedcore-svc}"                      # metadata.name inside rayservice.yaml
 # ✅ ADDED: Path to your new stable service definition
-STABLE_SERVE_SVC_FILE="${STABLE_SERVE_SVC_FILE:-serve-svc.yaml}"
+STABLE_SERVE_SVC_FILE="${STABLE_SERVE_SVC_FILE:-ray-serve-svc.yaml}"
 
 # Optional CLI: setup-kind-ray.sh [namespace] [cluster_name] [image] [rayservice_file] [rayservice_name]
 if [[ $# -ge 1 ]]; then NAMESPACE="$1"; fi
