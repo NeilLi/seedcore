@@ -14,6 +14,7 @@ This document provides a comprehensive reference for working with the Seedcore K
 **Current Running Services (as of latest deployment):**
 - `seedcore-svc-head-svc` (ClusterIP: None) - ports: 10001, 8265, 6379, 8080, 8000
 - `seedcore-svc-serve-svc` (ClusterIP: 10.96.171.126) - port: 8000
+- `seedcore-api` (ClusterIP) - port: 8002 (when deployed via deploy-seedcore-api.sh)
 
 **Note:** Pod names may change between deployments. Use `kubectl get pods -n seedcore-dev` to get current pod names.
 
@@ -76,6 +77,19 @@ This document provides a comprehensive reference for working with the Seedcore K
 - **Cluster IP**: `10.96.171.126`
 - **Port**: `8000`
 
+#### SeedCore API Service
+- **Service**: `seedcore-api`
+- **Type**: ClusterIP
+- **Port**: `8002`
+- **Purpose**: Standalone API service (separate from Ray Serve)
+- **Health Endpoints**: 
+  - `/health` - Startup and liveness probe
+  - `/readyz` - Readiness probe
+- **Environment Integration**: 
+  - Ray connection via `RAY_ADDRESS` environment variable
+  - Optional ConfigMap and Secret references for environment variables
+  - Project source code mounted at `/app` for development
+
 ## RayService Architecture: Understanding Dual Head Services
 
 **Short answer: they're not duplicates or a bug. RayService intentionally gives you two head Services:**
@@ -137,6 +151,9 @@ kubectl -n seedcore-dev port-forward svc/seedcore-svc-head-svc 10001:10001
 
 # Serve HTTP
 kubectl -n seedcore-dev port-forward svc/seedcore-svc-serve-svc 8000:8000
+
+# SeedCore API (when deployed)
+kubectl -n seedcore-dev port-forward svc/seedcore-api 8002:8002
 ```
 
 ### Recommended Port Forwarding (from setup-ray.sh)
@@ -187,6 +204,29 @@ From `rayservice.yaml`, the Ray head and worker pods also have these environment
 RAY_NAMESPACE=seedcore-dev
 SEEDCORE_NS=seedcore-dev
 XGB_STORAGE_PATH=/app/data/models
+```
+
+### SeedCore API Environment Variables
+From `k8s/seedcore-api.yaml`, the standalone API pods have these environment variables:
+```bash
+# Core Configuration
+DSP_LOG_TO_FILE=false
+DSP_LOG_TO_STDOUT=true
+TMPDIR=/tmp
+TEMP=/tmp
+
+# Ray Integration
+RAY_ADDRESS=ray://${RAY_HEAD_SVC}:${RAY_HEAD_PORT}
+SEEDCORE_NS=${SEEDCORE_NS}
+SEEDCORE_API_ADDRESS=127.0.0.1:8002
+SEEDCORE_SKIP_EAGER_RAY=1
+SEEDCORE_BOOTSTRAP_OPTIONAL=1
+
+# Optional Environment Sources (referenced via envFrom)
+# - seedcore-env ConfigMap
+# - seedcore-client-env ConfigMap  
+# - ${SERVICE_NAME}-config ConfigMap
+# - seedcore-env-secret Secret
 ```
 
 ## Useful Commands
@@ -343,6 +383,42 @@ kubectl get events -n seedcore-dev --sort-by='.lastTimestamp'
 kubectl describe resourcequota -n seedcore-dev
 ```
 
+### SeedCore API Troubleshooting
+
+**Common Deployment Issues:**
+```bash
+# Check if image exists locally
+docker images | grep seedcore-api
+
+# Check if image is loaded in Kind cluster
+kind load docker-image seedcore-api:kind --name seedcore-dev
+
+# Check deployment events
+kubectl describe deploy seedcore-api -n seedcore-dev
+
+# Check pod events and logs
+kubectl describe pod -l app=seedcore-api -n seedcore-dev
+kubectl logs -l app=seedcore-api -n seedcore-dev
+
+# Check ConfigMap/Secret references
+kubectl get configmap -n seedcore-dev | grep seedcore
+kubectl get secret -n seedcore-dev | grep seedcore
+```
+
+**Environment Variable Issues:**
+```bash
+# Check what environment variables are set in the pod
+kubectl exec -it deploy/seedcore-api -n seedcore-dev -- env | grep -E "(RAY_|SEEDCORE_)"
+
+# Check ConfigMap contents
+kubectl get configmap seedcore-env -n seedcore-dev -o yaml
+kubectl get configmap seedcore-client-env -n seedcore-dev -o yaml
+
+# Check if .env file exists and has content
+ls -la ../docker/.env
+cat ../docker/.env | head -10
+```
+
 ## Deployment Scripts
 
 ### Core Setup Scripts
@@ -356,6 +432,128 @@ kubectl describe resourcequota -n seedcore-dev
 - **`port-forward.sh`**: Sets up port forwarding for development access
 - **`cleanup-datastores.sh`**: Cleans up database deployments
 - **`debug-cluster.sh`**: Provides debugging information for the cluster
+
+### SeedCore API Deployment
+- **`deploy-seedcore-api.sh`**: Main deployment script for the SeedCore API service
+- **`k8s/seedcore-api.yaml`**: Kubernetes manifest template for the API deployment
+
+#### SeedCore API Deployment Features
+The `deploy-seedcore-api.sh` script provides:
+
+**Environment Management:**
+- **Auto Mode**: Automatically detects existing ConfigMaps (`seedcore-env`, `seedcore-client-env`) or secrets
+- **ConfigMap Mode**: Uses shared ConfigMaps for environment variables
+- **Secret Mode**: Uses Kubernetes secrets for sensitive data
+- **File Mode**: Creates service-specific ConfigMap from `.env` file
+
+**Smart Image Loading:**
+- Automatically loads Docker images into Kind cluster nodes
+- Skips loading if image already exists on nodes
+- Configurable via `SKIP_LOAD` environment variable
+
+**Deployment Options:**
+- Configurable replicas, namespace, and cluster name
+- Automatic namespace creation if missing
+- Health checks with readiness, startup, and liveness probes
+- Port forwarding capability for local development access
+
+**Usage Examples:**
+```bash
+# Basic deployment
+./deploy-seedcore-api.sh
+
+# Custom namespace and image
+./deploy-seedcore-api.sh -n my-namespace -i my-api:latest
+
+# Use specific environment mode
+./deploy-seedcore-api.sh --env-mode cm
+
+# Deploy with port forwarding
+./deploy-seedcore-api.sh --port-forward
+
+# Delete deployment
+./deploy-seedcore-api.sh --delete
+```
+
+**Complete Deployment Example:**
+```bash
+# Set environment variables for deployment
+export CLUSTER_NAME=seedcore-dev \
+       NAMESPACE=seedcore-dev \
+       API_IMAGE=seedcore-api:kind \
+       ENV_FILE=../docker/.env
+
+# Deploy with auto environment detection and port forwarding
+./deploy-seedcore-api.sh --env-mode auto --port-forward
+```
+
+**Environment Variables:**
+- `CLUSTER_NAME`: Kind cluster name (default: seedcore-dev)
+- `NAMESPACE`: Kubernetes namespace (default: seedcore-dev)
+- `API_IMAGE`: Docker image to deploy (default: seedcore-api:kind)
+- `REPLICAS`: Number of replicas (default: 1)
+- `ENV_FILE`: Path to .env file (default: ../docker/.env)
+- `ENV_MODE`: Environment wiring mode (default: auto)
+- `PORT_FORWARD`: Enable port forwarding (default: 0)
+- `LOCAL_PORT`: Local port for port forwarding (default: 8002)
+
+#### Step-by-Step Deployment Instructions
+
+**Prerequisites:**
+1. Ensure Kind cluster is running: `kind get clusters | grep seedcore-dev`
+2. Ensure Docker image is built: `docker images | grep seedcore-api`
+3. Ensure `.env` file exists at `../docker/.env`
+
+**Quick Deployment:**
+```bash
+# Navigate to deploy directory
+cd deploy
+
+# Deploy with default settings
+./deploy-seedcore-api.sh
+```
+
+**Customized Deployment:**
+```bash
+# Set custom environment variables
+export CLUSTER_NAME=seedcore-dev \
+       NAMESPACE=seedcore-dev \
+       API_IMAGE=seedcore-api:kind \
+       ENV_FILE=../docker/.env
+
+# Deploy with auto environment detection and port forwarding
+./deploy-seedcore-api.sh --env-mode auto --port-forward
+```
+
+**Alternative Deployment Modes:**
+```bash
+# Use ConfigMap mode (requires existing seedcore-env ConfigMap)
+./deploy-seedcore-api.sh --env-mode cm
+
+# Use file-based mode (creates service-specific ConfigMap)
+./deploy-seedcore-api.sh --env-mode file
+
+# Use secret mode (requires existing seedcore-env-secret)
+./deploy-seedcore-api.sh --env-mode secret
+
+# Deploy without loading image (if already loaded)
+SKIP_LOAD=1 ./deploy-seedcore-api.sh
+```
+
+**Verification:**
+```bash
+# Check deployment status
+kubectl get deploy seedcore-api -n seedcore-dev
+
+# Check service
+kubectl get svc seedcore-api -n seedcore-dev
+
+# Check pods
+kubectl get pods -l app=seedcore-api -n seedcore-dev
+
+# Check logs
+kubectl logs -l app=seedcore-api -n seedcore-dev -f
+```
 
 ## Development Workflow
 
@@ -372,6 +570,9 @@ cd deploy
 
 # Deploy standalone API (optional)
 ./setup-api.sh
+
+# Deploy SeedCore API using new deployment script
+./deploy-seedcore-api.sh
 
 # Initialize databases
 ./init_databases_k8s.sh
@@ -421,6 +622,10 @@ The Kind cluster is configured with the following mounts:
   - **Host Path**: `/project` (inside Kind node)
   - **Container Path**: `/app`
   - **Purpose**: Access to project code in standalone API pods
+- **Logs Volume**: 
+  - **Type**: emptyDir
+  - **Container Path**: `/tmp/seedcore-logs`
+  - **Purpose**: Temporary storage for application logs
 
 ## KubeRay Operator
 The KubeRay operator manages the Ray cluster lifecycle and is installed in the `kuberay-system` namespace.
@@ -454,6 +659,8 @@ kubectl get deployment -n kuberay-system
 - The setup uses Helm charts for databases (PostgreSQL, MySQL, Redis, Neo4j)
 - KubeRay operator manages the Ray cluster lifecycle
 - Both Ray head and worker pods have resource limits and health checks configured
+- The new `deploy-seedcore-api.sh` script provides flexible deployment options with automatic environment detection
+- SeedCore API deployment supports multiple environment modes (auto, ConfigMap, secret, file-based) for different deployment scenarios
 
 ## Quick Verification Commands
 To verify your current cluster state:
@@ -473,4 +680,35 @@ kubectl get raycluster -n seedcore-dev
 # Check KubeRay operator status
 kubectl get pods -n kuberay-system
 kubectl get pods -A | grep kuberay-operator
+
+# Check SeedCore API deployment (if deployed)
+kubectl get deploy seedcore-api -n seedcore-dev
+kubectl get svc seedcore-api -n seedcore-dev
+kubectl get pods -l app=seedcore-api -n seedcore-dev
+```
+
+## Quick Deployment Reference
+
+**Most Common Deployment Command:**
+```bash
+export CLUSTER_NAME=seedcore-dev \
+       NAMESPACE=seedcore-dev \
+       API_IMAGE=seedcore-api:kind \
+       ENV_FILE=../docker/.env
+./deploy-seedcore-api.sh --env-mode auto --port-forward
+```
+
+**Quick Commands:**
+```bash
+# Deploy with defaults
+./deploy-seedcore-api.sh
+
+# Deploy with port forwarding
+./deploy-seedcore-api.sh --port-forward
+
+# Delete deployment
+./deploy-seedcore-api.sh --delete
+
+# Check status
+kubectl get deploy,svc,pods -l app=seedcore-api -n seedcore-dev
 ```
