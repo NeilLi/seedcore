@@ -963,5 +963,12 @@ class SalienceServiceClient:
 # Entrypoint (optional)
 # ---------------------------------------------------------------------
 if __name__ == "__main__":
-    app = create_serve_app({})
-    serve.run(app)
+    serve.run(MLService.bind())
+
+
+# ---------------------------------------------------------------------
+# Application builder function for Serve YAML
+# ---------------------------------------------------------------------
+def build_ml_service(args: dict):
+    """Application builder for MLService (required by Serve YAML)."""
+    return MLService.bind()

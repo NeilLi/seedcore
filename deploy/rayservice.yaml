@@ -21,11 +21,14 @@ spec:
       # - name: cognitive
       #   import_path: cognitive_serve_entrypoint:cognitive_app # Assumes the bound app is named 'cognitive_app'
       #   route_prefix: /cognitive
-      - name: ml_serve
-        # ✅ FIX: Point to the correct file and application factory function.
-        # This uses serve_app.py, which is structured correctly for RayService.
-        import_path: src.seedcore.ml.serve_app:create_serve_app
-        route_prefix: /ml_serve
+      - name: ml_service
+        import_path: src.seedcore.ml.serve_app:build_ml_service
+        route_prefix: /ml
+      
+      # comment out the lightweight wrapper endpoints
+      # - name: ml_serve
+      #  import_path: src.seedcore.ml.serve_app:create_serve_app
+      #  route_prefix: /ml_serve
 
   # ===================================================================
   #  Ray Cluster Configuration
