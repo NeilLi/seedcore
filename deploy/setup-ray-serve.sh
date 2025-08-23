@@ -24,7 +24,7 @@ WORKER_REPLICAS="${WORKER_REPLICAS:-1}"
 RAYSERVICE_FILE="${RAYSERVICE_FILE:-rayservice.yaml}"  # path to your RayService YAML
 RS_NAME="${RS_NAME:-seedcore-svc}"                      # metadata.name inside rayservice.yaml
 # ✅ ADDED: Path to your new stable service definition
-STABLE_SERVE_SVC_FILE="${STABLE_SERVE_SVC_FILE:-ray-serve-svc.yaml}"
+STABLE_SERVE_SVC_FILE="${STABLE_SERVE_SVC_FILE:-ray-stable-svc.yaml}"
 
 # Optional CLI: setup-kind-ray.sh [namespace] [cluster_name] [image] [rayservice_file] [rayservice_name]
 if [[ $# -ge 1 ]]; then NAMESPACE="$1"; fi
@@ -179,7 +179,7 @@ OPERATOR_HEAD_SVC="${RS_NAME}-head-svc"
 OPERATOR_SERVE_SVC="${RS_NAME}-serve-svc" # This one has the selector issue
 
 # This is our user-managed, truly stable service. The name comes from your serve-svc.yaml
-USER_STABLE_SERVE_SVC="seedcore-svc-stable-svc"
+USER_STABLE_SERVE_SVC="seedcore-svc-serve-svc"
 
 # For dashboard and client, the operator-managed head service is fine
 if kubectl -n "${NAMESPACE}" get svc "${OPERATOR_HEAD_SVC}" >/dev/null 2>&1; then
