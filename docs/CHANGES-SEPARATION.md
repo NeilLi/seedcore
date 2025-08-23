@@ -20,7 +20,7 @@ result = await client.reason_about_failure(...)
 
 # After: HTTP client with fallback
 import httpx
-cognitive_client = httpx.AsyncClient(base_url="http://sc_cognitive-serve:8000")
+cognitive_client = httpx.AsyncClient(base_url="http://cognitive-serve:8000")
 try:
     response = await client.post("/cognitive/reason-about-failure", json={...})
     result = response.json()
@@ -103,7 +103,7 @@ seedcore-api (port 8002)
 
 ### After (Loosely Coupled)
 ```
-seedcore-api (port 8002)          sc_cognitive-serve (port 8002)
+seedcore-api (port 8002)          cognitive-serve (port 8002)
 ├── No serve module imports       ├── Cognitive endpoints
 ├── HTTP client for cognitive     ├── Ray Serve deployment
 ├── Fallback to direct usage      ├── Independent scaling

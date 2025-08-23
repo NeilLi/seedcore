@@ -31,7 +31,7 @@ def _env_stage() -> str:
     return os.getenv("SEEDCORE_STAGE", "dev")
 
 
-def _serve_app_name(base: str = "sc_cognitive") -> str:
+def _serve_app_name(base: str = "cognitive") -> str:
     # For Ray Serve applications, we don't need namespace/stage prefixes
     # The application is deployed with the base name directly
     return base
@@ -59,7 +59,7 @@ class RPCTimeoutError(CognitiveClientError):
 
 @dataclass
 class ClientConfig:
-    app_base_name: str = "sc_cognitive"
+    app_base_name: str = "cognitive"
     # Use RAY_HOST and RAY_PORT environment variables that are set in the API pod
     ray_address: str = os.getenv("RAY_ADDRESS") or f"ray://{os.getenv('RAY_HOST', 'seedcore-svc-head-svc')}:{os.getenv('RAY_PORT', '10001')}"
     default_rpc_timeout_s: float = float(os.getenv("DSPY_CLIENT_RPC_TIMEOUT_S", "30"))
@@ -78,7 +78,7 @@ class DSpyCognitiveClient:
     Enhanced, production-ready client for Ray Serve Cognitive Core deployments.
     """
 
-    def __init__(self, app_base_name: str = "sc_cognitive", *, config: Optional[ClientConfig] = None) -> None:
+    def __init__(self, app_base_name: str = "cognitive", *, config: Optional[ClientConfig] = None) -> None:
         self.app_name = _serve_app_name(app_base_name)
         self.config = config or ClientConfig(app_base_name=app_base_name)
         self._handle: Optional[Any] = None
@@ -95,7 +95,7 @@ class DSpyCognitiveClient:
     @classmethod
     def for_env(cls) -> "DSpyCognitiveClient":
         """Factory that applies env-based namespacing automatically."""
-        return cls(app_base_name="sc_cognitive")
+        return cls(app_base_name="cognitive")
 
     def _connect_if_needed(self) -> None:
         if self._is_connected:
@@ -415,12 +415,12 @@ if __name__ == "__main__":
         print(f"  Serve available: True")
         print(f"  Applications: {list(serve_status.applications.keys())}")
         
-        # Look for sc_cognitive app
-        if 'sc_cognitive' in serve_status.applications:
-            app_status = serve_status.applications['sc_cognitive']
-            print(f"  ✅ Found sc_cognitive app: {app_status.status}")
+        # Look for cognitive app
+        if 'cognitive' in serve_status.applications:
+            app_status = serve_status.applications['cognitive']
+            print(f"  ✅ Found cognitive app: {app_status.status}")
         else:
-            print(f"  ❌ sc_cognitive app not found")
+            print(f"  ❌ cognitive app not found")
             
     except Exception as e:
         print(f"  Serve available: False")

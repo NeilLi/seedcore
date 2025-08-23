@@ -1,10 +1,10 @@
 services:
-  sc_cognitive-serve:
+  cognitive-serve:
     build:
       context: ..
       dockerfile: docker/Dockerfile.cognitive-serve
-    image: sc_cognitive-serve:latest
-    container_name: sc_cognitive-serve
+    image: cognitive-serve:latest
+    container_name: cognitive-serve
     profiles: ["cognitive-serve"]
     working_dir: /app
     environment:

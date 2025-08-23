@@ -24,7 +24,7 @@ class RayAgentCognitiveIntegration:
     initialized in its environment.
     """
 
-    def __init__(self, app_name: str = "sc_cognitive") -> None:
+    def __init__(self, app_name: str = "cognitive") -> None:
         self._handle: Optional[serve.handle.DeploymentHandle] = None
         self._app_name = app_name
 

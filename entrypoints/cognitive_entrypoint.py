@@ -90,7 +90,7 @@ class CognitiveService:
     @app.get("/health")
     async def health(self):
         """Health check endpoint."""
-        return {"status": "healthy", "service": "sc_cognitive-warm-replica"}
+        return {"status": "healthy", "service": "cognitive-warm-replica"}
 
     @app.get("/")
     async def root(self):
@@ -209,7 +209,7 @@ def main():
         # Deploy the application with a unique name and route prefix
         serve.run(
             cognitive_app,
-            name="sc_cognitive",
+            name="cognitive",
             route_prefix="/cognitive"
         )
         print("✅ Cognitive service application is running.")
