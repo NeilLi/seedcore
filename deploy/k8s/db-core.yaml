@@ -1,0 +1,244 @@
+# ===============================
+# Persistent Volumes (hostPath)
+# ===============================
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgres-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes: [ "ReadWriteOnce" ]
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /var/dbdata/postgres
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mysql-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes: [ "ReadWriteOnce" ]
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /var/dbdata/mysql
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: neo4j-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes: [ "ReadWriteOnce" ]
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /var/dbdata/neo4j
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: redis-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: [ "ReadWriteOnce" ]
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /var/dbdata/redis
+---
+# ===============================
+# Persistent Volume Claims
+# ===============================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  resources:
+    requests:
+      storage: 10Gi
+  volumeName: postgres-pv
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  resources:
+    requests:
+      storage: 10Gi
+  volumeName: mysql-pv
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: neo4j-pvc
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  resources:
+    requests:
+      storage: 10Gi
+  volumeName: neo4j-pv
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  resources:
+    requests:
+      storage: 1Gi
+  volumeName: redis-pv
+---
+# ===============================
+# PostgreSQL
+# ===============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels: { app: postgres }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - { name: POSTGRES_PASSWORD, value: "password" }
+            - { name: POSTGRES_DB, value: "seedcore" }
+          ports: [ { containerPort: 5432 } ]
+          volumeMounts:
+            - { name: postgres-storage, mountPath: /var/lib/postgresql/data }
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim: { claimName: postgres-pvc }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector: { app: postgres }
+  ports: [ { port: 5432, targetPort: 5432 } ]
+---
+# ===============================
+# MySQL
+# ===============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  labels: { app: mysql }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: mysql }
+  template:
+    metadata: { labels: { app: mysql } }
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            - { name: MYSQL_ROOT_PASSWORD, value: "password" }
+            - { name: MYSQL_DATABASE, value: "seedcore" }
+          ports: [ { containerPort: 3306 } ]
+          volumeMounts:
+            - { name: mysql-storage, mountPath: /var/lib/mysql }
+      volumes:
+        - name: mysql-storage
+          persistentVolumeClaim: { claimName: mysql-pvc }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+spec:
+  selector: { app: mysql }
+  ports: [ { port: 3306, targetPort: 3306 } ]
+---
+# ===============================
+# Neo4j
+# ===============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: neo4j
+  labels: { app: neo4j }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: neo4j }
+  template:
+    metadata: { labels: { app: neo4j } }
+    spec:
+      containers:
+        - name: neo4j
+          image: neo4j:5
+          env:
+            - { name: NEO4J_AUTH, value: "neo4j/password" }
+          ports:
+            - { containerPort: 7474 }
+            - { containerPort: 7687 }
+          volumeMounts:
+            - { name: neo4j-storage, mountPath: /data }
+      volumes:
+        - name: neo4j-storage
+          persistentVolumeClaim: { claimName: neo4j-pvc }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: neo4j
+spec:
+  selector: { app: neo4j }
+  ports:
+    - { name: http, port: 7474, targetPort: 7474 }
+    - { name: bolt, port: 7687, targetPort: 7687 }
+---
+# ===============================
+# Redis
+# ===============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels: { app: redis }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata: { labels: { app: redis } }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7
+          command: [ "redis-server", "--appendonly", "yes" ]
+          ports: [ { containerPort: 6379 } ]
+          volumeMounts:
+            - { name: redis-storage, mountPath: /data }
+      volumes:
+        - name: redis-storage
+          persistentVolumeClaim: { claimName: redis-pvc }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector: { app: redis }
+  ports:
+    - { port: 6379, targetPort: 6379 }
+

@@ -12,7 +12,9 @@ pgvector==0.2.4
 neo4j-driver==5.15.0
 sqlalchemy[asyncio]==2.0.23
 mysql-connector-python==8.2.0
+pymysql>=1.1
 aiomysql==0.2.0
+cryptography>=41.0.0
 
 # HTTP and networking
 aiohttp==3.9.1

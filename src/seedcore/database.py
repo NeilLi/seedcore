@@ -199,28 +199,31 @@ def get_async_mysql_engine() -> AsyncEngine:
     Returns:
         AsyncEngine: Configured async MySQL engine
     """
-    # Convert to async DSN, avoiding double-prefixing
-    if "+" not in MYSQL_DSN:
-        async_dsn = MYSQL_DSN.replace("mysql://", "mysql+aiomysql://")
-    elif "mysqlconnector" in MYSQL_DSN:
-        async_dsn = MYSQL_DSN.replace("mysql+mysqlconnector://", "mysql+aiomysql://")
+    # Get async DSN from environment or auto-convert sync DSN
+    dsn = get_env_setting("MYSQL_DSN_ASYNC", "")
+    if not dsn:
+        base = MYSQL_DSN
+        # Auto-convert driver if user only set MYSQL_DSN
+        dsn = base.replace("mysql+pymysql://", "mysql+aiomysql://")
     else:
-        async_dsn = MYSQL_DSN
+        # Ensure the async DSN uses aiomysql
+        if "mysql+pymysql://" in dsn:
+            dsn = dsn.replace("mysql+pymysql://", "mysql+aiomysql://")
     
     # Extract hostname for logging
-    hostname = urlparse(async_dsn).hostname
+    hostname = urlparse(dsn).hostname
     
     logger.info(f"Creating async MySQL engine for {hostname} with pool_size={MYSQL_POOL_SIZE}")
     
     return create_async_engine(
-        async_dsn,
+        dsn,
+        pool_pre_ping=True,
+        pool_recycle=1800,
         pool_size=MYSQL_POOL_SIZE,
         max_overflow=MYSQL_MAX_OVERFLOW,
         pool_timeout=MYSQL_POOL_TIMEOUT,
-        pool_recycle=MYSQL_POOL_RECYCLE,
-        pool_pre_ping=MYSQL_POOL_PRE_PING,
-        echo_pool=False,
         future=True,
+        echo=False,
     )
 
 
@@ -478,6 +481,27 @@ async def check_neo4j_health() -> bool:
 # Pool Statistics
 # =============================================================================
 
+def _safe_pool_stats(pool):
+    """Safely collect pool statistics with error handling."""
+    stats = {}
+    try:
+        stats["size"] = pool.size()
+    except Exception:
+        stats["size"] = None
+    try:
+        stats["checked_out"] = pool.checkedout()
+    except Exception:
+        stats["checked_out"] = None
+    # "checked_in" isn't a direct API; approximate as size - checked_out if size is known
+    stats["checked_in"] = (stats["size"] - stats["checked_out"]) if all(
+        isinstance(stats[k], int) for k in ("size", "checked_out")) else None
+    try:
+        stats["overflow"] = pool.overflow()
+    except Exception:
+        stats["overflow"] = None
+    return stats
+
+
 def get_pg_pool_stats():
     """
     Get PostgreSQL pool statistics.
@@ -486,14 +510,7 @@ def get_pg_pool_stats():
         dict: Pool statistics
     """
     engine = get_sync_pg_engine()
-    pool = engine.pool
-    return {
-        "size": pool.size(),
-        "checked_in": pool.checkedin(),
-        "checked_out": pool.checkedout(),
-        "overflow": pool.overflow(),
-        "invalid": pool.invalid(),
-    }
+    return _safe_pool_stats(engine.pool)
 
 
 def get_mysql_pool_stats():
@@ -504,11 +521,4 @@ def get_mysql_pool_stats():
         dict: Pool statistics
     """
     engine = get_sync_mysql_engine()
-    pool = engine.pool
-    return {
-        "size": pool.size(),
-        "checked_in": pool.checkedin(),
-        "checked_out": pool.checkedout(),
-        "overflow": pool.overflow(),
-        "invalid": pool.invalid(),
-    } 
+    return _safe_pool_stats(engine.pool) 

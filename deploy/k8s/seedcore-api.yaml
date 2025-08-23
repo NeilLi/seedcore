@@ -52,9 +52,9 @@ spec:
             - configMapRef:
                 name: ${SERVICE_NAME}-config
                 optional: true
-            # - secretRef:
-            #    name: seedcore-env-secret
-            #    optional: true
+            - secretRef:
+               name: seedcore-env-secret
+               optional: true
           volumeMounts:
             - name: logs-volume
               mountPath: /tmp/seedcore-logs
@@ -65,9 +65,9 @@ spec:
             httpGet:
               path: /readyz
               port: 8002
-            initialDelaySeconds: 2
-            periodSeconds: 3
-            timeoutSeconds: 1
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 5
             failureThreshold: 3
           startupProbe:
             httpGet:
@@ -79,9 +79,9 @@ spec:
             httpGet:
               path: /health
               port: 8002
-            initialDelaySeconds: 10
+            initialDelaySeconds: 30
             periodSeconds: 10
-            timeoutSeconds: 2
+            timeoutSeconds: 5
             failureThreshold: 3
       volumes:
         - name: logs-volume
