@@ -1,227 +1,250 @@
 #!/usr/bin/env python3
 """
 Comprehensive Ray cluster and jobs analysis script.
+
+Runs inside the seedcore-api pod or host (with access to Ray head service).
 """
 
 import ray
-import json
-import time
-from typing import Dict, List, Any
 import os
+import requests
 
-def analyze_ray_cluster():
-    """Analyze the Ray cluster status and jobs."""
-    
-    print("🔍 Analyzing Ray Cluster and Jobs")
-    print("=" * 50)
-    
-    # Initialize Ray
-    # Get namespace from environment, default to "seedcore-dev" for consistency
+
+def connect_to_ray():
+    """Ensure connection to Ray cluster (only once)."""
     ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-    
-    # Get Ray address from environment variables, with fallback to the actual service name
-    # Note: RAY_HOST env var is set to 'seedcore-head-svc' but actual service is 'seedcore-svc-head-svc'
     ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
     ray_port = os.getenv("RAY_PORT", "10001")
     ray_address = f"ray://{ray_host}:{ray_port}"
-    
-    print(f"🔗 Connecting to Ray at: {ray_address}")
-    from seedcore.utils.ray_utils import ensure_ray_initialized
-    if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
-        print("❌ Failed to connect to Ray cluster")
-        return False
-    
-    # 1. Cluster Resources
-    print("\n📊 Cluster Resources:")
-    print("-" * 30)
-    cluster_resources = ray.cluster_resources()
-    available_resources = ray.available_resources()
-    
-    print(f"Total Resources: {cluster_resources}")
-    print(f"Available Resources: {available_resources}")
-    
-    # 2. Nodes
-    print("\n🖥️  Cluster Nodes:")
-    print("-" * 30)
-    nodes = ray.nodes()
-    print(f"Total Nodes: {len(nodes)}")
-    
-    for i, node in enumerate(nodes):
-        print(f"Node {i+1}:")
-        print(f"  - ID: {node['NodeID'][:16]}...")
-        print(f"  - Address: {node['NodeManagerAddress']}")
-        print(f"  - Alive: {node['Alive']}")
-        print(f"  - Resources: {node['Resources']}")
-    
-    # 3. List named actors
-    print("\n🎭 Named Actors:")
-    print("-" * 30)
+
+    print(f"🔗 Connecting to Ray at: {ray_address} (ns={ray_namespace})")
+
+    if not ray.is_initialized():
+        from seedcore.utils.ray_utils import ensure_ray_initialized
+        if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
+            print("❌ Failed to connect to Ray cluster")
+            return False
+    else:
+        print("ℹ️ Ray already initialized")
+
+    return True
+
+
+def analyze_cluster_resources():
+    """Show cluster-wide resources."""
+    print("\n📊 Cluster Resources")
+    print("-" * 40)
+    print(f"Total: {ray.cluster_resources()}")
+    print(f"Available: {ray.available_resources()}")
+
+
+def analyze_nodes():
+    """List cluster nodes using dashboard API."""
+    print("\n🖥️  Cluster Nodes")
+    print("-" * 40)
     try:
-        # Use Ray state API to get all actors instead of individual lookups
-        from ray.util.state import list_actors
-        
-        all_actors = list_actors()
-        named_actors = []
-        
-        # Group actors by namespace
-        actors_by_namespace = {}
-        for actor in all_actors:
-            namespace = getattr(actor, 'namespace', 'unknown')
-            if namespace not in actors_by_namespace:
-                actors_by_namespace[namespace] = []
-            actors_by_namespace[namespace].append(actor)
-        
-        # Show actors by namespace
-        for namespace, actors in actors_by_namespace.items():
-            print(f"\n📁 Namespace: {namespace}")
-            print(f"   Total actors: {len(actors)}")
+        r = requests.get("http://seedcore-svc-head-svc:8265/api/v0/nodes", timeout=5)
+        if r.status_code == 200:
+            data = r.json()
             
-            # Count by state
-            alive_count = sum(1 for a in actors if getattr(a, 'state', 'UNKNOWN') == 'ALIVE')
-            dead_count = sum(1 for a in actors if getattr(a, 'state', 'UNKNOWN') == 'DEAD')
-            print(f"   Alive: {alive_count}, Dead: {dead_count}")
-            
-            # Show named actors
-            named_in_namespace = [a for a in actors if getattr(a, 'name', None)]
-            if named_in_namespace:
-                print(f"   Named actors ({len(named_in_namespace)}):")
-                for actor in named_in_namespace:
-                    state = getattr(actor, 'state', 'UNKNOWN')
-                    name = getattr(actor, 'name', 'unnamed')
-                    class_name = getattr(actor, 'class_name', 'unknown')
-                    print(f"     - {name} ({class_name}): {state}")
-                    if name and name not in named_actors:
-                        named_actors.append(name)
+            # Handle the actual API response structure
+            if isinstance(data, dict) and data.get("result") in [True, "success"]:
+                result_block = data.get("data", {}).get("result", {})
+                nodes_data = result_block.get("result", [])
+                print(f"Total Nodes: {len(nodes_data)}")
+
+                for n in nodes_data:
+                    if isinstance(n, dict):
+                        node_id = n.get("node_id", n.get("nodeId", "unknown"))
+                        node_name = n.get("node_name", n.get("nodeName", "unknown"))
+                        state = n.get("state", "unknown")
+                        print(f"  - {str(node_id)[:8]} @ {node_name} :: {state}")
+                    else:
+                        print(f"  - {n}")
             else:
-                print(f"   No named actors")
-        
-        print(f"\nTotal named actors found: {len(named_actors)}")
-        
+                print(f"❌ API error: {data.get('msg', 'Unknown error')}")
+        else:
+            print(f"❌ HTTP {r.status_code}")
     except Exception as e:
-        print(f"Error listing actors: {e}")
-        # Fallback to old method
-        try:
-            named_actors = []
-            # Method 1: Try to get specific actors we know should exist
-            organ_names = ["cognitive_organ_1", "actuator_organ_1", "utility_organ_1"]
-            for name in organ_names:
-                try:
-                    actor = ray.get_actor(name)
-                    named_actors.append(name)
-                    print(f"✅ Found actor: {name}")
-                except ValueError:
-                    print(f"❌ Actor not found: {name}")
-                except Exception as e:
-                    print(f"⚠️  Error checking actor {name}: {e}")
-            
-            # Method 2: Try to get other known actors
-            other_actors = ["MissTracker", "SharedCache", "MwStore"]
-            for name in other_actors:
-                try:
-                    actor = ray.get_actor(name)
-                    named_actors.append(name)
-                    print(f"✅ Found actor: {name}")
-                except ValueError:
-                    print(f"❌ Actor not found: {name}")
-                except Exception as e:
-                    print(f"⚠️  Error checking actor {name}: {e}")
-            
-            print(f"\nTotal named actors found: {len(named_actors)}")
-        except Exception as e2:
-            print(f"Fallback method also failed: {e2}")
-    
-    # 4. Check our organism status via API
-    print("\n🧬 Organism Status:")
-    print("-" * 30)
+        print(f"❌ Error listing nodes: {e}")
+
+
+def analyze_actors():
+    """List actors using dashboard API."""
+    print("\n🎭 Actors by Namespace")
+    print("-" * 40)
     try:
-        import requests
-        response = requests.get("http://localhost:8002/organism/status", timeout=5)
-        if response.status_code == 200:
-            data = response.json()
+        r = requests.get("http://seedcore-svc-head-svc:8265/api/v0/actors", timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            
+            # Handle the actual API response structure
+            if isinstance(data, dict) and data.get("result") in [True, "success"]:
+                result_block = data.get("data", {}).get("result", {})
+                actors_data = result_block.get("result", [])
+                
+                if isinstance(actors_data, list) and len(actors_data) > 0:
+                    ns_map = {}
+                    for a in actors_data:
+                        if isinstance(a, dict):
+                            ns = a.get("namespace", "unknown")
+                            ns_map.setdefault(ns, []).append(a)
+
+                    for ns, items in ns_map.items():
+                        print(f"\n📁 Namespace: {ns} (Total: {len(items)})")
+                        alive = [x for x in items if isinstance(x, dict) and x.get("state") == "ALIVE"]
+                        dead = [x for x in items if isinstance(x, dict) and x.get("state") == "DEAD"]
+                        print(f"   Alive: {len(alive)}, Dead: {len(dead)}")
+                        named = [x for x in items if isinstance(x, dict) and x.get("name")]
+                        for x in named:
+                            name = x.get('name', 'unnamed')
+                            class_name = x.get('className', x.get('class_name', 'unknown'))
+                            state = x.get('state', 'unknown')
+                            print(f"   • {name} ({class_name}) :: {state}")
+                else:
+                    print(f"❌ No actors data found or empty list")
+            else:
+                print(f"❌ API error: {data.get('msg', 'Unknown error')}")
+        else:
+            print(f"❌ HTTP {r.status_code}")
+    except Exception as e:
+        print(f"❌ Error listing actors: {e}")
+
+
+def analyze_jobs():
+    """List jobs using dashboard API."""
+    print("\n📦 Ray Jobs")
+    print("-" * 40)
+    try:
+        r = requests.get("http://seedcore-svc-head-svc:8265/api/v0/jobs", timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            
+            # Handle the actual API response structure
+            if isinstance(data, dict) and data.get("result") in [True, "success"]:
+                result_block = data.get("data", {}).get("result", {})
+                jobs_data = result_block.get("result", [])
+                
+                if isinstance(jobs_data, list) and len(jobs_data) > 0:
+                    print(f"Total jobs: {len(jobs_data)}")
+                    
+                    # Show first 5 jobs safely
+                    for i, j in enumerate(jobs_data):
+                        if i >= 5:  # Limit to first 5
+                            break
+                            
+                        if isinstance(j, dict):
+                            job_id = j.get('jobId', j.get('job_id', 'unknown'))
+                            status = j.get('status', 'unknown')
+                            # Try different possible namespace fields
+                            namespace = j.get('namespace', j.get('entrypointNumArgs', 'unknown'))
+                            print(f"  - {job_id}: {status} (ns={namespace})")
+                        else:
+                            print(f" - {j}")
+                else:
+                    print(f"❌ No jobs data found or empty list")
+            else:
+                print(f"❌ API error: {data.get('msg', 'Unknown error')}")
+        else:
+            print(f"❌ HTTP {r.status_code}")
+    except Exception as e:
+        print(f"❌ Error listing jobs: {e}")
+
+
+def check_organism_status():
+    """Check organism API for organs + agents."""
+    print("\n🧬 Organism Status")
+    print("-" * 40)
+    try:
+        r = requests.get("http://localhost:8002/organism/status", timeout=5)
+        if r.status_code == 200:
+            data = r.json()
             if data.get("success"):
                 organs = data.get("data", [])
-                print(f"✅ Organism API working - Found {len(organs)} organs:")
-                for organ in organs:
-                    print(f"  - {organ.get('organ_id')}: {organ.get('agent_count')} agents")
+                print(f"✅ Found {len(organs)} organs")
+                for o in organs:
+                    print(f"   - {o.get('organ_id')} :: {o.get('agent_count')} agents")
             else:
-                print(f"❌ Organism API error: {data.get('error')}")
+                print(f"❌ API error: {data.get('error')}")
         else:
-            print(f"❌ Organism API failed: {response.status_code}")
+            print(f"❌ HTTP {r.status_code}")
     except Exception as e:
-        print(f"❌ Error checking organism API: {e}")
-    
-    # 5. Check Ray Dashboard API
-    print("\n🌐 Ray Dashboard Status:")
-    print("-" * 30)
+        print(f"❌ Error: {e}")
+
+
+def check_dashboard():
+    """Check Ray dashboard API endpoints."""
+    print("\n🌐 Ray Dashboard API")
+    print("-" * 40)
+    endpoints = [
+        "http://seedcore-svc-head-svc:8265/api/v0/nodes",
+        "http://seedcore-svc-head-svc:8265/api/v0/actors",
+        "http://seedcore-svc-head-svc:8265/api/v0/jobs",
+    ]
+    for ep in endpoints:
+        try:
+            r = requests.get(ep, timeout=5)
+            print(f"✅ {ep}: {r.status_code}")
+            if r.status_code == 200:
+                data = r.json()
+                print(f"   Keys: {list(data.keys())}")
+        except Exception as e:
+            print(f"❌ {ep}: {e}")
+
+
+def test_task_execution():
+    """Run a simple task through organism API."""
+    print("\n⚡ Task Execution Test")
+    print("-" * 40)
     try:
-        import requests
-        # Try different dashboard endpoints - use the correct /api/v0/ paths
-        endpoints = [
-            "http://seedcore-svc-head-svc:8265/api/v0/nodes",
-            "http://seedcore-svc-head-svc:8265/api/v0/actors",
-            "http://seedcore-svc-head-svc:8265/api/v0/jobs"
-        ]
-        
-        for endpoint in endpoints:
-            try:
-                response = requests.get(endpoint, timeout=5)
-                print(f"✅ {endpoint}: {response.status_code}")
-                if response.status_code == 200:
-                    try:
-                        data = response.json()
-                        if 'data' in data and 'result' in data['data']:
-                            result = data['data']['result']
-                            if isinstance(result, dict) and 'total' in result:
-                                print(f"   Total items: {result['total']}")
-                            elif isinstance(result, list):
-                                print(f"   Total items: {len(result)}")
-                            else:
-                                print(f"   Data structure: {type(result)}")
-                        else:
-                            print(f"   Response structure: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
-                    except Exception as parse_error:
-                        print(f"   Parse error: {parse_error}")
-                        print(f"   Response length: {len(response.text)} chars")
-                else:
-                    print(f"   Error: {response.status_code}")
-            except Exception as e:
-                print(f"❌ {endpoint}: {e}")
-                
-    except Exception as e:
-        print(f"❌ Error checking dashboard: {e}")
-    
-    # 6. Test task execution
-    print("\n⚡ Task Execution Test:")
-    print("-" * 30)
-    try:
-        import requests
-        task_data = {
+        task = {
             "task_data": {
                 "type": "test_task",
                 "description": "Job analysis test",
-                "parameters": {"test": True}
+                "parameters": {"test": True},
             }
         }
-        response = requests.post("http://localhost:8002/organism/execute/cognitive_organ_1", 
-                               json=task_data, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
+        r = requests.post(
+            "http://localhost:8002/organism/execute/cognitive_organ_1",
+            json=task,
+            timeout=10,
+        )
+        if r.status_code == 200:
+            data = r.json()
             if data.get("success"):
-                print("✅ Task execution successful")
                 result = data.get("result", {})
-                print(f"   Agent ID: {result.get('agent_id', 'Unknown')}")
-                print(f"   Success: {result.get('success', 'Unknown')}")
-                print(f"   Quality: {result.get('quality', 'Unknown')}")
+                print("✅ Task executed")
+                print(f"   Agent: {result.get('agent_id')}")
+                print(f"   Success: {result.get('success')}")
+                print(f"   Quality: {result.get('quality')}")
             else:
-                print(f"❌ Task execution failed: {data.get('error')}")
+                print(f"❌ Task failed: {data.get('error')}")
         else:
-            print(f"❌ Task execution HTTP error: {response.status_code}")
+            print(f"❌ HTTP {r.status_code}")
     except Exception as e:
-        print(f"❌ Error testing task execution: {e}")
-    
-    print("\n" + "=" * 50)
-    print("🎯 Ray Cluster Analysis Complete")
-    print("=" * 50)
+        print(f"❌ Error: {e}")
+
+
+def main():
+    print("🔍 Ray Cluster and Jobs Analysis")
+    print("=" * 60)
+
+    if not connect_to_ray():
+        return False
+
+    analyze_cluster_resources()
+    analyze_nodes()
+    analyze_actors()
+    analyze_jobs()
+    check_organism_status()
+    check_dashboard()
+    test_task_execution()
+
+    print("\n🎯 Analysis Complete")
+    print("=" * 60)
+    return True
+
 
 if __name__ == "__main__":
-    analyze_ray_cluster() 
+    ok = main()
+    exit(0 if ok else 1)
