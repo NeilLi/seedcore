@@ -130,30 +130,42 @@ def test_llm_config():
         return False
 
 def test_api_endpoints():
-    """Test that the API endpoints are accessible."""
-    print("\n🔍 Testing API endpoints...")
-    
+    """Test that the CognitiveService API endpoints are accessible."""
+    print("\n🔍 Testing CognitiveService API endpoints...")
+
     try:
         import requests
-        
-        # Test the status endpoint
-        response = requests.get("http://localhost:8002/dspy/status", timeout=5)
-        
+
+        base_url = os.getenv("COGNITIVE_URL", "http://localhost:8000/cognitive")
+
+        # Health check
+        response = requests.get(f"{base_url}/health", timeout=5)
         if response.status_code == 200:
             data = response.json()
-            print("✅ DSPy status endpoint accessible")
-            print(f"   Success: {data.get('success', False)}")
-            print(f"   Supported Task Types: {len(data.get('supported_task_types', []))}")
+            print("✅ CognitiveService health endpoint accessible")
+            print(f"   Status: {data.get('status')}")
+        else:
+            print(f"⚠️ Health endpoint returned {response.status_code}")
+            return False
+
+        # Info endpoint (newer cognitive entrypoint supports /info)
+        response = requests.get(f"{base_url}/info", timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            print("✅ CognitiveService info endpoint accessible")
+            print(f"   Service: {data.get('service')}")
+            print(f"   Route Prefix: {data.get('route_prefix')}")
+            print(f"   Ray Namespace: {data.get('ray_namespace')}")
             return True
         else:
-            print(f"⚠️ Status endpoint returned {response.status_code}")
+            print(f"⚠️ Info endpoint returned {response.status_code}")
             return False
-            
+
     except requests.exceptions.RequestException as e:
         print(f"❌ API endpoint test failed: {e}")
         return False
     except Exception as e:
-        print(f"❌ API test failed: {e}")
+        print(f"❌ API test crashed: {e}")
         return False
 
 def main():
