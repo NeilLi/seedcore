@@ -60,7 +60,7 @@ Usage Examples:
 2. Async MySQL Connection:
    from seedcore.database import get_async_mysql_session
    
-   async for session in get_async_mysql_session():
+   async with get_async_mysql_session() as session:
        try:
            result = await session.execute(text("SELECT 1"))
            print(result.scalar())
