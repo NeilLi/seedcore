@@ -1,30 +1,30 @@
 {
-  "timestamp": 1756026117.8069947,
+  "timestamp": 1756026312.5115614,
   "tests": {
     "Sync PostgreSQL Engine Creation": {
       "status": "PASSED",
-      "duration": 0.051322221755981445,
+      "duration": 0.13758587837219238,
       "result": "Engine(postgresql://postgres:***@postgresql:5432/postgres)"
     },
     "Sync MySQL Engine Creation": {
       "status": "PASSED",
-      "duration": 0.056955814361572266,
+      "duration": 0.22185778617858887,
       "result": "Engine(mysql+pymysql://seedcore:***@mysql:3306/seedcore)"
     },
     "Async PostgreSQL Engine Creation": {
       "status": "PASSED",
-      "duration": 0.021326541900634766,
-      "result": "<sqlalchemy.ext.asyncio.engine.AsyncEngine object at 0x741cffbf71c0>"
+      "duration": 0.02801823616027832,
+      "result": "<sqlalchemy.ext.asyncio.engine.AsyncEngine object at 0x7ac6d613c700>"
     },
     "Async MySQL Engine Creation": {
       "status": "PASSED",
-      "duration": 0.004530668258666992,
-      "result": "<sqlalchemy.ext.asyncio.engine.AsyncEngine object at 0x741cff313200>"
+      "duration": 0.01813220977783203,
+      "result": "<sqlalchemy.ext.asyncio.engine.AsyncEngine object at 0x7ac6d59112c0>"
     },
     "Neo4j Driver Creation": {
       "status": "PASSED",
-      "duration": 0.00034499168395996094,
-      "result": "<neo4j._async.driver.AsyncBoltDriver object at 0x741cff322ce0>"
+      "duration": 0.003504037857055664,
+      "result": "<neo4j._async.driver.AsyncBoltDriver object at 0x7ac6d591b1f0>"
     },
     "PostgreSQL Engine Singleton": {
       "status": "PASSED",
@@ -33,67 +33,67 @@
     },
     "PostgreSQL Sync Connection": {
       "status": "PASSED",
-      "duration": 0.011478424072265625,
+      "duration": 0.020940303802490234,
       "result": true
     },
     "MySQL Sync Connection": {
       "status": "PASSED",
-      "duration": 0.012105703353881836,
+      "duration": 0.02013564109802246,
       "result": true
     },
     "PostgreSQL Async Connection": {
       "status": "PASSED",
-      "duration": 0.026307344436645508,
+      "duration": 0.03381824493408203,
       "result": true
     },
     "MySQL Async Connection": {
       "status": "PASSED",
-      "duration": 0.04550981521606445,
+      "duration": 0.008087873458862305,
       "result": true
     },
     "Neo4j Async Connection": {
       "status": "PASSED",
-      "duration": 0.009097576141357422,
+      "duration": 0.06212568283081055,
       "result": true
     },
     "PostgreSQL Health Check": {
       "status": "PASSED",
-      "duration": 0.0034193992614746094,
+      "duration": 0.01459956169128418,
       "result": true
     },
     "MySQL Health Check": {
       "status": "PASSED",
-      "duration": 0.0027844905853271484,
+      "duration": 0.016322851181030273,
       "result": true
     },
     "Neo4j Health Check": {
       "status": "PASSED",
-      "duration": 0.008931159973144531,
+      "duration": 0.014825582504272461,
       "result": true
     },
     "PostgreSQL Pool Statistics": {
       "status": "PASSED",
-      "duration": 6.341934204101562e-05,
+      "duration": 0.00663447380065918,
       "result": true
     },
     "MySQL Pool Statistics": {
       "status": "PASSED",
-      "duration": 1.4066696166992188e-05,
+      "duration": 2.4557113647460938e-05,
       "result": true
     },
     "Concurrent Operations Success Rate": {
       "status": "PASSED",
-      "duration": 1.9073486328125e-06,
+      "duration": 2.1457672119140625e-06,
       "result": true
     },
     "Async Concurrent Operations Success Rate": {
       "status": "PASSED",
-      "duration": 0.7968511581420898,
+      "duration": 1.0353856086730957,
       "result": true
     },
     "Connection Acquisition Speed": {
       "status": "PASSED",
-      "duration": 0.011511802673339844,
+      "duration": 0.010034799575805664,
       "result": true
     }
   },
