@@ -41,7 +41,7 @@ except Exception:
 
 ## Files Created
 
-### 1. `docker/cognitive_serve_entrypoint.py`
+### 1. `entrypoints/cognitive_entrypoint.py`
 **Purpose:** New entrypoint for cognitive services running independently
 **Features:**
 - FastAPI app with cognitive endpoints

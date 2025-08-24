@@ -193,4 +193,8 @@ def update_all_metrics_from_api_data(
     
     if system_data:
         update_system_metrics(system_data)
-        update_memory_metrics(system_data.get("memory_system", {})) 
+        
+        memory_data = system_data.get("memory_system", {})
+        if not isinstance(memory_data, dict):
+            memory_data = {}
+        update_memory_metrics(memory_data) 

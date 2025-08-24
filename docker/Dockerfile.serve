@@ -26,6 +26,7 @@ WORKDIR /app
 COPY --chown=ray:ray src/ ./src/
 COPY --chown=ray:ray scripts/ ./scripts/
 COPY --chown=ray:ray docker/ ./docker/
+COPY --chown=ray:ray entrypoints/ ./entrypoints/
 
 # ---- Runtime env ----
 ENV PYTHONUNBUFFERED=1 \

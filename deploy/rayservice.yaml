@@ -18,12 +18,20 @@ spec:
       location: HeadOnly
     applications:
       # ✅ FIX: Replaced the single 'seedcore' app with two distinct applications.
-      # - name: cognitive
-      #   import_path: cognitive_serve_entrypoint:cognitive_app # Assumes the bound app is named 'cognitive_app'
-      #   route_prefix: /cognitive
       - name: ml_service
         import_path: src.seedcore.ml.serve_app:build_ml_service
         route_prefix: /ml
+
+      - name: cognitive
+        import_path: entrypoints.cognitive_entrypoint:cognitive_app
+        route_prefix: /cognitive
+        deployments:
+          - name: CognitiveService
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 1
+              num_gpus: 0
+              resources: {"head_node": 0.001}
       
       # comment out the lightweight wrapper endpoints
       # - name: ml_serve

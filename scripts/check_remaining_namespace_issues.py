@@ -76,7 +76,7 @@ def search_for_missing_environment_usage():
         "src/seedcore/config/ray_config.py",
         "src/seedcore/api/routers/tier0_router.py",
         "src/seedcore/serve/simple_app.py",
-        "docker/cognitive_serve_entrypoint.py"
+        "entrypoints/cognitive_entrypoint.py"
     ]
     
     missing_env_usage = []

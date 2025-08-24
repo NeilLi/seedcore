@@ -22,7 +22,7 @@ The issue was a **namespace mismatch** where Ray agents were being created in th
 4. `src/seedcore/config/ray_config.py` - Line 40
 5. `src/seedcore/api/routers/tier0_router.py` - Line 165
 6. `src/seedcore/serve/simple_app.py` - Line 97
-7. `docker/cognitive_serve_entrypoint.py` - Line 37
+7. `entrypoints/cognitive_entrypoint.py` - Line 37
 8. Various script files in `scripts/` directory
 
 ## ✅ Fixes Implemented
@@ -90,7 +90,7 @@ ray.init(address="auto", namespace=ray_namespace)
 
 ### 3. Docker Entrypoint Files
 
-#### `docker/cognitive_serve_entrypoint.py`
+#### `entrypoints/cognitive_entrypoint.py`
 ```python
 # BEFORE (hardcoded):
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore")

@@ -22,7 +22,7 @@ if os.getenv("KUBERNETES_SERVICE_HOST") or os.path.exists("/var/run/secrets/kube
     if os.getenv("SEEDCORE_NS") == "seedcore-dev":
         # We're in the seedcore namespace - connect to Ray Serve endpoint
         # The cognitive service is running on Ray head node via Ray Serve
-        BASE_URL = "http://seedcore-svc-serve-svc:8000"  # Use RAY_SERVE_URL from env.example
+        BASE_URL = os.getenv("RAY_SERVE_UR", "http://seedcore-svc-stable-svc:8000")   # Use RAY_SERVE_URL from env.example
     else:
         BASE_URL = "http://localhost:8000"  # Fallback to localhost
 else:
@@ -73,6 +73,8 @@ def test_endpoint(method: str, endpoint: str, data: Optional[Dict[str, Any]] = N
                     print_status("OK", f"  Response indicates success")
                 elif "status" in result and result.get("status") == "healthy":
                     print_status("OK", f"  Health check passed")
+                elif endpoint == "/" and "status" in result and result.get("status") == "healthy":
+                    print_status("OK", f"  Root endpoint healthy")
                 else:
                     print_status("WARN", f"  Response: {json.dumps(result, indent=2)}")
             except json.JSONDecodeError:
@@ -99,7 +101,7 @@ def test_health_endpoints():
     print(f"\n{Colors.BOLD}🔍 Testing Health Endpoints{Colors.END}")
     
     success_count = 0
-    total_count = 2
+    total_count = 3  # Updated to include /info endpoint
     
     # Test health endpoint
     if test_endpoint("GET", "/health"):
@@ -107,6 +109,10 @@ def test_health_endpoints():
     
     # Test root endpoint
     if test_endpoint("GET", "/"):
+        success_count += 1
+    
+    # Test info endpoint
+    if test_endpoint("GET", "/info"):
         success_count += 1
     
     return success_count, total_count
@@ -175,17 +181,26 @@ def test_service_info():
     print(f"\n{Colors.BOLD}ℹ️  Service Information{Colors.END}")
     
     try:
-        response = requests.get(f"{BASE_URL}{ROUTE_PREFIX}/health", timeout=TIMEOUT)
+        # First try the new /info endpoint for comprehensive metadata
+        response = requests.get(f"{BASE_URL}{ROUTE_PREFIX}/info", timeout=TIMEOUT)
         if response.status_code == 200:
             data = response.json()
             print(f"Service: {data.get('service', 'Unknown')}")
-            print(f"Status: {data.get('status', 'Unknown')}")
             print(f"Route Prefix: {data.get('route_prefix', 'Unknown')}")
-            print(f"Pod: {data.get('pod', 'Unknown')}")
-            print(f"Ray Cluster: {data.get('ray_cluster', 'Unknown')}")
-            print(f"Ray Address: {data.get('ray_address', 'Unknown')}")
             print(f"Ray Namespace: {data.get('ray_namespace', 'Unknown')}")
-            print(f"Cognitive App: {data.get('cognitive_app', 'Unknown')}")
+            print(f"Ray Address: {data.get('ray_address', 'Unknown')}")
+            
+            if "deployment" in data:
+                deployment = data["deployment"]
+                print(f"Deployment: {deployment.get('name', 'Unknown')}")
+                print(f"Replicas: {deployment.get('replicas', 'Unknown')}")
+                print(f"Max Requests: {deployment.get('max_ongoing_requests', 'Unknown')}")
+            
+            if "resources" in data:
+                resources = data["resources"]
+                print(f"CPU Allocation: {resources.get('num_cpus', 'Unknown')}")
+                print(f"GPU Allocation: {resources.get('num_gpus', 'Unknown')}")
+                print(f"Resource Pinning: {resources.get('pinned_to', 'Unknown')}")
             
             if "endpoints" in data:
                 print(f"\nAvailable Endpoints:")
@@ -196,7 +211,25 @@ def test_service_info():
                     else:
                         print(f"  {endpoints}")
         else:
-            print_status("ERROR", f"Could not retrieve service info: {response.status_code}")
+            # Fallback to health endpoint if /info is not available
+            print_status("WARN", f"/info endpoint returned {response.status_code}, falling back to /health")
+            response = requests.get(f"{BASE_URL}{ROUTE_PREFIX}/health", timeout=TIMEOUT)
+            if response.status_code == 200:
+                data = response.json()
+                print(f"Service: {data.get('service', 'Unknown')}")
+                print(f"Status: {data.get('status', 'Unknown')}")
+                print(f"Route Prefix: {data.get('route_prefix', 'Unknown')}")
+                
+                if "endpoints" in data:
+                    print(f"\nAvailable Endpoints:")
+                    for endpoint_type, endpoints in data["endpoints"].items():
+                        if isinstance(endpoints, list):
+                            for endpoint in endpoints:
+                                print(f"  {endpoint}")
+                        else:
+                            print(f"  {endpoints}")
+            else:
+                print_status("ERROR", f"Could not retrieve service info: {response.status_code}")
             
     except Exception as e:
         print_status("ERROR", f"Failed to get service info: {e}")

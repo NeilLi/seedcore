@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Cognitive Serve Entrypoint for SeedCore
-docker/cognitive_serve_entrypoint.py
+entrypoints/cognitive_entrypoint.py
 
 This service runs the cognitive core and related reasoning services
 as a separate Ray Serve deployment, independent of the main API.
@@ -90,12 +90,54 @@ class CognitiveService:
     @app.get("/health")
     async def health(self):
         """Health check endpoint."""
-        return {"status": "healthy", "service": "cognitive-warm-replica"}
+        return {
+            "status": "healthy", 
+            "service": "cognitive-warm-replica",
+            "route_prefix": "/cognitive",
+            "ray_namespace": RAY_NS,
+            "ray_address": RAY_ADDR,
+            "endpoints": {
+                "health": "/health",
+                "info": "/info",
+                "cognitive": [
+                    "/reason-about-failure",
+                    "/plan-task", 
+                    "/make-decision",
+                    "/solve-problem",
+                    "/synthesize-memory",
+                    "/assess-capabilities"
+                ]
+            }
+        }
 
     @app.get("/")
     async def root(self):
-        """Root endpoint."""
-        return {"message": "SeedCore Cognitive Service is running with the replica-warm isolation pattern"}
+        """Root endpoint with structured health info."""
+        return {
+            "status": "healthy",
+            "service": "cognitive-warm-replica",
+            "message": "SeedCore Cognitive Service is running with the replica-warm isolation pattern"
+        }
+
+    @app.get("/info")
+    async def info(self):
+        """Service information endpoint."""
+        return {
+            "service": "cognitive-warm-replica",
+            "route_prefix": "/cognitive",
+            "ray_namespace": RAY_NS,
+            "ray_address": RAY_ADDR,
+            "deployment": {
+                "name": "CognitiveService",
+                "replicas": int(os.getenv("COG_SVC_REPLICAS", "1")),
+                "max_ongoing_requests": 1
+            },
+            "resources": {
+                "num_cpus": float(os.getenv("COG_SVC_NUM_CPUS", "1")),
+                "num_gpus": float(os.getenv("COG_SVC_NUM_GPUS", "0")),
+                "pinned_to": "head_node"
+            }
+        }
 
     @app.post("/reason-about-failure", response_model=CognitiveResponse)
     async def reason_about_failure(self, request: CognitiveRequest):
@@ -195,33 +237,26 @@ class CognitiveService:
 
 
 # --- Main Entrypoint ---
+# At module level so Ray Serve YAML can import directly
+cognitive_app = CognitiveService.bind()
+
 def main():
-    """Main entrypoint for the cognitive serve service."""
     print("🚀 Starting deployment driver for Cognitive Service...")
     try:
         if not ensure_ray_initialized(ray_address=RAY_ADDR, ray_namespace=RAY_NS):
             print("❌ Failed to initialize Ray connection")
             sys.exit(1)
 
-        # The application is defined by binding the deployment class
-        cognitive_app = CognitiveService.bind()
-
-        # Deploy the application with a unique name and route prefix
         serve.run(
             cognitive_app,
             name="cognitive",
             route_prefix="/cognitive"
         )
-        print("✅ Cognitive service application is running.")
-        print("🔄 Press Ctrl+C to stop the driver and undeploy the application.")
+        print("✅ Cognitive service is running.")
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
         print("\n🛑 Shutting down gracefully...")
-    except Exception as e:
-        print(f"❌ Deployment driver error: {e}")
-        traceback.print_exc()
-        sys.exit(1)
     finally:
         serve.shutdown()
         print("✅ Serve shutdown complete.")
