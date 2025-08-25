@@ -2,14 +2,14 @@ import ray
 import time
 import os
 from src.seedcore.agents.ray_actor import RayAgent
-from src.seedcore.utils.ray_utils import init_ray
+from src.seedcore.utils.ray_utils import ensure_ray_initialized
 
 def run_scenario():
     """
     Executes Scenario 2: Critical Failure and Flashbulb Incident.
     """
     print("--- Running Scenario 2: Critical Failure and Flashbulb Incident ---")
-    init_ray()
+    ensure_ray_initialized()
 
     # 1. Create an agent
     agent = RayAgent.remote(agent_id="Agent-Critical-Ops")

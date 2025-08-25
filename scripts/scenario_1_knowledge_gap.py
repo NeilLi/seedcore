@@ -6,11 +6,11 @@ import asyncio
 import json
 
 from src.seedcore.agents.ray_actor import RayAgent
-from src.seedcore.utils.ray_utils import init_ray
+from src.seedcore.utils.ray_utils import ensure_ray_initialized
 
 def load_holon_uuid():
     """Load fact_X UUID from the artifacts directory."""
-    uuid_file_path = '/data/fact_uuids.json'  # Mounted volume from docker-compose
+    uuid_file_path = '/app/data/fact_uuids.json'  # Mounted volume from docker-compose
     try:
         with open(uuid_file_path, 'r') as f:
             data = json.load(f)
@@ -40,7 +40,7 @@ async def run_scenario():
         print(f"🔗 Connecting to Ray at: {ray_address}")
         print(f"🏷️ Using namespace: {ray_namespace}")
         
-        from seedcore.utils.ray_utils import ensure_ray_initialized
+        # Using the already imported ensure_ray_initialized from above
         if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
             print("❌ Failed to connect to Ray cluster")
             return
@@ -50,7 +50,7 @@ async def run_scenario():
         return
 
     try:
-        print("\\n🤖 Creating agents for collaborative task...")
+        print("\n🤖 Creating agents for collaborative task...")
         agent_a = RayAgent.remote(agent_id="Agent-A")
         agent_b = RayAgent.remote(agent_id="Agent-B")
         
@@ -66,12 +66,12 @@ async def run_scenario():
             "participants": ["Agent-A", "Agent-B"]
         }
         
-        print("\\n📋 Task Definition:")
+        print("\n📋 Task Definition:")
         print("   - Name: Launch Sequence Alpha")
         print("   - Required Fact: fact_X_uuid")
         print("   - Complexity: 0.8")
 
-        print("\\n" + "=" * 60)
+        print("\n" + "=" * 60)
         print("🔄 PHASE 1: First Attempt (Cache Miss Expected)")
         print("=" * 60)
         
@@ -80,17 +80,17 @@ async def run_scenario():
         result_ref = agent_b.execute_collaborative_task.remote(task_info)
         result = ray.get(result_ref)  # No await needed
         
-        print("\\n📊 Result from first attempt:")
+        print("\n📊 Result from first attempt:")
         print(f"   - Agent: {result['agent_id']}")
         print(f"   - Task: {result['task_name']}")
         print(f"   - Success: {result['success']}")
         print(f"   - Quality: {result['quality']:.3f}")
         print(f"   - Knowledge Found: {result['knowledge_found']}")
         
-        print("\\n⏳ Waiting 5 seconds to simulate time passing...")
+        print("\n⏳ Waiting 5 seconds to simulate time passing...")
         await asyncio.sleep(5)
 
-        print("\\n" + "=" * 60)
+        print("\n" + "=" * 60)
         print("🔄 PHASE 2: Second Attempt (Cache Hit Expected)")
         print("=" * 60)
         
@@ -100,30 +100,30 @@ async def run_scenario():
         result_ref_2 = agent_b.execute_collaborative_task.remote(task_info)
         result_2 = ray.get(result_ref_2)  # No await needed
         
-        print("\\n📊 Result from second attempt:")
+        print("\n📊 Result from second attempt:")
         print(f"   - Agent: {result_2['agent_id']}")
         print(f"   - Task: {result_2['task_name']}")
         print(f"   - Success: {result_2['success']}")
         print(f"   - Quality: {result_2['quality']:.3f}")
         print(f"   - Knowledge Found: {result_2['knowledge_found']}")
 
-        print("\\n" + "=" * 60)
+        print("\n" + "=" * 60)
         print("🔄 PHASE 3: Agent-A Collaboration")
         print("=" * 60)
         
-        print("�� Assigning task to Agent-A for collaboration...")
+        print("📤 Assigning task to Agent-A for collaboration...")
         
         result_ref_3 = agent_a.execute_collaborative_task.remote(task_info)
         result_3 = ray.get(result_ref_3)  # No await needed
         
-        print("\\n📊 Result from Agent-A:")
+        print("\n📊 Result from Agent-A:")
         print(f"   - Agent: {result_3['agent_id']}")
         print(f"   - Task: {result_3['task_name']}")
         print(f"   - Success: {result_3['success']}")
         print(f"   - Quality: {result_3['quality']:.3f}")
         print(f"   - Knowledge Found: {result_3['knowledge_found']}")
 
-        print("\\n" + "=" * 60)
+        print("\n" + "=" * 60)
         print("📈 SCENARIO ANALYSIS")
         print("=" * 60)
         
@@ -138,11 +138,11 @@ async def run_scenario():
         else:
             print("⚠️ Cache behavior: Knowledge availability remained consistent")
         
-        print("\\n" + "=" * 80)
+        print("\n" + "=" * 80)
         print("✅ SCENARIO 1 COMPLETED SUCCESSFULLY!")
         print("=" * 80)
         
-        print("\\n📋 What was validated:")
+        print("\n📋 What was validated:")
         print("✅ Cache Miss Handling: System correctly handles Mw miss and escalates to Mlt")
         print("✅ Mlt Integration: Agents can effectively query and retrieve data from Long-Term Memory")
         print("✅ Knowledge Caching: Read-through cache pattern works (retrieved knowledge populates Mw)")
@@ -155,7 +155,7 @@ async def run_scenario():
         traceback.print_exc()
     
     finally:
-        print("\\n🧹 Cleaning up...")
+        print("\n🧹 Cleaning up...")
         try:
             ray.shutdown()
             print("✅ Ray shutdown completed")

@@ -123,15 +123,21 @@ def bootstrap_actors():
 
     try:
         logger.info("🔍 Creating miss_tracker actor...")
-        miss_tracker = _get_or_create(MissTracker, "miss_tracker")
+        miss_tracker = MissTracker.options(
+            name="miss_tracker", lifetime="detached", namespace=ns, get_if_exists=True
+        ).remote()
         logger.info(f"✅ miss_tracker created: {miss_tracker}")
         
         logger.info("🔍 Creating shared_cache actor...")
-        shared_cache = _get_or_create(SharedCache, "shared_cache")
+        shared_cache = SharedCache.options(
+            name="shared_cache", lifetime="detached", namespace=ns, get_if_exists=True
+        ).remote()
         logger.info(f"✅ shared_cache created: {shared_cache}")
         
         logger.info("🔍 Creating mw_store actor...")
-        mw_store = _get_or_create(MwStore, "mw")
+        mw_store = MwStore.options(
+            name="mw", lifetime="detached", namespace=ns, get_if_exists=True
+        ).remote()
         logger.info(f"✅ mw_store created: {mw_store}")
         
         logger.info("🎉 All singleton actors bootstrapped successfully!")
@@ -146,13 +152,22 @@ def bootstrap_actors():
 # Convenience accessors (match names used elsewhere in the codebase)
 
 def get_miss_tracker():
-    return _get_or_create(MissTracker, "miss_tracker")
+    ns = _resolve_ns()
+    return MissTracker.options(
+        name="miss_tracker", lifetime="detached", namespace=ns, get_if_exists=True
+    ).remote()
 
 def get_shared_cache():
-    return _get_or_create(SharedCache, "shared_cache")
+    ns = _resolve_ns()
+    return SharedCache.options(
+        name="shared_cache", lifetime="detached", namespace=ns, get_if_exists=True
+    ).remote()
 
 def get_mw_store():  # note: **mw**, not mv
-    return _get_or_create(MwStore, "mw")
+    ns = _resolve_ns()
+    return MwStore.options(
+        name="mw", lifetime="detached", namespace=ns, get_if_exists=True
+    ).remote()
 
 __all__ = [
     "bootstrap_actors",

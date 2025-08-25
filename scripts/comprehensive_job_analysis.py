@@ -123,9 +123,8 @@ def analyze_ray_jobs_comprehensive():
         
         # Test organism endpoints
         endpoints = [
-            ("Organism Status", "http://localhost:8000/organism/status"),
-            ("Organism Summary", "http://localhost:8000/organism/summary"),
-            ("Ray Status", "http://localhost:8000/ray/status")
+            ("Organism Status", "http://localhost:8002/organism/status"),
+            ("Organism Summary", "http://localhost:8002/organism/summary")
         ]
         
         for name, url in endpoints:
@@ -161,7 +160,7 @@ def analyze_ray_jobs_comprehensive():
                     }
                     
                     response = requests.post(
-                        f"http://localhost:8000/organism/execute/{organ_name}",
+                        f"http://localhost:8002/organism/execute/{organ_name}",
                         json=task_data,
                         timeout=10
                     )

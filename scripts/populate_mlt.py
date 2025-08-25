@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.seedcore.memory.long_term_memory import LongTermMemoryManager
 
 # Save UUIDs to artifacts directory for inspection
-UUID_FILE_PATH = '/data/fact_uuids.json'  # Mounted volume in docker-compose
+UUID_FILE_PATH = '/app/data/fact_uuids.json'  # Mounted volume in docker-compose
 
 # Valid dummy UUID for health check
 DUMMY_UUID = "00000000-0000-0000-0000-000000000000"

@@ -119,31 +119,49 @@ def analyze_detailed_placement():
     
     try:
         # Get actors from Ray dashboard API
-        response = requests.get("http://localhost:8265/api/actors", timeout=5)
+        response = requests.get("http://seedcore-svc-head-svc:8265/api/v0/actors", timeout=5)
         if response.status_code == 200:
             data = response.json()
-            actors = data.get('data', [])
             
-            print(f"Total Actors in Dashboard: {len(actors)}")
+            # Debug: Print response structure
+            print(f"🔍 Dashboard API Response Structure:")
+            print(f"  - Top level keys: {list(data.keys())}")
+            if 'data' in data:
+                print(f"  - Data keys: {list(data['data'].keys())}")
+                if 'result' in data['data']:
+                    print(f"  - Result keys: {list(data['data']['result'].keys())}")
             print()
             
-            # Group actors by node
-            actors_by_node = {}
-            
-            for actor in actors:
-                node_id = actor.get('node_id', 'Unknown')
-                actor_id = actor.get('actor_id', 'Unknown')
-                state = actor.get('state', 'Unknown')
-                name = actor.get('name', 'Unnamed')
+            # Parse the nested response structure
+            # The API returns: {"result": true, "msg": "", "data": {"result": {"total": X, "result": [...]}}}
+            if data.get('result') and data.get('data', {}).get('result', {}).get('result'):
+                actors = data['data']['result']['result']
+                total_actors = data['data']['result'].get('total', 0)
                 
-                if node_id not in actors_by_node:
-                    actors_by_node[node_id] = []
+                print(f"Total Actors in Dashboard: {total_actors}")
+                print()
                 
-                actors_by_node[node_id].append({
-                    'actor_id': actor_id,
-                    'name': name,
-                    'state': state
-                })
+                # Group actors by node
+                actors_by_node = {}
+                
+                for actor in actors:
+                    node_id = actor.get('node_id', 'Unknown')
+                    actor_id = actor.get('actor_id', 'Unknown')
+                    state = actor.get('state', 'Unknown')
+                    name = actor.get('name', 'Unnamed')
+                    
+                    if node_id not in actors_by_node:
+                        actors_by_node[node_id] = []
+                    
+                    actors_by_node[node_id].append({
+                        'actor_id': actor_id,
+                        'name': name,
+                        'state': state
+                    })
+            else:
+                print("❌ Unexpected response structure from dashboard API")
+                print(f"Response: {data}")
+                return
             
             # Display actors by node
             for node_id, node_actors in actors_by_node.items():
@@ -163,13 +181,16 @@ def analyze_detailed_placement():
             print(f"❌ Dashboard API failed: {response.status_code}")
     except Exception as e:
         print(f"❌ Dashboard Error: {e}")
+        print(f"Error type: {type(e).__name__}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
     
     # 4. Check Tier 0 agents if available
     print("🤖 TIER 0 AGENT ANALYSIS:")
     print("-" * 40)
     
     try:
-        response = requests.get("http://localhost:8000/tier0/summary", timeout=5)
+        response = requests.get("http://localhost:8002/tier0/summary", timeout=5)
         if response.status_code == 200:
             data = response.json()
             if data.get("success"):

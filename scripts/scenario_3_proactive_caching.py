@@ -5,10 +5,10 @@ import asyncio
 import json
 from src.seedcore.agents.ray_actor import RayAgent
 from src.seedcore.agents.observer_agent import ObserverAgent
-from src.seedcore.utils.ray_utils import init_ray
+from src.seedcore.utils.ray_utils import ensure_ray_initialized
 
 # --- MODIFIED: Load the correct UUID from the artifacts directory ---
-UUID_FILE_PATH = '/data/fact_uuids.json'  # Mounted volume from docker-compose
+UUID_FILE_PATH = '/app/data/fact_uuids.json'  # Mounted volume from docker-compose
 try:
     with open(UUID_FILE_PATH, 'r') as f:
         FACT_TO_FIND = json.load(f)["fact_Y"]
@@ -23,7 +23,7 @@ NUM_REQUESTS_PER_AGENT = 3
 
 async def run_scenario():
     print("--- Running Scenario 3: Pattern Recognition and Proactive Caching ---")
-    init_ray()
+    ensure_ray_initialized()
 
     # 1. Create a pool of worker agents and one observer agent
     workers = [RayAgent.remote(agent_id=f"Worker-{i}") for i in range(NUM_WORKER_AGENTS)]

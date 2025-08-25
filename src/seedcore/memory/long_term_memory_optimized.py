@@ -28,6 +28,22 @@ class LongTermMemoryManagerOptimized:
         elapsed = time.time() - start_time
         print(f"✅ Optimized LongTermMemoryManager initialized in {elapsed:.2f}s")
 
+    async def initialize(self):
+        """Async initialization to set up connection pools and ensure readiness."""
+        print("🔌 Initializing async connections...")
+        start_time = time.time()
+        
+        try:
+            # Initialize the PgVector connection pool
+            await self.pg_store._get_pool()
+            
+            elapsed = time.time() - start_time
+            print(f"✅ Async connections initialized in {elapsed:.2f}s")
+        except Exception as e:
+            elapsed = time.time() - start_time
+            print(f"❌ Failed to initialize async connections in {elapsed:.2f}s: {e}")
+            raise
+
     async def incr_miss(self, fact_id: str):
         # fire-and-forget: no need to await
         pass # MwStore actor removed
@@ -81,6 +97,7 @@ class LongTermMemoryManagerOptimized:
             logger.error(f"[{self.__class__.__name__}] (async) Error querying holon by ID '{holon_id}': {e}")
             import traceback
             logger.error(f"[{self.__class__.__name__}] (async) Traceback: {traceback.format_exc()}")
+            print(f"❌ Error querying holon by ID '{holon_id}': {e}")
             return None
 
     async def query_holons_by_similarity(self, embedding: list, limit: int = 5) -> list:
@@ -120,6 +137,44 @@ class LongTermMemoryManagerOptimized:
         except Exception as e:
             print(f"🚨 Error getting relationships: {e}")
             return []
+
+    async def insert_holon_async(self, holon_data: dict) -> bool:
+        """
+        Async version of insert_holon that properly handles async operations.
+        """
+        try:
+            print(f"📝 Inserting holon (async): {holon_data['vector']['id']}")
+            start_time = time.time()
+            
+            # Create a Holon object for PgVector
+            from .backends.pgvector_backend_optimized import Holon
+            holon = Holon(
+                uuid=holon_data['vector']['id'],
+                embedding=np.array(holon_data['vector']['embedding']),
+                meta=holon_data['vector']['meta']
+            )
+            
+            # Insert into PgVector using optimized backend - properly await the async operation
+            success = await self.pg_store.upsert(holon)
+            
+            # Insert graph relationships into Neo4j if present
+            if success and 'graph' in holon_data:
+                graph_data = holon_data['graph']
+                self.neo4j_graph.upsert_edge(
+                    graph_data['src_uuid'],
+                    graph_data['rel'],
+                    graph_data['dst_uuid']
+                )
+            
+            elapsed = time.time() - start_time
+            print(f"✅ Successfully inserted holon (async): {holon_data['vector']['id']} in {elapsed:.2f}s")
+            return success
+            
+        except Exception as e:
+            print(f"❌ Error inserting holon (async): {e}")
+            import traceback
+            print(f"❌ Traceback: {traceback.format_exc()}")
+            return False
 
     def insert_holon(self, holon_data: dict) -> bool:
         """

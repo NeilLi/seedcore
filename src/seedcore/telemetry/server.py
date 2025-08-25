@@ -2105,17 +2105,51 @@ async def set_kappa(request: Request):
 async def ray_status():
     """Get Ray cluster status and configuration."""
     try:
-        config = get_ray_config()
-        cluster_info = get_connection_info()
+        # Get Ray configuration
+        try:
+            config = get_ray_config()
+            ray_configured = config.is_configured()
+            config_str = str(config)
+        except Exception as e:
+            logging.error(f"Error getting Ray config: {e}")
+            ray_configured = False
+            config_str = f"Error: {str(e)}"
+        
+        # Check Ray connection status
+        try:
+            ray_available = is_connected()
+        except Exception as e:
+            logging.error(f"Error checking Ray connection: {e}")
+            ray_available = False
+        
+        # Get cluster info (this is most likely to fail)
+        try:
+            cluster_info = get_connection_info()
+        except Exception as e:
+            logging.error(f"Error getting cluster info: {e}")
+            cluster_info = {
+                "status": "error",
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
         
         return {
-            "ray_configured": config.is_configured(),
-            "ray_available": is_connected(),
-            "config": str(config),
-            "cluster_info": cluster_info
+            "ray_configured": ray_configured,
+            "ray_available": ray_available,
+            "config": config_str,
+            "cluster_info": cluster_info,
+            "status": "success"
         }
     except Exception as e:
-        return {"error": str(e)}
+        logging.error(f"Unexpected error in /ray/status: {e}")
+        return {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "ray_configured": False,
+            "ray_available": False,
+            "config": "Error getting config",
+            "cluster_info": {"status": "error", "error": str(e)}
+        }
 
 @app.post("/ray/connect")
 async def ray_connect(request: dict):

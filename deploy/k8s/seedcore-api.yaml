@@ -40,7 +40,7 @@ spec:
             - name: SEEDCORE_SKIP_EAGER_RAY
               value: "1"
             - name: SEEDCORE_BOOTSTRAP_OPTIONAL
-              value: "1"
+              value: "0"
           # Optional, safe: these are ignored if missing due to 'optional: true'
           envFrom:
             - configMapRef:
@@ -61,6 +61,8 @@ spec:
             # (dev-only) mount your project source into /app
             - name: project-source-volume
               mountPath: /app
+            - name: data-volume
+              mountPath: /app/data
           readinessProbe:
             httpGet:
               path: /readyz
@@ -91,6 +93,9 @@ spec:
           hostPath:
             path: ${HOSTPATH_PROJECT}
             type: Directory
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: seedcore-data-pvc
 ---
 apiVersion: v1
 kind: Service
