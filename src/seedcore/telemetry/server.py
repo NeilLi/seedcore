@@ -83,6 +83,7 @@ from ..api.routers.organism_router import router as organism_router
 from ..api.routers.tier0_router import router as tier0_router
 from ..api.routers.energy_router import router as energy_router
 from ..api.routers.holon_router import router as holon_router
+from ..api.routers.control_router import router as control_router
 from ..config.ray_config import get_ray_config
 from ..utils.ray_utils import ensure_ray_initialized, is_ray_available
 from ..utils.ray_connector import (
@@ -382,6 +383,7 @@ app.include_router(organism_router)
 app.include_router(tier0_router)
 app.include_router(energy_router)
 app.include_router(holon_router)
+app.include_router(control_router)
 from ..api.routers.ocps_router import router as ocps_router
 from ..api.routers.dspy_router import router as dspy_router
 app.include_router(ocps_router)
@@ -2105,51 +2107,14 @@ async def set_kappa(request: Request):
 async def ray_status():
     """Get Ray cluster status and configuration."""
     try:
-        # Get Ray configuration
-        try:
-            config = get_ray_config()
-            ray_configured = config.is_configured()
-            config_str = str(config)
-        except Exception as e:
-            logging.error(f"Error getting Ray config: {e}")
-            ray_configured = False
-            config_str = f"Error: {str(e)}"
-        
-        # Check Ray connection status
-        try:
-            ray_available = is_connected()
-        except Exception as e:
-            logging.error(f"Error checking Ray connection: {e}")
-            ray_available = False
-        
-        # Get cluster info (this is most likely to fail)
-        try:
-            cluster_info = get_connection_info()
-        except Exception as e:
-            logging.error(f"Error getting cluster info: {e}")
-            cluster_info = {
-                "status": "error",
-                "error": str(e),
-                "error_type": type(e).__name__
-            }
-        
         return {
-            "ray_configured": ray_configured,
-            "ray_available": ray_available,
-            "config": config_str,
-            "cluster_info": cluster_info,
-            "status": "success"
+            "is_initialized": ray.is_initialized(),
+            "cluster_resources": ray.cluster_resources() if ray.is_initialized() else {},
+            "available_resources": ray.available_resources() if ray.is_initialized() else {},
+            "nodes": ray.nodes() if ray.is_initialized() else [],
         }
     except Exception as e:
-        logging.error(f"Unexpected error in /ray/status: {e}")
-        return {
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "ray_configured": False,
-            "ray_available": False,
-            "config": "Error getting config",
-            "cluster_info": {"status": "error", "error": str(e)}
-        }
+        return {"error": str(e)}
 
 @app.post("/ray/connect")
 async def ray_connect(request: dict):
