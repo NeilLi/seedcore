@@ -1,0 +1,58 @@
+"""
+Task database model for SeedCore.
+"""
+
+import uuid
+from sqlalchemy import String, DateTime, JSON, Float, Enum as SQLAlchemyEnum
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.sql import func
+import enum
+
+class Base(DeclarativeBase):
+    pass
+
+class TaskStatus(enum.Enum):
+    CREATED = "created"
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    # Columns
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    type: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str] = mapped_column(String, nullable=True)
+    params: Mapped[dict] = mapped_column(JSON, nullable=True, default=dict)
+    
+    # COA-specific fields
+    domain: Mapped[str] = mapped_column(String, nullable=True)
+    drift_score: Mapped[float] = mapped_column(Float, default=0.0)
+    
+    # State and results
+    status: Mapped[TaskStatus] = mapped_column(
+        SQLAlchemyEnum(TaskStatus), nullable=False, default=TaskStatus.CREATED
+    )
+    result: Mapped[dict] = mapped_column(JSON, nullable=True)
+    error: Mapped[str] = mapped_column(String, nullable=True)
+    
+    # Timestamps
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    def __init__(self, **kwargs):
+        """Initialize the task with default values."""
+        # Set default status if not provided
+        if 'status' not in kwargs:
+            kwargs['status'] = TaskStatus.CREATED
+        super().__init__(**kwargs)
+
+    def to_dict(self):
+        """Convert the task to a dictionary representation."""
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}

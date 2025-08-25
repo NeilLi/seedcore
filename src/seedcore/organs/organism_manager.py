@@ -771,6 +771,45 @@ class OrganismManager:
         """Hook for Mw/Mlt prefetch as per §8.6 Unified RAG Operations. No-op until memory wired."""
         pass
 
+    async def handle_incoming_task(self, task: Dict[str, Any], app_state=None) -> Dict[str, Any]:
+        """
+        Unified handler for all incoming tasks.
+        - If a builtin handler exists for task['type'], use it (no hairpin).
+        - Else, route via COA fast-path + OCPS; escalate to HGNN as needed.
+        Returns a dict with:
+            success: bool
+            path: "builtin" | "fast" | "hgnn"
+            p_fast: float
+            result: any
+        """
+        ttype = (task.get("type") or task.get("task_type") or "").strip()
+        if not ttype:
+            return {"success": False, "error": "task.type is required"}
+
+        # 1) Builtins registered on app.state (set in server.py)
+        if app_state is not None:
+            handlers = getattr(app_state, "builtin_task_handlers", {}) or {}
+            handler = handlers.get(ttype)
+            if callable(handler):
+                try:
+                    # allow both sync and async handler funcs
+                    out = handler() if task.get("params") is None else handler(**task.get("params", {}))
+                    if asyncio.iscoroutine(out):
+                        out = await out
+                    return {"success": True, "path": "builtin", "p_fast": self.ocps.p_fast, "result": out}
+                except Exception as e:
+                    logger.exception("Builtin task '%s' failed", ttype)
+                    return {"success": False, "path": "builtin", "p_fast": self.ocps.p_fast, "error": str(e)}
+
+        # 2) Default: COA routing
+        try:
+            routed = await self.route_and_execute(task)
+            routed.setdefault("path", "fast" if routed.get("path") == "fast" else "hgnn")
+            return routed
+        except Exception as e:
+            logger.exception("route_and_execute failed for task.type=%s", ttype)
+            return {"success": False, "error": str(e), "path": "error", "p_fast": self.ocps.p_fast}
+
     async def initialize_organism(self):
         """Creates all organs and populates them with agents based on the config."""
         if self._initialized:

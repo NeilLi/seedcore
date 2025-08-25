@@ -24,9 +24,11 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-import ray
+# Lazy import for Ray - only imported when functions are called
+# This prevents Ray initialization when the module is imported
+
 from ..utils.ray_utils import ensure_ray_initialized
 
 try:
@@ -86,12 +88,14 @@ logger.propagate = True
 # ---------------------------------------------------------------------------
 # Cluster-safe async helpers
 # ---------------------------------------------------------------------------
-async def _await_ref(ref: "ray.ObjectRef") -> Any:
+async def _await_ref(ref: Any) -> Any:
     """Await a Ray ObjectRef without blocking the event loop.
 
     This uses a threadpool to call ray.get(). Works across Ray/Python versions,
     including environments where `await ref` is not supported.
     """
+    # Lazy import Ray only when needed
+    import ray
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, ray.get, ref)
 
@@ -99,7 +103,7 @@ async def _await_ref(ref: "ray.ObjectRef") -> Any:
 # ---------------------------------------------------------------------------
 # Shared actors (definitions) — created only if AUTO_CREATE=1
 # ---------------------------------------------------------------------------
-@ray.remote
+# These classes will be decorated with @ray.remote when Ray is imported
 class MissTracker:
     """Tracks miss counts for item IDs across the cluster."""
 
@@ -115,7 +119,6 @@ class MissTracker:
         return sorted(self._miss_counts.items(), key=lambda kv: kv[1], reverse=True)[:n]
 
 
-@ray.remote
 class SharedCache:
     """Cluster-wide simple key/value cache."""
 
@@ -137,6 +140,8 @@ class SharedCache:
 # ---------------------------------------------------------------------------
 
 def _ensure_ray(namespace: Optional[str]) -> None:
+    # Lazy import Ray only when needed
+    import ray
     if ray.is_initialized():
         return
     if not ensure_ray_initialized(ray_address=CONFIG.ray_address, ray_namespace=namespace):
@@ -148,8 +153,10 @@ def _ensure_ray(namespace: Optional[str]) -> None:
     )
 
 
-def _lookup_actor(name: str, namespace: Optional[str]) -> Optional["ray.actor.ActorHandle"]:
+def _lookup_actor(name: str, namespace: Optional[str]) -> Optional[Any]:
     try:
+        # Lazy import Ray only when needed
+        import ray
         return ray.get_actor(name, namespace=namespace)
     except Exception:
         return None
@@ -159,7 +166,7 @@ def _create_actor_if_needed(
     name: str,
     namespace: Optional[str],
     cls: Optional[Any],
-) -> Optional["ray.actor.ActorHandle"]:
+) -> Optional[Any]:
     if not CONFIG.auto_create:
         return None
     if cls is None:
@@ -169,6 +176,11 @@ def _create_actor_if_needed(
         )
         return None
     logger.info("Creating missing actor '%s' in namespace '%s'...", name, namespace)
+    # Lazy import Ray only when needed
+    import ray
+    # Apply @ray.remote decorator to the class if not already decorated
+    if not hasattr(cls, 'remote'):
+        cls = ray.remote(cls)
     handle = (
         cls.options(name=name, lifetime="detached", namespace=namespace, get_if_exists=True)
         .remote()
@@ -176,7 +188,7 @@ def _create_actor_if_needed(
     return handle
 
 
-def _get_or_create(name: str, namespace: Optional[str], cls: Optional[Any]) -> "ray.actor.ActorHandle":
+def _get_or_create(name: str, namespace: Optional[str], cls: Optional[Any]) -> Any:
     _ensure_ray(namespace)
 
     # Retry loop: actor may not be up yet due to race conditions at startup
@@ -215,15 +227,15 @@ def _get_or_create(name: str, namespace: Optional[str], cls: Optional[Any]) -> "
 # Public accessors for shared actors
 # ---------------------------------------------------------------------------
 
-def get_miss_tracker() -> "ray.actor.ActorHandle":
+def get_miss_tracker() -> Any:
     return _get_or_create(CONFIG.miss_tracker_name, CONFIG.namespace, MissTracker)
 
 
-def get_shared_cache() -> "ray.actor.ActorHandle":
+def get_shared_cache() -> Any:
     return _get_or_create(CONFIG.shared_cache_name, CONFIG.namespace, SharedCache)
 
 
-def get_mw_store() -> "ray.actor.ActorHandle":
+def get_mw_store() -> Any:
     # MwStore may be project-specific; we create it only if AUTO_CREATE=1 and import succeeded
     return _get_or_create(CONFIG.mw_actor_name, CONFIG.namespace, MwStore)
 
@@ -304,6 +316,8 @@ class MwManager:
     def get_hot_items(self, top_n: int = 3) -> List[Tuple[str, int]]:
         miss_tracker = get_miss_tracker()
         try:
+            # Lazy import Ray only when needed
+            import ray
             return ray.get(miss_tracker.get_top_n.remote(top_n))
         except Exception as e:
             logger.error("get_hot_items error: %s", e)

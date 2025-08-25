@@ -12,9 +12,10 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
-import ray
+# Lazy import for Ray - only imported when functions are called
+# This prevents Ray initialization when the module is imported
 
 # Import the ACTOR CLASSES (must be decorated with @ray.remote)
 from .memory.working_memory import MissTracker, SharedCache, MwStore  # type: ignore
@@ -54,6 +55,8 @@ def get_ray_namespace() -> str:
     if ns:
         return ns
     try:
+        # Lazy import Ray only when needed
+        import ray
         ctx = ray.get_runtime_context()  # Requires Ray to be initialized in this proc
         if getattr(ctx, "namespace", None):
             return ctx.namespace  # type: ignore[attr-defined]
@@ -64,6 +67,8 @@ def get_ray_namespace() -> str:
 def _ensure_ray(namespace: Optional[str]) -> None:
     # SOLUTION: Ray connection is now handled centrally by ray_connector.py
     # This function is kept for compatibility but no longer initializes Ray
+    # Lazy import Ray only when needed
+    import ray
     if not ray.is_initialized():
         logger.critical("❌ Ray not initialized. This should not happen - Ray should be initialized at application startup.")
         raise RuntimeError("Ray not initialized - application startup issue")
@@ -71,6 +76,8 @@ def _ensure_ray(namespace: Optional[str]) -> None:
 
 def _ready_ping(handle) -> None:
     """Best-effort readiness ping on a freshly created actor."""
+    # Lazy import Ray only when needed
+    import ray
     for _ in range(10):
         try:
             # Try a conventional 'ready' or 'ping' method if present.
@@ -94,6 +101,8 @@ def _get_or_create(actor_cls, name: str, *args, **kwargs):
     Idempotent get-or-create for detached, named actors.
     Works in Ray Client mode; always uses the resolved namespace.
     """
+    # Lazy import Ray only when needed
+    import ray
     ns = _resolve_ns()
     try:
         return ray.get_actor(name, namespace=ns)
@@ -122,20 +131,38 @@ def bootstrap_actors():
     logger.info("Bootstrapping singletons in namespace %s", ns)
 
     try:
+        # Lazy import Ray only when needed
+        import ray
+        
         logger.info("🔍 Creating miss_tracker actor...")
-        miss_tracker = MissTracker.options(
+        # Apply @ray.remote decorator to the class if not already decorated
+        if not hasattr(MissTracker, 'remote'):
+            RayMissTracker = ray.remote(MissTracker)
+        else:
+            RayMissTracker = MissTracker
+        miss_tracker = RayMissTracker.options(
             name="miss_tracker", lifetime="detached", namespace=ns, get_if_exists=True
         ).remote()
         logger.info(f"✅ miss_tracker created: {miss_tracker}")
         
         logger.info("🔍 Creating shared_cache actor...")
-        shared_cache = SharedCache.options(
+        # Apply @ray.remote decorator to the class if not already decorated
+        if not hasattr(SharedCache, 'remote'):
+            RaySharedCache = ray.remote(SharedCache)
+        else:
+            RaySharedCache = SharedCache
+        shared_cache = RaySharedCache.options(
             name="shared_cache", lifetime="detached", namespace=ns, get_if_exists=True
         ).remote()
         logger.info(f"✅ shared_cache created: {shared_cache}")
         
         logger.info("🔍 Creating mw_store actor...")
-        mw_store = MwStore.options(
+        # Apply @ray.remote decorator to the class if not already decorated
+        if not hasattr(MwStore, 'remote'):
+            RayMwStore = ray.remote(MwStore)
+        else:
+            RayMwStore = MwStore
+        mw_store = RayMwStore.options(
             name="mw", lifetime="detached", namespace=ns, get_if_exists=True
         ).remote()
         logger.info(f"✅ mw_store created: {mw_store}")
@@ -152,20 +179,41 @@ def bootstrap_actors():
 # Convenience accessors (match names used elsewhere in the codebase)
 
 def get_miss_tracker():
+    # Lazy import Ray only when needed
+    import ray
     ns = _resolve_ns()
-    return MissTracker.options(
+    # Apply @ray.remote decorator to the class if not already decorated
+    if not hasattr(MissTracker, 'remote'):
+        RayMissTracker = ray.remote(MissTracker)
+    else:
+        RayMissTracker = MissTracker
+    return RayMissTracker.options(
         name="miss_tracker", lifetime="detached", namespace=ns, get_if_exists=True
     ).remote()
 
 def get_shared_cache():
+    # Lazy import Ray only when needed
+    import ray
     ns = _resolve_ns()
-    return SharedCache.options(
+    # Apply @ray.remote decorator to the class if not already decorated
+    if not hasattr(SharedCache, 'remote'):
+        RaySharedCache = ray.remote(SharedCache)
+    else:
+        RaySharedCache = SharedCache
+    return RaySharedCache.options(
         name="shared_cache", lifetime="detached", namespace=ns, get_if_exists=True
     ).remote()
 
 def get_mw_store():  # note: **mw**, not mv
+    # Lazy import Ray only when needed
+    import ray
     ns = _resolve_ns()
-    return MwStore.options(
+    # Apply @ray.remote decorator to the class if not already decorated
+    if not hasattr(MwStore, 'remote'):
+        RayMwStore = ray.remote(MwStore)
+    else:
+        RayMwStore = MwStore
+    return RayMwStore.options(
         name="mw", lifetime="detached", namespace=ns, get_if_exists=True
     ).remote()
 

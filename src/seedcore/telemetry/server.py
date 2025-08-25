@@ -84,6 +84,7 @@ from ..api.routers.tier0_router import router as tier0_router
 from ..api.routers.energy_router import router as energy_router
 from ..api.routers.holon_router import router as holon_router
 from ..api.routers.control_router import router as control_router
+from ..api.routers.tasks_router import router as tasks_router
 from ..config.ray_config import get_ray_config
 from ..utils.ray_utils import ensure_ray_initialized, is_ray_available
 from ..utils.ray_connector import (
@@ -384,6 +385,7 @@ app.include_router(tier0_router)
 app.include_router(energy_router)
 app.include_router(holon_router)
 app.include_router(control_router)
+app.include_router(tasks_router)
 from ..api.routers.ocps_router import router as ocps_router
 from ..api.routers.dspy_router import router as dspy_router
 app.include_router(ocps_router)
@@ -1965,6 +1967,21 @@ def run_all_loops():
         "compression_knob": compression_knob,
         "system_status": system_status()
     }
+
+# ---- Register builtin task handlers on app.state (no hairpin HTTP) ----
+# Put this after the functions are defined (run_memory_loop, run_all_loops, energy_calibrate)
+try:
+    app.state.builtin_task_handlers = {
+        "memory_loop": lambda: run_memory_loop(),
+        "run_all_loops": lambda: run_all_loops(),
+        "energy_calibrate": lambda: energy_calibrate(),
+        # Add more convenience shortcuts as needed:
+        # "energy_monitor": lambda: energy_monitor(),
+        # "energy_health": lambda: energy_health(),
+        # "two_agent_task": lambda: run_two_agent_task(),  # if desired
+    }
+except Exception as e:
+    logging.warning("Failed to register builtin task handlers: %s", e)
 
 # --- Reset Operations ---
 @app.post('/actions/reset', include_in_schema=False)
