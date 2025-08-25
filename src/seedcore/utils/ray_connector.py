@@ -1,9 +1,13 @@
 import os
 import logging
 import ray
+import asyncio
 
 # Module-level flag to ensure the connection logic runs only once per process.
 _is_connected = False
+
+# Global bootstrap lock for runtime initialization
+_bootstrap_lock = asyncio.Lock()
 
 def connect():
     """
@@ -146,3 +150,24 @@ def get_connection_info():
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+async def ensure_runtime_ready() -> bool:
+    """
+    Idempotently (re)establish Ray connection and initialize OrganismManager.
+    Safe to call from /readyz and a background task.
+    """
+    async with _bootstrap_lock:
+        try:
+            # 1) Connect to Ray if needed
+            if not is_connected():
+                connect()  # idempotent
+                if not wait_for_ray_ready(max_wait_seconds=10):
+                    return False
+
+            # 2) Initialize OrganismManager once Ray is up
+            # Note: This function doesn't have access to app.state, so it only handles Ray connection
+            # The OrganismManager initialization will be handled by the calling code
+            return True
+        except Exception:
+            logging.exception("Runtime bootstrap failed")
+            return False

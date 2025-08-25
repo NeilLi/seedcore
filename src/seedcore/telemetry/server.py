@@ -315,6 +315,44 @@ async def lifespan(app: FastAPI):
         logging.error(f"   - ❌ Failed to sync counters: {e}")
     
     logging.info("✅ FastAPI application startup complete.")
+    
+    # Keep trying in the background until we're fully ready.
+    async def _runtime_bootstrapper():
+        while True:
+            try:
+                # 1) Connect to Ray if needed
+                if not is_ray_available():
+                    connect()  # idempotent
+                    if not wait_for_ray_ready(max_wait_seconds=10):
+                        await asyncio.sleep(3)
+                        continue
+
+                # 2) Initialize OrganismManager once Ray is up
+                if getattr(app.state, "organism", None) is None:
+                    if OrganismManager is None:
+                        logging.warning("OrganismManager import unavailable, retrying in 3s...")
+                        await asyncio.sleep(3)
+                        continue
+                    try:
+                        om = OrganismManager()
+                        await om.initialize_organism()
+                        app.state.organism = om
+                        logging.info("✅ Runtime bootstrap complete (Ray + OrganismManager).")
+                        return
+                    except Exception as e:
+                        logging.warning(f"OrganismManager initialization failed: {e}, retrying in 3s...")
+                        await asyncio.sleep(3)
+                        continue
+                
+                # If we get here, everything is ready
+                logging.info("✅ Runtime bootstrap complete (Ray + OrganismManager).")
+                return
+            except Exception as e:
+                logging.warning(f"Runtime bootstrap attempt failed: {e}, retrying in 3s...")
+                await asyncio.sleep(3)
+
+    asyncio.create_task(_runtime_bootstrapper())
+    
     yield
     
     # --- SHUTDOWN LOGIC ---
@@ -371,12 +409,33 @@ def _readiness_check():
 
 @app.get("/readyz", include_in_schema=False)
 async def readyz():
+    # Try to self-heal readiness quickly
+    if not is_ray_available() or getattr(app.state, "organism", None) is None:
+        try:
+            # 1) Connect to Ray if needed
+            if not is_ray_available():
+                connect()  # idempotent
+                if not wait_for_ray_ready(max_wait_seconds=5):  # Shorter timeout for /readyz
+                    pass  # Continue with status check
+
+            # 2) Initialize OrganismManager once Ray is up
+            if getattr(app.state, "organism", None) is None and is_ray_available():
+                if OrganismManager is not None:
+                    try:
+                        om = OrganismManager()
+                        await om.initialize_organism()
+                        app.state.organism = om
+                    except Exception as e:
+                        logging.warning(f"OrganismManager initialization failed in /readyz: {e}")
+        except Exception as e:
+            logging.warning(f"Self-heal attempt in /readyz failed: {e}")
+
     ray_ok = is_ray_available()
-    organism_ok = hasattr(app.state, "organism") and app.state.organism is not None
+    organism_ok = getattr(app.state, "organism", None) is not None
     status = 200 if (ray_ok and organism_ok) else 503
     return JSONResponse(
-        {"ray_ok": ray_ok, "organism_ok": bool(organism_ok)},
-        status_code=status,
+        {"ray_ok": ray_ok, "organism_ok": organism_ok}, 
+        status_code=status
     )
 
 # Optional: HEAD variant (saves bandwidth/log noise for k8s probes)
