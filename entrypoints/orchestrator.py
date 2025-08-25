@@ -1,10 +1,48 @@
-# orchestrator.py
 import os, time, uuid, requests
+from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException
 from ray import serve
 
 ORCHESTRATOR_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10"))
-GATEWAY = os.getenv("SEEDCORE_GATEWAY", "http://127.0.0.1:8000")  # same pod
+
+def _normalize_http(url_or_host: str, default_port: int = 8000) -> str:
+    if "://" not in url_or_host:
+        return f"http://{url_or_host}:{default_port}"
+    # If someone set SERVE_GATEWAY with ray:// by mistake, coerce to http:// on same host:port
+    parsed = urlparse(url_or_host)
+    scheme = "http" if parsed.scheme in ("ray", "grpc", "grpcs") else parsed.scheme
+    netloc = parsed.netloc or parsed.path
+    return f"{scheme}://{netloc}"
+
+def _derive_serve_gateway() -> str:
+    # 1) Respect explicit SERVE_GATEWAY if provided
+    sg = os.getenv("SERVE_GATEWAY")
+    if sg:
+        return _normalize_http(sg, 8000)
+
+    # 2) Derive from RAY_ADDRESS (preferred for client pods like seedcore-api)
+    ra = os.getenv("RAY_ADDRESS")
+    if ra:
+        # Strip ray:// if present and extract host
+        hostport = ra.replace("ray://", "").split("/", 1)[0]
+        host = hostport.split(":")[0]
+        if host in ("127.0.0.1", "localhost"):
+            # inside head pod, Serve proxy is local on 8000
+            return "http://127.0.0.1:8000"
+        # Map head svc → serve svc (stable service names)
+        serve_host = host.replace("-head-svc", "-serve-svc")
+        return f"http://{serve_host}:8000"
+
+    # 3) Derive from RAY_HOST if set
+    rh = os.getenv("RAY_HOST")
+    if rh:
+        serve_host = rh.replace("-head-svc", "-serve-svc")
+        return f"http://{serve_host}:8000"
+
+    # 4) Last-resort default (your user-managed stable Serve Service)
+    return "http://seedcore-svc-serve-svc:8000"
+
+GATEWAY = _derive_serve_gateway()
 ML = f"{GATEWAY}/ml"
 COG = f"{GATEWAY}/cognitive"
 
