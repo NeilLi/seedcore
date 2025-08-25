@@ -29,7 +29,18 @@ spec:
           - name: CognitiveService
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 1
+              num_cpus: 0.4
+              num_gpus: 0
+              resources: {"head_node": 0.001}
+      
+      - name: orchestrator
+        import_path: entrypoints.orchestrator:build_orchestrator
+        route_prefix: /orchestrator
+        deployments:
+          - name: OpsOrchestrator
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 0.2
               num_gpus: 0
               resources: {"head_node": 0.001}
       
