@@ -1,10 +1,20 @@
 -- Migration: Create tasks table for Coordinator + Dispatcher system
 -- This table stores tasks that will be processed by the Dispatcher actors
 
+-- Create the taskstatus enum type
+CREATE TYPE taskstatus AS ENUM (
+    'created',
+    'queued', 
+    'running',
+    'completed',
+    'failed',
+    'cancelled'
+);
+
 -- Create tasks table
 CREATE TABLE IF NOT EXISTS tasks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    status TEXT NOT NULL DEFAULT 'QUEUED' CHECK (status IN ('QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'RETRY')),
+    status taskstatus NOT NULL DEFAULT 'created',
     attempts INTEGER NOT NULL DEFAULT 0,
     locked_by TEXT NULL,
     locked_at TIMESTAMP WITH TIME ZONE NULL,
@@ -30,7 +40,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_domain ON tasks(domain);
 
 -- Create composite index for the claim query
 CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks(status, run_after, created_at) 
-WHERE status IN ('QUEUED', 'RETRY');
+WHERE status IN ('queued', 'failed');
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_tasks_updated_at()

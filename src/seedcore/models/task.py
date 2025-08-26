@@ -3,7 +3,7 @@ Task database model for SeedCore.
 """
 
 import uuid
-from sqlalchemy import String, DateTime, JSON, Float, Enum as SQLAlchemyEnum
+from sqlalchemy import String, DateTime, JSON, Float, Enum as SQLAlchemyEnum, Integer
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
@@ -35,8 +35,12 @@ class Task(Base):
     
     # State and results
     status: Mapped[TaskStatus] = mapped_column(
-        SQLAlchemyEnum(TaskStatus), nullable=False, default=TaskStatus.CREATED
+        SQLAlchemyEnum(TaskStatus, values_callable=lambda obj: [e.value for e in obj]), nullable=False, default=TaskStatus.CREATED
     )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_by: Mapped[str] = mapped_column(String, nullable=True)
+    locked_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=True)
+    run_after: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=True)
     result: Mapped[dict] = mapped_column(JSON, nullable=True)
     error: Mapped[str] = mapped_column(String, nullable=True)
     
