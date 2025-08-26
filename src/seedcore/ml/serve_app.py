@@ -27,6 +27,8 @@ import ray
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from ray import serve
 
+from src.seedcore.utils.ray_utils import get_serve_urls
+
 # ---------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------
@@ -894,69 +896,32 @@ def create_serve_app(args: Dict[str, Any]):
 
 
 # ---------------------------------------------------------------------
-# Salience client with circuit breaker (unchanged)
+# Salience client using ray_utils constants
 # ---------------------------------------------------------------------
 class SalienceServiceClient:
-    def __init__(self, base_url: str | None = None):
+    def __init__(self, base_url: str | None = None, base_path: str | None = None):
         import httpx
-
-        if base_url is None:
-            base_url = os.getenv("RAY_SERVE_ADDRESS", "localhost:8000")
-            if not base_url.startswith("http"):
-                base_url = f"http://{base_url}"
-        self.base_url = base_url
-        self.salience_endpoint = f"{self.base_url}/score/salience"
-
-        self.circuit_breaker_threshold = 5
-        self.circuit_breaker_timeout = 60
-        self.fallback_enabled = True
-
-        self.failure_count = 0
-        self.last_failure_time = 0.0
-        self._circuit_open = False
-
+        urls = get_serve_urls(base_gateway=base_url, ml_base=base_path)
+        self.base_url = urls["gateway"]
+        self.salience_endpoint = urls["ml_salience"]
+        self.health_endpoint = urls["ml_health"]
         self.client = httpx.Client(timeout=10.0)
 
     def score_salience(self, features: List[Dict[str, Any]]) -> List[float]:
-        if self._is_circuit_open():
-            logger.warning("Circuit breaker is open, using fallback scoring")
-            return self._simple_fallback(features)
         try:
             resp = self.client.post(self.salience_endpoint, json={"features": features}, headers={"Content-Type": "application/json"})
             if resp.status_code == 200:
-                self.failure_count = 0
                 return resp.json().get("scores", [])
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
         except Exception as e:
             logger.error(f"Salience scoring failed: {e}")
-            self.failure_count += 1
-            if self.failure_count >= self.circuit_breaker_threshold:
-                self._open_circuit()
-            return self._simple_fallback(features) if self.fallback_enabled else (_ for _ in ()).throw(e)
+            return self._simple_fallback(features)
 
     def _simple_fallback(self, features: List[Dict[str, Any]]) -> List[float]:
         out = []
         for f in features:
             out.append(float(f.get("task_risk", 0.5)) * float(f.get("failure_severity", 0.5)))
         return out
-
-    def _is_circuit_open(self) -> bool:
-        if not self._circuit_open:
-            return False
-        if time.time() - self.last_failure_time > self.circuit_breaker_timeout:
-            self._close_circuit()
-            return False
-        return True
-
-    def _open_circuit(self):
-        self._circuit_open = True
-        self.last_failure_time = time.time()
-        logger.warning(f"Circuit breaker opened after {self.failure_count} failures")
-
-    def _close_circuit(self):
-        self._circuit_open = False
-        self.failure_count = 0
-        logger.info("Circuit breaker closed")
 
 
 # ---------------------------------------------------------------------
