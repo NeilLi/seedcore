@@ -40,15 +40,15 @@ from ..control.slow_loop import slow_loop_update_roles, slow_loop_update_roles_s
 from ..control.mem_loop import adaptive_mem_update, estimate_memory_gradient, get_memory_metrics
 from ..organs.base import Organ
 from ..organs.registry import OrganRegistry
-# Safe import to avoid shadowing issues in organs.__init__.py
-from importlib import import_module
+# REMOVED: Safe import to avoid shadowing issues in organs.__init__.py
+# from importlib import import_module
 
-try:
-    om_mod = import_module("src.seedcore.organs.organism_manager")  # explicit submodule
-    OrganismManager = getattr(om_mod, "OrganismManager")
-except Exception as e:
-    logging.critical("❌ Cannot import OrganismManager: %s", e)
-    OrganismManager = None  # type: ignore
+# try:
+#     om_mod = import_module("src.seedcore.organs.organism_manager")  # explicit submodule
+#     OrganismManager = getattr(om_mod, "OrganismManager")
+# except Exception as e:
+#     logging.critical("❌ Cannot import OrganismManager: %s", e)
+#     OrganismManager = None  # type: ignore
 
 from ..agents.base import Agent
 from ..agents import RayAgent
@@ -115,9 +115,9 @@ SIMULATION_REGISTRY = OrganRegistry()
 PAIR_TRACKER = PairStatsTracker()
 MEMORY_SYSTEM = SharedMemorySystem()  # Persistent memory system
 
-# Note: Organ and agent creation is now handled by the OrganismManager
+# Note: Organ and agent creation is now handled by the Coordinator actor
 # during startup. The old manual creation code has been removed.
-print("Organism initialization will be handled by OrganismManager during startup.")
+print("Organism initialization will be handled by the Coordinator actor during startup.")
 
 # Global compression knob for memory control
 compression_knob = 0.5
@@ -201,24 +201,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.critical(f"   - ❌ Ray connection failed: {e}. Some features will be disabled.")
 
-    # 2. Initialize critical components that depend on Ray.
-    if ray_ready:
-        logging.info("   - Step 2: Initializing OrganismManager...")
-        try:
-            if OrganismManager is None:
-                raise ImportError(
-                    "organs.organism_manager not importable (shadowed by package attr?). "
-                    "Ensure src/seedcore/organs/__init__.py does NOT define 'organism_manager'."
-                )
-            om = OrganismManager()
-            await om.initialize_organism()
-            app.state.organism = om              # store ONLY on app.state
-            logging.info("   - ✅ OrganismManager initialized.")
-        except Exception as e:
-            logging.error("   - ❌ Failed to initialize COA organism: %s", e, exc_info=True)
-    else:
-        logging.warning("   - ⚠️ Skipping OrganismManager initialization due to Ray connection issues")
-        
+    # 2. REMOVED: Initialize OrganismManager locally - this is now handled by the Coordinator actor
+    # The API should not bootstrap or hold a live OrganismManager
+    logging.info("   - Step 2: Skipping local OrganismManager initialization (handled by Coordinator actor)")
+    
     # 3. Initialize memory system
     logging.info("   - Step 3: Initializing Memory System...")
     try:
@@ -329,26 +315,11 @@ async def lifespan(app: FastAPI):
                         await asyncio.sleep(3)
                         continue
 
-                # 2) Initialize OrganismManager once Ray is up
-                if getattr(app.state, "organism", None) is None:
-                    if OrganismManager is None:
-                        logging.warning("OrganismManager import unavailable, retrying in 3s...")
-                        await asyncio.sleep(3)
-                        continue
-                    try:
-                        om = OrganismManager()
-                        await om.initialize_organism()
-                        app.state.organism = om
-                        logging.info("✅ Runtime bootstrap complete (Ray + OrganismManager).")
-                        return
-                    except Exception as e:
-                        logging.warning(f"OrganismManager initialization failed: {e}, retrying in 3s...")
-                        await asyncio.sleep(3)
-                        continue
-                
-                # If we get here, everything is ready
-                logging.info("✅ Runtime bootstrap complete (Ray + OrganismManager).")
+                # 2) REMOVED: Initialize OrganismManager locally - this is now handled by the Coordinator actor
+                # The API should not bootstrap or hold a live OrganismManager
+                logging.info("✅ Runtime bootstrap complete (Ray connection established).")
                 return
+                
             except Exception as e:
                 logging.warning(f"Runtime bootstrap attempt failed: {e}, retrying in 3s...")
                 await asyncio.sleep(3)
@@ -399,46 +370,29 @@ def _readiness_check():
     if not is_ray_available():
         reasons.append("ray:not_connected")
 
-    # 2) OrganismManager must be initialized and attached to app.state
-    om = getattr(app.state, "organism", None)
-    if om is None:
-        reasons.append("organism_manager:not_initialized")
-    else:
-        # If your OrganismManager exposes a flag, check it (safe no-op if absent)
-        initialized = getattr(om, "initialized", True)
-        if isinstance(initialized, bool) and not initialized:
-            reasons.append("organism_manager:initialized_false")
+    # 2) REMOVED: OrganismManager check - this is now handled by the Coordinator actor
+    # The API should not bootstrap or hold a live OrganismManager
 
     return reasons
 
 @app.get("/readyz", include_in_schema=False)
 async def readyz():
     # Try to self-heal readiness quickly
-    if not is_ray_available() or getattr(app.state, "organism", None) is None:
+    if not is_ray_available():
         try:
             # 1) Connect to Ray if needed
             if not is_ray_available():
                 connect()  # idempotent
                 if not wait_for_ray_ready(max_wait_seconds=5):  # Shorter timeout for /readyz
                     pass  # Continue with status check
-
-            # 2) Initialize OrganismManager once Ray is up
-            if getattr(app.state, "organism", None) is None and is_ray_available():
-                if OrganismManager is not None:
-                    try:
-                        om = OrganismManager()
-                        await om.initialize_organism()
-                        app.state.organism = om
-                    except Exception as e:
-                        logging.warning(f"OrganismManager initialization failed in /readyz: {e}")
         except Exception as e:
             logging.warning(f"Self-heal attempt in /readyz failed: {e}")
 
     ray_ok = is_ray_available()
-    organism_ok = getattr(app.state, "organism", None) is not None
-    status = 200 if (ray_ok and organism_ok) else 503
+    # REMOVED: organism_ok check - this is now handled by the Coordinator actor
+    status = 200 if ray_ok else 503
     return JSONResponse(
-        {"ray_ok": ray_ok, "organism_ok": organism_ok}, 
+        {"ray_ok": ray_ok, "organism_ok": "coordinator_managed"}, 
         status_code=status
     )
 
@@ -447,6 +401,50 @@ async def readyz():
 async def readyz_head():
     reasons = _readiness_check()
     return JSONResponse(status_code=200 if not reasons else 503, content=None)
+
+# --- NEW: Coordinator Proxy Functions ---
+async def get_coordinator_actor():
+    """Get the detached Coordinator actor that manages the OrganismManager."""
+    try:
+        # Use the correct namespace from environment variables
+        ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+        coord = ray.get_actor("seedcore_coordinator", namespace=ray_namespace)
+        return coord
+    except Exception as e:
+        logging.warning(f"Could not get Coordinator actor: {e}")
+        return None
+
+async def submit_task_to_coordinator(task: dict):
+    """Submit a task to the Coordinator actor for processing."""
+    coord = await get_coordinator_actor()
+    if not coord:
+        raise HTTPException(status_code=503, detail="Coordinator actor not available")
+    
+    try:
+        # The Coordinator.handle() method expects the task dict and returns the result directly
+        result = await coord.handle.remote(task)
+        return result
+    except Exception as e:
+        logging.error(f"Task submission to Coordinator failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Task processing failed: {str(e)}")
+
+async def check_coordinator_health():
+    """Check if the Coordinator actor is alive and responsive."""
+    try:
+        coord = await get_coordinator_actor()
+        if not coord:
+            return {"status": "degraded", "coordinator": "unavailable"}
+        
+        # Test coordinator with a ping - use async await instead of ray.get()
+        ping_ref = coord.ping.remote()
+        ping_result = await ping_ref
+        if ping_result == "pong":
+            return {"status": "ok", "coordinator": "healthy"}
+        else:
+            return {"status": "degraded", "coordinator": "unresponsive"}
+    except Exception as e:
+        logging.warning(f"Coordinator health check failed: {e}")
+        return {"status": "degraded", "coordinator": "error"}
 
 # --- Unified State Builder ---
 def _get_tier0_manager():
@@ -2691,6 +2689,18 @@ async def list_dead_actors(prefix: str = None):
         }
     except Exception as e:
         return {"error": str(e)}
+
+# --- NEW: Coordinator Health Endpoint ---
+@app.get("/coordinator/health")
+async def coordinator_health():
+    """Check the health of the Coordinator actor that manages the OrganismManager."""
+    return await check_coordinator_health()
+
+# --- NEW: Task Submission Endpoint ---
+@app.post("/coordinator/submit")
+async def submit_task_to_coordinator_endpoint(task: Dict[str, Any]):
+    """Submit a task directly to the Coordinator actor for processing."""
+    return await submit_task_to_coordinator(task)
 
 
 

@@ -801,7 +801,83 @@ class OrganismManager:
                     logger.exception("Builtin task '%s' failed", ttype)
                     return {"success": False, "path": "builtin", "p_fast": self.ocps.p_fast, "error": str(e)}
 
-        # 2) Default: COA routing
+        # 2) NEW: API Router Task Handlers (for Coordinator calls)
+        if ttype == "get_organism_status":
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                status = await self.get_organism_status()
+                return {"success": True, "path": "api_handler", "p_fast": self.ocps.p_fast, "result": status}
+            except Exception as e:
+                return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
+
+        elif ttype == "execute_on_organ":
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                params = task.get("params", {})
+                organ_id = params.get("organ_id")
+                task_data = params.get("task_data", {})
+                if not organ_id:
+                    return {"success": False, "error": "organ_id is required"}
+                result = await self.execute_task_on_organ(organ_id, task_data)
+                return {"success": True, "path": "api_handler", "p_fast": self.ocps.p_fast, "result": result}
+            except Exception as e:
+                return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
+
+        elif ttype == "execute_on_random_organ":
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                params = task.get("params", {})
+                task_data = params.get("task_data", {})
+                result = await self.execute_task_on_random_organ(task_data)
+                return {"success": True, "path": "api_handler", "p_fast": self.ocps.p_fast, "result": result}
+            except Exception as e:
+                return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
+
+        elif ttype == "get_organism_summary":
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                summary = {
+                    "initialized": self.is_initialized(),
+                    "organ_count": self.get_organ_count(),
+                    "total_agent_count": self.get_total_agent_count(),
+                    "organs": {}
+                }
+                # Get detailed organ info via Ray actor handles
+                for organ_id in self.organs.keys():
+                    organ_handle = self.get_organ_handle(organ_id)
+                    if organ_handle:
+                        try:
+                            status = ray.get(organ_handle.get_status.remote())
+                            summary["organs"][organ_id] = status
+                        except Exception as e:
+                            summary["organs"][organ_id] = {"error": str(e)}
+                return {"success": True, "path": "api_handler", "p_fast": self.ocps.p_fast, "result": summary}
+            except Exception as e:
+                return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
+
+        elif ttype == "initialize_organism":
+            try:
+                if self._initialized:
+                    return {"success": True, "path": "api_handler", "p_fast": self.ocps.p_fast, "result": "Organism already initialized"}
+                await self.initialize_organism()
+                return {"success": True, "path": "api_handler", "p_fast": self.ocps.p_fast, "result": "Organism initialized successfully"}
+            except Exception as e:
+                return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
+
+        elif ttype == "shutdown_organism":
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                self.shutdown_organism()
+                return {"success": True, "path": "api_handler", "p_fast": self.ocps.p_fast, "result": "Organism shutdown successfully"}
+            except Exception as e:
+                return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
+
+        # 3) Default: COA routing
         try:
             routed = await self.route_and_execute(task)
             routed.setdefault("path", "fast" if routed.get("path") == "fast" else "hgnn")

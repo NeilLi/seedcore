@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seedcore-bootstrap-dispatchers
+  namespace: seedcore-dev
+  labels:
+    app: seedcore
+    component: bootstrap
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: seedcore
+        component: bootstrap
+    spec:
+      serviceAccountName: seedcore-service-account
+      restartPolicy: Never
+      containers:
+      - name: bootstrap-dispatchers
+        image: seedcore-api:kind   # same image used by Ray pods
+        imagePullPolicy: IfNotPresent
+        command: ["python", "/app/scripts/bootstrap_dispatchers.py"]
+        env:
+        - name: RAY_ADDRESS
+          value: "ray://seedcore-svc-head-svc:10001"
+        - name: RAY_NAMESPACE
+          value: "seedcore-dev"
+        - name: SEEDCORE_NS
+          value: "seedcore-dev"
+        - name: SEEDCORE_PG_DSN
+          value: "postgresql://postgres:postgres@postgresql.seedcore-dev.svc.cluster.local:5432/seedcore"
+        - name: SEEDCORE_DISPATCHERS
+          value: "2"
+        - name: EXIT_AFTER_BOOTSTRAP
+          value: "true"     # script will exit when done
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+        volumeMounts:
+        - name: project-source-volume
+          mountPath: /app
+
+      volumes:
+      - name: project-source-volume
+        hostPath:
+          path: /project
+          type: DirectoryOrCreate
+
+---
+
+
