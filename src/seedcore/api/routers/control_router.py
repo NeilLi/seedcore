@@ -56,14 +56,35 @@ async def list_facts(
     result = await session.execute(final_query)
     facts = result.scalars().all()
     
-    return {"total": total, "items": [fact.to_dict() for fact in facts]}
+    # Convert facts to dictionaries manually to avoid lazy loading issues
+    fact_items = []
+    for fact in facts:
+        fact_items.append({
+            "id": str(fact.id),
+            "text": fact.text,
+            "tags": fact.tags,
+            "meta_data": fact.meta_data,
+            "created_at": fact.created_at.isoformat() if fact.created_at else None,
+            "updated_at": fact.updated_at.isoformat() if fact.updated_at else None
+        })
+    
+    return {"total": total, "items": fact_items}
 
 @router.get("/facts/{fact_id}", response_model=Dict[str, Any])
 async def get_fact(fact_id: uuid.UUID, session: AsyncSession = Depends(get_async_pg_session)):
     fact = await session.get(Fact, fact_id)
     if not fact:
         raise HTTPException(status_code=404, detail=f"Fact '{fact_id}' not found")
-    return fact.to_dict()
+    
+    # Return the fact data - timestamps should be loaded since we're querying by ID
+    return {
+        "id": str(fact.id),
+        "text": fact.text,
+        "tags": fact.tags,
+        "meta_data": fact.meta_data,
+        "created_at": fact.created_at.isoformat() if fact.created_at else None,
+        "updated_at": fact.updated_at.isoformat() if fact.updated_at else None
+    }
 
 @router.post("/facts", response_model=Dict[str, Any])
 async def create_fact(payload: FactCreate, session: AsyncSession = Depends(get_async_pg_session)):
@@ -74,8 +95,21 @@ async def create_fact(payload: FactCreate, session: AsyncSession = Depends(get_a
     )
     session.add(new_fact)
     await session.commit()
-    await session.refresh(new_fact)
-    return new_fact.to_dict()
+    
+    # Get the fact with fresh data from database to avoid lazy loading issues
+    # Use a new query to get the complete fact data
+    result = await session.execute(select(Fact).where(Fact.id == new_fact.id))
+    fresh_fact = result.scalar_one()
+    
+    # Return the fact data using the fresh fact object
+    return {
+        "id": str(fresh_fact.id),
+        "text": fresh_fact.text,
+        "tags": fresh_fact.tags,
+        "meta_data": fresh_fact.meta_data,
+        "created_at": fresh_fact.created_at.isoformat() if fresh_fact.created_at else None,
+        "updated_at": fresh_fact.updated_at.isoformat() if fresh_fact.updated_at else None
+    }
 
 @router.patch("/facts/{fact_id}", response_model=Dict[str, Any])
 async def patch_fact(fact_id: uuid.UUID, patch: FactPatch, session: AsyncSession = Depends(get_async_pg_session)):
@@ -88,8 +122,21 @@ async def patch_fact(fact_id: uuid.UUID, patch: FactPatch, session: AsyncSession
         setattr(fact, key, value)
         
     await session.commit()
-    await session.refresh(fact)
-    return fact.to_dict()
+    
+    # Get the fact with fresh data from database to avoid lazy loading issues
+    # Use a new query to get the complete fact data
+    result = await session.execute(select(Fact).where(Fact.id == fact_id))
+    fresh_fact = result.scalar_one()
+    
+    # Return the fact data using the fresh fact object
+    return {
+        "id": str(fresh_fact.id),
+        "text": fresh_fact.text,
+        "tags": fresh_fact.tags,
+        "meta_data": fresh_fact.meta_data,
+        "created_at": fresh_fact.created_at.isoformat() if fresh_fact.created_at else None,
+        "updated_at": fresh_fact.updated_at.isoformat() if fresh_fact.updated_at else None
+    }
 
 @router.delete("/facts/{fact_id}", response_model=Dict[str, Any])
 async def delete_fact(fact_id: uuid.UUID, session: AsyncSession = Depends(get_async_pg_session)):

@@ -27,4 +27,18 @@ class Fact(Base):
 
     def to_dict(self):
         """Convert the fact to a dictionary representation."""
-        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+        result = {}
+        # Use SQLAlchemy's state directly to avoid lazy loading
+        state = self.__dict__
+        for c in self.__table__.columns:
+            if c.name in state:
+                value = state[c.name]
+                # Handle special cases like enums
+                if hasattr(value, 'value'):
+                    result[c.name] = value.value
+                else:
+                    result[c.name] = value
+            else:
+                # For unloaded attributes, set to None to avoid lazy loading
+                result[c.name] = None
+        return result

@@ -42,6 +42,10 @@ async def lifespan(app: FastAPI):
     await init_db()
     print("✅ Database initialized.")
 
+    # Initialize app state
+    app.state.task_queue = asyncio.Queue()
+    print("✅ App state initialized.")
+
     # Start the single background task worker
     print("🚀 Starting task worker...")
     worker_task = asyncio.create_task(_task_worker(app.state))
