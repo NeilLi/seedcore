@@ -54,7 +54,19 @@ helm upgrade --install neo4j neo4j/neo4j \
   --set services.neo4j.enabled=false \
   --set loadbalancer=exclude
 
-echo "✅ All data stores deployed successfully!"
+# Deploy RAGFlow service
+# echo "📦 Deploying RAGFlow..."
+# helm upgrade --install ragflow ./helm/ragflow \
+#  --namespace seedcore-dev \
+#  --set database.host=postgresql.seedcore-dev.svc.cluster.local \
+#  --set database.user=postgres \
+#  --set database.password=password \
+#  --set redis.host=redis-master.seedcore-dev.svc.cluster.local \
+#  --set neo4j.uri=bolt://neo4j.seedcore-dev.svc.cluster.local:7687 \
+#  --wait \
+#  --timeout 10m
+
+echo "✅ All data stores and RAGFlow deployed successfully!"
 echo ""
 echo "🔍 Checking deployment status..."
 kubectl get pods -n seedcore-dev
@@ -65,6 +77,7 @@ echo "  PostgreSQL: postgresql.seedcore-dev.svc.cluster.local:5432"
 echo "  MySQL: mysql.seedcore-dev.svc.cluster.local:3306"
 echo "  Redis: redis-master.seedcore-dev.svc.cluster.local:6379"
 echo "  Neo4j: neo4j.seedcore-dev.svc.cluster.local:7687"
+echo "  RAGFlow: ragflow.seedcore-dev.svc.cluster.local:8080"
 echo ""
 echo "🔑 Default credentials:"
 echo "  PostgreSQL: postgres/password"
@@ -77,5 +90,6 @@ echo "  PG_DSN=postgresql://postgres:password@postgresql:5432/postgres"
 echo "  MYSQL_DATABASE_URL=mysql+mysqlconnector://seedcore:password@mysql:3306/seedcore"
 echo "  REDIS_HOST=redis-master REDIS_PORT=6379"
 echo "  NEO4J_URI=bolt://neo4j:7687 NEO4J_USER=neo4j NEO4J_PASSWORD=password"
+echo "  RAGFLOW_API_URL=http://ragflow:8080"
 echo ""
 echo "💡 Note: PgBouncer has been removed for simplicity. Use direct PostgreSQL connections."

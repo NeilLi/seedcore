@@ -1,0 +1,127 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ragflow.fullname" . }}
+  labels:
+    {{- include "ragflow.labels" . | nindent 4 }}
+spec:
+  {{- if not (.Values.autoscaling.enabled | default false) }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "ragflow.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ragflow.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            # Database configuration
+            - name: DATABASE_HOST
+              value: {{ .Values.database.host }}
+            - name: DATABASE_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: DATABASE_NAME
+              value: {{ .Values.database.name }}
+            - name: DATABASE_USER
+              value: {{ .Values.database.user }}
+            - name: DATABASE_PASSWORD
+              value: {{ .Values.database.password }}
+            - name: DATABASE_SSL_MODE
+              value: {{ .Values.database.sslMode }}
+            
+            # Redis configuration
+            - name: REDIS_HOST
+              value: {{ .Values.redis.host }}
+            - name: REDIS_PORT
+              value: {{ .Values.redis.port | quote }}
+            - name: REDIS_PASSWORD
+              value: {{ .Values.redis.password }}
+            - name: REDIS_DB
+              value: {{ .Values.redis.db | quote }}
+            
+            # Neo4j configuration
+            - name: NEO4J_URI
+              value: {{ .Values.neo4j.uri }}
+            - name: NEO4J_USER
+              value: {{ .Values.neo4j.user }}
+            - name: NEO4J_PASSWORD
+              value: {{ .Values.neo4j.password }}
+            - name: NEO4J_DATABASE
+              value: {{ .Values.neo4j.database }}
+            
+            # RAGFlow API configuration
+            - name: RAGFLOW_API_HOST
+              value: {{ .Values.ragflow.api.host }}
+            - name: RAGFLOW_API_PORT
+              value: {{ .Values.ragflow.api.port | quote }}
+            - name: RAGFLOW_API_WORKERS
+              value: {{ .Values.ragflow.api.workers | quote }}
+            
+            # Document processing
+            - name: RAGFLOW_DOC_MAX_SIZE
+              value: {{ .Values.ragflow.document.maxFileSize }}
+            - name: RAGFLOW_DOC_FORMATS
+              value: {{ join "," .Values.ragflow.document.supportedFormats }}
+            
+            # Vector search
+            - name: RAGFLOW_VECTOR_DIMENSION
+              value: {{ .Values.ragflow.vector.dimension | quote }}
+            - name: RAGFLOW_VECTOR_METRIC
+              value: {{ .Values.ragflow.vector.metric }}
+            - name: RAGFLOW_VECTOR_INDEX_TYPE
+              value: {{ .Values.ragflow.vector.indexType }}
+            
+            # LLM configuration
+            - name: RAGFLOW_LLM_PROVIDER
+              value: {{ .Values.ragflow.llm.provider }}
+            - name: RAGFLOW_LLM_MODEL
+              value: {{ .Values.ragflow.llm.model }}
+            - name: RAGFLOW_LLM_TEMPERATURE
+              value: {{ .Values.ragflow.llm.temperature | quote }}
+            - name: RAGFLOW_LLM_MAX_TOKENS
+              value: {{ .Values.ragflow.llm.maxTokens | quote }}
+            
+            # Embedding configuration
+            - name: RAGFLOW_EMBEDDING_PROVIDER
+              value: {{ .Values.ragflow.embedding.provider }}
+            - name: RAGFLOW_EMBEDDING_MODEL
+              value: {{ .Values.ragflow.embedding.model }}
+            - name: RAGFLOW_EMBEDDING_BATCH_SIZE
+              value: {{ .Values.ragflow.embedding.batchSize | quote }}
+            
+            # Additional environment variables
+            {{- if .Values.env }}
+            {{- range .Values.env }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+            {{- end }}
+          
+          {{- if .Values.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          {{- end }}
+      
+      {{- if .Values.persistence.enabled }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "ragflow.fullname" . }}-data
+      {{- end }}

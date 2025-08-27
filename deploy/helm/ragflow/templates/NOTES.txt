@@ -1,0 +1,29 @@
+🎯 RAGFlow has been deployed successfully!
+
+📋 Service Information:
+  - Service: {{ include "ragflow.fullname" . }}
+  - Namespace: {{ .Release.Namespace }}
+  - Port: {{ .Values.service.port }}
+
+🌐 Access Information:
+  - Internal: {{ include "ragflow.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+  - External: Use kubectl port-forward or create an Ingress
+
+🔗 Integration Points:
+  - PostgreSQL (pgvector): {{ .Values.database.host }}:{{ .Values.database.port }}
+  - Redis: {{ .Values.redis.host }}:{{ .Values.redis.port }}
+  - Neo4j: {{ .Values.neo4j.uri }}
+
+📊 Health Checks:
+  - Liveness: /health
+  - Readiness: /ready
+
+💡 Next Steps:
+  1. Verify deployment: kubectl get pods -n {{ .Release.Namespace }}
+  2. Check logs: kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "ragflow.name" . }}
+  3. Test API: kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "ragflow.fullname" . }} 8080:8080
+
+🔧 Configuration:
+  - Vector dimension: {{ .Values.ragflow.vector.dimension }}
+  - LLM provider: {{ .Values.ragflow.llm.provider }}
+  - Embedding model: {{ .Values.ragflow.embedding.model }}
