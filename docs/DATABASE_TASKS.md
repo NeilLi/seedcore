@@ -76,12 +76,12 @@ CREATE TABLE facts (
 
 ### Task Status Enum
 
-- `CREATED`: Task has been created but not queued
-- `QUEUED`: Task is in the execution queue
-- `RUNNING`: Task is currently being executed
-- `COMPLETED`: Task completed successfully
-- `FAILED`: Task failed during execution
-- `CANCELLED`: Task was cancelled
+- `created`: Task has been created but not queued
+- `queued`: Task is in the execution queue
+- `running`: Task is currently being executed
+- `completed`: Task completed successfully
+- `failed`: Task failed during execution
+- `cancelled`: Task was cancelled
 
 ## Setup Instructions
 

@@ -73,11 +73,13 @@ spec:
         spec:
           containers:
           - name: ray-head
-            image: seedcore-serve:latest
+            image: seedcore:latest
             imagePullPolicy: IfNotPresent
             envFrom:
             - secretRef: { name: seedcore-env-secret }
             env:
+            - name: DGL_GRAPHBOLT_SKIP
+              value: "0"
             - name: RAY_OVERRIDE_RESOURCES
               value: '{"head_node": 1}'
             - name: RAY_NAMESPACE
@@ -150,11 +152,13 @@ spec:
         spec:
           containers:
           - name: ray-worker
-            image: seedcore-serve:latest
+            image: seedcore:latest
             imagePullPolicy: IfNotPresent
             envFrom:
             - secretRef: { name: seedcore-env-secret }
             env:
+            - name: DGL_GRAPHBOLT_SKIP
+              value: "0"
             - name: RAY_NAMESPACE
               value: "seedcore-dev"
             - name: SEEDCORE_NS

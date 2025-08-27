@@ -36,7 +36,7 @@ async def test_task_model():
         # Verify required fields
         assert "id" in task_dict, "Task should have an ID"
         assert task_dict["type"] == "test_task", "Task type should match"
-        assert task_dict["status"] == TaskStatus.CREATED, "Default status should be CREATED"
+        assert task_dict["status"] == TaskStatus.CREATED.value, "Default status should be created"
         assert task_dict["params"]["param1"] == "value1", "Params should be preserved"
         
         print("✅ Task model test passed!")

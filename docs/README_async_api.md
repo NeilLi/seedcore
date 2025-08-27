@@ -68,13 +68,13 @@ This approach makes the service more robust and provides better user experience.
     "jobs": [
         {
             "job_id": "tune-a1b2c3d4",
-            "status": "COMPLETED",
+            "status": "completed",
             "progress": "Tuning sweep completed successfully",
             "submitted_at": "2024-01-15 10:30:45"
         },
         {
             "job_id": "tune-e5f6g7h8",
-            "status": "RUNNING",
+            "status": "running",
             "progress": "Starting tuning sweep...",
             "submitted_at": "2024-01-15 10:35:22"
         }
@@ -113,11 +113,11 @@ def run_async_tuning():
         
         print(f"Status: {status['status']} - {status['progress']}")
         
-        if status['status'] == 'COMPLETED':
+        if status['status'] == 'completed':
             result = status['result']
             print(f"Tuning completed! Best AUC: {result['best_trial']['auc']:.4f}")
             break
-        elif status['status'] == 'FAILED':
+        elif status['status'] == 'failed':
             print(f"Tuning failed: {status['result']['error']}")
             break
         

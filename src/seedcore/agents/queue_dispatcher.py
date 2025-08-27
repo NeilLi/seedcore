@@ -29,14 +29,14 @@ CLAIM_BATCH_SQL = f"""
 WITH c AS (
   SELECT id
   FROM tasks
-  WHERE status IN ('QUEUED','RETRY')
+  WHERE status IN ('queued','retry')
     AND (run_after IS NULL OR run_after <= NOW())
   ORDER BY created_at
   FOR UPDATE SKIP LOCKED
   LIMIT $1
 )
 UPDATE tasks t
-SET status='RUNNING',
+SET status='running',
     locked_by=$2,
     locked_at=NOW(),
     attempts = t.attempts + 1
@@ -47,19 +47,19 @@ RETURNING t.id, t.type, t.description, t.params, t.domain, t.drift_score, t.atte
 
 COMPLETE_SQL = """
 UPDATE tasks
-SET status='COMPLETED', result=$1, error=NULL, updated_at=NOW()
+SET status='completed', result=$1, error=NULL, updated_at=NOW()
 WHERE id=$2
 """
 
 FAIL_SQL = """
 UPDATE tasks
-SET status='FAILED', error=$1, updated_at=NOW()
+SET status='failed', error=$1, updated_at=NOW()
 WHERE id=$2
 """
 
 RETRY_SQL = """
 UPDATE tasks
-SET status='RETRY',
+SET status='retry',
     error=$1,
     run_after = NOW() + ($2 || ' seconds')::interval,
     updated_at=NOW()
@@ -68,12 +68,12 @@ WHERE id=$3
 
 REAP_STUCK_SQL = f"""
 UPDATE tasks
-SET status='RETRY',
+SET status='retry',
     run_after = NOW(),          -- requeue immediately; you can add backoff here if you want
     locked_by = NULL,
     locked_at = NULL,
     updated_at = NOW()
-WHERE status='RUNNING'
+WHERE status='running'
   AND locked_at < NOW() - INTERVAL '{LEASE_SECONDS} seconds'
 RETURNING id
 """

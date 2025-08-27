@@ -19,6 +19,7 @@ class TaskStatus(enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    RETRY = "retry"
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -35,7 +36,8 @@ class Task(Base):
     
     # State and results
     status: Mapped[TaskStatus] = mapped_column(
-        SQLAlchemyEnum(TaskStatus, values_callable=lambda obj: [e.value for e in obj]), nullable=False, default=TaskStatus.CREATED
+        SQLAlchemyEnum(TaskStatus, values_callable=lambda obj: [e.value for e in obj]), 
+        nullable=False, default=TaskStatus.CREATED
     )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_by: Mapped[str] = mapped_column(String, nullable=True)

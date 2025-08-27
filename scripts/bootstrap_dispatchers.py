@@ -17,6 +17,7 @@ sys.path.insert(0, str(src_path))
 # Import Ray utilities instead of direct ray.init()
 from seedcore.utils.ray_utils import ensure_ray_initialized, is_ray_available, get_ray_cluster_info
 from seedcore.agents.queue_dispatcher import Coordinator, Dispatcher
+from seedcore.agents.graph_dispatcher import GraphDispatcher
 
 # --- add right after imports, before logger = logging.getLogger(...) ---
 import traceback
@@ -164,9 +165,33 @@ def main():
         except Exception:
             logger.exception("⚠️ Dispatcher run loop failed to start")
     
+    # Start GraphDispatcher(s)
+    try:
+        from seedcore.agents.graph_dispatcher import GraphDispatcher
+        
+        graph_dispatcher_count = int(os.getenv("SEEDCORE_GRAPH_DISPATCHERS", "1"))
+        for i in range(graph_dispatcher_count):
+            gname = f"seedcore_graph_dispatcher_{i}"
+            try:
+                _ = ray.get_actor(gname, namespace=ns)
+                logger.info(f"✅ GraphDispatcher {gname} already exists")
+            except Exception:
+                logger.info(f"🚀 Creating GraphDispatcher {gname}...")
+                GraphDispatcher.options(
+                    name=gname,
+                    lifetime="detached",
+                    namespace=ns,
+                    num_cpus=0.2,
+                    resources={"head_node": 0.001}
+                ).remote(dsn=dsn, name=gname)
+                logger.info(f"✅ GraphDispatcher {gname} created successfully")
+    except Exception as e:
+        logger.exception("⚠️ GraphDispatcher creation failed (will continue): %s", e)
+    
     logger.info("✅ Bootstrap complete!")
     logger.info(f"📊 Coordinator: seedcore_coordinator")
     logger.info(f"📊 Dispatchers: {[f'seedcore_dispatcher_{i}' for i in range(dispatcher_count)]}")
+    logger.info(f"📊 GraphDispatchers: {[f'seedcore_graph_dispatcher_{i}' for i in range(int(os.getenv('SEEDCORE_GRAPH_DISPATCHERS', '1')))]}")
     logger.info(f"📊 Namespace: {ns}")
     
     # If configured to exit after bootstrap, do so now
@@ -218,6 +243,24 @@ def main():
                         logger.warning(f"⚠️ Reaper ping returned unexpected result: {ping_result}")
                 except Exception as e:
                     logger.debug(f"ℹ️ Reaper health check skipped: {e}")
+                
+                # Check GraphDispatcher health
+                try:
+                    graph_dispatcher_count = int(os.getenv("SEEDCORE_GRAPH_DISPATCHERS", "1"))
+                    for i in range(graph_dispatcher_count):
+                        gname = f"seedcore_graph_dispatcher_{i}"
+                        try:
+                            gd = ray.get_actor(gname, namespace=ns)
+                            ping_ref = gd.ping.remote()
+                            ping_result = ray.get(ping_ref, timeout=5.0)
+                            if ping_result == "pong":
+                                logger.debug(f"✅ GraphDispatcher {gname} is responsive")
+                            else:
+                                logger.warning(f"⚠️ GraphDispatcher {gname} ping returned unexpected result: {ping_result}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ GraphDispatcher {gname} health check failed: {e}")
+                except Exception as e:
+                    logger.debug(f"ℹ️ GraphDispatcher health check skipped: {e}")
                 
                 # Log cluster status periodically
                 cluster_info = get_ray_cluster_info()

@@ -41,7 +41,6 @@ spec:
               value: "1"
             - name: SEEDCORE_BOOTSTRAP_OPTIONAL
               value: "0"
-          # Optional, safe: these are ignored if missing due to 'optional: true'
           envFrom:
             - configMapRef:
                 name: seedcore-env
@@ -53,12 +52,11 @@ spec:
                 name: ${SERVICE_NAME}-config
                 optional: true
             - secretRef:
-               name: seedcore-env-secret
-               optional: true
+                name: seedcore-env-secret
+                optional: true
           volumeMounts:
             - name: logs-volume
               mountPath: /tmp/seedcore-logs
-            # (dev-only) mount your project source into /app
             - name: project-source-volume
               mountPath: /app
             - name: data-volume
@@ -75,7 +73,7 @@ spec:
             httpGet:
               path: /health
               port: 8002
-            failureThreshold: 60    # ~60 * 1s = 1 minute runway
+            failureThreshold: 60
             periodSeconds: 1
           livenessProbe:
             httpGet:
@@ -85,6 +83,15 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+          # ✅ Replaces ENTRYPOINT+CMD from Dockerfile
+          command: ["/bin/bash", "-c"]
+          args:
+            - >
+              uvicorn src.seedcore.telemetry.server:app
+              --host 0.0.0.0
+              --port 8002
+              --proxy-headers
+              --forwarded-allow-ips "*"
       volumes:
         - name: logs-volume
           emptyDir: {}

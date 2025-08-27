@@ -20,9 +20,10 @@ spec:
       restartPolicy: Never
       containers:
       - name: bootstrap-dispatchers
-        image: seedcore-api:kind   # same image used by Ray pods
+        image: seedcore:latest   # same image used by Ray pods
         imagePullPolicy: IfNotPresent
         command: ["python", "/app/scripts/bootstrap_dispatchers.py"]
+        # command: ["sleep", "1000000"]
         env:
         - name: RAY_ADDRESS
           value: "ray://seedcore-svc-head-svc:10001"
@@ -34,15 +35,19 @@ spec:
           value: "postgresql://postgres:postgres@postgresql.seedcore-dev.svc.cluster.local:5432/seedcore"
         - name: SEEDCORE_DISPATCHERS
           value: "2"
+        - name: SEEDCORE_GRAPH_DISPATCHERS
+          value: "1"
+        - name: DGLBACKEND
+          value: "pytorch"
         - name: EXIT_AFTER_BOOTSTRAP
           value: "true"     # script will exit when done
         resources:
           requests:
             cpu: "100m"
-            memory: "128Mi"
+            memory: "512Mi"
           limits:
             cpu: "200m"
-            memory: "256Mi"
+            memory: "1Gi"
         volumeMounts:
         - name: project-source-volume
           mountPath: /app
