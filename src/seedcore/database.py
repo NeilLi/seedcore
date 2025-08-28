@@ -423,6 +423,11 @@ def _safe_pool_stats(pool):
         stats["overflow"] = pool.overflow()
     except Exception:
         stats["overflow"] = None
+    # Add invalid connections count (default to 0 if not tracked)
+    try:
+        stats["invalid"] = getattr(pool, 'invalid', 0)
+    except Exception:
+        stats["invalid"] = 0
     return stats
 
 def get_pg_pool_stats():

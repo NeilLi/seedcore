@@ -4,7 +4,7 @@ import asyncio
 from typing import Dict, Any, List
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Depends
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, String
 
@@ -32,6 +32,29 @@ class TaskRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     # The 'from_attributes=True' setting tells Pydantic to read data from 
     # ORM object attributes instead of dictionary keys.
+    
+    @field_validator('result', mode='before')
+    @classmethod
+    def validate_result(cls, v):
+        """Ensure result is always a dictionary or None."""
+        if v is None:
+            return v
+        
+        if isinstance(v, dict):
+            return v
+        
+        if isinstance(v, list) and v and isinstance(v[0], dict):
+            # If it's a list containing dicts, extract the first one
+            return v[0]
+        
+        # For other types, try to convert to dict or return None
+        try:
+            if hasattr(v, '__dict__'):
+                return v.__dict__
+            else:
+                return {"raw_result": str(v), "type": str(type(v))}
+        except:
+            return None
 
 # --- NEW: Response model for list_tasks endpoint ---
 class TaskListResponse(BaseModel):
@@ -40,6 +63,28 @@ class TaskListResponse(BaseModel):
 
 def _task_to_task_read(task: Task) -> TaskRead:
     """Helper function to convert Task object to TaskRead with proper datetime formatting."""
+    # Ensure result is a dictionary or None
+    result = task.result
+    if result is not None and not isinstance(result, dict):
+        # If result is not a dict, convert it to a dict or set to None
+        if isinstance(result, list):
+            # If it's a list, try to extract the first item if it's a dict
+            if result and isinstance(result[0], dict):
+                result = result[0]
+            else:
+                # If we can't extract a dict, set to None and log the issue
+                print(f"Warning: Task {task.id} has non-dict result: {type(result)} - {result}")
+                result = None
+        else:
+            # For other types, try to convert to dict or set to None
+            try:
+                if hasattr(result, '__dict__'):
+                    result = result.__dict__
+                else:
+                    result = None
+            except:
+                result = None
+    
     return TaskRead(
         id=task.id,
         type=task.type,
@@ -48,7 +93,7 @@ def _task_to_task_read(task: Task) -> TaskRead:
         domain=task.domain,
         drift_score=task.drift_score,
         status=task.status,
-        result=task.result,
+        result=result,
         error=task.error,
         created_at=task.created_at,  # Let Pydantic handle datetime serialization
         updated_at=task.updated_at   # Let Pydantic handle datetime serialization
@@ -129,13 +174,31 @@ async def _task_worker(app_state: Any):
                     ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
                     coord = ray.get_actor("seedcore_coordinator", namespace=ray_namespace)
                     result = await coord.handle.remote(payload)
+                    
+                    # Log the result type for debugging
+                    print(f"Task {task.id} result type: {type(result)}, value: {result}")
+                    
                 except Exception as e:
                     # If Coordinator is not available, mark task as failed
                     result = {"success": False, "error": f"Coordinator not available: {str(e)}"}
+                    print(f"Task {task.id} failed with error: {str(e)}")
 
-                task.result = result
-                task.status = TaskStatus.COMPLETED if result.get("success") else TaskStatus.FAILED
-                task.error = None if result.get("success") else str(result.get("error", "Unknown error"))
+                # Ensure result is stored as a dictionary
+                if isinstance(result, list) and result and isinstance(result[0], dict):
+                    # If result is a list containing dicts, extract the first one
+                    task.result = result[0]
+                elif isinstance(result, dict):
+                    # If result is already a dict, use it directly
+                    task.result = result
+                else:
+                    # For other types, convert to dict or create a wrapper
+                    if hasattr(result, '__dict__'):
+                        task.result = result.__dict__
+                    else:
+                        task.result = {"raw_result": str(result), "type": str(type(result))}
+                
+                task.status = TaskStatus.COMPLETED if task.result.get("success") else TaskStatus.FAILED
+                task.error = None if task.result.get("success") else str(task.result.get("error", "Unknown error"))
                 await session.commit()
 
         except Exception as e:
@@ -177,7 +240,24 @@ async def create_task(
         await task_queue.put(new_task.id)
 
     # Convert to TaskRead with proper datetime formatting
-    return _task_to_task_read(new_task)
+    try:
+        return _task_to_task_read(new_task)
+    except Exception as e:
+        print(f"Error converting new task to TaskRead: {e}")
+        # Return a basic TaskRead with safe values
+        return TaskRead(
+            id=new_task.id,
+            type=new_task.type or "unknown",
+            description=new_task.description,
+            params=new_task.params or {},
+            domain=new_task.domain,
+            drift_score=new_task.drift_score or 0.0,
+            status=new_task.status,
+            result=None,
+            error=None,
+            created_at=new_task.created_at,
+            updated_at=new_task.updated_at
+        )
 
 @router.get("/tasks", response_model=TaskListResponse)
 async def list_tasks(session: AsyncSession = Depends(get_async_pg_session)) -> TaskListResponse:
@@ -185,7 +265,33 @@ async def list_tasks(session: AsyncSession = Depends(get_async_pg_session)) -> T
     tasks = result.scalars().all()
     
     # Convert tasks to TaskRead objects with proper datetime formatting
-    task_reads = [_task_to_task_read(task) for task in tasks]
+    task_reads = []
+    for task in tasks:
+        try:
+            task_read = _task_to_task_read(task)
+            task_reads.append(task_read)
+        except Exception as e:
+            print(f"Error converting task {task.id} to TaskRead: {e}")
+            print(f"Task result type: {type(task.result)}, value: {task.result}")
+            # Create a fallback TaskRead with safe values
+            try:
+                task_read = TaskRead(
+                    id=task.id,
+                    type=task.type or "unknown",
+                    description=task.description,
+                    params=task.params or {},
+                    domain=task.domain,
+                    drift_score=task.drift_score or 0.0,
+                    status=task.status,
+                    result=None,  # Set to None for problematic results
+                    error=f"Conversion error: {str(e)}",
+                    created_at=task.created_at,
+                    updated_at=task.updated_at
+                )
+                task_reads.append(task_read)
+            except Exception as fallback_error:
+                print(f"Fallback conversion also failed for task {task.id}: {fallback_error}")
+                continue
     
     return TaskListResponse(total=len(tasks), items=task_reads)
 
@@ -198,7 +304,24 @@ async def get_task(task_id: str, session: AsyncSession = Depends(get_async_pg_se
         raise HTTPException(status_code=404, detail="Task not found")
     
     # Convert to TaskRead with proper datetime formatting
-    return _task_to_task_read(task)
+    try:
+        return _task_to_task_read(task)
+    except Exception as e:
+        print(f"Error converting task {task.id} to TaskRead: {e}")
+        # Return a basic TaskRead with safe values
+        return TaskRead(
+            id=task.id,
+            type=task.type or "unknown",
+            description=task.description,
+            params=task.params or {},
+            domain=task.domain,
+            drift_score=task.drift_score or 0.0,
+            status=task.status,
+            result=None,
+            error=f"Conversion error: {str(e)}",
+            created_at=task.created_at,
+            updated_at=task.updated_at
+        )
 
 @router.post("/tasks/{task_id}/run", response_model=TaskRead)
 async def run_task_now(
@@ -216,7 +339,24 @@ async def run_task_now(
 
     if task.status in {TaskStatus.RUNNING, TaskStatus.COMPLETED}:
         # Convert to TaskRead with proper datetime formatting
-        return _task_to_task_read(task)
+        try:
+            return _task_to_task_read(task)
+        except Exception as e:
+            print(f"Error converting task {task.id} to TaskRead: {e}")
+            # Return a basic TaskRead with safe values
+            return TaskRead(
+                id=task.id,
+                type=task.type or "unknown",
+                description=task.description,
+                params=task.params or {},
+                domain=task.domain,
+                drift_score=task.drift_score or 0.0,
+                status=task.status,
+                result=None,
+                error=f"Conversion error: {str(e)}",
+                created_at=task.created_at,
+                updated_at=task.updated_at
+            )
 
     task.status = TaskStatus.QUEUED
     await session.commit()
@@ -224,7 +364,24 @@ async def run_task_now(
     await task_queue.put(task.id)
     
     # Convert to TaskRead with proper datetime formatting
-    return _task_to_task_read(task)
+    try:
+        return _task_to_task_read(task)
+    except Exception as e:
+        print(f"Error converting task {task.id} to TaskRead: {e}")
+        # Return a basic TaskRead with safe values
+        return TaskRead(
+            id=task.id,
+            type=task.type or "unknown",
+            description=task.description,
+            params=task.params or {},
+            domain=task.domain,
+            drift_score=task.drift_score or 0.0,
+            status=task.status,
+            result=None,
+            error=f"Conversion error: {str(e)}",
+            created_at=task.created_at,
+            updated_at=task.updated_at
+        )
 
 @router.post("/tasks/{task_id}/cancel", response_model=TaskRead)
 async def cancel_task(
@@ -239,14 +396,48 @@ async def cancel_task(
     
     if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
         # Convert to TaskRead with proper datetime formatting
-        return _task_to_task_read(task)
+        try:
+            return _task_to_task_read(task)
+        except Exception as e:
+            print(f"Error converting task {task.id} to TaskRead: {e}")
+            # Return a basic TaskRead with safe values
+            return TaskRead(
+                id=task.id,
+                type=task.type or "unknown",
+                description=task.description,
+                params=task.params or {},
+                domain=task.domain,
+                drift_score=task.drift_score or 0.0,
+                status=task.status,
+                result=None,
+                error=f"Conversion error: {str(e)}",
+                created_at=task.created_at,
+                updated_at=task.updated_at
+            )
     
     task.status = TaskStatus.CANCELLED
     await session.commit()
     await session.refresh(task)  # <-- add this refresh after commit
     
     # Convert to TaskRead with proper datetime formatting
-    return _task_to_task_read(task)
+    try:
+        return _task_to_task_read(task)
+    except Exception as e:
+        print(f"Error converting task {task.id} to TaskRead: {e}")
+        # Return a basic TaskRead with safe values
+        return TaskRead(
+            id=task.id,
+            type=task.type or "unknown",
+            description=task.description,
+            params=task.params or {},
+            domain=task.domain,
+            drift_score=task.drift_score or 0.0,
+            status=task.status,
+            result=None,
+            error=f"Conversion error: {str(e)}",
+            created_at=task.created_at,
+            updated_at=task.updated_at
+        )
 
 @router.get("/tasks/{task_id}/status", response_model=Dict[str, Any])
 async def task_status(

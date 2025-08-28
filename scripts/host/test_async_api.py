@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def test_async_endpoints(base_url: str = "http://localhost:8000"):
     """Test the async API endpoints."""
-    ml_service_url = f"{base_url}/ml_serve"
+    ml_service_url = f"{base_url}/ml"
     session = requests.Session()
     
     logger.info(f"🔗 Testing async API at: {ml_service_url}")

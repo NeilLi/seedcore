@@ -14,9 +14,10 @@ MIGRATION_001="${SCRIPT_DIR}/migrations/001_create_tasks_table.sql"
 MIGRATION_002="${SCRIPT_DIR}/migrations/002_graph_embeddings.sql"
 MIGRATION_003="${SCRIPT_DIR}/migrations/003_graph_task_types.sql"
 MIGRATION_004="${SCRIPT_DIR}/migrations/004_fix_taskstatus_enum.sql"
+MIGRATION_005="${SCRIPT_DIR}/migrations/002_create_facts_table.sql"
 
 # Check if all migration files exist
-for migration in "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004"; do
+for migration in "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_005"; do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
     exit 1
@@ -30,6 +31,7 @@ echo "   - 001: $MIGRATION_001"
 echo "   - 002: $MIGRATION_002"
 echo "   - 003: $MIGRATION_003"
 echo "   - 004: $MIGRATION_004"
+echo "   - 005: $MIGRATION_005"
 
 find_pg_pod() {
   local sel pod
@@ -129,6 +131,12 @@ kubectl -n "$NAMESPACE" cp "$MIGRATION_004" "$POSTGRES_POD:/tmp/004_fix_taskstat
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/004_fix_taskstatus_enum.sql"
 
+# Migration 005: Create facts table
+echo "⚙️  Running migration 005: Create facts table..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_005" "$POSTGRES_POD:/tmp/005_create_facts_table.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+  psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/005_create_facts_table.sql"
+
 # 7) Verify schema
 echo "✅ Verifying schema..."
 echo "📊 Tables:"
@@ -155,12 +163,16 @@ echo "📊 Graph tasks view:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ graph_tasks"
 
+echo "📊 Facts table structure:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+  psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ facts"
+
 echo "📊 Taskstatus enum values:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT unnest(enum_range(NULL::taskstatus)) as enum_value;"
 
 echo "🎉 SeedCore database setup complete!"
-echo "✅ Created tables: tasks, holons, graph_embeddings"
+echo "✅ Created tables: tasks, holons, graph_embeddings, facts"
 echo "✅ Created views: graph_tasks"
 echo "✅ Created helper functions: create_graph_embed_task, create_graph_rag_task"
 echo "✅ Fixed taskstatus enum to use consistent lowercase values (created, queued, running, completed, failed, cancelled, retry)"
@@ -176,3 +188,6 @@ echo "   SELECT create_graph_rag_task(ARRAY[123], 2, 15, 'Find similar nodes to 
 echo ""
 echo "   -- Monitor graph tasks:"
 echo "   SELECT * FROM graph_tasks ORDER BY updated_at DESC LIMIT 10;"
+echo ""
+echo "   -- Test facts table:"
+echo "   SELECT * FROM facts LIMIT 5;"

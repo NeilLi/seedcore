@@ -25,7 +25,20 @@ from seedcore.memory.adaptive_loop import (
     get_memory_metrics
 )
 from seedcore.agents.base import Agent
-from seedcore.organs.base import Organ
+# Mock Organ class for testing that mimics the expected interface
+class DummyOrgan:
+    def __init__(self, organ_id: str, organ_type: str = "test"):
+        self.organ_id = organ_id
+        self.organ_type = organ_type
+        self.agents = []  # List of agents for easy iteration in tests
+    
+    def register(self, agent):
+        """Register an agent with this organ (for testing compatibility)"""
+        self.agents.append(agent)
+    
+    def register_agent(self, agent_id: str, agent_handle):
+        """Alternative registration method that matches the real Organ interface"""
+        self.agents.append(agent_handle)
 
 def test_memory_tier_initialization():
     """Test that MemoryTier initializes correctly."""
@@ -151,7 +164,7 @@ def test_calculate_cost_vq():
 
 def test_get_memory_metrics():
     """Test memory metrics calculation across agents."""
-    organ = Organ(organ_id="test_organ")
+    organ = DummyOrgan(organ_id="test_organ")
     agent1 = Agent(agent_id="agent1")
     agent2 = Agent(agent_id="agent2")
     

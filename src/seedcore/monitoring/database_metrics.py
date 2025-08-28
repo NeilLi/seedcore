@@ -1,6 +1,7 @@
 # src/seedcore/monitoring/database_metrics.py
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -208,6 +209,40 @@ class DatabaseMetrics:
             self._safe_set(self.neo4j_overflow, 0)
 
         return valid(pg) or valid(my)
+
+    def get_metrics_summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of current metrics for easy access.
+        
+        Returns:
+            Dictionary containing pool and health metrics summary
+        """
+        # Get current pool stats
+        from seedcore.database import get_pg_pool_stats, get_mysql_pool_stats
+        
+        pg_stats = self._get_stats(get_pg_pool_stats)
+        mysql_stats = self._get_stats(get_mysql_pool_stats)
+        
+        return {
+            "postgresql": {
+                "pool_size": pg_stats.get("size", 0),
+                "checked_out": pg_stats.get("checked_out", 0),
+                "checked_in": pg_stats.get("checked_in", 0),
+                "overflow": pg_stats.get("overflow", 0)
+            },
+            "mysql": {
+                "pool_size": mysql_stats.get("size", 0),
+                "checked_out": mysql_stats.get("checked_out", 0),
+                "checked_in": mysql_stats.get("checked_in", 0),
+                "overflow": mysql_stats.get("overflow", 0)
+            },
+            "neo4j": {
+                "pool_size": 0,  # Neo4j doesn't expose pool stats the same way
+                "checked_out": 0,
+                "checked_in": 0,
+                "overflow": 0
+            }
+        }
 
     # ---------- optional background loop ----------
 

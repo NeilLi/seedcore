@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def test_async_behavior(base_url: str = "http://localhost:8000"):
     """Test that the async API returns immediately without blocking."""
-    ml_service_url = f"{base_url}/ml_serve"
+    ml_service_url = f"{base_url}/ml"
     session = requests.Session()
     
     logger.info(f"🔗 Testing fixed async API at: {ml_service_url}")
@@ -89,7 +89,7 @@ def test_async_behavior(base_url: str = "http://localhost:8000"):
 
 def test_synchronous_endpoint(base_url: str = "http://localhost:8000"):
     """Test that the synchronous endpoint still works for backward compatibility."""
-    ml_service_url = f"{base_url}/ml_serve"
+    ml_service_url = f"{base_url}/ml"
     session = requests.Session()
     
     logger.info("🧪 Test 5: Testing synchronous endpoint for backward compatibility...")

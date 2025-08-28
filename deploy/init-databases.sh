@@ -8,7 +8,7 @@ echo "=== Initializing Basic Database ==="
 bash "$SCRIPT_DIR/init_basic_db.sh"
 
 echo "=== Initializing Comprehensive Database ==="
-bash "$SCRIPT_DIR/init_comprehensive_db.sh"
+bash "$SCRIPT_DIR/init_full_db.sh"
 
 echo "✅ All databases initialized successfully."
 

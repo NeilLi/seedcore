@@ -74,14 +74,39 @@ def test_bootstrap_actors():
         return False
 
 def test_organism_manager():
-    """Test organism manager initialization."""
+    """Test organism manager through Coordinator actor."""
     print("\n🧪 Testing organism manager...")
     
     try:
-        from seedcore.organs.organism_manager import organism_manager
+        # First ensure Ray is initialized
+        from seedcore.utils.ray_utils import ensure_ray_initialized
+        ensure_ray_initialized()
         
-        print("✅ Organism manager imported successfully")
-        print(f"Initialized: {organism_manager._initialized}")
+        # Test that we can import the OrganismManager class
+        from seedcore.organs.organism_manager import OrganismManager
+        print("✅ OrganismManager class imported successfully")
+        
+        # Test that we can create an instance
+        organism_manager = OrganismManager()
+        print("✅ OrganismManager instance created successfully")
+        
+        # Test that the instance has the expected attributes
+        if hasattr(organism_manager, '_initialized'):
+            print(f"✅ _initialized attribute exists: {organism_manager._initialized}")
+        else:
+            print("⚠️ _initialized attribute not found")
+        
+        # Test that we can access the routing table
+        if hasattr(organism_manager, 'routing'):
+            print("✅ Routing table exists")
+        else:
+            print("⚠️ Routing table not found")
+        
+        # Test that we can access the organ configs
+        if hasattr(organism_manager, 'organ_configs'):
+            print(f"✅ Organ configs: {len(organism_manager.organ_configs)} configs found")
+        else:
+            print("⚠️ Organ configs not found")
         
         return True
         

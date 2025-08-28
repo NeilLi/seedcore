@@ -2,40 +2,127 @@
 """
 SeedCore CLI — interactive shell for human-in-the-loop control.
 
-New Features:
-  - Intelligent 'ask' command to translate natural language into structured tasks.
-  - Heuristic drift score to simulate OCPS gating for novel requests.
+New in this version
+- tasks --status <queued|running|completed|failed>
+- tasks --type <task_type>
+- tasks --since <1h|24h|2d|YYYY-MM-DD>
+- tasks --limit N
+- search <query>  (fuzzy across id/type/description/result) + same filters
 
-Supports:
-  ask <natural language query> : Intelligently create and run a task.
-  facts                        : list current facts
-  genfact <text>               : generate & store a new fact
-  delfact <id>                 : delete a fact
-  tasks                        : list tasks
-  taskstatus <id>              : get status of a task
-  exit / quit                  : quit shell
+Still supports:
+  ask <natural language>  : create & run a task
+  facts / genfact / delfact
+  taskstatus <id>         : detailed status (accepts short IDs)
+  status <id>             : quick status
 """
+
 import os
-import readline  # Enables arrow-key history navigation
+import re
+import json
+import readline  # history + arrows
 import requests
-from datetime import datetime
+import difflib
+import argparse
+from datetime import datetime, timedelta, timezone
 
 API_BASE = os.getenv("SEEDCORE_API", "http://127.0.0.1:8002")
 
-
-# ------------------- Formatting Helpers -------------------
+# ------------------- Helpers -------------------
 def _format_datetime(iso_string):
-    """Nicely format ISO datetime strings for display."""
     if not iso_string:
         return "N/A"
     try:
-        # Parse timezone-aware ISO string and convert to local time
         dt = datetime.fromisoformat(iso_string).astimezone()
         return dt.strftime('%Y-%m-%d %H:%M:%S')
     except (ValueError, TypeError):
         return iso_string
 
-# ------------------- FACTS (No changes needed) -------------------
+def _now():
+    return datetime.now(timezone.utc)
+
+def _parse_since(val: str) -> datetime | None:
+    """Accepts '1h', '24h', '2d', '30m', or ISO date 'YYYY-MM-DD'."""
+    if not val:
+        return None
+    val = val.strip().lower()
+    m = re.fullmatch(r"(\d+)([smhd])", val)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        delta = {"s": timedelta(seconds=n),
+                 "m": timedelta(minutes=n),
+                 "h": timedelta(hours=n),
+                 "d": timedelta(days=n)}[unit]
+        return _now() - delta
+    # Try plain date
+    try:
+        return datetime.fromisoformat(val).replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+def _parse_task_args(argv):
+    """Parse task/search command arguments using argparse for robust flag handling."""
+    parser = argparse.ArgumentParser(prog="tasks", add_help=False)
+    parser.add_argument("--status", type=str, help="Filter by status (e.g., running, completed, queued)")
+    parser.add_argument("--type", type=str, help="Filter by task type")
+    parser.add_argument("--since", type=str, help="Filter by time (e.g., 24h, 7d, 2024-01-01)")
+    parser.add_argument("--limit", type=int, help="Limit number of results")
+    
+    try:
+        return parser.parse_args(argv)
+    except SystemExit:
+        # argparse will exit on invalid args, but we want to handle this gracefully
+        return None
+
+def _fetch_tasks():
+    r = requests.get(f"{API_BASE}/tasks")
+    r.raise_for_status()
+    data = r.json()
+    return data.get("items", []), data.get("total", len(data))
+
+def _status_matches(task_status: str, want: str) -> bool:
+    if not want:
+        return True
+    s = (task_status or "").lower()
+    w = want.lower()
+    return s.startswith(w) or s == w
+
+def _type_matches(task_type: str, want: str) -> bool:
+    if not want:
+        return True
+    t = (task_type or "").lower()
+    w = want.lower()
+    return t == w or w in t
+
+def _since_matches(updated_at: str, since_dt: datetime | None) -> bool:
+    if not since_dt:
+        return True
+    try:
+        dt = datetime.fromisoformat(updated_at)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt >= since_dt
+    except Exception:
+        return True  # don't drop if we can't parse
+
+def _limit(items, n):
+    try:
+        n = int(n)
+        if n > 0:
+            return items[:n]
+    except Exception:
+        pass
+    return items
+
+def _task_str_result(task) -> str:
+    res = task.get("result")
+    if res is None:
+        return ""
+    try:
+        return json.dumps(res, ensure_ascii=False)
+    except Exception:
+        return str(res)
+
+# ------------------- FACTS -------------------
 def list_facts():
     try:
         r = requests.get(f"{API_BASE}/facts")
@@ -45,7 +132,7 @@ def list_facts():
         if not items:
             print("📭 No facts yet.")
             return
-        print(f"📖 Facts (total {data['total']}):")
+        print(f"📖 Facts (total {data.get('total', len(items))}):")
         for f in items:
             print(f"  - {f['id'][:8]}: {f['text']}  tags={f.get('tags',[])}")
     except requests.RequestException as e:
@@ -58,7 +145,6 @@ def gen_fact(text: str):
     f = r.json()
     print(f"✨ Created fact {f['id'][:8]}: {f['text']}")
 
-
 def del_fact(fid: str):
     r = requests.delete(f"{API_BASE}/facts/{fid}")
     if r.status_code == 404:
@@ -68,226 +154,234 @@ def del_fact(fid: str):
         print(f"🗑️ Deleted fact")
 
 # ------------------- TASKS -------------------
-
-# --- NEW: Intelligent Task Creation ---
 def intelligent_task_creation(prompt: str):
-    """
-    Parses a natural language prompt, assigns a task type, and estimates a drift score.
-    """
-    prompt_lower = prompt.lower()
-    payload = {
-        "description": prompt,
-        "run_immediately": True,
-        "params": {}
-    }
-
-    # --- Keyword-based mapping for "Fast-Path" style tasks ---
-    if "plan" in prompt_lower or "create a plan" in prompt_lower:
+    p = prompt.lower()
+    payload = {"description": prompt, "run_immediately": True, "params": {}}
+    if "plan" in p or "create a plan" in p:
         payload["type"] = "dspy.plan"
-        payload["drift_score"] = 0.1  # Low drift for recognized patterns
+        payload["drift_score"] = 0.1
         payload["params"]["task_description"] = prompt
         print("🔍 Interpreted as a 'planning' task (low drift).")
-
-    elif "analyze" in prompt_lower or "reason about" in prompt_lower:
+    elif "analyze" in p or "reason about" in p:
         payload["type"] = "dspy.reason"
         payload["drift_score"] = 0.2
-        # Example of extracting a parameter
-        if "incident" in prompt_lower:
-             parts = prompt.split()
-             try:
-                 idx = parts.index("incident")
-                 payload["params"]["incident_id"] = parts[idx + 1]
-             except (ValueError, IndexError):
-                 pass
+        if "incident" in p:
+            parts = prompt.split()
+            try:
+                idx = parts.index("incident")
+                payload["params"]["incident_id"] = parts[idx + 1]
+            except Exception:
+                pass
         print("🔍 Interpreted as a 'reasoning' task (low drift).")
-
     else:
-        # --- Fallback for "Escalation-Path" tasks ---
-        # This is a novel task; assign a generic type and high drift score
         payload["type"] = "general_query"
-        payload["drift_score"] = 0.9  # High drift for novel tasks
+        payload["drift_score"] = 0.9
         print("⚠️ Unrecognized pattern. Escalating with high drift score.")
 
-    # Send the structured task to the API
     r = requests.post(f"{API_BASE}/tasks", json=payload)
     r.raise_for_status()
     t = r.json()
     print(f"🚀 Task {t['id'][:8]} [{t['type']}] created with status '{t['status']}'")
 
-# --- UPDATED: To display richer DB-backed data ---
-def list_tasks():
+def _print_task_row(t, prefix="  - "):
+    status = (t.get('status') or 'N/A').upper()
+    desc = t.get('description', '')
+    updated = _format_datetime(t.get('updated_at'))
+    print(f"{prefix}{t['id'][:8]} [{t.get('type','N/A')}] {status:<10} | {desc[:50]:<50} | Updated: {updated}")
+
+def list_tasks_with_filters(args):
+    """tasks [--status X] [--type Y] [--since 24h|YYYY-MM-DD] [--limit N]"""
+    parsed_args = _parse_task_args(args)
+    if parsed_args is None:
+        print("❌ Invalid arguments. Use: tasks [--status <status>] [--type <type>] [--since <time>] [--limit <number>]")
+        return
+    
+    want_status = parsed_args.status
+    want_type   = parsed_args.type
+    since_dt    = _parse_since(parsed_args.since or "")
+    limit_n     = parsed_args.limit
+
     try:
-        r = requests.get(f"{API_BASE}/tasks")
-        r.raise_for_status()
-        data = r.json()
-        items = data.get("items", [])
-        if not items:
-            print("📭 No tasks yet.")
-            return
-        print(f"📝 Tasks (total {data['total']}):")
-        for t in sorted(items, key=lambda x: x.get('created_at'), reverse=True):
-            status = t.get('status', 'N/A').upper()
-            desc = t.get('description', '')
-            updated = _format_datetime(t.get('updated_at'))
-            print(f"  - {t['id'][:8]} [{t['type']}] {status:<10} | {desc[:50]:<50} | Updated: {updated}")
+        items, total = _fetch_tasks()
+        # newest first
+        items = sorted(items, key=lambda x: x.get('created_at') or "", reverse=True)
+
+        # apply filters
+        filtered = [
+            t for t in items
+            if _status_matches(t.get("status",""), want_status)
+            and _type_matches(t.get("type",""), want_type)
+            and _since_matches(t.get("updated_at") or t.get("created_at",""), since_dt)
+        ]
+        if limit_n:
+            filtered = _limit(filtered, limit_n)
+
+        print(f"📝 Tasks (showing {len(filtered)}/{total}"
+              f"{' | status='+str(want_status) if want_status else ''}"
+              f"{' | type='+str(want_type) if want_type else ''}"
+              f"{' | since set' if since_dt else ''}"
+              f"{' | limit='+str(limit_n) if limit_n else ''}):")
+        for t in filtered:
+            _print_task_row(t)
+        if not filtered:
+            print("  (no matches)")
     except requests.RequestException as e:
         print(f"❌ Could not connect to API to list tasks: {e}")
 
-# --- UPDATED: To display richer DB-backed data ---
 def task_status(tid: str):
     try:
-        # Try to match prefix against all tasks
-        r = requests.get(f"{API_BASE}/tasks")
-        r.raise_for_status()
-        items = r.json().get("items", [])
+        items, _ = _fetch_tasks()
         matches = [t for t in items if t["id"].startswith(tid)]
-        
         if not matches:
             print(f"❌ No task found with ID starting with {tid}")
             return
         if len(matches) > 1:
             print(f"⚠️ Multiple tasks match prefix {tid}:")
             for t in matches:
-                print(f"   - {t['id']} [{t.get('type', 'N/A')}] {t.get('status', 'N/A')}")
-            print(f"Please use a longer prefix to disambiguate.")
+                print(f"   - {t['id']} [{t.get('type','N/A')}] {t.get('status','N/A')}")
+            print("Use a longer prefix to disambiguate.")
             return
-            
-        # Use the single matching task
+
         full_id = matches[0]["id"]
-        print(f"🔍 Found task {full_id} (prefix: {tid})")
-        
-        # Now fetch the full task details
         r = requests.get(f"{API_BASE}/tasks/{full_id}")
         r.raise_for_status()
         t = r.json()
-        
-        status = t.get('status', 'N/A').upper()
-        updated = _format_datetime(t.get('updated_at'))
 
+        status = (t.get('status') or 'N/A').upper()
+        updated = _format_datetime(t.get('updated_at'))
         print(f"📊 Task {t['id'][:8]}")
         print(f"   Status:    {status}")
         print(f"   Type:      {t.get('type')}")
         print(f"   Updated:   {updated}")
         print(f"   Drift:     {t.get('drift_score')}")
-
         if t.get("error"):
             print(f"   🔴 Error: {t['error']}")
         if t.get("result"):
             print(f"   ✅ Result: {t['result']}")
-
     except requests.RequestException as e:
         print(f"❌ Could not connect to API to get task status: {e}")
 
-# --- NEW: Search tasks by prefix or partial match ---
-def search_tasks(query: str):
-    """Search for tasks by ID prefix, type, or description."""
+def _fuzzy_score(haystack: str, needle: str) -> float:
+    return difflib.SequenceMatcher(None, haystack.lower(), needle.lower()).ratio()
+
+def search_tasks(query: str, args=None):
+    """search <query> [--status X] [--type Y] [--since ...] [--limit N]"""
+    parsed_args = _parse_task_args(args or [])
+    if parsed_args is None:
+        print("❌ Invalid arguments. Use: search <query> [--status <status>] [--type <type>] [--since <time>] [--limit <number>]")
+        return
+    
+    want_status = parsed_args.status
+    want_type   = parsed_args.type
+    since_dt    = _parse_since(parsed_args.since or "")
+    limit_n     = parsed_args.limit
+
     try:
-        r = requests.get(f"{API_BASE}/tasks")
-        r.raise_for_status()
-        items = r.json().get("items", [])
-        
-        # Search by ID prefix first
-        id_matches = [t for t in items if t["id"].startswith(query)]
-        
-        # Search by type or description
-        text_matches = [t for t in items if 
-                       query.lower() in t.get('type', '').lower() or 
-                       query.lower() in t.get('description', '').lower()]
-        
-        # Combine and deduplicate
-        all_matches = list({t['id']: t for t in id_matches + text_matches}.values())
-        
-        if not all_matches:
+        items, _ = _fetch_tasks()
+        # candidate score based on id/type/description/result (max of fields)
+        scored = []
+        for t in items:
+            fields = [
+                t.get("id",""),
+                t.get("type",""),
+                t.get("description",""),
+                _task_str_result(t),
+            ]
+            score = max((_fuzzy_score(f, query) for f in fields if f), default=0.0)
+            if score >= 0.45:  # default fuzzy threshold
+                scored.append((score, t))
+
+        # newest first, then by score
+        scored.sort(key=lambda s: (s[1].get('created_at') or "", s[0]), reverse=True)
+        filtered = [
+            t for (_, t) in scored
+            if _status_matches(t.get("status",""), want_status)
+            and _type_matches(t.get("type",""), want_type)
+            and _since_matches(t.get("updated_at") or t.get("created_at",""), since_dt)
+        ]
+        if limit_n:
+            filtered = _limit(filtered, limit_n)
+
+        if not filtered:
             print(f"🔍 No tasks found matching '{query}'")
             return
-            
-        print(f"🔍 Found {len(all_matches)} task(s) matching '{query}':")
-        for t in sorted(all_matches, key=lambda x: x.get('created_at'), reverse=True):
-            status = t.get('status', 'N/A').upper()
-            desc = t.get('description', '')[:50]
+
+        print(f"🔍 Found {len(filtered)} task(s) matching '{query}'"
+              f"{' | status='+str(want_status) if want_status else ''}"
+              f"{' | type='+str(want_type) if want_type else ''}"
+              f"{' | since set' if since_dt else ''}"
+              f"{' | limit='+str(limit_n) if limit_n else ''}:")
+        for t in filtered:
             created = _format_datetime(t.get('created_at'))
-            print(f"  - {t['id'][:8]} [{t['type']}] {status:<10} | {desc:<50} | Created: {created}")
-            
+            status = (t.get('status') or 'N/A').upper()
+            desc = t.get('description','')[:50]
+            print(f"  - {t['id'][:8]} [{t.get('type','N/A')}] {status:<10} | {desc:<50} | Created: {created}")
+
     except requests.RequestException as e:
         print(f"❌ Could not connect to API to search tasks: {e}")
 
-# --- NEW: Convenience function for quick task status lookup ---
 def quick_status(tid: str):
-    """Quick status lookup - accepts short ID prefixes and shows minimal info."""
     try:
-        # Try to match prefix against all tasks
-        r = requests.get(f"{API_BASE}/tasks")
-        r.raise_for_status()
-        items = r.json().get("items", [])
+        items, _ = _fetch_tasks()
         matches = [t for t in items if t["id"].startswith(tid)]
-        
         if not matches:
             print(f"❌ No task found with ID starting with {tid}")
             return
         if len(matches) > 1:
             print(f"⚠️ Multiple tasks match prefix {tid}:")
-            for t in matches[:3]:  # Show first 3 matches
-                print(f"   - {t['id']} [{t.get('type', 'N/A')}] {t.get('status', 'N/A')}")
+            for t in matches[:3]:
+                print(f"   - {t['id']} [{t.get('type','N/A')}] {t.get('status','N/A')}")
             if len(matches) > 3:
-                print(f"   ... and {len(matches) - 3} more")
-            print(f"Use 'taskstatus {tid}' for detailed info or 'search {tid}' to see all matches.")
+                print(f"   ... and {len(matches)-3} more")
+            print(f"Use 'taskstatus {tid}' for details or 'search {tid}'.")
             return
-            
-        # Show quick status for single match
         t = matches[0]
-        status = t.get('status', 'N/A').upper()
+        status = (t.get('status') or 'N/A').upper()
         desc = t.get('description', '')[:40]
         updated = _format_datetime(t.get('updated_at'))
-        
-        print(f"📊 {t['id'][:8]} [{t['type']}] {status}")
+        print(f"📊 {t['id'][:8]} [{t.get('type','N/A')}] {status}")
         if desc:
             print(f"   {desc}")
         print(f"   Updated: {updated}")
-        
         if t.get("error"):
             print(f"   🔴 Error: {t['error']}")
         elif t.get("result"):
             print(f"   ✅ Has result")
-            
     except requests.RequestException as e:
         print(f"❌ Could not connect to API: {e}")
 
-# --- NEW: Help command to show available commands ---
 def show_help():
-    """Show detailed help for all available commands."""
-    print("🎯 SeedCore CLI Commands:")
-    print("=" * 50)
-    print("  ask <prompt>           - Create and run a task from natural language")
-    print("  facts                   - List all facts in the system")
-    print("  genfact <text>         - Generate a new fact")
-    print("  delfact <id>           - Delete a fact by ID")
-    print("  tasks                   - List all tasks")
-    print("  taskstatus <id>        - Get detailed task status (accepts short IDs)")
-    print("  status <id>            - Quick status lookup (accepts short IDs)")
-    print("  search <query>         - Search tasks by ID prefix, type, or description")
-    print("  help                    - Show this help message")
-    print("  exit/quit              - Exit the CLI")
-    print("=" * 50)
-    print("Tips:")
-    print("  - Use short ID prefixes (e.g., 'f9e9dfac' instead of full UUID)")
-    print("  - Type natural language directly (e.g., 'analyze the incident')")
-    print("  - Use 'search' to find tasks by type or description")
-
+    print("🎯 SeedCore CLI Commands")
+    print("=" * 60)
+    print(" ask <prompt>              - Create and run a task from natural language")
+    print(" facts                     - List all facts")
+    print(" genfact <text>            - Create a new fact")
+    print(" delfact <id>              - Delete a fact by ID")
+    print(" tasks [--status S] [--type T] [--since V] [--limit N]")
+    print("                           - List tasks with filters")
+    print(" search <q> [--status S] [--type T] [--since V] [--limit N]")
+    print("                           - Fuzzy search across id/type/description/result")
+    print(" taskstatus <id>           - Detailed status (accepts short IDs)")
+    print(" status <id>               - Quick status (accepts short IDs)")
+    print(" help                      - Show this help")
+    print(" exit / quit               - Exit")
+    print("=" * 60)
+    print("Examples:")
+    print("  tasks --status running")
+    print("  tasks --type general_query --since 24h --limit 10")
+    print("  search tea --status completed")
+    print("  ask analyze the incident 12345")
+    print("")
+    print("Note: All flags (--status, --type, --since, --limit) require values.")
+    print("      Use 'tasks --status running' not 'tasks --status'")
 
 # ------------------- SHELL LOOP -------------------
 def main():
-    print("🎯 SeedCore Interactive Shell (v1.2 - Intelligent Default)")
+    print("🎯 SeedCore Interactive Shell (v1.4 — robust filters & fuzzy search)")
     print("Connected to", API_BASE)
-    print("Commands: ask, facts, genfact, delfact, tasks, taskstatus, search, status, exit")
-    print("Examples:")
-    print("  ask 'analyze the incident'     - Create and run a task")
-    print("  taskstatus f9e9dfac           - Get detailed task status (accepts short IDs)")
-    print("  status f9e9dfac               - Quick status lookup (accepts short IDs)")
-    print("  search plan                    - Search tasks by type/description")
-    print("  tasks                          - List all tasks")
+    print("Commands: ask, facts, genfact, delfact, tasks, taskstatus, search, status, help, exit")
     print("=" * 70)
 
-    # --- NEW: Define a set of known system commands ---
     SYSTEM_COMMANDS = {"facts", "genfact", "delfact", "tasks", "taskstatus", "search", "status", "help"}
 
     while True:
@@ -296,47 +390,47 @@ def main():
         except (EOFError, KeyboardInterrupt):
             print("\n👋 Exiting SeedCore CLI")
             break
-
         if not cmd:
             continue
         if cmd in {"exit", "quit"}:
             break
 
         parts = cmd.split()
-        op = parts[0]
+        op, rest = parts[0], parts[1:]
 
         try:
-            # --- UPDATED: Restructured logic ---
             if op in SYSTEM_COMMANDS:
-                # Handle specific system commands as before
                 if op == "facts":
                     list_facts()
-                elif op == "genfact" and len(parts) > 1:
-                    gen_fact(" ".join(parts[1:]))
-                elif op == "delfact" and len(parts) > 1:
-                    del_fact(parts[1])
+                elif op == "genfact" and rest:
+                    gen_fact(" ".join(rest))
+                elif op == "delfact" and rest:
+                    del_fact(rest[0])
                 elif op == "tasks":
-                    list_tasks()
-                elif op == "taskstatus" and len(parts) > 1:
-                    task_status(parts[1])
-                elif op == "search" and len(parts) > 1:
-                    search_tasks(" ".join(parts[1:]))
-                elif op == "status" and len(parts) > 1:
-                    quick_status(parts[1])
+                    list_tasks_with_filters(rest)
+                elif op == "taskstatus" and rest:
+                    task_status(rest[0])
+                elif op == "search" and rest:
+                    # everything up to the first flag token is the query
+                    # e.g. search tea with milk --status completed
+                    q = []
+                    i = 0
+                    while i < len(rest) and not rest[i].startswith("--"):
+                        q.append(rest[i]); i += 1
+                    query = " ".join(q).strip()
+                    search_tasks(query, rest[i:])
+                elif op == "status" and rest:
+                    quick_status(rest[0])
                 elif op == "help":
                     show_help()
+                else:
+                    print("ℹ️ Try 'help' for usage.")
             else:
-                # Default behavior: Treat the entire input as an 'ask' command
-                # This handles explicit 'ask' and direct natural language queries
-                prompt = cmd
-                if op == "ask" and len(parts) > 1:
-                    prompt = " ".join(parts[1:]) # Strip 'ask' if it was used
-                
+                # natural language or explicit 'ask'
+                prompt = " ".join(rest) if op == "ask" else cmd
                 intelligent_task_creation(prompt)
-
         except Exception as e:
             print(f"❌ An error occurred: {e}")
-
 
 if __name__ == "__main__":
     main()
