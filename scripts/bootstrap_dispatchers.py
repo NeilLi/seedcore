@@ -79,6 +79,17 @@ def main():
     # Import ray after successful connection
     import ray
     
+    # Define environment variables to pass to actors
+    ENV_KEYS = [
+        "OCPS_DRIFT_THRESHOLD",
+        "COGNITIVE_TIMEOUT_S", 
+        "COGNITIVE_MAX_INFLIGHT",
+        "FAST_PATH_LATENCY_SLO_MS",
+        "MAX_PLAN_STEPS",
+    ]
+    env_vars = {k: os.getenv(k, "") for k in ENV_KEYS}
+    logger.info(f"🔧 Environment variables for actors: {env_vars}")
+    
     # Start Coordinator actor
     try:
         existing_coord = ray.get_actor("seedcore_coordinator", namespace=ns)
@@ -93,6 +104,7 @@ def main():
                 namespace=ns,
                 num_cpus=0.1,
                 resources={"head_node": 0.001},
+                runtime_env={"env_vars": env_vars},  # Pass env vars to actor
             ).remote()
             
             # Wait for the async initialization to complete
@@ -144,6 +156,7 @@ def main():
                     namespace=ns,
                     num_cpus=0.1,
                     resources={"head_node": 0.001},
+                    runtime_env={"env_vars": env_vars},  # Pass env vars to actor
                 ).remote(dsn=dsn, name=name)
                 dispatchers.append(dispatcher)
                 logger.info(f"✅ Dispatcher actor {name} created successfully")
@@ -182,7 +195,8 @@ def main():
                     lifetime="detached",
                     namespace=ns,
                     num_cpus=0.2,
-                    resources={"head_node": 0.001}
+                    resources={"head_node": 0.001},
+                    runtime_env={"env_vars": env_vars},  # Pass env vars to actor
                 ).remote(dsn=dsn, name=gname)
                 logger.info(f"✅ GraphDispatcher {gname} created successfully")
     except Exception as e:

@@ -21,17 +21,39 @@ spec:
       - name: ml_service
         import_path: src.seedcore.ml.serve_app:build_ml_service
         route_prefix: /ml
+        deployments:
+          - name: MLService
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 0.2
+              num_gpus: 0
+              resources: {"head_node": 0.001}
+              runtime_env:
+                env_vars:
+                  OCPS_DRIFT_THRESHOLD: "0.5"
+                  COGNITIVE_TIMEOUT_S: "8.0"
+                  COGNITIVE_MAX_INFLIGHT: "64"
+                  FAST_PATH_LATENCY_SLO_MS: "1000"
+                  MAX_PLAN_STEPS: "16"
 
       - name: cognitive
-        import_path: entrypoints.cognitive_entrypoint:cognitive_app
+        import_path: entrypoints.cognitive_entrypoint:build_cognitive_app
         route_prefix: /cognitive
         deployments:
           - name: CognitiveService
-            num_replicas: 1
+            num_replicas: 2
             ray_actor_options:
-              num_cpus: 0.4
+              num_cpus: 0.2
               num_gpus: 0
+              memory: 2147483648  # 2GB
               resources: {"head_node": 0.001}
+              runtime_env:
+                env_vars:
+                  OCPS_DRIFT_THRESHOLD: "0.5"
+                  COGNITIVE_TIMEOUT_S: "8.0"
+                  COGNITIVE_MAX_INFLIGHT: "64"
+                  FAST_PATH_LATENCY_SLO_MS: "1000"
+                  MAX_PLAN_STEPS: "16"
       
       - name: orchestrator
         import_path: entrypoints.orchestrator:build_orchestrator
@@ -43,6 +65,13 @@ spec:
               num_cpus: 0.2
               num_gpus: 0
               resources: {"head_node": 0.001}
+              runtime_env:
+                env_vars:
+                  OCPS_DRIFT_THRESHOLD: "0.5"
+                  COGNITIVE_TIMEOUT_S: "8.0"
+                  COGNITIVE_MAX_INFLIGHT: "64"
+                  FAST_PATH_LATENCY_SLO_MS: "1000"
+                  MAX_PLAN_STEPS: "16"
       
       # comment out the lightweight wrapper endpoints
       # - name: ml_serve

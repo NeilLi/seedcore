@@ -240,6 +240,21 @@ class CognitiveService:
 # At module level so Ray Serve YAML can import directly
 cognitive_app = CognitiveService.bind()
 
+def build_cognitive_app(args: dict = None):
+    """
+    Builder function for the cognitive service application.
+    
+    This function returns a bound Serve application that can be deployed
+    via Ray Serve YAML configuration.
+    
+    Args:
+        args: Optional configuration arguments (unused in this implementation)
+        
+    Returns:
+        Bound Serve application
+    """
+    return CognitiveService.bind()
+
 def main():
     print("🚀 Starting deployment driver for Cognitive Service...")
     try:

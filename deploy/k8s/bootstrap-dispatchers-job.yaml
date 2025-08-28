@@ -41,6 +41,18 @@ spec:
           value: "pytorch"
         - name: EXIT_AFTER_BOOTSTRAP
           value: "true"     # script will exit when done
+        
+        # Enhanced integration configuration
+        - name: OCPS_DRIFT_THRESHOLD
+          value: "0.5"
+        - name: COGNITIVE_TIMEOUT_S
+          value: "8.0"
+        - name: COGNITIVE_MAX_INFLIGHT
+          value: "64"
+        - name: FAST_PATH_LATENCY_SLO_MS
+          value: "1000"
+        - name: MAX_PLAN_STEPS
+          value: "16"
         resources:
           requests:
             cpu: "100m"

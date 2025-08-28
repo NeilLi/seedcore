@@ -168,6 +168,27 @@ class Coordinator:
                 "error": str(e)
             }
 
+    def debug_env(self, keys=None):
+        """
+        Debug method to verify environment variables are properly set.
+        
+        Args:
+            keys: List of environment variable keys to check. If None, checks all integration keys.
+            
+        Returns:
+            Dictionary of environment variable values
+        """
+        import os
+        if keys is None:
+            keys = [
+                "OCPS_DRIFT_THRESHOLD",
+                "COGNITIVE_TIMEOUT_S",
+                "COGNITIVE_MAX_INFLIGHT", 
+                "FAST_PATH_LATENCY_SLO_MS",
+                "MAX_PLAN_STEPS"
+            ]
+        return {k: os.getenv(k) for k in keys}
+
 # ------------- Dispatcher (PG -> Coordinator -> PG) -------------
 @ray.remote(lifetime="detached", num_cpus=0.1, namespace=RAY_NS)
 class Dispatcher:

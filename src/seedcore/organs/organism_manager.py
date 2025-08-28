@@ -30,6 +30,7 @@ import asyncio
 import time
 import ray
 import os
+import uuid
 import concurrent.futures
 # SOLUTION: Ray connection is now handled centrally by ray_connector.py
 import traceback
@@ -42,6 +43,14 @@ from typing import Dict, List, Any, Optional, Tuple, Set, TYPE_CHECKING
 
 from .base import Organ
 from ..agents import tier0_manager
+
+# Import cognitive client for HGNN escalation
+try:
+    from ..serve.cognitive_serve import CognitiveCoreClient
+    COGNITIVE_AVAILABLE = True
+except ImportError:
+    COGNITIVE_AVAILABLE = False
+    CognitiveCoreClient = None
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +134,15 @@ class OrganismManager:
         self.ocps = OCPSValve()
         self.routing = RoutingTable()
         self.organ_interfaces: Dict[str, StandardizedOrganInterface] = {}
+        
+        # Cognitive client configuration
+        self.cognitive_client = None
+        self.escalation_timeout_s = float(os.getenv("COGNITIVE_TIMEOUT_S", "8.0"))
+        self.escalation_max_inflight = int(os.getenv("COGNITIVE_MAX_INFLIGHT", "64"))
+        self._inflight = 0
+        self.ocps_drift_threshold = float(os.getenv("OCPS_DRIFT_THRESHOLD", "0.5"))
+        self.fast_path_latency_slo_ms = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
+        self.max_plan_steps = int(os.getenv("MAX_PLAN_STEPS", "16"))
         
         # Note: Ray-dependent initialization is now handled in initialize_organism()
         # This constructor is safe to call before Ray is ready
@@ -711,6 +729,11 @@ class OrganismManager:
         # Try fast-path resolution first
         organ_id = self.routing.resolve(ttype, domain)
         escalate = self.ocps.update(drift)
+        
+        # Apply configurable drift threshold for escalation
+        if drift >= self.ocps_drift_threshold:
+            escalate = True
+            logger.info(f"Task {task.get('id', 'unknown')} escalated due to drift threshold ({drift} >= {self.ocps_drift_threshold})")
 
         if organ_id and not escalate:
             try:
@@ -721,14 +744,22 @@ class OrganismManager:
                 # Inject OCPS regime signals for agent-side F-block features
                 task["p_fast"] = self.ocps.p_fast
                 task["escalated"] = False
+                
+                start_time = time.time()
                 result = tier0_manager.execute_task_on_best_of(candidate_ids, task)
+                fast_path_latency = (time.time() - start_time) * 1000  # Convert to ms
+                
+                # Track metrics
+                self._track_metrics("fast", True, fast_path_latency)
+                
                 return {"success": True, "result": result, "organ_id": organ_id, "path": "fast", "p_fast": self.ocps.p_fast}
             except Exception as e:
                 logger.warning(f"Fast-path failure on organ {organ_id}: {e}; escalating to HGNN")
                 escalate = True
 
         # Escalation path: HGNN decomposition to multi-organ plan
-        plan = self._hgnn_decompose(task)
+        start_time = time.time()
+        plan = await self._hgnn_decompose(task)
         results: List[Dict[str, Any]] = []
         for sub in plan:
             sub_organ = sub["organ_id"]
@@ -740,28 +771,169 @@ class OrganismManager:
             results.append(r)
 
         success = all(r.get("success") for r in results) if results else False
+        
+        # Track HGNN metrics
+        hgnn_latency = (time.time() - start_time) * 1000  # Convert to ms
+        self._track_metrics("hgnn", success, hgnn_latency)
+        
         if success:
             key = self._pattern_key(plan)
             self.routing.hyperedge_cache.setdefault(key, [p["organ_id"] for p in plan])
         return {"success": success, "result": results, "path": "hgnn", "p_fast": self.ocps.p_fast}
 
-    # === COA §6.1: placeholder hypergraph decomposition ===
-    def _hgnn_decompose(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
+    # === COA §6.1: enhanced hypergraph decomposition with cognitive client ===
+    async def _hgnn_decompose(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Placeholder for HGNN-based decomposition. For now, route to a minimal multi-organ plan
-        if no fast-path mapping exists.
+        Enhanced HGNN-based decomposition using CognitiveCore Serve deployment.
+        
+        This method:
+        1. Checks if cognitive client is available and healthy
+        2. Calls CognitiveCore for intelligent task decomposition
+        3. Validates the returned plan
+        4. Falls back to simple routing if cognitive reasoning fails
         """
-        # Example: trivial single-organ passthrough
+        # Check if we can use cognitive escalation
+        if (not self.cognitive_client or 
+            self._inflight >= self.escalation_max_inflight or
+            not self.cognitive_client.is_healthy()):
+            logger.info("Using fallback plan (cognitive client unavailable or at capacity)")
+            return self._fallback_plan(task)
+
+        # Prepare the request for CognitiveCore
+        req = {
+            "task_id": str(task.get("id", task.get("task_id", "unknown"))),
+            "type": task.get("type", task.get("task_type", "unknown")),
+            "description": task.get("description", str(task)),
+            "constraints": {
+                "latency_ms": self.fast_path_latency_slo_ms,
+                "budget": task.get("budget", 0.02)
+            },
+            "context": {
+                "features": task.get("features", {}),
+                "history_ids": task.get("history_ids", []),
+                "drift_score": float(task.get("drift_score", 0.0))
+            },
+            "available_organs": list(self.organs.keys()),
+            "correlation_id": str(task.get("correlation_id", uuid.uuid4()))
+        }
+
+        self._inflight += 1
+        try:
+            logger.info(f"Calling CognitiveCore for task {req['task_id']}")
+            resp = await self.cognitive_client.solve_problem(**req)
+            
+            if resp and resp.get("success"):
+                plan = resp.get("solution_steps", [])
+                validated_plan = self._validate_or_fallback(plan, task)
+                if validated_plan:
+                    logger.info(f"✅ CognitiveCore generated plan with {len(validated_plan)} steps")
+                    return validated_plan
+                else:
+                    logger.warning("CognitiveCore plan validation failed, using fallback")
+                    return self._fallback_plan(task)
+            else:
+                logger.warning(f"CognitiveCore returned unsuccessful response: {resp}")
+                return self._fallback_plan(task)
+                
+        except Exception as e:
+            logger.warning(f"HGNN call failed: {e}")
+            return self._fallback_plan(task)
+        finally:
+            self._inflight -= 1
+
+    def _fallback_plan(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Create a minimal safe fallback plan when cognitive reasoning is unavailable."""
         ttype = task.get("type") or task.get("task_type")
+        
         # If any organ claims support for this type, prefer it
         for organ_id, iface in getattr(self, "organ_interfaces", {}).items():
             if ttype in iface.task_types:
                 return [{"organ_id": organ_id, "task": task}]
+        
         # Fallback: round-robin across known organs
         if self.organs:
             first = next(iter(self.organs.keys()))
             return [{"organ_id": first, "task": task}]
+        
         return []
+
+    def _validate_or_fallback(self, plan: List[Dict[str, Any]], task: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+        """Validate the plan from CognitiveCore and return fallback if invalid."""
+        if not isinstance(plan, list) or len(plan) > self.max_plan_steps:
+            logger.warning(f"Plan validation failed: invalid format or too many steps ({len(plan) if isinstance(plan, list) else 'not a list'})")
+            return None
+            
+        for step in plan:
+            if not isinstance(step, dict):
+                logger.warning(f"Plan validation failed: step is not a dict: {step}")
+                return None
+                
+            organ_id = step.get("organ_id")
+            if not organ_id or organ_id not in self.organs:
+                logger.warning(f"Plan validation failed: unknown organ '{organ_id}'")
+                return None
+                
+            if "task" not in step:
+                logger.warning(f"Plan validation failed: step missing 'task' field: {step}")
+                return None
+        
+        return plan
+
+    def _track_metrics(self, path: str, success: bool, latency_ms: float):
+        """Track task execution metrics for monitoring and optimization."""
+        if not hasattr(self, '_task_metrics'):
+            self._task_metrics = {
+                "total_tasks": 0,
+                "successful_tasks": 0,
+                "failed_tasks": 0,
+                "fast_path_tasks": 0,
+                "hgnn_tasks": 0,
+                "escalation_failures": 0,
+                "fast_path_latency_ms": [],
+                "hgnn_latency_ms": []
+            }
+        
+        self._task_metrics["total_tasks"] += 1
+        
+        if success:
+            self._task_metrics["successful_tasks"] += 1
+        else:
+            self._task_metrics["failed_tasks"] += 1
+        
+        if path == "fast":
+            self._task_metrics["fast_path_tasks"] += 1
+            self._task_metrics["fast_path_latency_ms"].append(latency_ms)
+            # Keep only last 1000 measurements
+            if len(self._task_metrics["fast_path_latency_ms"]) > 1000:
+                self._task_metrics["fast_path_latency_ms"] = self._task_metrics["fast_path_latency_ms"][-1000:]
+        elif path == "hgnn":
+            self._task_metrics["hgnn_tasks"] += 1
+            self._task_metrics["hgnn_latency_ms"].append(latency_ms)
+            # Keep only last 1000 measurements
+            if len(self._task_metrics["hgnn_latency_ms"]) > 1000:
+                self._task_metrics["hgnn_latency_ms"] = self._task_metrics["hgnn_latency_ms"][-1000:]
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get current task execution metrics."""
+        if not hasattr(self, '_task_metrics'):
+            return {}
+        
+        metrics = self._task_metrics.copy()
+        
+        # Calculate averages
+        if metrics.get("fast_path_latency_ms"):
+            metrics["fast_path_latency_avg_ms"] = sum(metrics["fast_path_latency_ms"]) / len(metrics["fast_path_latency_ms"])
+        if metrics.get("hgnn_latency_ms"):
+            metrics["hgnn_latency_avg_ms"] = sum(metrics["hgnn_latency_ms"]) / len(metrics["hgnn_latency_ms"])
+        
+        # Calculate ratios
+        total = metrics.get("total_tasks", 0)
+        if total > 0:
+            metrics["fast_path_ratio"] = metrics.get("fast_path_tasks", 0) / total
+            metrics["escalation_ratio"] = metrics.get("hgnn_tasks", 0) / total
+            metrics["success_ratio"] = metrics.get("successful_tasks", 0) / total
+        
+        return metrics
 
     def _pattern_key(self, plan: List[Dict[str, Any]]) -> str:
         return "|".join(f"{p['organ_id']}:{p['task'].get('type', p['task'].get('task_type',''))}" for p in plan)
@@ -877,6 +1049,15 @@ class OrganismManager:
             except Exception as e:
                 return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
 
+        elif ttype == "get_metrics":
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                metrics = self.get_metrics()
+                return {"success": True, "path": "api_handler", "p_fast": self.ocps.p_fast, "result": metrics}
+            except Exception as e:
+                return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
+
         # 3) Default: COA routing
         try:
             routed = await self.route_and_execute(task)
@@ -935,6 +1116,9 @@ class OrganismManager:
                         for t in known_types:
                             self.routing.standardize(t, organ_id)
                 
+                # Initialize cognitive client for HGNN escalation
+                await self._initialize_cognitive_client()
+                
                 self._initialized = True
                 logger.info("✅ Organism initialization complete.")
                 return  # Success, exit the retry loop
@@ -949,6 +1133,21 @@ class OrganismManager:
                 else:
                     logger.error(f"❌ All {max_retries} attempts failed. Giving up.")
                     raise
+
+    async def _initialize_cognitive_client(self):
+        """Initialize the cognitive client for HGNN escalation."""
+        if not COGNITIVE_AVAILABLE:
+            logger.warning("⚠️ CognitiveCore not available - HGNN escalation will use fallback plans")
+            return
+            
+        try:
+            self.cognitive_client = CognitiveCoreClient(
+                deployment_name="cognitive",
+                timeout_s=self.escalation_timeout_s
+            )
+            logger.info("✅ Cognitive client ready")
+        except Exception as e:
+            logger.warning(f"⚠️ Cognitive client not ready: {e}")
 
     def shutdown_organism(self):
         """Shuts down the organism and cleans up resources."""

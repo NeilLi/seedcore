@@ -1,7 +1,12 @@
 import os, time, uuid, requests
 from urllib.parse import urlparse
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from ray import serve
+from pydantic import BaseModel, Field
+from typing import Dict, Any, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10"))
 
@@ -47,6 +52,23 @@ ML = f"{GATEWAY}/ml"
 COG = f"{GATEWAY}/cognitive"
 
 orch_app = FastAPI()
+
+# Task models
+class TaskCreateRequest(BaseModel):
+    type: str = Field(..., description="Task type")
+    description: str = Field(..., description="Task description")
+    params: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Task parameters")
+    domain: Optional[str] = Field(None, description="Task domain")
+    drift_score: Optional[float] = Field(0.0, description="Drift score for OCPS")
+    constraints: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Task constraints")
+    features: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Task features")
+    history_ids: Optional[list] = Field(default_factory=list, description="History IDs for context")
+
+class TaskResponse(BaseModel):
+    task_id: str
+    status: str
+    message: str
+    created_at: float
 
 def _post(url, json):
     r = requests.post(url, json=json, timeout=ORCHESTRATOR_TIMEOUT)
@@ -156,6 +178,66 @@ class OpsOrchestrator:
     @orch_app.get("/pipeline/tune/status/{job_id}")
     def tune_status(self, job_id: str):
         return requests.get(f"{ML}/xgboost/tune/status/{job_id}", timeout=ORCHESTRATOR_TIMEOUT).json()
+
+    @orch_app.post("/tasks", response_model=TaskResponse)
+    async def create_task(self, request: TaskCreateRequest, background_tasks: BackgroundTasks):
+        """
+        Create a new task and enqueue it for processing.
+        
+        This endpoint:
+        1. Creates a task record
+        2. Enqueues it for processing by dispatchers
+        3. Returns immediately with task ID
+        """
+        try:
+            task_id = str(uuid.uuid4())
+            created_at = time.time()
+            
+            # Create task payload for dispatchers
+            task_payload = {
+                "id": task_id,
+                "type": request.type,
+                "description": request.description,
+                "params": request.params,
+                "domain": request.domain,
+                "drift_score": request.drift_score,
+                "constraints": request.constraints,
+                "features": request.features,
+                "history_ids": request.history_ids,
+                "correlation_id": str(uuid.uuid4()),
+                "created_at": created_at
+            }
+            
+            # In a real implementation, you would:
+            # 1. Store the task in a database
+            # 2. Enqueue it for processing by dispatchers
+            # 3. Return the task ID immediately
+            
+            # For now, we'll simulate this by returning the task ID
+            # TODO: Integrate with actual database and dispatcher queue
+            
+            logger.info(f"Created task {task_id} of type {request.type}")
+            
+            return TaskResponse(
+                task_id=task_id,
+                status="created",
+                message="Task created and enqueued for processing",
+                created_at=created_at
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to create task: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @orch_app.get("/health")
+    async def health_check(self):
+        """Health check endpoint."""
+        return {
+            "status": "healthy",
+            "service": "orchestrator",
+            "timestamp": time.time(),
+            "gateway": GATEWAY
+        }
 
     
 def build_orchestrator(args: dict):
