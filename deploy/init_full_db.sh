@@ -14,10 +14,11 @@ MIGRATION_001="${SCRIPT_DIR}/migrations/001_create_tasks_table.sql"
 MIGRATION_002="${SCRIPT_DIR}/migrations/002_graph_embeddings.sql"
 MIGRATION_003="${SCRIPT_DIR}/migrations/003_graph_task_types.sql"
 MIGRATION_004="${SCRIPT_DIR}/migrations/004_fix_taskstatus_enum.sql"
-MIGRATION_005="${SCRIPT_DIR}/migrations/002_create_facts_table.sql"
+MIGRATION_005="${SCRIPT_DIR}/migrations/005_consolidate_task_schema.sql"
+MIGRATION_006="${SCRIPT_DIR}/migrations/002_create_facts_table.sql"
 
 # Check if all migration files exist
-for migration in "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_005"; do
+for migration in "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_005" "$MIGRATION_006"; do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
     exit 1
@@ -31,7 +32,8 @@ echo "   - 001: $MIGRATION_001"
 echo "   - 002: $MIGRATION_002"
 echo "   - 003: $MIGRATION_003"
 echo "   - 004: $MIGRATION_004"
-echo "   - 005: $MIGRATION_005"
+echo "   - 005: $MIGRATION_005 (NEW: Consolidated task schema)"
+echo "   - 006: $MIGRATION_006"
 
 find_pg_pod() {
   local sel pod
@@ -107,7 +109,7 @@ ON CONFLICT (uuid) DO NOTHING;
 # 5) Copy and run all migrations in sequence
 echo "📂 Copying and running migrations..."
 
-# Migration 001: Create tasks table
+# Migration 001: Create tasks table (basic structure)
 echo "⚙️  Running migration 001: Create tasks table..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_001" "$POSTGRES_POD:/tmp/001_create_tasks_table.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
@@ -131,13 +133,19 @@ kubectl -n "$NAMESPACE" cp "$MIGRATION_004" "$POSTGRES_POD:/tmp/004_fix_taskstat
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/004_fix_taskstatus_enum.sql"
 
-# Migration 005: Create facts table
-echo "⚙️  Running migration 005: Create facts table..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_005" "$POSTGRES_POD:/tmp/005_create_facts_table.sql"
+# Migration 005: NEW - Consolidate and fix task schema (CRITICAL FIX)
+echo "⚙️  Running migration 005: Consolidate and fix task schema (CRITICAL FIX)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_005" "$POSTGRES_POD:/tmp/005_consolidate_task_schema.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
-  psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/005_create_facts_table.sql"
+  psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/005_consolidate_task_schema.sql"
 
-# 7) Verify schema
+# Migration 006: Create facts table
+echo "⚙️  Running migration 006: Create facts table..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_006" "$POSTGRES_POD:/tmp/006_create_facts_table.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+  psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/006_create_facts_table.sql"
+
+# 6) Verify schema
 echo "✅ Verifying schema..."
 echo "📊 Tables:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
@@ -176,7 +184,9 @@ echo "✅ Created tables: tasks, holons, graph_embeddings, facts"
 echo "✅ Created views: graph_tasks"
 echo "✅ Created helper functions: create_graph_embed_task, create_graph_rag_task"
 echo "✅ Fixed taskstatus enum to use consistent lowercase values (created, queued, running, completed, failed, cancelled, retry)"
+echo "✅ CRITICAL FIX: Consolidated task schema with proper locked_by, locked_at, run_after, attempts columns"
 echo "✅ Enabled extensions: pgcrypto, vector"
+echo "✅ Fixed claim query index to include retry status"
 echo "👉 Use DSN: postgresql://${DB_USER}:${DB_PASS}@postgresql:5432/${DB_NAME}"
 echo ""
 echo "📋 Quick start examples:"
@@ -191,3 +201,10 @@ echo "   SELECT * FROM graph_tasks ORDER BY updated_at DESC LIMIT 10;"
 echo ""
 echo "   -- Test facts table:"
 echo "   SELECT * FROM facts LIMIT 5;"
+echo ""
+echo "🔧 Database Schema Fixes Applied:"
+echo "   ✅ Added missing 'retry' status to taskstatus enum"
+echo "   ✅ Ensured locked_by, locked_at, run_after, attempts columns exist"
+echo "   ✅ Fixed claim query index to include retry status"
+echo "   ✅ Consolidated all task schema fixes in one migration"
+echo "   ✅ Added proper error handling and retry logic support"

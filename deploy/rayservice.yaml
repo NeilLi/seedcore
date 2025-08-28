@@ -28,13 +28,6 @@ spec:
               num_cpus: 0.2
               num_gpus: 0
               resources: {"head_node": 0.001}
-              runtime_env:
-                env_vars:
-                  OCPS_DRIFT_THRESHOLD: "0.5"
-                  COGNITIVE_TIMEOUT_S: "8.0"
-                  COGNITIVE_MAX_INFLIGHT: "64"
-                  FAST_PATH_LATENCY_SLO_MS: "1000"
-                  MAX_PLAN_STEPS: "16"
 
       - name: cognitive
         import_path: entrypoints.cognitive_entrypoint:build_cognitive_app
@@ -47,13 +40,6 @@ spec:
               num_gpus: 0
               memory: 2147483648  # 2GB
               resources: {"head_node": 0.001}
-              runtime_env:
-                env_vars:
-                  OCPS_DRIFT_THRESHOLD: "0.5"
-                  COGNITIVE_TIMEOUT_S: "8.0"
-                  COGNITIVE_MAX_INFLIGHT: "64"
-                  FAST_PATH_LATENCY_SLO_MS: "1000"
-                  MAX_PLAN_STEPS: "16"
       
       - name: orchestrator
         import_path: entrypoints.orchestrator:build_orchestrator
@@ -65,13 +51,18 @@ spec:
               num_cpus: 0.2
               num_gpus: 0
               resources: {"head_node": 0.001}
-              runtime_env:
-                env_vars:
-                  OCPS_DRIFT_THRESHOLD: "0.5"
-                  COGNITIVE_TIMEOUT_S: "8.0"
-                  COGNITIVE_MAX_INFLIGHT: "64"
-                  FAST_PATH_LATENCY_SLO_MS: "1000"
-                  MAX_PLAN_STEPS: "16"
+      
+      - name: organism
+        import_path: entrypoints.organism_entrypoint:build_organism_app
+        route_prefix: /organism
+        deployments:
+          - name: OrganismManager
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 0.4
+              num_gpus: 0
+              memory: 2147483648  # 2GB
+              resources: {"head_node": 0.001}
       
       # comment out the lightweight wrapper endpoints
       # - name: ml_serve
@@ -117,6 +108,17 @@ spec:
               value: "seedcore-dev"
             - name: XGB_STORAGE_PATH
               value: "/app/data/models"
+            # ✅ Routing environment variables for coordinator access
+            - name: OCPS_DRIFT_THRESHOLD
+              value: "0.5"
+            - name: COGNITIVE_TIMEOUT_S
+              value: "8.0"
+            - name: COGNITIVE_MAX_INFLIGHT
+              value: "64"
+            - name: FAST_PATH_LATENCY_SLO_MS
+              value: "1000"
+            - name: MAX_PLAN_STEPS
+              value: "16"
             ports:
               - name: gcs
                 containerPort: 6379
@@ -194,6 +196,17 @@ spec:
               value: "seedcore-dev"
             - name: XGB_STORAGE_PATH
               value: "/app/data/models"
+            # ✅ Routing environment variables for coordinator access
+            - name: OCPS_DRIFT_THRESHOLD
+              value: "0.5"
+            - name: COGNITIVE_TIMEOUT_S
+              value: "8.0"
+            - name: COGNITIVE_MAX_INFLIGHT
+              value: "64"
+            - name: FAST_PATH_LATENCY_SLO_MS
+              value: "1000"
+            - name: MAX_PLAN_STEPS
+              value: "16"
             resources:
               requests:
                 cpu: "500m"

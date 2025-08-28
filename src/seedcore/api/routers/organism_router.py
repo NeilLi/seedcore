@@ -1,47 +1,33 @@
 from typing import Dict, Any
 
 import time
-import ray
 from fastapi import APIRouter, HTTPException, Request
 
-# REMOVED: Local OrganismManager import - this is now handled by the Coordinator actor
-# from ...organs.organism_manager import organism_manager
+# Import the new organism serve client
+from ...serve.organism_serve import get_organism_client
 
 
 router = APIRouter()
 
 
-# REMOVED: _get_manager_from_request function - this is no longer needed since we don't hold OrganismManager locally
-
-async def _get_coordinator_actor():
-    """Get the detached Coordinator actor that manages the OrganismManager."""
+async def _get_organism_client():
+    """Get the organism serve client that communicates with the Serve-deployed organism."""
     try:
-        import os
-        # Use the correct namespace from environment variables
-        ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-        coord = ray.get_actor("seedcore_coordinator", namespace=ray_namespace)
-        return coord
+        client = get_organism_client()
+        return client
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Coordinator actor not available: {str(e)}")
+        raise HTTPException(status_code=503, detail=f"Organism service not available: {str(e)}")
 
 
 @router.get("/organism/status")
 async def get_organism_status(request: Request) -> Dict[str, Any]:
     try:
-        coord = await _get_coordinator_actor()
+        client = await _get_organism_client()
         
-        # Use a simple task to get organism status via Coordinator
-        status_task = {
-            "type": "get_organism_status",
-            "params": {},
-            "description": "Get organism status",
-            "domain": None,
-            "drift_score": 0.0
-        }
-        
-        result = await coord.handle.remote(status_task)
+        # Get organism status directly from the serve client
+        result = await client.get_organism_status()
         if result.get("success"):
-            return {"success": True, "data": result.get("result", {})}
+            return {"success": True, "data": result.get("status", {})}
         else:
             return {"success": False, "error": result.get("error", "Failed to get organism status")}
     except Exception as e:
@@ -51,7 +37,7 @@ async def get_organism_status(request: Request) -> Dict[str, Any]:
 @router.post("/organism/execute/{organ_id}")
 async def execute_task_on_organ(organ_id: str, request: Request, task_request: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        coord = await _get_coordinator_actor()
+        client = await _get_organism_client()
         
         task_data = task_request.get("task_data", {})
         task = {
@@ -65,7 +51,7 @@ async def execute_task_on_organ(organ_id: str, request: Request, task_request: D
             "drift_score": 0.0
         }
         
-        result = await coord.handle.remote(task)
+        result = await client.handle_incoming_task(task)
         return result
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -74,7 +60,7 @@ async def execute_task_on_organ(organ_id: str, request: Request, task_request: D
 @router.post("/organism/execute/random")
 async def execute_task_on_random_organ(request: Request, task_request: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        coord = await _get_coordinator_actor()
+        client = await _get_organism_client()
         
         task_data = task_request.get("task_data", {})
         task = {
@@ -87,7 +73,7 @@ async def execute_task_on_random_organ(request: Request, task_request: Dict[str,
             "drift_score": 0.0
         }
         
-        result = await coord.handle.remote(task)
+        result = await client.handle_incoming_task(task)
         return result
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -96,20 +82,12 @@ async def execute_task_on_random_organ(request: Request, task_request: Dict[str,
 @router.get("/organism/summary")
 async def get_organism_summary(request: Request) -> Dict[str, Any]:
     try:
-        coord = await _get_coordinator_actor()
+        client = await _get_organism_client()
         
-        # Use a task to get organism summary via Coordinator
-        summary_task = {
-            "type": "get_organism_summary",
-            "params": {},
-            "description": "Get organism summary",
-            "domain": None,
-            "drift_score": 0.0
-        }
-        
-        result = await coord.handle.remote(summary_task)
+        # Get organism summary directly from the serve client
+        result = await client.get_organism_summary()
         if result.get("success"):
-            return {"success": True, "summary": result.get("result", {})}
+            return {"success": True, "summary": result.get("summary", {})}
         else:
             return {"success": False, "error": result.get("error", "Failed to get organism summary")}
     except Exception as e:
@@ -119,18 +97,16 @@ async def get_organism_summary(request: Request) -> Dict[str, Any]:
 @router.post("/organism/initialize")
 async def initialize_organism(request: Request) -> Dict[str, Any]:
     try:
-        coord = await _get_coordinator_actor()
+        client = await _get_organism_client()
         
-        # Use a task to initialize organism via Coordinator
-        init_task = {
+        # Initialize organism directly via the serve client
+        result = await client.handle_incoming_task({
             "type": "initialize_organism",
             "params": {},
             "description": "Initialize organism",
             "domain": None,
             "drift_score": 0.0
-        }
-        
-        result = await coord.handle.remote(init_task)
+        })
         if result.get("success"):
             return {"success": True, "message": "Organism initialized successfully"}
         else:
@@ -142,18 +118,16 @@ async def initialize_organism(request: Request) -> Dict[str, Any]:
 @router.post("/organism/shutdown")
 async def shutdown_organism(request: Request) -> Dict[str, Any]:
     try:
-        coord = await _get_coordinator_actor()
+        client = await _get_organism_client()
         
-        # Use a task to shutdown organism via Coordinator
-        shutdown_task = {
+        # Shutdown organism directly via the serve client
+        result = await client.handle_incoming_task({
             "type": "shutdown_organism",
             "params": {},
             "description": "Shutdown organism",
             "domain": None,
             "drift_score": 0.0
-        }
-        
-        result = await coord.handle.remote(shutdown_task)
+        })
         if result.get("success"):
             return {"success": True, "message": "Organism shutdown successfully"}
         else:
@@ -162,34 +136,35 @@ async def shutdown_organism(request: Request) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-# --- NEW: Coordinator Health Check Endpoint ---
-@router.get("/coordinator/health")
-async def coordinator_health():
-    """Check the health of the Coordinator actor."""
+# --- NEW: Organism Service Health Check Endpoint ---
+@router.get("/organism/health")
+async def organism_health():
+    """Check the health of the Organism service."""
     try:
-        coord = await _get_coordinator_actor()
+        client = await _get_organism_client()
         
-        # Use async await instead of ray.get() for better FastAPI responsiveness
-        ping_ref = coord.ping.remote()
-        ping_result = await ping_ref
+        # Check organism service health
+        health_result = await client.health_check()
         
-        if ping_result == "pong":
+        if health_result.get("status") == "healthy":
             return {
                 "status": "healthy",
-                "coordinator": "available",
-                "message": "Coordinator actor is responsive"
+                "organism": "available",
+                "message": "Organism service is healthy",
+                "organism_initialized": health_result.get("organism_initialized", False)
             }
         else:
             return {
                 "status": "degraded",
-                "coordinator": "unresponsive",
-                "message": f"Coordinator ping returned unexpected result: {ping_result}"
+                "organism": "unhealthy",
+                "message": f"Organism service status: {health_result.get('status', 'unknown')}",
+                "organism_initialized": health_result.get("organism_initialized", False)
             }
     except Exception as e:
         return {
             "status": "unhealthy",
-            "coordinator": "unavailable",
-            "message": f"Coordinator actor not available: {str(e)}"
+            "organism": "unavailable",
+            "message": f"Organism service not available: {str(e)}"
         }
 
 

@@ -40,10 +40,11 @@ def verify_bootstrap_env():
     
     return True
 
-def verify_ray_actors():
-    """Verify environment variables in Ray actors."""
+async def verify_ray_actors():
+    """Verify environment variables in Ray actors and Serve deployments."""
     try:
         import ray
+        from ray import serve
         
         # Check if Ray is initialized
         if not ray.is_initialized():
@@ -51,26 +52,27 @@ def verify_ray_actors():
             ray.init(address=os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001"))
         
         namespace = os.getenv("RAY_NAMESPACE", "seedcore-dev")
-        logger.info(f"🔧 Checking environment variables in Ray actors (namespace: {namespace})...")
+        logger.info(f"🔧 Checking environment variables in Ray actors and Serve deployments (namespace: {namespace})...")
         
-        # Check Coordinator
+        # Check OrganismManager Serve deployment
         try:
-            coord = ray.get_actor("seedcore_coordinator", namespace=namespace)
-            env_vars = ray.get(coord.debug_env.remote())
-            logger.info("✅ Coordinator environment variables:")
-            for key, value in env_vars.items():
-                logger.info(f"  {key}: {value}")
+            coord = serve.get_deployment_handle("OrganismManager", app_name="organism")
+            # Note: Serve deployments don't have debug_env method, so we'll check health instead
+            health_result = await coord.health.remote()
+            logger.info("✅ OrganismManager Serve deployment health:")
+            logger.info(f"  Status: {health_result.get('status', 'unknown')}")
+            logger.info(f"  Organism initialized: {health_result.get('organism_initialized', False)}")
         except Exception as e:
-            logger.error(f"❌ Failed to check Coordinator: {e}")
+            logger.error(f"❌ Failed to check OrganismManager Serve deployment: {e}")
             return False
         
         return True
         
     except Exception as e:
-        logger.error(f"❌ Failed to verify Ray actors: {e}")
+        logger.error(f"❌ Failed to verify Ray actors and Serve deployments: {e}")
         return False
 
-def main():
+async def main():
     """Run verification checks."""
     logger.info("🚀 Starting environment variable verification...")
     
@@ -78,7 +80,7 @@ def main():
     verify_bootstrap_env()
     
     # Check Ray actors
-    if verify_ray_actors():
+    if await verify_ray_actors():
         logger.info("✅ Environment variable verification completed successfully!")
         return 0
     else:
@@ -86,5 +88,6 @@ def main():
         return 1
 
 if __name__ == "__main__":
-    exit_code = main()
+    import asyncio
+    exit_code = asyncio.run(main())
     sys.exit(exit_code)

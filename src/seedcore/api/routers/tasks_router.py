@@ -11,6 +11,10 @@ from sqlalchemy import select, String
 # --- IMPORTS FROM YOUR OTHER MODULES ---
 from ...database import get_async_pg_session, get_async_pg_session_factory
 from ...models.task import Task, TaskStatus
+from ...models.result_schema import (
+    TaskResult, ResultKind, create_fast_path_result, create_escalated_result,
+    create_cognitive_result, create_error_result, from_legacy_result
+)
 
 router = APIRouter()
 
@@ -51,8 +55,15 @@ class TaskRead(BaseModel):
         try:
             if hasattr(v, '__dict__'):
                 return v.__dict__
+            elif hasattr(v, 'dict'):
+                return v.model_dump()
             else:
-                return {"raw_result": str(v), "type": str(type(v))}
+                # Create structured wrapper instead of raw_result
+                return {
+                    "type": "other_result",
+                    "value": str(v),
+                    "original_type": str(type(v))
+                }
         except:
             return None
 
@@ -166,36 +177,102 @@ async def _task_worker(app_state: Any):
                     "drift_score": task.drift_score,
                 }
                 
-                # NEW: Submit task to Coordinator actor instead of local OrganismManager
+                # ✅ FIX: Submit task to OrganismManager Serve deployment instead of raw Ray actor
                 try:
-                    import ray
-                    import os
-                    # Use the correct namespace from environment variables
-                    ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-                    coord = ray.get_actor("seedcore_coordinator", namespace=ray_namespace)
-                    result = await coord.handle.remote(payload)
+                    from ray import serve
+                    # Get the Serve deployment handle for OrganismManager
+                    coord = serve.get_deployment_handle("OrganismManager", app_name="organism")
+                    result = await coord.handle_incoming_task.remote(payload)
                     
                     # Log the result type for debugging
                     print(f"Task {task.id} result type: {type(result)}, value: {result}")
                     
                 except Exception as e:
-                    # If Coordinator is not available, mark task as failed
-                    result = {"success": False, "error": f"Coordinator not available: {str(e)}"}
+                    # If OrganismManager Serve deployment is not available, mark task as failed
+                    result = {"success": False, "error": f"OrganismManager not available: {str(e)}"}
                     print(f"Task {task.id} failed with error: {str(e)}")
 
-                # Ensure result is stored as a dictionary
-                if isinstance(result, list) and result and isinstance(result[0], dict):
-                    # If result is a list containing dicts, extract the first one
-                    task.result = result[0]
-                elif isinstance(result, dict):
-                    # If result is already a dict, use it directly
-                    task.result = result
-                else:
-                    # For other types, convert to dict or create a wrapper
-                    if hasattr(result, '__dict__'):
-                        task.result = result.__dict__
+                # Use the new unified result schema
+                try:
+                    if isinstance(result, dict):
+                        # Check if this is already a TaskResult
+                        if "kind" in result and "payload" in result:
+                            task.result = result  # Already in new format
+                        else:
+                            # Use the centralized conversion function
+                            task_result = from_legacy_result(result)
+                            task.result = task_result.model_dump()
+                    elif hasattr(result, 'kind') and hasattr(result, 'payload'):
+                        # This is already a TaskResult object
+                        task.result = result.model_dump()
+                    elif isinstance(result, list):
+                        # Handle list results (common for HGNN decomposition)
+                        if result and isinstance(result[0], dict):
+                            # Convert list to escalated result using the new schema
+                            task_steps = []
+                            for step in result:
+                                if isinstance(step, dict):
+                                    task_steps.append(TaskStep(
+                                        organ_id=step.get("organ_id", "unknown"),
+                                        success=step.get("success", True),
+                                        task=step.get("task"),
+                                        result=step.get("result"),
+                                        error=step.get("error"),
+                                        metadata=step
+                                    ))
+                                else:
+                                    task_steps.append(TaskStep(
+                                        organ_id="unknown",
+                                        success=False,
+                                        error=f"Invalid step format: {step}"
+                                    ))
+                            
+                            escalated_result = create_escalated_result(
+                                solution_steps=task_steps,
+                                plan_source="list_conversion"
+                            )
+                            task.result = escalated_result.model_dump()
+                        else:
+                            # Other list types
+                            error_result = create_error_result(
+                                error="Unsupported list result format",
+                                error_type="unsupported_list",
+                                original_type=str(type(result))
+                            )
+                            task.result = error_result.model_dump()
+                    elif hasattr(result, '__dict__'):
+                        # Handle objects with __dict__
+                        fast_path_result = create_fast_path_result(
+                            routed_to="unknown",
+                            organ_id="unknown",
+                            result=result.__dict__
+                        )
+                        task.result = fast_path_result.dict()
+                    elif hasattr(result, 'dict'):
+                        # Handle Pydantic models
+                        fast_path_result = create_fast_path_result(
+                            routed_to="unknown",
+                            organ_id="unknown",
+                            result=result.model_dump()
+                        )
+                        task.result = fast_path_result.model_dump()
                     else:
-                        task.result = {"raw_result": str(result), "type": str(type(result))}
+                        # For other types, create error result
+                        error_result = create_error_result(
+                            error="Unsupported result type",
+                            error_type="unsupported_type",
+                            original_type=str(type(result))
+                        )
+                        task.result = error_result.model_dump()
+                        
+                except Exception as e:
+                    # Fallback to error result if conversion fails
+                    error_result = create_error_result(
+                        error=f"Failed to convert result: {str(e)}",
+                        error_type="conversion_error",
+                        original_type=str(type(result))
+                    )
+                    task.result = error_result.model_dump()
                 
                 task.status = TaskStatus.COMPLETED if task.result.get("success") else TaskStatus.FAILED
                 task.error = None if task.result.get("success") else str(task.result.get("error", "Unknown error"))
@@ -458,36 +535,34 @@ async def task_status(
         "error": task.error
     }
 
-# --- NEW: Coordinator Health Check Endpoint ---
+# --- NEW: OrganismManager Serve Deployment Health Check Endpoint ---
 @router.get("/coordinator/health")
 async def coordinator_health():
-    """Check the health of the Coordinator actor."""
+    """Check the health of the OrganismManager Serve deployment."""
     try:
-        import ray
-        import os
-        # Use the correct namespace from environment variables
-        ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-        coord = ray.get_actor("seedcore_coordinator", namespace=ray_namespace)
+        from ray import serve
+        # Get the Serve deployment handle for OrganismManager
+        coord = serve.get_deployment_handle("OrganismManager", app_name="organism")
         
-        # Use async await instead of ray.get() for better FastAPI responsiveness
-        ping_ref = coord.ping.remote()
-        ping_result = await ping_ref
+        # Use the health endpoint of the Serve deployment
+        health_result = await coord.health.remote()
         
-        if ping_result == "pong":
+        if health_result.get("status") == "healthy":
             return {
                 "status": "healthy",
                 "coordinator": "available",
-                "message": "Coordinator actor is responsive"
+                "message": "OrganismManager Serve deployment is healthy",
+                "organism_initialized": health_result.get("organism_initialized", False)
             }
         else:
             return {
                 "status": "degraded",
                 "coordinator": "unresponsive",
-                "message": f"Coordinator ping returned unexpected result: {ping_result}"
+                "message": f"OrganismManager health check failed: {health_result}"
             }
     except Exception as e:
         return {
             "status": "unhealthy",
             "coordinator": "unavailable",
-            "message": f"Coordinator actor not available: {str(e)}"
+            "message": f"OrganismManager Serve deployment not available: {str(e)}"
         }

@@ -8,9 +8,14 @@ integrating with the SeedCore architecture for memory, energy, and lifecycle man
 import dspy
 import json
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from dataclasses import dataclass
 from enum import Enum
+
+# Import the new centralized result schema
+from ..models.result_schema import (
+    create_cognitive_result, create_error_result, TaskResult
+)
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +228,7 @@ class CognitiveCore(dspy.Module):
             result = handler(**input_data)
             
             # Process and format the result
-            processed_result = self._process_result(result, context.task_type)
+            processed_result = self._format_result(result, context)
             
             # Add metadata
             processed_result.update({
@@ -287,47 +292,93 @@ class CognitiveCore(dspy.Module):
         else:
             raise ValueError(f"Unsupported task type: {context.task_type}")
     
-    def _process_result(self, result, task_type: CognitiveTaskType) -> Dict[str, Any]:
-        """Process and format the result based on task type."""
-        if task_type == CognitiveTaskType.FAILURE_ANALYSIS:
-            return {
-                "thought": result.thought,
-                "proposed_solution": result.proposed_solution,
-                "confidence_score": self._safe_float_convert(result.confidence_score)
-            }
-        elif task_type == CognitiveTaskType.TASK_PLANNING:
-            return {
-                "step_by_step_plan": result.step_by_step_plan,
-                "estimated_complexity": result.estimated_complexity,
-                "risk_assessment": result.risk_assessment
-            }
-        elif task_type == CognitiveTaskType.DECISION_MAKING:
-            return {
-                "reasoning": result.reasoning,
-                "decision": result.decision,
-                "confidence": self._safe_float_convert(result.confidence),
-                "alternative_options": result.alternative_options
-            }
-        elif task_type == CognitiveTaskType.PROBLEM_SOLVING:
-            return {
-                "solution_approach": result.solution_approach,
-                "solution_steps": result.solution_steps,
-                "success_metrics": result.success_metrics
-            }
-        elif task_type == CognitiveTaskType.MEMORY_SYNTHESIS:
-            return {
-                "synthesized_insight": result.synthesized_insight,
-                "confidence_level": self._safe_float_convert(result.confidence_level),
-                "related_patterns": result.related_patterns
-            }
-        elif task_type == CognitiveTaskType.CAPABILITY_ASSESSMENT:
-            return {
-                "capability_gaps": result.capability_gaps,
-                "improvement_plan": result.improvement_plan,
-                "priority_recommendations": result.priority_recommendations
-            }
-        else:
-            return {"raw_result": str(result)}
+    def _format_result(self, result: Any, context: CognitiveContext) -> Dict[str, Any]:
+        """Format the result based on task type using the new centralized schema."""
+        task_type = context.task_type
+        
+        try:
+            if task_type == CognitiveTaskType.FAILURE_ANALYSIS:
+                return create_cognitive_result(
+                    agent_id=context.agent_id,
+                    task_type=task_type.value,
+                    result={
+                        "thought": result.thought,
+                        "proposed_solution": result.proposed_solution,
+                        "confidence_score": self._safe_float_convert(result.confidence_score)
+                    },
+                    confidence_score=self._safe_float_convert(result.confidence_score)
+                ).model_dump()
+            elif task_type == CognitiveTaskType.TASK_PLANNING:
+                return create_cognitive_result(
+                    agent_id=context.agent_id,
+                    task_type=task_type.value,
+                    result={
+                        "step_by_step_plan": result.step_by_step_plan,
+                        "estimated_complexity": result.estimated_complexity,
+                        "risk_assessment": result.risk_assessment
+                    }
+                ).model_dump()
+            elif task_type == CognitiveTaskType.DECISION_MAKING:
+                return create_cognitive_result(
+                    agent_id=context.agent_id,
+                    task_type=task_type.value,
+                    result={
+                        "reasoning": result.reasoning,
+                        "decision": result.decision,
+                        "confidence": self._safe_float_convert(result.confidence),
+                        "alternative_options": result.alternative_options
+                    },
+                    confidence_score=self._safe_float_convert(result.confidence)
+                ).model_dump()
+            elif task_type == CognitiveTaskType.PROBLEM_SOLVING:
+                return create_cognitive_result(
+                    agent_id=context.agent_id,
+                    task_type=task_type.value,
+                    result={
+                        "solution_approach": result.solution_approach,
+                        "solution_steps": result.solution_steps,
+                        "success_metrics": result.success_metrics
+                    }
+                ).model_dump()
+            elif task_type == CognitiveTaskType.MEMORY_SYNTHESIS:
+                return create_cognitive_result(
+                    agent_id=context.agent_id,
+                    task_type=task_type.value,
+                    result={
+                        "synthesized_insight": result.synthesized_insight,
+                        "confidence_level": self._safe_float_convert(result.confidence_level),
+                        "related_patterns": result.related_patterns
+                    },
+                    confidence_score=self._safe_float_convert(result.confidence_level)
+                ).model_dump()
+            elif task_type == CognitiveTaskType.CAPABILITY_ASSESSMENT:
+                return create_cognitive_result(
+                    agent_id=context.agent_id,
+                    task_type=task_type.value,
+                    result={
+                        "capability_gaps": result.capability_gaps,
+                        "improvement_plan": result.improvement_plan,
+                        "priority_recommendations": result.priority_recommendations
+                    }
+                ).model_dump()
+            else:
+                # Return structured result using the new schema
+                return create_cognitive_result(
+                    agent_id=context.agent_id,
+                    task_type=task_type.value,
+                    result={
+                        "type": "cognitive_result",
+                        "result": str(result),
+                        "original_type": str(type(result))
+                    }
+                ).model_dump()
+        except Exception as e:
+            # Return error result using the new schema
+            return create_error_result(
+                error=f"Failed to format cognitive result: {str(e)}",
+                error_type="formatting_error",
+                original_type=str(type(result))
+            ).model_dump()
     
     def _safe_float_convert(self, value) -> float:
         """Safely convert a value to float, handling various input types."""

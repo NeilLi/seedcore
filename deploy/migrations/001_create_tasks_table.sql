@@ -8,7 +8,8 @@ CREATE TYPE taskstatus AS ENUM (
     'running',
     'completed',
     'failed',
-    'cancelled'
+    'cancelled',
+    'retry'
 );
 
 -- Create tasks table
@@ -38,9 +39,9 @@ CREATE INDEX IF NOT EXISTS idx_tasks_locked_at ON tasks(locked_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type);
 CREATE INDEX IF NOT EXISTS idx_tasks_domain ON tasks(domain);
 
--- Create composite index for the claim query
+-- Create composite index for the claim query (include retry status)
 CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks(status, run_after, created_at) 
-WHERE status IN ('queued', 'failed');
+WHERE status IN ('queued', 'failed', 'retry');
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_tasks_updated_at()

@@ -16,7 +16,7 @@ sys.path.insert(0, str(src_path))
 
 # Import Ray utilities instead of direct ray.init()
 from seedcore.utils.ray_utils import ensure_ray_initialized, is_ray_available, get_ray_cluster_info
-from seedcore.agents.queue_dispatcher import Coordinator, Dispatcher
+from seedcore.agents.queue_dispatcher import Dispatcher
 from seedcore.agents.graph_dispatcher import GraphDispatcher
 
 # --- add right after imports, before logger = logging.getLogger(...) ---
@@ -90,54 +90,10 @@ def main():
     env_vars = {k: os.getenv(k, "") for k in ENV_KEYS}
     logger.info(f"🔧 Environment variables for actors: {env_vars}")
     
-    # Start Coordinator actor
-    try:
-        existing_coord = ray.get_actor("seedcore_coordinator", namespace=ns)
-        logger.info("✅ Coordinator actor already exists")
-    except Exception:
-        logger.info("🚀 Creating Coordinator actor...")
-        try:
-            # Create the Coordinator actor with async initialization
-            coord_ref = Coordinator.options(
-                name="seedcore_coordinator",
-                lifetime="detached",
-                namespace=ns,
-                num_cpus=0.1,
-                resources={"head_node": 0.001},
-                runtime_env={"env_vars": env_vars},  # Pass env vars to actor
-            ).remote()
-            
-            # Wait for the async initialization to complete
-            # This ensures the OrganismManager is fully initialized before proceeding
-            logger.info("⏳ Waiting for Coordinator initialization...")
-            
-            # Use get_status() for more comprehensive health checking
-            max_wait_time = 60  # seconds
-            start_time = time.time()
-            
-            while time.time() - start_time < max_wait_time:
-                try:
-                    status = ray.get(coord_ref.get_status.remote(), timeout=10.0)
-                    if status.get("status") == "healthy" and status.get("organism_initialized"):
-                        logger.info("✅ Coordinator actor created and fully initialized")
-                        break
-                    elif status.get("status") == "initializing":
-                        logger.info("⏳ Coordinator still initializing, waiting...")
-                        time.sleep(2)
-                    else:
-                        logger.warning(f"⚠️ Coordinator status: {status}")
-                        time.sleep(2)
-                except Exception as e:
-                    logger.warning(f"⚠️ Waiting for Coordinator initialization: {e}")
-                    time.sleep(2)
-            else:
-                # Timeout reached
-                raise TimeoutError("Coordinator initialization timed out after 60 seconds")
-            
-            logger.info("✅ Coordinator actor created and initialized successfully")
-        except Exception:
-            logger.exception("❌ Failed to create Coordinator actor")
-            sys.exit(1)
+    # Note: Coordinator is now managed by Ray Serve as part of the organism app
+    # The organism will be automatically deployed via serveConfigV2 in rayservice.yaml
+    logger.info("ℹ️  Coordinator is now managed by Ray Serve organism app")
+    logger.info("ℹ️  No need to create plain Ray actors - Serve will handle deployment")
     
     # Start Dispatcher actors
     dispatchers = []
@@ -203,7 +159,7 @@ def main():
         logger.exception("⚠️ GraphDispatcher creation failed (will continue): %s", e)
     
     logger.info("✅ Bootstrap complete!")
-    logger.info(f"📊 Coordinator: seedcore_coordinator")
+    logger.info(f"📊 Coordinator: OrganismManager Serve deployment")
     logger.info(f"📊 Dispatchers: {[f'seedcore_dispatcher_{i}' for i in range(dispatcher_count)]}")
     logger.info(f"📊 GraphDispatchers: {[f'seedcore_graph_dispatcher_{i}' for i in range(int(os.getenv('SEEDCORE_GRAPH_DISPATCHERS', '1')))]}")
     logger.info(f"📊 Namespace: {ns}")
@@ -223,15 +179,7 @@ def main():
             
             # Check if actors are still alive
             try:
-                # Check Coordinator health
-                coord = ray.get_actor("seedcore_coordinator", namespace=ns)
-                ping_ref = coord.ping.remote()
-                ping_result = ray.get(ping_ref, timeout=10.0)
-                if ping_result == "pong":
-                    logger.debug("✅ Coordinator is responsive")
-                else:
-                    logger.warning(f"⚠️ Coordinator ping returned unexpected result: {ping_result}")
-                
+                # ✅ FIX: Coordinator is now a Serve deployment, health check handled by Serve
                 # Check Dispatcher health using ping method
                 for i, dispatcher in enumerate(dispatchers):
                     try:

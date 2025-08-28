@@ -139,6 +139,10 @@ class CognitiveService:
             }
         }
 
+    async def ping(self) -> str:
+        """Health check method to verify the deployment is responsive."""
+        return "pong"
+
     @app.post("/reason-about-failure", response_model=CognitiveResponse)
     async def reason_about_failure(self, request: CognitiveRequest):
         try:
@@ -185,20 +189,50 @@ class CognitiveService:
         except Exception as e:
             return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
 
-    @app.post("/solve-problem", response_model=CognitiveResponse)
-    async def solve_problem(self, request: CognitiveRequest):
+    async def solve_problem(self, agent_id: str, problem_statement: str, constraints: dict | None = None, available_tools: dict | None = None, task_id: str | None = None, **kwargs):
+        """
+        Main entry point for HGNN problem solving and task decomposition.
+        
+        Args:
+            agent_id: ID of the agent
+            problem_statement: Description of the problem
+            constraints: Optional constraints
+            available_tools: Optional available tools
+            task_id: Optional task ID for tracing
+            **kwargs: Additional keyword arguments (ignored for compatibility)
+            
+        Returns:
+            CognitiveResponse with reasoning results
+        """
         try:
+            # Log task_id for tracing if present
+            if task_id:
+                print(f"[solve_problem] task_id={task_id}")
+                
             context = CognitiveContext(
-                agent_id=request.agent_id,
+                agent_id=agent_id,
                 task_type=CognitiveTaskType.PROBLEM_SOLVING,
                 input_data={
-                    "problem_statement": request.problem_statement,
-                    "constraints": request.constraints or {},
-                    "available_tools": request.available_tools or {}
+                    "problem_statement": problem_statement,
+                    "constraints": constraints or {},
+                    "available_tools": available_tools or {}
                 }
             )
             result = self.cognitive_core(context)
-            return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)
+            return CognitiveResponse(success=True, agent_id=agent_id, result=result)
+        except Exception as e:
+            return CognitiveResponse(success=False, agent_id=agent_id, result={}, error=str(e))
+
+    @app.post("/solve-problem", response_model=CognitiveResponse)
+    async def solve_problem_http(self, request: CognitiveRequest):
+        """HTTP endpoint for solve-problem that delegates to the direct method."""
+        try:
+            return await self.solve_problem(
+                agent_id=request.agent_id,
+                problem_statement=request.problem_statement or "",
+                constraints=request.constraints,
+                available_tools=request.available_tools
+            )
         except Exception as e:
             return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
 

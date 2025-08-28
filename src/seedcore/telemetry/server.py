@@ -99,6 +99,12 @@ from ..agents.cognitive_core import (
     initialize_cognitive_core,
     get_cognitive_core
 )
+
+# Import the new centralized result schema
+from ..models.result_schema import (
+    create_cognitive_result, create_error_result, TaskResult
+)
+
 # Serve modules are now running as separate services
 # from ..serve.cognitive_serve import CognitiveCoreClient
 from ..energy.weights import EnergyWeights
@@ -402,48 +408,46 @@ async def readyz_head():
     reasons = _readiness_check()
     return JSONResponse(status_code=200 if not reasons else 503, content=None)
 
-# --- NEW: Coordinator Proxy Functions ---
-async def get_coordinator_actor():
-    """Get the detached Coordinator actor that manages the OrganismManager."""
+# --- NEW: OrganismManager Serve Deployment Proxy Functions ---
+async def get_organism_manager_handle():
+    """Get the OrganismManager Serve deployment handle."""
     try:
-        # Use the correct namespace from environment variables
-        ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-        coord = ray.get_actor("seedcore_coordinator", namespace=ray_namespace)
+        from ray import serve
+        coord = serve.get_deployment_handle("OrganismManager", app_name="organism")
         return coord
     except Exception as e:
-        logging.warning(f"Could not get Coordinator actor: {e}")
+        logging.warning(f"Could not get OrganismManager Serve deployment: {e}")
         return None
 
 async def submit_task_to_coordinator(task: dict):
-    """Submit a task to the Coordinator actor for processing."""
-    coord = await get_coordinator_actor()
+    """Submit a task to the OrganismManager Serve deployment for processing."""
+    coord = await get_organism_manager_handle()
     if not coord:
-        raise HTTPException(status_code=503, detail="Coordinator actor not available")
+        raise HTTPException(status_code=503, detail="OrganismManager Serve deployment not available")
     
     try:
-        # The Coordinator.handle() method expects the task dict and returns the result directly
-        result = await coord.handle.remote(task)
+        # The OrganismManager.handle_incoming_task() method expects the task dict and returns the result directly
+        result = await coord.handle_incoming_task.remote(task)
         return result
     except Exception as e:
-        logging.error(f"Task submission to Coordinator failed: {e}")
+        logging.error(f"Task submission to OrganismManager failed: {e}")
         raise HTTPException(status_code=500, detail=f"Task processing failed: {str(e)}")
 
 async def check_coordinator_health():
-    """Check if the Coordinator actor is alive and responsive."""
+    """Check if the OrganismManager Serve deployment is alive and responsive."""
     try:
-        coord = await get_coordinator_actor()
+        coord = await get_organism_manager_handle()
         if not coord:
             return {"status": "degraded", "coordinator": "unavailable"}
         
-        # Test coordinator with a ping - use async await instead of ray.get()
-        ping_ref = coord.ping.remote()
-        ping_result = await ping_ref
-        if ping_result == "pong":
-            return {"status": "ok", "coordinator": "healthy"}
+        # Test OrganismManager with a health check
+        health_result = await coord.health.remote()
+        if health_result.get("status") == "healthy":
+            return {"status": "ok", "coordinator": "healthy", "organism_initialized": health_result.get("organism_initialized", False)}
         else:
             return {"status": "degraded", "coordinator": "unresponsive"}
     except Exception as e:
-        logging.warning(f"Coordinator health check failed: {e}")
+        logging.warning(f"OrganismManager health check failed: {e}")
         return {"status": "degraded", "coordinator": "error"}
 
 # --- Unified State Builder ---
@@ -2441,13 +2445,15 @@ async def solve_problem(
             )
             
             result = cognitive_core(context)
-            return {
-                "success": True,
-                "agent_id": agent_id or "default_agent",
-                "solution_approach": result.get("solution_approach", ""),
-                "solution_steps": result.get("solution_steps", ""),
-                "success_metrics": result.get("success_metrics", "")
-            }
+            return create_cognitive_result(
+                agent_id=agent_id or "default_agent",
+                task_type="problem_solving",
+                result={
+                    "solution_approach": result.get("solution_approach", ""),
+                    "solution_steps": result.get("solution_steps", ""),
+                    "success_metrics": result.get("success_metrics", "")
+                }
+            ).model_dump()
         
         # Use HTTP client to separate serve service
         try:
@@ -2458,7 +2464,15 @@ async def solve_problem(
                 "available_tools": available_tools
             })
             result = response.json()
-            return result
+            return create_cognitive_result(
+                agent_id=agent_id or "default_agent",
+                task_type="problem_solving",
+                result={
+                    "solution_approach": result.get("solution_approach", ""),
+                    "solution_steps": result.get("solution_steps", ""),
+                    "success_metrics": result.get("success_metrics", "")
+                }
+            ).model_dump()
         except Exception:  # Remove unused variable e
             logger.warning(f"⚠️ HTTP client call failed, using fallback")
             # Continue with fallback logic below
@@ -2504,13 +2518,15 @@ async def synthesize_memory(
             )
             
             result = cognitive_core(context)
-            return {
-                "success": True,
-                "agent_id": agent_id or "default_agent",
-                "synthesized_insight": result.get("synthesized_insight", ""),
-                "confidence_level": result.get("confidence_level", 0.0),
-                "related_patterns": result.get("related_patterns", "")
-            }
+            return create_cognitive_result(
+                agent_id=agent_id or "default_agent",
+                task_type="memory_synthesis",
+                result={
+                    "synthesized_insight": result.get("synthesized_insight", ""),
+                    "confidence_level": self._safe_float_convert(result.confidence_level),
+                    "related_patterns": result.get("related_patterns", "")
+                }
+            ).model_dump()
         
         # Use HTTP client to separate serve service
         try:
@@ -2520,7 +2536,15 @@ async def synthesize_memory(
                 "synthesis_goal": synthesis_goal
             })
             result = response.json()
-            return result
+            return create_cognitive_result(
+                agent_id=agent_id or "default_agent",
+                task_type="memory_synthesis",
+                result={
+                    "synthesized_insight": result.get("synthesized_insight", ""),
+                    "confidence_level": self._safe_float_convert(result.confidence_level),
+                    "related_patterns": result.get("related_patterns", "")
+                }
+            ).model_dump()
         except Exception:  # Remove unused variable e
             logger.warning(f"⚠️ HTTP client call failed, using fallback")
             # Continue with fallback logic below
