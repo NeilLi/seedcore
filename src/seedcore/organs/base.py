@@ -73,7 +73,8 @@ class Organ:
             "organ_id": self.organ_id,
             "organ_type": self.organ_type,
             "agent_count": len(self.agents),
-            "agent_ids": list(self.agents.keys())
+            "agent_ids": list(self.agents.keys()),
+            "status": "healthy"  # Explicit status field for health checks
         }
 
     def get_agent_handles(self) -> Dict[str, 'RayAgent']:

@@ -133,13 +133,13 @@ class Dispatcher:
                         await conw.execute(COMPLETE_SQL, json.dumps(result.get("result"), default=str), tid)
                     else:
                         delay = min(10 * (item["attempts"] + 1), 300)
-                        await conw.execute(RETRY_SQL, result.get("error") or "Unknown error", delay, tid)
+                        await conw.execute(RETRY_SQL, result.get("error") or "Unknown error", str(delay), tid)
 
             except Exception as e:
                 log.exception("Dispatcher %s task %s failed: %s", self.name, tid, e)
                 delay = min(10 * (item["attempts"] + 1), 300)
                 async with self.pool.acquire() as conw:
-                    await conw.execute(RETRY_SQL, f"dispatcher error: {e}", delay, tid)
+                    await conw.execute(RETRY_SQL, f"dispatcher error: {e}", str(delay), tid)
 
     async def _watchdog_check(self):
         """Detect and return stuck 'running' tasks back to 'retry'."""

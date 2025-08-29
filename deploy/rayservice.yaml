@@ -36,10 +36,10 @@ spec:
           - name: CognitiveService
             num_replicas: 2
             ray_actor_options:
-              num_cpus: 0.2
+              num_cpus: 0.5
               num_gpus: 0
               memory: 2147483648  # 2GB
-              resources: {"head_node": 0.001}
+              # resources: {"head_node": 0.001}
       
       - name: orchestrator
         import_path: entrypoints.orchestrator:build_orchestrator
@@ -59,7 +59,7 @@ spec:
           - name: OrganismManager
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.4
+              num_cpus: 0.5
               num_gpus: 0
               memory: 2147483648  # 2GB
               resources: {"head_node": 0.001}

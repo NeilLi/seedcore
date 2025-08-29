@@ -15,6 +15,8 @@ import os
 import sys
 import time
 import traceback
+import asyncio
+import logging
 from typing import Dict, Any, Optional
 
 import ray
@@ -22,6 +24,8 @@ from ray import serve
 from fastapi import FastAPI
 from seedcore.utils.ray_utils import ensure_ray_initialized
 from pydantic import BaseModel
+
+logger = logging.getLogger("seedcore.organism_service")
 
 # Add the project root to Python path
 sys.path.insert(0, '/app')
@@ -33,6 +37,13 @@ from seedcore.organs.organism_manager import OrganismManager
 # --- Configuration ---
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
+
+# Concurrency settings - adjust based on workload characteristics:
+# - For I/O-bound work: 8-32 × CPU
+# - For CPU-bound work: 1-2 × CPU per replica
+# Environment variables:
+# - ORGANISM_MAX_ONGOING_REQUESTS: Max concurrent requests (default: 16)
+# - ORGANISM_NUM_CPUS: CPU allocation per replica (default: 0.5)
 
 # --- Request/Response Models ---
 class OrganismRequest(BaseModel):
@@ -64,7 +75,7 @@ app = FastAPI(title="SeedCore Organism Service", version="1.0.0")
 @serve.deployment(
     name="OrganismManager",
     num_replicas=int(os.getenv("ORGANISM_REPLICAS", "1")),
-    max_ongoing_requests=10,  # Allow multiple concurrent requests
+    max_ongoing_requests=int(os.getenv("ORGANISM_MAX_ONGOING_REQUESTS", "16")),  # More conservative concurrency
     ray_actor_options={
         "num_cpus": float(os.getenv("ORGANISM_NUM_CPUS", "0.5")),
         "num_gpus": float(os.getenv("ORGANISM_NUM_GPUS", "0")),
@@ -73,32 +84,40 @@ app = FastAPI(title="SeedCore Organism Service", version="1.0.0")
         "resources": {"head_node": 0.001},
     },
 )
+
 @serve.ingress(app)
 class OrganismService:
     def __init__(self):
-        """
-        Lightweight initialization - only create the OrganismManager instance.
-        Heavy async initialization will happen in reconfigure() method.
-        """
-        print("🚀 Creating OrganismManager instance...")
+        logger.info("🚀 Creating OrganismManager instance...")
         self.organism_manager = OrganismManager()
         self._initialized = False
-        print("✅ OrganismManager instance created (will initialize in reconfigure)")
+        self._init_task = None
+        self._init_lock = asyncio.Lock()
+        logger.info("✅ OrganismManager instance created (will init in background)")
+
+    async def _lazy_init(self):
+        # prevent duplicate inits
+        if self._initialized:
+            return
+        async with self._init_lock:
+            if self._initialized:
+                return
+            try:
+                await self.organism_manager.initialize_organism()
+                self._initialized = True
+                logger.info("✅ Organism initialized (background)")
+            except Exception:
+                logger.exception("❌ Organism init failed")
 
     async def reconfigure(self, config: dict = None):
-        """
-        Called automatically by Ray Serve after __init__ completes.
-        This is the proper place for async initialization without blocking the event loop.
-        """
-        print("⏳ Starting async initialization in reconfigure...")
-        try:
-            await self.organism_manager.initialize_organism()
-            self._initialized = True
-            print("✅ OrganismManager initialization complete in reconfigure")
-        except Exception as e:
-            print(f"❌ Failed to initialize organism in reconfigure: {e}")
-            self._initialized = False
-            raise
+        """Never block here — just kick off (or reuse) the background task."""
+        logger.info("⏳ reconfigure called")
+        if not self._initialized and (self._init_task is None or self._init_task.done()):
+            # schedule but DO NOT await
+            loop = asyncio.get_running_loop()
+            self._init_task = loop.create_task(self._lazy_init())
+        logger.info("🔁 reconfigure returned without blocking")
+
 
     # --- Health and Status Endpoints ---
 
@@ -117,7 +136,11 @@ class OrganismService:
                 "status": "/status",
                 "handle_task": "/handle-task",
                 "get_organism_status": "/organism-status",
-                "get_organism_summary": "/organism-summary"
+                "get_organism_summary": "/organism-summary",
+                "initialize": "/initialize",
+                "initialize_organism": "/initialize-organism",
+                "shutdown": "/shutdown",
+                "shutdown_organism": "/shutdown-organism"
             }
         }
 
@@ -165,8 +188,9 @@ class OrganismService:
                 )
             
             # Convert request to task format expected by OrganismManager
+            ttype = request.task_type or "general_query"
             task = {
-                "type": request.task_type,
+                "type": ttype,
                 "params": request.params or {},
                 "description": request.description or "",
                 "domain": request.domain or "general",
@@ -179,6 +203,8 @@ class OrganismService:
                 app_state=request.app_state
             )
             
+            # Note: API response structure is {"success": ..., "result": { manager_fields... }}
+            # Some clients prefer a flat shape, but this maintains compatibility
             return OrganismResponse(
                 success=result.get("success", True),
                 result=result,
@@ -214,10 +240,51 @@ class OrganismService:
             if not self._initialized:
                 return {"error": "Organism not initialized"}
             
-            summary = await self.organism_manager.get_organism_summary()
+            # Get organism status from the manager (same as organism-status endpoint)
+            status = await self.organism_manager.get_organism_status()
+            
+            # Create a summary by aggregating the status data
+            summary = {
+                "total_organs": 0,
+                "organs_by_type": {},
+                "agents_by_type": {},
+                "overall_health": "healthy",
+                "last_updated": time.time()
+            }
+
+            if isinstance(status, list) and status:
+                summary["total_organs"] = len(status)
+
+                organs_by_type = {}
+                agents_by_type = {}
+                overall_healthy = True
+
+                for organ in status:
+                    if not isinstance(organ, dict):
+                        overall_healthy = False
+                        continue
+
+                    otype = organ.get("organ_type", "unknown")
+                    agents = int(organ.get("agent_count", 0))
+                    organs_by_type[otype] = organs_by_type.get(otype, 0) + 1
+                    agents_by_type[otype] = agents_by_type.get(otype, 0) + agents
+
+                    # treat missing status as healthy
+                    if organ.get("status", "healthy") != "healthy":
+                        overall_healthy = False
+
+                summary["organs_by_type"] = organs_by_type
+                summary["agents_by_type"] = agents_by_type
+                summary["overall_health"] = "healthy" if overall_healthy else "degraded"
+            
             return {"success": True, "summary": summary}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    @app.post("/initialize")
+    async def initialize(self):
+        """Manually trigger organism initialization (convenience endpoint)."""
+        return await self.initialize_organism()
 
     @app.post("/initialize-organism")
     async def initialize_organism(self):
@@ -231,6 +298,11 @@ class OrganismService:
             return {"success": True, "message": "Organism initialized successfully"}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    @app.post("/shutdown")
+    async def shutdown(self):
+        """Manually trigger organism shutdown (convenience endpoint)."""
+        return await self.shutdown_organism()
 
     @app.post("/shutdown-organism")
     async def shutdown_organism(self):
@@ -305,10 +377,10 @@ def build_organism_app(args: dict = None):
     return OrganismService.bind()
 
 def main():
-    print("🚀 Starting deployment driver for Organism Service...")
+    logger.info("🚀 Starting deployment driver for Organism Service...")
     try:
         if not ensure_ray_initialized(ray_address=RAY_ADDR, ray_namespace=RAY_NS):
-            print("❌ Failed to initialize Ray connection")
+            logger.error("❌ Failed to initialize Ray connection")
             sys.exit(1)
 
         serve.run(
@@ -316,14 +388,14 @@ def main():
             name="organism",
             route_prefix="/organism"
         )
-        print("✅ Organism service is running.")
+        logger.info("✅ Organism service is running.")
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
-        print("\n🛑 Shutting down gracefully...")
+        logger.info("\n🛑 Shutting down gracefully...")
     finally:
         serve.shutdown()
-        print("✅ Serve shutdown complete.")
+        logger.info("✅ Serve shutdown complete.")
 
 
 if __name__ == "__main__":

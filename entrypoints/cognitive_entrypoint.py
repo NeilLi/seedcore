@@ -67,12 +67,13 @@ app = FastAPI(title="SeedCore Cognitive Service", version="1.0.0")
 @serve.deployment(
     name="CognitiveService",
     num_replicas=int(os.getenv("COG_SVC_REPLICAS", "1")),
-    max_ongoing_requests=1,  # one request per replica at a time
+    max_ongoing_requests=32,  # one request per replica at a time
     ray_actor_options={
-        "num_cpus": float(os.getenv("COG_SVC_NUM_CPUS", "1")),  # allow 0.5 etc.
-        "num_gpus": float(os.getenv("COG_SVC_NUM_GPUS", "0")),
+        # "num_cpus": float(os.getenv("COG_SVC_NUM_CPUS", "0.5")),  # allow 0.5 etc.
+        # "num_gpus": float(os.getenv("COG_SVC_NUM_GPUS", "0.5")),
         # Pin replicas to the head node resource set by RAY_OVERRIDE_RESOURCES
-        "resources": {"head_node": 0.001},
+        "num_cpus": 0.5,
+        "resources": {"cognitive_node": 0.001},
     },
 )
 @serve.ingress(app)
@@ -130,7 +131,7 @@ class CognitiveService:
             "deployment": {
                 "name": "CognitiveService",
                 "replicas": int(os.getenv("COG_SVC_REPLICAS", "1")),
-                "max_ongoing_requests": 1
+                "max_ongoing_requests": 32
             },
             "resources": {
                 "num_cpus": float(os.getenv("COG_SVC_NUM_CPUS", "1")),

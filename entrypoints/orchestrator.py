@@ -76,7 +76,14 @@ def _post(url, json):
         raise HTTPException(status_code=r.status_code, detail=r.text)
     return r.json()
 
-@serve.deployment(num_replicas=1, ray_actor_options={"num_cpus": 0.2})
+@serve.deployment(
+    name="OpsOrchestrator",
+    num_replicas=int(os.getenv("ORCH_REPLICAS", "1")),
+    max_ongoing_requests=16,
+    ray_actor_options={
+        "num_cpus": float(os.getenv("ORCH_NUM_CPUS", "0.2")),
+    },
+)
 @serve.ingress(orch_app)
 class OpsOrchestrator:
     """
@@ -239,8 +246,49 @@ class OpsOrchestrator:
             "gateway": GATEWAY
         }
 
+    @orch_app.get("/_env")
+    async def _env(self):
+        """Environment variables endpoint for verification."""
+        keys = [
+            "SEEDCORE_PG_DSN",
+            "OCPS_DRIFT_THRESHOLD",
+            "COGNITIVE_TIMEOUT_S",
+            "COGNITIVE_MAX_INFLIGHT",
+            "FAST_PATH_LATENCY_SLO_MS",
+            "MAX_PLAN_STEPS",
+        ]
+        # mask secrets lightly
+        out = {}
+        for k in keys:
+            v = os.environ.get(k, "")
+            if k == "SEEDCORE_PG_DSN" and v:
+                out[k] = v.split("@")[-1]  # show only host/db portion
+            else:
+                out[k] = v
+        return out
+
     
-def build_orchestrator(args: dict):
-    # You can consume args if you want to pass runtime config
-    return OpsOrchestrator.bind()
+def build_orchestrator(args: dict = None):
+    """Builder for the OpsOrchestrator Serve app."""
+    # Collect env vars from the *controller* process to inject into replicas
+    env_vars = {
+        "SEEDCORE_PG_DSN": os.getenv("SEEDCORE_PG_DSN", ""),
+        "OCPS_DRIFT_THRESHOLD": os.getenv("OCPS_DRIFT_THRESHOLD", "0.5"),
+        "COGNITIVE_TIMEOUT_S": os.getenv("COGNITIVE_TIMEOUT_S", "8.0"),
+        "COGNITIVE_MAX_INFLIGHT": os.getenv("COGNITIVE_MAX_INFLIGHT", "64"),
+        "FAST_PATH_LATENCY_SLO_MS": os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"),
+        "MAX_PLAN_STEPS": os.getenv("MAX_PLAN_STEPS", "16"),
+    }
+    # Ensure all values are strings (runtime_env.env_vars requires str)
+    env_vars = {k: ("" if v is None else str(v)) for k, v in env_vars.items()}
+
+    return OpsOrchestrator.options(
+        # Put runtime_env under ray_actor_options here
+        ray_actor_options={
+            "runtime_env": {
+                "env_vars": env_vars
+            }
+        }
+    ).bind()
+
 

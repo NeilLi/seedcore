@@ -723,7 +723,7 @@ async def promote_xgboost_model(request: Dict[str, Any]):
 # ---------------------------------------------------------------------
 @serve.deployment(
     num_replicas=1,
-    max_ongoing_requests=1,
+    max_ongoing_requests=32,
     ray_actor_options={
         "num_cpus": 0.1,
         "num_gpus": 0,

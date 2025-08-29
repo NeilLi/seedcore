@@ -46,11 +46,11 @@ from ..agents import tier0_manager
 
 # Import cognitive client for HGNN escalation
 try:
-    from ..serve.cognitive_serve import CognitiveCoreClient
+    from ..serve.cognitive_client import CognitiveServiceClient
     COGNITIVE_AVAILABLE = True
 except ImportError:
     COGNITIVE_AVAILABLE = False
-    CognitiveCoreClient = None
+    CognitiveServiceClient = None
 
 # Import result schema functions for proper result building
 try:
@@ -663,17 +663,18 @@ class OrganismManager:
         """Collects and returns the status of all organs."""
         if not self._initialized:
             return [{"error": "Organism not initialized"}]
-            
+
         try:
-            # Since get_status is synchronous, use ray.get instead of asyncio.gather
+            # fan out
+            refs = [organ.get_status.remote() for organ in self.organs.values()]
+            results = await asyncio.gather(*refs, return_exceptions=True)
+
             statuses = []
-            for organ in self.organs.values():
-                try:
-                    status = ray.get(organ.get_status.remote())
-                    statuses.append(status)
-                except Exception as e:
-                    logger.error(f"Error getting organ status: {e}")
-                    statuses.append({"error": str(e)})
+            for r in results:
+                if isinstance(r, Exception):
+                    statuses.append({"error": str(r)})
+                else:
+                    statuses.append(r)
             return statuses
         except Exception as e:
             logger.error(f"Error getting organism status: {e}")
@@ -830,6 +831,8 @@ class OrganismManager:
 
         # Prepare the request for CognitiveCore
         req = {
+            "agent_id": f"hgnn_planner_{task.get('id', task.get('task_id', 'unknown'))}",
+            "problem_statement": task.get("description", str(task)),
             "task_id": str(task.get("id", task.get("task_id", "unknown"))),
             "type": task.get("type", task.get("task_type", "unknown")),
             "description": task.get("description", str(task)),
@@ -918,7 +921,7 @@ class OrganismManager:
                     "step_count": len(plan)
                 }
             )
-            return escalated_result.to_dict()
+            return escalated_result.model_dump()
         else:
             # Fallback to manual result building if schema not available
             return {
@@ -1254,8 +1257,8 @@ class OrganismManager:
             return
             
         try:
-            self.cognitive_client = CognitiveCoreClient(
-                deployment_name="cognitive",
+            self.cognitive_client = CognitiveServiceClient(
+                base_url=os.getenv("COGNITIVE_SERVICE_URL", "http://127.0.0.1:8000"),
                 timeout_s=self.escalation_timeout_s
             )
             logger.info("✅ Cognitive client ready")

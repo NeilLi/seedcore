@@ -8,6 +8,7 @@ import os
 import sys
 import logging
 import time
+import httpx
 from pathlib import Path
 
 # Add src to path for imports
@@ -35,6 +36,86 @@ os.environ.setdefault("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+def ensure_organism_initialized(timeout_s: float = 180) -> None:
+    """Ensure OrganismManager is initialized (idempotent). Fail fast if not."""
+    start = time.time()
+    
+    # 1) Try via Serve handle (best: no DNS dependency)
+    try:
+        import ray
+        from ray import serve
+        
+        h = serve.get_deployment_handle("OrganismManager", app_name="organism")
+        # Quick health check
+        try:
+            health = h.health.remote().result(timeout_s=15)
+            if isinstance(health, dict) and health.get("organism_initialized") is True:
+                logger.info("✅ Organism already initialized (Serve handle)")
+                return
+        except Exception:
+            logger.info("ℹ️ Serve health check failed; will try to initialize")
+
+        # Trigger initialization (idempotent)
+        logger.info("🚀 Initializing organism via Serve handle…")
+        resp = h.initialize_organism.remote().result(timeout_s=60)
+        logger.info(f"📋 initialize_organism response: {resp}")
+
+        # Poll until healthy
+        while time.time() - start < timeout_s:
+            try:
+                health = h.health.remote().result(timeout_s=10)
+                if isinstance(health, dict) and health.get("organism_initialized") is True:
+                    logger.info("✅ Organism initialized (Serve handle)")
+                    return
+            except Exception:
+                pass
+            time.sleep(2)
+        raise RuntimeError("Organism did not become initialized (Serve handle) within timeout")
+    except Exception as e:
+        logger.warning(f"⚠️ Serve handle path failed: {e}")
+
+    # 2) Fallback: HTTP (if SERVE_BASE_URL / ORGANISM_URL are set)
+    base = os.getenv("SERVE_BASE_URL", "http://seedcore-svc-serve-svc.seedcore-dev.svc.cluster.local:8000")
+    org = os.getenv("ORGANISM_URL", f"{base}/organism")
+    logger.info(f"🔗 Fallback HTTP init at {org}")
+
+    # health
+    try:
+        with httpx.Client(timeout=5) as client:
+            r = client.get(f"{org}/health")
+            if r.status_code == 200 and r.json().get("organism_initialized") is True:
+                logger.info("✅ Organism already initialized (HTTP)")
+                return
+    except Exception:
+        logger.info("ℹ️ HTTP health not ready; continuing")
+
+    # init (POST)
+    for _ in range(3):
+        try:
+            with httpx.Client(timeout=15) as client:
+                rr = client.post(f"{org}/initialize")
+                if rr.status_code == 200:
+                    logger.info(f"📋 POST /initialize: {rr.text[:200]}")
+                    break
+        except Exception as e:
+            logger.info(f"ℹ️ POST /initialize retry: {e}")
+        time.sleep(2)
+
+    # poll
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            with httpx.Client(timeout=5) as client:
+                r = client.get(f"{org}/health")
+                if r.status_code == 200 and r.json().get("organism_initialized") is True:
+                    logger.info("✅ Organism initialized (HTTP)")
+                    return
+        except Exception:
+            pass
+        time.sleep(2)
+
+    raise RuntimeError("Organism did not become initialized (HTTP) within timeout")
 
 def main():
     """Initialize Ray and start Coordinator + Dispatcher actors."""
@@ -71,6 +152,15 @@ def main():
             logger.info("✅ Bootstrapped singleton memory actors")
         except Exception:
             logger.exception("⚠️ bootstrap_actors() failed (will continue)")
+        
+        # Ensure organism is initialized before creating dispatchers
+        logger.info("🚀 Ensuring organism is initialized...")
+        try:
+            ensure_organism_initialized()
+            logger.info("✅ Organism initialization verified")
+        except Exception as e:
+            logger.exception("❌ Failed to ensure organism initialization")
+            sys.exit(1)
         
     except Exception as e:
         logger.exception("❌ Ray connect blew up")  # prints stacktrace

@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 class PlanRequest(BaseModel):
     """Request model for HGNN problem solving and task decomposition."""
+    agent_id: str = Field(..., description="ID of the agent making the request")
+    problem_statement: str = Field(..., description="Problem statement for the cognitive service")
     task_id: str = Field(..., description="Unique task identifier")
     type: str = Field(..., description="Task type (general_query, graph_rag, etc.)")
     description: str = Field(..., description="Task description")
@@ -166,7 +168,7 @@ class CognitiveCoreServe:
             if self.cognitive_core:
                 # Create cognitive context for planning
                 cognitive_context = CognitiveContext(
-                    agent_id=f"hgnn_planner_{request.task_id}",
+                    agent_id=request.agent_id,
                     task_type=CognitiveTaskType.TASK_PLANNING,
                     input_data={
                         "task_description": description,

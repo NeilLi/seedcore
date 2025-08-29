@@ -9,7 +9,7 @@ metadata:
 spec:
   completions: 1
   parallelism: 1
-  backoffLimit: 0
+  backoffLimit: 3        # <— give it a few retries
   template:
     metadata:
       labels:
@@ -53,6 +53,13 @@ spec:
           value: "1000"
         - name: MAX_PLAN_STEPS
           value: "16"
+
+        # Optional: for HTTP fallback path in the script
+        - name: SERVE_BASE_URL
+          value: "http://seedcore-svc-serve-svc.seedcore-dev.svc.cluster.local:8000"
+        - name: ORGANISM_URL
+          value: "http://seedcore-svc-serve-svc.seedcore-dev.svc.cluster.local:8000/organism"
+
         resources:
           requests:
             cpu: "100m"
