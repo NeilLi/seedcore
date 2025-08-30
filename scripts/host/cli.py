@@ -8,6 +8,7 @@ New in this version
 - tasks --since <1h|24h|2d|YYYY-MM-DD>
 - tasks --limit N
 - search <query>  (fuzzy across id/type/description/result) + same filters
+- health / readyz - check API health and readiness
 
 Still supports:
   ask <natural language>  : create & run a task
@@ -26,6 +27,7 @@ import argparse
 from datetime import datetime, timedelta, timezone
 
 API_BASE = os.getenv("SEEDCORE_API", "http://127.0.0.1:8002")
+API_V1_BASE = f"{API_BASE}/api/v1"
 
 # ------------------- Helpers -------------------
 def _format_datetime(iso_string):
@@ -74,7 +76,7 @@ def _parse_task_args(argv):
         return None
 
 def _fetch_tasks():
-    r = requests.get(f"{API_BASE}/tasks")
+    r = requests.get(f"{API_V1_BASE}/tasks")
     r.raise_for_status()
     data = r.json()
     return data.get("items", []), data.get("total", len(data))
@@ -122,10 +124,36 @@ def _task_str_result(task) -> str:
     except Exception:
         return str(res)
 
+# ------------------- HEALTH CHECKS -------------------
+def check_health():
+    """Check API health status."""
+    try:
+        r = requests.get(f"{API_BASE}/health")
+        r.raise_for_status()
+        data = r.json()
+        print(f"🏥 Health: {data.get('status', 'unknown')}")
+        print(f"   Service: {data.get('service', 'unknown')}")
+        print(f"   Version: {data.get('version', 'unknown')}")
+    except requests.RequestException as e:
+        print(f"❌ Health check failed: {e}")
+
+def check_readiness():
+    """Check API readiness (including database connectivity)."""
+    try:
+        r = requests.get(f"{API_BASE}/readyz")
+        r.raise_for_status()
+        data = r.json()
+        print(f"✅ Readiness: {data.get('status', 'unknown')}")
+        if 'deps' in data:
+            for dep, status in data['deps'].items():
+                print(f"   {dep}: {status}")
+    except requests.RequestException as e:
+        print(f"❌ Readiness check failed: {e}")
+
 # ------------------- FACTS -------------------
 def list_facts():
     try:
-        r = requests.get(f"{API_BASE}/facts")
+        r = requests.get(f"{API_V1_BASE}/facts")
         r.raise_for_status()
         data = r.json()
         items = data.get("items", [])
@@ -140,13 +168,13 @@ def list_facts():
 
 def gen_fact(text: str):
     payload = {"text": text, "metadata": {"source": "cli"}}
-    r = requests.post(f"{API_BASE}/facts", json=payload)
+    r = requests.post(f"{API_V1_BASE}/facts", json=payload)
     r.raise_for_status()
     f = r.json()
     print(f"✨ Created fact {f['id'][:8]}: {f['text']}")
 
 def del_fact(fid: str):
-    r = requests.delete(f"{API_BASE}/facts/{fid}")
+    r = requests.delete(f"{API_V1_BASE}/facts/{fid}")
     if r.status_code == 404:
         print(f"❌ No fact with ID starting with {fid}")
     else:
@@ -178,7 +206,7 @@ def intelligent_task_creation(prompt: str):
         payload["drift_score"] = 0.9
         print("⚠️ Unrecognized pattern. Escalating with high drift score.")
 
-    r = requests.post(f"{API_BASE}/tasks", json=payload)
+    r = requests.post(f"{API_V1_BASE}/tasks", json=payload)
     r.raise_for_status()
     t = r.json()
     print(f"🚀 Task {t['id'][:8]} [{t['type']}] created with status '{t['status']}'")
@@ -187,7 +215,16 @@ def _print_task_row(t, prefix="  - "):
     status = (t.get('status') or 'N/A').upper()
     desc = t.get('description', '')
     updated = _format_datetime(t.get('updated_at'))
-    print(f"{prefix}{t['id'][:8]} [{t.get('type','N/A')}] {status:<10} | {desc[:50]:<50} | Updated: {updated}")
+    
+    # Truncate description more intelligently - try to break at word boundaries
+    if len(desc) > 50:
+        # Try to find a good break point around 50 characters
+        trunc_desc = desc[:47] + "..."
+    else:
+        trunc_desc = desc
+    
+    # Use dynamic width for better alignment
+    print(f"{prefix}{t['id'][:8]} [{t.get('type','N/A')}] {status:<10} | {trunc_desc:<53} | Updated: {updated}")
 
 def list_tasks_with_filters(args):
     """tasks [--status X] [--type Y] [--since 24h|YYYY-MM-DD] [--limit N]"""
@@ -243,7 +280,7 @@ def task_status(tid: str):
             return
 
         full_id = matches[0]["id"]
-        r = requests.get(f"{API_BASE}/tasks/{full_id}")
+        r = requests.get(f"{API_V1_BASE}/tasks/{full_id}")
         r.raise_for_status()
         t = r.json()
 
@@ -363,6 +400,8 @@ def show_help():
     print("                           - Fuzzy search across id/type/description/result")
     print(" taskstatus <id>           - Detailed status (accepts short IDs)")
     print(" status <id>               - Quick status (accepts short IDs)")
+    print(" health                    - Check API health status")
+    print(" readyz                    - Check API readiness (including DB)")
     print(" help                      - Show this help")
     print(" exit / quit               - Exit")
     print("=" * 60)
@@ -377,12 +416,12 @@ def show_help():
 
 # ------------------- SHELL LOOP -------------------
 def main():
-    print("🎯 SeedCore Interactive Shell (v1.4 — robust filters & fuzzy search)")
+    print("🎯 SeedCore Interactive Shell (v1.5 — new API endpoints & health checks)")
     print("Connected to", API_BASE)
-    print("Commands: ask, facts, genfact, delfact, tasks, taskstatus, search, status, help, exit")
+    print("Commands: ask, facts, genfact, delfact, tasks, taskstatus, search, status, health, readyz, help, exit")
     print("=" * 70)
 
-    SYSTEM_COMMANDS = {"facts", "genfact", "delfact", "tasks", "taskstatus", "search", "status", "help"}
+    SYSTEM_COMMANDS = {"facts", "genfact", "delfact", "tasks", "taskstatus", "search", "status", "health", "readyz", "help"}
 
     while True:
         try:
@@ -421,6 +460,10 @@ def main():
                     search_tasks(query, rest[i:])
                 elif op == "status" and rest:
                     quick_status(rest[0])
+                elif op == "health":
+                    check_health()
+                elif op == "readyz":
+                    check_readiness()
                 elif op == "help":
                     show_help()
                 else:

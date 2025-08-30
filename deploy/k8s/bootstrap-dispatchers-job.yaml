@@ -1,29 +1,29 @@
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: seedcore-bootstrap-dispatchers
+  name: seedcore-bootstrap-organism
   namespace: seedcore-dev
   labels:
     app: seedcore
-    component: bootstrap
+    component: bootstrap-organism
 spec:
   completions: 1
   parallelism: 1
-  backoffLimit: 3        # <— give it a few retries
+  backoffLimit: 3
   template:
     metadata:
       labels:
         app: seedcore
-        component: bootstrap
+        component: bootstrap-organism
     spec:
       serviceAccountName: seedcore-service-account
       restartPolicy: Never
       containers:
-      - name: bootstrap-dispatchers
-        image: seedcore:latest   # same image used by Ray pods
+      - name: bootstrap-organism
+        image: seedcore:latest
         imagePullPolicy: IfNotPresent
-        command: ["python", "/app/scripts/bootstrap_dispatchers.py"]
-        # command: ["sleep", "1000000"]
+        # command: ["python", "/app/bootstraps/bootstrap_organism.py"]
         env:
         - name: RAY_ADDRESS
           value: "ray://seedcore-svc-head-svc:10001"
@@ -31,28 +31,10 @@ spec:
           value: "seedcore-dev"
         - name: SEEDCORE_NS
           value: "seedcore-dev"
+        - name: RUNNING_IN_CLUSTER
+          value: "1"
         - name: SEEDCORE_PG_DSN
           value: "postgresql://postgres:postgres@postgresql.seedcore-dev.svc.cluster.local:5432/seedcore"
-        - name: SEEDCORE_DISPATCHERS
-          value: "2"
-        - name: SEEDCORE_GRAPH_DISPATCHERS
-          value: "1"
-        - name: DGLBACKEND
-          value: "pytorch"
-        - name: EXIT_AFTER_BOOTSTRAP
-          value: "true"     # script will exit when done
-        
-        # Enhanced integration configuration
-        - name: OCPS_DRIFT_THRESHOLD
-          value: "0.5"
-        - name: COGNITIVE_TIMEOUT_S
-          value: "8.0"
-        - name: COGNITIVE_MAX_INFLIGHT
-          value: "64"
-        - name: FAST_PATH_LATENCY_SLO_MS
-          value: "1000"
-        - name: MAX_PLAN_STEPS
-          value: "16"
 
         # Optional: for HTTP fallback path in the script
         - name: SERVE_BASE_URL
@@ -70,7 +52,6 @@ spec:
         volumeMounts:
         - name: project-source-volume
           mountPath: /app
-
       volumes:
       - name: project-source-volume
         hostPath:
@@ -78,5 +59,77 @@ spec:
           type: DirectoryOrCreate
 
 ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seedcore-bootstrap-dispatchers
+  namespace: seedcore-dev
+  labels:
+    app: seedcore
+    component: bootstrap-dispatchers
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: seedcore
+        component: bootstrap-dispatchers
+    spec:
+      serviceAccountName: seedcore-service-account
+      restartPolicy: Never
+      containers:
+      - name: bootstrap-dispatchers
+        image: seedcore:latest
+        imagePullPolicy: IfNotPresent
+        command: ["python", "/app/bootstraps/bootstrap_dispatchers.py"]
+        env:
+        - name: FORCE_REPLACE_DISPATCHERS
+          value: "true"
+        - name: RAY_ADDRESS
+          value: "ray://seedcore-svc-head-svc:10001"
+        - name: RAY_NAMESPACE
+          value: "seedcore-dev"
+        - name: SEEDCORE_NS
+          value: "seedcore-dev"
+        - name: RUNNING_IN_CLUSTER
+          value: "1"
+        - name: SEEDCORE_PG_DSN
+          value: "postgresql://postgres:postgres@postgresql.seedcore-dev.svc.cluster.local:5432/seedcore"
+        - name: SEEDCORE_DISPATCHERS
+          value: "2"
+        - name: SEEDCORE_GRAPH_DISPATCHERS
+          value: "1"
+        - name: DGLBACKEND
+          value: "pytorch"
+        - name: EXIT_AFTER_BOOTSTRAP
+          value: "true"
 
+        # Enhanced integration configuration
+        - name: OCPS_DRIFT_THRESHOLD
+          value: "0.5"
+        - name: COGNITIVE_TIMEOUT_S
+          value: "8.0"
+        - name: COGNITIVE_MAX_INFLIGHT
+          value: "64"
+        - name: FAST_PATH_LATENCY_SLO_MS
+          value: "1000"
+        - name: MAX_PLAN_STEPS
+          value: "16"
 
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "512Mi"
+          limits:
+            cpu: "200m"
+            memory: "1Gi"
+        volumeMounts:
+        - name: project-source-volume
+          mountPath: /app
+      volumes:
+      - name: project-source-volume
+        hostPath:
+          path: /project
+          type: DirectoryOrCreate

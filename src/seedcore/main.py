@@ -5,65 +5,42 @@ This demonstrates how to integrate the refactored task router with proper
 database initialization and background worker management using FastAPI's lifespan.
 """
 
+import os
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import text
 
-# Import database and models
-from .database import get_async_pg_engine
+from .database import get_async_pg_engine  # must return postgresql+asyncpg engine
 from .models.task import Base as TaskBase
 from .models.fact import Base as FactBase
 from .api.routers.tasks_router import router as tasks_router
 from .api.routers.control_router import router as control_router
 
-# Import the worker function
-from .api.routers.tasks_router import _task_worker
+ENABLE_ENV_ENDPOINT = os.getenv("ENABLE_DEBUG_ENV", "false").lower() in ("1","true","yes")
+RUN_DDL_ON_STARTUP = os.getenv("RUN_DDL_ON_STARTUP", "true").lower() in ("1","true","yes")  # set false in prod
 
-async def init_db():
-    """Create database tables on startup if they don't exist."""
-    try:
-        engine = get_async_pg_engine()
-        async with engine.begin() as conn:
-            # This will create both 'tasks' and 'facts' tables
-            await conn.run_sync(TaskBase.metadata.create_all)
-            await conn.run_sync(FactBase.metadata.create_all)
-        print("✅ Database tables created/verified successfully.")
-    except Exception as e:
-        print(f"❌ Database initialization failed: {e}")
-        raise
+async def init_db(engine: AsyncEngine):
+    """Create tables in dev; in prod prefer Alembic/migrations."""
+    if not RUN_DDL_ON_STARTUP:
+        return
+    async with engine.begin() as conn:
+        await conn.run_sync(TaskBase.metadata.create_all)
+        await conn.run_sync(FactBase.metadata.create_all)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- STARTUP ---
-    print("🚀 Initializing SeedCore application...")
-    
-    print("🚀 Initializing database...")
-    await init_db()
-    print("✅ Database initialized.")
+    # Startup
+    engine = get_async_pg_engine()  # must be asyncpg-based
+    app.state.db_engine = engine
+    await init_db(engine)
+    yield
+    # Shutdown
+    eng: AsyncEngine = app.state.db_engine
+    await eng.dispose()
 
-    # Initialize app state
-    app.state.task_queue = asyncio.Queue()
-    print("✅ App state initialized.")
-
-    # Start the single background task worker
-    print("🚀 Starting task worker...")
-    worker_task = asyncio.create_task(_task_worker(app.state))
-    print("✅ Task worker started.")
-    
-    yield # Application is running
-    
-    # --- SHUTDOWN ---
-    print("🛑 Shutting down task worker...")
-    # Gracefully shut down the worker
-    worker_task.cancel()
-    try:
-        await worker_task
-    except asyncio.CancelledError:
-        pass
-    print("✅ Worker shutdown complete.")
-
-# Create the FastAPI application with lifespan management
 app = FastAPI(
     title="SeedCore API",
     description="Scalable, database-backed task management system",
@@ -71,40 +48,54 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include the refactored routers
 app.include_router(tasks_router, prefix="/api/v1", tags=["Tasks"])
 app.include_router(control_router, prefix="/api/v1", tags=["Control"])
 
-# Health check endpoint
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "service": "seedcore-api",
-        "version": "1.0.0"
-    }
+    return {"status": "healthy", "service": "seedcore-api", "version": "1.0.0"}
 
-# Root endpoint
+@app.get("/readyz")
+async def ready_check():
+    # verify DB quickly to gate readiness
+    try:
+        eng: AsyncEngine = app.state.db_engine
+        async with eng.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        return {"status": "ready", "deps": {"db": "ok"}}
+    except Exception as e:
+        return {"status": "not_ready", "deps": {"db": f"error: {e}"}}
+
 @app.get("/")
 async def root():
-    """Root endpoint."""
-    return {
-        "message": "Welcome to SeedCore API",
-        "version": "1.0.0",
-        "docs": "/docs",
-        "health": "/health"
-    }
+    return {"message": "Welcome to SeedCore API", "version": "1.0.0", "docs": "/docs", "health": "/health"}
+
+# Optional, gated env dump for debugging
+if ENABLE_ENV_ENDPOINT:
+    @app.get("/_env")
+    async def env_dump():
+        keys = [
+            "SEEDCORE_PG_DSN", "RAY_ADDRESS", "RAY_NAMESPACE",
+            "OCPS_DRIFT_THRESHOLD", "COGNITIVE_TIMEOUT_S",
+            "COGNITIVE_MAX_INFLIGHT", "FAST_PATH_LATENCY_SLO_MS",
+            "MAX_PLAN_STEPS"
+        ]
+        return {k: os.getenv(k, "") for k in keys}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app,
+        host=os.getenv("HOST", "0.0.0.0"),
+        port=int(os.getenv("PORT", "8002")),
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )

@@ -31,7 +31,31 @@ class GraphDispatcher:
         logger.info("GraphDispatcher '%s' ready.", self.name)
 
     def ping(self) -> str:
+        """Simple ping for basic responsiveness check."""
         return "pong"
+    
+    def heartbeat(self) -> Dict[str, Any]:
+        """Enhanced heartbeat with detailed health information."""
+        try:
+            # Basic health check - GraphDispatcher uses SQLAlchemy engine
+            engine_ok = self.engine is not None
+            
+            health_status = "healthy"
+            if not engine_ok:
+                health_status = "engine_issue"
+            
+            return {
+                "status": health_status,
+                "timestamp": time.time(),
+                "engine_ok": engine_ok,
+                "name": self.name,
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "timestamp": time.time(),
+                "error": str(e),
+            }
 
     # === Task loop (optional; you can also call methods directly) ===
     def run(self, poll_interval: float = 1.0):

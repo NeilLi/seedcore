@@ -210,10 +210,10 @@ spec:
             resources:
               requests:
                 cpu: "500m"
-                memory: "1Gi"
+                memory: "4Gi"
               limits:
                 cpu: "2"
-                memory: "4Gi"
+                memory: "8Gi"
             volumeMounts:
               - name: xgb-model-storage
                 mountPath: /app/data
