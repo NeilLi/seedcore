@@ -155,14 +155,24 @@ class OrganismManager:
         self.fast_path_latency_slo_ms = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
         self.max_plan_steps = int(os.getenv("MAX_PLAN_STEPS", "16"))
         
-        # Note: Ray-dependent initialization is now handled in initialize_organism()
+                # Note: Ray-dependent initialization is now handled in initialize_organism()
         # This constructor is safe to call before Ray is ready
+        
+        # Concurrency control for escalations
+        self.escalation_semaphore = asyncio.Semaphore(5)  # Limit concurrent escalations
+        
+        # Background health check task
+        self._health_check_task: Optional[asyncio.Task] = None
+        self._health_check_interval = 30  # seconds
+        
+        # Metrics tracking
+        self._metrics = {"fast": [], "hgnn": []}
 
-    # SOLUTION: Ray connection is now handled centrally by ray_connector.py
-    # This method is no longer needed and has been removed.
-    
-    # SOLUTION: Namespace verification is now handled centrally by ray_connector.py
-    # This method is no longer needed and has been removed.
+        # SOLUTION: Ray connection is now handled centrally by ray_connector.py
+        # This method is no longer needed and has been removed.
+        
+        # SOLUTION: Namespace verification is now handled centrally by ray_connector.py
+        # This method is no longer needed and has been removed.
 
     def _load_config(self, config_path: str):
         """Loads the organism configuration from a YAML file."""
@@ -181,8 +191,100 @@ class OrganismManager:
         except Exception as e:
             logger.error(f"Error loading organism configuration: {e}")
             self.organ_configs = []
+    
+    async def _async_ray_get(self, remote_call, timeout: float = 30.0):
+        """
+        Async wrapper for ray.get calls to prevent blocking the event loop.
+        
+        Args:
+            remote_call: The remote call to execute (e.g., organ_handle.get_status.remote())
+            timeout: Timeout in seconds
+            
+        Returns:
+            The result of the remote call
+        """
+        try:
+            # Run ray.get in a thread pool to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, 
+                lambda: ray.get(remote_call, timeout=timeout)
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Async ray.get failed: {e}")
+            raise
+    
+    async def _async_ray_actor(self, name: str, namespace: Optional[str] = None):
+        """
+        Async wrapper for ray.get_actor calls.
+        
+        Args:
+            name: Actor name
+            namespace: Actor namespace
+            
+        Returns:
+            The actor handle
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            if namespace:
+                actor = await loop.run_in_executor(
+                    None, 
+                    lambda: ray.get_actor(name, namespace=namespace)
+                )
+            else:
+                actor = await loop.run_in_executor(
+                    None, 
+                    lambda: ray.get_actor(name)
+                )
+            return actor
+        except Exception as e:
+            logger.error(f"Async ray.get_actor failed: {e}")
+            raise
 
-    def _check_ray_cluster_health(self):
+    def _init_routing(self):
+        """Initialize routing components after config is loaded."""
+        try:
+            # Import RoutingTable if available, otherwise create a simple one
+            try:
+                from .routing import RoutingTable
+                self.routing = RoutingTable()
+            except ImportError:
+                # Fallback to simple routing table
+                self.routing = RoutingTable()
+            self.organ_interfaces: Dict[str, StandardizedOrganInterface] = {}
+            
+            # Set up default routing rules to avoid cognitive organ for simple queries
+            self._setup_default_routing()
+            
+            # Cognitive client configuration
+            self.cognitive_client = None
+            self.escalation_timeout_s = float(os.getenv("COGNITIVE_TIMEOUT_S", "8.0"))
+            self.escalation_max_inflight = int(os.getenv("COGNITIVE_MAX_INFLIGHT", "64"))
+            self._inflight = 0
+            self.fast_path_latency_slo_ms = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
+            self.max_plan_steps = int(os.getenv("MAX_PLAN_STEPS", "16"))
+            
+            logger.info("✅ Routing components initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize routing components: {e}")
+            raise
+    
+    def _setup_default_routing(self):
+        """Set up default routing rules to avoid cognitive organ for simple queries."""
+        try:
+            # Add default routing rules
+            self.routing.add_rule("general_query", "general", "general_organ")
+            self.routing.add_rule("text_processing", "general", "general_organ")
+            self.routing.add_rule("data_analysis", "data", "data_organ")
+            self.routing.add_rule("ml_inference", "ml", "ml_organ")
+            
+            logger.info("✅ Default routing rules configured")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to set up default routing rules: {e}")
+
+    async def _check_ray_cluster_health(self):
         """Check Ray cluster health and log diagnostic information."""
         try:
             # Check cluster resources (available with Ray client)
@@ -211,7 +313,7 @@ class OrganismManager:
                 def _health_check_task():
                     return "healthy"
                 
-                result = ray.get(_health_check_task.remote())
+                result = await self._async_ray_get(_health_check_task.remote())
                 if result == "healthy":
                     logger.info("✅ Ray remote task execution test passed")
                 else:
@@ -225,6 +327,117 @@ class OrganismManager:
         except Exception as e:
             logger.error(f"❌ Failed to check Ray cluster health: {e}")
             raise  # Re-raise to trigger retry mechanism
+    
+    async def _start_background_health_checks(self):
+        """Start background health check task to monitor organs and agents."""
+        if self._health_check_task and not self._health_check_task.done():
+            logger.info("Background health checks already running")
+            return
+        
+        try:
+            self._health_check_task = asyncio.create_task(self._background_health_check_loop())
+            logger.info("✅ Background health checks started")
+        except Exception as e:
+            logger.error(f"❌ Failed to start background health checks: {e}")
+    
+    async def _stop_background_health_checks(self):
+        """Stop background health check task."""
+        if self._health_check_task and not self._health_check_task.done():
+            self._health_check_task.cancel()
+            try:
+                await self._health_check_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("✅ Background health checks stopped")
+    
+    async def _background_health_check_loop(self):
+        """Background loop for health checks."""
+        while True:
+            try:
+                await asyncio.sleep(self._health_check_interval)
+                await self._perform_background_health_checks()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Background health check error: {e}")
+                await asyncio.sleep(5)  # Brief pause before retry
+    
+    async def _perform_background_health_checks(self):
+        """Perform health checks on organs and agents in the background."""
+        try:
+            logger.debug("🔄 Performing background health checks...")
+            
+            # Check organ health asynchronously
+            organ_health_tasks = []
+            for organ_id, organ_handle in self.organs.items():
+                task = asyncio.create_task(self._check_organ_health_async(organ_handle, organ_id))
+                organ_health_tasks.append(task)
+            
+            # Wait for all health checks to complete
+            if organ_health_tasks:
+                results = await asyncio.gather(*organ_health_tasks, return_exceptions=True)
+                
+                # Log results
+                for i, result in enumerate(results):
+                    organ_id = list(self.organs.keys())[i]
+                    if isinstance(result, Exception):
+                        logger.warning(f"⚠️ Organ {organ_id} health check failed: {result}")
+                    else:
+                        logger.debug(f"✅ Organ {organ_id} health check passed")
+            
+            logger.debug("✅ Background health checks completed")
+            
+        except Exception as e:
+            logger.error(f"❌ Background health checks failed: {e}")
+    
+    async def _check_organ_health_async(self, organ_handle, organ_id: str) -> bool:
+        """Async version of organ health check."""
+        try:
+            # Use async wrapper for ray.get
+            status = await self._async_ray_get(organ_handle.get_status.remote(), timeout=10.0)
+            if status and status.get('organ_id') == organ_id:
+                return True
+            else:
+                logger.warning(f"⚠️ Organ {organ_id} status mismatch")
+                return False
+        except Exception as e:
+            logger.warning(f"⚠️ Organ {organ_id} health check failed: {e}")
+            return False
+    
+    async def _create_organs(self):
+        """Create organs based on configuration."""
+        try:
+            for organ_config in self.organ_configs:
+                organ_id = organ_config['id']
+                organ_type = organ_config['type']
+                
+                try:
+                    logger.info(f"🔧 Creating organ: {organ_id} (type: {organ_type})")
+                    new_organ = Organ.options(
+                        name=organ_id,
+                        lifetime="detached",
+                        num_cpus=0.1
+                    ).remote(
+                        organ_id=organ_id,
+                        organ_type=organ_type
+                    )
+                    
+                    # Test the new organ
+                    if await self._test_organ_health_async(new_organ, organ_id):
+                        self.organs[organ_id] = new_organ
+                        logger.info(f"✅ Successfully created organ: {organ_id}")
+                    else:
+                        raise Exception(f"New organ {organ_id} failed health check")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Failed to create organ {organ_id}: {e}")
+                    raise
+                    
+            logger.info(f"✅ Created {len(self.organs)} organs successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create organs: {e}")
+            raise
 
     async def _cleanup_dead_actors(self):
         """Clean up dead Ray actors using the Janitor actor for cluster-side cleanup."""
@@ -234,13 +447,13 @@ class OrganismManager:
             
             jan = None
             try:
-                jan = ray.get_actor("seedcore_janitor")
+                jan = await self._async_ray_actor("seedcore_janitor")
             except Exception:
                 logger.debug("Janitor actor not available; skipping cluster cleanup")
             
             if jan:
                 try:
-                    res = ray.get(jan.reap.remote(prefix=None))  # Clean up all dead actors
+                    res = await self._async_ray_get(jan.reap.remote(prefix=None))  # Clean up all dead actors
                     if res.get("count"):
                         logger.info("Cluster cleanup removed %d dead actors: %s", res["count"], res["reaped"])
                     else:
@@ -267,20 +480,37 @@ class OrganismManager:
         except Exception as e:
             logger.warning(f"⚠️ Organ {organ_id} health check failed: {e}")
             return False
+    
+    async def _test_organ_health_async(self, organ_handle, organ_id: str) -> bool:
+        """Async version of organ health check."""
+        try:
+            # Use async wrapper for ray.get
+            status = await self._async_ray_get(organ_handle.get_status.remote(), timeout=10.0)
+            if status and status.get('organ_id') == organ_id:
+                logger.info(f"✅ Organ {organ_id} health check passed")
+                return True
+            else:
+                logger.warning(f"⚠️ Organ {organ_id} status mismatch")
+                return False
+        except Exception as e:
+            logger.warning(f"⚠️ Organ {organ_id} health check failed: {e}")
+            return False
 
-    def _recreate_dead_organ(self, organ_id: str, organ_type: str):
+    async def _recreate_dead_organ(self, organ_id: str, organ_type: str):
         """Recreate a dead organ actor."""
         try:
             logger.info(f"🔄 Recreating dead organ: {organ_id}")
             
             # Try to kill the dead actor first
             try:
-                actors = list_actors()
-                for actor in actors:
-                    if actor.name == organ_id and actor.state == "DEAD":
-                        ray.kill(actor.actor_id)
-                        logger.info(f"🗑️ Killed dead actor: {organ_id}")
-                        break
+                # Note: list_actors() doesn't work with Ray client connections
+                # Instead, try to kill the actor by name if it exists
+                try:
+                    dead_actor = await self._async_ray_actor(organ_id)
+                    ray.kill(dead_actor)
+                    logger.info(f"🗑️ Killed dead actor: {organ_id}")
+                except Exception:
+                    logger.debug(f"Actor {organ_id} not found or already dead")
             except Exception as e:
                 logger.warning(f"Could not kill dead actor {organ_id}: {e}")
             
@@ -354,7 +584,7 @@ class OrganismManager:
             logger.error(f"❌ Failed to recreate organ {organ_id}: {e}")
             return False
 
-    def _create_organs(self):
+    async def _create_organs(self):
         """Creates the organ actors as defined in the configuration."""
         logger.info(f"🏗️ Starting organ creation process...")
         logger.info(f"📋 Organ configs loaded: {len(self.organ_configs)}")
@@ -370,13 +600,13 @@ class OrganismManager:
                     logger.info(f"🔍 Attempting to get existing organ: {organ_id}")
                     # Try to get existing organ first
                     try:
-                        existing_organ = ray.get_actor(organ_id)
+                        existing_organ = await self._async_ray_actor(organ_id)
                         logger.info(f"✅ Retrieved existing Organ: {organ_id} (Type: {organ_type})")
                         
                         # Test if the organ is healthy
-                        if not self._test_organ_health(existing_organ, organ_id):
+                        if not await self._test_organ_health_async(existing_organ, organ_id):
                             logger.warning(f"⚠️ Organ {organ_id} is unresponsive, recreating...")
-                            if self._recreate_dead_organ(organ_id, organ_type):
+                            if await self._recreate_dead_organ(organ_id, organ_type):
                                 continue
                             else:
                                 raise Exception(f"Failed to recreate organ {organ_id}")
@@ -445,7 +675,7 @@ class OrganismManager:
                             raise Exception(f"All approaches to create organ {organ_id} failed")
                         
                         # Test the new organ
-                        if not self._test_organ_health(self.organs[organ_id], organ_id):
+                        if not await self._test_organ_health_async(self.organs[organ_id], organ_id):
                             logger.error(f"❌ New organ {organ_id} is not healthy")
                             raise Exception(f"New organ {organ_id} failed health check")
                             
@@ -557,8 +787,8 @@ class OrganismManager:
                     # Check if agent already exists in the organ
                     logger.info(f"🔍 Checking for existing agent {agent_id} in organ {organ_id}...")
                     try:
-                        # get_agent_handles is synchronous, so use ray.get() instead of await
-                        existing_agents = ray.get(organ_handle.get_agent_handles.remote())
+                        # Use async wrapper for ray.get to avoid blocking
+                        existing_agents = await self._async_ray_get(organ_handle.get_agent_handles.remote())
                         logger.info(f"✅ Retrieved existing agents for {organ_id}: {list(existing_agents.keys())}")
                     except Exception as e:
                         logger.error(f"❌ Failed to get agent handles from organ {organ_id}: {e}")
@@ -591,7 +821,7 @@ class OrganismManager:
                             raise Exception("Agent handle not found after creation")
 
                         logger.info(f"✅ Tier0 agent {agent_id} created, testing with get_id...")
-                        test_result = ray.get(agent_handle.get_id.remote())
+                        test_result = await self._async_ray_get(agent_handle.get_id.remote())
                         logger.info(f"✅ Agent {agent_id} get_id test passed: {test_result}")
 
                         if test_result != agent_id:
@@ -599,7 +829,7 @@ class OrganismManager:
 
                         # Register the agent with its organ
                         logger.info(f"📝 Registering agent {agent_id} with organ {organ_id}...")
-                        ray.get(organ_handle.register_agent.remote(agent_id, agent_handle))
+                        await self._async_ray_get(organ_handle.register_agent.remote(agent_id, agent_handle))
                         logger.info(f"✅ Agent {agent_id} registered with organ {organ_id}")
 
                         self.agent_to_organ_map[agent_id] = organ_id
@@ -623,8 +853,8 @@ class OrganismManager:
         """Remove excess agents from an organ to match the target count."""
         try:
             logger.info(f"🧹 Checking for excess agents in {organ_id} (target: {target_count})...")
-            # get_agent_handles is synchronous, so use ray.get() instead of await
-            existing_agents = ray.get(organ_handle.get_agent_handles.remote())
+            # Use async wrapper for ray.get to avoid blocking
+            existing_agents = await self._async_ray_get(organ_handle.get_agent_handles.remote())
             current_count = len(existing_agents)
             logger.info(f"📊 Current agent count in {organ_id}: {current_count}")
             
@@ -637,8 +867,8 @@ class OrganismManager:
                 for agent_id in agent_ids[target_count:]:
                     try:
                         logger.info(f"🗑️ Removing excess agent: {agent_id}")
-                        # remove_agent is also synchronous
-                        ray.get(organ_handle.remove_agent.remote(agent_id))
+                        # Use async wrapper for ray.get
+                        await self._async_ray_get(organ_handle.remove_agent.remote(agent_id))
                         logger.info(f"✅ Removed excess agent: {agent_id}")
                     except Exception as e:
                         logger.error(f"❌ Failed to remove agent {agent_id}: {e}")
@@ -751,7 +981,7 @@ class OrganismManager:
             try:
                 # Level 4: best agent within selected organ via Tier 0 constrained selection
                 organ_handle = self.organs[organ_id]
-                handles = ray.get(organ_handle.get_agent_handles.remote())
+                handles = await self._async_ray_get(organ_handle.get_agent_handles.remote())
                 candidate_ids = list(handles.keys())
                 
                 if not candidate_ids:
@@ -786,17 +1016,19 @@ class OrganismManager:
                 escalate = True
 
         # Escalation path: HGNN decomposition to multi-organ plan
-        start_time = time.time()
-        plan = await self._hgnn_decompose(task)
-        results: List[Dict[str, Any]] = []
-        for sub in plan:
-            sub_organ = sub["organ_id"]
-            sub_task = sub["task"]
-            # Inject OCPS regime signals for escalated path
-            sub_task["p_fast"] = self.ocps.p_fast
-            sub_task["escalated"] = True
-            r = await self.execute_task_on_organ(sub_organ, sub_task)
-            results.append(r)
+        # Use semaphore to throttle concurrent escalations
+        async with self.escalation_semaphore:
+            start_time = time.time()
+            plan = await self._hgnn_decompose(task)
+            results: List[Dict[str, Any]] = []
+            for sub in plan:
+                sub_organ = sub["organ_id"]
+                sub_task = sub["task"]
+                # Inject OCPS regime signals for escalated path
+                sub_task["p_fast"] = self.ocps.p_fast
+                sub_task["escalated"] = True
+                r = await self.execute_task_on_organ(sub_organ, sub_task)
+                results.append(r)
 
         success = all(r.get("success") for r in results) if results else False
         
@@ -810,6 +1042,23 @@ class OrganismManager:
         
         # Set explicit escalation signals for verifier
         return self._make_escalation_result(results, plan, success)
+    
+    def _pattern_key(self, plan: List[Dict[str, Any]]) -> str:
+        """Generate a cache key for the hyperedge pattern."""
+        organ_ids = sorted([p["organ_id"] for p in plan])
+        return "|".join(organ_ids)
+    
+    def _make_escalation_result(self, results: List[Dict[str, Any]], plan: List[Dict[str, Any]], success: bool) -> Dict[str, Any]:
+        """Create the final escalation result."""
+        return {
+            "success": success,
+            "result": results,
+            "path": "hgnn",
+            "p_fast": self.ocps.p_fast,
+            "kind": "escalated",
+            "escalated": True,
+            "plan": plan
+        }
 
     # === COA §6.1: enhanced hypergraph decomposition with cognitive client ===
     async def _hgnn_decompose(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1101,7 +1350,7 @@ class OrganismManager:
                     organ_handle = self.get_organ_handle(organ_id)
                     if organ_handle:
                         try:
-                            status = ray.get(organ_handle.get_status.remote())
+                            status = await self._async_ray_get(organ_handle.get_status.remote())
                             summary["organs"][organ_id] = status
                         except Exception as e:
                             summary["organs"][organ_id] = {"error": str(e)}
@@ -1122,7 +1371,7 @@ class OrganismManager:
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
-                self.shutdown_organism()
+                await self.shutdown_organism()
                 return {"success": True, "path": "api_handler", "p_fast": self.ocps.p_fast, "result": "Organism shutdown successfully"}
             except Exception as e:
                 return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
@@ -1165,7 +1414,7 @@ class OrganismManager:
                 # Get organ details
                 for organ_id, organ_handle in self.organs.items():
                     try:
-                        status = ray.get(organ_handle.get_status.remote())
+                        status = await self._async_ray_get(organ_handle.get_status.remote())
                         routing_info["organ_details"][organ_id] = status
                     except Exception as e:
                         routing_info["organ_details"][organ_id] = {"error": str(e)}
@@ -1183,8 +1432,18 @@ class OrganismManager:
             logger.exception("route_and_execute failed for task.type=%s", ttype)
             return {"success": False, "error": str(e), "path": "error", "p_fast": self.ocps.p_fast}
 
-    async def initialize_organism(self):
+    async def initialize_organism(self, *args, **kwargs):
         """Creates all organs and populates them with agents based on the config."""
+        # Accept arbitrary arguments to handle Ray Serve endpoint calls
+        # Check if configuration was passed as first argument
+        if args and isinstance(args[0], dict):
+            config = args[0]
+            logger.info(f"📋 Using provided configuration: {list(config.keys())}")
+            # Update organ configs if provided
+            if 'organ_types' in config:
+                self.organ_configs = config['organ_types']
+                logger.info(f"✅ Updated organ configs from provided configuration: {len(self.organ_configs)} organs")
+        
         if self._initialized:
             logger.warning("Organism already initialized. Skipping re-initialization.")
             return
@@ -1213,13 +1472,13 @@ class OrganismManager:
                 logger.info(f"🔄 Attempt {attempt + 1}/{max_retries} to initialize organism...")
                 
                 # Check Ray cluster health before proceeding
-                self._check_ray_cluster_health()
+                await self._check_ray_cluster_health()
                 
                 # Clean up dead actors first
                 await self._cleanup_dead_actors()
                 
                 logger.info("🏗️ Creating organs...")
-                self._create_organs()
+                await self._create_organs()
                 
                 logger.info("🤖 Creating and distributing agents...")
                 await self._create_and_distribute_agents()
@@ -1234,6 +1493,9 @@ class OrganismManager:
                 
                 # Initialize cognitive client for HGNN escalation
                 await self._initialize_cognitive_client()
+                
+                # Start background health checks
+                await self._start_background_health_checks()
                 
                 self._initialized = True
                 logger.info("✅ Organism initialization complete.")
@@ -1265,14 +1527,36 @@ class OrganismManager:
         except Exception as e:
             logger.warning(f"⚠️ Cognitive client not ready: {e}")
 
-    def shutdown_organism(self):
+    async def shutdown_organism(self):
         """Shuts down the organism and cleans up resources."""
         logger.info("🛑 Shutting down organism...")
+        
+        # Stop background health checks
+        await self._stop_background_health_checks()
         
         # Note: Ray actors with lifetime="detached" will persist until explicitly terminated
         # In a production system, you might want to add explicit cleanup here
         self._initialized = False
         logger.info("✅ Organism shutdown complete")
+    
+    def _track_metrics(self, path: str, success: bool, latency_ms: float):
+        """Track execution metrics for monitoring and optimization."""
+        try:
+            if path not in self._metrics:
+                self._metrics[path] = []
+            
+            self._metrics[path].append({
+                "timestamp": time.time(),
+                "success": success,
+                "latency_ms": latency_ms
+            })
+            
+            # Keep only last 1000 metrics per path to prevent memory bloat
+            if len(self._metrics[path]) > 1000:
+                self._metrics[path] = self._metrics[path][-1000:]
+                
+        except Exception as e:
+            logger.debug(f"Failed to track metrics: {e}")
 
     def get_drift_threshold(self) -> float:
         """Get the current drift threshold value for diagnostic purposes."""

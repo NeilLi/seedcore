@@ -73,7 +73,7 @@ This document provides a comprehensive reference for working with the Seedcore K
 - **Resources**: 2 CPU, 1Gi memory (requests), 2 CPU, 4Gi memory (limits)
 
 #### Serve Service
-- **Service**: `seedcore-svc-serve-svc`
+- **Service**: `seedcore-svc-serve-svc` and `seedcore-svc-stable-svc`
 - **Cluster IP**: `10.96.171.126`
 - **Port**: `8000`
 

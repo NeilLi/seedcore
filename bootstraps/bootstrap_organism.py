@@ -134,7 +134,7 @@ def _init_via_ray(cfg: dict) -> bool:
             log.info(f"ℹ️ Serve health not ready: {e}")
 
         log.info("🚀 Calling initialize_organism via Serve handle…")
-        resp = h.initialize_organism.remote(cfg["seedcore"]["organism"])
+        resp = h.initialize_organism.remote()
         result = _resolve_ray_response(resp, timeout_s=120)
         log.info(f"📋 initialize_organism response: {result}")
         return True
