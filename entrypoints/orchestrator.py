@@ -45,7 +45,7 @@ def _derive_serve_gateway() -> str:
         return f"http://{serve_host}:8000"
 
     # 4) Last-resort default (your user-managed stable Serve Service)
-    return "http://seedcore-svc-serve-svc:8000"
+    return "http://seedcore-svc-stable-svc:8000"
 
 GATEWAY = _derive_serve_gateway()
 ML = f"{GATEWAY}/ml"

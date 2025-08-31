@@ -1,11 +1,11 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: seedcore-bootstrap-dispatchers
+  name: seedcore-bootstrap-organism
   namespace: seedcore-dev
   labels:
     app: seedcore
-    component: bootstrap-dispatchers
+    component: bootstrap-organism
 spec:
   completions: 1
   parallelism: 1
@@ -14,31 +14,21 @@ spec:
     metadata:
       labels:
         app: seedcore
-        component: bootstrap-dispatchers
+        component: bootstrap-organism
     spec:
       serviceAccountName: seedcore-service-account
       restartPolicy: Never
       containers:
-      - name: bootstrap-dispatchers
+      - name: bootstrap-organism
         image: seedcore:latest
         imagePullPolicy: IfNotPresent
         command: ["python", "/app/bootstraps/bootstrap_entry.py"]
         env:
-        # Tell the entrypoint to only init dispatchers and exit
+        # Tell the entrypoint to only init the organism and exit
         - name: BOOTSTRAP_MODE
-          value: "dispatchers"
+          value: "organism"
         - name: EXIT_AFTER_BOOTSTRAP
           value: "true"
-
-        # Dispatcher bring-up options
-        - name: FORCE_REPLACE_DISPATCHERS
-          value: "true"
-        - name: DISPATCHER_COUNT          # init_dispatchers.py also accepts SEEDCORE_DISPATCHERS
-          value: "2"
-        - name: SEEDCORE_GRAPH_DISPATCHERS
-          value: "1"
-        - name: DGLBACKEND
-          value: "pytorch"
 
         # Ray connectivity
         - name: RAY_ADDRESS
@@ -50,21 +40,15 @@ spec:
         - name: RUNNING_IN_CLUSTER
           value: "1"
 
-        # Database for dispatchers/reaper/graph-dispatchers
+        # DB DSN (not strictly needed for organism init, but harmless)
         - name: SEEDCORE_PG_DSN
           value: "postgresql://postgres:postgres@postgresql.seedcore-dev.svc.cluster.local:5432/seedcore"
 
-        # Optional tuning passed into actors
-        - name: OCPS_DRIFT_THRESHOLD
-          value: "0.5"
-        - name: COGNITIVE_TIMEOUT_S
-          value: "8.0"
-        - name: COGNITIVE_MAX_INFLIGHT
-          value: "64"
-        - name: FAST_PATH_LATENCY_SLO_MS
-          value: "1000"
-        - name: MAX_PLAN_STEPS
-          value: "16"
+        # HTTP fallback for init_organism.py
+        - name: SERVE_BASE_URL
+          value: "http://seedcore-svc-stable-svc.seedcore-dev.svc.cluster.local:8000"
+        - name: ORGANISM_URL
+          value: "http://seedcore-svc-stable-svc.seedcore-dev.svc.cluster.local:8000/organism"
 
         resources:
           requests:

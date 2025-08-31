@@ -25,7 +25,7 @@ class XGBoostTuningDemo:
             # Auto-detect service URL based on environment
             if os.getenv('KUBERNETES_SERVICE_HOST'):
                 # We're in a K8s pod, use internal service names
-                self.base_url = "http://seedcore-svc-serve-svc:8000"
+                self.base_url = "http://seedcore-svc-stable-svc:8000"
             else:
                 # Local development (assumes port-forwarding)
                 self.base_url = "http://localhost:8000"

@@ -42,7 +42,7 @@ def test_service_connectivity():
     
     # Test Ray head service
     services = [
-        ("Ray Head ML Service", "http://seedcore-svc-serve-svc:8000/ml/health"),
+        ("Ray Head ML Service", "http://seedcore-svc-stable-svc:8000/ml/health"),
         ("Ray Head Dashboard", "http://seedcore-svc-head-svc:8265"),
         ("Localhost ML Service", "http://localhost:8000/ml/health"),
         ("Localhost Dashboard", "http://localhost:8265")

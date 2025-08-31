@@ -67,7 +67,7 @@ def _derive_serve_gateway() -> str:
       2) Else derive from RAY_ADDRESS:
          - localhost/127.0.0.1 -> http://127.0.0.1:8000
          - seedcore-svc-*-head-svc(.ns.svc.cluster.local) -> ...-serve-svc:8000
-      3) Else default to 'http://seedcore-svc-serve-svc:8000'
+      3) Else default to 'http://seedcore-svc-stable-svc:8000'
     """
     sg = os.getenv(ENV_SERVE_GATEWAY)
     if sg:
@@ -83,12 +83,12 @@ def _derive_serve_gateway() -> str:
             _log.info("Derived SERVE gateway (localhost): %s", gw)
             return gw
         # map *-head-svc to *-serve-svc (works for FQDNs too)
-        serve_host = host.replace("-head-svc", "-serve-svc")
+        serve_host = host.replace("-head-svc", "-stable-svc")
         gw = f"http://{serve_host}:{DEFAULT_SERVE_PORT}"
         _log.info("Derived SERVE gateway (cluster svc): %s", gw)
         return gw
 
-    gw = f"http://seedcore-svc-serve-svc:{DEFAULT_SERVE_PORT}"
+    gw = f"http://seedcore-svc-stable-svc:{DEFAULT_SERVE_PORT}"
     _log.info("Derived SERVE gateway (fallback): %s", gw)
     return gw
 

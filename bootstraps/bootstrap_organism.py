@@ -1,9 +1,8 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-bootstrap_organism.py
----------------------
-Adaptive bootstrap script for OrganismManager and its organs.
-Intended to run as a Kubernetes Job, exits cleanly once initialization completes.
+init_organism.py
+Initialize OrganismManager via Ray Serve handle first; fall back to HTTP.
+Blocks until /organism/health shows organism_initialized=true (with timeout).
 """
 
 import os
@@ -11,128 +10,192 @@ import sys
 import time
 import json
 import logging
-import asyncio
-import requests
-import ray
-import yaml
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("bootstrap_organism")
+import requests
 
-# --- Config defaults ---
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "src" / "seedcore" / "config" / "defaults.yaml"
+# Add src to path for imports
+ROOT = Path(__file__).resolve().parents[1]  # /app
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-ORGANISM_URL = os.getenv("ORGANISM_URL", "http://127.0.0.1:8000/organism")
-SERVE_BASE_URL = os.getenv("SERVE_BASE_URL", "http://127.0.0.1:8000")
-RAY_ADDRESS = os.getenv("RAY_ADDRESS", "ray://127.0.0.1:10001")
+from seedcore.utils.ray_utils import (
+    ensure_ray_initialized,
+    is_ray_available,
+    get_ray_cluster_info,
+    shutdown_ray
+)
+
+import ray
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,
+)
+log = logging.getLogger("init_organism")
+
+# --- Defaults & ENV ---
+DEFAULT_CONFIG_PATH = Path(
+    os.getenv("SEEDCORE_DEFAULT_CONFIG", str(SRC / "seedcore" / "config" / "defaults.yaml"))
+)
+
+# Use ray_utils constants and methods for unified configuration
+from seedcore.utils.ray_utils import SERVE_GATEWAY, ML, COG
+
+# Derive organism URL from ray_utils SERVE_GATEWAY
+ORGANISM_URL = os.getenv("ORGANISM_URL", f"{SERVE_GATEWAY}/organism")
+
+# Ray connection settings - let ray_utils handle defaults
+RAY_ADDRESS = os.getenv("RAY_ADDRESS")  # ray_utils will use this internally
 RAY_NAMESPACE = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
 
-EXIT_AFTER_BOOTSTRAP = os.getenv("EXIT_AFTER_BOOTSTRAP", "true").lower() == "true"
+HEALTH_TIMEOUT_S = int(os.getenv("ORGANISM_HEALTH_TIMEOUT_S", "180"))
+HEALTH_INTERVAL_S = float(os.getenv("ORGANISM_HEALTH_TIMEOUT_S", "2.0"))
 
-
-def load_config(path=DEFAULT_CONFIG_PATH):
+def _load_config(path: Path) -> dict:
+    import yaml
     try:
         with open(path, "r") as f:
-            return yaml.safe_load(f)
+            cfg = yaml.safe_load(f)
+        if not cfg or "seedcore" not in cfg or "organism" not in cfg["seedcore"]:
+            raise ValueError("Config missing required keys: seedcore.organism")
+        return cfg
     except Exception as e:
         log.error(f"Failed to load config {path}: {e}")
-        sys.exit(1)
+        raise
 
-
-async def init_via_ray(config):
-    """Initialize OrganismManager and organs using Ray handles (preferred)."""
-    import ray
-
+def _resolve_ray_response(response, timeout_s: float = 15.0):
+    """
+    Safely resolve Ray responses, handling both ObjectRefs and DeploymentResponses.
+    
+    Args:
+        response: Either a Ray ObjectRef or Serve DeploymentResponse
+        timeout_s: Timeout in seconds
+        
+    Returns:
+        The resolved result
+        
+    Raises:
+        Exception: If resolution fails
+    """
     try:
-        ray.init(address=RAY_ADDRESS, namespace=RAY_NAMESPACE)
-        log.info(f"✅ Connected to Ray at {RAY_ADDRESS} (ns={RAY_NAMESPACE})")
+        # Try to use .result() first (DeploymentResponse)
+        if hasattr(response, 'result'):
+            return response.result(timeout_s=timeout_s)
+        # Fall back to ray.get() for ObjectRefs
+        else:
+            import ray
+            return ray.get(response, timeout=timeout_s)
     except Exception as e:
-        log.error(f"❌ Failed to connect to Ray: {e}")
+        log.warning(f"Failed to resolve Ray response: {e}")
+        raise
+
+def _ensure_ray() -> bool:
+    """Use ray_utils to ensure Ray is properly initialized."""
+    if is_ray_available():
+        log.info("✅ Ray already available")
+        return True
+    
+    log.info("🚀 Initializing Ray connection...")
+    success = ensure_ray_initialized(
+        ray_namespace=RAY_NAMESPACE,
+        force_reinit=False
+    )
+    
+    if success:
+        cluster_info = get_ray_cluster_info()
+        log.info(f"✅ Ray connected: {cluster_info}")
+        return True
+    else:
+        log.error("❌ Failed to initialize Ray")
         return False
 
+def _init_via_ray(cfg: dict) -> bool:
+    """Use Serve handle to initialize (preferred)."""
     try:
-        # Get handle to OrganismManager Serve deployment
+        if not _ensure_ray():
+            log.error("❌ Cannot initialize via Ray - Ray connection failed")
+            return False
+            
         from ray import serve
-        handle = serve.get_deployment_handle("OrganismManager", app_name="organism")
+        h = serve.get_deployment_handle("OrganismManager", app_name="organism")
+        
+        # Try health quick - handle DeploymentResponse correctly
+        try:
+            health = h.health.remote()
+            resp = _resolve_ray_response(health, timeout_s=15)
+            if isinstance(resp, dict) and resp.get("organism_initialized"):
+                log.info("✅ Organism already initialized (Serve handle)")
+                return True
+        except Exception as e:
+            log.info(f"ℹ️ Serve health not ready: {e}")
 
-        # Call initialize-organism
-        result = await handle.initialize_organism.remote(config["seedcore"]["organism"])
-        result = await result
-        log.info(f"Organism initialize response: {result}")
+        log.info("🚀 Calling initialize_organism via Serve handle…")
+        resp = h.initialize_organism.remote(cfg["seedcore"]["organism"])
+        result = _resolve_ray_response(resp, timeout_s=120)
+        log.info(f"📋 initialize_organism response: {result}")
         return True
     except Exception as e:
-        log.error(f"❌ Failed to initialize OrganismManager via Ray: {e}")
+        log.warning(f"⚠️ Serve handle init failed: {e}")
         return False
 
-
-def init_via_http(config):
-    """Fallback path: initialize via Serve HTTP API."""
+def _init_via_http(cfg: dict) -> bool:
+    """HTTP fallback (works even if ray client ingress is blocked)."""
     url = f"{ORGANISM_URL}/initialize-organism"
     try:
-        resp = requests.post(url, json=config["seedcore"]["organism"], timeout=10)
-        if resp.status_code == 200:
-            log.info(f"✅ Organism initialized via HTTP: {resp.json()}")
+        r = requests.post(url, json=cfg["seedcore"]["organism"], timeout=15)
+        if r.status_code == 200:
+            log.info(f"✅ HTTP initialize-organism ok: {r.json()}")
             return True
-        else:
-            log.error(f"❌ HTTP init failed {resp.status_code}: {resp.text}")
-            return False
+        log.error(f"❌ HTTP initialize-organism failed {r.status_code}: {r.text[:200]}")
+        return False
     except Exception as e:
-        log.error(f"❌ Exception in HTTP init: {e}")
+        log.error(f"❌ HTTP exception: {e}")
         return False
 
-
-def wait_for_health(timeout=60, interval=5):
-    """Poll /organism/health until healthy or timeout."""
+def _wait_health(timeout_s: int, interval_s: float) -> bool:
     url = f"{ORGANISM_URL}/health"
-    deadline = time.time() + timeout
+    deadline = time.time() + timeout_s
     while time.time() < deadline:
         try:
-            resp = requests.get(url, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
+            r = requests.get(url, timeout=5)
+            if r.status_code == 200:
+                data = r.json()
                 if data.get("organism_initialized"):
-                    log.info(f"✅ Organism health OK: {data}")
+                    log.info("✅ Organism health: initialized")
                     return True
-                else:
-                    log.info("⏳ Organism still initializing...")
+                log.info("⏳ Organism still initializing...")
             else:
-                log.warning(f"⚠️ Health returned {resp.status_code}")
+                log.info(f"ℹ️ Health HTTP {r.status_code}…")
         except Exception as e:
-            log.warning(f"Health check failed: {e}")
-        time.sleep(interval)
+            log.info(f"ℹ️ Health check error: {e}")
+        time.sleep(interval_s)
     log.error("❌ Timed out waiting for organism to initialize")
     return False
 
+def bootstrap_organism() -> bool:
+    """Public entry used by bootstrap_entry.py. Returns True/False (no sys.exit here)."""
+    try:
+        cfg = _load_config(DEFAULT_CONFIG_PATH)
+    except Exception:
+        return False
 
-async def main():
-    cfg = load_config()
-    log.info(f"Loaded config with organs: {cfg['seedcore']['organism']['organ_types']}")
-
-    # Step 1: Try Ray Serve initialization
-    ok = await init_via_ray(cfg)
+    ok = _init_via_ray(cfg)
     if not ok:
-        log.warning("⚠️ Falling back to HTTP initialization")
-        ok = init_via_http(cfg)
-
-    # Step 2: Poll health endpoint
-    if ok:
-        if not wait_for_health(timeout=120, interval=5):
-            sys.exit(1)
-    else:
-        sys.exit(1)
-
-    log.info("🎉 Organism bootstrap completed successfully")
-
-    if EXIT_AFTER_BOOTSTRAP:
-        log.info("🚪 EXIT_AFTER_BOOTSTRAP=true, exiting now")
-        sys.exit(0)
-    else:
-        log.info("👀 Staying alive for debugging...")
-        while True:
-            time.sleep(60)
-
+        log.info("↪️ Falling back to HTTP init")
+        ok = _init_via_http(cfg)
+    if not ok:
+        return False
+    return _wait_health(HEALTH_TIMEOUT_S, HEALTH_INTERVAL_S)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        ok = bootstrap_organism()
+        sys.exit(0 if ok else 1)
+    finally:
+        # Clean up Ray connection
+        shutdown_ray()
 

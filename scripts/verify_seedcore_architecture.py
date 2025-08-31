@@ -87,7 +87,7 @@ Env:
   RAY_NAMESPACE=seedcore-dev
   SEEDCORE_PG_DSN=postgresql://postgres:postgres@postgresql:5432/seedcore
 
-  ORCH_URL=http://seedcore-svc-serve-svc:8000/orchestrator  (or http://127.0.0.1:8000/orchestrator)
+  ORCH_URL=http://seedcore-svc-stable-svc:8000/orchestrator  (or http://127.0.0.1:8000/orchestrator)
   ORCH_PATHS=/tasks                                   (comma-separated candidate endpoints)
   
   # API Schema (OpenAPI 3.1.0):

@@ -267,18 +267,18 @@ def main():
         print_status("INFO", f"  - Route Prefix: {ROUTE_PREFIX}")
         print_status("INFO", f"  - Full URL: {BASE_URL}{ROUTE_PREFIX}")
         
-        if "seedcore-svc-serve-svc" in BASE_URL:
+        if "seedcore-svc-stable-svc" in BASE_URL:
             print_status("INFO", "You're testing from a K8s pod - make sure:")
             print_status("INFO", "  1. The cognitive service is deployed on Ray head node via Ray Serve")
-            print_status("INFO", "  2. Ray Serve is running and accessible at seedcore-svc-serve-svc:8000")
+            print_status("INFO", "  2. Ray Serve is running and accessible at seedcore-svc-stable-svc:8000")
             print_status("INFO", "  3. Check Ray Serve status: kubectl exec -it <ray-head-pod> -- ray status")
         elif "seedcore-api" in BASE_URL:
             print_status("INFO", "You're testing from seedcore-api pod - make sure:")
             print_status("INFO", "  1. The cognitive service is deployed on Ray head node via Ray Serve")
-            print_status("INFO", "  2. Ray Serve is accessible at seedcore-svc-serve-svc:8000")
+            print_status("INFO", "  2. Ray Serve is accessible at seedcore-svc-stable-svc:8000")
         else:
             print_status("INFO", "You're testing from localhost - make sure:")
-            print_status("INFO", "  1. Port forwarding is set up: kubectl port-forward svc/seedcore-svc-serve-svc 8000:8000")
+            print_status("INFO", "  1. Port forwarding is set up: kubectl port-forward svc/seedcore-svc-stable-svc 8000:8000")
             print_status("INFO", "  2. The cognitive service is deployed and running on Ray head node")
         
         return

@@ -56,7 +56,7 @@ def get_service_url():
     # Check if we're running in seedcore-api pod
     if os.getenv('SEEDCORE_API_ADDRESS'):
         # We're in the seedcore-api pod, use internal service names
-        return "http://seedcore-svc-serve-svc:8000"
+        return "http://seedcore-svc-stable-svc:8000"
     else:
         # Local development or ray head pod
         return "http://localhost:8000"
