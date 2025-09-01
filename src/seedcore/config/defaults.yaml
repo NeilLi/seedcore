@@ -17,15 +17,17 @@ seedcore:
   # COA Organism Configuration
   organism:
     organ_types:
-      - id: "cognitive_organ_1"
-        type: "Cognitive"
-        description: "Handles reasoning, planning, and complex task decomposition."
-        agent_count: 1
+      # - id: "cognitive_organ_1"
+      #   type: "Cognitive"
+      #   description: "Handles reasoning, planning, and complex task decomposition."
+      #   agent_count: 0
       - id: "actuator_organ_1"
         type: "Actuator"
         description: "Executes actions and interacts with external APIs."
         agent_count: 1
+        task_types: ["execute", "workflow_step", "side_effect"]
       - id: "utility_organ_1"
         type: "Utility"
         description: "Manages memory, health checks, and internal system tasks."
-        agent_count: 1 
+        agent_count: 1
+        task_types: ["general_query", "health_check", "status", "ping"] 

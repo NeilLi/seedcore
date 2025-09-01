@@ -106,19 +106,33 @@ class RoutingTable:
         self.by_domain: Dict[Tuple[str, str], str] = {}
         self.hyperedge_cache: Dict[str, List[str]] = {}
 
+    @staticmethod
+    def _norm(s: Optional[str]) -> Optional[str]:
+        return str(s).strip().lower() if s is not None else None
+
     def resolve(self, task_type: Optional[str], domain: Optional[str]) -> Optional[str]:
-        if task_type is None:
+        tt = self._norm(task_type)
+        dm = self._norm(domain)
+        if tt is None:
             return None
-        key = (task_type, domain)
+        key = (tt, dm)
         if key in self.by_domain:
             return self.by_domain[key]
-        return self.by_task_type.get(task_type)
+        return self.by_task_type.get(tt)
 
     def standardize(self, task_type: str, organ_id: str, domain: Optional[str] = None):
-        if domain:
-            self.by_domain[(task_type, domain)] = organ_id
+        tt = self._norm(task_type)
+        dm = self._norm(domain)
+        if tt is None:
+            return
+        if dm:
+            self.by_domain[(tt, dm)] = organ_id
         else:
-            self.by_task_type[task_type] = organ_id
+            self.by_task_type[tt] = organ_id
+
+    # backwards-compatible alias for older code paths
+    def add_rule(self, task_type: str, domain: Optional[str], organ_id: str):
+        self.standardize(task_type, organ_id, domain)
 
 class OrganismManager:
     """
@@ -173,6 +187,11 @@ class OrganismManager:
         
         # SOLUTION: Namespace verification is now handled centrally by ray_connector.py
         # This method is no longer needed and has been removed.
+
+    def _would_escalate_preview(self, drift: float) -> bool:
+        # non-mutating preview of CUSUM trigger OR threshold trigger
+        S_next = max(0.0, self.ocps.S + drift - self.ocps.nu)
+        return (S_next > self.ocps.h) or (drift >= self.ocps_drift_threshold)
 
     def _load_config(self, config_path: str):
         """Loads the organism configuration from a YAML file."""
@@ -274,13 +293,12 @@ class OrganismManager:
     def _setup_default_routing(self):
         """Set up default routing rules to avoid cognitive organ for simple queries."""
         try:
-            # Add default routing rules
-            self.routing.add_rule("general_query", "general", "general_organ")
-            self.routing.add_rule("text_processing", "general", "general_organ")
-            self.routing.add_rule("data_analysis", "data", "data_organ")
-            self.routing.add_rule("ml_inference", "ml", "ml_organ")
-            
-            logger.info("✅ Default routing rules configured")
+            # map the most common types explicitly to existing organs
+            self.routing.standardize("general_query", "utility_organ_1")
+            self.routing.standardize("health_check", "utility_organ_1")
+            self.routing.standardize("execute", "actuator_organ_1")
+            # add more defaults here if you like
+            logger.info("✅ Default routing installed for general_query/health_check/execute.")
         except Exception as e:
             logger.warning(f"⚠️ Failed to set up default routing rules: {e}")
 
@@ -404,40 +422,7 @@ class OrganismManager:
             logger.warning(f"⚠️ Organ {organ_id} health check failed: {e}")
             return False
     
-    async def _create_organs(self):
-        """Create organs based on configuration."""
-        try:
-            for organ_config in self.organ_configs:
-                organ_id = organ_config['id']
-                organ_type = organ_config['type']
-                
-                try:
-                    logger.info(f"🔧 Creating organ: {organ_id} (type: {organ_type})")
-                    new_organ = Organ.options(
-                        name=organ_id,
-                        lifetime="detached",
-                        num_cpus=0.1
-                    ).remote(
-                        organ_id=organ_id,
-                        organ_type=organ_type
-                    )
-                    
-                    # Test the new organ
-                    if await self._test_organ_health_async(new_organ, organ_id):
-                        self.organs[organ_id] = new_organ
-                        logger.info(f"✅ Successfully created organ: {organ_id}")
-                    else:
-                        raise Exception(f"New organ {organ_id} failed health check")
-                        
-                except Exception as e:
-                    logger.error(f"❌ Failed to create organ {organ_id}: {e}")
-                    raise
-                    
-            logger.info(f"✅ Created {len(self.organs)} organs successfully")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to create organs: {e}")
-            raise
+
 
     async def _cleanup_dead_actors(self):
         """Clean up dead Ray actors using the Janitor actor for cluster-side cleanup."""
@@ -964,12 +949,19 @@ class OrganismManager:
         if not self._initialized:
             raise RuntimeError("Organism not initialized")
 
-        ttype = task.get("type") or task.get("task_type")
-        domain = task.get("domain")
+        # start of route_and_execute
+        ttype = (task.get("type") or task.get("task_type") or "").strip().lower()
+        domain = (task.get("domain") or "").strip().lower() or None
         drift = float(task.get("drift_score", 0.0))
 
         # Try fast-path resolution first
         organ_id = self.routing.resolve(ttype, domain)
+        
+        # Guard unknown organ IDs at run time
+        if organ_id and organ_id not in self.organs:
+            logger.warning(f"⚠️ Route resolved to unknown organ '{organ_id}'. Escalating.")
+            organ_id = None  # force escalation
+            
         escalate = self.ocps.update(drift)
         
         # Apply configurable drift threshold for escalation
@@ -1020,6 +1012,16 @@ class OrganismManager:
         async with self.escalation_semaphore:
             start_time = time.time()
             plan = await self._hgnn_decompose(task)
+            
+            if not plan:
+                return {
+                    "success": False,
+                    "path": "hgnn",
+                    "p_fast": self.ocps.p_fast,
+                    "error": "No valid plan/organ available for task type",
+                    "task_type": ttype
+                }
+            
             results: List[Dict[str, Any]] = []
             for sub in plan:
                 sub_organ = sub["organ_id"]
@@ -1043,22 +1045,9 @@ class OrganismManager:
         # Set explicit escalation signals for verifier
         return self._make_escalation_result(results, plan, success)
     
-    def _pattern_key(self, plan: List[Dict[str, Any]]) -> str:
-        """Generate a cache key for the hyperedge pattern."""
-        organ_ids = sorted([p["organ_id"] for p in plan])
-        return "|".join(organ_ids)
+
     
-    def _make_escalation_result(self, results: List[Dict[str, Any]], plan: List[Dict[str, Any]], success: bool) -> Dict[str, Any]:
-        """Create the final escalation result."""
-        return {
-            "success": success,
-            "result": results,
-            "path": "hgnn",
-            "p_fast": self.ocps.p_fast,
-            "kind": "escalated",
-            "escalated": True,
-            "plan": plan
-        }
+
 
     # === COA §6.1: enhanced hypergraph decomposition with cognitive client ===
     async def _hgnn_decompose(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1124,7 +1113,7 @@ class OrganismManager:
 
     def _fallback_plan(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Create a minimal safe fallback plan when cognitive reasoning is unavailable."""
-        ttype = task.get("type") or task.get("task_type")
+        ttype = (task.get("type") or task.get("task_type") or "").strip().lower()
         
         # If any organ claims support for this type, prefer it
         for organ_id, iface in getattr(self, "organ_interfaces", {}).items():
@@ -1263,7 +1252,7 @@ class OrganismManager:
         return metrics
 
     def _pattern_key(self, plan: List[Dict[str, Any]]) -> str:
-        return "|".join(f"{p['organ_id']}:{p['task'].get('type', p['task'].get('task_type',''))}" for p in plan)
+        return "|".join(f"{p['organ_id']}:{(p['task'].get('type') or p['task'].get('task_type') or '').lower()}" for p in plan)
 
     # === §8 hooks: memory-aware prefetch/record (stubs) ===
     def prefetch_context(self, task: Dict[str, Any]) -> None:
@@ -1281,7 +1270,9 @@ class OrganismManager:
             p_fast: float
             result: any
         """
-        ttype = (task.get("type") or task.get("task_type") or "").strip()
+        # at the top of handle_incoming_task
+        ttype = (task.get("type") or task.get("task_type") or "").strip().lower()
+        task["type"] = ttype  # normalize into the payload for consistent downstream use
         if not ttype:
             return {"success": False, "error": "task.type is required"}
 
@@ -1408,7 +1399,7 @@ class OrganismManager:
                     "task_type": test_task_type,
                     "domain": test_domain,
                     "routed_organ": routed_organ,
-                    "would_escalate": self.ocps.update(float(task.get("params", {}).get("drift_score", 0.0)))
+                    "would_escalate": self._would_escalate_preview(float(task.get("params", {}).get("drift_score", 0.0)))
                 }
                 
                 # Get organ details
@@ -1485,11 +1476,16 @@ class OrganismManager:
                 # Register known task types for fast-path routing (standardization)
                 for organ_config in self.organ_configs:
                     organ_id = organ_config['id']
-                    known_types = set(organ_config.get('task_types', []) or [])
+                    known_types = [str(t).strip().lower() for t in (organ_config.get("task_types") or [])]
                     if known_types:
-                        self.organ_interfaces[organ_id] = StandardizedOrganInterface(task_types=known_types)
+                        self.organ_interfaces[organ_id] = StandardizedOrganInterface(task_types=set(known_types))
                         for t in known_types:
                             self.routing.standardize(t, organ_id)
+                
+                # warn if a route points to a missing organ
+                for t, oid in list(self.routing.by_task_type.items()):
+                    if oid not in self.organs:
+                        logger.warning(f"⚠️ Route for task_type='{t}' points to missing organ '{oid}'")
                 
                 # Initialize cognitive client for HGNN escalation
                 await self._initialize_cognitive_client()
@@ -1539,24 +1535,7 @@ class OrganismManager:
         self._initialized = False
         logger.info("✅ Organism shutdown complete")
     
-    def _track_metrics(self, path: str, success: bool, latency_ms: float):
-        """Track execution metrics for monitoring and optimization."""
-        try:
-            if path not in self._metrics:
-                self._metrics[path] = []
-            
-            self._metrics[path].append({
-                "timestamp": time.time(),
-                "success": success,
-                "latency_ms": latency_ms
-            })
-            
-            # Keep only last 1000 metrics per path to prevent memory bloat
-            if len(self._metrics[path]) > 1000:
-                self._metrics[path] = self._metrics[path][-1000:]
-                
-        except Exception as e:
-            logger.debug(f"Failed to track metrics: {e}")
+
 
     def get_drift_threshold(self) -> float:
         """Get the current drift threshold value for diagnostic purposes."""
@@ -1569,12 +1548,6 @@ class OrganismManager:
             "by_domain": self.routing.by_domain,
             "hyperedge_cache": self.routing.hyperedge_cache
         }
-
-    def _setup_default_routing(self):
-        """Sets up default routing rules to ensure general_query tasks go to utility_organ."""
-        # Add a default rule for general_query to go to Utility organ
-        self.routing.standardize("general_query", "utility_organ")
-        logger.info("✅ Default routing for general_query to utility_organ set.")
 
 # Global instance for easy access from the API server
 # SOLUTION: Lazy initialization - this will be created by FastAPI lifespan after Ray is connected
