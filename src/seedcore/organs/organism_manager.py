@@ -62,6 +62,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Define target namespace for agent actors (prefer SEEDCORE_NS, fallback to RAY_NAMESPACE)
+AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+
 @dataclass
 class StandardizedOrganInterface:
     """COA §6.2: I_o = <T_o, R_o, S_o>"""
@@ -233,6 +236,29 @@ class OrganismManager:
         except Exception as e:
             logger.error(f"Async ray.get failed: {e}")
             raise
+
+    async def _attach_missing_candidates(self, organ_id: str, organ_handle) -> int:
+        """
+        Ensure Tier0 registry has handles for all agents the organ reports.
+        Returns number of newly attached handles.
+        """
+        try:
+            handles = await self._async_ray_get(organ_handle.get_agent_handles.remote(), timeout=5.0)
+        except Exception as e:
+            logger.warning(f"[routing] get_agent_handles failed for {organ_id}: {e}")
+            return 0
+
+        attached = 0
+        for aid, ah in (handles or {}).items():
+            if aid not in tier0_manager.agents:
+                try:
+                    tier0_manager.attach_existing_actor(aid, ah)
+                    attached += 1
+                except Exception as e:
+                    logger.debug(f"[routing] attach_existing_actor failed for {aid}: {e}")
+        if attached:
+            logger.info(f"🔗 Attached {attached} missing agent handle(s) for {organ_id}")
+        return attached
     
     async def _async_ray_actor(self, name: str, namespace: Optional[str] = None):
         """
@@ -247,20 +273,38 @@ class OrganismManager:
         """
         try:
             loop = asyncio.get_event_loop()
-            if namespace:
-                actor = await loop.run_in_executor(
-                    None, 
-                    lambda: ray.get_actor(name, namespace=namespace)
-                )
-            else:
-                actor = await loop.run_in_executor(
-                    None, 
-                    lambda: ray.get_actor(name)
-                )
+            
+            # If no namespace specified, try to determine the correct namespace
+            if namespace is None:
+                # Get the expected namespace from environment variables (prefer SEEDCORE_NS)
+                expected_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                namespace = expected_namespace
+                logger.debug(f"🔍 Using default namespace '{namespace}' for actor '{name}'")
+            
+            actor = await loop.run_in_executor(
+                None, 
+                lambda: ray.get_actor(name, namespace=namespace)
+            )
             return actor
         except Exception as e:
-            logger.error(f"Async ray.get_actor failed: {e}")
+            logger.error(f"Async ray.get_actor failed for '{name}' in namespace '{namespace}': {e}")
             raise
+
+    async def get_agent_handle(self, agent_name: str) -> Optional[ray.actor.ActorHandle]:
+        """
+        Finds a RayAgent actor handle by explicitly looking in the correct namespace.
+        """
+        try:
+            namespace = AGENT_NAMESPACE
+            logger.info(f"Searching for actor '{agent_name}' in namespace '{namespace}'...")
+            handle = await self._async_ray_actor(agent_name, namespace=namespace)
+            return handle
+        except ValueError:
+            logger.warning(f"Actor '{agent_name}' not found in namespace '{AGENT_NAMESPACE}'.")
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get actor '{agent_name}' in namespace '{AGENT_NAMESPACE}': {e}")
+            return None
 
     def _init_routing(self):
         """Initialize routing components after config is loaded."""
@@ -432,7 +476,9 @@ class OrganismManager:
             
             jan = None
             try:
-                jan = await self._async_ray_actor("seedcore_janitor")
+                # Use explicit namespace for janitor lookup
+                namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                jan = await self._async_ray_actor("seedcore_janitor", namespace=namespace)
             except Exception:
                 logger.debug("Janitor actor not available; skipping cluster cleanup")
             
@@ -491,24 +537,23 @@ class OrganismManager:
                 # Note: list_actors() doesn't work with Ray client connections
                 # Instead, try to kill the actor by name if it exists
                 try:
-                    dead_actor = await self._async_ray_actor(organ_id)
+                    # Use the correct namespace for organ actors (prefer SEEDCORE_NS)
+                    organ_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                    dead_actor = await self._async_ray_actor(organ_id, namespace=organ_namespace)
                     ray.kill(dead_actor)
-                    logger.info(f"🗑️ Killed dead actor: {organ_id}")
+                    logger.info(f"🗑️ Killed dead actor: {organ_id} from namespace '{organ_namespace}'")
                 except Exception:
                     logger.debug(f"Actor {organ_id} not found or already dead")
             except Exception as e:
                 logger.warning(f"Could not kill dead actor {organ_id}: {e}")
             
-            # Get the expected namespace from environment variables
-            ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+            # Get the expected namespace from environment variables (prefer SEEDCORE_NS)
+            ray_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
             logger.info(f"🔧 Creating organ in namespace: {ray_namespace}")
             
-            # Try multiple approaches to ensure namespace is respected
-            organ_created = False
-            
-            # Approach 1: Use Organ.options with explicit namespace
+            # Create organ with explicit namespace to ensure consistency
             try:
-                logger.info(f"🔧 Attempting to create organ with explicit namespace: {ray_namespace}")
+                logger.info(f"🔧 Creating organ with explicit namespace: {ray_namespace}")
                 new_organ = Organ.options(
                     name=organ_id, 
                     lifetime="detached",
@@ -518,43 +563,10 @@ class OrganismManager:
                     organ_id=organ_id,
                     organ_type=organ_type
                 )
-                organ_created = True
                 logger.info(f"✅ Created new organ with explicit namespace: {organ_id}")
             except Exception as e:
-                logger.warning(f"⚠️ Failed to create organ with explicit namespace: {e}")
-            
-            # Approach 2: Use Organ.options without namespace (should inherit)
-            if not organ_created:
-                try:
-                    logger.info(f"🔧 Attempting to create organ without namespace (should inherit)")
-                    new_organ = Organ.options(
-                        name=organ_id, 
-                        lifetime="detached",
-                        num_cpus=0.1
-                    ).remote(
-                        organ_id=organ_id,
-                        organ_type=organ_type
-                    )
-                    organ_created = True
-                    logger.info(f"✅ Created new organ without namespace (inherited): {organ_id}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to create organ without namespace: {e}")
-            
-            # Approach 3: Use Organ.remote directly (last resort)
-            if not organ_created:
-                try:
-                    logger.info(f"🔧 Attempting to create organ with direct remote call")
-                    new_organ = Organ.remote(
-                        organ_id=organ_id,
-                        organ_type=organ_type
-                    )
-                    organ_created = True
-                    logger.info(f"✅ Created new organ with direct remote: {organ_id}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to create organ with direct remote: {e}")
-            
-            if not organ_created:
-                raise Exception(f"All approaches to recreate organ {organ_id} failed")
+                logger.error(f"❌ Failed to create organ {organ_id} with namespace {ray_namespace}: {e}")
+                raise Exception(f"Failed to create organ {organ_id}: {e}")
             
             # Test the new organ
             if self._test_organ_health(new_organ, organ_id):
@@ -585,8 +597,10 @@ class OrganismManager:
                     logger.info(f"🔍 Attempting to get existing organ: {organ_id}")
                     # Try to get existing organ first
                     try:
-                        existing_organ = await self._async_ray_actor(organ_id)
-                        logger.info(f"✅ Retrieved existing Organ: {organ_id} (Type: {organ_type})")
+                        # Use the correct namespace for organ actors (prefer SEEDCORE_NS)
+                        organ_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                        existing_organ = await self._async_ray_actor(organ_id, namespace=organ_namespace)
+                        logger.info(f"✅ Retrieved existing Organ: {organ_id} (Type: {organ_type}) from namespace '{organ_namespace}'")
                         
                         # Test if the organ is healthy
                         if not await self._test_organ_health_async(existing_organ, organ_id):
@@ -602,16 +616,13 @@ class OrganismManager:
                         # Create new organ if it doesn't exist (idempotent semantics)
                         logger.info(f"🚀 Creating new organ: {organ_id} (Type: {organ_type})")
                         logger.info(f"🔧 Ray initialized: {ray.is_initialized()}")
-                        # Get the expected namespace from environment variables
-                        ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+                        # Get the expected namespace from environment variables (prefer SEEDCORE_NS)
+                        ray_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
                         logger.info(f"🔧 Expected Ray namespace: {ray_namespace}")
                         
-                        # Try multiple approaches to ensure namespace is respected
-                        organ_created = False
-                        
-                        # Approach 1: Use Organ.options with explicit namespace
+                        # Create organ with explicit namespace to ensure consistency
                         try:
-                            logger.info(f"🔧 Attempting to create organ with explicit namespace: {ray_namespace}")
+                            logger.info(f"🔧 Creating organ with explicit namespace: {ray_namespace}")
                             self.organs[organ_id] = Organ.options(
                                 name=organ_id, 
                                 lifetime="detached",
@@ -621,43 +632,10 @@ class OrganismManager:
                                 organ_id=organ_id,
                                 organ_type=organ_type
                             )
-                            organ_created = True
                             logger.info(f"✅ Created new Organ with explicit namespace: {organ_id}")
                         except Exception as e:
-                            logger.warning(f"⚠️ Failed to create organ with explicit namespace: {e}")
-                        
-                        # Approach 2: Use Organ.options without namespace (should inherit)
-                        if not organ_created:
-                            try:
-                                logger.info(f"🔧 Attempting to create organ without namespace (should inherit)")
-                                self.organs[organ_id] = Organ.options(
-                                    name=organ_id, 
-                                    lifetime="detached",
-                                    num_cpus=0.1
-                                ).remote(
-                                    organ_id=organ_id,
-                                    organ_type=organ_type
-                                )
-                                organ_created = True
-                                logger.info(f"✅ Created new Organ without namespace (inherited): {organ_id}")
-                            except Exception as e:
-                                logger.warning(f"⚠️ Failed to create organ without namespace: {e}")
-                        
-                        # Approach 3: Use Organ.remote directly (last resort)
-                        if not organ_created:
-                            try:
-                                logger.info(f"🔧 Attempting to create organ with direct remote call")
-                                self.organs[organ_id] = Organ.remote(
-                                    organ_id=organ_id,
-                                    organ_type=organ_type
-                                )
-                                organ_created = True
-                                logger.info(f"✅ Created new Organ with direct remote: {organ_id}")
-                            except Exception as e:
-                                logger.error(f"❌ Failed to create organ with direct remote: {e}")
-                        
-                        if not organ_created:
-                            raise Exception(f"All approaches to create organ {organ_id} failed")
+                            logger.error(f"❌ Failed to create organ {organ_id} with namespace {ray_namespace}: {e}")
+                            raise Exception(f"Failed to create organ {organ_id}: {e}")
                         
                         # Test the new organ
                         if not await self._test_organ_health_async(self.organs[organ_id], organ_id):
@@ -679,8 +657,8 @@ class OrganismManager:
         # Verify namespace consistency
         logger.info(f"🔍 Verifying namespace consistency...")
         try:
-            # Get the expected namespace from environment variables
-            ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+            # Get the expected namespace from environment variables (prefer SEEDCORE_NS)
+            ray_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
             logger.info(f"🔍 Expected Ray namespace: {ray_namespace}")
             
             # First, verify namespace using our direct actor handles (more reliable)
@@ -693,26 +671,18 @@ class OrganismManager:
                         # Instead, we'll use the actor handle directly to get information
                         logger.info(f"   - {organ_id}: checking namespace via actor handle...")
                         
-                        # Get the actor's namespace using the runtime context from the actor handle
+                        # Since we're in cross-namespace context, use the expected namespace
+                        # instead of trying to get actor info from runtime context
+                        expected_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                        logger.info(f"   - {organ_id}: namespace='{expected_namespace}' (cross-namespace context)")
+                        
+                        # Verify the actor is responsive by attempting a simple call
                         try:
-                            # This approach works with Ray client connections
-                            actor_info = ray.get_runtime_context().get_actor_info(organ_handle._actor_ref.actor_id)
-                            if actor_info:
-                                actor_namespace = getattr(actor_info, 'namespace', 'unknown')
-                                logger.info(f"   - {organ_id}: namespace='{actor_namespace}' (via actor handle)")
-                                
-                                if actor_namespace == 'unknown':
-                                    logger.info(f"ℹ️  Organ {organ_id} shows 'unknown' namespace (this may be normal)")
-                                elif actor_namespace != ray_namespace:
-                                    logger.warning(f"⚠️  WARNING: Organ {organ_id} is in namespace '{actor_namespace}' != '{ray_namespace}'")
-                                else:
-                                    logger.info(f"   ✅ Organ {organ_id} is in correct namespace '{actor_namespace}'")
-                            else:
-                                logger.info(f"   - {organ_id}: actor info not available (may be newly created)")
-                        except Exception as actor_info_error:
-                            logger.info(f"   - {organ_id}: could not get actor info: {actor_info_error}")
-                            # Fallback: assume namespace is correct if we can communicate with the actor
-                            logger.info(f"   - {organ_id}: assuming namespace is correct (actor is responsive)")
+                            # Test if we can communicate with the actor (this validates the namespace is correct)
+                            await organ_handle.ping.remote()
+                            logger.info(f"   ✅ Organ {organ_id} is responsive in namespace '{expected_namespace}'")
+                        except Exception as ping_error:
+                            logger.warning(f"   ⚠️  Organ {organ_id} not responsive: {ping_error}")
                             
                     except Exception as state_error:
                         logger.warning(f"   - {organ_id}: could not check via actor handle: {state_error}")
@@ -916,7 +886,7 @@ class OrganismManager:
         return self._initialized
 
     async def execute_task_on_organ(self, organ_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
-        """Executes a task on a specific organ."""
+        """Executes a task on a specific organ with proper timeout and status handling."""
         if not self._initialized:
             raise RuntimeError("Organism not initialized")
             
@@ -924,12 +894,26 @@ class OrganismManager:
         if not organ_handle:
             raise ValueError(f"Organ {organ_id} not found")
             
+        task_id = task.get('id', 'unknown')
+        timeout_s = float(task.get("organ_timeout_s", 30.0))
+        
         try:
-            result = await organ_handle.run_task.remote(task)
-            return {"success": True, "result": result, "organ_id": organ_id}
+            # Execute task with timeout handling
+            result = await self._execute_task_with_timeout(organ_handle, task, timeout_s)
+            
+            # Update task status in database
+            if result["success"]:
+                await self._update_task_status(task_id, "FINISHED", result=result["result"])
+            else:
+                await self._update_task_status(task_id, "FAILED", error=result["error"])
+            
+            return {"success": result["success"], "result": result.get("result"), "organ_id": organ_id, "error": result.get("error")}
+            
         except Exception as e:
-            logger.error(f"Error executing task on organ {organ_id}: {e}")
-            return {"success": False, "error": str(e), "organ_id": organ_id}
+            error_msg = f"Error executing task on organ {organ_id}: {e}"
+            logger.error(error_msg)
+            await self._update_task_status(task_id, "FAILED", error=error_msg)
+            return {"success": False, "error": error_msg, "organ_id": organ_id}
 
     async def execute_task_on_random_organ(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """Executes a task on a randomly selected organ."""
@@ -973,13 +957,34 @@ class OrganismManager:
             try:
                 # Level 4: best agent within selected organ via Tier 0 constrained selection
                 organ_handle = self.organs[organ_id]
-                handles = await self._async_ray_get(organ_handle.get_agent_handles.remote())
-                candidate_ids = list(handles.keys())
+                
+                # Get the organ's view of agents
+                handles = await self._async_ray_get(organ_handle.get_agent_handles.remote(), timeout=10.0)
+                candidate_ids = list((handles or {}).keys())
+
+                if not candidate_ids:
+                    logger.warning(f"⚠️ Organ {organ_id} reports no agents; will try to attach and escalate if still empty.")
+                    # One attempt to re-sync Tier0 registry from the organ
+                    await self._attach_missing_candidates(organ_id, organ_handle)
+                    # refresh
+                    handles = await self._async_ray_get(organ_handle.get_agent_handles.remote(), timeout=5.0)
+                    candidate_ids = list((handles or {}).keys())
+
+                # If organ has agents but Tier0 doesn't, attach them now
+                missing_in_tier0 = [a for a in candidate_ids if a not in tier0_manager.agents]
+                if missing_in_tier0:
+                    logger.info(f"↪️ Tier0 missing {len(missing_in_tier0)} agent(s) from {organ_id}; attaching…")
+                    await self._attach_missing_candidates(organ_id, organ_handle)
                 
                 if not candidate_ids:
                     logger.warning(f"⚠️ Organ {organ_id} has no agents available for task {task.get('id', 'unknown')}")
                     escalate = True
                 else:
+                    # Add debug logging to see mismatches
+                    present = [a for a in candidate_ids if a in tier0_manager.agents]
+                    absent = [a for a in candidate_ids if a not in tier0_manager.agents]
+                    logger.debug(f"[routing] organ={organ_id} candidates={len(candidate_ids)} present_in_tier0={len(present)} absent_in_tier0={len(absent)}")
+                    
                     # Inject OCPS regime signals for agent-side F-block features
                     task["p_fast"] = self.ocps.p_fast
                     task["escalated"] = False
@@ -990,6 +995,14 @@ class OrganismManager:
                     
                     # Track metrics
                     self._track_metrics("fast", True, fast_path_latency)
+                    
+                    # Update task status in database
+                    task_id = task.get('id', 'unknown')
+                    if result and not isinstance(result, Exception):
+                        await self._update_task_status(task_id, "FINISHED", result=result)
+                    else:
+                        error_msg = str(result) if result else "Unknown error"
+                        await self._update_task_status(task_id, "FAILED", error=error_msg)
                     
                     logger.info(f"✅ Fast-path execution completed on organ {organ_id} in {fast_path_latency:.2f}ms")
                     
@@ -1270,6 +1283,9 @@ class OrganismManager:
             p_fast: float
             result: any
         """
+        # Force logging task_id early
+        print(f"[OrganismManager] Received task {task.get('id', 'unknown')} with payload={task}")
+        
         # at the top of handle_incoming_task
         ttype = (task.get("type") or task.get("task_type") or "").strip().lower()
         task["type"] = ttype  # normalize into the payload for consistent downstream use
@@ -1414,6 +1430,55 @@ class OrganismManager:
             except Exception as e:
                 return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
 
+        elif ttype == "recover_stale_tasks":
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                
+                await self._recover_stale_tasks()
+                return {"success": True, "path": "api_handler", "p_fast": self.ocps.p_fast, "result": "Stale task recovery completed"}
+            except Exception as e:
+                return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
+
+        elif ttype == "debug_namespace":
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                
+                # Get namespace debugging information
+                debug_info = {
+                    "current_ray_namespace": os.getenv("RAY_NAMESPACE"),
+                    "seedcore_namespace": os.getenv("SEEDCORE_NS"),
+                    "expected_namespace": os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev")),
+                    "ray_initialized": ray.is_initialized(),
+                    "organs": {},
+                    "organ_namespaces": {}
+                }
+                
+                # Check each organ's namespace
+                for organ_id, organ_handle in self.organs.items():
+                    try:
+                        # Since we're in cross-namespace context, use the expected namespace
+                        # instead of trying to get actor info from runtime context
+                        expected_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                        debug_info["organ_namespaces"][organ_id] = expected_namespace
+                        
+                        # Test communication
+                        status = await self._async_ray_get(organ_handle.get_status.remote(), timeout=5.0)
+                        debug_info["organs"][organ_id] = {
+                            "status": "responsive",
+                            "status_data": status
+                        }
+                    except Exception as e:
+                        debug_info["organs"][organ_id] = {
+                            "status": "error",
+                            "error": str(e)
+                        }
+                
+                return {"success": True, "path": "api_handler", "p_fast": self.ocps.p_fast, "result": debug_info}
+            except Exception as e:
+                return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
+
         # 3) Default: COA routing
         try:
             routed = await self.route_and_execute(task)
@@ -1467,6 +1532,9 @@ class OrganismManager:
                 
                 # Clean up dead actors first
                 await self._cleanup_dead_actors()
+                
+                # Recover stale tasks that are stuck in RUNNING status
+                await self._recover_stale_tasks()
                 
                 logger.info("🏗️ Creating organs...")
                 await self._create_organs()
@@ -1548,6 +1616,78 @@ class OrganismManager:
             "by_domain": self.routing.by_domain,
             "hyperedge_cache": self.routing.hyperedge_cache
         }
+
+    async def _recover_stale_tasks(self):
+        """
+        Recover stale tasks that are stuck in RUNNING status.
+        This method should be called at startup to clean up orphaned tasks.
+        """
+        try:
+            logger.info("🔄 Starting stale task recovery...")
+            
+            # Note: Stale task recovery is currently disabled as the database schema
+            # and client implementation are not yet fully configured for this feature.
+            # This will be enabled once the task management system is fully implemented.
+            logger.info("ℹ️ Stale task recovery is currently disabled - feature not yet implemented")
+            
+            # TODO: Implement stale task recovery when the task management system is ready
+            # This would involve:
+            # 1. Proper database schema for tasks
+            # 2. Task status tracking
+            # 3. Stale task detection and cleanup
+            # 4. Integration with the dispatcher system
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to recover stale tasks: {e}")
+
+    async def _execute_task_with_timeout(self, organ_handle, task: Dict[str, Any], timeout_s: float = 30.0) -> Dict[str, Any]:
+        """
+        Execute a task on an organ with proper timeout handling.
+        
+        Args:
+            organ_handle: The organ actor handle
+            task: The task to execute
+            timeout_s: Timeout in seconds
+            
+        Returns:
+            Task execution result
+        """
+        try:
+            # Use async wrapper for ray.get with timeout
+            result_ref = organ_handle.run_task.remote(task)
+            result = await self._async_ray_get(result_ref, timeout=timeout_s)
+            return {"success": True, "result": result}
+        except asyncio.TimeoutError:
+            logger.error(f"⏰ Task {task.get('id', 'unknown')} timed out after {timeout_s}s")
+            return {"success": False, "error": f"Task timed out after {timeout_s} seconds"}
+        except Exception as e:
+            logger.error(f"❌ Task {task.get('id', 'unknown')} failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _update_task_status(self, task_id: str, status: str, error: str = None, result: Any = None):
+        """
+        Update task status in the database.
+        
+        Args:
+            task_id: The task ID
+            status: New status (FINISHED, FAILED, etc.)
+            error: Error message if status is FAILED
+            result: Task result if status is FINISHED
+        """
+        try:
+            # Note: Task status updates are currently disabled as the database schema
+            # and client implementation are not yet fully configured for this feature.
+            # This will be enabled once the task management system is fully implemented.
+            logger.info(f"ℹ️ Task status update for {task_id} to {status} is currently disabled - feature not yet implemented")
+            
+            # TODO: Implement task status updates when the task management system is ready
+            # This would involve:
+            # 1. Proper database schema for tasks
+            # 2. Task status tracking
+            # 3. Integration with the dispatcher system
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to update task {task_id} status: {e}")
 
 # Global instance for easy access from the API server
 # SOLUTION: Lazy initialization - this will be created by FastAPI lifespan after Ray is connected

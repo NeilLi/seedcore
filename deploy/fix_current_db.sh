@@ -12,6 +12,7 @@ DB_PASS="${DB_PASS:-postgres}"
 echo "🔧 Quick Database Schema Fix for SeedCore"
 echo "🔧 Namespace: $NAMESPACE"
 echo "🔧 Database:  $DB_NAME (user: $DB_USER)"
+echo "🔧 Includes: Task lease columns for stale task recovery"
 
 # Find PostgreSQL pod
 find_pg_pod() {
@@ -143,7 +144,52 @@ CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type);
 CREATE INDEX IF NOT EXISTS idx_tasks_domain ON tasks(domain);
 "
 
-# Fix 5: Verify the schema is correct
+# Fix 5: Add task lease columns for stale task recovery
+echo "⚙️  Adding task lease columns..."
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+  psql -U "$DB_USER" -d "$DB_NAME" -c "
+DO \$\$
+BEGIN
+    -- Add owner_id column if it doesn't exist
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'owner_id') THEN
+        ALTER TABLE tasks ADD COLUMN owner_id TEXT NULL;
+        RAISE NOTICE 'Added owner_id column to tasks table';
+    ELSE
+        RAISE NOTICE 'owner_id column already exists';
+    END IF;
+    
+    -- Add lease_expires_at column if it doesn't exist
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'lease_expires_at') THEN
+        ALTER TABLE tasks ADD COLUMN lease_expires_at TIMESTAMP WITH TIME ZONE NULL;
+        RAISE NOTICE 'Added lease_expires_at column to tasks table';
+    ELSE
+        RAISE NOTICE 'lease_expires_at column already exists';
+    END IF;
+    
+    -- Add last_heartbeat column if it doesn't exist
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'last_heartbeat') THEN
+        ALTER TABLE tasks ADD COLUMN last_heartbeat TIMESTAMP WITH TIME ZONE NULL;
+        RAISE NOTICE 'Added last_heartbeat column to tasks table';
+    ELSE
+        RAISE NOTICE 'last_heartbeat column already exists';
+    END IF;
+END\$\$;
+"
+
+# Create indexes for the new columns
+echo "⚙️  Creating indexes for lease tracking..."
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+  psql -U "$DB_USER" -d "$DB_NAME" -c "
+CREATE INDEX IF NOT EXISTS idx_tasks_owner_id ON tasks(owner_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_lease_expires_at ON tasks(lease_expires_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_last_heartbeat ON tasks(last_heartbeat);
+CREATE INDEX IF NOT EXISTS idx_tasks_stale_running ON tasks(status, updated_at, last_heartbeat, lease_expires_at) 
+WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS idx_tasks_owner_status ON tasks(owner_id, status, last_heartbeat) 
+WHERE owner_id IS NOT NULL;
+"
+
+# Fix 6: Verify the schema is correct
 echo "✅ Verifying fixed schema..."
 echo "📊 Tasks table structure:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
@@ -177,6 +223,7 @@ ORDER BY count DESC;
 echo "🎉 Database schema fixes completed!"
 echo "✅ Added missing 'retry' status to taskstatus enum"
 echo "✅ Ensured locked_by, locked_at, run_after, attempts columns exist"
+echo "✅ Added task lease columns (owner_id, lease_expires_at, last_heartbeat) for stale task recovery"
 echo "✅ Fixed claim query index to include retry status"
 echo "✅ Reset any stuck tasks to retry status"
 echo "✅ Recreated all necessary indexes"

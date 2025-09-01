@@ -744,6 +744,8 @@ class MLService:
             except Exception:
                 ns = os.getenv("RAY_NAMESPACE", None)
             try:
+                # Use explicit namespace (prefer SEEDCORE_NS)
+                ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
                 status_actor = ray.get_actor("job_status_actor", namespace=ns)
                 logger.info(f"✅ Connected to existing status actor (ns={ns})")
             except Exception:

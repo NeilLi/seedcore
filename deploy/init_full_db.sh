@@ -16,9 +16,10 @@ MIGRATION_003="${SCRIPT_DIR}/migrations/003_graph_task_types.sql"
 MIGRATION_004="${SCRIPT_DIR}/migrations/004_fix_taskstatus_enum.sql"
 MIGRATION_005="${SCRIPT_DIR}/migrations/005_consolidate_task_schema.sql"
 MIGRATION_006="${SCRIPT_DIR}/migrations/002_create_facts_table.sql"
+MIGRATION_007="${SCRIPT_DIR}/migrations/006_add_task_lease_columns.sql"
 
 # Check if all migration files exist
-for migration in "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_005" "$MIGRATION_006"; do
+for migration in "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_005" "$MIGRATION_006" "$MIGRATION_007"; do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
     exit 1
@@ -34,6 +35,7 @@ echo "   - 003: $MIGRATION_003"
 echo "   - 004: $MIGRATION_004"
 echo "   - 005: $MIGRATION_005 (NEW: Consolidated task schema)"
 echo "   - 006: $MIGRATION_006"
+echo "   - 007: $MIGRATION_007 (NEW: Task lease columns for stale recovery)"
 
 find_pg_pod() {
   local sel pod
@@ -145,6 +147,12 @@ kubectl -n "$NAMESPACE" cp "$MIGRATION_006" "$POSTGRES_POD:/tmp/006_create_facts
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/006_create_facts_table.sql"
 
+# Migration 007: Add task lease columns for stale task recovery
+echo "⚙️  Running migration 007: Add task lease columns for stale task recovery..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_007" "$POSTGRES_POD:/tmp/007_add_task_lease_columns.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+  psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/007_add_task_lease_columns.sql"
+
 # 6) Verify schema
 echo "✅ Verifying schema..."
 echo "📊 Tables:"
@@ -185,6 +193,7 @@ echo "✅ Created views: graph_tasks"
 echo "✅ Created helper functions: create_graph_embed_task, create_graph_rag_task"
 echo "✅ Fixed taskstatus enum to use consistent lowercase values (created, queued, running, completed, failed, cancelled, retry)"
 echo "✅ CRITICAL FIX: Consolidated task schema with proper locked_by, locked_at, run_after, attempts columns"
+echo "✅ Added task lease columns (owner_id, lease_expires_at, last_heartbeat) for stale task recovery"
 echo "✅ Enabled extensions: pgcrypto, vector"
 echo "✅ Fixed claim query index to include retry status"
 echo "👉 Use DSN: postgresql://${DB_USER}:${DB_PASS}@postgresql:5432/${DB_NAME}"
@@ -208,3 +217,4 @@ echo "   ✅ Ensured locked_by, locked_at, run_after, attempts columns exist"
 echo "   ✅ Fixed claim query index to include retry status"
 echo "   ✅ Consolidated all task schema fixes in one migration"
 echo "   ✅ Added proper error handling and retry logic support"
+echo "   ✅ Added task lease columns for automatic stale task recovery"

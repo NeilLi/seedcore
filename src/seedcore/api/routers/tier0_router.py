@@ -231,7 +231,9 @@ async def attach_agent(request: Dict[str, Any]):
             except Exception:
                 handle = None
         if handle is None:
-            handle = ray.get_actor(actor_name)
+            # Use explicit namespace for cross-namespace actor lookup
+            namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+            handle = ray.get_actor(actor_name, namespace=namespace)
 
         # Sanity check get_id
         resolved_id = ray.get(handle.get_id.remote())

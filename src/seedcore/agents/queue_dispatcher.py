@@ -9,6 +9,7 @@ import logging
 import contextlib
 import random
 import time
+import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import ray
@@ -56,6 +57,12 @@ RESULT_MAX_BYTES     = int(os.getenv("DISPATCHER_RESULT_MAX_BYTES", "0"))     # 
 ASYNC_PG_STMT_CACHE  = int(os.getenv("ASYNC_PG_STATEMENT_CACHE", "128"))
 ASYNC_PG_IDLE_LIFETIME = float(os.getenv("ASYNC_PG_IDLE_LIFETIME_S", "300"))
 
+# Task lease and stale recovery configuration
+TASK_STALE_S   = int(os.getenv("TASK_STALE_S", "900"))   # 15m default
+MAX_REQUEUE    = int(os.getenv("TASK_MAX_REQUEUE", "3")) # cap retries
+REAP_BATCH     = int(os.getenv("TASK_REAP_BATCH", "200"))
+RUN_LEASE_S    = int(os.getenv("TASK_LEASE_S", "600"))   # 10m default
+
 # --------- SQL (asyncpg-style $1 params) ----------
 CLAIM_BATCH_SQL = f"""
 WITH c AS (
@@ -71,6 +78,9 @@ UPDATE tasks t
 SET status='running',
     locked_by=$2,
     locked_at=NOW(),
+    owner_id=$2,
+    lease_expires_at = NOW() + ({RUN_LEASE_S} || ' seconds')::interval,
+    last_heartbeat = NOW(),
     attempts = t.attempts + 1
 FROM c
 WHERE t.id = c.id
@@ -354,7 +364,47 @@ class Dispatcher:
 
         if batch:
             self.tasks_claimed.inc(len(batch))
+            # Log all claimed tasks with their IDs
+            task_ids = [str(task["id"]) for task in batch]
+            log.info(f"[QueueDispatcher] 📦 Claimed batch of {len(batch)} tasks: {task_ids}")
+            log.info(f"[QueueDispatcher] 🎯 Task IDs: {', '.join(task_ids)}")
         return batch
+
+    async def _renew_task_lease(self, con, task_id: str):
+        """Renew the lease for a running task."""
+        try:
+            await con.execute("""
+                UPDATE tasks
+                SET lease_expires_at = NOW() + (%s || ' seconds')::interval,
+                    last_heartbeat = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND status = 'running'
+                  AND owner_id = %s
+            """, str(RUN_LEASE_S), task_id, self.name)
+            log.debug(f"[QueueDispatcher] Renewed lease for task {task_id}")
+        except Exception as e:
+            log.warning(f"[QueueDispatcher] Failed to renew lease for task {task_id}: {e}")
+
+    async def _recover_mine(self):
+        """Recover any RUNNING tasks owned by this dispatcher on startup."""
+        try:
+            async with self.pool.acquire() as con:
+                result = await con.execute("""
+                    UPDATE tasks
+                    SET status = 'queued',
+                        owner_id = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = NOW(),
+                        error = COALESCE(error,'') || ' | recovered on owner restart'
+                    WHERE status = 'running'
+                      AND owner_id = %s
+                      AND (last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '2 minutes')
+                """, self.name)
+                if result != "UPDATE 0":
+                    log.info(f"[QueueDispatcher] Recovered {result} tasks owned by {self.name} on startup")
+        except Exception as e:
+            log.warning(f"[QueueDispatcher] Failed to recover tasks for {self.name}: {e}")
 
     class TaskPayload(BaseModel):
         type: str
@@ -379,6 +429,11 @@ class Dispatcher:
             self._tasks_total += 1
             self._tasks_since_gc += 1
             tid = item["id"]
+            
+            # Force logging task_id early with comprehensive info
+            log.info(f"[QueueDispatcher] 🚀 Processing task {tid} (type={item['type']}, domain={item['domain']}, attempts={item.get('attempts', 0)})")
+            log.info(f"[QueueDispatcher] 📋 Task ID: {tid} | Type: {item['type']} | Domain: {item['domain']} | Attempts: {item.get('attempts', 0)}")
+            
             payload = Dispatcher.TaskPayload(
                 type=item["type"],
                 params=item["params"],
@@ -388,8 +443,38 @@ class Dispatcher:
                 task_id=str(tid)
             )
             try:
+                # Start lease renewal task for long-running tasks
+                lease_renewal_task = None
+                try:
+                    # Create a background task to renew the lease every 30 seconds
+                    async def renew_lease_periodically():
+                        while not self._stop.is_set():
+                            try:
+                                await asyncio.sleep(30)  # Renew every 30 seconds
+                                if self._stop.is_set():
+                                    break
+                                async with self.pool.acquire() as con:
+                                    await self._renew_task_lease(con, tid)
+                            except Exception as e:
+                                log.debug(f"Lease renewal failed for task {tid}: {e}")
+                                break
+                    
+                    lease_renewal_task = asyncio.create_task(renew_lease_periodically())
+                except Exception as e:
+                    log.debug(f"Failed to start lease renewal for task {tid}: {e}")
+
                 # NOTE: Ray Serve returns a DeploymentResponse; awaiting it is fine.
+                log.info(f"[QueueDispatcher] 📤 Sending task {tid} to OrganismManager for execution")
+                log.info(f"[QueueDispatcher] 🎯 Task ID: {tid} | Executing task type: {item['type']}")
                 result: Dict[str, Any] = await coord_handle.handle_incoming_task.remote(payload.dict())
+
+                # Cancel lease renewal task
+                if lease_renewal_task:
+                    lease_renewal_task.cancel()
+                    try:
+                        await lease_renewal_task
+                    except asyncio.CancelledError:
+                        pass
 
                 # Persist results via pooled connection
                 async with self.pool.acquire() as conw:
@@ -416,7 +501,8 @@ class Dispatcher:
                                 log.debug(f"Task {tid} result size check failed: {e}")
                         
                         await conw.execute(COMPLETE_SQL, _dumps(result_data), tid)
-                        log.info("✅ Task %s completed successfully", tid)
+                        log.info(f"[QueueDispatcher] ✅ Task {tid} completed successfully")
+                        log.info(f"[QueueDispatcher] 🎉 Task ID: {tid} | Status: COMPLETED | Type: {item['type']}")
                         self.tasks_completed.inc()
                     else:
                         # Task failed - check if we should retry or mark as failed
@@ -429,18 +515,19 @@ class Dispatcher:
                         if attempts >= max_attempts:
                             # Mark as failed after max attempts
                             await conw.execute(FAIL_SQL, f"Max attempts ({max_attempts}) exceeded: {error_msg}", tid)
-                            log.warning("❌ Task %s failed after %d attempts: %s", tid, attempts, error_msg)
+                            log.warning(f"[QueueDispatcher] ❌ Task {tid} failed after {attempts} attempts: {error_msg}")
+                            log.warning(f"[QueueDispatcher] 💀 Task ID: {tid} | Status: FAILED | Attempts: {attempts}/{max_attempts} | Error: {error_msg}")
                             self.tasks_failed.inc()
                         else:
                             # Retry with exponential backoff
                             delay = min(10 * (2 ** (attempts - 1)), 300)  # Exponential backoff: 10s, 20s, 40s, 80s, 160s, 300s max
                             await conw.execute(RETRY_SQL, error_msg, str(delay), tid)
-                            log.info("🔄 Task %s marked for retry (attempt %d/%d) in %ds: %s", 
-                                    tid, attempts, max_attempts, delay, error_msg)
+                            log.info(f"[QueueDispatcher] 🔄 Task {tid} marked for retry (attempt {attempts}/{max_attempts}) in {delay}s: {error_msg}")
+                            log.info(f"[QueueDispatcher] 🔁 Task ID: {tid} | Status: RETRY | Attempts: {attempts}/{max_attempts} | Delay: {delay}s")
                             self.tasks_retried.inc()
 
             except Exception as e:
-                log.exception("Dispatcher %s task %s failed: %s", self.name, tid, e)
+                log.exception(f"[QueueDispatcher] Dispatcher {self.name} task {tid} failed: {e}")
                 attempts = item["attempts"] + 1
                 max_attempts = int(os.getenv("MAX_TASK_ATTEMPTS", "3"))
                 
@@ -448,15 +535,16 @@ class Dispatcher:
                     if attempts >= max_attempts:
                         # Mark as failed after max attempts
                         await conw.execute(FAIL_SQL, f"Dispatcher error after {max_attempts} attempts: {e}", tid)
-                        log.warning("❌ Task %s failed after %d attempts due to dispatcher error: %s", tid, attempts, e)
+                        log.warning(f"[QueueDispatcher] ❌ Task {tid} failed after {attempts} attempts due to dispatcher error: {e}")
+                        log.warning(f"[QueueDispatcher] 💀 Task ID: {tid} | Status: FAILED | Dispatcher Error | Attempts: {attempts}/{max_attempts}")
                         self.tasks_failed.inc()
                     else:
                         # Retry with exponential backoff, but add jitter to avoid retry storms
                         base_delay = min(10 * (2 ** (attempts - 1)), 300)
                         delay = base_delay + random.randint(0, 5)
                         await conw.execute(RETRY_SQL, f"dispatcher error: {e}", str(delay), tid)
-                        log.info("🔄 Task %s retry (attempt %d/%d) in %ds with jitter due to dispatcher error: %s", 
-                                tid, attempts, max_attempts, delay, e)
+                        log.info(f"[QueueDispatcher] 🔄 Task {tid} retry (attempt {attempts}/{max_attempts}) in {delay}s with jitter due to dispatcher error: {e}")
+                        log.info(f"[QueueDispatcher] 🔁 Task ID: {tid} | Status: RETRY | Dispatcher Error | Attempts: {attempts}/{max_attempts} | Delay: {delay}s")
                         self.tasks_retried.inc()
             finally:
                 # help GC drop references quickly
@@ -509,9 +597,9 @@ class Dispatcher:
             if stuck:
                 ids = [str(r["id"]) for r in stuck]
                 owners = [r.get("locked_by") for r in stuck]
-                log.warning("🚨 Watchdog: returned %d stuck tasks to RETRY: %s (locked_by=%s)", len(ids), ids, owners)
+                log.warning(f"[QueueDispatcher] 🚨 Watchdog: returned {len(ids)} stuck tasks to RETRY: {ids} (locked_by={owners})")
         except Exception as e:
-            log.error("❌ Watchdog check failed: %s", e)
+            log.error(f"[QueueDispatcher] ❌ Watchdog check failed: {e}")
 
     async def _listen_loop(self, con):
         """LISTEN/NOTIFY loop using a coalescing event (no unbounded growth)."""
@@ -540,6 +628,9 @@ class Dispatcher:
     async def run(self):
         await self._ensure_pool()
 
+        # Recover any tasks owned by this dispatcher on startup
+        await self._recover_mine()
+
         # ✅ Get a handle to the OrganismManager deployment inside the 'organism' app.
         coord_handle = serve.get_deployment_handle("OrganismManager", app_name="organism")
 
@@ -567,6 +658,7 @@ class Dispatcher:
                     else:
                         # Process concurrently; each worker acquires its own write connection.
                         # return_exceptions=True prevents task retention on transient errors
+                        log.info(f"[QueueDispatcher] Starting concurrent processing of {len(batch)} tasks")
                         await asyncio.gather(
                             *(self._process_one(item, coord_handle) for item in batch),
                             return_exceptions=True,
@@ -741,6 +833,110 @@ class Reaper:
             self.pool = None
             await self._ensure_pool()
 
+    def _now(self):
+        """Get current UTC time with timezone info."""
+        return datetime.datetime.now(datetime.timezone.utc)
+
+    def reap_stale_tasks(self) -> dict:
+        """
+        Requeue RUNNING tasks whose lease/heartbeat is stale or whose owner is gone.
+        Safe to call periodically.
+        """
+        now = self._now()
+        requeued = 0
+        inspected = 0
+
+        q_select = """
+        SELECT id, status, owner_id, lease_expires_at, attempts, updated_at, last_heartbeat
+        FROM tasks
+        WHERE status = 'running'
+        ORDER BY updated_at ASC
+        LIMIT %s
+        """
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            
+            with psycopg2.connect(self.dsn) as con, con.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(q_select, (REAP_BATCH,))
+                rows = cur.fetchall()
+                for r in rows:
+                    inspected += 1
+
+                    # staleness criteria (works even if you don't have all columns)
+                    last_ts = r.get("last_heartbeat") or r.get("lease_expires_at") or r.get("updated_at")
+                    if not last_ts:
+                        log.debug(f"Task {r['id']}: No timestamp found for staleness check")
+                        continue
+                    
+                    log.debug(f"Task {r['id']}: last_ts={last_ts}, tzinfo={last_ts.tzinfo}")
+                    
+                    # Handle timezone-aware vs naive datetime comparison
+                    try:
+                        if last_ts.tzinfo is None:
+                            # If last_ts is naive, assume it's UTC and make it timezone-aware
+                            last_ts = last_ts.replace(tzinfo=datetime.timezone.utc)
+                        
+                        age_s = (now - last_ts).total_seconds()
+                        stale = age_s >= TASK_STALE_S
+                    except Exception as dt_error:
+                        log.debug(f"DateTime comparison failed for task {r['id']}: {dt_error}")
+                        # Fallback: use updated_at for staleness check
+                        updated_ts = r.get("updated_at")
+                        if updated_ts and updated_ts.tzinfo is None:
+                            updated_ts = updated_ts.replace(tzinfo=datetime.timezone.utc)
+                        if updated_ts:
+                            age_s = (now - updated_ts).total_seconds()
+                            stale = age_s >= TASK_STALE_S
+                        else:
+                            stale = False
+
+                    # owner liveness (best-effort)
+                    owner_dead = False
+                    owner_id = r.get("owner_id")
+                    if owner_id:
+                        try:
+                            a = ray.get_actor(owner_id, namespace=os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev")))
+                            pong = ray.get(a.ping.remote(), timeout=2)
+                            owner_dead = (pong != "pong")  # your Dispatcher/Reaper ping returns "pong"
+                        except Exception:
+                            owner_dead = True  # cannot find owner -> dead
+
+                    if not stale and not owner_dead:
+                        continue
+
+                    # retry budget check (optional)
+                    attempts = r.get("attempts") or 0
+                    if attempts >= MAX_REQUEUE:
+                        # mark FAILED permanently
+                        cur.execute("""
+                            UPDATE tasks
+                            SET status='failed',
+                                error = COALESCE(error,'') || ' | reaper: max requeues exceeded',
+                                updated_at = NOW()
+                            WHERE id = %s
+                        """, (r["id"],))
+                        continue
+
+                    # Requeue
+                    cur.execute("""
+                        UPDATE tasks
+                        SET status='queued',
+                            attempts = attempts + 1,
+                            owner_id = NULL,
+                            lease_expires_at = NULL,
+                            updated_at = NOW(),
+                            error = COALESCE(error,'') || ' | reaper: lease expired or owner dead'
+                        WHERE id = %s
+                    """, (r["id"],))
+                    requeued += 1
+
+            return {"inspected": inspected, "requeued": requeued}
+        except Exception as e:
+            log.warning("reap_stale_tasks failed: %s", e)
+            log.debug("reap_stale_tasks error details: %s", traceback.format_exc())
+            return {"inspected": inspected, "requeued": requeued, "error": str(e)}
+
     async def run(self):
         await self._ensure_pool()
         while not self._stop.is_set():
@@ -833,7 +1029,9 @@ class Reaper:
 # ------------- Bootstrap helpers -------------
 def _get_or_create(name: str, cls, *args, **kwargs):
     try:
-        return ray.get_actor(name, namespace=RAY_NS)
+        # Use explicit namespace (prefer SEEDCORE_NS)
+        ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+        return ray.get_actor(name, namespace=ns)
     except Exception:
         return cls.options(name=name).remote(*args, **kwargs)
 

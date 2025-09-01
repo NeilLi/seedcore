@@ -87,3 +87,7 @@ class Organ:
             del self.agents[agent_id]
             return True
         return False
+    
+    def ping(self) -> str:
+        """Health check method to verify the organ is responsive."""
+        return "pong"

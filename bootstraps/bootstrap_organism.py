@@ -121,6 +121,10 @@ def _init_via_ray(cfg: dict) -> bool:
             return False
             
         from ray import serve
+        
+        # Ensure we're using the correct namespace for the Serve handle
+        # The OrganismManager is deployed in the 'serve' namespace
+        log.info(f"🔍 Getting OrganismManager handle from 'serve' namespace...")
         h = serve.get_deployment_handle("OrganismManager", app_name="organism")
         
         # Try health quick - handle DeploymentResponse correctly
@@ -133,7 +137,18 @@ def _init_via_ray(cfg: dict) -> bool:
         except Exception as e:
             log.info(f"ℹ️ Serve health not ready: {e}")
 
+        # Bootstrap required singleton actors before organism initialization
+        log.info("🚀 Bootstrapping required singleton actors...")
+        try:
+            from seedcore.bootstrap import bootstrap_actors
+            bootstrap_actors()
+            log.info("✅ Singleton actors (mw, miss_tracker, shared_cache) bootstrapped successfully")
+        except Exception as e:
+            log.warning(f"⚠️ Failed to bootstrap singleton actors: {e}")
+            log.warning("⚠️ Organism may have limited functionality without memory managers")
+        
         log.info("🚀 Calling initialize_organism via Serve handle…")
+        log.info(f"🔧 Using namespace '{RAY_NAMESPACE}' for organ/agent creation")
         resp = h.initialize_organism.remote()
         result = _resolve_ray_response(resp, timeout_s=120)
         log.info(f"📋 initialize_organism response: {result}")
@@ -144,6 +159,16 @@ def _init_via_ray(cfg: dict) -> bool:
 
 def _init_via_http(cfg: dict) -> bool:
     """HTTP fallback (works even if ray client ingress is blocked)."""
+    # Bootstrap required singleton actors before HTTP organism initialization
+    log.info("🚀 Bootstrapping required singleton actors via HTTP path...")
+    try:
+        from seedcore.bootstrap import bootstrap_actors
+        bootstrap_actors()
+        log.info("✅ Singleton actors (mw, miss_tracker, shared_cache) bootstrapped successfully")
+    except Exception as e:
+        log.warning(f"⚠️ Failed to bootstrap singleton actors: {e}")
+        log.warning("⚠️ Organism may have limited functionality without memory managers")
+    
     url = f"{ORGANISM_URL}/initialize-organism"
     try:
         r = requests.post(url, json=cfg["seedcore"]["organism"], timeout=15)

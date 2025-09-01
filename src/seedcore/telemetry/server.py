@@ -188,7 +188,9 @@ async def lifespan(app: FastAPI):
             try:
                 from ..maintenance.janitor import Janitor
                 try:
-                    janitor = ray.get_actor("seedcore_janitor")  # reuse if exists
+                    # Use explicit namespace for cross-namespace actor lookup
+                    namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                    janitor = ray.get_actor("seedcore_janitor", namespace=namespace)
                     logging.info("   - ✅ Janitor actor already exists")
                 except Exception:
                     janitor = Janitor.options(name="seedcore_janitor", lifetime="detached", num_cpus=0).remote()

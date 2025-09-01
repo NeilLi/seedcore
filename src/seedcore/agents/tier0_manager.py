@@ -74,15 +74,14 @@ class Tier0MemoryManager:
                 attached = 0
                 for actor_name in candidate_names:
                     try:
-                        # Try default/current namespace first, then explicit env namespace
+                        # Try explicit namespace first (prefer SEEDCORE_NS), then fallback
                         try:
-                            handle = ray.get_actor(actor_name)
+                            ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                            handle = ray.get_actor(actor_name, namespace=ns)
                         except Exception:
-                            ns = os.getenv("RAY_NAMESPACE", None)
-                            if ns:
-                                handle = ray.get_actor(name=actor_name, namespace=ns)
-                            else:
-                                raise
+                            # Fallback to explicit namespace (prefer SEEDCORE_NS)
+                            ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                            handle = ray.get_actor(actor_name, namespace=ns)
                         # Sanity check
                         resolved_id = ray.get(handle.get_id.remote())
                         self.attach_existing_actor(resolved_id, handle)
@@ -145,7 +144,7 @@ class Tier0MemoryManager:
                 options_kwargs["namespace"] = namespace
             else:
                 # Get namespace from environment
-                env_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+                env_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
                 if env_namespace:
                     options_kwargs["namespace"] = env_namespace
 
@@ -300,7 +299,7 @@ class Tier0MemoryManager:
             
         # Get namespace from environment, default to "seedcore-dev" for consistency
         if ray_namespace is None:
-            ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+            ray_namespace = os.getenv("SEEDCORE_NS", os.getenv("SEEDCORE_NS", "seedcore-dev"))
         
         # Get Ray connection parameters from environment
         if ray_address is None:
@@ -362,9 +361,10 @@ class Tier0MemoryManager:
                                     handle = ray.get_actor(name=name, namespace=namespace)
                                 except Exception:
                                     handle = None
-                            # Fallback to current namespace
+                            # Fallback to explicit namespace (prefer SEEDCORE_NS)
                             if handle is None:
-                                handle = ray.get_actor(name)
+                                ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                                handle = ray.get_actor(name, namespace=ns)
                             discovered[name] = handle
                         except Exception:
                             # Could be in a different namespace; skip if not retrievable
@@ -394,7 +394,9 @@ class Tier0MemoryManager:
                                     except Exception:
                                         handle = None
                                 if handle is None:
-                                    handle = ray.get_actor(name)
+                                    # Use explicit namespace (prefer SEEDCORE_NS)
+                                    ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                                    handle = ray.get_actor(name, namespace=ns)
                                 discovered[name] = handle
                             except Exception:
                                 continue

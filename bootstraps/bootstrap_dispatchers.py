@@ -130,16 +130,30 @@ def _ensure_reaper(env_vars: dict):
         log.info("ℹ️ Reaper disabled (ENABLE_REAPER=false)")
         return
     try:
-        ray.get_actor("seedcore_reaper", namespace=RAY_NAMESPACE)
+        reaper = ray.get_actor("seedcore_reaper", namespace=RAY_NAMESPACE)
         log.info("✅ Reaper already exists")
+        
+        # Run one-shot stale task sweep during bootstrap
+        try:
+            result = ray.get(reaper.reap_stale_tasks.remote(), timeout=30)
+            log.info(f"✅ Initial stale task sweep completed: {result}")
+        except Exception as e:
+            log.warning(f"Initial stale task sweep failed: {e}")
     except Exception:
         from seedcore.agents.queue_dispatcher import Reaper
         opts = dict(name="seedcore_reaper", lifetime="detached", namespace=RAY_NAMESPACE, num_cpus=0.05, runtime_env={"env_vars": env_vars})
         res = _optional_resources()
         if res:
             opts["resources"] = res
-        Reaper.options(**opts).remote(dsn=PG_DSN)
+        reaper = Reaper.options(**opts).remote(dsn=PG_DSN)
         log.info("✅ Reaper created")
+        
+        # Run one-shot stale task sweep after creating reaper
+        try:
+            result = ray.get(reaper.reap_stale_tasks.remote(), timeout=30)
+            log.info(f"✅ Initial stale task sweep completed: {result}")
+        except Exception as e:
+            log.warning(f"Initial stale task sweep failed: {e}")
 
 def _ensure_graph_dispatchers(env_vars: dict):
     if os.getenv("ENABLE_GRAPH_DISPATCHERS", "true").lower() not in ("1", "true", "yes"):

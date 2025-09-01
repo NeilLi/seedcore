@@ -18,7 +18,8 @@ from typing import Any, Optional, TYPE_CHECKING
 # This prevents Ray initialization when the module is imported
 
 # Import the ACTOR CLASSES (must be decorated with @ray.remote)
-from .memory.working_memory import MissTracker, SharedCache, MwStore  # type: ignore
+from .memory.working_memory import MissTracker, SharedCache  # type: ignore
+from .memory.mw_store import MwStore  # type: ignore
 
 # -----------------------------------------------------------------------------
 # Config & logging
