@@ -22,8 +22,8 @@ if [ ! -d "/app/src" ]; then
     exit 1
 fi
 
-if [ ! -f "/app/src/seedcore/telemetry/server.py" ]; then
-    echo "❌ Error: server.py not found in /app/src/seedcore/telemetry/"
+if [ ! -f "/app/src/seedcore/main.py" ]; then
+    echo "❌ Error: main.py not found in /app/src/seedcore/"
     exit 1
 fi
 
@@ -39,8 +39,8 @@ cd /app && python -c "import dsp_patch" 2>/dev/null || echo "⚠️  DSP patch i
 
 # Start the API server
 echo "🌐 Starting uvicorn server..."
-echo "🚀 Executing: uvicorn src.seedcore.telemetry.server:app --host 0.0.0.0 --port 8002 --proxy-headers --forwarded-allow-ips *"
-exec uvicorn src.seedcore.telemetry.server:app \
+echo "🚀 Executing: uvicorn src.seedcore.main:app --host 0.0.0.0 --port 8002 --proxy-headers --forwarded-allow-ips *"
+exec uvicorn src.seedcore.main:app \
     --host 0.0.0.0 \
     --port 8002 \
     --proxy-headers \

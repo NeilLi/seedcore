@@ -32,8 +32,8 @@ if [ ! -d "/app/src" ]; then
     exit 1
 fi
 
-if [ ! -f "/app/src/seedcore/telemetry/server.py" ]; then
-    echo "❌ Error: server.py not found in /app/src/seedcore/telemetry/"
+if [ ! -f "/app/src/seedcore/main.py" ]; then
+    echo "❌ Error: main.py not found in /app/src/seedcore/"
     exit 1
 fi
 
@@ -45,10 +45,10 @@ python /app/logging_config.py
 
 # Start the API server with environment variables already set
 echo "🌐 Starting uvicorn server..."
-echo "🚀 Executing: uvicorn src.seedcore.telemetry.server:app --host 0.0.0.0 --port 8002 --proxy-headers --forwarded-allow-ips *"
+echo "🚀 Executing: uvicorn src.seedcore.main:app --host 0.0.0.0 --port 8002 --proxy-headers --forwarded-allow-ips *"
 
 # Use exec to replace the shell process with uvicorn
-exec python -m uvicorn src.seedcore.telemetry.server:app \
+exec python -m uvicorn src.seedcore.main:app \
     --host 0.0.0.0 \
     --port 8002 \
     --proxy-headers \
