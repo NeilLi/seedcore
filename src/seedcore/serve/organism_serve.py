@@ -149,14 +149,19 @@ class OrganismServeClient:
         Returns:
             Task result dictionary
         """
+        task_id = task.get('id', 'unknown')
+        logger.info(f"[OrganismServeClient] 🎯 Received task {task_id} for processing")
+        logger.info(f"[OrganismServeClient] 📋 Task details: type={task.get('type')}, domain={task.get('domain')}")
+        
         # Try Serve handle first (faster, internal)
         if self._serve_handle_available and self._serve_handle:
             try:
-                logger.debug("🔄 Using Serve handle for task handling")
+                logger.info(f"[OrganismServeClient] 🔄 Using Serve handle for task {task_id}")
                 result = await self._serve_handle.handle_incoming_task.remote(task, app_state)
+                logger.info(f"[OrganismServeClient] ✅ Serve handle completed for task {task_id}: success={result.get('success')}")
                 return result
             except Exception as e:
-                logger.warning(f"⚠️ Serve handle failed, falling back to HTTP: {e}")
+                logger.warning(f"[OrganismServeClient] ⚠️ Serve handle failed for task {task_id}, falling back to HTTP: {e}")
                 self._serve_handle_available = False
         
         # Fallback to HTTP endpoint

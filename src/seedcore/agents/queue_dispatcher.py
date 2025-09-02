@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import ray
 from ray import serve
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, field_validator, Field
 from prometheus_client import Counter, Gauge, CollectorRegistry
 try:
     import psutil  # for RSS telemetry if available
@@ -108,15 +108,41 @@ SET status='retry',
 WHERE id=$3
 """
 
-REAP_STUCK_SQL = f"""
+REAP_STUCK_SQL = """
 UPDATE tasks
 SET status='retry',
-    run_after = NOW(),
+    run_after = NOW() + INTERVAL '15 seconds',
+    owner_id = NULL,
+    lease_expires_at = NULL,
     locked_by = NULL,
     locked_at = NULL,
     updated_at = NOW()
 WHERE status='running'
-  AND locked_at < NOW() - INTERVAL '{LEASE_SECONDS} seconds'
+  AND attempts < $2
+  AND (
+        (lease_expires_at IS NOT NULL AND lease_expires_at < NOW())
+        OR
+        (last_heartbeat IS NOT NULL AND last_heartbeat < NOW() - ($1 || ' seconds')::interval)
+      )
+RETURNING id, locked_by
+"""
+
+REAP_FAILED_SQL = """
+UPDATE tasks
+SET status='failed',
+    error = COALESCE(error,'') || ' | watchdog: attempts exceeded',
+    owner_id = NULL,
+    lease_expires_at = NULL,
+    locked_by = NULL,
+    locked_at = NULL,
+    updated_at = NOW()
+WHERE status='running'
+  AND attempts >= $2
+  AND (
+        (lease_expires_at IS NOT NULL AND lease_expires_at < NOW())
+        OR
+        (last_heartbeat IS NOT NULL AND last_heartbeat < NOW() - ($1 || ' seconds')::interval)
+      )
 RETURNING id, locked_by
 """
 
@@ -375,12 +401,12 @@ class Dispatcher:
         try:
             await con.execute("""
                 UPDATE tasks
-                SET lease_expires_at = NOW() + (%s || ' seconds')::interval,
+                SET lease_expires_at = NOW() + ($1 || ' seconds')::interval,
                     last_heartbeat = NOW(),
                     updated_at = NOW()
-                WHERE id = %s
+                WHERE id = $2
                   AND status = 'running'
-                  AND owner_id = %s
+                  AND owner_id = $3
             """, str(RUN_LEASE_S), task_id, self.name)
             log.debug(f"[QueueDispatcher] Renewed lease for task {task_id}")
         except Exception as e:
@@ -398,7 +424,7 @@ class Dispatcher:
                         updated_at = NOW(),
                         error = COALESCE(error,'') || ' | recovered on owner restart'
                     WHERE status = 'running'
-                      AND owner_id = %s
+                      AND owner_id = $1
                       AND (last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '2 minutes')
                 """, self.name)
                 if result != "UPDATE 0":
@@ -410,9 +436,27 @@ class Dispatcher:
         type: str
         params: Dict[str, Any] = {}
         description: str = ""
-        domain: str
+        domain: Optional[str] = None
         drift_score: float = 0.0
         task_id: str
+        
+        @field_validator('params', mode='before')
+        @classmethod
+        def parse_params(cls, v):
+            """Parse params from JSON string if needed."""
+            if isinstance(v, str):
+                try:
+                    import json
+                    return json.loads(v)
+                except (json.JSONDecodeError, TypeError):
+                    return {}
+            return v or {}
+        
+        @field_validator('domain', mode='before')
+        @classmethod
+        def parse_domain(cls, v):
+            """Convert None domain to empty string."""
+            return v or ""
 
     async def _process_one(self, item: Dict[str, Any], coord_handle):
         """Bounded-concurrency task runner for a single task."""
@@ -433,6 +477,8 @@ class Dispatcher:
             # Force logging task_id early with comprehensive info
             log.info(f"[QueueDispatcher] 🚀 Processing task {tid} (type={item['type']}, domain={item['domain']}, attempts={item.get('attempts', 0)})")
             log.info(f"[QueueDispatcher] 📋 Task ID: {tid} | Type: {item['type']} | Domain: {item['domain']} | Attempts: {item.get('attempts', 0)}")
+            log.info(f"[QueueDispatcher] 🔍 Raw item data: {item}")
+            log.info(f"[QueueDispatcher] 🔍 Item types: params={type(item.get('params'))}, domain={type(item.get('domain'))}")
             
             payload = Dispatcher.TaskPayload(
                 type=item["type"],
@@ -442,6 +488,9 @@ class Dispatcher:
                 drift_score=item["drift_score"],
                 task_id=str(tid)
             )
+            log.info(f"[QueueDispatcher] ✅ Task payload created for {tid}: {payload.dict()}")
+            log.info(f"[QueueDispatcher] 🔧 Coord handle type: {type(coord_handle)}")
+            
             try:
                 # Start lease renewal task for long-running tasks
                 lease_renewal_task = None
@@ -464,9 +513,36 @@ class Dispatcher:
                     log.debug(f"Failed to start lease renewal for task {tid}: {e}")
 
                 # NOTE: Ray Serve returns a DeploymentResponse; awaiting it is fine.
-                log.info(f"[QueueDispatcher] 📤 Sending task {tid} to OrganismManager for execution")
+                log.info(f"[QueueDispatcher] 📤 About to send task {tid} to OrganismManager for execution")
                 log.info(f"[QueueDispatcher] 🎯 Task ID: {tid} | Executing task type: {item['type']}")
-                result: Dict[str, Any] = await coord_handle.handle_incoming_task.remote(payload.dict())
+                log.info(f"[QueueDispatcher] 📋 Task payload: {payload.dict()}")
+                log.info(f"[QueueDispatcher] 🔧 Coord handle: {coord_handle}")
+                
+                try:
+                    # Add timeout to prevent hanging on Serve calls
+                    CALL_TIMEOUT_S = int(os.getenv("SERVE_CALL_TIMEOUT_S", "120"))
+                    log.info(f"[QueueDispatcher] 🚀 Calling coord_handle.handle_incoming_task.remote() for task {tid} (timeout={CALL_TIMEOUT_S}s)")
+                    
+                    fut = coord_handle.handle_incoming_task.remote(payload.dict(), None)
+                    result: Dict[str, Any] = await asyncio.wait_for(fut, timeout=CALL_TIMEOUT_S)
+                    log.info(f"[QueueDispatcher] ✅ Received result from OrganismManager for task {tid}: {result}")
+                    
+                except asyncio.TimeoutError:
+                    log.warning(f"[QueueDispatcher] ⏰ Serve call timeout for task {tid} after {CALL_TIMEOUT_S}s")
+                    # Mark as RETRY with backoff, exit cleanly; do NOT stall the loop
+                    async with self.pool.acquire() as conw:
+                        delay = min(10 * (2 ** item["attempts"]), 300)
+                        await conw.execute(RETRY_SQL, "dispatcher: serve call timeout", str(delay), tid)
+                        log.info(f"[QueueDispatcher] 🔄 Task {tid} marked for retry due to timeout (delay={delay}s)")
+                        self.tasks_retried.inc()
+                    return
+                    
+                except Exception as e:
+                    log.error(f"[QueueDispatcher] ❌ Failed to get result from OrganismManager for task {tid}: {e}")
+                    log.error(f"[QueueDispatcher] 🔧 Exception type: {type(e)}")
+                    log.error(f"[QueueDispatcher] 📋 Exception details: {str(e)}")
+                    log.error(f"[QueueDispatcher] 🔧 Exception traceback:", exc_info=True)
+                    raise
 
                 # Cancel lease renewal task
                 if lease_renewal_task:
@@ -527,7 +603,10 @@ class Dispatcher:
                             self.tasks_retried.inc()
 
             except Exception as e:
-                log.exception(f"[QueueDispatcher] Dispatcher {self.name} task {tid} failed: {e}")
+                log.error(f"[QueueDispatcher] ❌ CRITICAL: Dispatcher {self.name} task {tid} failed with exception: {e}")
+                log.error(f"[QueueDispatcher] 🔧 Exception type: {type(e)}")
+                log.error(f"[QueueDispatcher] 📋 Exception details: {str(e)}")
+                log.exception(f"[QueueDispatcher] 🔧 Full exception traceback:")
                 attempts = item["attempts"] + 1
                 max_attempts = int(os.getenv("MAX_TASK_ATTEMPTS", "3"))
                 
@@ -593,11 +672,22 @@ class Dispatcher:
         """Detect and return stuck 'running' tasks back to 'retry'."""
         try:
             async with self.pool.acquire() as con:
-                stuck = await con.fetch(REAP_STUCK_SQL)
-            if stuck:
-                ids = [str(r["id"]) for r in stuck]
-                owners = [r.get("locked_by") for r in stuck]
-                log.warning(f"[QueueDispatcher] 🚨 Watchdog: returned {len(ids)} stuck tasks to RETRY: {ids} (locked_by={owners})")
+                # Use a grace period of 90 seconds for heartbeat checks (as string for SQL)
+                grace_period = "90"
+                max_attempts = int(os.getenv("MAX_TASK_ATTEMPTS", "3"))
+                
+                # First, mark tasks that exceeded attempt budget as failed
+                failed = await con.fetch(REAP_FAILED_SQL, grace_period, max_attempts)
+                if failed:
+                    failed_ids = [str(r["id"]) for r in failed]
+                    log.warning(f"[QueueDispatcher] 💀 Watchdog: marked {len(failed_ids)} tasks as FAILED (attempts exceeded): {failed_ids}")
+                
+                # Then, requeue tasks that are still within attempt budget
+                stuck = await con.fetch(REAP_STUCK_SQL, grace_period, max_attempts)
+                if stuck:
+                    ids = [str(r["id"]) for r in stuck]
+                    owners = [r.get("locked_by") for r in stuck]
+                    log.warning(f"[QueueDispatcher] 🚨 Watchdog: returned {len(ids)} stuck tasks to RETRY: {ids} (locked_by={owners})")
         except Exception as e:
             log.error(f"[QueueDispatcher] ❌ Watchdog check failed: {e}")
 
@@ -632,7 +722,24 @@ class Dispatcher:
         await self._recover_mine()
 
         # ✅ Get a handle to the OrganismManager deployment inside the 'organism' app.
-        coord_handle = serve.get_deployment_handle("OrganismManager", app_name="organism")
+        log.info(f"[QueueDispatcher] 🔍 Getting OrganismManager Serve deployment handle...")
+        try:
+            coord_handle = serve.get_deployment_handle("OrganismManager", app_name="organism")
+            log.info(f"[QueueDispatcher] ✅ Successfully got OrganismManager handle: {coord_handle}")
+            
+            # Test the connection with a health check
+            log.info(f"[QueueDispatcher] 🏥 Testing OrganismManager connection with health check...")
+            try:
+                health_result = await coord_handle.health.remote()
+                log.info(f"[QueueDispatcher] ✅ OrganismManager health check passed: {health_result}")
+            except Exception as e:
+                log.warning(f"[QueueDispatcher] ⚠️ OrganismManager health check failed: {e}")
+                log.warning(f"[QueueDispatcher] 🔧 Continuing anyway, but tasks may fail...")
+                
+        except Exception as e:
+            log.error(f"[QueueDispatcher] ❌ Failed to get OrganismManager handle: {e}")
+            log.error(f"[QueueDispatcher] 🔧 Available deployments: {serve.list_deployments()}")
+            raise
 
         # LISTEN/NOTIFY connection (better batching)
         listen_task = None
@@ -657,12 +764,12 @@ class Dispatcher:
                         await asyncio.sleep(EMPTY_SLEEP_SECONDS)
                     else:
                         # Process concurrently; each worker acquires its own write connection.
-                        # return_exceptions=True prevents task retention on transient errors
+                        # Use fire-and-forget tasks to prevent one bad task from blocking the entire batch
                         log.info(f"[QueueDispatcher] Starting concurrent processing of {len(batch)} tasks")
-                        await asyncio.gather(
-                            *(self._process_one(item, coord_handle) for item in batch),
-                            return_exceptions=True,
-                        )
+                        for item in batch:
+                            asyncio.create_task(self._process_one(item, coord_handle))
+                        # Brief pause to let tasks start
+                        await asyncio.sleep(0.01)
                 except Exception as e:
                     log.error(f"Dispatcher {self.name}: Error in main loop: {e}")
                     # Brief pause before retrying to avoid tight error loops
@@ -816,6 +923,7 @@ class Reaper:
     async def _ensure_pool(self):
         if self.pool is None:
             try:
+                import asyncpg
                 # Use same pool tuning as Dispatcher for consistency
                 self.pool = await asyncpg.create_pool(
                     dsn=self.dsn,

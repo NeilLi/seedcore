@@ -182,10 +182,24 @@ class CognitiveCoreServe:
                 
                 # Get planning result from cognitive core
                 result = self.cognitive_core(cognitive_context)
+                logger.info(f"[CognitiveServe] Raw cognitive core result: {result}")
                 
                 # Extract solution steps from the result
                 solution_steps = result.get("solution_steps", [])
-                if not solution_steps:
+                logger.info(f"[CognitiveServe] Raw solution_steps: {solution_steps} (type: {type(solution_steps)})")
+                
+                # Parse solution_steps if it's a string
+                if isinstance(solution_steps, str):
+                    try:
+                        import json
+                        solution_steps = json.loads(solution_steps)
+                        logger.info(f"[CognitiveServe] Parsed solution_steps: {solution_steps}")
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(f"[CognitiveServe] Failed to parse solution_steps as JSON: {e}")
+                        solution_steps = []
+                
+                if not solution_steps or not isinstance(solution_steps, list):
+                    logger.warning(f"[CognitiveServe] Invalid solution_steps, using fallback plan")
                     # Fallback: create a simple plan based on available organs
                     solution_steps = self._create_fallback_plan(request)
                 

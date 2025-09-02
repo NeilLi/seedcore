@@ -930,45 +930,59 @@ class OrganismManager:
         Level 1–2 fast routing; OCPS decides whether to escalate the remaining ~10% to HGNN.
         Returns a dict with success flag, result payload, selected path, and p_fast.
         """
+        task_id = task.get('id', 'unknown')
+        logger.info(f"[OrganismManager] 🎯 Starting route_and_execute for task {task_id}")
+        
         if not self._initialized:
+            logger.error(f"[OrganismManager] ❌ Organism not initialized for task {task_id}")
             raise RuntimeError("Organism not initialized")
 
         # start of route_and_execute
         ttype = (task.get("type") or task.get("task_type") or "").strip().lower()
         domain = (task.get("domain") or "").strip().lower() or None
         drift = float(task.get("drift_score", 0.0))
+        
+        domain_display = domain if domain is not None else "None"
+        logger.info(f"[OrganismManager] 🔍 Routing task {task_id}: type='{ttype}', domain='{domain_display}', drift={drift}")
 
         # Try fast-path resolution first
         organ_id = self.routing.resolve(ttype, domain)
+        logger.info(f"[OrganismManager] 🎯 Routing resolved to organ: '{organ_id}' for task {task_id}")
         
         # Guard unknown organ IDs at run time
         if organ_id and organ_id not in self.organs:
-            logger.warning(f"⚠️ Route resolved to unknown organ '{organ_id}'. Escalating.")
+            logger.warning(f"[OrganismManager] ⚠️ Route resolved to unknown organ '{organ_id}' for task {task_id}. Escalating.")
             organ_id = None  # force escalation
             
         escalate = self.ocps.update(drift)
+        logger.info(f"[OrganismManager] 🔧 OCPS escalation decision for task {task_id}: escalate={escalate}, p_fast={self.ocps.p_fast}")
         
         # Apply configurable drift threshold for escalation
         if drift >= self.ocps_drift_threshold:
             escalate = True
-            logger.info(f"Task {task.get('id', 'unknown')} escalated due to drift threshold ({drift} >= {self.ocps_drift_threshold})")
+            logger.info(f"[OrganismManager] 🚀 Task {task_id} escalated due to drift threshold ({drift} >= {self.ocps_drift_threshold})")
 
         if organ_id and not escalate:
+            logger.info(f"[OrganismManager] 🚀 Taking fast-path for task {task_id} on organ '{organ_id}'")
             try:
                 # Level 4: best agent within selected organ via Tier 0 constrained selection
                 organ_handle = self.organs[organ_id]
+                logger.info(f"[OrganismManager] 🏗️ Got organ handle for '{organ_id}'")
                 
                 # Get the organ's view of agents
+                logger.info(f"[OrganismManager] 🔍 Getting agent handles from organ '{organ_id}'")
                 handles = await self._async_ray_get(organ_handle.get_agent_handles.remote(), timeout=10.0)
                 candidate_ids = list((handles or {}).keys())
+                logger.info(f"[OrganismManager] 🤖 Organ '{organ_id}' has {len(candidate_ids)} agents: {candidate_ids}")
 
                 if not candidate_ids:
-                    logger.warning(f"⚠️ Organ {organ_id} reports no agents; will try to attach and escalate if still empty.")
+                    logger.warning(f"[OrganismManager] ⚠️ Organ {organ_id} reports no agents for task {task_id}; will try to attach and escalate if still empty.")
                     # One attempt to re-sync Tier0 registry from the organ
                     await self._attach_missing_candidates(organ_id, organ_handle)
                     # refresh
                     handles = await self._async_ray_get(organ_handle.get_agent_handles.remote(), timeout=5.0)
                     candidate_ids = list((handles or {}).keys())
+                    logger.info(f"[OrganismManager] 🔄 After re-sync, organ '{organ_id}' has {len(candidate_ids)} agents")
 
                 # If organ has agents but Tier0 doesn't, attach them now
                 missing_in_tier0 = [a for a in candidate_ids if a not in tier0_manager.agents]
@@ -977,34 +991,39 @@ class OrganismManager:
                     await self._attach_missing_candidates(organ_id, organ_handle)
                 
                 if not candidate_ids:
-                    logger.warning(f"⚠️ Organ {organ_id} has no agents available for task {task.get('id', 'unknown')}")
+                    logger.warning(f"[OrganismManager] ⚠️ Organ {organ_id} has no agents available for task {task_id}")
                     escalate = True
                 else:
                     # Add debug logging to see mismatches
                     present = [a for a in candidate_ids if a in tier0_manager.agents]
                     absent = [a for a in candidate_ids if a not in tier0_manager.agents]
-                    logger.debug(f"[routing] organ={organ_id} candidates={len(candidate_ids)} present_in_tier0={len(present)} absent_in_tier0={len(absent)}")
+                    logger.info(f"[OrganismManager] 🔍 Agent status for task {task_id}: organ={organ_id}, candidates={len(candidate_ids)}, present_in_tier0={len(present)}, absent_in_tier0={len(absent)}")
                     
                     # Inject OCPS regime signals for agent-side F-block features
                     task["p_fast"] = self.ocps.p_fast
                     task["escalated"] = False
                     
+                    logger.info(f"[OrganismManager] 🚀 Executing task {task_id} on best agent from {len(candidate_ids)} candidates")
                     start_time = time.time()
                     result = tier0_manager.execute_task_on_best_of(candidate_ids, task)
                     fast_path_latency = (time.time() - start_time) * 1000  # Convert to ms
+                    
+                    logger.info(f"[OrganismManager] ⏱️ Task {task_id} execution completed in {fast_path_latency:.2f}ms")
+                    logger.info(f"[OrganismManager] 📊 Task {task_id} result type: {type(result)}, success: {not isinstance(result, Exception)}")
                     
                     # Track metrics
                     self._track_metrics("fast", True, fast_path_latency)
                     
                     # Update task status in database
-                    task_id = task.get('id', 'unknown')
                     if result and not isinstance(result, Exception):
                         await self._update_task_status(task_id, "FINISHED", result=result)
+                        logger.info(f"[OrganismManager] ✅ Task {task_id} marked as FINISHED in database")
                     else:
                         error_msg = str(result) if result else "Unknown error"
                         await self._update_task_status(task_id, "FAILED", error=error_msg)
+                        logger.warning(f"[OrganismManager] ❌ Task {task_id} marked as FAILED in database: {error_msg}")
                     
-                    logger.info(f"✅ Fast-path execution completed on organ {organ_id} in {fast_path_latency:.2f}ms")
+                    logger.info(f"[OrganismManager] ✅ Fast-path execution completed on organ {organ_id} in {fast_path_latency:.2f}ms")
                     
                     return {
                         "success": True, 
@@ -1016,14 +1035,16 @@ class OrganismManager:
                         "escalated": False
                     }
             except Exception as e:
-                logger.warning(f"Fast-path failure on organ {organ_id}: {e}; escalating to HGNN")
-                logger.debug(f"Task details: {task}")
+                logger.warning(f"[OrganismManager] ⚠️ Fast-path failure on organ {organ_id} for task {task_id}: {e}; escalating to HGNN")
+                logger.debug(f"[OrganismManager] 📋 Task details: {task}")
                 escalate = True
 
         # Escalation path: HGNN decomposition to multi-organ plan
-        # Use semaphore to throttle concurrent escalations
-        async with self.escalation_semaphore:
-            start_time = time.time()
+        if escalate:
+            logger.info(f"[OrganismManager] 🚀 Escalating task {task_id} to HGNN (escalate={escalate})")
+            # Use semaphore to throttle concurrent escalations
+            async with self.escalation_semaphore:
+                start_time = time.time()
             plan = await self._hgnn_decompose(task)
             
             if not plan:
@@ -1283,29 +1304,50 @@ class OrganismManager:
             p_fast: float
             result: any
         """
+        # Enhanced logging for debugging
+        task_id = task.get('id') or task.get('task_id', 'unknown')
+        logger.info(f"[OrganismManager] 🎯 Received task {task_id}")
+        domain_value = task.get('domain')
+        if domain_value is None:
+            domain_value = "None"
+        logger.info(f"[OrganismManager] 📋 Task details: type={task.get('type')}, domain={domain_value}, drift_score={task.get('drift_score')}")
+        logger.info(f"[OrganismManager] 🔧 Organism initialized: {self._initialized}")
+        logger.info(f"[OrganismManager] 🏗️ Available organs: {list(self.organs.keys())}")
+        
         # Force logging task_id early
-        print(f"[OrganismManager] Received task {task.get('id', 'unknown')} with payload={task}")
+        print(f"[OrganismManager] Received task {task_id} with payload={task}")
         
         # at the top of handle_incoming_task
         ttype = (task.get("type") or task.get("task_type") or "").strip().lower()
         task["type"] = ttype  # normalize into the payload for consistent downstream use
+        logger.info(f"[OrganismManager] 🔍 Normalized task type: '{ttype}'")
+        
         if not ttype:
+            logger.error(f"[OrganismManager] ❌ Task {task_id} missing required type field")
             return {"success": False, "error": "task.type is required"}
 
         # 1) Builtins registered on app.state (set in server.py)
+        logger.info(f"[OrganismManager] 🔍 Checking builtin handlers for task type: '{ttype}'")
         if app_state is not None:
             handlers = getattr(app_state, "builtin_task_handlers", {}) or {}
+            logger.info(f"[OrganismManager] 📦 Available builtin handlers: {list(handlers.keys())}")
             handler = handlers.get(ttype)
             if callable(handler):
+                logger.info(f"[OrganismManager] ✅ Found builtin handler for '{ttype}', executing...")
                 try:
                     # allow both sync and async handler funcs
                     out = handler() if task.get("params") is None else handler(**task.get("params", {}))
                     if asyncio.iscoroutine(out):
                         out = await out
+                    logger.info(f"[OrganismManager] ✅ Builtin handler for '{ttype}' completed successfully")
                     return {"success": True, "path": "builtin", "p_fast": self.ocps.p_fast, "result": out}
                 except Exception as e:
-                    logger.exception("Builtin task '%s' failed", ttype)
+                    logger.exception(f"[OrganismManager] ❌ Builtin task '{ttype}' failed: {e}")
                     return {"success": False, "path": "builtin", "p_fast": self.ocps.p_fast, "error": str(e)}
+            else:
+                logger.info(f"[OrganismManager] ⚠️ No builtin handler found for '{ttype}'")
+        else:
+            logger.info(f"[OrganismManager] ⚠️ No app_state provided, skipping builtin handlers")
 
         # 2) NEW: API Router Task Handlers (for Coordinator calls)
         if ttype == "get_organism_status":
@@ -1480,12 +1522,20 @@ class OrganismManager:
                 return {"success": False, "path": "api_handler", "p_fast": self.ocps.p_fast, "error": str(e)}
 
         # 3) Default: COA routing
+        logger.info(f"[OrganismManager] 🚀 Proceeding to COA routing for task type: '{ttype}'")
+        logger.info(f"[OrganismManager] 🔧 Organism initialized status: {self._initialized}")
+        if not self._initialized:
+            logger.error(f"[OrganismManager] ❌ Cannot route task {task_id} - organism not initialized")
+            return {"success": False, "error": "Organism not initialized", "path": "error", "p_fast": self.ocps.p_fast}
+        
         try:
+            logger.info(f"[OrganismManager] 🎯 Calling route_and_execute for task {task_id}")
             routed = await self.route_and_execute(task)
             routed.setdefault("path", "fast" if routed.get("path") == "fast" else "hgnn")
+            logger.info(f"[OrganismManager] ✅ Route_and_execute completed for task {task_id}: success={routed.get('success')}, path={routed.get('path')}")
             return routed
         except Exception as e:
-            logger.exception("route_and_execute failed for task.type=%s", ttype)
+            logger.exception(f"[OrganismManager] ❌ route_and_execute failed for task {task_id} type={ttype}: {e}")
             return {"success": False, "error": str(e), "path": "error", "p_fast": self.ocps.p_fast}
 
     async def initialize_organism(self, *args, **kwargs):

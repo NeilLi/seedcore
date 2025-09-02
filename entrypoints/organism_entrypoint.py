@@ -178,8 +178,14 @@ class OrganismService:
         Handle incoming tasks through the organism manager.
         This is the main endpoint that replaces the plain Ray actor task handling.
         """
+        task_id = getattr(request, 'id', 'unknown')
+        logger.info(f"[OrganismService] 🎯 Received task {task_id} via HTTP endpoint")
+        logger.info(f"[OrganismService] 📋 Task details: type={request.task_type}, domain={request.domain}")
+        
         try:
+            logger.info(f"[OrganismService] 🔧 Checking organism initialization status: {self._initialized}")
             if not self._initialized:
+                logger.error(f"[OrganismService] ❌ Organism not initialized for task {task_id}")
                 return OrganismResponse(
                     success=False,
                     result={},
@@ -196,12 +202,15 @@ class OrganismService:
                 "domain": request.domain or "general",
                 "drift_score": request.drift_score or 0.0
             }
+            logger.info(f"[OrganismService] 🔄 Converted request to task format for {task_id}")
             
             # Handle the task through the organism manager
+            logger.info(f"[OrganismService] 🚀 Calling organism_manager.handle_incoming_task for {task_id}")
             result = await self.organism_manager.handle_incoming_task(
                 task, 
                 app_state=request.app_state
             )
+            logger.info(f"[OrganismService] ✅ Organism manager completed for {task_id}: success={result.get('success')}")
             
             # Note: API response structure is {"success": ..., "result": { manager_fields... }}
             # Some clients prefer a flat shape, but this maintains compatibility
