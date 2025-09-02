@@ -19,8 +19,8 @@ export SEEDCORE_API_TIMEOUT=5.0
 
 ### Dispatcher expectations
 export EXPECT_DISPATCHERS=2
-export EXPECT_GRAPH_DISPATCHERS=0
-#export STRICT_GRAPH_DISPATCHERS=false  # allow fewer than expected
+export EXPECT_GRAPH_DISPATCHERS=1
+export STRICT_GRAPH_DISPATCHERS=false  # allow fewer than expected
 
 ### OCPS & Cognitive escalation
 export OCPS_DRIFT_THRESHOLD=0.5

@@ -13,32 +13,51 @@ from .models import SAGE
 
 PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))
 
-# ---------- Ray tasks ----------
+# ---------- Ray Actor ----------
 
 @ray.remote(num_cpus=0.5)
-def compute_graph_embeddings(start_ids: List[int], k: int = 2) -> Dict[int, List[float]]:
+class GraphEmbedder:
     """
-    Pull subgraph from Neo4j and compute 128-d embeddings for each node.
-    Returns {neo4j_id: [float,...]}.
+    Stateful Ray actor that holds a cached GraphSAGE model in memory.
+    Prevents reinitializing the model on every call.
     """
-    loader = GraphLoader()
-    try:
-        g, idx_map, X = loader.load_k_hop(start_ids=start_ids, k=k)
-    finally:
-        loader.close()
 
-    if g.num_nodes() == 0:
-        return {}
+    def __init__(self, checkpoint_path: str | None = None):
+        self.loader = GraphLoader()
+        self.model: SAGE | None = None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._init_model(checkpoint_path)
 
-    model = SAGE(in_feats=X.shape[1], h_feats=128, layers=2)
-    model.eval()
-    with torch.no_grad():
-        Z = model(g, X)  # [N, 128]
+    def _init_model(self, checkpoint_path: str | None):
+        # You may want to parameterize input dims if known
+        in_feats = 128  # TODO: set based on your dataset/loader
+        self.model = SAGE(in_feats=in_feats, h_feats=128, layers=2).to(self.device)
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            state = torch.load(checkpoint_path, map_location=self.device)
+            self.model.load_state_dict(state)
+        self.model.eval()
+        print(f"[GraphEmbedder] Model initialized on {self.device}")
 
-    # reverse map: index -> neo_id
-    inv = {v: k for k, v in idx_map.items()}
-    out = {inv[i]: Z[i].cpu().tolist() for i in range(Z.shape[0])}
-    return out
+    def compute_embeddings(self, start_ids: List[int], k: int = 2) -> Dict[int, List[float]]:
+        """Compute embeddings for k-hop neighborhood and return mapping."""
+        g, idx_map, X = self.loader.load_k_hop(start_ids=start_ids, k=k)
+
+        if g.num_nodes() == 0:
+            return {}
+
+        with torch.no_grad():
+            Z = self.model(g, X.to(self.device))
+
+        inv = {v: k for k, v in idx_map.items()}
+        return {inv[i]: Z[i].cpu().tolist() for i in range(Z.shape[0])}
+
+    def close(self):
+        """Cleanup any held resources."""
+        self.loader.close()
+        del self.model
+        torch.cuda.empty_cache()
+
+# ---------- Separate upsert stays as task ----------
 
 
 @ray.remote(num_cpus=0.2)
@@ -52,21 +71,18 @@ def upsert_embeddings(emb_map: Dict[int, List[float]]) -> int:
                  sa.Column("node_id", sa.BigInteger, primary_key=True),
                  sa.Column("label", sa.Text),
                  sa.Column("props", sa.dialects.postgresql.JSONB),
-                 sa.Column("emb", sa.ARRAY(sa.Float)),   # SQLAlchemy fallback; we'll cast in SQL
+                 sa.Column("emb", sa.ARRAY(sa.Float)),   # Ideally replace with pgvector type
                  sa.Column("created_at", sa.DateTime(timezone=True)),
                  sa.Column("updated_at", sa.DateTime(timezone=True)),
                  schema=None, autoload_with=engine)
 
-    # Insert with vector cast ::vector
     rows = [{"node_id": nid, "emb": emb} for nid, emb in emb_map.items()]
     with engine.begin() as conn:
-        # raw upsert to use vector type
         stmt = """
         INSERT INTO graph_embeddings (node_id, emb)
         VALUES %s
         ON CONFLICT (node_id) DO UPDATE SET emb = EXCLUDED.emb, updated_at = NOW();
         """
-        # Build value tuples with casting to vector
         values_sql = ",".join(
             "(" + f"{r['node_id']}, '{json.dumps(r['emb'])}'::jsonb::vector" + ")"
             for r in rows

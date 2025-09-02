@@ -9,7 +9,7 @@ import ray
 import sqlalchemy as sa
 from sqlalchemy import text
 
-from seedcore.graph.embeddings import compute_graph_embeddings, upsert_embeddings
+from seedcore.graph.embeddings import GraphEmbedder, upsert_embeddings
 
 PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))
 logger = logging.getLogger(__name__)
@@ -24,11 +24,14 @@ class GraphDispatcher:
         params: {"start_ids":[int,...], "k":2, "topk": 10}
     """
 
-    def __init__(self, dsn: Optional[str] = None, name: str = "seedcore_graph_dispatcher"):
+    def __init__(self, dsn: Optional[str] = None, name: str = "seedcore_graph_dispatcher", checkpoint_path: Optional[str] = None):
         self.dsn = dsn or PG_DSN
         self.name = name
         self.engine = sa.create_engine(self.dsn, future=True)
-        logger.info("GraphDispatcher '%s' ready.", self.name)
+        
+        # Initialize the GraphEmbedder actor with cached model
+        self.embedder = GraphEmbedder.options(name=f"{name}_embedder", lifetime="detached").remote(checkpoint_path)
+        logger.info("GraphDispatcher '%s' ready with GraphEmbedder actor.", self.name)
 
     def ping(self) -> str:
         """Simple ping for basic responsiveness check."""
@@ -113,7 +116,7 @@ class GraphDispatcher:
             if ttype == "graph_embed":
                 start_ids: List[int] = params.get("start_ids") or []
                 k: int = int(params.get("k", 2))
-                emb_map = ray.get(compute_graph_embeddings.remote(start_ids, k), timeout=600)
+                emb_map = ray.get(self.embedder.compute_embeddings.remote(start_ids, k), timeout=600)
                 n = ray.get(upsert_embeddings.remote(emb_map), timeout=600)
                 self._complete(tid, result={"embedded": n})
                 logger.info("graph_embed task %s completed: %d nodes", tid, n)
@@ -125,7 +128,7 @@ class GraphDispatcher:
                 topk: int = int(params.get("topk", 10))
 
                 # ensure embeddings exist for the seed neighborhood
-                emb_map = ray.get(compute_graph_embeddings.remote(start_ids, k), timeout=600)
+                emb_map = ray.get(self.embedder.compute_embeddings.remote(start_ids, k), timeout=600)
                 ray.get(upsert_embeddings.remote(emb_map), timeout=600)
 
                 # query nearest neighbors (l2) across graph_embeddings
@@ -157,3 +160,19 @@ class GraphDispatcher:
         except Exception as e:
             logger.exception("Task %s failed: %s", tid, e)
             self._complete(tid, error=str(e), retry_after=30)
+
+    def cleanup(self):
+        """Cleanup resources including the GraphEmbedder actor."""
+        try:
+            if hasattr(self, 'embedder'):
+                ray.get(self.embedder.close.remote(), timeout=30)
+                logger.info("GraphEmbedder actor cleaned up successfully.")
+        except Exception as e:
+            logger.warning("Failed to cleanup GraphEmbedder actor: %s", e)
+        
+        try:
+            if hasattr(self, 'engine'):
+                self.engine.dispose()
+                logger.info("Database engine disposed successfully.")
+        except Exception as e:
+            logger.warning("Failed to dispose database engine: %s", e)

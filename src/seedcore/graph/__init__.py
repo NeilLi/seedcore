@@ -10,11 +10,11 @@ This module provides:
 
 from .loader import GraphLoader
 from .models import SAGE
-from .embeddings import compute_graph_embeddings, upsert_embeddings
+from .embeddings import GraphEmbedder, upsert_embeddings
 
 __all__ = [
     "GraphLoader",
     "SAGE", 
-    "compute_graph_embeddings",
+    "GraphEmbedder",
     "upsert_embeddings"
 ]
