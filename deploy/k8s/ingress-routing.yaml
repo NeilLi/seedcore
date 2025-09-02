@@ -1,0 +1,120 @@
+# Ingress routing configuration for SeedCore service boundaries
+# This shows how to route traffic between seedcore-api and orchestrator
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: seedcore-ingress
+  namespace: ${NAMESPACE}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  rules:
+  - host: ${INGRESS_HOST}
+    http:
+      paths:
+      # Route API requests to seedcore-api (System of Record)
+      - path: /api/v1(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: ${SERVICE_NAME}  # seedcore-api service
+            port:
+              number: 8002
+      
+      # Route organism control to Ray Serve (Ray Control Plane)
+      - path: /organism(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: seedcore-svc-stable-svc  # Stable Ray Serve service
+            port:
+              number: 8000
+      
+      # Route pipeline operations to Ray Serve
+      - path: /pipeline(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: seedcore-svc-stable-svc
+            port:
+              number: 8000
+      
+      # Route orchestrator operations to Ray Serve
+      - path: /orchestrator(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: seedcore-svc-stable-svc
+            port:
+              number: 8000
+      
+      # Health checks - both services
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: ${SERVICE_NAME}  # seedcore-api health
+            port:
+              number: 8002
+      
+      # Default route to seedcore-api for docs, root, etc.
+      - path: /(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: ${SERVICE_NAME}  # seedcore-api
+            port:
+              number: 8002
+
+---
+# Alternative: Separate ingress for orchestrator (if needed)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: orchestrator-ingress
+  namespace: ${NAMESPACE}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  rules:
+  - host: orchestrator.${INGRESS_HOST}
+    http:
+      paths:
+      # All organism control routes
+      - path: /organism(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: seedcore-svc-stable-svc
+            port:
+              number: 8000
+      
+      # Pipeline operations
+      - path: /pipeline(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: seedcore-svc-stable-svc
+            port:
+              number: 8000
+      
+      # Orchestrator operations
+      - path: /orchestrator(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: seedcore-svc-stable-svc
+            port:
+              number: 8000
+      
+      # Ray Serve health
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: seedcore-svc-stable-svc
+            port:
+              number: 8000

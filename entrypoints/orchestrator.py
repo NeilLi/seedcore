@@ -1,4 +1,5 @@
 import os, time, uuid, requests
+import httpx
 from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from ray import serve
@@ -9,6 +10,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10"))
+
+# Configuration for seedcore-api integration
+SEEDCORE_API_URL = os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002")
+SEEDCORE_API_TIMEOUT = float(os.getenv("SEEDCORE_API_TIMEOUT", "5.0"))
 
 def _normalize_http(url_or_host: str, default_port: int = 8000) -> str:
     if "://" not in url_or_host:
@@ -50,6 +55,67 @@ def _derive_serve_gateway() -> str:
 GATEWAY = _derive_serve_gateway()
 ML = f"{GATEWAY}/ml"
 COG = f"{GATEWAY}/cognitive"
+
+async def _create_task_via_api(task_data: Dict[str, Any], correlation_id: str = None) -> Dict[str, Any]:
+    """
+    Create a task via seedcore-api HTTP call.
+    
+    Args:
+        task_data: Task creation payload
+        correlation_id: Optional correlation ID for tracing
+        
+    Returns:
+        Task creation response from seedcore-api
+        
+    Raises:
+        HTTPException: If task creation fails
+    """
+    try:
+        correlation_id = correlation_id or str(uuid.uuid4())
+        task_id = task_data.get('id', str(uuid.uuid4()))
+        
+        async with httpx.AsyncClient(timeout=SEEDCORE_API_TIMEOUT) as client:
+            response = await client.post(
+                f"{SEEDCORE_API_URL}/api/v1/tasks",
+                json=task_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Service": "orchestrator",
+                    "X-Correlation-ID": correlation_id,
+                    "X-Task-ID": task_id,
+                    "X-Source-Service": "orchestrator",
+                    "X-Target-Service": "seedcore-api"
+                }
+            )
+            response.raise_for_status()
+            
+            # Add correlation info to response
+            result = response.json()
+            result["_correlation"] = {
+                "correlation_id": correlation_id,
+                "task_id": task_id,
+                "source_service": "orchestrator",
+                "target_service": "seedcore-api"
+            }
+            return result
+    except httpx.TimeoutException:
+        logger.error(f"Timeout creating task via seedcore-api after {SEEDCORE_API_TIMEOUT}s")
+        raise HTTPException(
+            status_code=504,
+            detail=f"Task creation timeout after {SEEDCORE_API_TIMEOUT}s"
+        )
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error creating task via seedcore-api: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"Task creation failed: {e.response.text}"
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error creating task via seedcore-api: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Task creation failed: {str(e)}"
+        )
 
 orch_app = FastAPI()
 
@@ -187,22 +253,45 @@ class OpsOrchestrator:
         return requests.get(f"{ML}/xgboost/tune/status/{job_id}", timeout=ORCHESTRATOR_TIMEOUT).json()
 
     @orch_app.post("/tasks", response_model=TaskResponse)
-    async def create_task(self, request: TaskCreateRequest, background_tasks: BackgroundTasks):
+    async def create_task_deprecated(self, request: TaskCreateRequest, background_tasks: BackgroundTasks):
         """
-        Create a new task and enqueue it for processing.
+        DEPRECATED: Task creation has moved to seedcore-api.
+        
+        This endpoint returns 410 Gone and redirects to the proper service.
+        All task creation should now go through seedcore-api at /api/v1/tasks.
+        """
+        logger.warning(f"DEPRECATED: Task creation attempted on orchestrator. Redirecting to seedcore-api.")
+        
+        # Return 410 Gone with redirect information
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "error": "Task creation endpoint has been moved",
+                "message": "All task creation now goes through seedcore-api",
+                "new_endpoint": "/api/v1/tasks",
+                "service": "seedcore-api",
+                "migration_date": "2024-12-19"
+            },
+            headers={
+                "Location": "/api/v1/tasks",
+                "X-Deprecated-Endpoint": "/tasks",
+                "X-New-Service": "seedcore-api"
+            }
+        )
+
+    @orch_app.post("/pipeline/create-task", response_model=TaskResponse)
+    async def create_task_via_api(self, request: TaskCreateRequest, background_tasks: BackgroundTasks):
+        """
+        Create a new task via seedcore-api (proper service boundary).
         
         This endpoint:
-        1. Creates a task record
-        2. Enqueues it for processing by dispatchers
-        3. Returns immediately with task ID
+        1. Calls seedcore-api to create the task record
+        2. Returns the task ID from seedcore-api
+        3. Maintains proper service boundaries
         """
         try:
-            task_id = str(uuid.uuid4())
-            created_at = time.time()
-            
-            # Create task payload for dispatchers
-            task_payload = {
-                "id": task_id,
+            # Prepare task data for seedcore-api
+            task_data = {
                 "type": request.type,
                 "description": request.description,
                 "params": request.params,
@@ -211,30 +300,110 @@ class OpsOrchestrator:
                 "constraints": request.constraints,
                 "features": request.features,
                 "history_ids": request.history_ids,
-                "correlation_id": str(uuid.uuid4()),
-                "created_at": created_at
+                "run_immediately": True  # Enqueue for processing
             }
             
-            # In a real implementation, you would:
-            # 1. Store the task in a database
-            # 2. Enqueue it for processing by dispatchers
-            # 3. Return the task ID immediately
+            # Create task via seedcore-api
+            api_response = await _create_task_via_api(task_data)
             
-            # For now, we'll simulate this by returning the task ID
-            # TODO: Integrate with actual database and dispatcher queue
-            
-            logger.info(f"Created task {task_id} of type {request.type}")
+            logger.info(f"Created task {api_response.get('id')} via seedcore-api")
             
             return TaskResponse(
-                task_id=task_id,
-                status="created",
-                message="Task created and enqueued for processing",
-                created_at=created_at
+                task_id=str(api_response.get('id', '')),
+                status=api_response.get('status', 'created'),
+                message="Task created via seedcore-api and enqueued for processing",
+                created_at=time.time()
             )
             
+        except HTTPException:
+            # Re-raise HTTP exceptions from _create_task_via_api
+            raise
         except Exception as e:
-            logger.error(f"Failed to create task: {e}")
+            logger.error(f"Failed to create task via seedcore-api: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+    # --- Organism Control Endpoints (Ray Control Plane) ---
+    
+    @orch_app.get("/organism/health")
+    async def organism_health(self):
+        """Health check for organism service."""
+        correlation_id = str(uuid.uuid4())
+        try:
+            # Call organism service health endpoint with correlation headers
+            response = requests.get(
+                f"{GATEWAY}/organism/health", 
+                timeout=ORCHESTRATOR_TIMEOUT,
+                headers={
+                    "X-Correlation-ID": correlation_id,
+                    "X-Source-Service": "orchestrator",
+                    "X-Target-Service": "organism"
+                }
+            )
+            response.raise_for_status()
+            result = response.json()
+            result["_correlation"] = {
+                "correlation_id": correlation_id,
+                "source_service": "orchestrator",
+                "target_service": "organism"
+            }
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get organism health: {e}")
+            return {
+                "status": "unhealthy",
+                "error": str(e),
+                "service": "organism",
+                "_correlation": {
+                    "correlation_id": correlation_id,
+                    "source_service": "orchestrator",
+                    "target_service": "organism"
+                }
+            }
+    
+    @orch_app.get("/organism/status")
+    async def organism_status(self):
+        """Get organism status."""
+        try:
+            response = requests.get(f"{GATEWAY}/organism/status", timeout=ORCHESTRATOR_TIMEOUT)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to get organism status: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "service": "organism"
+            }
+    
+    @orch_app.post("/organism/initialize")
+    async def initialize_organism(self):
+        """Initialize organism."""
+        try:
+            response = requests.post(f"{GATEWAY}/organism/initialize-organism", timeout=ORCHESTRATOR_TIMEOUT)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to initialize organism: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "service": "organism"
+            }
+    
+    @orch_app.post("/organism/shutdown")
+    async def shutdown_organism(self):
+        """Shutdown organism."""
+        try:
+            response = requests.post(f"{GATEWAY}/organism/shutdown-organism", timeout=ORCHESTRATOR_TIMEOUT)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to shutdown organism: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "service": "organism"
+            }
 
     @orch_app.get("/health")
     async def health_check(self):

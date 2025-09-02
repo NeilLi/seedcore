@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: ${NAMESPACE}
+  labels:
+    app: orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+    spec:
+      containers:
+        - name: orchestrator
+          image: ${ORCHESTRATOR_IMAGE:-seedcore:latest}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: RAY_ADDRESS
+              value: "ray://seedcore-svc-head-svc:10001"
+            - name: RAY_NAMESPACE
+              value: "${SEEDCORE_NS}"
+            - name: SEEDCORE_API_URL
+              value: "http://seedcore-api:8002"
+            - name: SEEDCORE_API_TIMEOUT
+              value: "5.0"
+            - name: SERVE_GATEWAY
+              value: "http://seedcore-svc-stable-svc:8000"
+            - name: ORCH_HTTP_TIMEOUT
+              value: "10.0"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          command: ["/bin/bash", "-c"]
+          args:
+            - >
+              python -m uvicorn entrypoints.orchestrator:orch_app
+              --host 0.0.0.0
+              --port 8000
+              --proxy-headers
+              --forwarded-allow-ips "*"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator-service
+  namespace: ${NAMESPACE}
+  labels:
+    app: orchestrator
+spec:
+  type: ClusterIP
+  selector:
+    app: orchestrator
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000

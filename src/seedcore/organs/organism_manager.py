@@ -156,7 +156,8 @@ class OrganismManager:
         self._initialized = False
         
         # Initialize routing components (these don't depend on Ray)
-        self.ocps = OCPSValve()
+        # OCPS will be configured after reading environment variables
+        self.ocps = None  # Will be initialized in _configure_ocps()
         self.routing = RoutingTable()
         self.organ_interfaces: Dict[str, StandardizedOrganInterface] = {}
         
@@ -171,6 +172,9 @@ class OrganismManager:
         self.ocps_drift_threshold = float(os.getenv("OCPS_DRIFT_THRESHOLD", "0.5"))
         self.fast_path_latency_slo_ms = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
         self.max_plan_steps = int(os.getenv("MAX_PLAN_STEPS", "16"))
+        
+        # Configure OCPS with the drift threshold
+        self._configure_ocps()
         
                 # Note: Ray-dependent initialization is now handled in initialize_organism()
         # This constructor is safe to call before Ray is ready
@@ -191,10 +195,19 @@ class OrganismManager:
         # SOLUTION: Namespace verification is now handled centrally by ray_connector.py
         # This method is no longer needed and has been removed.
 
+    def _configure_ocps(self):
+        """Configure OCPS with the drift threshold from environment variables."""
+        # Use the drift threshold as the CUSUM threshold (h parameter)
+        # This ensures OCPS decisions align with the configured drift threshold
+        self.ocps = OCPSValve(nu=0.1, h=self.ocps_drift_threshold)
+        logger.info(f"[OrganismManager] 🔧 OCPS configured with drift threshold: {self.ocps_drift_threshold}")
+
     def _would_escalate_preview(self, drift: float) -> bool:
-        # non-mutating preview of CUSUM trigger OR threshold trigger
+        # non-mutating preview of CUSUM trigger (OCPS now handles drift threshold internally)
+        if self.ocps is None:
+            return drift >= self.ocps_drift_threshold  # Fallback if OCPS not configured
         S_next = max(0.0, self.ocps.S + drift - self.ocps.nu)
-        return (S_next > self.ocps.h) or (drift >= self.ocps_drift_threshold)
+        return S_next > self.ocps.h
 
     def _load_config(self, config_path: str):
         """Loads the organism configuration from a YAML file."""
@@ -957,10 +970,9 @@ class OrganismManager:
         escalate = self.ocps.update(drift)
         logger.info(f"[OrganismManager] 🔧 OCPS escalation decision for task {task_id}: escalate={escalate}, p_fast={self.ocps.p_fast}")
         
-        # Apply configurable drift threshold for escalation
-        if drift >= self.ocps_drift_threshold:
-            escalate = True
-            logger.info(f"[OrganismManager] 🚀 Task {task_id} escalated due to drift threshold ({drift} >= {self.ocps_drift_threshold})")
+        # Note: OCPS already considers drift threshold internally via its CUSUM algorithm
+        # The simple drift >= threshold check was conflicting with OCPS decisions
+        # OCPS provides more sophisticated escalation logic based on statistical analysis
 
         if organ_id and not escalate:
             logger.info(f"[OrganismManager] 🚀 Taking fast-path for task {task_id} on organ '{organ_id}'")
