@@ -713,8 +713,11 @@ def pg_create_graph_rag_task(conn, node_ids: list[int], hops: int, topk: int, de
             cur.execute("SELECT create_graph_rag_task(%s::int[], %s::int, %s::int, %s);",
                         (node_ids, hops, topk, description))
             row = cur.fetchone()
-            # The function may return VOID; if it returns id, adapt here.
-            tid = None
+            if row and row[0]:
+                tid = row[0]
+                log.info(f"Created graph RAG task with ID: {tid}")
+            else:
+                log.warning("create_graph_rag_task returned no task ID")
     except Exception as e:
         log.warning(f"create_graph_rag_task call failed: {e}")
     return tid
@@ -1915,7 +1918,7 @@ def check_cluster_and_actors():
         assert handle is not None, f"Serve app '{app}' not available"
 
     log.info("Actors and Serve apps look good.")
-    return ray, coord
+    return ray, coord, want_g, found_g
 
 def monitor_task_status(conn, tid: uuid.UUID, label: str, timeout_s: float = None):
     """Monitor task status with detailed logging and diagnostics."""
@@ -2086,10 +2089,14 @@ def scenario_graph_task(conn) -> Optional[uuid.UUID]:
     if not conn:
         return None
     try:
-        # If your SQL helper returns an ID, adapt accordingly; otherwise the dispatcher will pick it up anyway.
-        _ = pg_create_graph_rag_task(conn, node_ids=[123], hops=2, topk=8, description="Find similar nodes to 123")
-        log.info("Submitted graph RAG task via DB function (id may be implicit).")
-        return None
+        # Create a graph RAG task and return the task ID for verification
+        task_id = pg_create_graph_rag_task(conn, node_ids=[123], hops=2, topk=8, description="Find similar nodes to 123")
+        if task_id:
+            log.info(f"✅ Submitted graph RAG task via DB function with ID: {task_id}")
+            return task_id
+        else:
+            log.warning("⚠️ Graph RAG task submission failed - no task ID returned")
+            return None
     except Exception as e:
         log.warning(f"Graph task submission skipped: {e}")
         return None
@@ -2229,7 +2236,7 @@ def main():
         log.warning("   Set SEEDCORE_PG_DSN environment variable for full verification")
 
     # Cluster & actors up?
-    ray, coord = check_cluster_and_actors()
+    ray, coord, want_g, found_g = check_cluster_and_actors()
 
     # Check if running in debug-only mode
     if args.debug:
@@ -2341,6 +2348,20 @@ def main():
                 log.info(f"📋 Fast path metadata: {fast_metadata}")
     else:
         log.warning("No DB connection; cannot verify fast-path completion in DB.")
+
+    # Optional: Graph task (moved before escalation to ensure it runs)
+    if env_bool("VERIFY_GRAPH_TASK", False):
+        log.info("🔍 VERIFYING GRAPH TASK PROCESSING")
+        log.info("=" * 50)
+        g_tid = scenario_graph_task(conn)
+        if g_tid and conn:
+            log.info(f"⏳ Waiting for graph task {g_tid} to complete...")
+            wait_for_completion(conn, g_tid, "GRAPH", timeout_s=150.0)
+            log.info("✅ Graph task verification completed successfully")
+        else:
+            log.warning("⚠️ Graph task verification skipped - no task ID or DB connection")
+    else:
+        log.info("📋 Graph task verification disabled (VERIFY_GRAPH_TASK=false)")
 
     # Escalation
     esc_tid = scenario_escalation(conn)
@@ -2485,12 +2506,6 @@ def main():
             
     else:
         log.warning("No DB connection; cannot verify escalation completion in DB.")
-
-    # Optional: Graph task
-    if env_bool("VERIFY_GRAPH_TASK", False):
-        g_tid = scenario_graph_task(conn)
-        if g_tid and conn:
-            wait_for_completion(conn, g_tid, "GRAPH", timeout_s=150.0)
 
     # Snapshot coordinator metrics/status (best-effort)
     try:

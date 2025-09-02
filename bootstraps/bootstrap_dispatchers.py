@@ -161,6 +161,7 @@ def _ensure_graph_dispatchers(env_vars: dict):
         return
     from seedcore.agents.graph_dispatcher import GraphDispatcher
 
+    graph_dispatchers = []
     ok = 0
     for i in range(GRAPH_COUNT):
         name = f"seedcore_graph_dispatcher_{i}"
@@ -172,6 +173,7 @@ def _ensure_graph_dispatchers(env_vars: dict):
                 try:
                     if ray.get(a.ping.remote(), timeout=5) == "pong":
                         log.info("✅ %s alive", name)
+                        graph_dispatchers.append(a)
                         ok += 1
                         continue
                 except Exception:
@@ -185,6 +187,7 @@ def _ensure_graph_dispatchers(env_vars: dict):
         if res:
             opts["resources"] = res
         a = GraphDispatcher.options(**opts).remote(dsn=PG_DSN, name=name)
+        graph_dispatchers.append(a)
         time.sleep(0.5)
         try:
             if ray.get(a.ping.remote(), timeout=5) == "pong":
@@ -192,6 +195,12 @@ def _ensure_graph_dispatchers(env_vars: dict):
                 ok += 1
         except Exception as e:
             log.warning("⚠️ %s ping failed after create: %s", name, e)
+    
+    # Start run loops for GraphDispatchers (fire & forget)
+    for a in graph_dispatchers:
+        a.run.remote()
+        log.info("🚀 Started GraphDispatcher run loop")
+    
     log.info("📊 GraphDispatchers ready: %d/%d", ok, GRAPH_COUNT)
 
 def _ensure_dispatchers(env_vars: dict):

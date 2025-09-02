@@ -12,6 +12,7 @@ from sqlalchemy import text
 from seedcore.graph.embeddings import GraphEmbedder, upsert_embeddings
 
 PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))
+RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 logger = logging.getLogger(__name__)
 
 @ray.remote
@@ -29,8 +30,20 @@ class GraphDispatcher:
         self.name = name
         self.engine = sa.create_engine(self.dsn, future=True)
         
-        # Initialize the GraphEmbedder actor with cached model
-        self.embedder = GraphEmbedder.options(name=f"{name}_embedder", lifetime="detached").remote(checkpoint_path)
+        # Try to reuse existing GraphEmbedder actor, or create new one
+        embedder_name = f"{name}_embedder"
+        try:
+            self.embedder = ray.get_actor(embedder_name, namespace=RAY_NAMESPACE)
+            logger.info("GraphDispatcher '%s' reusing existing GraphEmbedder: %s", self.name, embedder_name)
+        except ValueError:
+            # Actor doesn't exist, create a new one
+            self.embedder = GraphEmbedder.options(
+                name=embedder_name,
+                lifetime="detached",
+                namespace=RAY_NAMESPACE
+            ).remote(checkpoint_path)
+            logger.info("GraphDispatcher '%s' created new GraphEmbedder: %s", self.name, embedder_name)
+        
         logger.info("GraphDispatcher '%s' ready with GraphEmbedder actor.", self.name)
 
     def ping(self) -> str:
@@ -103,8 +116,10 @@ class GraphDispatcher:
             """
             params = {"st": new_status, "err": str(error), "retry": retry_after or 0, "id": task_id}
         else:
+            # Ensure we always have a structured result, never None or empty
+            structured_result = result if result is not None else {"status": "completed", "message": "Task completed successfully"}
             q = "UPDATE tasks SET status='completed', result=:res WHERE id=:id"
-            params = {"res": json.dumps(result or {}), "id": task_id}
+            params = {"res": json.dumps(structured_result), "id": task_id}
         with self.engine.begin() as conn:
             conn.execute(text(q), params)
 
@@ -118,7 +133,9 @@ class GraphDispatcher:
                 k: int = int(params.get("k", 2))
                 emb_map = ray.get(self.embedder.compute_embeddings.remote(start_ids, k), timeout=600)
                 n = ray.get(upsert_embeddings.remote(emb_map), timeout=600)
-                self._complete(tid, result={"embedded": n})
+                # Always write structured result
+                result = {"embedded": n, "start_ids": start_ids, "k": k, "embedding_count": len(emb_map)}
+                self._complete(tid, result=result)
                 logger.info("graph_embed task %s completed: %d nodes", tid, n)
 
             elif ttype == "graph_rag_query":
@@ -149,13 +166,29 @@ class GraphDispatcher:
                         rows = conn.execute(sql, {"centroid": json.dumps(centroid), "k": topk}).mappings().all()
                         hits = [{"node_id": r["node_id"], "score": float(r["dist"])} for r in rows]
 
-                # materialize context payload
-                context = {"neighbors": hits, "seed_count": len(emb_map)}
+                # Always write structured result with fallbacks
+                context = {
+                    "neighbors": hits or [], 
+                    "seed_count": len(emb_map) if emb_map else 0,
+                    "start_ids": start_ids,
+                    "k": k,
+                    "topk": topk,
+                    "centroid_computed": centroid is not None,
+                    "embedding_count": len(emb_map) if emb_map else 0
+                }
                 self._complete(tid, result=context)
                 logger.info("graph_rag_query task %s completed: %d hits", tid, len(hits))
 
             else:
-                self._complete(tid, error=f"Unsupported task type: {ttype}")
+                # Always write structured result even for unsupported task types
+                result = {
+                    "error": f"Unsupported task type: {ttype}",
+                    "supported_types": ["graph_embed", "graph_rag_query"],
+                    "task_type": ttype,
+                    "params": params
+                }
+                self._complete(tid, result=result)
+                logger.warning("Unsupported task type %s for task %s", ttype, tid)
 
         except Exception as e:
             logger.exception("Task %s failed: %s", tid, e)

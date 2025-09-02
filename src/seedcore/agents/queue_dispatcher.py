@@ -70,6 +70,7 @@ WITH c AS (
   FROM tasks
   WHERE status IN ('queued','retry')
     AND (run_after IS NULL OR run_after <= NOW())
+    AND type NOT IN ('graph_embed', 'graph_rag_query')  -- Exclude graph tasks (handled by GraphDispatcher)
   ORDER BY created_at
   FOR UPDATE SKIP LOCKED
   LIMIT $1

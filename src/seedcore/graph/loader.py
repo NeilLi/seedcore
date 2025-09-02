@@ -36,16 +36,16 @@ class GraphLoader:
         """
         with self.driver.session() as s:
             # Gather nodes within k hops
-            q_nodes = """
+            q_nodes = f"""
             MATCH (s)
             WHERE id(s) IN $start_ids
-            MATCH p=(s)-[*..$k]-(m)
+            MATCH p=(s)-[*..{k}]-(m)
             WITH COLLECT(DISTINCT m) + COLLECT(DISTINCT s) AS ns
             UNWIND ns AS n
             WITH DISTINCT n LIMIT $limit_nodes
             RETURN id(n) AS id, labels(n) AS labels, properties(n) AS props
             """
-            nodes = s.run(q_nodes, start_ids=start_ids, k=k, limit_nodes=limit_nodes).data()
+            nodes = s.run(q_nodes, start_ids=start_ids, limit_nodes=limit_nodes).data()
 
             if not nodes:
                 # fallback to ensure we still include the start nodes

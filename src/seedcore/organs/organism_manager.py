@@ -1051,6 +1051,11 @@ class OrganismManager:
                 logger.debug(f"[OrganismManager] 📋 Task details: {task}")
                 escalate = True
 
+        # Initialize results list for both fast-path and escalation cases
+        results: List[Dict[str, Any]] = []
+        plan = None
+        start_time = time.time()
+
         # Escalation path: HGNN decomposition to multi-organ plan
         if escalate:
             logger.info(f"[OrganismManager] 🚀 Escalating task {task_id} to HGNN (escalate={escalate})")
@@ -1068,7 +1073,6 @@ class OrganismManager:
                     "task_type": ttype
                 }
             
-            results: List[Dict[str, Any]] = []
             for sub in plan:
                 sub_organ = sub["organ_id"]
                 sub_task = sub["task"]
@@ -1084,7 +1088,7 @@ class OrganismManager:
         hgnn_latency = (time.time() - start_time) * 1000  # Convert to ms
         self._track_metrics("hgnn", success, hgnn_latency)
         
-        if success:
+        if success and plan:
             key = self._pattern_key(plan)
             self.routing.hyperedge_cache.setdefault(key, [p["organ_id"] for p in plan])
         
@@ -1202,7 +1206,7 @@ class OrganismManager:
                     "success": success,
                     "path": "hgnn",
                     "p_fast": self.ocps.p_fast,
-                    "step_count": len(plan)
+                    "step_count": len(plan) if plan else 0
                 }
             )
             return escalated_result.model_dump()
@@ -1216,7 +1220,7 @@ class OrganismManager:
                 "kind": "escalated",
                 "escalated": True,
                 "plan_source": "cognitive_core",
-                "step_count": len(plan)
+                "step_count": len(plan) if plan else 0
             }
 
     def _validate_or_fallback(self, plan: List[Dict[str, Any]], task: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
