@@ -51,6 +51,10 @@ class GraphEmbedder:
         inv = {v: k for k, v in idx_map.items()}
         return {inv[i]: Z[i].cpu().tolist() for i in range(Z.shape[0])}
 
+    def ping(self) -> str:
+        """Simple ping for basic responsiveness check."""
+        return "pong"
+    
     def close(self):
         """Cleanup any held resources."""
         self.loader.close()

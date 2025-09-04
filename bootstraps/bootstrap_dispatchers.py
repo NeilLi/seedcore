@@ -5,7 +5,7 @@ Create/refresh Reaper, GraphDispatchers, and N queue Dispatchers.
 Warm them up (DB pools) and kick off their run loops.
 """
 from seedcore.logging_setup import setup_logging
-setup_logging(app_name="seedcore.dispatchers")
+setup_logging(app_name="seedcore.dispatchers")  # centralized stdout logging only
 
 import os
 import sys
@@ -28,29 +28,46 @@ from seedcore.utils.ray_utils import (
 
 import ray
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-    force=True,
-)
 log = logging.getLogger("seedcore.dispatchers")
+
+# ---------- helpers ----------
+def _env_bool(name: str, default: str | bool = "false") -> bool:
+    val = os.getenv(name, str(default)).strip().lower()
+    return val in ("1", "true", "yes", "y", "on")
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return default
 
 # --- ENV defaults ---
 # Use ray_utils for unified Ray configuration - no need to set defaults here
 # ray_utils will handle RAY_ADDRESS internally with proper fallbacks
 
-RAY_ADDRESS = os.getenv("RAY_ADDRESS")  # ray_utils will use this if set
-RAY_NAMESPACE = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+RAY_ADDRESS = os.getenv("RAY_ADDRESS")  # used by ensure_ray_initialized if set
+RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev")).strip() or "seedcore-dev"
 PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))
 
-DISPATCHER_COUNT = int(os.getenv("DISPATCHER_COUNT") or os.getenv("SEEDCORE_DISPATCHERS", "2"))
-GRAPH_COUNT      = int(os.getenv("SEEDCORE_GRAPH_DISPATCHERS", "1"))
+DISPATCHER_COUNT = _env_int("DISPATCHER_COUNT", _env_int("SEEDCORE_DISPATCHERS", 2))
+GRAPH_COUNT      = _env_int("SEEDCORE_GRAPH_DISPATCHERS", 1)
 
-FORCE_REPLACE = os.getenv("FORCE_REPLACE_DISPATCHERS", "false").lower() in ("1", "true", "yes")
-EXIT_AFTER    = os.getenv("EXIT_AFTER_BOOTSTRAP", "true").lower() in ("1", "true", "yes")
+FORCE_REPLACE = _env_bool("FORCE_REPLACE_DISPATCHERS", "false")
+EXIT_AFTER    = _env_bool("EXIT_AFTER_BOOTSTRAP", "true")
 
-PIN_TO_HEAD   = os.getenv("PIN_TO_HEAD_NODE", "false").lower() in ("1", "true", "yes")
+PIN_TO_HEAD   = _env_bool("PIN_TO_HEAD_NODE", "false")
+
+# strict gating for graph dispatchers
+EXPECT_GRAPH  = _env_int("EXPECT_GRAPH_DISPATCHERS", GRAPH_COUNT)
+STRICT_GRAPH  = _env_bool("STRICT_GRAPH_DISPATCHERS", "false")
+GRAPH_READY_TOTAL_TIMEOUT_S = _env_float("GRAPH_READY_TOTAL_TIMEOUT_S", 90.0)
+GRAPH_PING_TIMEOUT_S = _env_float("GRAPH_PING_TIMEOUT_S", 10.0)
 
 ENV_KEYS = [
     "OCPS_DRIFT_THRESHOLD",
@@ -61,6 +78,9 @@ ENV_KEYS = [
     "SEEDCORE_GRAPH_DISPATCHERS",
     "ENABLE_GRAPH_DISPATCHERS",
 ]
+
+
+# ---------- ray resolution utilities ----------
 
 def _resolve_ray_response(response, timeout_s: float = 15.0):
     """
@@ -128,7 +148,7 @@ def _optional_resources():
     return {"head_node": 0.001} if PIN_TO_HEAD else None
 
 def _ensure_reaper(env_vars: dict):
-    if os.getenv("ENABLE_REAPER", "true").lower() not in ("1", "true", "yes"):
+    if not _env_bool("ENABLE_REAPER", "true"):
         log.info("ℹ️ Reaper disabled (ENABLE_REAPER=false)")
         return
     try:
@@ -158,12 +178,13 @@ def _ensure_reaper(env_vars: dict):
             log.warning(f"Initial stale task sweep failed: {e}")
 
 def _ensure_graph_dispatchers(env_vars: dict):
-    if os.getenv("ENABLE_GRAPH_DISPATCHERS", "true").lower() not in ("1", "true", "yes"):
+    if not _env_bool("ENABLE_GRAPH_DISPATCHERS", "true"):
         log.info("ℹ️ GraphDispatchers disabled")
         return
     from seedcore.agents.graph_dispatcher import GraphDispatcher
 
-    graph_dispatchers = []
+    graph_dispatchers_all = []
+    graph_dispatchers_created = []
     ok = 0
     for i in range(GRAPH_COUNT):
         name = f"seedcore_graph_dispatcher_{i}"
@@ -173,9 +194,9 @@ def _ensure_graph_dispatchers(env_vars: dict):
             try:
                 a = ray.get_actor(name, namespace=RAY_NAMESPACE)
                 try:
-                    if ray.get(a.ping.remote(), timeout=5) == "pong":
+                    if ray.get(a.ping.remote(), timeout=GRAPH_PING_TIMEOUT_S) == "pong":
                         log.info("✅ %s alive", name)
-                        graph_dispatchers.append(a)
+                        graph_dispatchers_all.append(a)
                         ok += 1
                         continue
                 except Exception:
@@ -189,21 +210,59 @@ def _ensure_graph_dispatchers(env_vars: dict):
         if res:
             opts["resources"] = res
         a = GraphDispatcher.options(**opts).remote(dsn=PG_DSN, name=name)
-        graph_dispatchers.append(a)
-        time.sleep(0.5)
+        graph_dispatchers_all.append(a)
+        graph_dispatchers_created.append(a)
+
+        # Short grace before probing
+        time.sleep(1.0)
+
+        # Retry ping with capped exponential backoff (bounded by GRAPH_READY_TOTAL_TIMEOUT_S)
+        max_retries = 6
+        retry_delay = 2.0
+        ping_success = False
+        waited = 0.0
+        
+        for attempt in range(max_retries):
+            try:
+                # Optional: ask for startup status if actor implements it
+                try:
+                    status = ray.get(a.get_startup_status.remote(), timeout=5)
+                    log.info("📊 %s startup (attempt %d/%d): %s", name, attempt + 1, max_retries, status)
+                except Exception:
+                    pass
+
+                if ray.get(a.ping.remote(), timeout=GRAPH_PING_TIMEOUT_S) == "pong":
+                    log.info("✅ %s created and responsive (attempt %d/%d)", name, attempt + 1, max_retries)
+                    ok += 1
+                    ping_success = True
+                    break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    log.info("⏳ %s not ready (attempt %d/%d): %s — retrying in %.1fs", name, attempt + 1, max_retries, e, retry_delay)
+                    time.sleep(retry_delay)
+                    waited += retry_delay
+                    if waited >= GRAPH_READY_TOTAL_TIMEOUT_S:
+                        log.warning("⚠️ %s exceeded total wait budget (%.1fs)", name, GRAPH_READY_TOTAL_TIMEOUT_S)
+                        break
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    log.warning("⚠️ %s ping failed after %d attempts: %s", name, max_retries, e)
+        
+        if not ping_success:
+            log.warning("⚠️ %s created but not responsive after all retries", name)
+
+    # Start run loops only for actors we just created (avoid double-run enqueues)
+    for a in graph_dispatchers_created:
         try:
-            if ray.get(a.ping.remote(), timeout=5) == "pong":
-                log.info("✅ %s created", name)
-                ok += 1
+            a.run.remote()
+            log.info("🚀 Started GraphDispatcher run loop")
         except Exception as e:
-            log.warning("⚠️ %s ping failed after create: %s", name, e)
-    
-    # Start run loops for GraphDispatchers (fire & forget)
-    for a in graph_dispatchers:
-        a.run.remote()
-        log.info("🚀 Started GraphDispatcher run loop")
-    
-    log.info("📊 GraphDispatchers ready: %d/%d", ok, GRAPH_COUNT)
+            log.warning("⚠️ Failed to start GraphDispatcher loop: %s", e)
+
+    log.info("📊 GraphDispatchers responsive: %d/%d (expected=%d, strict=%s)", ok, GRAPH_COUNT, EXPECT_GRAPH, STRICT_GRAPH)
+    if STRICT_GRAPH and ok < EXPECT_GRAPH:
+        # Surface a clear gating error to the caller
+        raise RuntimeError(f"Only {ok}/{EXPECT_GRAPH} GraphDispatchers responsive with STRICT_GRAPH_DISPATCHERS=true")
 
 def _ensure_dispatchers(env_vars: dict):
     from seedcore.agents.queue_dispatcher import Dispatcher
@@ -292,7 +351,14 @@ def bootstrap_dispatchers() -> bool:
 
     env_vars = {k: os.getenv(k, "") for k in ENV_KEYS}
     _ensure_reaper(env_vars)
-    _ensure_graph_dispatchers(env_vars)
+    try:
+        _ensure_graph_dispatchers(env_vars)
+    except Exception as e:
+        log.error("❌ GraphDispatcher bring-up failed: %s", e)
+        # If strict, abort bootstrap; otherwise continue with queue dispatchers
+        if STRICT_GRAPH:
+            return False
+
     ok = _ensure_dispatchers(env_vars)
     if not ok:
         log.error("❌ Dispatcher bring-up failed")

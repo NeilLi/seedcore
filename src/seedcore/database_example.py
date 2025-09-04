@@ -14,7 +14,7 @@ export POSTGRES_PORT="5432"
 export POSTGRES_DB="postgres"
 export POSTGRES_USER="postgres"
 export POSTGRES_PASSWORD="your_password"
-export PG_DSN="postgresql://postgres:your_password@postgresql:5432/postgres"
+export PG_DSN="postgresql://postgres:your_password@postgresql:5432/seedcore"
 
 # MySQL - Sync (PyMySQL driver)
 export MYSQL_HOST="mysql"
