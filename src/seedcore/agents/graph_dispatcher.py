@@ -25,9 +25,14 @@ DB_POOL_RECYCLE_S     = int(os.getenv("GRAPH_DB_POOL_RECYCLE_S", "600"))
 DB_ECHO               = os.getenv("GRAPH_DB_ECHO", "false").lower() in ("1","true","yes")
 TASK_POLL_INTERVAL_S  = float(os.getenv("GRAPH_TASK_POLL_INTERVAL_S", "1.0"))
 EMBED_BATCH_CHUNK     = int(os.getenv("GRAPH_EMBED_BATCH_CHUNK", "0"))  # 0 = disabled
-RUN_AFTER_ENABLED     = os.getenv("GRAPH_RUN_AFTER_ENABLED", "true").lower() in ("1","true","yes")
+# RUN_AFTER_ENABLED removed - always use run_after filter for safety
 LOG_DSN               = os.getenv("GRAPH_LOG_DSN", "masked").lower()    # "plain" to print full DSN (not recommended)
 STRICT_JSON_RESULT    = os.getenv("GRAPH_STRICT_JSON_RESULT", "true").lower() in ("1","true","yes")
+
+# Recommended database indexes for optimal performance:
+# CREATE INDEX CONCURRENTLY idx_tasks_status_type_created ON tasks (status, type, created_at);
+# CREATE INDEX CONCURRENTLY idx_tasks_status_run_after ON tasks (status, run_after) WHERE run_after IS NOT NULL;
+# CREATE INDEX CONCURRENTLY idx_tasks_type_status ON tasks (type, status) WHERE type IN ('graph_embed', 'graph_rag_query');
 
 def _redact_dsn(dsn: str) -> str:
     if LOG_DSN == "plain":
@@ -337,15 +342,14 @@ class GraphDispatcher:
           SELECT id FROM tasks
           WHERE status IN ('queued','retry')
             AND type IN ('graph_embed','graph_rag_query')
-            {run_after_filter}
+            AND (run_after IS NULL OR run_after <= NOW())
           ORDER BY created_at ASC
           LIMIT 1
         )
         RETURNING id, type, params::text;
         """
         try:
-            run_after_filter = "AND (run_after IS NULL OR run_after <= NOW())" if RUN_AFTER_ENABLED else ""
-            sql = text(q.format(run_after_filter=run_after_filter))
+            sql = text(q)
             with self.engine.begin() as conn:
                 row = conn.execute(sql, {"name": self.name}).mappings().first()
             return dict(row) if row else None

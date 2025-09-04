@@ -13,6 +13,18 @@ export SEEDCORE_PG_DSN="postgresql://postgres:postgres@localhost:5432/seedcore"
 export ORCH_URL="http://127.0.0.1:8000/orchestrator"
 export ORCH_PATHS="/tasks"
 
+# Adjust if your gateway differs
+# export ORCH_URL="http://127.0.0.1:8000/orchestrator"
+
+# Orchestrator → per-request budget for cognitive calls
+export COGNITIVE_TIMEOUT_S=12
+# Orchestrator client default; keep small but > COGNITIVE_TIMEOUT_S
+export ORCH_HTTP_TIMEOUT=15
+# Make memory synthesis optional (or off)
+export SEEDCORE_FACTS_ENABLED=false
+export ENABLE_MEMORY_SYNTHESIS=false   # if you added this flag
+
+
 ### SeedCore API (FastAPI front door)
 export SEEDCORE_API_URL="http://127.0.0.1:8002"
 export SEEDCORE_API_TIMEOUT=5.0

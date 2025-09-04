@@ -14,6 +14,7 @@ import os
 import sys
 import time
 import traceback
+import logging
 from typing import Dict, Any, Optional
 
 import ray
@@ -53,6 +54,7 @@ class CognitiveRequest(BaseModel):
     performance_data: Dict[str, Any] = None
     current_capabilities: Dict[str, Any] = None
     target_capabilities: Dict[str, Any] = None
+    knowledge_context: Optional[Dict[str, Any]] = None
 
 class CognitiveResponse(BaseModel):
     success: bool
@@ -62,6 +64,7 @@ class CognitiveResponse(BaseModel):
 
 # --- FastAPI app for ingress ---
 app = FastAPI(title="SeedCore Cognitive Service", version="1.0.0")
+logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------
 # Ray Serve Deployment: Replica-Warm Isolation Pattern
@@ -148,16 +151,46 @@ class CognitiveService:
 
     @app.post("/reason-about-failure", response_model=CognitiveResponse)
     async def reason_about_failure(self, request: CognitiveRequest):
+        logger.info(f"Received reason-about-failure request for agent {request.agent_id}")
+        start_time = time.time()
         try:
+            # Safely handle knowledge_context - normalize to empty dict if None
+            kc = request.knowledge_context or {}
+            facts = kc.get("facts") or []
+            summary = kc.get("facts_summary") or ""
+            
+            # Prepare input data with knowledge context if available
+            input_data = request.incident_context or {}
+            if facts or summary:
+                input_data.update({
+                    "relevant_facts": facts,
+                    "facts_summary": summary,
+                    "retrieval_metadata": kc.get("metadata", {})
+                })
+            
             context = CognitiveContext(
                 agent_id=request.agent_id,
                 task_type=CognitiveTaskType.FAILURE_ANALYSIS,
-                input_data=request.incident_context or {}
+                input_data=input_data
             )
+            logger.info(f"Created cognitive context for agent {request.agent_id}, calling cognitive_core")
             result = self.cognitive_core(context)
+            processing_time = time.time() - start_time
+            logger.info(f"Completed reason-about-failure for agent {request.agent_id} in {processing_time:.2f}s")
             return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)
         except Exception as e:
-            return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
+            processing_time = time.time() - start_time
+            logger.exception(f"Error in reason-about-failure for agent {request.agent_id} after {processing_time:.2f}s: {e}")
+            return CognitiveResponse(
+                success=False, 
+                agent_id=request.agent_id, 
+                result={
+                    "thought": "Unable to analyze failure due to service error",
+                    "proposed_solution": "Fix request parsing / input validation", 
+                    "confidence_score": 0.0
+                }, 
+                error=str(e)
+            )
 
     @app.post("/plan-task", response_model=CognitiveResponse)
     async def plan_task(self, request: CognitiveRequest):
@@ -178,19 +211,49 @@ class CognitiveService:
 
     @app.post("/make-decision", response_model=CognitiveResponse)
     async def make_decision(self, request: CognitiveRequest):
+        logger.info(f"Received make-decision request for agent {request.agent_id}")
+        start_time = time.time()
         try:
+            # Safely handle knowledge_context - normalize to empty dict if None
+            kc = request.knowledge_context or {}
+            facts = kc.get("facts") or []
+            summary = kc.get("facts_summary") or ""
+            
+            # Prepare input data with knowledge context if available
+            input_data = {
+                "decision_context": request.decision_context or {},
+                "historical_data": request.historical_data or {}
+            }
+            if facts or summary:
+                input_data.update({
+                    "relevant_facts": facts,
+                    "facts_summary": summary,
+                    "retrieval_metadata": kc.get("metadata", {})
+                })
+            
             context = CognitiveContext(
                 agent_id=request.agent_id,
                 task_type=CognitiveTaskType.DECISION_MAKING,
-                input_data={
-                    "decision_context": request.decision_context or {},
-                    "historical_data": request.historical_data or {}
-                }
+                input_data=input_data
             )
+            logger.info(f"Created cognitive context for agent {request.agent_id}, calling cognitive_core")
             result = self.cognitive_core(context)
+            processing_time = time.time() - start_time
+            logger.info(f"Completed make-decision for agent {request.agent_id} in {processing_time:.2f}s")
             return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)
         except Exception as e:
-            return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
+            processing_time = time.time() - start_time
+            logger.exception(f"Error in make-decision for agent {request.agent_id} after {processing_time:.2f}s: {e}")
+            return CognitiveResponse(
+                success=False, 
+                agent_id=request.agent_id, 
+                result={
+                    "action": "hold",
+                    "reason": "Unable to make decision due to service error",
+                    "confidence": 0.0
+                }, 
+                error=str(e)
+            )
 
     async def solve_problem(self, agent_id: str, problem_statement: str, constraints: dict | None = None, available_tools: dict | None = None, task_id: str | None = None, **kwargs):
         """

@@ -14,6 +14,17 @@ spec:
       labels:
         {{- include "redis.selectorLabels" . | nindent 8 }}
     spec:
+      initContainers:
+      - name: install-tini
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - sh
+        - -c
+        - apk add --no-cache tini && cp /sbin/tini /shared/tini
+        volumeMounts:
+        - name: shared-tini
+          mountPath: /shared
       containers:
       - name: redis
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -35,7 +46,11 @@ spec:
         volumeMounts:
         - name: redis-data
           mountPath: /data
+        - name: shared-tini
+          mountPath: /shared
         command:
+        - /shared/tini
+        - --
         - redis-server
         - --appendonly
         - yes
@@ -44,31 +59,25 @@ spec:
         - {{ .Values.redis.auth.password }}
         {{- end }}
         livenessProbe:
-          exec:
-            command:
-            - redis-cli
-            {{- if .Values.redis.auth.enabled }}
-            - -a
-            - {{ .Values.redis.auth.password }}
-            {{- end }}
-            - ping
-          initialDelaySeconds: 30
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 10
           periodSeconds: 10
+          timeoutSeconds: 1
+          failureThreshold: 3
         readinessProbe:
-          exec:
-            command:
-            - redis-cli
-            {{- if .Values.redis.auth.enabled }}
-            - -a
-            - {{ .Values.redis.auth.password }}
-            {{- end }}
-            - ping
+          tcpSocket:
+            port: 6379
           initialDelaySeconds: 5
           periodSeconds: 5
+          timeoutSeconds: 1
+          failureThreshold: 3
       volumes:
       - name: redis-data
         persistentVolumeClaim:
           claimName: {{ include "redis.fullname" . }}-pvc
+      - name: shared-tini
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
