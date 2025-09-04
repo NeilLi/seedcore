@@ -5,6 +5,9 @@ Initialize OrganismManager via Ray Serve handle first; fall back to HTTP.
 Blocks until /organism/health shows organism_initialized=true (with timeout).
 """
 
+from seedcore.logging_setup import setup_logging
+setup_logging(app_name="seedcore.organism")
+
 import os
 import sys
 import time
@@ -35,7 +38,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
     force=True,
 )
-log = logging.getLogger("init_organism")
+log = logging.getLogger("seedcore.organism")
 
 # --- Defaults & ENV ---
 DEFAULT_CONFIG_PATH = Path(

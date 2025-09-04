@@ -17,6 +17,10 @@ Tier 0 Memory Manager
 Manages Ray agents and collects heartbeats for the meta-controller.
 """
 
+from seedcore.logging_setup import setup_logging
+setup_logging(app_name="seedcore.Tier0MemoryManager")
+
+
 import os
 import ray
 import time
@@ -32,7 +36,7 @@ from ..energy.optimizer import select_best_agent, score_agent
 # Avoid importing EnergyLedger at module import time to prevent circular imports.
 # We'll import it inside functions that need it.
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("seedcore.Tier0MemoryManager")
 
 class Tier0MemoryManager:
     """

@@ -17,7 +17,7 @@ from ..models.result_schema import (
     create_cognitive_result, create_error_result, TaskResult
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("cognitiveseedcore.CognitiveCore")
 
 
 class CognitiveTaskType(Enum):

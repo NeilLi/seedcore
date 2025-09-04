@@ -24,6 +24,9 @@ Ray client connections have limitations:
 - Actor information must be obtained through actor handles, not state APIs
 """
 
+from seedcore.logging_setup import setup_logging
+setup_logging(app_name="seedcore.organism")
+
 import yaml
 import logging
 import asyncio
@@ -60,7 +63,7 @@ except ImportError:
     RESULT_SCHEMA_AVAILABLE = False
     create_escalated_result = None
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("seedcore.organism")
 
 # Define target namespace for agent actors (prefer SEEDCORE_NS, fallback to RAY_NAMESPACE)
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))

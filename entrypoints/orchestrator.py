@@ -5,9 +5,13 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from ray import serve
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
+
+from seedcore.logging_setup import setup_logging
+setup_logging(app_name="seedcore.orchestrator")
+
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("seedcore.orchestrator")
 
 ORCHESTRATOR_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10"))
 

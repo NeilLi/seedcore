@@ -4,6 +4,8 @@ init_dispatchers.py
 Create/refresh Reaper, GraphDispatchers, and N queue Dispatchers.
 Warm them up (DB pools) and kick off their run loops.
 """
+from seedcore.logging_setup import setup_logging
+setup_logging(app_name="seedcore.dispatchers")
 
 import os
 import sys
@@ -32,7 +34,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
     force=True,
 )
-log = logging.getLogger("init_dispatchers")
+log = logging.getLogger("seedcore.dispatchers")
 
 # --- ENV defaults ---
 # Use ray_utils for unified Ray configuration - no need to set defaults here

@@ -10,6 +10,8 @@ request/response lifecycles, health checks, and integration with Serve's autosca
 This fixes the issue where tasks get locked with status=running but never complete
 because they're not being processed by a Serve deployment.
 """
+from seedcore.logging_setup import setup_logging
+setup_logging(app_name="seedcore.organism")
 
 import os
 import sys
@@ -25,7 +27,7 @@ from fastapi import FastAPI
 from seedcore.utils.ray_utils import ensure_ray_initialized
 from pydantic import BaseModel
 
-logger = logging.getLogger("seedcore.organism_service")
+logger = logging.getLogger("seedcore.organism")
 
 # Add the project root to Python path
 sys.path.insert(0, '/app')
