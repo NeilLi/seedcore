@@ -16,7 +16,7 @@ if not logger.handlers:
     handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
     logger.addHandler(handler)
 
-from ..bootstrap import get_miss_tracker, get_shared_cache
+from ..bootstrap import get_mw_store, get_shared_cache
 from ..memory.long_term_memory import LongTermMemoryManager
 
 @ray.remote
@@ -58,7 +58,7 @@ class ObserverAgent:
         self.miss_threshold = int(os.getenv("MISS_THRESHOLD", 2))
         # placeholders – no awaits here
         self._ltm = None
-        self._miss = None
+        self._mw_store = None
         self._cache = None
         self._loop = None
         logger.info("%s created, awaiting ready()", self.agent_id)
@@ -67,10 +67,10 @@ class ObserverAgent:
         """Async bootstrap, must be called once from the driver."""
         # Safe to await here
         from ..memory.long_term_memory import LongTermMemoryManager
-        from ..bootstrap import get_miss_tracker, get_shared_cache
+        from ..bootstrap import get_mw_store, get_shared_cache
 
         self._ltm = LongTermMemoryManager()
-        self._miss = get_miss_tracker()
+        self._mw_store = get_mw_store()
         self._cache = get_shared_cache()
         self._loop = asyncio.create_task(self._monitor())
         logger.info("%s ready – monitoring loop started", self.agent_id)
@@ -88,13 +88,13 @@ class ObserverAgent:
 
     async def _proactive_pass(self):
         """Performs a single pass of proactive caching logic."""
-        if not self._miss:
-            logger.warning("[%s] Miss tracker not available.", self.agent_id)
-            print(f"DEBUG: {self.agent_id} - Miss tracker not available.")
+        if not self._mw_store:
+            logger.warning("[%s] MwStore not available.", self.agent_id)
+            print(f"DEBUG: {self.agent_id} - MwStore not available.")
             return
 
         # Get the top N most frequently missed items
-        hot_items = await self._miss.get_top_n.remote(1)
+        hot_items = await self._mw_store.topn.remote(1)
         if not hot_items:
             return
 

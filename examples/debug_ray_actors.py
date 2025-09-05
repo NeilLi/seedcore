@@ -10,7 +10,7 @@ import ray
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from seedcore.utils.ray_utils import init_ray, get_ray_cluster_info
+from seedcore.utils.ray_utils import ensure_ray_initialized, get_ray_cluster_info
 from seedcore.config.ray_config import get_ray_config
 
 def test_simple_ray_actor():
@@ -110,7 +110,7 @@ def main():
     
     # Initialize Ray
     print("🔗 Initializing Ray...")
-    success = init_ray()
+    success = ensure_ray_initialized()
     if not success:
         print("❌ Failed to initialize Ray")
         return

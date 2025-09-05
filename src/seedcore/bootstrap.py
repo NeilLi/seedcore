@@ -18,7 +18,7 @@ from typing import Any, Optional, TYPE_CHECKING
 # This prevents Ray initialization when the module is imported
 
 # Import the ACTOR CLASSES (must be decorated with @ray.remote)
-from .memory.working_memory import MissTracker, SharedCache  # type: ignore
+from .memory.working_memory import SharedCache  # type: ignore
 from .memory.mw_store import MwStore  # type: ignore
 
 # -----------------------------------------------------------------------------
@@ -135,17 +135,6 @@ def bootstrap_actors():
         # Lazy import Ray only when needed
         import ray
         
-        logger.info("🔍 Creating miss_tracker actor...")
-        # Apply @ray.remote decorator to the class if not already decorated
-        if not hasattr(MissTracker, 'remote'):
-            RayMissTracker = ray.remote(MissTracker)
-        else:
-            RayMissTracker = MissTracker
-        miss_tracker = RayMissTracker.options(
-            name="miss_tracker", lifetime="detached", namespace=ns, get_if_exists=True
-        ).remote()
-        logger.info(f"✅ miss_tracker created: {miss_tracker}")
-        
         logger.info("🔍 Creating shared_cache actor...")
         # Apply @ray.remote decorator to the class if not already decorated
         if not hasattr(SharedCache, 'remote'):
@@ -169,7 +158,7 @@ def bootstrap_actors():
         logger.info(f"✅ mw_store created: {mw_store}")
         
         logger.info("🎉 All singleton actors bootstrapped successfully!")
-        return miss_tracker, shared_cache, mw_store
+        return shared_cache, mw_store
         
     except Exception as e:
         logger.error(f"❌ Bootstrap failed: {e}")
@@ -179,18 +168,6 @@ def bootstrap_actors():
 
 # Convenience accessors (match names used elsewhere in the codebase)
 
-def get_miss_tracker():
-    # Lazy import Ray only when needed
-    import ray
-    ns = _resolve_ns()
-    # Apply @ray.remote decorator to the class if not already decorated
-    if not hasattr(MissTracker, 'remote'):
-        RayMissTracker = ray.remote(MissTracker)
-    else:
-        RayMissTracker = MissTracker
-    return RayMissTracker.options(
-        name="miss_tracker", lifetime="detached", namespace=ns, get_if_exists=True
-    ).remote()
 
 def get_shared_cache():
     # Lazy import Ray only when needed
@@ -220,7 +197,6 @@ def get_mw_store():  # note: **mw**, not mv
 
 __all__ = [
     "bootstrap_actors",
-    "get_miss_tracker",
     "get_shared_cache",
     "get_mw_store",
     "get_ray_namespace",

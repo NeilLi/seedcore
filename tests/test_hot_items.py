@@ -1,12 +1,12 @@
 import ray
 import json
 from src.seedcore.memory.working_memory import MwManager
-from src.seedcore.bootstrap import get_miss_tracker
-from src.seedcore.utils.ray_utils import init_ray
+from src.seedcore.bootstrap import get_mw_store
+from src.seedcore.utils.ray_utils import ensure_ray_initialized
 
 def test_hot_items():
     print("--- Testing Hot Items Tracking ---")
-    init_ray()
+    ensure_ray_initialized()
     
     # Create a MwManager
     mw_manager = MwManager(organ_id="test_organ")
@@ -15,13 +15,13 @@ def test_hot_items():
     test_item_id = "test_item_123"
     print(f"Simulating misses for {test_item_id}...")
     
-    # Get the miss tracker
-    miss_tracker = get_miss_tracker()
+    # Get the mw store
+    mw_store = get_mw_store()
     
     # Simulate some misses
     for i in range(5):
         print(f"Simulating miss #{i+1}")
-        miss_tracker.incr.remote(test_item_id)
+        mw_store.incr.remote(test_item_id)
     
     # Check hot items
     print("Checking hot items...")

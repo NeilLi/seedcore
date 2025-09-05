@@ -8,9 +8,23 @@ integrating with the SeedCore architecture for memory, energy, and lifecycle man
 import dspy
 import json
 import logging
-from typing import Dict, Any, Optional, List, Union
+import hashlib
+import os
+from typing import Dict, Any, Optional, List, Union, cast
 from dataclasses import dataclass
 from enum import Enum
+
+# Try to use MwManager if present; degrade gracefully if not.
+try:
+    from src.seedcore.memory.mw_manager import MwManager, get_shared_cache, get_mw_store
+    _MW_AVAILABLE = True
+except Exception:
+    MwManager = None  # type: ignore
+    get_shared_cache = None  # type: ignore
+    get_mw_store = None  # type: ignore
+    _MW_AVAILABLE = False
+
+MW_ENABLED = os.getenv("MW_ENABLED", "1") in {"1", "true", "True"}
 
 # Import the new centralized result schema
 from ..models.result_schema import (
@@ -272,6 +286,67 @@ class CognitiveCore(dspy.Module):
         }
         
         logger.info(f"Initialized CognitiveCore with {llm_provider} and model {model}")
+
+        # ### MW INTEGRATION: lightweight per-agent managers cache
+        self._mw_enabled = bool(MW_ENABLED and _MW_AVAILABLE)
+        self._mw_by_agent: Dict[str, MwManager] = {} if self._mw_enabled else {}
+        if self._mw_enabled:
+            logger.info("MwManager integration: ENABLED")
+        else:
+            logger.info("MwManager integration: DISABLED (missing module or env)")
+
+    # ### MW INTEGRATION: helpers
+    def _stable_hash(self, task_type: CognitiveTaskType, agent_id: str, input_data: Dict[str, Any]) -> str:
+        """Stable hash of inputs (drop obviously-ephemeral fields if present)."""
+        # Shallow sanitize to improve cache hit rate.
+        sanitized = dict(input_data)
+        for k in list(sanitized.keys()):
+            if k in {"correlation_id", "timestamp", "now", "request_id"}:
+                sanitized.pop(k, None)
+        payload = json.dumps({"t": task_type.value, "a": agent_id, "d": sanitized}, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+    def _mw(self, agent_id: str) -> Optional[MwManager]:
+        if not self._mw_enabled:
+            return None
+        mgr = self._mw_by_agent.get(agent_id)
+        if mgr is None:
+            try:
+                mgr = MwManager(agent_id)  # per-agent "organ" id keeps keys well-namespaced
+                self._mw_by_agent[agent_id] = mgr
+            except Exception as e:
+                logger.debug("MwManager unavailable (init failed): %s", e)
+                return None
+        return mgr
+
+    def _mw_cache_get_sync(self, agent_id: str, key: str) -> Optional[Dict[str, Any]]:
+        """Synchronous global get via SharedCache. Safe to no-op."""
+        if not self._mw_enabled:
+            return None
+        try:
+            import ray
+            shared = get_shared_cache()
+            val = ray.get(shared.get.remote(key))  # sync; CognitiveCore.forward is sync
+            if isinstance(val, dict):
+                logger.info("MW cache HIT: %s", key)
+                return cast(Dict[str, Any], val)
+        except Exception as e:
+            logger.debug("MW cache get failed (%s): %s", key, e)
+        return None
+
+    def _mw_cache_set_async(self, mgr: MwManager, key: str, value: Dict[str, Any]) -> None:
+        """Best-effort write-through (fire-and-forget)."""
+        try:
+            mgr.set_global_item(key, value)
+        except Exception as e:
+            logger.debug("MW cache set failed (%s): %s", key, e)
+
+    def _mw_record_miss(self, mgr: MwManager, item_id: str) -> None:
+        """Record demand for what was asked (topN telemetry)."""
+        try:
+            mgr.mw_store.incr.remote(item_id)  # non-blocking
+        except Exception as e:
+            logger.debug("MW miss record failed (%s): %s", item_id, e)
     
     def forward(self, context: CognitiveContext) -> Dict[str, Any]:
         """
@@ -284,34 +359,70 @@ class CognitiveCore(dspy.Module):
             Dictionary containing the cognitive task results
         """
         try:
-            # Get the appropriate handler for the task type
             handler = self.task_handlers.get(context.task_type)
             if not handler:
                 raise ValueError(f"Unsupported task type: {context.task_type}")
-            
-            # Prepare input data based on task type
+
+            # ### MW INTEGRATION: fast-path cache lookup
+            mw_mgr = self._mw(context.agent_id)
+            cache_key = None
+            cached: Optional[Dict[str, Any]] = None
+            if mw_mgr:
+                try:
+                    cache_key = f"cc:res:{context.task_type.value}:{self._stable_hash(context.task_type, context.agent_id, context.input_data)}"
+                    cached = self._mw_cache_get_sync(context.agent_id, cache_key)
+                except Exception as e:
+                    logger.debug("MW cache probe failed: %s", e)
+
+            if cached:
+                # Return cached result with light metadata update
+                cached_out = dict(cached)
+                cached_out.update({
+                    "task_type": context.task_type.value,
+                    "agent_id": context.agent_id,
+                    "success": True,
+                    "model_used": self.model,
+                    "provider": self.llm_provider,
+                    "metadata": {**cached.get("metadata", {}), "mw_cache": "hit"},
+                })
+                return cached_out
+
+            # Prepare & execute
             input_data = self._prepare_input_data(context)
-            
-            # Execute the cognitive task
+            if mw_mgr:
+                self._mw_record_miss(mw_mgr, f"cc:task:{context.task_type.value}")
+
             result = handler(**input_data)
-            
-            # Process and format the result
+
             processed_result = self._format_result(result, context)
-            
-            # Add metadata
             processed_result.update({
                 "task_type": context.task_type.value,
                 "agent_id": context.agent_id,
                 "success": True,
                 "model_used": self.model,
-                "provider": self.llm_provider
+                "provider": self.llm_provider,
+                "metadata": {**processed_result.get("metadata", {}), "mw_cache": "miss"},
             })
-            
+
+            # ### MW INTEGRATION: write-through of result
+            if mw_mgr and cache_key:
+                self._mw_cache_set_async(mw_mgr, cache_key, processed_result)
+
+            # ### MW INTEGRATION: special case for memory synthesis — store insight globally
+            if mw_mgr and context.task_type == CognitiveTaskType.MEMORY_SYNTHESIS:
+                try:
+                    goal = context.input_data.get("synthesis_goal", "")
+                    frags = context.input_data.get("memory_fragments", [])
+                    insight_key = hashlib.sha1(json.dumps({"g": goal, "f": frags}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                    global_key = f"cc:insight:{context.agent_id}:{insight_key}"
+                    self._mw_cache_set_async(mw_mgr, global_key, processed_result)
+                except Exception as e:
+                    logger.debug("MW insight write-through failed: %s", e)
+
             logger.info(f"Completed cognitive task {context.task_type.value} for agent {context.agent_id}")
             return processed_result
-            
+
         except Exception as e:
-            # Handle both enum and string task types
             task_type_str = context.task_type.value if hasattr(context.task_type, 'value') else str(context.task_type)
             logger.error(f"Error in cognitive task {task_type_str}: {e}")
             return {
@@ -588,4 +699,36 @@ def plan_new_task_with_robust_context(task_desc: str, agent_id: str):
 # --- Example Usage ---
 if __name__ == "__main__":
     task_description = "Design a plan to build a new web-based task management feature using a high-performance Python framework and a scalable database."
-    plan_new_task_with_robust_context(task_desc=task_description, agent_id="agent-008") 
+    plan_new_task_with_robust_context(task_desc=task_description, agent_id="agent-008")
+    
+    # ### MW INTEGRATION: Quick smoke test (shows cache hit)
+    print("\n" + "="*60)
+    print("MW INTEGRATION SMOKE TEST")
+    print("="*60)
+    
+    # Pre-req: have Ray & actors available, or set AUTO_CREATE=1
+    initialize_cognitive_core()  # your existing init function
+
+    core = get_cognitive_core()
+    ctx = CognitiveContext(
+        agent_id="agent-demo",
+        task_type=CognitiveTaskType.DECISION_MAKING,
+        input_data={
+            "decision_context": {"choices": ["A","B"], "goal": "pick-best"},
+            "historical_data": {"seen": []},
+            "facts_summary": "none",
+            "relevant_facts": [],
+        },
+    )
+
+    print("First call (expect mw_cache=miss):")
+    result1 = core.forward(ctx)
+    print(json.dumps(result1, indent=2))
+
+    print("\nSecond call (expect mw_cache=hit):")
+    result2 = core.forward(ctx)
+    print(json.dumps(result2, indent=2))
+    
+    print("\n" + "="*60)
+    print("SMOKE TEST COMPLETE")
+    print("="*60) 

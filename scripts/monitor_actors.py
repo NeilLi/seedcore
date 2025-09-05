@@ -28,7 +28,7 @@ def monitor_actors():
         
         # Import required modules
         try:
-            from src.seedcore.bootstrap import get_miss_tracker, get_shared_cache
+            from src.seedcore.bootstrap import get_mw_store, get_shared_cache
             from src.seedcore.agents.observer_agent import ObserverAgent
         except ImportError as e:
             print(f"⚠️  Could not import seedcore modules: {e}")
@@ -41,24 +41,24 @@ def monitor_actors():
         
         actors_status = {}
         
-        # MissTracker
+        # MwStore
         try:
-            miss_tracker = get_miss_tracker()
+            mw_store = get_mw_store()
             # Try to get some basic info
             try:
                 # This might fail if no misses recorded yet
-                top_misses = ray.get(miss_tracker.get_top_n.remote(1))
-                actors_status["MissTracker"] = {
+                top_misses = ray.get(mw_store.topn.remote(1))
+                actors_status["MwStore"] = {
                     "status": "✅ Running",
                     "top_misses": len(top_misses) if top_misses else 0
                 }
             except:
-                actors_status["MissTracker"] = {
+                actors_status["MwStore"] = {
                     "status": "✅ Running",
                     "top_misses": 0
                 }
         except Exception as e:
-            actors_status["MissTracker"] = {
+            actors_status["MwStore"] = {
                 "status": f"❌ Error: {str(e)[:50]}",
                 "top_misses": 0
             }

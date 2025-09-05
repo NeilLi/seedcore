@@ -28,10 +28,10 @@ def test_imports():
     log.info("🔍 Testing imports...")
     
     try:
-        from seedcore.memory.working_memory import MissTracker, SharedCache
-        log.info("✅ MissTracker and SharedCache imported successfully")
+        from seedcore.memory.working_memory import MwManager, SharedCache
+        log.info("✅ MwManager and SharedCache imported successfully")
     except Exception as e:
-        log.error(f"❌ Failed to import MissTracker/SharedCache: {e}")
+        log.error(f"❌ Failed to import MwManager/SharedCache: {e}")
         return False
     
     try:
@@ -128,5 +128,6 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
 
 
