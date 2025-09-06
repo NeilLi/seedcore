@@ -148,13 +148,11 @@ class TestAsyncDatabaseOperations:
         if not os.getenv("POSTGRES_HOST") and not os.getenv("PG_DSN"):
             pytest.skip("No PostgreSQL connection configured")
         
-        async for session in get_async_pg_session():
-            try:
-                result = await session.execute(text("SELECT 1 as test_value"))
-                row = result.fetchone()
-                assert row.test_value == 1
-            finally:
-                await session.close()
+        from seedcore.database import get_async_pg_session_factory
+        async with get_async_pg_session_factory()() as session:
+            result = await session.execute(text("SELECT 1 as test_value"))
+            row = result.fetchone()
+            assert row.test_value == 1
     
     @pytest.mark.asyncio
     async def test_async_mysql_connection(self):
@@ -164,13 +162,11 @@ class TestAsyncDatabaseOperations:
         if not os.getenv("MYSQL_HOST") and not os.getenv("MYSQL_DSN"):
             pytest.skip("No MySQL connection configured")
         
-        async for session in get_async_mysql_session():
-            try:
-                result = await session.execute(text("SELECT 1 as test_value"))
-                row = result.fetchone()
-                assert row.test_value == 1
-            finally:
-                await session.close()
+        from seedcore.database import get_async_mysql_session_factory
+        async with get_async_mysql_session_factory()() as session:
+            result = await session.execute(text("SELECT 1 as test_value"))
+            row = result.fetchone()
+            assert row.test_value == 1
     
     @pytest.mark.asyncio
     async def test_neo4j_connection(self):
@@ -266,15 +262,14 @@ class TestConcurrentOperations:
             pytest.skip("No PostgreSQL connection configured")
         
         async def execute_async_query(query_id: int) -> Dict[str, Any]:
-            async for session in get_async_pg_session():
+            from seedcore.database import get_async_pg_session_factory
+            async with get_async_pg_session_factory()() as session:
                 try:
                     result = await session.execute(text(f"SELECT {query_id} as query_id"))
                     row = result.fetchone()
                     return {"query_id": row.query_id, "success": True}
                 except Exception as e:
                     return {"query_id": query_id, "success": False, "error": str(e)}
-                finally:
-                    await session.close()
         
         # Execute 10 concurrent async queries
         tasks = [execute_async_query(i) for i in range(10)]
@@ -431,7 +426,8 @@ class TestConnectionPoolStress:
             pytest.skip("No PostgreSQL connection configured")
         
         async def stress_operation(operation_id: int):
-            async for session in get_async_pg_session():
+            from seedcore.database import get_async_pg_session_factory
+            async with get_async_pg_session_factory()() as session:
                 try:
                     # Simulate some work
                     await asyncio.sleep(0.01)
@@ -440,8 +436,6 @@ class TestConnectionPoolStress:
                     return {"operation_id": row.op_id, "success": True}
                 except Exception as e:
                     return {"operation_id": operation_id, "success": False, "error": str(e)}
-                finally:
-                    await session.close()
         
         # Execute many concurrent operations
         tasks = [stress_operation(i) for i in range(50)]
@@ -543,11 +537,9 @@ class TestPerformance:
             pytest.skip("No PostgreSQL connection configured")
         
         async def quick_query():
-            async for session in get_async_pg_session():
-                try:
-                    await session.execute(text("SELECT 1"))
-                finally:
-                    await session.close()
+            from seedcore.database import get_async_pg_session_factory
+            async with get_async_pg_session_factory()() as session:
+                await session.execute(text("SELECT 1"))
         
         start_time = time.time()
         
