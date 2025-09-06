@@ -28,6 +28,10 @@ import asyncio
 import logging
 import os
 import time
+import heapq
+import hashlib
+import bisect
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -37,49 +41,15 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from ..utils.ray_utils import ensure_ray_initialized
 
 # -------------------------
-# Optional bootstrap helper
+# Memory configuration
 # -------------------------
-def _bootstrap_namespace() -> Optional[str]:
-    """Try to import a project helper (optional). Falls back to env."""
-    try:
-        # If your project exposes a bootstrap namespace helper, use it
-        from src.seedcore.bootstrap import get_ray_namespace  # type: ignore
-        return get_ray_namespace()
-    except Exception:
-        return os.getenv("RAY_NAMESPACE")
+from ..config.mem_config import CONFIG, get_memory_config
 
 try:
     # If MwStore class is available, we can optionally auto-create it
     from src.seedcore.memory.mw_store import MwStore  # type: ignore
 except Exception:  # pragma: no cover - MwStore may not be importable in some contexts
     MwStore = None  # type: ignore
-
-
-# -------------------------
-# Configuration
-# -------------------------
-@dataclass(frozen=True)
-class MwConfig:
-    # Ray
-    ray_address: str = os.getenv("RAY_ADDRESS", "auto")
-    namespace: Optional[str] = _bootstrap_namespace()
-
-    # Actor names
-    mw_actor_name: str = os.getenv("MW_ACTOR_NAME", "mw")
-    shared_cache_name: str = os.getenv("SHARED_CACHE_NAME", "shared_cache")
-
-    # Behavior flags
-    auto_create: bool = os.getenv("AUTO_CREATE", "0") in {"1", "true", "True"}
-
-    # Lookup behavior
-    lookup_retries: int = int(os.getenv("LOOKUP_RETRIES", "12"))
-    lookup_backoff_s: float = float(os.getenv("LOOKUP_BACKOFF_S", "0.5"))
-    lookup_backoff_mult: float = float(os.getenv("LOOKUP_BACKOFF_MULT", "1.5"))
-
-    # Logging
-    log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
-
-CONFIG = MwConfig()
 
 
 # -------------------------
@@ -133,6 +103,76 @@ class SharedCache:
         return dict(self._cache)
 
 
+class NodeCache:
+    """L1 cache: per-node cache with TTL support."""
+    def __init__(self, default_ttl_s: int = 30) -> None:
+        self._data: Dict[str, Tuple[Any, Optional[float]]] = {}  # key -> (val, expire_ts)
+        self._ttl = default_ttl_s
+
+    async def get(self, key: str) -> Optional[Any]:
+        rec = self._data.get(key)
+        if not rec:
+            return None
+        val, exp = rec
+        if exp and exp < time.time():
+            self._data.pop(key, None)
+            return None
+        return val
+
+    async def set(self, key: str, val: Any, ttl_s: Optional[int] = None) -> None:
+        ttl = ttl_s or self._ttl
+        exp = time.time() + ttl
+        self._data[key] = (val, exp)
+
+    async def delete(self, key: str) -> None:
+        self._data.pop(key, None)
+
+
+class SharedCacheShard:
+    """L2 cache: sharded global cache with LRU eviction and TTL."""
+    def __init__(self, max_items: int = 100000, default_ttl_s: int = 3600) -> None:
+        self._map: Dict[str, Tuple[Any, float]] = {}  # key -> (value, expire_ts)
+        self._lru: OrderedDict[str, bool] = OrderedDict()
+        self._heap: List[Tuple[float, str]] = []  # (expire_ts, key)
+        self._max_items = max_items
+        self._ttl = default_ttl_s
+
+    async def get(self, key: str) -> Optional[Any]:
+        rec = self._map.get(key)
+        if not rec:
+            return None
+        val, exp = rec
+        if exp < time.time():
+            await self.delete(key)
+            return None
+        self._lru.move_to_end(key, last=True)
+        return val
+
+    async def set(self, key: str, val: Any, ttl_s: Optional[int] = None) -> None:
+        ttl = ttl_s or self._ttl
+        exp = time.time() + ttl
+        self._map[key] = (val, exp)
+        self._lru[key] = True
+        heapq.heappush(self._heap, (exp, key))
+        await self._evict_if_needed()
+
+    async def delete(self, key: str) -> None:
+        self._map.pop(key, None)
+        self._lru.pop(key, None)
+
+    async def _evict_if_needed(self) -> None:
+        now = time.time()
+        # Evict expired items
+        while self._heap and self._heap[0][0] <= now:
+            _, k = heapq.heappop(self._heap)
+            self._map.pop(k, None)
+            self._lru.pop(k, None)
+        # Evict LRU if too many items
+        while len(self._map) > self._max_items and self._lru:
+            k, _ = self._lru.popitem(last=False)
+            self._map.pop(k, None)
+
+
 class MwStore:
     """
     Tracks item frequencies/misses; returns hot items.
@@ -157,6 +197,92 @@ class MwStore:
 
     def snapshot(self) -> Dict[str, int]:
         return dict(self._counts)
+
+# -------------------------
+# Consistent Hashing for Shards
+# -------------------------
+class _HashRing:
+    """Consistent hashing ring for shard distribution."""
+    def __init__(self, nodes: List[str], vnodes: int = 64) -> None:
+        pairs = []
+        for n in nodes:
+            for v in range(vnodes):
+                h = int(hashlib.md5(f"{n}#{v}".encode()).hexdigest(), 16)
+                pairs.append((h, n))
+        pairs.sort()
+        self._hs = [h for h, _ in pairs]
+        self._ns = [n for _, n in pairs]
+
+    def node_for(self, key: str) -> str:
+        h = int(hashlib.md5(key.encode()).hexdigest(), 16)
+        i = bisect.bisect(self._hs, h) % len(self._ns)
+        return self._ns[i]
+
+
+# Global shard management
+_RING: Optional[_HashRing] = None
+_SHARDS: Dict[str, Any] = {}
+
+
+def _get_shard_handles(num_shards: Optional[int] = None, namespace: Optional[str] = None) -> Tuple[_HashRing, Dict[str, Any]]:
+    """Initialize shard handles and hash ring."""
+    import ray
+    num_shards = num_shards or CONFIG.num_shards
+    namespace = namespace or CONFIG.namespace
+    names = CONFIG.shard_names
+    handles = {}
+    for nm in names:
+        try:
+            h = ray.get_actor(nm, namespace=namespace)
+        except Exception:
+            if CONFIG.auto_create:
+                h = _remoteify(SharedCacheShard).options(
+                    name=nm, 
+                    lifetime="detached", 
+                    namespace=namespace,
+                    num_cpus=0,
+                    max_concurrency=2000
+                ).remote(CONFIG.max_items_per_shard, CONFIG.l2_ttl_s)
+            else:
+                raise
+        handles[nm] = h
+    ring = _HashRing(names, vnodes=CONFIG.vnodes_per_shard)
+    return ring, handles
+
+
+def _shard_for(key: str) -> Any:
+    """Get the appropriate shard for a key."""
+    global _RING, _SHARDS
+    if _RING is None or not _SHARDS:
+        _RING, _SHARDS = _get_shard_handles()
+    nm = _RING.node_for(key)
+    return _SHARDS[nm]
+
+
+def get_node_cache() -> Any:
+    """Get or create the node cache for the current node."""
+    import ray
+    from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+    
+    ctx = ray.get_runtime_context()
+    node_id = ctx.get_node_id()
+    name = CONFIG.get_node_cache_name(node_id)
+    
+    try:
+        return ray.get_actor(name, namespace=CONFIG.namespace)
+    except Exception:
+        if CONFIG.auto_create:
+            return _remoteify(NodeCache).options(
+                name=name,
+                lifetime="detached",
+                namespace=CONFIG.namespace,
+                num_cpus=0,
+                max_concurrency=1000,
+                scheduling_strategy=NodeAffinitySchedulingStrategy(node_id=node_id, soft=False)
+            ).remote(CONFIG.l1_ttl_s)
+        else:
+            raise
+
 
 # -------------------------
 # Ray bootstrap
@@ -309,40 +435,68 @@ class MwManager:
 
     # ---- async APIs ----
     async def get_item_async(self, item_id: str) -> Optional[Any]:
-        """Check global cache, then organ-local cache; record a miss in MwStore if not found."""
-        shared_cache = get_shared_cache()
-        gkey = self._global_key(item_id)
-
-        try:
-            global_val = await _await_ref(shared_cache.get.remote(gkey))
-        except Exception as e:
-            logger.error(
-                "SharedCache.get failed",
-                extra={"organ": self.organ_id, "namespace": self.namespace, "key": gkey, "error": str(e)},
-            )
-            global_val = None
-
-        if global_val is not None:
-            logger.info(
-                "HIT(GLOBAL)",
-                extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
-            )
-            return global_val
-
+        """Check L0 (organ-local) -> L1 (node) -> L2 (sharded global) cache hierarchy."""
         okey = self._organ_key(item_id)
+        gkey = self._global_key(item_id)
+        
+        # L0: Check organ-local cache first (fastest)
         if okey in self._cache:
             logger.info(
-                "HIT(ORGAN)",
+                "HIT(L0)",
                 extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
             )
             return self._cache[okey]
 
+        # L1: Check node cache
+        try:
+            node_cache = get_node_cache()
+            val = await _await_ref(node_cache.get.remote(gkey))
+            if val is not None:
+                logger.info(
+                    "HIT(L1)",
+                    extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
+                )
+                # Populate L0 cache
+                self._cache[okey] = val
+                return val
+        except Exception as e:
+            logger.error(
+                "NodeCache.get failed",
+                extra={"organ": self.organ_id, "namespace": self.namespace, "key": gkey, "error": str(e)},
+            )
+
+        # L2: Check sharded global cache
+        try:
+            shard = _shard_for(item_id)
+            val = await _await_ref(shard.get.remote(gkey))
+            if val is not None:
+                logger.info(
+                    "HIT(L2)",
+                    extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
+                )
+                # Populate L1 and L0 caches
+                try:
+                    node_cache = get_node_cache()
+                    node_cache.set.remote(gkey, val, ttl_s=CONFIG.l1_ttl_s)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to populate L1 cache",
+                        extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id, "error": str(e)},
+                    )
+                self._cache[okey] = val
+                return val
+        except Exception as e:
+            logger.error(
+                "ShardCache.get failed",
+                extra={"organ": self.organ_id, "namespace": self.namespace, "key": gkey, "error": str(e)},
+            )
+
+        # Miss: record in MwStore
         logger.warning(
             "MISS",
             extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
         )
         try:
-            # record miss
             self.mw_store.incr.remote(item_id)
         except Exception as e:
             logger.error(
@@ -377,14 +531,31 @@ class MwManager:
         """Set an organ-local cached value (not visible to other organs)."""
         self._cache[self._organ_key(item_id)] = value
 
-    def set_global_item(self, item_id: str, value: Any) -> None:
-        """Write-through to SharedCache (cluster-wide)."""
-        shared_cache = get_shared_cache()
+    def set_global_item(self, item_id: str, value: Any, ttl_s: Optional[int] = None) -> None:
+        """Write-through to all cache levels (L0, L1, L2)."""
+        okey = self._organ_key(item_id)
+        gkey = self._global_key(item_id)
+        
+        # L0: Update organ-local cache
+        self._cache[okey] = value
+        
+        # L1: Update node cache
         try:
-            shared_cache.set.remote(self._global_key(item_id), value)
+            node_cache = get_node_cache()
+            node_cache.set.remote(gkey, value, ttl_s=CONFIG.l1_ttl_s)
         except Exception as e:
             logger.error(
-                "set_global_item error",
+                "Failed to update L1 cache",
+                extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id, "error": str(e)},
+            )
+        
+        # L2: Update sharded global cache
+        try:
+            shard = _shard_for(item_id)
+            shard.set.remote(gkey, value, ttl_s=ttl_s)
+        except Exception as e:
+            logger.error(
+                "Failed to update L2 cache",
                 extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id, "error": str(e)},
             )
 

@@ -18,8 +18,9 @@ from typing import Any, Optional, TYPE_CHECKING
 # This prevents Ray initialization when the module is imported
 
 # Import the ACTOR CLASSES (must be decorated with @ray.remote)
-from .memory.working_memory import SharedCache  # type: ignore
+from .memory.working_memory import SharedCache, SharedCacheShard, NodeCache  # type: ignore
 from .memory.mw_store import MwStore  # type: ignore
+from .config.mem_config import CONFIG as MEMORY_CONFIG  # type: ignore
 
 # -----------------------------------------------------------------------------
 # Config & logging
@@ -31,6 +32,12 @@ class _Cfg:
     ray_host: str = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
     ray_port: str = os.getenv("RAY_PORT", "10001")
     ray_address: str = os.getenv("RAY_ADDRESS", f"ray://{os.getenv('RAY_HOST', 'seedcore-svc-head-svc')}:{os.getenv('RAY_PORT', '10001')}")
+    
+    # Cache configuration
+    num_shards: int = int(os.getenv("CACHE_NUM_SHARDS", "16"))
+    shard_max_items: int = int(os.getenv("SHARD_MAX_ITEMS", "100000"))
+    shard_cache_ttl: int = int(os.getenv("SHARD_CACHE_TTL", "3600"))
+    node_cache_ttl: int = int(os.getenv("NODE_CACHE_TTL", "30"))
 
 CFG = _Cfg()
 
@@ -166,6 +173,95 @@ def bootstrap_actors():
         logger.error(f"❌ Traceback: {traceback.format_exc()}")
         raise
 
+
+def bootstrap_memory_actors():
+    """Bootstrap memory subsystem actors in dedicated mem-dev namespace."""
+    # Early return if bootstrap is optional and environment variable is set
+    if os.getenv("SEEDCORE_BOOTSTRAP_OPTIONAL") == "1":
+        logger.info("🚀 Bootstrap optional - skipping memory actor creation")
+        return None, None, []
+    
+    # Use dedicated memory namespace
+    memory_ns = MEMORY_CONFIG.namespace
+    logger.info("Bootstrapping memory actors in namespace %s", memory_ns)
+
+    try:
+        # Lazy import Ray only when needed
+        import ray
+        
+        logger.info("🔍 Creating shared_cache actor in memory namespace...")
+        # Apply @ray.remote decorator to the class if not already decorated
+        if not hasattr(SharedCache, 'remote'):
+            RaySharedCache = ray.remote(SharedCache)
+        else:
+            RaySharedCache = SharedCache
+        shared_cache = RaySharedCache.options(
+            name=MEMORY_CONFIG.shared_cache_name, lifetime="detached", namespace=memory_ns, get_if_exists=True
+        ).remote()
+        logger.info(f"✅ shared_cache created: {shared_cache}")
+        
+        logger.info("🔍 Creating mw_store actor in memory namespace...")
+        # Apply @ray.remote decorator to the class if not already decorated
+        if not hasattr(MwStore, 'remote'):
+            RayMwStore = ray.remote(MwStore)
+        else:
+            RayMwStore = MwStore
+        mw_store = RayMwStore.options(
+            name=MEMORY_CONFIG.mw_actor_name, lifetime="detached", namespace=memory_ns, get_if_exists=True
+        ).remote()
+        logger.info(f"✅ mw_store created: {mw_store}")
+        
+        # Create sharded cache actors in parallel batches
+        logger.info(f"🔍 Creating {MEMORY_CONFIG.num_shards} sharded cache actors in memory namespace...")
+        shard_handles = []
+        
+        # Apply @ray.remote decorator to the class if not already decorated
+        if not hasattr(SharedCacheShard, 'remote'):
+            RaySharedCacheShard = ray.remote(SharedCacheShard)
+        else:
+            RaySharedCacheShard = SharedCacheShard
+        
+        # Create shards in parallel batches to avoid sequential bottleneck
+        batch_size = min(MEMORY_CONFIG.bootstrap_batch_size, MEMORY_CONFIG.num_shards)
+        for batch_start in range(0, MEMORY_CONFIG.num_shards, batch_size):
+            batch_end = min(batch_start + batch_size, MEMORY_CONFIG.num_shards)
+            batch_shards = []
+            
+            # Create batch of shard actors
+            for i in range(batch_start, batch_end):
+                shard_name = MEMORY_CONFIG.get_shard_name(i)
+                try:
+                    shard = RaySharedCacheShard.options(
+                        name=shard_name, 
+                        lifetime="detached", 
+                        namespace=memory_ns, 
+                        get_if_exists=True,
+                        num_cpus=0,
+                        max_concurrency=2000
+                    ).remote(MEMORY_CONFIG.max_items_per_shard, MEMORY_CONFIG.l2_ttl_s)
+                    batch_shards.append((i, shard_name, shard))
+                except Exception as e:
+                    logger.error(f"❌ Failed to create {shard_name}: {e}")
+                    raise
+            
+            # Wait for batch to be ready and log results
+            for i, shard_name, shard in batch_shards:
+                shard_handles.append(shard)
+                logger.info(f"✅ {shard_name} created: {shard}")
+            
+            # Log progress
+            if batch_end < MEMORY_CONFIG.num_shards:
+                logger.info(f"   Progress: {batch_end}/{MEMORY_CONFIG.num_shards} shards created...")
+        
+        logger.info("🎉 All memory actors bootstrapped successfully!")
+        return shared_cache, mw_store, shard_handles
+        
+    except Exception as e:
+        logger.error(f"❌ Memory bootstrap failed: {e}")
+        import traceback
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
+        raise
+
 # Convenience accessors (match names used elsewhere in the codebase)
 
 
@@ -197,8 +293,11 @@ def get_mw_store():  # note: **mw**, not mv
 
 __all__ = [
     "bootstrap_actors",
+    "bootstrap_memory_actors",
     "get_shared_cache",
     "get_mw_store",
     "get_ray_namespace",
     "_resolve_ns",
+    "SharedCacheShard",
+    "NodeCache",
 ]

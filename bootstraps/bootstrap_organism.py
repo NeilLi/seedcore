@@ -143,8 +143,9 @@ def _init_via_ray(cfg: dict) -> bool:
         # Bootstrap required singleton actors before organism initialization
         log.info("🚀 Bootstrapping required singleton actors...")
         try:
-            from seedcore.bootstrap import bootstrap_actors
-            bootstrap_actors()
+            from seedcore.bootstrap import bootstrap_actors, bootstrap_memory_actors
+            bootstrap_actors()  # Core system actors in seedcore-dev namespace
+            bootstrap_memory_actors()  # Memory actors in mem-dev namespace
             log.info("✅ Singleton actors (mw, miss_tracker, shared_cache) bootstrapped successfully")
         except Exception as e:
             log.warning(f"⚠️ Failed to bootstrap singleton actors: {e}")
@@ -165,8 +166,9 @@ def _init_via_http(cfg: dict) -> bool:
     # Bootstrap required singleton actors before HTTP organism initialization
     log.info("🚀 Bootstrapping required singleton actors via HTTP path...")
     try:
-        from seedcore.bootstrap import bootstrap_actors
-        bootstrap_actors()
+        from seedcore.bootstrap import bootstrap_actors, bootstrap_memory_actors
+        bootstrap_actors()  # Core system actors in seedcore-dev namespace
+        bootstrap_memory_actors()  # Memory actors in mem-dev namespace
         log.info("✅ Singleton actors (mw, miss_tracker, shared_cache) bootstrapped successfully")
     except Exception as e:
         log.warning(f"⚠️ Failed to bootstrap singleton actors: {e}")

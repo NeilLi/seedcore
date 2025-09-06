@@ -1582,8 +1582,9 @@ class OrganismManager:
         # Bootstrap required singleton actors
         try:
             logger.info("🚀 Bootstrapping required singleton actors...")
-            from ..bootstrap import bootstrap_actors
-            bootstrap_actors()
+            from ..bootstrap import bootstrap_actors, bootstrap_memory_actors
+            bootstrap_actors()  # Core system actors in seedcore-dev namespace
+            bootstrap_memory_actors()  # Memory actors in mem-dev namespace
             logger.info("✅ Singleton actors bootstrapped successfully")
         except Exception as e:
             logger.error(f"⚠️ Failed to bootstrap singleton actors: {e}", exc_info=True)
