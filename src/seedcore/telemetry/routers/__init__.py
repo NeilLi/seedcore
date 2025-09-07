@@ -27,6 +27,7 @@ def include_all(app: FastAPI) -> None:
     app.include_router(actions_router, prefix='/actions')
     app.include_router(admin_router, prefix='/admin')
     app.include_router(agents_router, prefix='/agents')
+    app.include_router(agents_router, prefix='/tier0')  # Also include agents router under /tier0 for tier0/agents/state
     app.include_router(coordinator_router, prefix='/coordinator')
     app.include_router(dspy_router, prefix='/dspy')
     app.include_router(energy_router, prefix='/energy')
