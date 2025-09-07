@@ -221,4 +221,4 @@ async def stop_metrics_integration():
 
 def get_metrics_service() -> Optional[MetricsIntegrationService]:
     """Get the global metrics integration service instance."""
-    return _metrics_service 
+    return _metrics_service

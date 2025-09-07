@@ -32,7 +32,7 @@ from typing import List, Dict, Any
 import time
 from contextlib import asynccontextmanager
 # import redis
-from ..telemetry.stats import StatsCollector
+from ..telemetry.services.stats import StatsCollector
 from ..energy.api import energy_gradient_payload, _ledger
 from ..energy.pair_stats import PairStatsTracker
 from ..control.fast_loop import fast_loop_select_agent
@@ -74,7 +74,7 @@ from ..memory.backends.neo4j_graph import Neo4jGraph
 from ..memory.consolidation_logic import consolidate_batch
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST  # type: ignore
 from fastapi import Response  # type: ignore
-from ..telemetry.metrics import COSTVQ, ENERGY_SLOPE, MEM_WRITES
+from ..telemetry.services.metrics import COSTVQ, ENERGY_SLOPE, MEM_WRITES
 from ..control.memory.meta_controller import adjust
 import asyncio
 from ..api.routers.mfb_router import mfb_router
@@ -640,7 +640,7 @@ async def sync_counters():
         total, = await c.fetchrow("SELECT COUNT(*) FROM holons;")
         MEM_WRITES.labels(tier="Mlt").inc(total)
         avg_cost, = await c.fetchrow("SELECT AVG((meta->>'stored_bytes')::float / GREATEST((meta->>'raw_bytes')::int,1)) FROM holons")
-        from ..telemetry.metrics import COSTVQ
+        from ..telemetry.services.metrics import COSTVQ
         COSTVQ.set(avg_cost or 0)
     finally:
         await c.close()
@@ -756,7 +756,7 @@ async def log_energy_event(event: dict):
             r = float(event.get('r', 1.0))
             # Update COSTVQ gauge if available
             try:
-                from ..telemetry.metrics import COSTVQ
+                from ..telemetry.services.metrics import COSTVQ
                 COSTVQ.set(cost_vq)
             except Exception:
                 pass
@@ -2086,8 +2086,8 @@ async def metrics():
 @app.get("/health")
 async def health():
     import time
-    from ..telemetry.stats import StatsCollector
-    from ..telemetry.metrics import ENERGY_SLOPE
+    from ..telemetry.services.stats import StatsCollector
+    from ..telemetry.services.metrics import ENERGY_SLOPE
     mw_staleness = app.state.stats.mw_stats().get("avg_staleness_s", 0)
     energy_slope = ENERGY_SLOPE._value.get()
     # Track how long energy_slope has been positive

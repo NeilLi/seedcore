@@ -6,7 +6,7 @@ from .backends.pgvector_backend import PgVectorStore
 from .backends.neo4j_graph import Neo4jGraph
 from .holon_fabric import HolonFabric
 from .consolidation_worker import vq_vae_compress
-from ..telemetry.metrics import COSTVQ, MEM_WRITES, ENERGY_SLOPE
+from ..telemetry.services.metrics import COSTVQ, MEM_WRITES, ENERGY_SLOPE
 
 previous_cost_vq = 0.0
 
