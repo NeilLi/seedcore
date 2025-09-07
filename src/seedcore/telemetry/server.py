@@ -109,7 +109,7 @@ from ..models.result_schema import (
 # from ..serve.cognitive_serve import CognitiveCoreClient
 from ..energy.weights import EnergyWeights
 from ..energy.calculator import energy_and_grad
-from ..energy.state import UnifiedState, AgentSnapshot, OrganState, SystemState, MemoryVector
+# State classes moved to organism_manager.py and StateAggregator class
 from ..hgnn.pattern_shim import SHIM
 from ..energy.energy_persistence import EnergyLedgerStore
 
@@ -465,71 +465,8 @@ def _get_tier0_manager():
     except Exception:
         return None
 
-def _get_ma_stats() -> dict:
-    try:
-        if tier0_manager is None:
-            return {"count": 0, "error": "tier0_manager_not_available"}
-        return {"count": len(tier0_manager.list_agents())}
-    except Exception:
-        return {}
-
-
-def _get_mw_stats() -> dict:
-    try:
-        return app.state.stats.mw_stats()
-    except Exception:
-        return {}
-
-
-def _get_mlt_stats() -> dict:
-    try:
-        return app.state.mem.get_memory_stats() if hasattr(app.state, "mem") else {}
-    except Exception:
-        return {}
-
-
-def _get_mfb_stats() -> dict:
-    try:
-        return {"incidents": 0}
-    except Exception:
-        return {}
-
-
-def build_unified_state(agent_ids: list[str]) -> UnifiedState:
-    tm = _get_tier0_manager()
-    if tm is None:
-        # Return empty state if tier0_manager is not available
-        return UnifiedState(
-            agents={}, 
-            organs={}, 
-            system=SystemState(E_patterns=np.array([])), 
-            memory=MemoryVector(ma={}, mw={}, mlt={}, mfb={})
-        )
-    
-    agents: dict[str, AgentSnapshot] = {}
-    for agent_id in agent_ids:
-        ag = tm.get_agent(agent_id)
-        if not ag:
-            continue
-        hb = ray.get(ag.get_heartbeat.remote())
-        agents[agent_id] = AgentSnapshot(
-            h=np.array(hb.get('state_embedding_h') or [], dtype=np.float32),
-            p=hb.get('role_probs', {}),
-            c=float(hb.get('performance_metrics', {}).get('capability_score_c', 0.0)),
-            mem_util=float(hb.get('performance_metrics', {}).get('mem_util', 0.0)),
-            lifecycle=str(hb.get('lifecycle', {}).get('state', 'Employed')),
-        )
-
-    organs: dict[str, OrganState] = {}
-    E_vec, _emap = SHIM.get_E_patterns()
-    system = SystemState(E_patterns=E_vec)
-    memory = MemoryVector(
-        ma=_get_ma_stats(),
-        mw=_get_mw_stats(),
-        mlt=_get_mlt_stats(),
-        mfb=_get_mfb_stats(),
-    )
-    return UnifiedState(agents=agents, organs=organs, system=system, memory=memory)
+# State aggregation functions moved to organism_manager.py and StateAggregator class
+# Use /energy/unified_state endpoint instead
 
 class _Ctl:
     tau: float = 0.3

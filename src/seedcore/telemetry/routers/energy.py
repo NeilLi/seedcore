@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Query
+from typing import Optional, List
 import time
 import logging
 from ...energy.pair_stats import PairStatsTracker
 from ...utils.ray_utils import ensure_ray_initialized
+from ...organs.organism_manager import organism_manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -221,3 +223,113 @@ async def get_energy_logs(limit: int = 100):
     except Exception as e:
         logger.error(f"Failed to retrieve energy logs: {e}")
         return {"status": "error", "message": str(e)}
+
+@router.get("/unified_state")
+async def get_unified_state(agent_ids: Optional[List[str]] = Query(None, description="List of agent IDs to include")):
+    """
+    Get unified state for energy calculations and monitoring.
+    
+    This endpoint provides the main entry point for state aggregation,
+    implementing Paper §3.1 requirements for light aggregators from
+    live Ray actors and memory managers.
+    
+    Args:
+        agent_ids: Optional list of agent IDs to include. If None, includes all agents.
+        
+    Returns:
+        UnifiedState object containing complete system state
+    """
+    try:
+        if organism_manager is None:
+            return {
+                "error": "Organism manager not initialized",
+                "status": "error"
+            }
+        
+        # Get unified state from organism manager
+        unified_state = await organism_manager.get_unified_state(agent_ids)
+        
+        # Convert to JSON-serializable format
+        result = {
+            "agents": {
+                agent_id: {
+                    "h": agent.h.tolist() if hasattr(agent.h, 'tolist') else agent.h,
+                    "p": agent.p,
+                    "c": agent.c,
+                    "mem_util": agent.mem_util,
+                    "lifecycle": agent.lifecycle
+                }
+                for agent_id, agent in unified_state.agents.items()
+            },
+            "organs": {
+                organ_id: {
+                    "h": organ.h.tolist() if hasattr(organ.h, 'tolist') else organ.h,
+                    "P": organ.P.tolist() if hasattr(organ.P, 'tolist') else organ.P,
+                    "v_pso": organ.v_pso.tolist() if organ.v_pso is not None and hasattr(organ.v_pso, 'tolist') else organ.v_pso
+                }
+                for organ_id, organ in unified_state.organs.items()
+            },
+            "system": {
+                "h_hgnn": unified_state.system.h_hgnn.tolist() if unified_state.system.h_hgnn is not None and hasattr(unified_state.system.h_hgnn, 'tolist') else unified_state.system.h_hgnn,
+                "E_patterns": unified_state.system.E_patterns.tolist() if unified_state.system.E_patterns is not None and hasattr(unified_state.system.E_patterns, 'tolist') else unified_state.system.E_patterns,
+                "w_mode": unified_state.system.w_mode.tolist() if unified_state.system.w_mode is not None and hasattr(unified_state.system.w_mode, 'tolist') else unified_state.system.w_mode
+            },
+            "memory": {
+                "ma": unified_state.memory.ma,
+                "mw": unified_state.memory.mw,
+                "mlt": unified_state.memory.mlt,
+                "mfb": unified_state.memory.mfb
+            },
+            "matrices": {
+                "H_matrix": unified_state.H_matrix().tolist(),
+                "P_matrix": unified_state.P_matrix().tolist()
+            },
+            "metadata": {
+                "agent_count": len(unified_state.agents),
+                "organ_count": len(unified_state.organs),
+                "timestamp": time.time()
+            }
+        }
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to get unified state: {e}")
+        return {
+            "error": str(e),
+            "status": "error"
+        }
+
+@router.get("/state_summary")
+async def get_state_summary():
+    """
+    Get a summary of system state for monitoring and debugging.
+    
+    Returns:
+        Dictionary containing state summaries
+    """
+    try:
+        if organism_manager is None:
+            return {
+                "error": "Organism manager not initialized",
+                "status": "error"
+            }
+        
+        # Get all summaries in parallel
+        agent_summary = await organism_manager.get_agent_state_summary()
+        memory_summary = await organism_manager.get_memory_state_summary()
+        system_summary = await organism_manager.get_system_state_summary()
+        
+        return {
+            "agent_summary": agent_summary,
+            "memory_summary": memory_summary,
+            "system_summary": system_summary,
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get state summary: {e}")
+        return {
+            "error": str(e),
+            "status": "error"
+        }

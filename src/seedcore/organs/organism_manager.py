@@ -45,6 +45,7 @@ from typing import Dict, List, Any, Optional, Tuple, Set, TYPE_CHECKING
 # from ray.util.state import list_actors, list_nodes
 
 from .base import Organ
+from .state_aggregator import StateAggregator
 from ..agents import tier0_manager
 
 # Import cognitive client for HGNN escalation
@@ -191,6 +192,9 @@ class OrganismManager:
         
         # Metrics tracking
         self._metrics = {"fast": [], "hgnn": []}
+        
+        # State aggregation
+        self._state_aggregator: Optional[StateAggregator] = None
 
         # SOLUTION: Ray connection is now handled centrally by ray_connector.py
         # This method is no longer needed and has been removed.
@@ -325,13 +329,8 @@ class OrganismManager:
     def _init_routing(self):
         """Initialize routing components after config is loaded."""
         try:
-            # Import RoutingTable if available, otherwise create a simple one
-            try:
-                from .routing import RoutingTable
-                self.routing = RoutingTable()
-            except ImportError:
-                # Fallback to simple routing table
-                self.routing = RoutingTable()
+            # Use the RoutingTable class defined in this file
+            self.routing = RoutingTable()
             self.organ_interfaces: Dict[str, StandardizedOrganInterface] = {}
             
             # Set up default routing rules to avoid cognitive organ for simple queries
@@ -1758,6 +1757,143 @@ class OrganismManager:
             
         except Exception as e:
             logger.error(f"❌ Failed to update task {task_id} status: {e}")
+
+    # ============================================================================
+    # State Aggregation Methods
+    # ============================================================================
+    
+    def _get_state_aggregator(self) -> StateAggregator:
+        """Get or create the state aggregator instance."""
+        if self._state_aggregator is None:
+            self._state_aggregator = StateAggregator(self)
+            logger.info("✅ State aggregator initialized")
+        return self._state_aggregator
+    
+    async def get_unified_state(self, agent_ids: Optional[List[str]] = None):
+        """
+        Get unified state for specified agents or all agents.
+        
+        This method provides the main entry point for state aggregation,
+        implementing Paper §3.1 requirements for light aggregators from
+        live Ray actors and memory managers.
+        
+        Args:
+            agent_ids: List of agent IDs to include, or None for all agents
+            
+        Returns:
+            UnifiedState object containing complete system state
+        """
+        if not self._initialized:
+            logger.warning("Organism not initialized, returning empty state")
+            from ..energy.state import UnifiedState, SystemState, MemoryVector
+            return UnifiedState(
+                agents={},
+                organs={},
+                system=SystemState(),
+                memory=MemoryVector(ma={}, mw={}, mlt={}, mfb={})
+            )
+        
+        aggregator = self._get_state_aggregator()
+        return await aggregator.build_unified_state(agent_ids)
+    
+    async def get_agent_state_summary(self, agent_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Get a summary of agent states for monitoring and debugging.
+        
+        Args:
+            agent_ids: List of agent IDs to include, or None for all agents
+            
+        Returns:
+            Dictionary containing agent state summary
+        """
+        if agent_ids is None:
+            agent_ids = list(self.agent_to_organ_map.keys())
+        
+        summary = {
+            "total_agents": len(agent_ids),
+            "agent_details": {},
+            "organ_distribution": {},
+            "system_health": "unknown"
+        }
+        
+        try:
+            # Get basic agent information
+            for agent_id in agent_ids:
+                organ_id = self.agent_to_organ_map.get(agent_id)
+                summary["agent_details"][agent_id] = {
+                    "organ": organ_id,
+                    "status": "active" if organ_id else "orphaned"
+                }
+                
+                # Count agents per organ
+                if organ_id:
+                    summary["organ_distribution"][organ_id] = summary["organ_distribution"].get(organ_id, 0) + 1
+            
+            # Get system health
+            if self._initialized and len(self.organs) > 0:
+                summary["system_health"] = "healthy"
+            else:
+                summary["system_health"] = "unhealthy"
+            
+            logger.debug(f"Agent state summary: {len(agent_ids)} agents across {len(summary['organ_distribution'])} organs")
+            
+        except Exception as e:
+            logger.error(f"Failed to get agent state summary: {e}")
+            summary["error"] = str(e)
+        
+        return summary
+    
+    async def get_memory_state_summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of memory system state.
+        
+        Returns:
+            Dictionary containing memory state summary
+        """
+        try:
+            aggregator = self._get_state_aggregator()
+            memory_vector = await aggregator.get_memory_stats()
+            
+            summary = {
+                "ma": memory_vector.ma,
+                "mw": memory_vector.mw,
+                "mlt": memory_vector.mlt,
+                "mfb": memory_vector.mfb,
+                "timestamp": time.time()
+            }
+            
+            logger.debug("Memory state summary collected")
+            return summary
+            
+        except Exception as e:
+            logger.error(f"Failed to get memory state summary: {e}")
+            return {"error": str(e), "timestamp": time.time()}
+    
+    async def get_system_state_summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of system-level state.
+        
+        Returns:
+            Dictionary containing system state summary
+        """
+        try:
+            aggregator = self._get_state_aggregator()
+            system_state = await aggregator.get_system_state()
+            
+            summary = {
+                "h_hgnn_available": system_state.h_hgnn is not None,
+                "E_patterns_available": system_state.E_patterns is not None,
+                "E_patterns_shape": system_state.E_patterns.shape if system_state.E_patterns is not None else None,
+                "w_mode_available": system_state.w_mode is not None,
+                "timestamp": time.time()
+            }
+            
+            logger.debug("System state summary collected")
+            return summary
+            
+        except Exception as e:
+            logger.error(f"Failed to get system state summary: {e}")
+            return {"error": str(e), "timestamp": time.time()}
 
 # Global instance for easy access from the API server
 # SOLUTION: Lazy initialization - this will be created by FastAPI lifespan after Ray is connected
