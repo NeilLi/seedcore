@@ -35,6 +35,7 @@ import ray
 import os
 import uuid
 import concurrent.futures
+import numpy as np
 # SOLUTION: Ray connection is now handled centrally by ray_connector.py
 import traceback
 import random
@@ -45,7 +46,8 @@ from typing import Dict, List, Any, Optional, Tuple, Set, TYPE_CHECKING
 # from ray.util.state import list_actors, list_nodes
 
 from .base import Organ
-from .state_aggregator import StateAggregator
+# State aggregation is now handled by the standalone state service
+# from .state_aggregator import StateAggregator
 from ..agents import tier0_manager
 
 # Import cognitive client for HGNN escalation
@@ -193,8 +195,8 @@ class OrganismManager:
         # Metrics tracking
         self._metrics = {"fast": [], "hgnn": []}
         
-        # State aggregation
-        self._state_aggregator: Optional[StateAggregator] = None
+        # State service connection (replaces local state aggregator)
+        self._state_service = None
 
         # SOLUTION: Ray connection is now handled centrally by ray_connector.py
         # This method is no longer needed and has been removed.
@@ -1762,18 +1764,32 @@ class OrganismManager:
     # State Aggregation Methods
     # ============================================================================
     
-    def _get_state_aggregator(self) -> StateAggregator:
-        """Get or create the state aggregator instance."""
-        if self._state_aggregator is None:
-            self._state_aggregator = StateAggregator(self)
-            logger.info("✅ State aggregator initialized")
-        return self._state_aggregator
+    def _get_state_service(self):
+        """Get or connect to the state service."""
+        if self._state_service is None:
+            try:
+                # Try multiple namespaces
+                for namespace in ["seedcore-dev", "serve", AGENT_NAMESPACE, "default"]:
+                    try:
+                        self._state_service = ray.get_actor("StateService", namespace=namespace)
+                        logger.info(f"✅ Connected to state service in namespace: {namespace}")
+                        break
+                    except Exception as e:
+                        logger.debug(f"Failed to connect to state service in namespace {namespace}: {e}")
+                        continue
+                
+                if self._state_service is None:
+                    logger.warning("Failed to connect to state service in any namespace")
+            except Exception as e:
+                logger.warning(f"Failed to connect to state service: {e}")
+                self._state_service = None
+        return self._state_service
     
     async def get_unified_state(self, agent_ids: Optional[List[str]] = None):
         """
         Get unified state for specified agents or all agents.
         
-        This method provides the main entry point for state aggregation,
+        This method delegates to the standalone state service for state aggregation,
         implementing Paper §3.1 requirements for light aggregators from
         live Ray actors and memory managers.
         
@@ -1793,8 +1809,97 @@ class OrganismManager:
                 memory=MemoryVector(ma={}, mw={}, mlt={}, mfb={})
             )
         
-        aggregator = self._get_state_aggregator()
-        return await aggregator.build_unified_state(agent_ids)
+        state_service = self._get_state_service()
+        if state_service is None:
+            logger.error("State service not available, returning empty state")
+            from ..energy.state import UnifiedState, SystemState, MemoryVector
+            return UnifiedState(
+                agents={},
+                organs={},
+                system=SystemState(),
+                memory=MemoryVector(ma={}, mw={}, mlt={}, mfb={})
+            )
+        
+        try:
+            # Call state service to get unified state
+            response = await state_service.get_unified_state.remote(
+                agent_ids=agent_ids,
+                include_organs=True,
+                include_system=True,
+                include_memory=True
+            )
+            
+            if not response.get("success"):
+                logger.error(f"State service failed: {response.get('error')}")
+                from ..energy.state import UnifiedState, SystemState, MemoryVector
+                return UnifiedState(
+                    agents={},
+                    organs={},
+                    system=SystemState(),
+                    memory=MemoryVector(ma={}, mw={}, mlt={}, mfb={})
+                )
+            
+            # Parse the response back into UnifiedState object
+            state_dict = response["unified_state"]
+            
+            # Parse agents
+            agents = {}
+            for agent_id, agent_data in state_dict.get("agents", {}).items():
+                from ..energy.state import AgentSnapshot
+                agents[agent_id] = AgentSnapshot(
+                    h=np.array(agent_data["h"], dtype=np.float32),
+                    p=agent_data["p"],
+                    c=agent_data["c"],
+                    mem_util=agent_data["mem_util"],
+                    lifecycle=agent_data["lifecycle"]
+                )
+            
+            # Parse organs
+            organs = {}
+            for organ_id, organ_data in state_dict.get("organs", {}).items():
+                from ..energy.state import OrganState
+                organs[organ_id] = OrganState(
+                    h=np.array(organ_data["h"], dtype=np.float32),
+                    P=np.array(organ_data["P"], dtype=np.float32),
+                    v_pso=np.array(organ_data["v_pso"], dtype=np.float32) if organ_data.get("v_pso") else None
+                )
+            
+            # Parse system
+            system_data = state_dict.get("system", {})
+            from ..energy.state import SystemState
+            system = SystemState(
+                h_hgnn=np.array(system_data["h_hgnn"], dtype=np.float32) if system_data.get("h_hgnn") else None,
+                E_patterns=np.array(system_data["E_patterns"], dtype=np.float32) if system_data.get("E_patterns") else None,
+                w_mode=np.array(system_data["w_mode"], dtype=np.float32) if system_data.get("w_mode") else None
+            )
+            
+            # Parse memory
+            memory_data = state_dict.get("memory", {})
+            from ..energy.state import MemoryVector
+            memory = MemoryVector(
+                ma=memory_data.get("ma", {}),
+                mw=memory_data.get("mw", {}),
+                mlt=memory_data.get("mlt", {}),
+                mfb=memory_data.get("mfb", {})
+            )
+            
+            from ..energy.state import UnifiedState
+            return UnifiedState(
+                agents=agents,
+                organs=organs,
+                system=system,
+                memory=memory
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to get unified state from state service: {e}")
+            from ..energy.state import UnifiedState, SystemState, MemoryVector
+            return UnifiedState(
+                agents={},
+                organs={},
+                system=SystemState(),
+                memory=MemoryVector(ma={}, mw={}, mlt={}, mfb={})
+            )
     
     async def get_agent_state_summary(self, agent_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """

@@ -52,6 +52,30 @@ spec:
               num_gpus: 0
               resources: {"head_node": 0.001}
       
+      - name: state
+        import_path: entrypoints.state_entrypoint:build_state_app
+        route_prefix: /state
+        deployments:
+          - name: StateService
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 0.2
+              num_gpus: 0
+              memory: 1073741824  # 1GB
+              resources: {"head_node": 0.001}
+      
+      - name: energy
+        import_path: entrypoints.energy_entrypoint:build_energy_app
+        route_prefix: /energy
+        deployments:
+          - name: EnergyService
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 0.2
+              num_gpus: 0
+              memory: 1073741824  # 1GB
+              resources: {"head_node": 0.001}
+      
       - name: organism
         import_path: entrypoints.organism_entrypoint:build_organism_app
         route_prefix: /organism
@@ -201,7 +225,7 @@ spec:
             - name: DGL_GRAPHBOLT_SKIP
               value: "0"
             - name: RAY_NAMESPACE
-              value: "seedcore-dev"
+              value: "serve"
             - name: SEEDCORE_NS
               value: "seedcore-dev"
             - name: XGB_STORAGE_PATH

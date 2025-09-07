@@ -240,58 +240,75 @@ async def get_unified_state(agent_ids: Optional[List[str]] = Query(None, descrip
         UnifiedState object containing complete system state
     """
     try:
-        if organism_manager is None:
+        # Get state service - try multiple namespaces
+        state_service = None
+        for namespace in ["serve", "seedcore-dev", "default"]:
+            try:
+                state_service = ray.get_actor("StateService", namespace=namespace)
+                break
+            except Exception as e:
+                logger.debug(f"Failed to get state service in namespace {namespace}: {e}")
+                continue
+        
+        if state_service is None:
             return {
-                "error": "Organism manager not initialized",
+                "error": "State service not available in any namespace",
                 "status": "error"
             }
         
-        # Get unified state from organism manager
-        unified_state = await organism_manager.get_unified_state(agent_ids)
+        # Get unified state from state service
+        response = await state_service.get_unified_state.remote(
+            agent_ids=agent_ids,
+            include_organs=True,
+            include_system=True,
+            include_memory=True
+        )
         
-        # Convert to JSON-serializable format
-        result = {
-            "agents": {
-                agent_id: {
-                    "h": agent.h.tolist() if hasattr(agent.h, 'tolist') else agent.h,
-                    "p": agent.p,
-                    "c": agent.c,
-                    "mem_util": agent.mem_util,
-                    "lifecycle": agent.lifecycle
-                }
-                for agent_id, agent in unified_state.agents.items()
-            },
-            "organs": {
-                organ_id: {
-                    "h": organ.h.tolist() if hasattr(organ.h, 'tolist') else organ.h,
-                    "P": organ.P.tolist() if hasattr(organ.P, 'tolist') else organ.P,
-                    "v_pso": organ.v_pso.tolist() if organ.v_pso is not None and hasattr(organ.v_pso, 'tolist') else organ.v_pso
-                }
-                for organ_id, organ in unified_state.organs.items()
-            },
-            "system": {
-                "h_hgnn": unified_state.system.h_hgnn.tolist() if unified_state.system.h_hgnn is not None and hasattr(unified_state.system.h_hgnn, 'tolist') else unified_state.system.h_hgnn,
-                "E_patterns": unified_state.system.E_patterns.tolist() if unified_state.system.E_patterns is not None and hasattr(unified_state.system.E_patterns, 'tolist') else unified_state.system.E_patterns,
-                "w_mode": unified_state.system.w_mode.tolist() if unified_state.system.w_mode is not None and hasattr(unified_state.system.w_mode, 'tolist') else unified_state.system.w_mode
-            },
-            "memory": {
-                "ma": unified_state.memory.ma,
-                "mw": unified_state.memory.mw,
-                "mlt": unified_state.memory.mlt,
-                "mfb": unified_state.memory.mfb
-            },
-            "matrices": {
-                "H_matrix": unified_state.H_matrix().tolist(),
-                "P_matrix": unified_state.P_matrix().tolist()
-            },
-            "metadata": {
-                "agent_count": len(unified_state.agents),
-                "organ_count": len(unified_state.organs),
-                "timestamp": time.time()
+        if not response.get("success"):
+            return {
+                "error": f"State service failed: {response.get('error')}",
+                "status": "error"
             }
+        
+        # Add matrices and metadata to the response
+        unified_state_dict = response["unified_state"]
+        
+        # Calculate matrices from the state data
+        agents = unified_state_dict.get("agents", {})
+        if agents:
+            # H matrix: stack all agent embeddings
+            h_vectors = []
+            for agent_data in agents.values():
+                h_vectors.append(agent_data["h"])
+            H_matrix = h_vectors if h_vectors else []
+            
+            # P matrix: stack all role probabilities
+            p_vectors = []
+            for agent_data in agents.values():
+                p = agent_data["p"]
+                p_vectors.append([
+                    float(p.get("E", 0.0)),
+                    float(p.get("S", 0.0)),
+                    float(p.get("O", 0.0))
+                ])
+            P_matrix = p_vectors if p_vectors else []
+        else:
+            H_matrix = []
+            P_matrix = []
+        
+        # Add matrices and metadata
+        unified_state_dict["matrices"] = {
+            "H_matrix": H_matrix,
+            "P_matrix": P_matrix
+        }
+        unified_state_dict["metadata"] = {
+            "agent_count": len(agents),
+            "organ_count": len(unified_state_dict.get("organs", {})),
+            "timestamp": time.time(),
+            "collection_time_ms": response.get("collection_time_ms", 0)
         }
         
-        return result
+        return unified_state_dict
         
     except Exception as e:
         logger.error(f"Failed to get unified state: {e}")
@@ -329,6 +346,148 @@ async def get_state_summary():
         
     except Exception as e:
         logger.error(f"Failed to get state summary: {e}")
+        return {
+            "error": str(e),
+            "status": "error"
+        }
+
+@router.post("/compute-energy")
+async def compute_energy_endpoint(
+    agent_ids: Optional[List[str]] = Query(None, description="List of agent IDs to include"),
+    include_gradients: bool = Query(False, description="Include gradient calculations"),
+    include_breakdown: bool = Query(True, description="Include energy term breakdown"),
+    weights: Optional[Dict[str, float]] = None
+):
+    """
+    Compute energy metrics using the energy service.
+    
+    This endpoint delegates to the energy service for energy calculations,
+    providing access to all energy terms and gradients.
+    
+    Args:
+        agent_ids: Optional list of agent IDs to include
+        include_gradients: Whether to include gradient calculations
+        include_breakdown: Whether to include energy term breakdown
+        weights: Optional energy weights override
+        
+    Returns:
+        Energy calculation results
+    """
+    try:
+        # Get energy service - try multiple namespaces
+        energy_service = None
+        for namespace in ["serve", "seedcore-dev", "default"]:
+            try:
+                energy_service = ray.get_actor("EnergyService", namespace=namespace)
+                break
+            except Exception as e:
+                logger.debug(f"Failed to get energy service in namespace {namespace}: {e}")
+                continue
+        
+        if energy_service is None:
+            return {
+                "error": "Energy service not available in any namespace",
+                "status": "error"
+            }
+        
+        # Use the energy service's convenience endpoint
+        response = await energy_service.get_energy_from_state.remote(
+            agent_ids=agent_ids,
+            include_gradients=include_gradients,
+            include_breakdown=include_breakdown
+        )
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Failed to compute energy: {e}")
+        return {
+            "error": str(e),
+            "status": "error"
+        }
+
+@router.post("/optimize-agents")
+async def optimize_agents_endpoint(
+    task: Dict[str, Any],
+    agent_ids: Optional[List[str]] = Query(None, description="List of agent IDs to consider"),
+    max_agents: Optional[int] = Query(None, description="Maximum number of agents to select"),
+    weights: Optional[Dict[str, float]] = None
+):
+    """
+    Optimize agent selection for a given task using the energy service.
+    
+    This endpoint delegates to the energy service for agent optimization,
+    providing energy-based agent selection and role recommendations.
+    
+    Args:
+        task: Task description for optimization
+        agent_ids: Optional list of agent IDs to consider
+        max_agents: Maximum number of agents to select
+        weights: Optional energy weights override
+        
+    Returns:
+        Agent optimization results
+    """
+    try:
+        # Get energy service - try multiple namespaces
+        energy_service = None
+        for namespace in ["serve", "seedcore-dev", "default"]:
+            try:
+                energy_service = ray.get_actor("EnergyService", namespace=namespace)
+                break
+            except Exception as e:
+                logger.debug(f"Failed to get energy service in namespace {namespace}: {e}")
+                continue
+        
+        if energy_service is None:
+            return {
+                "error": "Energy service not available in any namespace",
+                "status": "error"
+            }
+        
+        # Get unified state from state service first - try multiple namespaces
+        state_service = None
+        for namespace in ["serve", "seedcore-dev", "default"]:
+            try:
+                state_service = ray.get_actor("StateService", namespace=namespace)
+                break
+            except Exception as e:
+                logger.debug(f"Failed to get state service in namespace {namespace}: {e}")
+                continue
+        
+        if state_service is None:
+            return {
+                "error": "State service not available in any namespace",
+                "status": "error"
+            }
+        state_response = await state_service.get_unified_state.remote(
+            agent_ids=agent_ids,
+            include_organs=True,
+            include_system=True,
+            include_memory=True
+        )
+        
+        if not state_response.get("success"):
+            return {
+                "error": f"State service failed: {state_response.get('error')}",
+                "status": "error"
+            }
+        
+        # Create optimization request
+        optimization_request = {
+            "unified_state": state_response["unified_state"],
+            "task": task,
+            "max_agents": max_agents,
+            "weights": weights
+        }
+        
+        # Call energy service for optimization
+        response = await energy_service.optimize_agents.remote(optimization_request)
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Failed to optimize agents: {e}")
         return {
             "error": str(e),
             "status": "error"

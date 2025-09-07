@@ -1,0 +1,545 @@
+#!/usr/bin/env python3
+"""
+State Service - Standalone Ray Serve Application
+
+This service provides centralized state aggregation for the SeedCore system.
+It collects state from distributed Ray actors and memory managers, producing
+UnifiedState objects that can be consumed by other services.
+
+Key Features:
+- Efficient batch collection from Ray actors
+- Smart caching to reduce overhead
+- Error handling and graceful degradation
+- Support for all memory tiers (ma, mw, mlt, mfb)
+- Real-time E_patterns collection
+- RESTful API for state queries
+
+This service implements Paper §3.1 requirements for light aggregators from
+live Ray actors and memory managers.
+"""
+
+import asyncio
+import logging
+import time
+from typing import Dict, List, Optional, Any
+import numpy as np
+import ray
+from ray import serve
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
+
+from ..energy.state import (
+    UnifiedState, 
+    AgentSnapshot, 
+    OrganState, 
+    SystemState, 
+    MemoryVector
+)
+from ..organs.aggregators import (
+    AgentStateAggregator,
+    MemoryManagerAggregator,
+    SystemStateAggregator
+)
+
+logger = logging.getLogger(__name__)
+
+# --- Request/Response Models ---
+class StateRequest(BaseModel):
+    agent_ids: Optional[List[str]] = None
+    include_organs: bool = True
+    include_system: bool = True
+    include_memory: bool = True
+
+class StateResponse(BaseModel):
+    success: bool
+    unified_state: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    timestamp: float
+    collection_time_ms: float
+
+class HealthResponse(BaseModel):
+    status: str
+    service: str
+    initialized: bool
+    organism_connected: bool
+    error: Optional[str] = None
+
+# --- FastAPI App ---
+app = FastAPI(title="SeedCore State Service", version="1.0.0")
+
+@serve.deployment(
+    name="StateService",
+    num_replicas=1,
+    max_ongoing_requests=32,
+    ray_actor_options={
+        "num_cpus": 0.5,
+        "num_gpus": 0,
+        "memory": 1073741824,  # 1GB
+        "resources": {"head_node": 0.001},
+    },
+)
+class StateService:
+    """
+    Standalone state aggregation service.
+    
+    This service collects state from distributed Ray actors and memory managers,
+    providing a unified view of the system state for energy calculations,
+    monitoring, and other consumers.
+    """
+    
+    def __init__(self):
+        self.organism_manager = None
+        self._initialized = False
+        self._init_lock = asyncio.Lock()
+        
+        # Initialize specialized aggregators (will be set when organism is connected)
+        self.agent_aggregator = None
+        self.memory_aggregator = None
+        self.system_aggregator = None
+        
+        # ASGI app integration
+        self._app = app
+        
+        logger.info("✅ StateService initialized - will connect to organism manager on first request")
+    
+    async def __call__(self, request):
+        """Handle HTTP requests through FastAPI."""
+        return await self._app(request.scope, request.receive, request.send)
+    
+    async def _serve_asgi_lifespan(self, scope, receive, send):
+        """ASGI lifespan handler for Ray Serve."""
+        if scope["type"] == "lifespan":
+            while True:
+                message = await receive()
+                if message["type"] == "lifespan.startup":
+                    await self._lazy_init()
+                    await send({"type": "lifespan.startup.complete"})
+                elif message["type"] == "lifespan.shutdown":
+                    await send({"type": "lifespan.shutdown.complete"})
+                    break
+    
+    async def _lazy_init(self):
+        """Initialize the service by connecting to the organism manager."""
+        if self._initialized:
+            return
+            
+        async with self._init_lock:
+            if self._initialized:
+                return
+                
+            try:
+                # Get the organism manager from Ray - try multiple namespaces
+                organism_handle = None
+                for namespace in ["seedcore-dev", "serve", "default"]:
+                    try:
+                        organism_handle = ray.get_actor("OrganismManager", namespace=namespace)
+                        logger.info(f"✅ StateService connected to organism manager in namespace: {namespace}")
+                        break
+                    except Exception as e:
+                        logger.debug(f"Failed to connect to organism manager in namespace {namespace}: {e}")
+                        continue
+                
+                if organism_handle is None:
+                    logger.warning("⚠️ Organism manager not available - StateService will work in limited mode")
+                    self._initialized = True
+                    return
+                
+                self.organism_manager = organism_handle
+                
+                # Initialize specialized aggregators
+                self.agent_aggregator = AgentStateAggregator(organism_handle, cache_ttl=5.0)
+                self.memory_aggregator = MemoryManagerAggregator(organism_handle, cache_ttl=5.0)
+                self.system_aggregator = SystemStateAggregator(organism_handle, cache_ttl=5.0)
+                
+                self._initialized = True
+                logger.info("✅ StateService connected to organism manager")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize StateService: {e}")
+                # Don't raise - service can still start and work in limited mode
+                self._initialized = True
+    
+    async def reconfigure(self, config: dict = None):
+        """Ray Serve reconfigure hook."""
+        logger.info("⏳ StateService reconfigure called")
+        try:
+            if not self._initialized:
+                logger.info("🔄 StateService starting lazy initialization...")
+                await self._lazy_init()
+            logger.info("🔁 StateService reconfigure completed successfully")
+        except Exception as e:
+            logger.error(f"❌ StateService reconfigure failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    # --- Health and Status Endpoints ---
+    
+    @app.get("/health", response_model=HealthResponse)
+    async def health(self):
+        """Health check endpoint."""
+        try:
+            organism_connected = False
+            if self.organism_manager:
+                try:
+                    # Try to get organism status to verify connection
+                    await self.organism_manager.get_organism_status.remote()
+                    organism_connected = True
+                except Exception:
+                    organism_connected = False
+            
+            return HealthResponse(
+                status="healthy" if self._initialized and organism_connected else "unhealthy",
+                service="state-service",
+                initialized=self._initialized,
+                organism_connected=organism_connected
+            )
+        except Exception as e:
+            return HealthResponse(
+                status="unhealthy",
+                service="state-service",
+                initialized=self._initialized,
+                organism_connected=False,
+                error=str(e)
+            )
+    
+    @app.get("/status")
+    async def status(self):
+        """Get detailed service status."""
+        try:
+            if not self._initialized:
+                return {
+                    "status": "uninitialized",
+                    "error": "Service not initialized"
+                }
+            
+            # Get organism status
+            organism_status = await self.organism_manager.get_organism_status.remote()
+            
+            return {
+                "status": "healthy",
+                "service": "state-service",
+                "organism_status": organism_status,
+                "aggregators": {
+                    "agent_aggregator": self.agent_aggregator is not None,
+                    "memory_aggregator": self.memory_aggregator is not None,
+                    "system_aggregator": self.system_aggregator is not None
+                }
+            }
+        except Exception as e:
+            return {
+                "status": "unhealthy",
+                "error": str(e)
+            }
+    
+    # --- Core State Collection Endpoints ---
+    
+    @app.post("/unified-state", response_model=StateResponse)
+    async def get_unified_state(self, request: StateRequest):
+        """
+        Get unified state for specified agents or all agents.
+        
+        This is the main endpoint for state aggregation, implementing Paper §3.1
+        requirements for light aggregators from live Ray actors and memory managers.
+        """
+        start_time = time.time()
+        
+        try:
+            if not self._initialized:
+                await self._lazy_init()
+            
+            if not self.organism_manager:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Organism manager not available"
+                )
+            
+            # Get agent IDs if not specified
+            agent_ids = request.agent_ids
+            if agent_ids is None:
+                agent_to_organ_map = await self.organism_manager.get_agent_to_organ_map.remote()
+                agent_ids = list(agent_to_organ_map.keys())
+            
+            logger.info(f"Building unified state for {len(agent_ids)} agents")
+            
+            # Collect all state components in parallel for efficiency
+            tasks = []
+            
+            if request.include_organs:
+                tasks.append(self._get_organ_states())
+            else:
+                tasks.append(asyncio.create_task(asyncio.sleep(0, result={})))
+            
+            if request.include_system:
+                tasks.append(self._get_system_state())
+            else:
+                tasks.append(asyncio.create_task(asyncio.sleep(0, result=SystemState())))
+            
+            if request.include_memory:
+                tasks.append(self._get_memory_stats())
+            else:
+                tasks.append(asyncio.create_task(asyncio.sleep(0, result=MemoryVector(ma={}, mw={}, mlt={}, mfb={}))))
+            
+            # Always collect agent snapshots
+            tasks.append(self._get_agent_snapshots(agent_ids))
+            
+            # Wait for all tasks to complete
+            organ_states, system_state, memory_stats, agent_snapshots = await asyncio.gather(
+                *tasks, return_exceptions=True
+            )
+            
+            # Handle any exceptions
+            if isinstance(agent_snapshots, Exception):
+                logger.error(f"Failed to collect agent snapshots: {agent_snapshots}")
+                agent_snapshots = {}
+            
+            if isinstance(organ_states, Exception):
+                logger.error(f"Failed to collect organ states: {organ_states}")
+                organ_states = {}
+            
+            if isinstance(system_state, Exception):
+                logger.error(f"Failed to collect system state: {system_state}")
+                system_state = SystemState()
+            
+            if isinstance(memory_stats, Exception):
+                logger.error(f"Failed to collect memory stats: {memory_stats}")
+                memory_stats = MemoryVector(ma={}, mw={}, mlt={}, mfb={})
+            
+            # Build unified state
+            unified_state = UnifiedState(
+                agents=agent_snapshots,
+                organs=organ_states,
+                system=system_state,
+                memory=memory_stats
+            )
+            
+            # Convert to JSON-serializable format
+            unified_state_dict = {
+                "agents": {
+                    agent_id: {
+                        "h": agent.h.tolist() if isinstance(agent.h, np.ndarray) else agent.h,
+                        "p": agent.p,
+                        "c": agent.c,
+                        "mem_util": agent.mem_util,
+                        "lifecycle": agent.lifecycle
+                    }
+                    for agent_id, agent in unified_state.agents.items()
+                },
+                "organs": {
+                    organ_id: {
+                        "h": organ.h.tolist() if isinstance(organ.h, np.ndarray) else organ.h,
+                        "P": organ.P.tolist() if isinstance(organ.P, np.ndarray) else organ.P,
+                        "v_pso": organ.v_pso.tolist() if organ.v_pso is not None and isinstance(organ.v_pso, np.ndarray) else organ.v_pso
+                    }
+                    for organ_id, organ in unified_state.organs.items()
+                },
+                "system": {
+                    "h_hgnn": unified_state.system.h_hgnn.tolist() if unified_state.system.h_hgnn is not None and isinstance(unified_state.system.h_hgnn, np.ndarray) else unified_state.system.h_hgnn,
+                    "E_patterns": unified_state.system.E_patterns.tolist() if unified_state.system.E_patterns is not None and isinstance(unified_state.system.E_patterns, np.ndarray) else unified_state.system.E_patterns,
+                    "w_mode": unified_state.system.w_mode.tolist() if unified_state.system.w_mode is not None and isinstance(unified_state.system.w_mode, np.ndarray) else unified_state.system.w_mode
+                },
+                "memory": {
+                    "ma": unified_state.memory.ma,
+                    "mw": unified_state.memory.mw,
+                    "mlt": unified_state.memory.mlt,
+                    "mfb": unified_state.memory.mfb
+                }
+            }
+            
+            collection_time = (time.time() - start_time) * 1000
+            
+            logger.info(f"✅ Unified state built: {len(agent_snapshots)} agents, {len(organ_states)} organs, {collection_time:.2f}ms")
+            
+            return StateResponse(
+                success=True,
+                unified_state=unified_state_dict,
+                timestamp=time.time(),
+                collection_time_ms=collection_time
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to build unified state: {e}")
+            return StateResponse(
+                success=False,
+                error=str(e),
+                timestamp=time.time(),
+                collection_time_ms=(time.time() - start_time) * 1000
+            )
+    
+    @app.get("/unified-state")
+    async def get_unified_state_simple(
+        self,
+        agent_ids: Optional[List[str]] = Query(None, description="List of agent IDs to include"),
+        include_organs: bool = Query(True, description="Include organ states"),
+        include_system: bool = Query(True, description="Include system state"),
+        include_memory: bool = Query(True, description="Include memory statistics")
+    ):
+        """Simplified GET endpoint for unified state."""
+        request = StateRequest(
+            agent_ids=agent_ids,
+            include_organs=include_organs,
+            include_system=include_system,
+            include_memory=include_memory
+        )
+        return await self.get_unified_state(request)
+    
+    # --- Specialized State Collection Methods ---
+    
+    async def _get_agent_snapshots(self, agent_ids: List[str]) -> Dict[str, AgentSnapshot]:
+        """Collect agent state from Ray actors."""
+        if not self.agent_aggregator:
+            return {}
+        return await self.agent_aggregator.collect_agent_snapshots(agent_ids)
+    
+    async def _get_organ_states(self) -> Dict[str, OrganState]:
+        """Collect organ-level state information."""
+        if not self.organism_manager:
+            return {}
+            
+        organ_states = {}
+        
+        try:
+            # Get organ handles from organism manager
+            organ_handles = await self.organism_manager.get_organs.remote()
+            
+            for organ_id, organ_handle in organ_handles.items():
+                try:
+                    # Get organ status
+                    status = await self._async_ray_get(organ_handle.get_status.remote())
+                    
+                    # Get agent handles for this organ
+                    agent_handles = await self._async_ray_get(organ_handle.get_agent_handles.remote())
+                    
+                    if not agent_handles:
+                        # Empty organ
+                        organ_states[organ_id] = OrganState(
+                            h=np.zeros(128, dtype=np.float32),
+                            P=np.zeros((0, 3), dtype=np.float32)
+                        )
+                        continue
+                    
+                    # Collect agent states for this organ
+                    agent_heartbeats = []
+                    for agent_handle in agent_handles.values():
+                        try:
+                            hb = await self._async_ray_get(agent_handle.get_heartbeat.remote())
+                            agent_heartbeats.append(hb)
+                        except Exception as e:
+                            logger.warning(f"Failed to get heartbeat from agent in organ {organ_id}: {e}")
+                            continue
+                    
+                    if not agent_heartbeats:
+                        organ_states[organ_id] = OrganState(
+                            h=np.zeros(128, dtype=np.float32),
+                            P=np.zeros((0, 3), dtype=np.float32)
+                        )
+                        continue
+                    
+                    # Compute organ-level state
+                    h_vectors = []
+                    p_vectors = []
+                    
+                    for hb in agent_heartbeats:
+                        state_embedding = hb.get('state_embedding_h', hb.get('state_embedding', []))
+                        if state_embedding:
+                            h_vectors.append(np.array(state_embedding, dtype=np.float32))
+                        
+                        role_probs = hb.get('role_probs', {})
+                        p_vector = [
+                            float(role_probs.get('E', 0.0)),
+                            float(role_probs.get('S', 0.0)),
+                            float(role_probs.get('O', 0.0))
+                        ]
+                        p_vectors.append(p_vector)
+                    
+                    if h_vectors:
+                        h_matrix = np.vstack(h_vectors)
+                        h_organ = np.mean(h_matrix, axis=0)  # Average agent embedding
+                    else:
+                        h_organ = np.zeros(128, dtype=np.float32)
+                    
+                    if p_vectors:
+                        P_matrix = np.array(p_vectors, dtype=np.float32)
+                    else:
+                        P_matrix = np.zeros((0, 3), dtype=np.float32)
+                    
+                    organ_states[organ_id] = OrganState(
+                        h=h_organ,
+                        P=P_matrix
+                    )
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to collect state for organ {organ_id}: {e}")
+                    continue
+            
+            logger.debug(f"Successfully collected {len(organ_states)} organ states")
+            return organ_states
+            
+        except Exception as e:
+            logger.error(f"Failed to collect organ states: {e}")
+            return {}
+    
+    async def _get_system_state(self) -> SystemState:
+        """Collect system-level state including E_patterns and h_hgnn."""
+        if not self.system_aggregator:
+            return SystemState()
+        return await self.system_aggregator.collect_system_state()
+    
+    async def _get_memory_stats(self) -> MemoryVector:
+        """Collect memory manager statistics from all memory tiers."""
+        if not self.memory_aggregator:
+            return MemoryVector(ma={}, mw={}, mlt={}, mfb={})
+        return await self.memory_aggregator.collect_memory_vector()
+    
+    async def _async_ray_get(self, refs) -> Any:
+        """Safely resolve Ray references with proper error handling."""
+        try:
+            if isinstance(refs, list):
+                return await asyncio.gather(*[self._async_ray_get(ref) for ref in refs])
+            else:
+                # Single reference
+                if hasattr(refs, 'result'):
+                    # DeploymentResponse
+                    return await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: refs.result(timeout_s=15.0)
+                    )
+                else:
+                    # ObjectRef
+                    return await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: ray.get(refs, timeout=15.0)
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to resolve Ray reference: {e}")
+            raise
+
+# --- Main Entrypoint ---
+state_app = StateService.bind()
+
+def build_state_app(args: dict = None):
+    """
+    Builder function for the state service application.
+    
+    This function returns a bound Serve application that can be deployed
+    via Ray Serve YAML configuration.
+    """
+    return StateService.bind()
+
+def main():
+    """Main entrypoint for standalone deployment."""
+    logger.info("🚀 Starting State Service...")
+    try:
+        serve.run(
+            state_app,
+            name="state-service",
+            route_prefix="/state"
+        )
+        logger.info("✅ State service is running.")
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        logger.info("\n🛑 Shutting down gracefully...")
+    finally:
+        serve.shutdown()
+        logger.info("✅ Serve shutdown complete.")
+
+if __name__ == "__main__":
+    main()
