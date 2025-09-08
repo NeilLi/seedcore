@@ -736,5 +736,19 @@ class Tier0MemoryManager:
         
         logger.info("✅ All agents shut down")
 
-# Global instance for easy access
-tier0_manager = Tier0MemoryManager() 
+# Global instance for easy access - lazy initialization
+_tier0_manager_instance = None
+
+def get_tier0_manager():
+    """Get the global Tier0MemoryManager instance, creating it if needed."""
+    global _tier0_manager_instance
+    if _tier0_manager_instance is None:
+        _tier0_manager_instance = Tier0MemoryManager()
+    return _tier0_manager_instance
+
+# For backward compatibility, create a property-like access
+class Tier0ManagerProxy:
+    def __getattr__(self, name):
+        return getattr(get_tier0_manager(), name)
+
+tier0_manager = Tier0ManagerProxy() 

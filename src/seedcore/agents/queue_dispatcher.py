@@ -514,7 +514,7 @@ class Dispatcher:
                     log.debug(f"Failed to start lease renewal for task {tid}: {e}")
 
                 # NOTE: Ray Serve returns a DeploymentResponse; awaiting it is fine.
-                log.info(f"[QueueDispatcher] 📤 About to send task {tid} to OrganismManager for execution")
+                log.info(f"[QueueDispatcher] 📤 About to send task {tid} to Coordinator for routing and execution")
                 log.info(f"[QueueDispatcher] 🎯 Task ID: {tid} | Executing task type: {item['type']}")
                 log.info(f"[QueueDispatcher] 📋 Task payload: {payload.dict()}")
                 log.info(f"[QueueDispatcher] 🔧 Coord handle: {coord_handle}")
@@ -522,11 +522,11 @@ class Dispatcher:
                 try:
                     # Add timeout to prevent hanging on Serve calls
                     CALL_TIMEOUT_S = int(os.getenv("SERVE_CALL_TIMEOUT_S", "120"))
-                    log.info(f"[QueueDispatcher] 🚀 Calling coord_handle.handle_incoming_task.remote() for task {tid} (timeout={CALL_TIMEOUT_S}s)")
+                    log.info(f"[QueueDispatcher] 🚀 Calling coord_handle.route_and_execute.remote() for task {tid} (timeout={CALL_TIMEOUT_S}s)")
                     
-                    fut = coord_handle.handle_incoming_task.remote(payload.dict(), None)
+                    fut = coord_handle.route_and_execute.remote(payload.dict())
                     result: Dict[str, Any] = await asyncio.wait_for(fut, timeout=CALL_TIMEOUT_S)
-                    log.info(f"[QueueDispatcher] ✅ Received result from OrganismManager for task {tid}: {result}")
+                    log.info(f"[QueueDispatcher] ✅ Received result from Coordinator for task {tid}: {result}")
                     
                 except asyncio.TimeoutError:
                     log.warning(f"[QueueDispatcher] ⏰ Serve call timeout for task {tid} after {CALL_TIMEOUT_S}s")
@@ -539,7 +539,7 @@ class Dispatcher:
                     return
                     
                 except Exception as e:
-                    log.error(f"[QueueDispatcher] ❌ Failed to get result from OrganismManager for task {tid}: {e}")
+                    log.error(f"[QueueDispatcher] ❌ Failed to get result from Coordinator for task {tid}: {e}")
                     log.error(f"[QueueDispatcher] 🔧 Exception type: {type(e)}")
                     log.error(f"[QueueDispatcher] 📋 Exception details: {str(e)}")
                     log.error(f"[QueueDispatcher] 🔧 Exception traceback:", exc_info=True)
@@ -722,23 +722,17 @@ class Dispatcher:
         # Recover any tasks owned by this dispatcher on startup
         await self._recover_mine()
 
-        # ✅ Get a handle to the OrganismManager deployment inside the 'organism' app.
-        log.info(f"[QueueDispatcher] 🔍 Getting OrganismManager Serve deployment handle...")
+        # ✅ Get a handle to the Coordinator deployment inside the 'coordinator' app.
+        log.info(f"[QueueDispatcher] 🔍 Getting Coordinator Serve deployment handle...")
         try:
-            coord_handle = serve.get_deployment_handle("OrganismManager", app_name="organism")
-            log.info(f"[QueueDispatcher] ✅ Successfully got OrganismManager handle: {coord_handle}")
+            coord_handle = serve.get_deployment_handle("Coordinator", app_name="coordinator")
+            log.info(f"[QueueDispatcher] ✅ Successfully got Coordinator handle: {coord_handle}")
             
-            # Test the connection with a health check
-            log.info(f"[QueueDispatcher] 🏥 Testing OrganismManager connection with health check...")
-            try:
-                health_result = await coord_handle.health.remote()
-                log.info(f"[QueueDispatcher] ✅ OrganismManager health check passed: {health_result}")
-            except Exception as e:
-                log.warning(f"[QueueDispatcher] ⚠️ OrganismManager health check failed: {e}")
-                log.warning(f"[QueueDispatcher] 🔧 Continuing anyway, but tasks may fail...")
+            # Test the connection with a health check (coordinator doesn't have health endpoint, so we'll skip)
+            log.info(f"[QueueDispatcher] 🏥 Coordinator handle obtained successfully")
                 
         except Exception as e:
-            log.error(f"[QueueDispatcher] ❌ Failed to get OrganismManager handle: {e}")
+            log.error(f"[QueueDispatcher] ❌ Failed to get Coordinator handle: {e}")
             log.error(f"[QueueDispatcher] 🔧 Available deployments: {serve.list_deployments()}")
             raise
 
@@ -1165,7 +1159,7 @@ def start_detached_pipeline(
     reaper.run.remote()
 
     return {
-        "coordinator": "Serve deployment: organism/OrganismManager",
+        "coordinator": "Serve deployment: coordinator/Coordinator",
         "dispatchers": [f"seedcore_dispatcher_{i}" for i in range(dispatcher_count)],
         "reaper": "seedcore_reaper",
         "namespace": RAY_NS,

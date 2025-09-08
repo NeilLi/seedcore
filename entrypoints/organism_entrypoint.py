@@ -328,6 +328,48 @@ class OrganismService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    @app.post("/execute-on-organ")
+    async def execute_on_organ(self, request: Dict[str, Any]):
+        """Execute a task on a specific organ."""
+        try:
+            if not self._initialized:
+                return {"success": False, "error": "Organism not initialized"}
+            
+            organ_id = request.get("organ_id")
+            task = request.get("task", {})
+            organ_timeout_s = request.get("organ_timeout_s", 30.0)
+            
+            if not organ_id:
+                return {"success": False, "error": "organ_id is required"}
+            
+            # Add timeout to task if provided
+            if organ_timeout_s:
+                task["organ_timeout_s"] = organ_timeout_s
+            
+            result = await self.organism_manager.execute_task_on_organ(organ_id, task)
+            return {"success": True, **result}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @app.post("/execute-on-random")
+    async def execute_on_random(self, request: Dict[str, Any]):
+        """Execute a task on a randomly selected organ."""
+        try:
+            if not self._initialized:
+                return {"success": False, "error": "Organism not initialized"}
+            
+            task = request.get("task", {})
+            organ_timeout_s = request.get("organ_timeout_s", 30.0)
+            
+            # Add timeout to task if provided
+            if organ_timeout_s:
+                task["organ_timeout_s"] = organ_timeout_s
+            
+            result = await self.organism_manager.execute_task_on_random_organ(task)
+            return {"success": True, **result}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     # --- Direct Method Access for Backward Compatibility ---
 
     async def handle_incoming_task(self, task: Dict[str, Any], app_state: Dict[str, Any] = None) -> Dict[str, Any]:

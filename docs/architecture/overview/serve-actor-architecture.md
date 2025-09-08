@@ -27,12 +27,12 @@ From `serve status`, the system runs 6 main applications:
 |-------------|---------|---------|----------|
 | **ml_service** | ML inference and model serving | Running | 1 |
 | **cognitive** | Reasoning, planning, and cognitive tasks | Running | 2 |
-| **orchestrator** | System-level orchestration and workflow management | Running | 1 |
+| **coordinator** | Global coordination, routing, and escalation | Running | 1 |
 | **state** | Centralized state aggregation and memory management | Running | 1 |
 | **energy** | Energy tracking and performance metrics | Running | 1 |
-| **organism** | Organism lifecycle and organ coordination | Running | 1 |
+| **organism** | Local organ management and task execution | Running | 1 |
 
-Each application represents a logical service namespace that can contain multiple deployments and replicas. The **cognitive** service runs with 2 replicas for distributed reasoning capabilities.
+Each application represents a logical service namespace that can contain multiple deployments and replicas. The **cognitive** service runs with 2 replicas for distributed reasoning capabilities, while the **coordinator** handles global task routing and escalation decisions.
 
 ## Serve Deployments → Ray Actors
 
@@ -55,12 +55,13 @@ Every deployment spawns one or more **`ServeReplica` actors**, plus global actor
 - **Purpose**: Parallel workers for reasoning and planning tasks
 - **Distribution**: Replicas are distributed across different Ray nodes for redundancy
 
-### 3. Orchestrator → OpsOrchestrator
+### 3. Coordinator → Coordinator
 
-- **ServeDeployment**: `OpsOrchestrator`
+- **ServeDeployment**: `Coordinator`
 - **Replicas**: `1 RUNNING`
 - **Ray Actor ID**: Actor 5
-- **Purpose**: System-level orchestration and external workflow management
+- **Purpose**: Global coordination, task routing, OCPS valve, and HGNN escalation
+- **Route Prefix**: `/pipeline`
 
 ### 4. State → StateService
 
@@ -83,8 +84,9 @@ Every deployment spawns one or more **`ServeReplica` actors**, plus global actor
 - **ServeDeployment**: `OrganismManager`
 - **Replicas**: `1 RUNNING`
 - **Ray Actor ID**: Actor 8
-- **Purpose**: Organism lifecycle management and organ coordination
+- **Purpose**: Local organ management, agent distribution, and direct task execution
 - **Memory**: 2GB allocated for organism state management
+- **Route Prefix**: `/organism`
 
 ## Control Plane Actors
 
@@ -115,19 +117,26 @@ Besides service replicas, Serve maintains several control plane actors:
 
 ### 3. Core Service Interactions
 
-#### OrganismManager & CognitiveService
-- **OrganismManager** (Actor 8) coordinates organism initialization
-- Routes tasks to **organs** (Cognitive, Actuator, Utility)
-- **CognitiveService** (Actors 1 & 4) serves as the "Cognitive organ" backing OrganismManager
+#### Coordinator & OrganismManager
+- **Coordinator** (Actor 5) handles global task routing and coordination
+- Uses OCPS valve for drift detection and escalation decisions
+- Routes tasks to **OrganismManager** for local execution
+- **OrganismManager** (Actor 8) manages organ lifecycle and agent distribution
 
-#### Orchestrator Integration
-- Acts as an external workflow/controller service
-- Communicates with **OrganismManager** and **CognitiveService**
-- Provides system-level orchestration capabilities
+#### CognitiveService Integration
+- **CognitiveService** (Actors 1 & 4) provides reasoning and planning capabilities
+- Called by **Coordinator** for HGNN decomposition and escalation
+- Serves as the "Cognitive organ" for complex task planning
+
+#### Coordinator Service Flow
+- Receives tasks from Queue Dispatcher
+- Applies OCPS valve for fast-path vs escalation decisions
+- Routes simple tasks directly to OrganismManager
+- Escalates complex tasks through CognitiveService for planning
 
 #### MLService Integration
 - Independent ML-focused endpoint
-- Can be called by CognitiveService or Orchestrator for inference workloads
+- Can be called by Coordinator for anomaly detection and ML inference
 - Supports various ML model types and inference patterns
 
 #### StateService Integration
@@ -147,16 +156,16 @@ The SeedCore system implements a sophisticated task workflow that moves through 
 ### 1. Task Arrival and Routing
 
 **Source**: Tasks originate from multiple sources:
-- **OrganismManager** (Serve replica) - Primary task coordinator
+- **Queue Dispatcher** - Primary task coordinator and batch processing
 - **External APIs** - Direct task submission via HTTP/GRPC
-- **Dispatcher services** - Batch task processing
-- **Orchestrator** - Workflow-driven task generation
+- **Coordinator Service** - Global task routing and escalation
+- **OrganismManager** - Local organ management and execution
 
-**Routing Decision**: OrganismManager determines which Organ is responsible for the task based on:
+**Routing Decision**: Coordinator determines task routing based on:
+- OCPS valve drift detection (fast-path vs escalation)
 - Task type and complexity
-- Current system load
-- Agent capability scores
-- Resource availability
+- Current system load and escalation capacity
+- Available organs and agent capabilities
 
 ### 2. Agent Selection and Memory Management
 
@@ -261,25 +270,32 @@ After task completion, the system updates multiple metrics:
 ### High-Level Workflow Summary
 
 ```
-Task Arrival
+Task Arrival (Queue Dispatcher)
      ↓
-OrganismManager → Organ (container)
-     ↓
-Tier0MemoryManager → select best agent(s)
-     ↓
-RayAgent
-├─ Execute task
-│    ├─ Memory lookup: Mw → Mlt → Mfb
-│    ├─ Cognitive reasoning (optional)
-│    └─ Produce result
+Coordinator Service
+├─ OCPS Valve Check (fast-path vs escalation)
 │
-├─ Update performance + energy metrics
-├─ Emit heartbeat
-└─ Possibly archive/log to Mlt & Mfb
+├─ Fast Path: Direct to OrganismManager
+│   └─ Organ (container) → Tier0MemoryManager → RayAgent
+│
+└─ Escalation Path: CognitiveService → OrganismManager
+   ├─ HGNN decomposition (CognitiveService)
+   ├─ Plan validation and execution
+   └─ Organ (container) → Tier0MemoryManager → RayAgent
+       ├─ Execute task
+       │    ├─ Memory lookup: Mw → Mlt → Mfb
+       │    ├─ Cognitive reasoning (optional)
+       │    └─ Produce result
+       │
+       ├─ Update performance + energy metrics
+       ├─ Emit heartbeat
+       └─ Possibly archive/log to Mlt & Mfb
 ```
 
 ### Key Architectural Points
 
+- **Coordinator** = Global coordination, OCPS valve, routing decisions, HGNN escalation
+- **OrganismManager** = Local organ management, agent distribution, direct execution
 - **Tier0MemoryManager** = Registry/selector utility, not a Ray actor
 - **Organ** = Wrapper container, creates and supervises RayAgents
 - **RayAgent** = Real worker, stateful, owns private memory, cognitive access, telemetry
@@ -306,9 +322,9 @@ RayAgent
 │  │                        Serve Applications                               │   │
 │  │                                                                         │   │
 │  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ │   │
-│  │  │ml_service│ │cognitive│ │orchestr │ │  state  │ │ energy  │ │organism │ │   │
+│  │  │ml_service│ │cognitive│ │coordinator│ │  state  │ │ energy  │ │organism │ │   │
 │  │  │         │ │         │ │         │ │         │ │         │ │         │ │   │
-│  │  │MLService│ │Cognitive│ │OpsOrchestr│ │StateSvc │ │EnergySvc│ │OrganismMgr│ │   │
+│  │  │MLService│ │Cognitive│ │Coordinator│ │StateSvc │ │EnergySvc│ │OrganismMgr│ │   │
 │  │  │(Actor 2)│ │(Actor 1,4)│ │(Actor 5)│ │(Actor 9)│ │(Actor 10)│ │(Actor 8)│ │   │
 │  │  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ │   │
 │  └─────────────────────────────────────────────────────────────────────────┘   │
@@ -318,7 +334,7 @@ RayAgent
 │  │                                                                         │   │
 │  │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐     │   │
 │  │  │A 0  │ │A 1  │ │A 2  │ │A 3  │ │A 4  │ │A 5  │ │A 6  │ │A 7  │     │   │
-│  │  │Status│ │Cogn │ │ML   │ │Ctrl │ │Cogn │ │Orch │ │Proxy│ │Proxy│     │   │
+│  │  │Status│ │Cogn │ │ML   │ │Ctrl │ │Cogn │ │Coord│ │Proxy│ │Proxy│     │   │
 │  │  └─────┘ └─────┘ └─────┘ └─────┘ └─────┘ └─────┘ └─────┘ └─────┘     │   │
 │  │                                                                         │   │
 │  │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐                                     │   │

@@ -41,11 +41,11 @@ spec:
               memory: 2147483648  # 2GB
               # resources: {"head_node": 0.001}
       
-      - name: orchestrator
-        import_path: entrypoints.orchestrator:build_orchestrator
-        route_prefix: /orchestrator
+      - name: coordinator
+        import_path: entrypoints.coordinator_entrypoint:build_coordinator
+        route_prefix: /pipeline
         deployments:
-          - name: OpsOrchestrator
+          - name: Coordinator
             num_replicas: 1
             ray_actor_options:
               num_cpus: 0.2
