@@ -8,6 +8,9 @@ that matches the entrypoint interface.
 """
 
 import logging
+import time
+import random
+import asyncio
 from typing import Dict, Any, Optional
 
 try:
@@ -17,6 +20,26 @@ except ImportError:
     HTTPX_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+# Retry configuration
+MAX_RETRIES = 3
+BASE_RETRY_DELAY = 0.15  # Base delay in seconds
+MAX_RETRY_DELAY = 1.0    # Max delay in seconds
+
+async def _retry(async_fn, *, attempts=3, base_delay=0.15, max_delay=1.0, retriable=(httpx.ReadTimeout, httpx.ConnectError, httpx.RemoteProtocolError, httpx.HTTPStatusError)):
+    """Generic retry helper with exponential backoff and jitter."""
+    last_exc = None
+    for i in range(attempts):
+        try:
+            return await async_fn()
+        except retriable as e:
+            last_exc = e
+            # 5xx are retriable; 4xx are not (except 409/429 optionally)
+            if isinstance(e, httpx.HTTPStatusError) and not (500 <= e.response.status_code < 600 or e.response.status_code in (409, 429)):
+                break
+            delay = min(max_delay, base_delay * (2 ** i)) + random.uniform(0, 0.25)
+            await asyncio.sleep(delay)
+    raise last_exc
 
 class CognitiveServiceClient:
     """
@@ -38,7 +61,7 @@ class CognitiveServiceClient:
         
     async def solve_problem(self, **payload: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Call the deployed cognitive service's solve_problem endpoint.
+        Call the deployed cognitive service's solve_problem endpoint with retry logic.
         
         Args:
             **payload: Request payload including agent_id, problem_statement, etc.
@@ -46,27 +69,31 @@ class CognitiveServiceClient:
         Returns:
             Response from cognitive service
         """
-        try:
-            client = self._get_client()
-            
-            # Extract required fields for the cognitive service
-            agent_id = payload.get("agent_id", f"hgnn_planner_{payload.get('task_id', 'unknown')}")
-            problem_statement = payload.get("problem_statement", payload.get("description", str(payload)))
-            
-            # Prepare request for cognitive service
-            request_data = {
-                "agent_id": agent_id,
-                "problem_statement": problem_statement,
-                "constraints": payload.get("constraints", {}),
-                "available_tools": {organ: {"type": "organ"} for organ in payload.get("available_organs", [])}
-            }
-            
+        client = self._get_client()
+        
+        # Extract required fields for the cognitive service
+        agent_id = payload.get("agent_id", f"hgnn_planner_{payload.get('task_id', 'unknown')}")
+        problem_statement = payload.get("problem_statement", payload.get("description", str(payload)))
+        
+        # Prepare request for cognitive service
+        request_data = {
+            "agent_id": agent_id,
+            "problem_statement": problem_statement,
+            "constraints": payload.get("constraints", {}),
+            "available_tools": {organ: {"type": "organ"} for organ in payload.get("available_organs", [])}
+        }
+        
+        async def _do():
             response = await client.post(
                 f"{self.base_url}/cognitive/solve-problem",
                 json=request_data,
                 timeout=self.timeout_s
             )
             response.raise_for_status()
+            return response
+        
+        try:
+            response = await _retry(_do, attempts=MAX_RETRIES, base_delay=BASE_RETRY_DELAY, max_delay=MAX_RETRY_DELAY)
             
             result = response.json()
             if result.get("success"):
@@ -98,12 +125,17 @@ class CognitiveServiceClient:
             }
             
     async def ping(self) -> bool:
-        """Health check to verify the service is reachable."""
-        try:
-            client = self._get_client()
+        """Health check to verify the service is reachable with retry logic."""
+        client = self._get_client()
+        
+        async def _do():
             response = await client.get(f"{self.base_url}/cognitive/health", timeout=2.0)
             return response.status_code == 200
-        except Exception:
+        
+        try:
+            return await _retry(_do, attempts=MAX_RETRIES, base_delay=BASE_RETRY_DELAY, max_delay=MAX_RETRY_DELAY)
+        except Exception as e:
+            logger.debug(f"Cognitive health check failed: {e}")
             return False
             
     def is_healthy(self) -> bool:

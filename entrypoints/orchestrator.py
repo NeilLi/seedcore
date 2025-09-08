@@ -1,4 +1,4 @@
-import os, time, uuid, requests
+import os, time, uuid, random, asyncio
 import httpx
 from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -32,6 +32,11 @@ CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(os.getenv("CIRCUIT_BREAKER_FAILURE_THRES
 CIRCUIT_BREAKER_RECOVERY_TIMEOUT = float(os.getenv("CIRCUIT_BREAKER_RECOVERY_TIMEOUT", "60"))
 _circuit_breaker_state = {}  # service_name -> {failures: int, last_failure: float, state: str}
 
+# Retry configuration
+MAX_RETRIES = int(os.getenv("HTTP_MAX_RETRIES", "3"))
+BASE_RETRY_DELAY = float(os.getenv("HTTP_BASE_RETRY_DELAY", "0.15"))  # Base delay in seconds
+MAX_RETRY_DELAY = float(os.getenv("HTTP_MAX_RETRY_DELAY", "1.0"))  # Max delay in seconds
+
 # Configuration for seedcore-api integration
 SEEDCORE_API_URL = os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002")
 SEEDCORE_API_TIMEOUT = float(os.getenv("SEEDCORE_API_TIMEOUT", "5.0"))
@@ -39,11 +44,10 @@ SEEDCORE_API_TIMEOUT = float(os.getenv("SEEDCORE_API_TIMEOUT", "5.0"))
 def _normalize_http(url_or_host: str, default_port: int = 8000) -> str:
     if "://" not in url_or_host:
         return f"http://{url_or_host}:{default_port}"
-    # If someone set SERVE_GATEWAY with ray:// by mistake, coerce to http:// on same host:port
     parsed = urlparse(url_or_host)
     scheme = "http" if parsed.scheme in ("ray", "grpc", "grpcs") else parsed.scheme
     netloc = parsed.netloc or parsed.path
-    return f"{scheme}://{netloc}"
+    return f"{scheme}://{netloc}".rstrip("/")
 
 def _derive_serve_gateway() -> str:
     # 1) Respect explicit SERVE_GATEWAY if provided
@@ -73,7 +77,7 @@ def _derive_serve_gateway() -> str:
     # 4) Last-resort default (your user-managed stable Serve Service)
     return "http://seedcore-svc-stable-svc:8000"
 
-GATEWAY = _derive_serve_gateway()
+GATEWAY = _derive_serve_gateway().rstrip("/")
 ML = f"{GATEWAY}/ml"
 COG = f"{GATEWAY}/cognitive"
 
@@ -231,72 +235,99 @@ def _record_circuit_breaker_failure(service_name: str):
         state["state"] = "open"
         logger.warning(f"Circuit breaker for {service_name} opened after {state['failures']} failures")
 
+async def _retry(async_fn, *, attempts=3, base_delay=0.15, max_delay=1.0, retriable=(httpx.ReadTimeout, httpx.ConnectError, httpx.RemoteProtocolError, httpx.HTTPStatusError)):
+    """Generic retry helper with exponential backoff and jitter."""
+    last_exc = None
+    for i in range(attempts):
+        try:
+            return await async_fn()
+        except retriable as e:
+            last_exc = e
+            # 5xx are retriable; 4xx are not (except 409/429 optionally)
+            if isinstance(e, httpx.HTTPStatusError) and not (500 <= e.response.status_code < 600 or e.response.status_code in (409, 429)):
+                break
+            delay = min(max_delay, base_delay * (2 ** i)) + random.uniform(0, 0.25)
+            await asyncio.sleep(delay)
+    raise last_exc
+
 async def _apost(client: httpx.AsyncClient, url: str, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
-    """Async POST helper with error handling, circuit breaker, and structured logging."""
+    """Async POST helper with error handling, circuit breaker, retries, and structured logging."""
     if client is None:
         raise HTTPException(status_code=503, detail="HTTP client not initialized - replica may still be starting up")
-    
-    start_time = time.time()
+
+    start = time.time()
     cid = headers.get("X-Correlation-ID", "unknown")
     target = headers.get("X-Target-Service", "unknown")
-    
-    # Check circuit breaker
+
+    # Choose timeout by target **or** URL path as a fallback safety
+    def _timeout_for(url_path: str, target_name: str) -> float:
+        t = ORCHESTRATOR_TIMEOUT
+        low = target_name.lower()
+        if "ml" in low or "/ml/" in url_path:
+            t = ML_SERVICE_TIMEOUT
+        elif "cognitive" in low or "/cognitive/" in url_path:
+            t = COGNITIVE_SERVICE_TIMEOUT
+        elif "organism" in low or "/organism/" in url_path:
+            t = ORGANISM_SERVICE_TIMEOUT
+        return t
+
     if not _check_circuit_breaker(target):
-        raise HTTPException(status_code=503, detail=f"Service {target} is temporarily unavailable (circuit breaker open)")
-    
-    try:
-        # Use appropriate timeout based on target service
-        timeout = ORCHESTRATOR_TIMEOUT
-        if "ml" in target.lower():
-            timeout = ML_SERVICE_TIMEOUT
-        elif "cognitive" in target.lower():
-            timeout = COGNITIVE_SERVICE_TIMEOUT
-        elif "organism" in target.lower():
-            timeout = ORGANISM_SERVICE_TIMEOUT
-        
-        r = await client.post(url, json=payload, headers=headers, timeout=timeout)
+        raise HTTPException(status_code=503, detail=f"Service {target} temporarily unavailable (circuit open)")
+
+    async def _do():
+        r = await client.post(url, json=payload, headers=headers, timeout=_timeout_for(url, target))
         r.raise_for_status()
-        latency_ms = (time.time() - start_time) * 1000
+        return r
+
+    try:
+        r = await _retry(_do, attempts=MAX_RETRIES, base_delay=BASE_RETRY_DELAY, max_delay=MAX_RETRY_DELAY)
+        latency_ms = (time.time() - start) * 1000
         _log_service_call(target, cid, "POST", url, "success", latency_ms)
         _record_circuit_breaker_success(target)
         return r.json()
     except Exception as e:
-        latency_ms = (time.time() - start_time) * 1000
+        latency_ms = (time.time() - start) * 1000
         _log_service_call(target, cid, "POST", url, "error", latency_ms, str(e))
         _record_circuit_breaker_failure(target)
         raise
 
 async def _aget(client: httpx.AsyncClient, url: str, headers: Dict[str, str]) -> Dict[str, Any]:
-    """Async GET helper with error handling, circuit breaker, and structured logging."""
+    """Async GET helper with error handling, circuit breaker, retries, and structured logging."""
     if client is None:
         raise HTTPException(status_code=503, detail="HTTP client not initialized - replica may still be starting up")
-    
-    start_time = time.time()
+
+    start = time.time()
     cid = headers.get("X-Correlation-ID", "unknown")
     target = headers.get("X-Target-Service", "unknown")
-    
-    # Check circuit breaker
+
+    # Choose timeout by target **or** URL path as a fallback safety
+    def _timeout_for(url_path: str, target_name: str) -> float:
+        t = ORCHESTRATOR_TIMEOUT
+        low = target_name.lower()
+        if "ml" in low or "/ml/" in url_path:
+            t = ML_SERVICE_TIMEOUT
+        elif "cognitive" in low or "/cognitive/" in url_path:
+            t = COGNITIVE_SERVICE_TIMEOUT
+        elif "organism" in low or "/organism/" in url_path:
+            t = ORGANISM_SERVICE_TIMEOUT
+        return t
+
     if not _check_circuit_breaker(target):
-        raise HTTPException(status_code=503, detail=f"Service {target} is temporarily unavailable (circuit breaker open)")
-    
-    try:
-        # Use appropriate timeout based on target service
-        timeout = ORCHESTRATOR_TIMEOUT
-        if "ml" in target.lower():
-            timeout = ML_SERVICE_TIMEOUT
-        elif "cognitive" in target.lower():
-            timeout = COGNITIVE_SERVICE_TIMEOUT
-        elif "organism" in target.lower():
-            timeout = ORGANISM_SERVICE_TIMEOUT
-        
-        r = await client.get(url, headers=headers, timeout=timeout)
+        raise HTTPException(status_code=503, detail=f"Service {target} temporarily unavailable (circuit open)")
+
+    async def _do():
+        r = await client.get(url, headers=headers, timeout=_timeout_for(url, target))
         r.raise_for_status()
-        latency_ms = (time.time() - start_time) * 1000
+        return r
+
+    try:
+        r = await _retry(_do, attempts=MAX_RETRIES, base_delay=BASE_RETRY_DELAY, max_delay=MAX_RETRY_DELAY)
+        latency_ms = (time.time() - start) * 1000
         _log_service_call(target, cid, "GET", url, "success", latency_ms)
         _record_circuit_breaker_success(target)
         return r.json()
     except Exception as e:
-        latency_ms = (time.time() - start_time) * 1000
+        latency_ms = (time.time() - start) * 1000
         _log_service_call(target, cid, "GET", url, "error", latency_ms, str(e))
         _record_circuit_breaker_failure(target)
         raise
@@ -486,20 +517,26 @@ class OpsOrchestrator:
 
         logger.info(f"Processing anomaly triage for agent {agent_id}, series length: {len(series)}")
 
-        # 1) Detect anomalies
-        anomalies = await _apost(
-            self._http, f"{ML}/detect/anomaly",
-            {"data": series},
-            _corr_headers("ml_service", cid)
-        )
+        # 1) Detect anomalies (ML) and fetch facts concurrently (if enabled)
+        cid = str(uuid.uuid4())
+        tasks = [
+            _apost(self._http, f"{ML}/detect/anomaly", {"data": series}, _corr_headers("ml_service", cid))
+        ]
+        if FACTS_ENABLED:
+            query = f"anomaly triage {context.get('service','')} {context.get('region','')}"
+            tasks.append(_fetch_facts(query, k=30))
 
-        # (optional) prepare knowledge for cognitive calls
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        anomalies = results[0] if not isinstance(results[0], Exception) else {"anomalies": []}
         knowledge = None
         if FACTS_ENABLED:
-            # craft a basic query; you can do something smarter here
-            query = f"anomaly triage {context.get('service','')} {context.get('region','')}"
-            facts, summary = await _fetch_facts(query, k=30)
-            knowledge = build_knowledge_context(facts, summary)
+            idx = 1
+            if isinstance(results[idx], Exception):
+                logger.warning(f"facts fetch failed: {results[idx]}")
+            else:
+                facts, summary = results[idx]
+                knowledge = build_knowledge_context(facts, summary)
 
         # 2) Explain failure / reason about anomalies
         incident_context = {
@@ -512,7 +549,7 @@ class OpsOrchestrator:
             "agent_id": agent_id,
             "incident_context": incident_context
         }
-        if knowledge and (knowledge.get("facts") or knowledge.get("facts_summary")):
+        if knowledge and (knowledge.get("facts") or knowledge.get("summary")):
             reason_payload["knowledge_context"] = knowledge
 
         logger.info(f"Reasoning about failure for agent {agent_id}, anomaly count: {len(incident_context['anomalies'])}")
@@ -536,13 +573,15 @@ class OpsOrchestrator:
             "decision_context": {
                 "anomaly_count": len(incident_context["anomalies"]),
                 "severity_counts": {
-                    "high": sum(a.get("severity") == "high" for a in incident_context["anomalies"])
+                    "high": sum(1 for a in incident_context["anomalies"] if (a or {}).get("severity") == "high"),
+                    "medium": sum(1 for a in incident_context["anomalies"] if (a or {}).get("severity") == "medium"),
+                    "low": sum(1 for a in incident_context["anomalies"] if (a or {}).get("severity") == "low"),
                 },
                 "meta": context
             },
             "historical_data": {}
         }
-        if knowledge and (knowledge.get("facts") or knowledge.get("facts_summary")):
+        if knowledge and (knowledge.get("facts") or knowledge.get("summary")):
             decision_payload["knowledge_context"] = knowledge
 
         logger.info(f"Making decision for agent {agent_id}")
@@ -859,6 +898,8 @@ class OpsOrchestrator:
     @orch_app.get("/_env")
     async def _env(self):
         """Environment variables endpoint for verification."""
+        if os.getenv("EXPOSE_DEBUG_ENDPOINTS", "false").lower() not in ("1", "true", "yes"):
+            raise HTTPException(status_code=404, detail="Not found")
         keys = [
             "SEEDCORE_PG_DSN",
             "OCPS_DRIFT_THRESHOLD",
@@ -893,11 +934,9 @@ def build_orchestrator(args: dict = None):
     env_vars = {k: ("" if v is None else str(v)) for k, v in env_vars.items()}
 
     return OpsOrchestrator.options(
-        # Put runtime_env under ray_actor_options here
         ray_actor_options={
-            "runtime_env": {
-                "env_vars": env_vars
-            }
+            "num_cpus": float(os.getenv("ORCH_NUM_CPUS", "0.2")),  # <- keep original
+            "runtime_env": {"env_vars": env_vars},
         }
     ).bind()
 
