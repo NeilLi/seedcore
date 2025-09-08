@@ -1,0 +1,468 @@
+# SeedCore v2: Ray Serve Configuration with Placement Groups
+# This YAML fragment demonstrates the placement group policies for OCPS-enabled architecture
+
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: seedcore-v2-svc
+  namespace: seedcore-dev
+spec:
+  serveConfigV2: |
+    # ===================================================================
+    #  OCPS-Enabled Serve Configuration v2
+    # ===================================================================
+    
+    # HTTP proxy configuration
+    http_options:
+      host: 0.0.0.0
+      port: 8000
+      location: HeadOnly
+    
+    # Placement groups for optimized resource allocation
+    placement_groups:
+      # OCPS Pack Group: Low-latency services (OrganismManager, ML, Orchestrator)
+      - name: "ocps_pack_group"
+        strategy: "PACK"
+        bundles:
+          - resources: {"CPU": 1.0, "memory": 2 * 1024**3, "head_node": 0.001}
+            replicas: 1  # OrganismManager
+          - resources: {"CPU": 0.5, "memory": 1 * 1024**3}
+            replicas: 1  # MLService
+          - resources: {"CPU": 0.5, "memory": 1 * 1024**3}
+            replicas: 1  # Orchestrator
+      
+      # Cognitive Pack Group: Fast GNN processing
+      - name: "cognitive_pack_group"
+        strategy: "PACK"
+        bundles:
+          - resources: {"CPU": 0.5, "memory": 1 * 1024**3}
+            replicas: 2  # Fast GNN replicas
+      
+      # Cognitive Spread Group: Deep HGNN processing
+      - name: "cognitive_spread_group"
+        strategy: "SPREAD"
+        bundles:
+          - resources: {"CPU": 2.0, "memory": 4 * 1024**3}
+            replicas: 1  # Deep HGNN replica
+      
+      # State-Energy Spread Group: Distributed state and energy services
+      - name: "state_energy_spread_group"
+        strategy: "SPREAD"
+        bundles:
+          - resources: {"CPU": 0.5, "memory": 1 * 1024**3}
+            replicas: 1  # StateService
+          - resources: {"CPU": 0.5, "memory": 1 * 1024**3}
+            replicas: 1  # EnergyService
+    
+    applications:
+      # ===================================================================
+      #  OCPS-Enhanced OrganismManager
+      # ===================================================================
+      - name: organism
+        import_path: entrypoints.organism_entrypoint_v2:build_organism_app_v2
+        route_prefix: /organism
+        deployments:
+          - name: OrganismManagerV2
+            num_replicas: 1
+            ray_actor_options:
+              placement_group: "ocps_pack_group"
+              placement_group_bundle_index: 0
+              num_cpus: 1.0
+              num_gpus: 0
+              memory: 2147483648  # 2GB
+              resources: {"head_node": 0.001}
+            # OCPS-specific configuration
+            user_config:
+              ocps_threshold_theta: 0.8
+              fast_path_target_ratio: 0.90
+              cusum_reset_threshold: 0.1
+              safety_overlay_enabled: true
+              lipschitz_bound_max: 0.9
+      
+      # ===================================================================
+      #  Two-Tier Cognitive Service (Enhanced with RRF/MMR)
+      # ===================================================================
+      - name: cognitive
+        import_path: entrypoints.cognitive_entrypoint:build_cognitive_app
+        route_prefix: /cognitive
+        deployments:
+          # Fast GNN Processing (PACK placement for low latency)
+          - name: CognitiveServiceFast
+            num_replicas: 2
+            ray_actor_options:
+              placement_group: "cognitive_pack_group"
+              placement_group_bundle_index: 0
+              num_cpus: 0.5
+              num_gpus: 0
+              memory: 1073741824  # 1GB
+            user_config:
+              processing_mode: "fast"
+              target_latency_ms: 200
+              gnn_model_path: "/app/models/fast_gnn.pkl"
+              rrf_fusion_enabled: true
+              mmr_diversity_enabled: true
+              dynamic_token_budget: true
+              cache_ttl_by_task_type: true
+          
+          # Deep HGNN Processing (SPREAD placement for compute isolation)
+          - name: CognitiveServiceDeep
+            num_replicas: 1
+            ray_actor_options:
+              placement_group: "cognitive_spread_group"
+              placement_group_bundle_index: 0
+              num_cpus: 2.0
+              num_gpus: 0
+              memory: 4294967296  # 4GB
+            user_config:
+              processing_mode: "deep"
+              target_latency_ms: 20000
+              hgnn_model_path: "/app/models/deep_hgnn.pkl"
+              safety_validation_enabled: true
+              rrf_fusion_enabled: true
+              mmr_diversity_enabled: true
+              post_condition_checks: true
+              self_consistency_pass: true
+      
+      # ===================================================================
+      #  ML Service (PACK placement for inference latency)
+      # ===================================================================
+      - name: ml_service
+        import_path: src.seedcore.ml.serve_app_v2:build_ml_service_v2
+        route_prefix: /ml
+        deployments:
+          - name: MLServiceV2
+            num_replicas: 1
+            ray_actor_options:
+              placement_group: "ocps_pack_group"
+              placement_group_bundle_index: 1
+              num_cpus: 0.5
+              num_gpus: 0
+              memory: 1073741824  # 1GB
+            user_config:
+              inference_engine: "onnx"
+              target_latency_ms: 100
+              model_cache_size: 512  # MB
+      
+      # ===================================================================
+      #  Unified State Service (SPREAD placement for availability)
+      # ===================================================================
+      - name: state
+        import_path: entrypoints.state_entrypoint_v2:build_state_app_v2
+        route_prefix: /state
+        deployments:
+          - name: StateServiceV2
+            num_replicas: 1
+            ray_actor_options:
+              placement_group: "state_energy_spread_group"
+              placement_group_bundle_index: 0
+              num_cpus: 0.5
+              num_gpus: 0
+              memory: 1073741824  # 1GB
+            user_config:
+              aggregation_latency_target_ms: 50
+              memory_fabric_enabled: true
+              tier25_compression_enabled: true
+              max_freshness_s: 3.0
+      
+      # ===================================================================
+      #  Energy Gradient Service (SPREAD placement for compute isolation)
+      # ===================================================================
+      - name: energy
+        import_path: entrypoints.energy_entrypoint_v2:build_energy_app_v2
+        route_prefix: /energy
+        deployments:
+          - name: EnergyServiceV2
+            num_replicas: 1
+            ray_actor_options:
+              placement_group: "state_energy_spread_group"
+              placement_group_bundle_index: 1
+              num_cpus: 0.5
+              num_gpus: 0
+              memory: 1073741824  # 1GB
+            user_config:
+              gradient_latency_target_ms: 100
+              energy_decomposition_enabled: true
+              balance_optimization_enabled: true
+      
+      # ===================================================================
+      #  Orchestrator Service (PACK placement for coordination latency)
+      # ===================================================================
+      - name: orchestrator
+        import_path: entrypoints.orchestrator_v2:build_orchestrator_v2
+        route_prefix: /orchestrator
+        deployments:
+          - name: OpsOrchestratorV2
+            num_replicas: 1
+            ray_actor_options:
+              placement_group: "ocps_pack_group"
+              placement_group_bundle_index: 2
+              num_cpus: 0.5
+              num_gpus: 0
+              memory: 1073741824  # 1GB
+            user_config:
+              orchestration_latency_target_ms: 500
+              workflow_optimization_enabled: true
+              external_api_integration: true
+
+  # ===================================================================
+  #  Ray Cluster Configuration v2
+  # ===================================================================
+  rayClusterConfig:
+    rayVersion: "2.33.0"
+    
+    # Head Node Specification
+    headGroupSpec:
+      serviceType: ClusterIP
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        dashboard-port: "8265"
+        ray-client-server-port: "10001"
+        num-cpus: "4"  # Increased for OCPS processing
+        
+      template:
+        spec:
+          containers:
+          - name: ray-head
+            image: seedcore:v2-latest
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - secretRef: { name: seedcore-env-secret }
+            env:
+            # OCPS Configuration
+            - name: OCPS_THRESHOLD_THETA
+              value: "0.8"
+            - name: OCPS_FAST_PATH_TARGET_RATIO
+              value: "0.90"
+            - name: OCPS_CUSUM_RESET_THRESHOLD
+              value: "0.1"
+            
+            # Memory Fabric Configuration
+            - name: MEMORY_FABRIC_ENABLED
+              value: "true"
+            - name: TIER25_COMPRESSION_ENABLED
+              value: "true"
+            - name: MEMORY_MAX_FRESHNESS_S
+              value: "3.0"
+            - name: MEMORY_MW_HIT_RATE_TARGET
+              value: "0.95"
+            - name: MEMORY_MLT_HIT_RATE_TARGET
+              value: "0.80"
+            
+            # Safety Configuration
+            - name: SAFETY_OVERLAY_ENABLED
+              value: "true"
+            - name: LIPSCHITZ_BOUND_MAX
+              value: "0.9"
+            - name: ZK_SNARK_ENABLED
+              value: "false"  # Optional
+            - name: TEE_CAPSULES_ENABLED
+              value: "false"  # Optional
+            
+            # Performance Targets
+            - name: FAST_PATH_LATENCY_SLO_MS
+              value: "200"
+            - name: DEEP_PATH_LATENCY_SLO_MS
+              value: "20000"
+            - name: MEMORY_AGGREGATION_LATENCY_SLO_MS
+              value: "50"
+            - name: ENERGY_GRADIENT_LATENCY_SLO_MS
+              value: "100"
+            
+            # Existing environment variables
+            - name: DGL_GRAPHBOLT_SKIP
+              value: "0"
+            - name: RAY_OVERRIDE_RESOURCES
+              value: '{"head_node": 1}'
+            - name: RAY_NAMESPACE
+              value: "seedcore-dev"
+            - name: SEEDCORE_NS
+              value: "seedcore-dev"
+            - name: XGB_STORAGE_PATH
+              value: "/app/data/models"
+            
+            ports:
+              - name: gcs
+                containerPort: 6379
+              - name: dashboard
+                containerPort: 8265
+              - name: client
+                containerPort: 10001
+              - name: serve
+                containerPort: 8000
+              - name: metrics
+                containerPort: 8080
+            
+            resources:
+              requests:
+                cpu: "2"
+                memory: "8Gi"
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+            
+            volumeMounts:
+              - name: xgb-model-storage
+                mountPath: /app/data
+              - name: project-source-volume
+                mountPath: /app
+              - name: ocps-config-volume
+                mountPath: /app/config/ocps
+              - name: memory-fabric-volume
+                mountPath: /app/data/memory_fabric
+            
+            # Health checks with OCPS-specific probes
+            startupProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 5
+              timeoutSeconds: 3
+              failureThreshold: 72
+            
+            readinessProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 5
+              timeoutSeconds: 2
+              failureThreshold: 3
+            
+            livenessProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 5
+              timeoutSeconds: 2
+              failureThreshold: 120
+          
+          volumes:
+            - name: project-source-volume
+              hostPath:
+                path: /project
+                type: DirectoryOrCreate
+            - name: xgb-model-storage
+              persistentVolumeClaim:
+                claimName: xgb-pvc
+            - name: ocps-config-volume
+              configMap:
+                name: ocps-config
+            - name: memory-fabric-volume
+              persistentVolumeClaim:
+                claimName: memory-fabric-pvc
+
+    # Worker Node Specifications
+    workerGroupSpecs:
+    - groupName: ocps-workers
+      replicas: 2
+      rayStartParams:
+        num-cpus: "4"
+      template:
+        spec:
+          containers:
+          - name: ray-worker
+            image: seedcore:v2-latest
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - secretRef: { name: seedcore-env-secret }
+            env:
+            # OCPS Configuration
+            - name: OCPS_THRESHOLD_THETA
+              value: "0.8"
+            - name: OCPS_FAST_PATH_TARGET_RATIO
+              value: "0.90"
+            
+            # Memory Fabric Configuration
+            - name: MEMORY_FABRIC_ENABLED
+              value: "true"
+            - name: TIER25_COMPRESSION_ENABLED
+              value: "true"
+            - name: MEMORY_MAX_FRESHNESS_S
+              value: "3.0"
+            
+            # Existing environment variables
+            - name: DGL_GRAPHBOLT_SKIP
+              value: "0"
+            - name: RAY_NAMESPACE
+              value: "seedcore-dev"
+            - name: SEEDCORE_NS
+              value: "seedcore-dev"
+            - name: XGB_STORAGE_PATH
+              value: "/app/data/models"
+            
+            resources:
+              requests:
+                cpu: "2"
+                memory: "8Gi"
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+            
+            volumeMounts:
+              - name: xgb-model-storage
+                mountPath: /app/data
+              - name: project-source-volume
+                mountPath: /app
+              - name: memory-fabric-volume
+                mountPath: /app/data/memory_fabric
+            
+            readinessProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 5
+              timeoutSeconds: 2
+              failureThreshold: 3
+            
+            livenessProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 5
+              timeoutSeconds: 2
+              failureThreshold: 120
+          
+          volumes:
+            - name: project-source-volume
+              hostPath:
+                path: /project
+                type: DirectoryOrCreate
+            - name: xgb-model-storage
+              persistentVolumeClaim:
+                claimName: xgb-pvc
+            - name: memory-fabric-volume
+              persistentVolumeClaim:
+                claimName: memory-fabric-pvc
+
+---
+# ===================================================================
+#  Supporting ConfigMaps and PVCs
+# ===================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ocps-config
+  namespace: seedcore-dev
+data:
+  ocps.yaml: |
+    threshold_theta: 0.8
+    fast_path_target_ratio: 0.90
+    cusum_reset_threshold: 0.1
+    safety_overlay_enabled: true
+    lipschitz_bound_max: 0.9
+  
+  memory_fabric.yaml: |
+    tier25_compression_enabled: true
+    max_freshness_s: 3.0
+    mw_hit_rate_target: 0.95
+    mlt_hit_rate_target: 0.80
+    tier25_hit_rate_target: 0.90
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: memory-fabric-pvc
+  namespace: seedcore-dev
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 120Gi  # 100GB Mlt + 10GB M2.5 + 10GB buffer
+  storageClassName: gp2

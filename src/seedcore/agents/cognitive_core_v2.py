@@ -44,7 +44,7 @@ from ..models.result_schema import (
     create_cognitive_result, create_error_result, TaskResult
 )
 
-logger = logging.getLogger("cognitiveseedcore.CognitiveCore")
+logger = logging.getLogger("cognitiveseedcore.CognitiveCoreV2")
 
 
 # =============================================================================
@@ -579,7 +579,7 @@ class CapabilityAssessmentSignature(WithKnowledgeMixin, dspy.Signature):
 # Enhanced Cognitive Core with OCPS Integration
 # =============================================================================
 
-class CognitiveCore(dspy.Module):
+class CognitiveCoreV2(dspy.Module):
     """
     Enhanced cognitive core with OCPS integration, cache governance, and post-condition checks.
     
@@ -624,7 +624,7 @@ class CognitiveCore(dspy.Module):
             CognitiveTaskType.CAPABILITY_ASSESSMENT: 1800, # 30 minutes
         }
         
-        logger.info(f"Initialized CognitiveCore with {llm_provider} and model {model}")
+        logger.info(f"Initialized CognitiveCoreV2 with {llm_provider} and model {model}")
 
         # ### MW INTEGRATION: lightweight per-agent managers cache
         self._mw_enabled = bool(MW_ENABLED and _MW_AVAILABLE)
@@ -916,45 +916,3 @@ class CognitiveCore(dspy.Module):
                 "metadata": getattr(result, 'metadata', {}),
                 "error": getattr(result, 'error', None)
             }
-
-
-# =============================================================================
-# Global Cognitive Core Instance Management
-# =============================================================================
-
-COGNITIVE_CORE_INSTANCE: Optional[CognitiveCore] = None
-
-
-def initialize_cognitive_core(llm_provider: str = "openai", model: str = "gpt-4o", context_broker: Optional[ContextBroker] = None) -> CognitiveCore:
-    """Initialize the global cognitive core instance."""
-    global COGNITIVE_CORE_INSTANCE
-    
-    if COGNITIVE_CORE_INSTANCE is None:
-        try:
-            # Configure DSPy with the LLM
-            if llm_provider == "openai":
-                llm = dspy.OpenAI(model=model, max_tokens=1024)
-            else:
-                # Add support for other providers as needed
-                raise ValueError(f"Unsupported LLM provider: {llm_provider}")
-            
-            dspy.settings.configure(lm=llm)
-            COGNITIVE_CORE_INSTANCE = CognitiveCore(llm_provider, model, context_broker)
-            logger.info(f"Initialized global cognitive core with {llm_provider} and {model}")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize cognitive core: {e}")
-            raise
-    
-    return COGNITIVE_CORE_INSTANCE
-
-
-def get_cognitive_core() -> Optional[CognitiveCore]:
-    """Get the global cognitive core instance."""
-    return COGNITIVE_CORE_INSTANCE
-
-
-def reset_cognitive_core():
-    """Reset the global cognitive core instance (useful for testing)."""
-    global COGNITIVE_CORE_INSTANCE
-    COGNITIVE_CORE_INSTANCE = None
