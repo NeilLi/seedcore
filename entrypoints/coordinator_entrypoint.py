@@ -49,6 +49,10 @@ def build_coordinator(args: dict = None):
         "ML_SERVICE_TIMEOUT": os.getenv("ML_SERVICE_TIMEOUT", "8"),
         "COGNITIVE_SERVICE_TIMEOUT": os.getenv("COGNITIVE_SERVICE_TIMEOUT", "15"),
         "ORGANISM_SERVICE_TIMEOUT": os.getenv("ORGANISM_SERVICE_TIMEOUT", "5"),
+        # Tuning configuration
+        "TUNE_SPACE_TYPE": os.getenv("TUNE_SPACE_TYPE", "basic"),
+        "TUNE_CONFIG_TYPE": os.getenv("TUNE_CONFIG_TYPE", "fast"),
+        "TUNE_EXPERIMENT_PREFIX": os.getenv("TUNE_EXPERIMENT_PREFIX", "coordinator-tune"),
     }
     
     # Set environment variables for the replicas

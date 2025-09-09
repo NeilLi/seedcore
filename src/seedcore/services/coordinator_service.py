@@ -28,6 +28,11 @@ FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
 MAX_PLAN_STEPS = int(os.getenv("MAX_PLAN_STEPS", "16"))
 COGNITIVE_MAX_INFLIGHT = int(os.getenv("COGNITIVE_MAX_INFLIGHT", "64"))
 
+# Tuning configuration
+TUNE_SPACE_TYPE = os.getenv("TUNE_SPACE_TYPE", "basic")
+TUNE_CONFIG_TYPE = os.getenv("TUNE_CONFIG_TYPE", "fast")
+TUNE_EXPERIMENT_PREFIX = os.getenv("TUNE_EXPERIMENT_PREFIX", "coordinator-tune")
+
 # ---------- Small helpers ----------
 def _corr_headers(target: str, cid: str) -> Dict[str, str]:
     return {
@@ -159,6 +164,22 @@ class Task(BaseModel):
     features: Dict[str, Any] = {}
     history_ids: List[str] = []
     # … add fields as needed
+
+class AnomalyTriageRequest(BaseModel):
+    agent_id: str
+    series: List[float] = []
+    context: Dict[str, Any] = {}
+    drift_score: float = 0.0
+
+class AnomalyTriageResponse(BaseModel):
+    agent_id: str
+    anomalies: Dict[str, Any]
+    reason: Dict[str, Any]
+    decision: Dict[str, Any]
+    correlation_id: str
+    p_fast: float
+    escalated: bool
+    tuning_job: Optional[Dict[str, Any]] = None
 
 # ---------- FastAPI/Serve ----------
 app = FastAPI(title="SeedCore Coordinator")
@@ -402,36 +423,103 @@ class Coordinator:
         """Get current task execution metrics."""
         return self.metrics.get_metrics()
 
-    # Example retained pipeline (your anomaly triage) calling ML/COG and using Organism if needed
-    @app.post(f"{router_prefix}/anomaly-triage")
-    async def anomaly_triage(self, payload: Dict[str, Any]):
+    # Enhanced anomaly triage pipeline matching the sequence diagram
+    @app.post(f"{router_prefix}/anomaly-triage", response_model=AnomalyTriageResponse)
+    async def anomaly_triage(self, payload: AnomalyTriageRequest):
+        """
+        Anomaly triage pipeline that follows the sequence diagram:
+        1. Detect anomalies via ML service
+        2. Reason about failure via Cognitive service  
+        3. Make decision via Cognitive service
+        4. Conditionally submit tune/retrain job if action requires it
+        5. Best-effort memory synthesis
+        6. Return aggregated response
+        """
         cid = uuid.uuid4().hex
-        series = payload.get("series") or []
-        context = payload.get("context") or {}
+        agent_id = payload.agent_id
+        series = payload.series
+        context = payload.context
+        
+        # Extract drift score for OCPS gating (optional)
+        drift_score = payload.drift_score
+        escalate = self.ocps.update(drift_score)
+        
+        logger.info(f"[Coordinator] Anomaly triage started for agent {agent_id}, drift={drift_score}, escalate={escalate}, cid={cid}")
 
+        # 1. Detect anomalies via ML service
         anomalies = await _apost(self.http, f"{ML}/detect/anomaly",
                                  {"data": series}, _corr_headers("ml_service", cid), timeout=ML_TIMEOUT)
 
+        # 2. Reason about failure (only if escalating or no OCPS gating)
         reason = {}
-        try:
-            reason = await _apost(self.http, f"{COG}/reason-about-failure",
-                                  {"incident_context": {"anomalies": anomalies.get("anomalies", []), "meta": context}},
-                                  _corr_headers("cognitive", cid), timeout=COG_TIMEOUT)
-        except Exception as e:
-            reason = {"result": {"thought": "cognitive error", "proposed_solution": "retry"}, "error": str(e)}
+        decision = {"result": {"action": "hold"}}
+        
+        if escalate or not hasattr(self, 'ocps'):  # Always reason if no OCPS or escalating
+            try:
+                reason = await _apost(self.http, f"{COG}/reason-about-failure",
+                                      {"incident_context": {"anomalies": anomalies.get("anomalies", []), "meta": context}},
+                                      _corr_headers("cognitive", cid), timeout=COG_TIMEOUT)
+            except Exception as e:
+                logger.warning(f"[Coordinator] Reasoning failed: {e}")
+                reason = {"result": {"thought": "cognitive error", "proposed_solution": "retry"}, "error": str(e)}
 
-        decision = {}
-        action = "hold"
-        try:
-            decision = await _apost(self.http, f"{COG}/make-decision",
-                                    {"decision_context": {"anomaly_count": len(anomalies.get("anomalies", []))}},
-                                    _corr_headers("cognitive", cid), timeout=COG_TIMEOUT)
-            action = (decision.get("result") or {}).get("action", "hold")
-        except Exception as e:
-            decision = {"result": {"action": "hold"}, "error": str(e)}
+            # 3. Make decision
+            try:
+                decision = await _apost(self.http, f"{COG}/make-decision",
+                                        {"decision_context": {"anomaly_count": len(anomalies.get("anomalies", [])),
+                                                              "reason": reason.get("result", {})}},
+                                        _corr_headers("cognitive", cid), timeout=COG_TIMEOUT)
+            except Exception as e:
+                logger.warning(f"[Coordinator] Decision making failed: {e}")
+                decision = {"result": {"action": "hold"}, "error": str(e)}
+        else:
+            logger.info(f"[Coordinator] Skipping cognitive calls due to OCPS gating (low drift)")
 
-        out = {"anomalies": anomalies, "reason": reason, "decision": decision, "correlation_id": cid}
-        return out
+        # 4. Conditional tune/retrain based on decision
+        tuning_job = None
+        action = (decision.get("result") or {}).get("action", "hold")
+        
+        if action in ["tune", "retrain"]:
+            try:
+                tuning_job = await _apost(self.http, f"{ML}/xgboost/tune/submit",
+                                          {"space_type": TUNE_SPACE_TYPE,
+                                           "config_type": TUNE_CONFIG_TYPE,
+                                           "experiment_name": f"{TUNE_EXPERIMENT_PREFIX}-{agent_id}-{cid}"},
+                                          _corr_headers("ml_service", cid), timeout=ML_TIMEOUT)
+                logger.info(f"[Coordinator] Tuning job submitted: {tuning_job.get('job_id', 'unknown')}")
+            except Exception as e:
+                logger.warning(f"[Coordinator] Tuning submission failed: {e}")
+                tuning_job = {"error": str(e)}
+
+        # 5. Best-effort memory synthesis (fire-and-forget)
+        try:
+            await _apost(self.http, f"{COG}/synthesize-memory",
+                         {"agent_id": agent_id,
+                          "memory_fragments": [
+                              {"anomalies": anomalies.get("anomalies", [])},
+                              {"reason": reason.get("result") or reason},
+                              {"decision": decision.get("result") or decision}
+                          ],
+                          "synthesis_goal": "incident_triage_summary"},
+                         _corr_headers("cognitive", cid), timeout=COG_TIMEOUT)
+            logger.debug(f"[Coordinator] Memory synthesis completed for agent {agent_id}")
+        except Exception as e:
+            logger.debug(f"[Coordinator] Memory synthesis failed (best-effort): {e}")
+
+        # 6. Build response
+        response = AnomalyTriageResponse(
+            agent_id=agent_id,
+            anomalies=anomalies,
+            reason=reason,
+            decision=decision,
+            correlation_id=cid,
+            p_fast=self.ocps.p_fast,
+            escalated=escalate,
+            tuning_job=tuning_job
+        )
+            
+        logger.info(f"[Coordinator] Anomaly triage completed for agent {agent_id}, action={action}, cid={cid}")
+        return response
 
 # Bind the deployment
 coordinator_deployment = Coordinator.bind()
