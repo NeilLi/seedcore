@@ -112,7 +112,14 @@ class PredicateLoader:
                     description="Emergency fallback rule"
                 )
             ],
-            mutations=[],
+            mutations=[
+                Rule(
+                    when="false",  # Disabled fallback mutation rule
+                    do="hold",
+                    priority=-1,
+                    description="Disabled fallback mutation"
+                )
+            ],
             gpu_guard=GpuGuard(
                 max_concurrent=2,
                 daily_budget_hours=4.0,
@@ -125,7 +132,8 @@ class PredicateLoader:
                 description="Emergency fallback configuration"
             ),
             routing_enabled=True,
-            mutations_enabled=False  # Disable mutations in fallback
+            mutations_enabled=False,  # Disable mutations in fallback
+            gpu_guard_enabled=True
         )
     
     def get_config(self) -> Optional[PredicatesConfig]:
@@ -295,7 +303,10 @@ def create_default_config() -> PredicatesConfig:
             version="1.0.0",
             commit="initial",
             description="Default predicate configuration"
-        )
+        ),
+        routing_enabled=True,
+        mutations_enabled=True,
+        gpu_guard_enabled=True
     )
 
 def save_default_config(config_path: str):
@@ -303,7 +314,7 @@ def save_default_config(config_path: str):
     config = create_default_config()
     
     # Convert to dict for YAML serialization
-    config_dict = config.dict()
+    config_dict = config.model_dump()
     
     with open(config_path, 'w') as f:
         yaml.dump(config_dict, f, default_flow_style=False, indent=2)

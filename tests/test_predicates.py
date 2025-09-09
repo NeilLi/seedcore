@@ -7,16 +7,16 @@ import tempfile
 import yaml
 from pathlib import Path
 
-from src.seedcore.predicates import (
+from seedcore.predicates import (
     PredicateRouter, 
     load_predicates, 
     create_signal_context,
     validate_signal_value,
     get_signal_spec
 )
-from src.seedcore.predicates.schema import PredicatesConfig, Rule, GpuGuard, Metadata
-from src.seedcore.predicates.evaluator import PredicateEvaluator
-from src.seedcore.predicates.loader import create_default_config, save_default_config
+from seedcore.predicates.schema import PredicatesConfig, Rule, GpuGuard, Metadata
+from seedcore.predicates.evaluator import PredicateEvaluator
+from seedcore.predicates.loader import create_default_config, save_default_config
 
 class TestPredicateEvaluator:
     """Test the predicate evaluator."""
@@ -192,7 +192,7 @@ class TestConfigurationLoading:
         config = create_default_config()
         
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            config_dict = config.dict()
+            config_dict = config.model_dump()
             yaml.dump(config_dict, f)
             temp_path = f.name
         

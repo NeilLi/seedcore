@@ -61,13 +61,13 @@ class PredicateMetrics:
         self.cpu_utilization_gauge = create_safe_gauge("coord_cpu_utilization", "CPU utilization ratio")
         
         # Task-specific signals
-        self.task_priority_gauge = create_safe_gauge("coord_task_priority", "Current task priority", ["task_type"])
-        self.task_complexity_gauge = create_safe_gauge("coord_task_complexity", "Current task complexity", ["task_type"])
+        self.task_priority_gauge = create_safe_gauge("coord_task_priority", "Current task priority", labelnames=["task_type"])
+        self.task_complexity_gauge = create_safe_gauge("coord_task_complexity", "Current task complexity", labelnames=["task_type"])
         
         # Request counters
-        self.requests_total = create_safe_counter("coord_requests_total", "Total requests", ["path", "success"])
-        self.routing_decisions = create_safe_counter("coord_routing_decisions_total", "Routing decisions", ["decision", "reason"])
-        self.mutation_decisions = create_safe_counter("coord_mutation_decisions_total", "Mutation decisions", ["decision", "reason"])
+        self.requests_total = create_safe_counter("coord_requests_total", "Total requests", labelnames=["path", "success"])
+        self.routing_decisions = create_safe_counter("coord_routing_decisions_total", "Routing decisions", labelnames=["decision", "reason"])
+        self.mutation_decisions = create_safe_counter("coord_mutation_decisions_total", "Mutation decisions", labelnames=["decision", "reason"])
         
         # Escalation ratio tracking
         self.escalation_requests = create_safe_counter("coord_escalation_requests_total", "Escalated requests")
@@ -80,16 +80,16 @@ class PredicateMetrics:
         self.gpu_seconds_count = create_safe_counter("coord_gpu_seconds_count", "Count of GPU jobs")
         
         # Predicate evaluation metrics
-        self.predicate_evaluations = create_safe_counter("coord_predicate_evaluations_total", "Predicate evaluations", ["rule_type", "result"])
+        self.predicate_evaluations = create_safe_counter("coord_predicate_evaluations_total", "Predicate evaluations", labelnames=["rule_type", "result"])
         self.predicate_evaluation_time = create_safe_summary("coord_predicate_evaluation_seconds", "Predicate evaluation time")
         
         # GPU job metrics
-        self.gpu_jobs_submitted = create_safe_counter("coord_gpu_jobs_submitted_total", "GPU jobs submitted", ["job_type"])
-        self.gpu_jobs_completed = create_safe_counter("coord_gpu_jobs_completed_total", "GPU jobs completed", ["job_type", "status"])
-        self.gpu_job_duration = create_safe_histogram("coord_gpu_job_duration_seconds", "GPU job duration", ["job_type"])
+        self.gpu_jobs_submitted = create_safe_counter("coord_gpu_jobs_submitted_total", "GPU jobs submitted", labelnames=["job_type"])
+        self.gpu_jobs_completed = create_safe_counter("coord_gpu_jobs_completed_total", "GPU jobs completed", labelnames=["job_type", "status"])
+        self.gpu_job_duration = create_safe_histogram("coord_gpu_job_duration_seconds", "GPU job duration", labelnames=["job_type"])
         
         # Memory synthesis metrics
-        self.memory_synthesis_attempts = create_safe_counter("coord_memory_synthesis_attempts_total", "Memory synthesis attempts", ["status"])
+        self.memory_synthesis_attempts = create_safe_counter("coord_memory_synthesis_attempts_total", "Memory synthesis attempts", labelnames=["status"])
         self.memory_synthesis_duration = create_safe_summary("coord_memory_synthesis_seconds", "Memory synthesis duration")
         
         logger.info("✅ Predicate metrics initialized")

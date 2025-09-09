@@ -13,7 +13,8 @@ from .signals import SIGNALS, get_signal_spec, validate_signal_value, create_sig
 from .schema import PredicatesConfig, Rule, GpuGuard, Metadata
 from .loader import load_predicates, validate_predicates
 from .evaluator import PredicateEvaluator, eval_predicate
-from .metrics import PredicateMetrics
+from .metrics import PredicateMetrics, get_metrics
+from .router import PredicateRouter
 
 __all__ = [
     "SIGNALS",
@@ -28,5 +29,7 @@ __all__ = [
     "validate_predicates",
     "PredicateEvaluator",
     "eval_predicate",
-    "PredicateMetrics"
+    "PredicateMetrics",
+    "get_metrics",
+    "PredicateRouter"
 ]

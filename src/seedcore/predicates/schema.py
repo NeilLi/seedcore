@@ -60,6 +60,7 @@ class PredicatesConfig(BaseModel):
     # Feature flags for emergency control
     routing_enabled: bool = Field(default=True, description="Enable routing rules")
     mutations_enabled: bool = Field(default=True, description="Enable mutation rules")
+    gpu_guard_enabled: bool = Field(default=True, description="Enable GPU guard system")
     
     # Optional configuration sections
     alerts: Optional[Dict[str, Any]] = Field(default=None, description="Alert configuration")
@@ -116,8 +117,8 @@ class EvaluationContext(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for evaluation."""
         return {
-            "task": self.task.dict(),
-            "decision": self.decision.dict(),
+            "task": self.task.model_dump(),
+            "decision": self.decision.model_dump(),
             **self.signals,
             "gpu": self.gpu
         }
@@ -125,13 +126,18 @@ class EvaluationContext(BaseModel):
 # Allowed symbols for expression validation
 ALLOWED_TASK_FIELDS = {"type", "domain", "priority", "complexity"}
 ALLOWED_DECISION_FIELDS = {"action", "confidence", "reasoning"}
-ALLOWED_OPERATORS = {"and", "or", "not", "in", "True", "False", "None"}
+ALLOWED_OPERATORS = {"and", "or", "not", "in", "True", "False", "None", "true", "false"}
 
 def validate_expression_symbols(expr: str) -> List[str]:
     """Extract and validate symbols used in an expression."""
-    # Simple regex to find identifiers
+    # Remove string literals first to avoid matching them as symbols
+    # This regex matches single or double quoted strings
+    string_literal_re = re.compile(r'["\'][^"\']*["\']')
+    expr_without_strings = string_literal_re.sub('""', expr)
+    
+    # Simple regex to find identifiers (but not inside string literals)
     symbol_re = re.compile(r'\b([A-Za-z_Δ][A-Za-z0-9_Δ\.]*)\b')
-    symbols = symbol_re.findall(expr)
+    symbols = symbol_re.findall(expr_without_strings)
     
     # Filter out operators and literals
     valid_symbols = []
