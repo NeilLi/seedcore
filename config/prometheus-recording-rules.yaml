@@ -1,0 +1,151 @@
+# Prometheus recording rules for SeedCore Coordinator dashboards
+# These rules compute derived metrics from the raw counters and gauges
+
+groups:
+  - name: seedcore_coordinator
+    rules:
+      # Escalation ratio calculation
+      - record: coordinator:escalation_ratio
+        expr: |
+          (
+            rate(coord_escalation_requests_total[5m]) /
+            rate(coord_total_requests_total[5m])
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "ratio"
+      
+      # Request success rate
+      - record: coordinator:request_success_rate
+        expr: |
+          (
+            rate(coord_requests_total{success="true"}[5m]) /
+            rate(coord_requests_total[5m])
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "ratio"
+      
+      # Fast path success rate
+      - record: coordinator:fast_path_success_rate
+        expr: |
+          (
+            rate(coord_requests_total{path="fast",success="true"}[5m]) /
+            rate(coord_requests_total{path="fast"}[5m])
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "ratio"
+      
+      # HGNN path success rate
+      - record: coordinator:hgnn_success_rate
+        expr: |
+          (
+            rate(coord_requests_total{path="hgnn",success="true"}[5m]) /
+            rate(coord_requests_total{path="hgnn"}[5m])
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "ratio"
+      
+      # Average ΔE realized per job
+      - record: coordinator:deltaE_realized_avg
+        expr: |
+          (
+            rate(coord_deltaE_realized_sum[5m]) /
+            rate(coord_deltaE_realized_count[5m])
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "average"
+      
+      # Cost per ΔE (efficiency metric)
+      - record: coordinator:cost_per_deltaE
+        expr: |
+          (
+            rate(coord_gpu_seconds_sum[15m]) /
+            rate(coord_deltaE_realized_sum[15m])
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "efficiency"
+      
+      # GPU utilization rate
+      - record: coordinator:gpu_utilization_rate
+        expr: |
+          (
+            coord_gpu_concurrent_jobs /
+            coord_gpu_queue_depth
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "utilization"
+      
+      # Budget utilization rate
+      - record: coordinator:budget_utilization_rate
+        expr: |
+          (
+            (coord_gpu_budget_remaining_s - coord_gpu_budget_remaining_s) /
+            (coord_gpu_budget_remaining_s + coord_gpu_budget_remaining_s)
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "utilization"
+      
+      # Predicate evaluation success rate
+      - record: coordinator:predicate_evaluation_success_rate
+        expr: |
+          (
+            rate(coord_predicate_evaluations_total{result="true"}[5m]) /
+            rate(coord_predicate_evaluations_total[5m])
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "ratio"
+      
+      # Memory synthesis success rate
+      - record: coordinator:memory_synthesis_success_rate
+        expr: |
+          (
+            rate(coord_memory_synthesis_attempts_total{status="success"}[5m]) /
+            rate(coord_memory_synthesis_attempts_total[5m])
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "ratio"
+      
+      # Circuit breaker health (1 = healthy, 0 = open)
+      - record: coordinator:circuit_breaker_health
+        expr: |
+          (
+            coord_circuit_breaker_state == 0
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "health"
+      
+      # Request latency percentiles
+      - record: coordinator:e2e_latency_p95
+        expr: |
+          histogram_quantile(0.95, rate(coord_e2e_ms_bucket[5m]))
+        labels:
+          service: "coordinator"
+          metric_type: "latency"
+      
+      - record: coordinator:e2e_latency_p99
+        expr: |
+          histogram_quantile(0.99, rate(coord_e2e_ms_bucket[5m]))
+        labels:
+          service: "coordinator"
+          metric_type: "latency"
+      
+      # Error budget (for SLO monitoring)
+      - record: coordinator:error_budget_remaining
+        expr: |
+          (
+            0.95 - coordinator:request_success_rate
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "slo"
+          slo_target: "0.95"

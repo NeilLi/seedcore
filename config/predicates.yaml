@@ -1,0 +1,149 @@
+# Predicate-based routing configuration for SeedCore Coordinator
+# This file defines the routing and mutation rules using canonical signals
+
+routing:
+  # High-priority rules for critical tasks
+  - when: "task.type == 'anomaly_triage' and s_drift > 0.7"
+    do: "escalate"
+    priority: 10
+    description: "Escalate high-drift anomaly triage tasks to cognitive reasoning"
+  
+  - when: "task.type == 'anomaly_triage' and s_drift <= 0.7 and p_fast > 0.8"
+    do: "fast_path:utility_organ_1"
+    priority: 9
+    description: "Fast path for low-drift anomaly triage with high confidence"
+  
+  - when: "task.type == 'anomaly_triage' and s_drift <= 0.7 and p_fast <= 0.8"
+    do: "escalate"
+    priority: 8
+    description: "Escalate low-drift anomaly triage with low confidence"
+  
+  # Performance-based routing
+  - when: "task.type == 'general_query' and fast_path_latency_ms < 100"
+    do: "fast_path:utility_organ_1"
+    priority: 7
+    description: "Fast path for general queries when system is responsive"
+  
+  - when: "task.type == 'general_query' and fast_path_latency_ms >= 100"
+    do: "escalate"
+    priority: 6
+    description: "Escalate general queries when system is slow"
+  
+  # Resource-aware routing
+  - when: "task.type == 'execute' and memory_utilization < 0.8 and cpu_utilization < 0.9"
+    do: "fast_path:actuator_organ_1"
+    priority: 5
+    description: "Fast path for execute tasks when resources are available"
+  
+  - when: "task.type == 'execute' and (memory_utilization >= 0.8 or cpu_utilization >= 0.9)"
+    do: "escalate"
+    priority: 4
+    description: "Escalate execute tasks when resources are constrained"
+  
+  # Priority-based routing
+  - when: "task.priority >= 8"
+    do: "escalate"
+    priority: 3
+    description: "Always escalate high-priority tasks"
+  
+  - when: "task.priority <= 3 and task.complexity < 0.3"
+    do: "fast_path:utility_organ_1"
+    priority: 2
+    description: "Fast path for simple low-priority tasks"
+  
+  # Default fallback
+  - when: "task.type == 'health_check'"
+    do: "fast_path:utility_organ_1"
+    priority: 1
+    description: "Health checks always go fast path"
+  
+  # Catch-all fallback rule (lowest priority)
+  - when: "true"
+    do: "fast_path:utility_organ_1"
+    priority: -1
+    description: "Default fallback rule for unmatched tasks"
+
+mutations:
+  # High-value mutations with GPU guard
+  - when: "decision.action in ['tune', 'retrain'] and ΔE_est > 0.05 and gpu.guard_ok and gpu.budget_remaining_s > 600"
+    do: "submit_tuning"
+    priority: 10
+    description: "Submit high-value tuning jobs when GPU resources are available"
+  
+  - when: "decision.action == 'retrain' and ΔE_est > 0.02 and gpu.guard_ok and gpu.budget_remaining_s > 1800"
+    do: "submit_retrain"
+    priority: 9
+    description: "Submit retraining jobs for medium-value improvements"
+  
+  # Budget-conscious mutations
+  - when: "decision.action == 'tune' and ΔE_est > 0.02 and ΔE_est <= 0.05 and gpu.guard_ok and gpu.budget_remaining_s > 300"
+    do: "submit_tuning"
+    priority: 8
+    description: "Submit medium-value tuning jobs with sufficient budget"
+  
+  # Low-value mutations - hold
+  - when: "decision.action in ['tune', 'retrain'] and ΔE_est <= 0.02"
+    do: "hold"
+    priority: 7
+    description: "Hold low-value mutation requests"
+  
+  # Resource-constrained mutations
+  - when: "decision.action in ['tune', 'retrain'] and not gpu.guard_ok"
+    do: "hold"
+    priority: 6
+    description: "Hold mutations when GPU guard is blocking"
+  
+  - when: "decision.action in ['tune', 'retrain'] and gpu.budget_remaining_s <= 300"
+    do: "hold"
+    priority: 5
+    description: "Hold mutations when budget is low"
+  
+  # Escalation-based mutations
+  - when: "decision.action in ['tune', 'retrain'] and escalation_ratio > 0.5 and ΔE_est > 0.03"
+    do: "submit_tuning"
+    priority: 4
+    description: "Submit mutations when escalation rate is high and value is good"
+  
+  # Default hold
+  - when: "decision.action in ['tune', 'retrain']"
+    do: "hold"
+    priority: 1
+    description: "Default hold for mutation requests"
+
+gpu_guard:
+  max_concurrent: 2
+  daily_budget_hours: 4.0
+  cooldown_minutes: 30
+  queue_timeout_minutes: 30
+
+metadata:
+  version: "1.0.0"
+  commit: "initial-predicate-config"
+  created_at: "2025-01-09T00:00:00Z"
+  description: "Initial predicate configuration for SeedCore Coordinator"
+
+# Feature flags for emergency control
+routing_enabled: true
+mutations_enabled: true
+
+# Optional fallback actions
+fallback:
+  routing: "escalate"
+  mutation: "hold"
+
+# Optional alert configuration
+alerts:
+  high_escalation_rate:
+    threshold: 0.4
+    duration: "5m"
+    message: "High escalation rate detected"
+  
+  low_p_fast:
+    threshold: 0.6
+    duration: "2m"
+    message: "Low fast-path probability"
+  
+  gpu_budget_low:
+    threshold: 0.1
+    duration: "1m"
+    message: "GPU budget running low"

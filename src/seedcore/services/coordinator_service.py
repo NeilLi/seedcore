@@ -7,6 +7,14 @@ from ray import serve
 from pydantic import BaseModel, Field
 import logging
 
+# Import predicate system
+from ..predicates import PredicateRouter, load_predicates, get_metrics
+from ..predicates.metrics import update_ocps_signals, update_energy_signals, record_request, record_latency
+from ..predicates.circuit_breaker import ServiceClient, CircuitBreaker, RetryConfig
+from ..predicates.safe_storage import SafeStorage
+import redis
+import json
+
 logger = logging.getLogger("seedcore.coordinator")
 
 # ---------- Config ----------
@@ -27,6 +35,12 @@ ORG = f"{SERVE_GATEWAY}/organism"
 FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
 MAX_PLAN_STEPS = int(os.getenv("MAX_PLAN_STEPS", "16"))
 COGNITIVE_MAX_INFLIGHT = int(os.getenv("COGNITIVE_MAX_INFLIGHT", "64"))
+
+# Predicate system configuration
+PREDICATES_CONFIG_PATH = os.getenv("PREDICATES_CONFIG_PATH", "/app/config/predicates.yaml")
+
+# Redis configuration for job state persistence
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 # Tuning configuration
 TUNE_SPACE_TYPE = os.getenv("TUNE_SPACE_TYPE", "basic")
@@ -181,6 +195,14 @@ class AnomalyTriageResponse(BaseModel):
     escalated: bool
     tuning_job: Optional[Dict[str, Any]] = None
 
+class TuneCallbackRequest(BaseModel):
+    job_id: str
+    E_before: Optional[float] = None
+    E_after: Optional[float] = None
+    gpu_seconds: Optional[float] = None
+    status: str = "completed"  # completed, failed
+    error: Optional[str] = None
+
 # ---------- FastAPI/Serve ----------
 app = FastAPI(title="SeedCore Coordinator")
 router_prefix = "/pipeline"
@@ -194,6 +216,35 @@ router_prefix = "/pipeline"
 @serve.ingress(app)
 class Coordinator:
     def __init__(self):
+        # Initialize service clients with conservative circuit breakers
+        self.ml_client = ServiceClient(
+            "ml_service", ML, timeout=float(os.getenv("CB_ML_TIMEOUT_S", "2.0")),
+            circuit_breaker=CircuitBreaker(
+                failure_threshold=int(os.getenv("CB_FAIL_THRESHOLD", "5")),
+                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0"))
+            ),
+            retry_config=RetryConfig(max_attempts=1, base_delay=1.0, max_delay=2.0)
+        )
+        
+        self.cognitive_client = ServiceClient(
+            "cognitive_service", COG, timeout=float(os.getenv("CB_COG_TIMEOUT_S", "4.0")),
+            circuit_breaker=CircuitBreaker(
+                failure_threshold=int(os.getenv("CB_FAIL_THRESHOLD", "5")),
+                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0"))
+            ),
+            retry_config=RetryConfig(max_attempts=0, base_delay=0.0)  # No retries for cognitive
+        )
+        
+        self.organism_client = ServiceClient(
+            "organism_service", ORG, timeout=float(os.getenv("CB_ORG_TIMEOUT_S", "5.0")),
+            circuit_breaker=CircuitBreaker(
+                failure_threshold=int(os.getenv("CB_FAIL_THRESHOLD", "5")),
+                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0"))
+            ),
+            retry_config=RetryConfig(max_attempts=0, base_delay=0.0)  # No retries for organism
+        )
+        
+        # Legacy HTTP client for backward compatibility
         self.http = httpx.AsyncClient(
             timeout=ORCH_TIMEOUT,
             limits=httpx.Limits(max_keepalive_connections=100, max_connections=200),
@@ -201,6 +252,27 @@ class Coordinator:
         self.ocps = OCPSValve()
         self.routing = RoutingDirectory()
         self.metrics = MetricsTracker()
+        
+        # Initialize safe storage (Redis with in-memory fallback)
+        try:
+            redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+            self.storage = SafeStorage(redis_client)
+            logger.info(f"✅ Storage initialized: {self.storage.get_backend_type()}")
+        except Exception as e:
+            logger.warning(f"⚠️ Redis connection failed, using in-memory storage: {e}")
+            self.storage = SafeStorage(None)
+        
+        # Initialize predicate system
+        try:
+            self.predicate_config = load_predicates(PREDICATES_CONFIG_PATH)
+            self.predicate_router = PredicateRouter(self.predicate_config)
+            logger.info("✅ Predicate system initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load predicate config, using fallback: {e}")
+            # Create a minimal fallback configuration
+            from ..predicates.loader import create_default_config
+            self.predicate_config = create_default_config()
+            self.predicate_router = PredicateRouter(self.predicate_config)
         
         # sensible defaults (avoid cognitive for simple)
         self.routing.set_rule("general_query", "utility_organ_1")
@@ -215,6 +287,88 @@ class Coordinator:
         # Configuration
         self.fast_path_latency_slo_ms = FAST_PATH_LATENCY_SLO_MS
         self.max_plan_steps = MAX_PLAN_STEPS
+        
+        # Start background tasks
+        asyncio.create_task(self._start_background_tasks())
+
+    async def _start_background_tasks(self):
+        """Start background maintenance tasks."""
+        try:
+            await self.predicate_router.start_background_tasks()
+            logger.info("🚀 Started Coordinator background tasks")
+        except Exception as e:
+            logger.error(f"❌ Failed to start background tasks: {e}")
+
+    def _get_current_energy_state(self, agent_id: str) -> Optional[float]:
+        """Get current energy state for an agent."""
+        try:
+            # This would typically call the energy service or get from agent state
+            # For now, return a placeholder value
+            return 0.5  # TODO: Implement actual energy state retrieval
+        except Exception as e:
+            logger.warning(f"Failed to get energy state for agent {agent_id}: {e}")
+            return None
+    
+    def _persist_job_state(self, job_id: str, state: Dict[str, Any]):
+        """Persist job state using safe storage."""
+        success = self.storage.set(f"job:{job_id}", state, ttl=86400)  # 24h TTL
+        if not success:
+            logger.warning(f"Failed to persist job state for {job_id}")
+    
+    def _get_job_state(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve job state using safe storage."""
+        return self.storage.get(f"job:{job_id}")
+
+    async def _fire_and_forget_memory_synthesis(self, agent_id: str, anomalies: dict, 
+                                               reason: dict, decision: dict, cid: str):
+        """Fire-and-forget memory synthesis with proper error handling and metrics."""
+        start_time = time.time()
+        
+        try:
+            # Redact sensitive data
+            redacted_anomalies = self._redact_sensitive_data(anomalies.get("anomalies", []))
+            redacted_reason = self._redact_sensitive_data(reason.get("result") or reason)
+            redacted_decision = self._redact_sensitive_data(decision.get("result") or decision)
+            
+            payload = {
+                "agent_id": agent_id,
+                "memory_fragments": [
+                    {"anomalies": redacted_anomalies},
+                    {"reason": redacted_reason},
+                    {"decision": redacted_decision}
+                ],
+                "synthesis_goal": "incident_triage_summary"
+            }
+            
+            await self.cognitive_client.post("/synthesize-memory",
+                                           json=payload,
+                                           headers=_corr_headers("cognitive", cid))
+            
+            duration = time.time() - start_time
+            self.predicate_router.metrics.record_memory_synthesis("success", duration)
+            logger.debug(f"[Coordinator] Memory synthesis completed for agent {agent_id} in {duration:.2f}s")
+            
+        except Exception as e:
+            duration = time.time() - start_time
+            self.predicate_router.metrics.record_memory_synthesis("failure", duration)
+            logger.debug(f"[Coordinator] Memory synthesis failed (best-effort): {e}")
+    
+    def _redact_sensitive_data(self, data: Any) -> Any:
+        """Redact sensitive data from memory synthesis payload."""
+        if isinstance(data, dict):
+            redacted = {}
+            for key, value in data.items():
+                if any(sensitive in key.lower() for sensitive in ['password', 'token', 'key', 'secret', 'auth']):
+                    redacted[key] = "[REDACTED]"
+                else:
+                    redacted[key] = self._redact_sensitive_data(value)
+            return redacted
+        elif isinstance(data, list):
+            return [self._redact_sensitive_data(item) for item in data]
+        elif isinstance(data, str) and len(data) > 1000:
+            return data[:1000] + "... [TRUNCATED]"
+        else:
+            return data
 
     def prefetch_context(self, task: Dict[str, Any]) -> None:
         """Hook for Mw/Mlt prefetch as per §8.6 Unified RAG Operations. No-op until memory wired."""
@@ -372,7 +526,7 @@ class Coordinator:
     @app.post(f"{router_prefix}/route-and-execute")
     async def route_and_execute(self, task: Task):
         """
-        Global entrypoint (paper §6): OCPS fast router + HGNN escalation.
+        Global entrypoint (paper §6): Predicate-based routing + HGNN escalation.
         """
         cid = uuid.uuid4().hex
         start_time = time.time()
@@ -383,18 +537,34 @@ class Coordinator:
         # Prefetch context if available
         self.prefetch_context(task.model_dump())
 
-        # Resolve fast-path organ
-        organ_id = self.routing.resolve(task.type, task.domain)
+        # Update OCPS and signals
         escalate = self.ocps.update(task.drift_score)
+        
+        # Update predicate signals
+        self.predicate_router.update_signals(
+            p_fast=self.ocps.p_fast,
+            s_drift=task.drift_score,
+            task_priority=task.params.get("priority", 5),
+            task_complexity=task.params.get("complexity", 0.5),
+            memory_utilization=0.5,  # TODO: Get from system metrics
+            cpu_utilization=0.3,     # TODO: Get from system metrics
+        )
 
-        if organ_id and not escalate:
+        # Use predicate-based routing
+        routing_decision = self.predicate_router.route_task(task.model_dump())
+        
+        # Execute based on routing decision
+        if routing_decision.action == "fast_path" and routing_decision.organ_id:
             try:
-                resp = await self._execute_fast(task, organ_id, cid)
+                resp = await self._execute_fast(task, routing_decision.organ_id, cid)
                 latency_ms = (time.time() - start_time) * 1000
                 self.metrics.track_metrics("fast", resp.get("success", False), latency_ms)
+                record_request("fast", resp.get("success", False))
+                record_latency("e2e", latency_ms)
                 return {
                     "success": resp.get("success", False), "result": resp,
-                    "path": "fast", "p_fast": self.ocps.p_fast, "organ_id": organ_id, "correlation_id": cid
+                    "path": "fast", "p_fast": self.ocps.p_fast, "organ_id": routing_decision.organ_id, 
+                    "correlation_id": cid, "routing_reason": routing_decision.reason
                 }
             except Exception as e:
                 logger.warning(f"Fast path failed; escalating. err={e}")
@@ -403,17 +573,27 @@ class Coordinator:
         if self._inflight_escalations >= self.escalation_max_inflight:
             latency_ms = (time.time() - start_time) * 1000
             self.metrics.track_metrics("escalation_failure", False, latency_ms)
+            record_request("escalation_failure", False)
+            record_latency("e2e", latency_ms)
             return {"success": False, "error": "Too many concurrent escalations", "path": "escalation_failure", "p_fast": self.ocps.p_fast, "correlation_id": cid}
 
         async with self.escalation_semaphore:
             self._inflight_escalations += 1
             try:
                 resp = await self._execute_hgnn(task, cid)
-                resp.update({"p_fast": self.ocps.p_fast, "correlation_id": cid})
+                resp.update({
+                    "p_fast": self.ocps.p_fast, 
+                    "correlation_id": cid,
+                    "routing_reason": routing_decision.reason
+                })
+                record_request("hgnn", resp.get("success", False))
+                record_latency("e2e", (time.time() - start_time) * 1000)
                 return resp
             except Exception as e:
                 latency_ms = (time.time() - start_time) * 1000
                 self.metrics.track_metrics("escalation_failure", False, latency_ms)
+                record_request("escalation_failure", False)
+                record_latency("e2e", latency_ms)
                 return {"success": False, "error": str(e), "path": "hgnn", "p_fast": self.ocps.p_fast, "correlation_id": cid}
             finally:
                 self._inflight_escalations -= 1
@@ -422,6 +602,114 @@ class Coordinator:
     async def get_metrics(self):
         """Get current task execution metrics."""
         return self.metrics.get_metrics()
+    
+    @app.get(f"{router_prefix}/predicates/status")
+    async def get_predicate_status(self):
+        """Get predicate system status and GPU guard information."""
+        import hashlib
+        import os
+        
+        # Get file modification time and hash
+        config_path = Path(PREDICATES_CONFIG_PATH)
+        loaded_at = None
+        file_hash = None
+        
+        if config_path.exists():
+            stat = config_path.stat()
+            loaded_at = time.ctime(stat.st_mtime)
+            
+            # Calculate file hash
+            with open(config_path, 'rb') as f:
+                file_hash = hashlib.sha256(f.read()).hexdigest()[:16]
+        
+        return {
+            "predicate_config": {
+                "version": self.predicate_config.metadata.version,
+                "commit": self.predicate_config.metadata.commit,
+                "loaded_at": loaded_at,
+                "file_hash": file_hash,
+                "routing_rules": len(self.predicate_config.routing),
+                "mutation_rules": len(self.predicate_config.mutations),
+                "routing_enabled": getattr(self.predicate_config, 'routing_enabled', True),
+                "mutations_enabled": getattr(self.predicate_config, 'mutations_enabled', True),
+                "gpu_guard_enabled": getattr(self.predicate_config, 'gpu_guard_enabled', False),
+                "is_fallback": self.predicate_config.metadata.version == "fallback"
+            },
+            "gpu_guard": self.predicate_router.get_gpu_guard_status(),
+            "signals": self.predicate_router._signal_cache,
+            "escalation_ratio": self.predicate_router.metrics.get_escalation_ratio(),
+            "circuit_breakers": {
+                "ml_service": self.ml_client.get_metrics(),
+                "cognitive_service": self.cognitive_client.get_metrics(),
+                "organism_service": self.organism_client.get_metrics()
+            },
+            "storage": {
+                "backend": self.storage.get_backend_type(),
+                "redis_available": self.storage.get_backend_type() == "redis"
+            }
+        }
+    
+    @app.get(f"{router_prefix}/predicates/config")
+    async def get_predicate_config(self):
+        """Get current predicate configuration."""
+        return self.predicate_config.dict()
+    
+    @app.post(f"{router_prefix}/predicates/reload")
+    async def reload_predicates(self):
+        """Reload predicate configuration from file."""
+        try:
+            self.predicate_config = load_predicates(PREDICATES_CONFIG_PATH)
+            self.predicate_router = PredicateRouter(self.predicate_config)
+            logger.info("✅ Predicate configuration reloaded")
+            return {"success": True, "message": "Configuration reloaded successfully"}
+        except Exception as e:
+            logger.error(f"❌ Failed to reload predicate config: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @app.post(f"{router_prefix}/ml/tune/callback")
+    async def tune_callback(self, payload: TuneCallbackRequest):
+        """Callback endpoint for ML tuning job completion."""
+        try:
+            job_id = payload.job_id
+            logger.info(f"[Coordinator] Received tuning callback for job {job_id}: {payload.status}")
+            
+            # Get persisted job state
+            job_state = self._get_job_state(job_id)
+            if not job_state:
+                logger.warning(f"No job state found for {job_id}")
+                return {"success": False, "error": "Job state not found"}
+            
+            # Calculate ΔE_realized
+            if payload.status == "completed" and payload.E_after is not None:
+                E_before = job_state.get("E_before")
+                if E_before is not None:
+                    deltaE = payload.E_after - E_before
+                    
+                    # Record metrics
+                    self.predicate_router.metrics.record_deltaE_realized(
+                        deltaE=deltaE,
+                        gpu_seconds=payload.gpu_seconds or 0.0
+                    )
+                    
+                    # Update GPU job status
+                    self.predicate_router.update_gpu_job_status(job_id, "completed", success=True)
+                    
+                    logger.info(f"[Coordinator] Job {job_id} completed: ΔE={deltaE:.4f}, GPU_seconds={payload.gpu_seconds}")
+                else:
+                    logger.warning(f"No E_before found for job {job_id}")
+            else:
+                # Job failed
+                self.predicate_router.update_gpu_job_status(job_id, "failed", success=False)
+                logger.warning(f"Job {job_id} failed: {payload.error}")
+            
+            # Clean up job state
+            self.storage.delete(f"job:{job_id}")
+            
+            return {"success": True, "message": "Callback processed"}
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing tuning callback: {e}")
+            return {"success": False, "error": str(e)}
 
     # Enhanced anomaly triage pipeline matching the sequence diagram
     @app.post(f"{router_prefix}/anomaly-triage", response_model=AnomalyTriageResponse)
@@ -447,8 +735,9 @@ class Coordinator:
         logger.info(f"[Coordinator] Anomaly triage started for agent {agent_id}, drift={drift_score}, escalate={escalate}, cid={cid}")
 
         # 1. Detect anomalies via ML service
-        anomalies = await _apost(self.http, f"{ML}/detect/anomaly",
-                                 {"data": series}, _corr_headers("ml_service", cid), timeout=ML_TIMEOUT)
+        anomalies = await self.ml_client.post("/detect/anomaly", 
+                                             json={"data": series}, 
+                                             headers=_corr_headers("ml_service", cid))
 
         # 2. Reason about failure (only if escalating or no OCPS gating)
         reason = {}
@@ -456,55 +745,68 @@ class Coordinator:
         
         if escalate or not hasattr(self, 'ocps'):  # Always reason if no OCPS or escalating
             try:
-                reason = await _apost(self.http, f"{COG}/reason-about-failure",
-                                      {"incident_context": {"anomalies": anomalies.get("anomalies", []), "meta": context}},
-                                      _corr_headers("cognitive", cid), timeout=COG_TIMEOUT)
+                reason = await self.cognitive_client.post("/reason-about-failure",
+                                                         json={"incident_context": {"anomalies": anomalies.get("anomalies", []), "meta": context}},
+                                                         headers=_corr_headers("cognitive", cid))
             except Exception as e:
                 logger.warning(f"[Coordinator] Reasoning failed: {e}")
                 reason = {"result": {"thought": "cognitive error", "proposed_solution": "retry"}, "error": str(e)}
 
             # 3. Make decision
             try:
-                decision = await _apost(self.http, f"{COG}/make-decision",
-                                        {"decision_context": {"anomaly_count": len(anomalies.get("anomalies", [])),
-                                                              "reason": reason.get("result", {})}},
-                                        _corr_headers("cognitive", cid), timeout=COG_TIMEOUT)
+                decision = await self.cognitive_client.post("/make-decision",
+                                                           json={"decision_context": {"anomaly_count": len(anomalies.get("anomalies", [])),
+                                                                                     "reason": reason.get("result", {})}},
+                                                           headers=_corr_headers("cognitive", cid))
             except Exception as e:
                 logger.warning(f"[Coordinator] Decision making failed: {e}")
                 decision = {"result": {"action": "hold"}, "error": str(e)}
         else:
             logger.info(f"[Coordinator] Skipping cognitive calls due to OCPS gating (low drift)")
 
-        # 4. Conditional tune/retrain based on decision
+        # 4. Conditional tune/retrain based on predicate evaluation
         tuning_job = None
         action = (decision.get("result") or {}).get("action", "hold")
         
-        if action in ["tune", "retrain"]:
+        # Use predicate system to evaluate mutation decision
+        mutation_decision = self.predicate_router.evaluate_mutation(
+            task={"type": "anomaly_triage", "domain": "anomaly", "priority": 7, "complexity": 0.8},
+            decision=decision.get("result", {})
+        )
+        
+        if mutation_decision.action in ["submit_tuning", "submit_retrain"]:
             try:
-                tuning_job = await _apost(self.http, f"{ML}/xgboost/tune/submit",
-                                          {"space_type": TUNE_SPACE_TYPE,
-                                           "config_type": TUNE_CONFIG_TYPE,
-                                           "experiment_name": f"{TUNE_EXPERIMENT_PREFIX}-{agent_id}-{cid}"},
-                                          _corr_headers("ml_service", cid), timeout=ML_TIMEOUT)
-                logger.info(f"[Coordinator] Tuning job submitted: {tuning_job.get('job_id', 'unknown')}")
+                # Get current energy state for E_before
+                current_energy = self._get_current_energy_state(agent_id)
+                
+                tuning_job = await self.ml_client.post("/xgboost/tune/submit",
+                                                       json={"space_type": TUNE_SPACE_TYPE,
+                                                             "config_type": TUNE_CONFIG_TYPE,
+                                                             "experiment_name": f"{TUNE_EXPERIMENT_PREFIX}-{agent_id}-{cid}",
+                                                             "callback_url": f"{SEEDCORE_API_URL}/pipeline/ml/tune/callback"},
+                                                       headers=_corr_headers("ml_service", cid))
+                
+                # Persist E_before for later ΔE calculation
+                if tuning_job.get("job_id") and current_energy is not None:
+                    self._persist_job_state(tuning_job["job_id"], {
+                        "E_before": current_energy,
+                        "agent_id": agent_id,
+                        "submitted_at": time.time(),
+                        "job_type": mutation_decision.action.replace("submit_", "")
+                    })
+                    self.predicate_router.update_gpu_job_status(tuning_job["job_id"], "started")
+                
+                logger.info(f"[Coordinator] Tuning job submitted: {tuning_job.get('job_id', 'unknown')} (reason: {mutation_decision.reason})")
             except Exception as e:
                 logger.warning(f"[Coordinator] Tuning submission failed: {e}")
                 tuning_job = {"error": str(e)}
+        else:
+            logger.info(f"[Coordinator] Mutation decision: {mutation_decision.action} (reason: {mutation_decision.reason})")
 
         # 5. Best-effort memory synthesis (fire-and-forget)
-        try:
-            await _apost(self.http, f"{COG}/synthesize-memory",
-                         {"agent_id": agent_id,
-                          "memory_fragments": [
-                              {"anomalies": anomalies.get("anomalies", [])},
-                              {"reason": reason.get("result") or reason},
-                              {"decision": decision.get("result") or decision}
-                          ],
-                          "synthesis_goal": "incident_triage_summary"},
-                         _corr_headers("cognitive", cid), timeout=COG_TIMEOUT)
-            logger.debug(f"[Coordinator] Memory synthesis completed for agent {agent_id}")
-        except Exception as e:
-            logger.debug(f"[Coordinator] Memory synthesis failed (best-effort): {e}")
+        asyncio.create_task(self._fire_and_forget_memory_synthesis(
+            agent_id, anomalies, reason, decision, cid
+        ))
 
         # 6. Build response
         response = AnomalyTriageResponse(
