@@ -345,14 +345,25 @@ Coordinator Service
 │  └─────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                 │
 │  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │                    Memory Architecture                                  │   │
+│  │                    Memory Architecture (Enhanced)                      │   │
 │  │                                                                         │   │
 │  │  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐              │   │
-│  │  │   Mw    │    │   Mlt   │    │   Mfb   │    │   Ma    │              │   │
-│  │  │ Working │    │Long-Term│    │Flashbulb│    │Private  │              │   │
-│  │  │ Memory  │    │ Memory  │    │ Memory  │    │ Memory  │              │   │
-│  │  │(Volatile)│    │(Persistent)│ │(Rare)  │    │(128-D)  │              │   │
+│  │  │   L0    │    │   L1    │    │   L2    │    │   Mw    │              │   │
+│  │  │Organ-Local│   │Node Cache│   │SharedCache│   │ Working │              │   │
+│  │  │  Cache  │    │         │    │  Shard  │    │ Memory  │              │   │
+│  │  │(Per-Agent)│   │(Per-Node)│   │(Cluster)│    │(Volatile)│              │   │
 │  │  └─────────┘    └─────────┘    └─────────┘    └─────────┘              │   │
+│  │       │              │              │              │                   │   │
+│  │       └──────────────┼──────────────┼──────────────┘                   │   │
+│  │                      │              │                                  │   │
+│  │  ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐              │   │
+│  │  │   Mlt   │    │   Mfb   │    │   Ma    │    │MwManager│              │   │
+│  │  │Long-Term│    │Flashbulb│    │Private  │    │(Enhanced)│              │   │
+│  │  │ Memory  │    │ Memory  │    │ Memory  │    │         │              │   │
+│  │  │(Persistent)│ │(Rare)  │    │(128-D)  │    │• CAS Ops│              │   │
+│  │  └─────────┘    └─────────┘    └─────────┘    │• Compress│              │   │
+│  │                                                │• Telemetry│              │   │
+│  │                                                └─────────┘              │   │
 │  └─────────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -369,16 +380,104 @@ The current system shows **healthy** status across all components:
 
 ## Memory Architecture
 
-The SeedCore system implements a sophisticated multi-tier memory architecture that supports both real-time processing and long-term knowledge retention. This architecture is designed to optimize performance while maintaining system efficiency.
+The SeedCore system implements a sophisticated multi-tier memory architecture with SharedCacheShard optimization that supports both real-time processing and long-term knowledge retention. This architecture is designed to optimize performance while maintaining system efficiency through L0/L1/L2 cache hierarchy, atomic operations, and intelligent memory management.
 
 ### Memory Tiers Overview
 
 | Tier | Name | Type | Purpose | Characteristics |
 |------|------|------|---------|-----------------|
+| **L0** | Organ-Local Cache | Volatile | Per-agent fastest access | In-memory, agent-specific |
+| **L1** | Node Cache | Volatile | Node-wide shared cache | Per-node, TTL-managed |
+| **L2** | SharedCacheShard | Volatile | Cluster-wide distributed cache | Sharded, LRU eviction, TTL |
 | **Mw** | Working Memory | Volatile | Fast access to recent information | High-speed cache, limited capacity |
 | **Mlt** | Long-Term Memory | Persistent | Durable knowledge storage | Large capacity, slower access |
 | **Mfb** | Flashbulb Memory | Persistent | High-salience events | Rare, critical events only |
 | **Ma** | Agent Private Memory | Volatile | Agent state representation | 128-D embedding vector |
+
+### SharedCacheShard Architecture
+
+The SharedCacheShard system implements a sophisticated L0/L1/L2 cache hierarchy that provides enterprise-grade caching with atomic operations, compression, and intelligent memory management.
+
+#### L0/L1/L2 Cache Hierarchy
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SharedCacheShard Architecture               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐        │
+│  │     L0      │    │     L1      │    │     L2      │        │
+│  │Organ-Local  │    │ Node Cache  │    │SharedCache  │        │
+│  │   Cache     │    │             │    │   Shard     │        │
+│  │             │    │             │    │             │        │
+│  │• Per-agent  │    │• Per-node   │    │• Cluster-wide│        │
+│  │• Fastest    │    │• TTL-managed│    │• Sharded     │        │
+│  │• In-memory  │    │• Shared     │    │• LRU eviction│        │
+│  └─────────────┘    └─────────────┘    └─────────────┘        │
+│           │                   │                   │            │
+│           └───────────────────┼───────────────────┘            │
+│                               │                                │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                Write-Through Strategy                   │   │
+│  │                                                         │   │
+│  │  set_global_item() → L0 + L1 + L2 (all levels)         │   │
+│  │  get_item() → L0 → L1 → L2 (hierarchical lookup)       │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Key Features
+
+##### 1. Atomic Operations
+- **CAS (Compare-And-Swap)**: `setnx()` for atomic sentinel operations
+- **Single-Flight Guards**: Prevents thundering herd on cache misses
+- **Race Condition Prevention**: Atomic operations ensure data consistency
+
+##### 2. Unified Cache Key Schema
+- **Global Keys**: `global:item:{kind}:{scope}:{id}`
+- **Organ Keys**: `organ:{organ_id}:item:{kind}:{id}`
+- **Consistent Naming**: Audit-friendly, hierarchical key structure
+- **Examples**:
+  - `global:item:fact:global:user_123`
+  - `organ:agent_1:item:synopsis:task_456`
+
+##### 3. Compression and Size Management
+- **Automatic Compression**: Values >16KB compressed with zlib
+- **Size Limits**: 256KB maximum value size with intelligent truncation
+- **Envelope Format**: Safe serialization with versioning
+- **JSON Safety**: Truncation preserves JSON structure
+
+##### 4. Negative Caching and TTL
+- **Negative Cache**: 30s TTL for cache misses to prevent stampedes
+- **TTL Management**: Configurable TTL per cache level
+- **Explicit Deletion**: Proper cleanup with multi-level deletion
+- **Stale Prevention**: Negative cache cleared on successful writes
+
+##### 5. Hot-Item Prewarming
+- **Telemetry**: Tracks access patterns and hot items
+- **Prewarming**: Promotes hot items to L0 during heartbeats
+- **Rate Limiting**: 10 prewarm operations per minute per agent
+- **Jitter**: Prevents cluster-wide prewarm bursts
+
+#### Performance Characteristics
+
+| Level | Access Time | Capacity | Persistence | Distribution |
+|-------|-------------|----------|-------------|--------------|
+| **L0** | ~1ms | Limited | Volatile | Per-agent |
+| **L1** | ~5ms | Medium | Volatile | Per-node |
+| **L2** | ~10-50ms | Large | Volatile | Cluster-wide |
+
+#### Security and Safety
+
+##### Compression Security
+- **Zip Bomb Protection**: 2MB decompression limit
+- **Safe Deserialization**: Only trusted envelope format
+- **Error Handling**: Graceful fallbacks for corrupted data
+
+##### Data Integrity
+- **Schema Versioning**: `_v: "v1"` for future compatibility
+- **Truncation Safety**: JSON structure preservation
+- **Atomic Operations**: Race condition prevention
 
 ### Memory Flow and Access Patterns
 
@@ -423,13 +522,63 @@ The SeedCore system implements a sophisticated multi-tier memory architecture th
 ```
 Task Query
     ↓
-1. Check Mw (Working Memory) - Fast lookup
+1. Check L0 (Organ-Local Cache) - Fastest lookup (~1ms)
     ↓ (cache miss)
-2. Query Mlt (Long-Term Memory) - Persistent storage
+2. Check L1 (Node Cache) - Node-wide shared cache (~5ms)
+    ↓ (cache miss)
+3. Check L2 (SharedCacheShard) - Cluster-wide distributed cache (~10-50ms)
+    ↓ (cache miss)
+4. Query Mlt (Long-Term Memory) - Persistent storage
     ↓ (success)
-3. Cache result back to Mw for future access
+5. Write-through to L2 → L1 → L0 (all levels)
     ↓ (high-salience event)
-4. Optionally log to Mfb (Flashbulb Memory)
+6. Optionally log to Mfb (Flashbulb Memory)
+
+Enhanced Flow with Optimizations:
+    ↓
+• Negative Cache Check (30s TTL for misses)
+• Single-Flight Sentinel (atomic CAS operation)
+• Hot-Item Prewarming (promote to L0)
+• Compression (automatic for >16KB values)
+• Rate Limiting (10 prewarm ops/minute)
+```
+
+### MwManager (Enhanced with SharedCacheShard)
+
+The **MwManager** is a per-organ facade that provides enterprise-grade caching with L0/L1/L2 hierarchy, atomic operations, and intelligent memory management.
+
+#### Key Responsibilities (Enhanced)
+- **L0/L1/L2 Coordination**: Manages hierarchical cache access patterns
+- **Atomic Operations**: Provides CAS-based sentinel operations
+- **Compression Management**: Handles automatic compression and decompression
+- **Telemetry Collection**: Tracks hit/miss ratios and performance metrics
+- **Rate Limiting**: Prevents cache stampedes and prewarm storms
+
+#### Enhanced Memory Management Functions
+- **Write-Through Strategy**: `set_global_item()` writes to all cache levels
+- **Hierarchical Lookup**: `get_item()` checks L0 → L1 → L2 in sequence
+- **Atomic Sentinels**: `try_set_inflight()` prevents thundering herd
+- **Negative Caching**: `set_negative_cache()` prevents repeated misses
+- **Hot-Item Prewarming**: Promotes frequently accessed data to L0
+- **Compression**: Automatic zlib compression for large values
+- **Size Management**: 256KB limits with JSON-safe truncation
+
+#### API Enhancements
+```python
+# Unified cache key schema
+mw.set_global_item_typed("fact", "global", "user_123", data, ttl_s=1800)
+mw.get_item_typed_async("fact", "global", "user_123")
+
+# Atomic operations
+sentinel_acquired = await mw.try_set_inflight("fact:global:user_123", ttl_s=5)
+await mw.del_global_key("fact:global:user_123")
+
+# Compression and size management
+mw.set_global_item_compressed("large_data", big_dict, ttl_s=3600)
+data = await mw.get_item_compressed_async("large_data")
+
+# Telemetry
+stats = mw.get_telemetry()  # Hit ratios, access patterns, performance
 ```
 
 ### Tier0MemoryManager
@@ -467,23 +616,35 @@ The **Tier0MemoryManager** is a utility class (not a Ray actor) that orchestrate
 
 ### Memory Performance Characteristics
 
-#### Access Latency
-- **Mw**: ~1-10ms (in-memory access)
-- **Mlt**: ~10-100ms (persistent storage)
-- **Mfb**: ~5-50ms (indexed lookup)
-- **Ma**: ~1-5ms (vector operations)
+#### Access Latency (Enhanced with SharedCacheShard)
+- **L0 (Organ-Local)**: ~1ms (in-memory, per-agent)
+- **L1 (Node Cache)**: ~5ms (in-memory, per-node)
+- **L2 (SharedCacheShard)**: ~10-50ms (distributed, cluster-wide)
+- **Mw (Working Memory)**: ~1-10ms (in-memory access)
+- **Mlt (Long-Term)**: ~10-100ms (persistent storage)
+- **Mfb (Flashbulb)**: ~5-50ms (indexed lookup)
+- **Ma (Private Memory)**: ~1-5ms (vector operations)
 
 #### Capacity Management
+- **L0**: Limited per-agent (configurable)
+- **L1**: Medium per-node (TTL-managed)
+- **L2**: Large cluster-wide (sharded, LRU eviction)
 - **Mw**: Dynamic sizing based on available memory
 - **Mlt**: Scalable storage with configurable limits
 - **Mfb**: Fixed capacity with strict admission criteria
 - **Ma**: Fixed 128-D vector per agent
 
-#### Optimization Strategies
-- **Predictive Caching**: Pre-load frequently accessed data into Mw
+#### Optimization Strategies (Enhanced)
+- **L0/L1/L2 Hierarchy**: Multi-level caching with write-through
+- **Atomic Operations**: CAS-based sentinels prevent race conditions
+- **Negative Caching**: 30s TTL prevents cache stampedes
+- **Hot-Item Prewarming**: Promotes frequently accessed data to L0
+- **Compression**: Automatic zlib compression for values >16KB
+- **Rate Limiting**: Prevents prewarm storms (10 ops/minute)
+- **Predictive Caching**: Pre-load frequently accessed data
 - **Intelligent Eviction**: LRU with priority-based retention
 - **Batch Processing**: Group memory operations for efficiency
-- **Compression**: Optimize storage for long-term memory
+- **Size Management**: 256KB limits with JSON-safe truncation
 
 ## RayAgent Lifecycle Management
 
@@ -646,13 +807,25 @@ When an agent reaches end-of-life or becomes idle:
 - **Scheduling**: Task assignment based on agent capabilities
 - **Management**: Agent creation, monitoring, and cleanup
 
-## Performance and Energy Tracking
+## Performance and Energy Tracking (Enhanced with SharedCacheShard)
 
-The SeedCore system implements comprehensive performance and energy tracking to optimize system efficiency and ensure optimal resource utilization.
+The SeedCore system implements comprehensive performance and energy tracking with SharedCacheShard optimizations to optimize system efficiency and ensure optimal resource utilization.
 
-### Performance Metrics Framework
+### SharedCacheShard Performance Improvements
 
-#### Core Performance Indicators
+#### Cache Performance Metrics
+
+| Metric | Description | Measurement | Target | Improvement |
+|--------|-------------|-------------|---------|-------------|
+| **L0 Hit Rate** | Organ-local cache hit ratio | L0 hits / total requests | >60% | ~1ms access |
+| **L1 Hit Rate** | Node cache hit ratio | L1 hits / total requests | >30% | ~5ms access |
+| **L2 Hit Rate** | SharedCacheShard hit ratio | L2 hits / total requests | >20% | ~10-50ms access |
+| **Cache Stampede Prevention** | Single-flight sentinel success rate | Successful CAS operations | >95% | Prevents thundering herd |
+| **Negative Cache Effectiveness** | Miss prevention via negative cache | Negative cache hits | >80% | Reduces Mlt queries |
+| **Compression Ratio** | Space savings from compression | (Original - Compressed) / Original | >30% | For values >16KB |
+| **Prewarm Effectiveness** | Hot-item promotion success | L0 promotions / prewarm ops | >70% | Proactive optimization |
+
+#### Enhanced Performance Indicators
 
 | Metric | Description | Measurement | Target |
 |--------|-------------|-------------|---------|
@@ -661,6 +834,9 @@ The SeedCore system implements comprehensive performance and energy tracking to 
 | **Memory Hit Rate** | Cache hit ratio in working memory | Hit/(Hit+Miss) ratio | >80% |
 | **Throughput** | Tasks processed per unit time | Tasks/second | Variable by service |
 | **Resource Utilization** | CPU, memory, energy consumption | Percentage of allocated resources | <80% |
+| **Cache Latency P95** | 95th percentile cache access time | L0+L1+L2 combined | <50ms |
+| **Compression Efficiency** | Bytes saved per compressed value | Compression ratio | >30% |
+| **Atomic Operation Success** | CAS operation success rate | Successful setnx / total attempts | >95% |
 
 #### Capability Score Calculation
 
@@ -879,13 +1055,53 @@ The system analyzes performance trends to predict potential issues:
 - **Low latency**: Direct actor-to-actor communication within Ray cluster
 - **High throughput**: Distributed processing across multiple nodes
 
-## Monitoring and Observability
+## Monitoring and Observability (Enhanced with SharedCacheShard)
 
 ### Key Metrics to Monitor
+
+#### System Health Metrics
 - **Replica health**: All replicas should be in RUNNING state
 - **Actor distribution**: Ensure replicas are distributed across nodes
 - **Response times**: Monitor service latency and throughput
 - **Resource utilization**: CPU, memory, and GPU usage across nodes
+
+#### SharedCacheShard Metrics
+- **Cache Hit Ratios**: L0, L1, L2 hit rates per agent and cluster-wide
+- **Cache Latency**: P50, P95, P99 access times for each cache level
+- **Atomic Operations**: CAS success rate and contention metrics
+- **Compression Efficiency**: Space savings and compression ratio trends
+- **Negative Cache Effectiveness**: Miss prevention and TTL utilization
+- **Prewarm Performance**: Hot-item promotion success and rate limiting
+- **Memory Utilization**: Cache size, eviction rates, and TTL distribution
+
+#### Enhanced Telemetry
+```python
+# MwManager telemetry example
+telemetry = mw.get_telemetry()
+{
+    "organ_id": "agent_1",
+    "total_requests": 1500,
+    "hits": 1200,
+    "misses": 300,
+    "hit_ratio": 0.8,
+    "l0_hits": 800,      # ~1ms access
+    "l1_hits": 300,      # ~5ms access  
+    "l2_hits": 100,      # ~10-50ms access
+    "l0_hit_ratio": 0.53,
+    "l1_hit_ratio": 0.20,
+    "l2_hit_ratio": 0.07,
+    "compression_savings": 0.35,  # 35% space saved
+    "negative_cache_hits": 45,    # Miss prevention
+    "setnx_contention": 0.05      # 5% CAS contention
+}
+```
+
+#### Performance Dashboards
+- **Cache Performance**: Hit ratios, latency, and efficiency trends
+- **Atomic Operations**: CAS success rates and contention patterns
+- **Compression Analytics**: Space savings and compression ratios
+- **Hot-Item Tracking**: Prewarm effectiveness and access patterns
+- **Memory Health**: Cache utilization and eviction patterns
 
 ### Troubleshooting
 - **Actor failures**: Check Ray logs for actor crash details
@@ -895,10 +1111,25 @@ The system analyzes performance trends to predict potential issues:
 ## Future Considerations
 
 ### Potential Enhancements
+
+#### SharedCacheShard Optimizations
+- **Adaptive TTL**: Dynamic TTL adjustment based on access patterns
+- **Predictive Prewarming**: ML-based hot-item prediction for proactive caching
+- **Cross-Region Replication**: L2 cache replication across geographic regions
+- **Advanced Compression**: LZ4 or Zstandard for better compression ratios
+- **Cache Warming**: Bulk preloading of critical data during startup
+
+#### System Enhancements
 - **Auto-scaling**: Implement dynamic replica scaling based on load
 - **Multi-region**: Extend to multiple Ray clusters for geographic distribution
 - **Advanced routing**: Implement intelligent request routing based on actor load
 - **State persistence**: Add persistent state storage for critical actor state
+
+#### Monitoring and Analytics
+- **Real-time Dashboards**: Live cache performance monitoring
+- **Anomaly Detection**: ML-based detection of cache performance issues
+- **Capacity Planning**: Predictive analytics for cache sizing
+- **Cost Optimization**: Resource usage optimization based on cache patterns
 
 ### Integration Points
 - **External APIs**: REST/GRPC endpoints for external system integration

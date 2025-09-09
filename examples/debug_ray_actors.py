@@ -48,16 +48,16 @@ def test_simple_ray_actor():
         traceback.print_exc()
         return False
 
-def test_simple_ray_agent_creation():
-    """Test creating our SimpleRayAgent (no numpy)."""
-    print("\n🔧 Testing SimpleRayAgent creation...")
+def test_ray_agent_without_numpy():
+    """Test creating our RayAgent without numpy dependency."""
+    print("\n🔧 Testing RayAgent creation (no numpy)...")
     
     try:
-        from seedcore.agents.ray_actor_simple import SimpleRayAgent
+        from seedcore.agents.ray_actor import RayAgent
         
         # Create agent
-        agent = SimpleRayAgent.remote("test_agent_1", {'E': 0.6, 'S': 0.3, 'O': 0.1})
-        print(f"✅ SimpleRayAgent created: {agent}")
+        agent = RayAgent.remote("test_agent_1", {'E': 0.6, 'S': 0.3, 'O': 0.1})
+        print(f"✅ RayAgent created: {agent}")
         
         # Test methods
         agent_id = ray.get(agent.get_id.remote())
@@ -73,7 +73,7 @@ def test_simple_ray_agent_creation():
         
         return True
     except Exception as e:
-        print(f"❌ SimpleRayAgent test failed: {e}")
+        print(f"❌ RayAgent test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -121,15 +121,15 @@ def main():
     # Test simple actor
     simple_success = test_simple_ray_actor()
     
-    # Test SimpleRayAgent (no numpy)
-    simple_agent_success = test_simple_ray_agent_creation()
+    # Test RayAgent (no numpy dependency)
+    agent_no_numpy_success = test_ray_agent_without_numpy()
     
     # Test RayAgent (with numpy)
     agent_success = test_ray_agent_creation()
     
     print(f"\n📊 Results:")
     print(f"  Simple actor: {'✅' if simple_success else '❌'}")
-    print(f"  SimpleRayAgent (no numpy): {'✅' if simple_agent_success else '❌'}")
+    print(f"  RayAgent (no numpy): {'✅' if agent_no_numpy_success else '❌'}")
     print(f"  RayAgent (with numpy): {'✅' if agent_success else '❌'}")
 
 if __name__ == "__main__":

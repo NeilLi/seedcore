@@ -31,6 +31,9 @@ import time
 import heapq
 import hashlib
 import bisect
+import json
+import zlib
+import base64
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
@@ -159,6 +162,15 @@ class SharedCacheShard:
     async def delete(self, key: str) -> None:
         self._map.pop(key, None)
         self._lru.pop(key, None)
+
+    async def setnx(self, key: str, val: Any, ttl_s: int = 5) -> bool:
+        """Set if not exists - atomic CAS operation for sentinels."""
+        now = time.time()
+        rec = self._map.get(key)
+        if rec and rec[1] > now:  # not expired
+            return False
+        await self.set(key, val, ttl_s)
+        return True
 
     async def _evict_if_needed(self) -> None:
         now = time.time()
@@ -420,6 +432,13 @@ class MwManager:
         self.namespace = CONFIG.namespace
         self.mw_store = get_mw_store()
         self._cache: Dict[str, Any] = {}
+        
+        # Telemetry counters
+        self._hit_count = 0
+        self._miss_count = 0
+        self._l0_hits = 0
+        self._l1_hits = 0
+        self._l2_hits = 0
 
         logger.info(
             "✅ MwManager ready: %s",
@@ -432,6 +451,14 @@ class MwManager:
 
     def _global_key(self, item_id: str) -> str:
         return f"global:item:{item_id}"
+    
+    def _build_global_key(self, kind: str, scope: str, item_id: str) -> str:
+        """Build a consistent global cache key: global:item:{kind}:{scope}:{id}"""
+        return f"global:item:{kind}:{scope}:{item_id}"
+    
+    def _build_organ_key(self, kind: str, item_id: str) -> str:
+        """Build a consistent organ cache key: organ:{organ_id}:item:{kind}:{id}"""
+        return f"organ:{self.organ_id}:item:{kind}:{item_id}"
 
     # ---- async APIs ----
     async def get_item_async(self, item_id: str) -> Optional[Any]:
@@ -441,6 +468,8 @@ class MwManager:
         
         # L0: Check organ-local cache first (fastest)
         if okey in self._cache:
+            self._hit_count += 1
+            self._l0_hits += 1
             logger.info(
                 "HIT(L0)",
                 extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
@@ -452,6 +481,8 @@ class MwManager:
             node_cache = get_node_cache()
             val = await _await_ref(node_cache.get.remote(gkey))
             if val is not None:
+                self._hit_count += 1
+                self._l1_hits += 1
                 logger.info(
                     "HIT(L1)",
                     extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
@@ -470,6 +501,8 @@ class MwManager:
             shard = _shard_for(item_id)
             val = await _await_ref(shard.get.remote(gkey))
             if val is not None:
+                self._hit_count += 1
+                self._l2_hits += 1
                 logger.info(
                     "HIT(L2)",
                     extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
@@ -492,6 +525,7 @@ class MwManager:
             )
 
         # Miss: record in MwStore
+        self._miss_count += 1
         logger.warning(
             "MISS",
             extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
@@ -558,6 +592,278 @@ class MwManager:
                 "Failed to update L2 cache",
                 extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id, "error": str(e)},
             )
+
+    def set_global_item_typed(self, kind: str, scope: str, item_id: str, value: Any, ttl_s: Optional[int] = None) -> None:
+        """Set a global item with typed key format: global:item:{kind}:{scope}:{id}"""
+        key = self._build_global_key(kind, scope, item_id)
+        self.set_global_item(key, value, ttl_s)
+
+    def set_organ_item_typed(self, kind: str, item_id: str, value: Any) -> None:
+        """Set an organ-local item with typed key format: organ:{organ_id}:item:{kind}:{id}"""
+        key = self._build_organ_key(kind, item_id)
+        self.set_item(key, value)
+
+    async def get_item_typed_async(self, kind: str, scope: str, item_id: str) -> Optional[Any]:
+        """Get an item using typed key format, checking global first then organ-local"""
+        # Try global key first
+        global_key = self._build_global_key(kind, scope, item_id)
+        result = await self.get_item_async(global_key)
+        if result is not None:
+            return result
+        
+        # Fallback to organ-local
+        organ_key = self._build_organ_key(kind, item_id)
+        return await self.get_item_async(organ_key)
+
+    def set_negative_cache(self, kind: str, scope: str, item_id: str, ttl_s: int = 30) -> None:
+        """Set a negative cache entry to prevent cache stampedes"""
+        neg_key = f"_neg:{kind}:{scope}:{item_id}"
+        self.set_global_item(neg_key, "1", ttl_s)
+
+    async def check_negative_cache(self, kind: str, scope: str, item_id: str) -> bool:
+        """Check if an item is in negative cache (should skip lookup)"""
+        neg_key = f"_neg:{kind}:{scope}:{item_id}"
+        result = await self.get_item_async(neg_key)
+        return result == "1"
+
+    def set_inflight_sentinel(self, kind: str, scope: str, item_id: str, ttl_s: int = 5) -> bool:
+        """Set an in-flight sentinel to prevent thundering herd. Returns True if acquired."""
+        sentinel_key = f"_inflight:{kind}:{scope}:{item_id}"
+        try:
+            # Try to set sentinel - if it already exists, we didn't acquire it
+            self.set_global_item(sentinel_key, "1", ttl_s)
+            return True
+        except Exception:
+            return False
+
+    def clear_inflight_sentinel(self, kind: str, scope: str, item_id: str) -> None:
+        """Clear an in-flight sentinel"""
+        sentinel_key = f"_inflight:{kind}:{scope}:{item_id}"
+        try:
+            self.set_global_item(sentinel_key, None, ttl_s=1)  # Delete semantics
+        except Exception:
+            pass
+
+    def _wrap_value(self, val: Any, compressed: bool = False, codec: str = "zlib") -> Dict[str, Any]:
+        """Wrap value in envelope with compression if needed."""
+        if not compressed:
+            return {"_v": "v1", "_ct": "raw", "data": val}
+        
+        try:
+            # Serialize to JSON first
+            if isinstance(val, str):
+                json_bytes = val.encode('utf-8')
+            else:
+                json_bytes = json.dumps(val).encode('utf-8')
+            
+            # Compress with level 3 (good balance of speed/size)
+            compressed_bytes = zlib.compress(json_bytes, level=3)
+            encoded_data = base64.b64encode(compressed_bytes).decode('ascii')
+            
+            return {
+                "_v": "v1",
+                "_ct": codec,
+                "data": encoded_data
+            }
+        except Exception as e:
+            logger.warning(f"Compression failed, falling back to raw: {e}")
+            return {"_v": "v1", "_ct": "raw", "data": val}
+
+    def _unwrap_value(self, blob: Any) -> Any:
+        """Unwrap value from envelope, decompressing if needed."""
+        if not isinstance(blob, dict) or blob.get("_v") != "v1":
+            return blob  # Not our format, return as-is
+        
+        if blob.get("_ct") == "raw":
+            return blob.get("data", blob)
+        
+        if blob.get("_ct") == "zlib":
+            try:
+                # Decode base64 and decompress with size limit
+                compressed_bytes = base64.b64decode(blob["data"])
+                raw_bytes = zlib.decompress(compressed_bytes, max_length=2_000_000)  # 2MB limit
+                return json.loads(raw_bytes.decode('utf-8'))
+            except Exception as e:
+                logger.warning(f"Decompression failed: {e}")
+                return blob  # Return original if decompression fails
+        
+        return blob  # Safe fallback
+
+    def _truncate_value(self, value: Any, max_size: int = 262144) -> Any:  # 256KB default
+        """Truncate large values while preserving structure and JSON safety."""
+        if isinstance(value, str) and len(value) > max_size:
+            return {
+                "_v": "v1",
+                "truncated": True,
+                "preview": value[:max_size-200],
+                "orig_bytes": len(value),
+                "truncated_bytes": len(value) - max_size + 200
+            }
+        elif isinstance(value, dict):
+            # For dicts, try to preserve key structure but truncate large values
+            truncated = {}
+            total_size = 0
+            for k, v in value.items():
+                if total_size > max_size:
+                    truncated["_truncated"] = True
+                    truncated["_orig_keys"] = len(value)
+                    break
+                
+                if isinstance(v, str) and len(v) > max_size // 4:  # 1/4 of max per field
+                    truncated[k] = {
+                        "_v": "v1",
+                        "truncated": True,
+                        "preview": v[:max_size//4-100],
+                        "orig_bytes": len(v)
+                    }
+                    total_size += max_size // 4
+                else:
+                    truncated[k] = v
+                    total_size += len(str(v))
+            return truncated
+        return value
+
+    def set_global_item_compressed(self, item_id: str, value: Any, ttl_s: Optional[int] = None, max_size: int = 262144) -> None:
+        """Set a global item with compression and size limits."""
+        # Truncate if too large
+        value = self._truncate_value(value, max_size)
+        
+        # Determine if compression is needed (16KB threshold)
+        json_bytes = json.dumps(value).encode('utf-8') if not isinstance(value, str) else value.encode('utf-8')
+        should_compress = len(json_bytes) > 16384
+        
+        # Wrap with envelope
+        wrapped_value = self._wrap_value(value, compressed=should_compress)
+        
+        # Set with envelope
+        self.set_global_item(item_id, wrapped_value, ttl_s)
+
+    async def get_item_compressed_async(self, item_id: str) -> Optional[Any]:
+        """Get an item and unwrap if needed."""
+        wrapped_data = await self.get_item_async(item_id)
+        if wrapped_data is None:
+            return None
+        
+        return self._unwrap_value(wrapped_data)
+
+    def get_telemetry(self) -> Dict[str, Any]:
+        """Get cache telemetry statistics."""
+        total_requests = self._hit_count + self._miss_count
+        hit_ratio = self._hit_count / total_requests if total_requests > 0 else 0.0
+        
+        return {
+            "organ_id": self.organ_id,
+            "total_requests": total_requests,
+            "hits": self._hit_count,
+            "misses": self._miss_count,
+            "hit_ratio": hit_ratio,
+            "l0_hits": self._l0_hits,
+            "l1_hits": self._l1_hits,
+            "l2_hits": self._l2_hits,
+            "l0_hit_ratio": self._l0_hits / total_requests if total_requests > 0 else 0.0,
+            "l1_hit_ratio": self._l1_hits / total_requests if total_requests > 0 else 0.0,
+            "l2_hit_ratio": self._l2_hits / total_requests if total_requests > 0 else 0.0,
+        }
+
+    def reset_telemetry(self) -> None:
+        """Reset telemetry counters."""
+        self._hit_count = 0
+        self._miss_count = 0
+        self._l0_hits = 0
+        self._l1_hits = 0
+        self._l2_hits = 0
+
+    # ---- sync/async parity ----
+    def get_item(self, item_id: str) -> Optional[Any]:
+        """Sync version of get_item_async - uses asyncio.run for compatibility."""
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're in an async context, we can't use asyncio.run
+                # Fall back to a simple sync implementation
+                return self._get_item_sync(item_id)
+            else:
+                return asyncio.run(self.get_item_async(item_id))
+        except Exception:
+            return self._get_item_sync(item_id)
+
+    def _get_item_sync(self, item_id: str) -> Optional[Any]:
+        """Simple sync fallback that only checks L0 cache."""
+        okey = self._organ_key(item_id)
+        if okey in self._cache:
+            self._hit_count += 1
+            self._l0_hits += 1
+            return self._cache[okey]
+        self._miss_count += 1
+        return None
+
+    def get_item_typed(self, kind: str, scope: str, item_id: str) -> Optional[Any]:
+        """Sync version of get_item_typed_async."""
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                return self._get_item_typed_sync(kind, scope, item_id)
+            else:
+                return asyncio.run(self.get_item_typed_async(kind, scope, item_id))
+        except Exception:
+            return self._get_item_typed_sync(kind, scope, item_id)
+
+    def _get_item_typed_sync(self, kind: str, scope: str, item_id: str) -> Optional[Any]:
+        """Simple sync fallback for typed keys."""
+        global_key = self._build_global_key(kind, scope, item_id)
+        result = self._get_item_sync(global_key)
+        if result is not None:
+            return result
+        organ_key = self._build_organ_key(kind, item_id)
+        return self._get_item_sync(organ_key)
+
+    # ---- CAS operations ----
+    async def try_set_inflight(self, key: str, ttl_s: int = 5) -> bool:
+        """Try to set an in-flight sentinel atomically."""
+        try:
+            shard = _shard_for(key)
+            return await _await_ref(shard.setnx.remote(key, "1", ttl_s))
+        except Exception as e:
+            logger.warning(f"CAS operation failed: {e}")
+            return False
+
+    async def del_global_key(self, key: str) -> None:
+        """Delete a key from all cache levels."""
+        try:
+            # Delete from L2 (shard)
+            shard = _shard_for(key)
+            await _await_ref(shard.delete.remote(key))
+        except Exception as e:
+            logger.warning(f"Failed to delete from L2: {e}")
+        
+        try:
+            # Delete from L1 (node cache)
+            node_cache = get_node_cache()
+            await _await_ref(node_cache.delete.remote(key))
+        except Exception as e:
+            logger.warning(f"Failed to delete from L1: {e}")
+        
+        # Delete from L0 (organ cache)
+        okey = self._organ_key(key)
+        self._cache.pop(okey, None)
+
+    def del_global_key_sync(self, key: str) -> None:
+        """Sync version of del_global_key."""
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Can't use asyncio.run in running loop, just delete L0
+                okey = self._organ_key(key)
+                self._cache.pop(okey, None)
+            else:
+                asyncio.run(self.del_global_key(key))
+        except Exception:
+            # Fallback to L0 only
+            okey = self._organ_key(key)
+            self._cache.pop(okey, None)
 
 
 # -------------------------

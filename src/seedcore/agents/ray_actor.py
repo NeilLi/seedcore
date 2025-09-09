@@ -23,6 +23,8 @@ import time
 import asyncio
 import json
 import random
+import ast
+import operator
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 import logging
@@ -34,6 +36,43 @@ if not logger.handlers:
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
     logger.addHandler(handler)
+
+# Safe arithmetic evaluator to replace unsafe eval()
+_ALLOWED_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+def _safe_eval_arith(expr: str) -> float:
+    """
+    Evaluate simple arithmetic safely via AST (no names, no calls).
+    Supports + - * / // % ** and unary +/- on numbers.
+    """
+    def _eval(node):
+        if isinstance(node, ast.Num):  # py<3.8
+            return node.n
+        if isinstance(node, ast.Constant):  # py>=3.8
+            if isinstance(node.value, (int, float)):
+                return node.value
+            raise ValueError("Only numeric constants allowed")
+        if isinstance(node, ast.BinOp):
+            op = _ALLOWED_OPS.get(type(node.op))
+            if not op: raise ValueError("Operator not allowed")
+            return op(_eval(node.left), _eval(node.right))
+        if isinstance(node, ast.UnaryOp):
+            op = _ALLOWED_OPS.get(type(node.op))
+            if not op: raise ValueError("Unary operator not allowed")
+            return op(_eval(node.operand))
+        raise ValueError("Unsupported expression")
+    tree = ast.parse(expr, mode="eval")
+    return float(_eval(tree.body))
 
 # NEW: Import the FlashbulbClient
 from ..memory.flashbulb_client import FlashbulbClient
@@ -164,8 +203,8 @@ class RayAgent:
             from ..memory.working_memory import MwManager
             from ..memory.long_term_memory import LongTermMemoryManager
             
-            # Create organ_id for this agent
-            organ_id = f"organ_for_{self.agent_id}"
+            # Use provided organ_id or fallback to generated one
+            organ_id = self._organ_id or f"organ_for_{self.agent_id}"
             self.mw_manager = MwManager(organ_id=organ_id)
             self.mlt_manager = LongTermMemoryManager()
             
@@ -196,6 +235,68 @@ class RayAgent:
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize cognitive core for {self.agent_id}: {e}")
             self.cognitive_core = None
+    
+    def _mw_put_json(self, key: str, obj: Dict[str, Any], ttl_s: int = 600) -> bool:
+        """Put JSON object to Mw with TTL."""
+        if not self.mw_manager:
+            return False
+        try:
+            self.mw_manager.set_item(key, json.dumps(obj), ttl=ttl_s)  # supports ttl if your MwManager does
+            self.memory_writes += 1
+            self._mw_puts = getattr(self, "_mw_puts", 0) + 1
+            return True
+        except Exception as e:
+            logger.debug(f"[{self.agent_id}] Mw put failed for {key}: {e}")
+            return False
+
+    def _promote_to_mlt(self, key: str, obj: Dict[str, Any], compression: bool = True) -> bool:
+        """Promote object to Mlt with optional compression."""
+        if not self.mlt_manager:
+            return False
+        try:
+            payload = obj
+            if compression and isinstance(obj, dict):
+                # toy "compression": drop large fields & keep summary size
+                pruned = {k: v for k, v in obj.items() if k not in ("raw", "tokens", "trace")}
+                if "raw" in obj:
+                    pruned["raw_size"] = len(str(obj["raw"]))  # track size
+                payload = pruned
+                self.total_compression_gain += max(0.0, len(str(obj)) - len(str(pruned)))
+            self.mlt_manager.store_holon(key, payload)  # consistent with your mlt API
+            self._mlt_promotions = getattr(self, "_mlt_promotions", 0) + 1
+            return True
+        except Exception as e:
+            logger.debug(f"[{self.agent_id}] Mlt promote failed for {key}: {e}")
+            return False
+
+    def _energy_slice(self) -> float:
+        """A simple local scalar we can use as 'E' proxy: norm(h) + capability + 0.1*mem_util."""
+        try:
+            norm = float(np.linalg.norm(self.state_embedding))
+        except Exception:
+            norm = float(np.linalg.norm(np.array(self.state.h, dtype=np.float32)))
+        return norm + float(self.capability_score) + 0.1 * float(self.mem_util)
+
+    def build_memory_fragments(self, *, anomalies=None, reason=None, decision=None) -> List[Dict[str, Any]]:
+        """
+        Return canonical fragments for best-effort synthesis. Pure data; no I/O.
+        """
+        frags = []
+        if anomalies is not None:
+            frags.append({"anomalies": anomalies})
+        if reason is not None:
+            frags.append({"reason": reason})
+        if decision is not None:
+            frags.append({"decision": decision})
+        # include a tiny local context snapshot
+        frags.append({"agent_snapshot": {
+            "agent_id": self.agent_id,
+            "capability": self.capability_score,
+            "mem_util": self.mem_util,
+            "h_norm": float(np.linalg.norm(self.state_embedding)),
+            "ts": time.time(),
+        }})
+        return frags
     
     def get_id(self) -> str:
         """Returns the agent's ID."""
@@ -340,6 +441,9 @@ class RayAgent:
         """
         logger.info(f"🤖 Agent {self.agent_id} executing task: {task_data.get('task_id', 'unknown')}")
         
+        # Capture energy before task execution
+        E_before = self._energy_slice()
+        
         # --- TASK EXECUTION LOGIC ---
         task_type = task_data.get('type', 'unknown')
         task_description = task_data.get('description', '')
@@ -362,6 +466,33 @@ class RayAgent:
         
         # Update local metrics using the new energy-aware method
         self.update_local_metrics(result.get('success', False), result.get('quality', 0.5), result.get('mem_hits', 0))
+        
+        # Calculate energy after task execution
+        E_after = self._energy_slice()
+        delta_e = E_after - E_before
+        result["delta_e_realized"] = delta_e
+        result["E_before"] = E_before
+        result["E_after"] = E_after
+        
+        # --- Mw/Mlt write path and promotion ---
+        artifact_key = f"task:{task_data.get('task_id','unknown')}"
+        artifact = {
+            "agent_id": self.agent_id,
+            "type": task_type,
+            "ts": time.time(),
+            "result": result.get("result"),
+            "success": result.get("success", False),
+            "quality": result.get("quality", 0.5),
+        }
+        self._mw_put_json(artifact_key, artifact, ttl_s=600)
+
+        # simple policy: promote successes with quality>=0.8, or failures with salience >= 0.7 (if present)
+        should_promote = artifact["success"] and artifact["quality"] >= 0.8
+        sal = result.get("salience_score")
+        if sal is not None:
+            should_promote = should_promote or (not artifact["success"] and sal >= 0.7)
+        if should_promote:
+            self._promote_to_mlt(artifact_key, artifact, compression=True)
         
         return result
 
@@ -468,15 +599,23 @@ class RayAgent:
                     
                     if matches:
                         expression = matches[0]
-                        # Safe evaluation using ast.literal_eval for simple expressions
-                        # This is limited but safe for basic arithmetic
-                        result = {
-                            "query_type": "math_query",
-                            "expression": expression,
-                            "result": eval(expression),  # Safe for basic arithmetic
-                            "formatted": f"The result of {expression} is {eval(expression)}",
-                            "description": description
-                        }
+                        # Safe evaluation using our custom arithmetic evaluator
+                        try:
+                            value = _safe_eval_arith(expression)
+                            result = {
+                                "query_type": "math_query",
+                                "expression": expression,
+                                "result": value,
+                                "formatted": f"The result of {expression} is {value}",
+                                "description": description
+                            }
+                        except Exception as e:
+                            result = {
+                                "query_type": "math_query",
+                                "error": f"Failed to evaluate expression: {str(e)}",
+                                "formatted": f"I couldn't evaluate the expression '{expression}': {str(e)}",
+                                "description": description
+                            }
                     else:
                         result = {
                             "query_type": "math_query",
@@ -693,7 +832,9 @@ class RayAgent:
                 "memory_writes": self.memory_writes,
                 "memory_hits_on_writes": self.memory_hits_on_writes,
                 "salient_events_logged": self.salient_events_logged,
-                "total_compression_gain": self.total_compression_gain
+                "total_compression_gain": self.total_compression_gain,
+                "mw_puts": getattr(self, "_mw_puts", 0),
+                "mlt_promotions": getattr(self, "_mlt_promotions", 0),
             },
             "local_state": {
                 "skill_deltas": self.skill_deltas,
@@ -738,7 +879,7 @@ class RayAgent:
     async def find_knowledge(self, fact_id: str) -> Optional[Dict[str, Any]]:
         """
         Attempts to find a piece of knowledge, implementing the Mw -> Mlt escalation.
-        This is an async method that uses non-blocking calls.
+        This is an async method that uses non-blocking calls with negative caching and single-flight guards.
         
         Args:
             fact_id: The ID of the fact to find
@@ -753,43 +894,80 @@ class RayAgent:
             logger.error(f"[{self.agent_id}] ❌ Memory managers not available")
             return None
 
-        # 1. Query Working Memory (Mw) first using async method
-        logger.info(f"[{self.agent_id}] 📋 Querying Working Memory (Mw)...")
-        try:
-            cached_data = await self.mw_manager.get_item_async(fact_id)
-            
+        # Check negative cache first (avoid stampede on cold misses)
+        if await self.mw_manager.check_negative_cache("fact", "global", fact_id):
+            logger.info(f"[{self.agent_id}] NEG-HIT for {fact_id}; skipping Mlt lookup")
+            return None
+
+        # Try to acquire single-flight sentinel atomically
+        sentinel_key = f"_inflight:fact:global:{fact_id}"
+        sentinel_acquired = await self.mw_manager.try_set_inflight(sentinel_key, ttl_s=5)
+        if not sentinel_acquired:
+            logger.info(f"[{self.agent_id}] Another worker is fetching {fact_id}, waiting briefly...")
+            # Wait briefly for the other worker to complete
+            await asyncio.sleep(0.05)  # Brief backoff
+            # Try to get the result that might have been cached
+            cached_data = await self.mw_manager.get_item_typed_async("fact", "global", fact_id)
             if cached_data:
-                logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mw (cache hit).")
+                logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' after waiting (cache hit).")
                 try:
-                    return json.loads(cached_data)  # Deserialize from JSON string
+                    return json.loads(cached_data) if isinstance(cached_data, str) else cached_data
                 except json.JSONDecodeError:
                     logger.warning(f"[{self.agent_id}] ⚠️ Failed to parse cached data as JSON")
                     return {"raw_data": cached_data}
-        except Exception as e:
-            logger.error(f"[{self.agent_id}] ❌ Error querying Mw: {e}")
+            return None
 
-        # 2. On a miss, escalate to Long-Term Memory (Mlt)
-        logger.info(f"[{self.agent_id}] ⚠️ '{fact_id}' not in Mw (cache miss). Escalating to Mlt...")
         try:
-            long_term_data = self.mlt_manager.query_holon_by_id(fact_id)  # No await needed
+            # 1. Query Working Memory (Mw) first using typed key format
+            logger.info(f"[{self.agent_id}] 📋 Querying Working Memory (Mw)...")
+            try:
+                cached_data = await self.mw_manager.get_item_typed_async("fact", "global", fact_id)
+                
+                if cached_data:
+                    logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mw (cache hit).")
+                    try:
+                        return json.loads(cached_data) if isinstance(cached_data, str) else cached_data
+                    except json.JSONDecodeError:
+                        logger.warning(f"[{self.agent_id}] ⚠️ Failed to parse cached data as JSON")
+                        return {"raw_data": cached_data}
+            except Exception as e:
+                logger.error(f"[{self.agent_id}] ❌ Error querying Mw: {e}")
 
-            if long_term_data:
-                logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mlt.")
-                
-                # 3. Cache the retrieved data back into Mw for future use
-                logger.info(f"[{self.agent_id}] 💾 Caching '{fact_id}' back to Mw...")
-                try:
-                    self.mw_manager.set_item(fact_id, json.dumps(long_term_data))
-                    logger.info(f"[{self.agent_id}] ✅ Successfully cached to Mw")
-                except Exception as e:
-                    logger.error(f"[{self.agent_id}] ❌ Failed to cache to Mw: {e}")
-                
-                return long_term_data
-            else:
-                logger.warning(f"[{self.agent_id}] ❌ '{fact_id}' not found in Mlt either.")
-                
-        except Exception as e:
-            logger.error(f"[{self.agent_id}] ❌ Error querying Mlt: {e}")
+            # 2. On a miss, escalate to Long-Term Memory (Mlt)
+            logger.info(f"[{self.agent_id}] ⚠️ '{fact_id}' not in Mw (cache miss). Escalating to Mlt...")
+            try:
+                long_term_data = self.mlt_manager.query_holon_by_id(fact_id)  # No await needed
+
+                if long_term_data:
+                    logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mlt.")
+                    
+                    # 3. Cache the retrieved data back into Mw for future use using global write-through
+                    logger.info(f"[{self.agent_id}] 💾 Caching '{fact_id}' back to Mw...")
+                    try:
+                        # Use set_global_item for cluster-wide visibility with TTL
+                        self.mw_manager.set_global_item_typed("fact", "global", fact_id, json.dumps(long_term_data), ttl_s=900)
+                        logger.info(f"[{self.agent_id}] ✅ Successfully cached to Mw (global)")
+                    except Exception as e:
+                        logger.error(f"[{self.agent_id}] ❌ Failed to cache to Mw: {e}")
+                    
+                    return long_term_data
+                else:
+                    # On total miss: write short-lived negative cache (30s)
+                    logger.info(f"[{self.agent_id}] ❌ '{fact_id}' not found in Mlt. Setting negative cache.")
+                    try:
+                        self.mw_manager.set_negative_cache("fact", "global", fact_id, ttl_s=30)
+                    except Exception as e:
+                        logger.error(f"[{self.agent_id}] ❌ Failed to set negative cache: {e}")
+                    
+                    return None
+            except Exception as e:
+                logger.error(f"[{self.agent_id}] ❌ Error querying Mlt: {e}")
+        finally:
+            # Always clear in-flight sentinel
+            try:
+                await self.mw_manager.del_global_key(sentinel_key)
+            except Exception:
+                pass
         
         logger.warning(f"[{self.agent_id}] 🚨 Could not find '{fact_id}' in any memory tier.")
         return None
@@ -809,6 +987,9 @@ class RayAgent:
         required_fact = task_info.get('required_fact')
         
         logger.info(f"[{self.agent_id}] 🚀 Starting collaborative task '{task_name}'...")
+        
+        # Capture energy before task execution
+        E_before = self._energy_slice()
         
         knowledge = None
         if required_fact:
@@ -834,7 +1015,11 @@ class RayAgent:
         task_complexity = task_info.get('complexity', 0.5)
         self.mem_util = min(1.0, self.mem_util + task_complexity * 0.1)
         
-        return {
+        # Calculate energy after task execution
+        E_after = self._energy_slice()
+        delta_e = E_after - E_before
+        
+        result = {
             "agent_id": self.agent_id,
             "task_name": task_name,
             "task_processed": True,
@@ -843,8 +1028,29 @@ class RayAgent:
             "capability_score": self.capability_score,
             "mem_util": self.mem_util,
             "knowledge_found": knowledge is not None,
-            "knowledge_content": knowledge.get('content', None) if knowledge else None
+            "knowledge_content": knowledge.get('content', None) if knowledge else None,
+            "delta_e_realized": delta_e,
+            "E_before": E_before,
+            "E_after": E_after
         }
+        
+        # --- Mw/Mlt write path and promotion ---
+        artifact_key = f"task:{task_info.get('task_id', task_name)}"
+        artifact = {
+            "agent_id": self.agent_id,
+            "type": "collab_task",
+            "ts": time.time(),
+            "required_fact": required_fact,
+            "knowledge_found": knowledge is not None,
+            "knowledge_content": knowledge.get('content') if knowledge else None,
+            "success": success,
+            "quality": quality,
+        }
+        self._mw_put_json(artifact_key, artifact, ttl_s=900)
+        if success and quality >= 0.8:
+            self._promote_to_mlt(artifact_key, artifact, compression=True)
+        
+        return result
 
     def execute_high_stakes_task(self, task_info: dict) -> dict:
         """
@@ -882,6 +1088,16 @@ class RayAgent:
                 
                 if incident_logged:
                     logger.info(f"[{self.agent_id}] ✅ Incident successfully logged to Flashbulb Memory")
+                    
+                    # Also drop a compact pointer in Mw with a short TTL
+                    if self.mw_manager:
+                        try:
+                            ptr_key = f"incident:{task_info.get('id', 'unknown')}"
+                            self.mw_manager.set_global_item_typed("incident", "global", ptr_key, 
+                                                                {"mfb_id": incident_logged}, ttl_s=1800)
+                            logger.debug(f"[{self.agent_id}] Incident pointer cached in Mw")
+                        except Exception as e:
+                            logger.debug(f"[{self.agent_id}] Failed to cache incident pointer: {e}")
                 else:
                     logger.error(f"[{self.agent_id}] ❌ Failed to log incident to Flashbulb Memory")
             else:
@@ -1059,6 +1275,36 @@ class RayAgent:
                 # In a real system, you would publish this to Redis Pub/Sub
                 # or send it to a central telemetry service
                 logger.info(f"HEARTBEAT from {self.agent_id}: capability={heartbeat['performance_metrics']['capability_score_c']:.3f}")
+                
+                # Light-touch hot-item prewarming with rate limiting
+                if self.mw_manager and random.random() < 0.1:
+                    # Reset rate limit counter every minute
+                    now = time.time()
+                    if now - self._prewarm_reset_time > 60:
+                        self._prewarm_count = 0
+                        self._prewarm_reset_time = now
+                    
+                    # Check rate limit
+                    if self._prewarm_count < self._max_prewarm_per_minute:
+                        try:
+                            hot_items = await self.mw_manager.get_hot_items_async(top_n=5)
+                            for item_id, _cnt in hot_items:
+                                # Touch into L0 via get_item_async (promotes if present in L1/L2)
+                                _ = await self.mw_manager.get_item_async(item_id)
+                                self._prewarm_count += 1
+                            if hot_items:
+                                logger.debug(f"[{self.agent_id}] Pre-warmed {len(hot_items)} hot items")
+                        except Exception as e:
+                            logger.debug(f"[{self.agent_id}] Hot-item prewarming failed: {e}")
+                
+                # Log cache telemetry every 10th heartbeat
+                if self.mw_manager and self.tasks_processed % 10 == 0:
+                    try:
+                        telemetry = self.mw_manager.get_telemetry()
+                        logger.info(f"[{self.agent_id}] Cache telemetry: {telemetry}")
+                    except Exception as e:
+                        logger.debug(f"[{self.agent_id}] Telemetry logging failed: {e}")
+                
                 await asyncio.sleep(interval_seconds)
             except Exception as e:
                 logger.error(f"Error in heartbeat loop for {self.agent_id}: {e}")
@@ -1078,6 +1324,11 @@ class RayAgent:
         self.total_compression_gain = 0.0
         self.skill_deltas.clear()
         self.peer_interactions.clear()
+        
+        # Rate limiting for prewarm
+        self._prewarm_count = 0
+        self._prewarm_reset_time = time.time()
+        self._max_prewarm_per_minute = 10
         logger.info(f"🔄 Agent {self.agent_id} metrics reset")
     
     # =============================================================================

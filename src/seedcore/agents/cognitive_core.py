@@ -39,6 +39,16 @@ except Exception:
 
 MW_ENABLED = os.getenv("MW_ENABLED", "1") in {"1", "true", "True"}
 
+# Try to use LongTermMemoryManager if present; degrade gracefully if not.
+try:
+    from src.seedcore.memory.long_term_memory import LongTermMemoryManager
+    _MLT_AVAILABLE = True
+except Exception:
+    LongTermMemoryManager = None  # type: ignore
+    _MLT_AVAILABLE = False
+
+MLT_ENABLED = os.getenv("MLT_ENABLED", "1") in {"1", "true", "True"}
+
 # Import the new centralized result schema
 from ..models.result_schema import (
     create_cognitive_result, create_error_result, TaskResult
@@ -592,9 +602,23 @@ class CognitiveCore(dspy.Module):
         super().__init__()
         self.llm_provider = llm_provider
         self.model = model
-        self.context_broker = context_broker
         self.ocps_client = ocps_client
         self.schema_version = "v2.0"
+        
+        # Initialize Mw/Mlt support first
+        self._mw_enabled = bool(MW_ENABLED and _MW_AVAILABLE)
+        self._mw_by_agent: Dict[str, MwManager] = {} if self._mw_enabled else {}
+        self._mlt_enabled = bool(MLT_ENABLED and _MLT_AVAILABLE)
+        self._mlt = LongTermMemoryManager() if self._mlt_enabled else None
+        
+        # Create ContextBroker with Mw/Mlt search functions if none provided
+        if context_broker is None:
+            # Create lambda functions that will be bound to agent_id at call time
+            text_fn = lambda query, k: self._mw_first_text_search("", query, k)  # Will be overridden in process()
+            vec_fn = lambda query, k: self._mw_first_vector_search("", query, k)  # Will be overridden in process()
+            self.context_broker = ContextBroker(text_fn, vec_fn, token_budget=1500, ocps_client=self.ocps_client)
+        else:
+            self.context_broker = context_broker
         
         # Initialize specialized cognitive modules with post-condition checks
         self.failure_analyzer = dspy.ChainOfThought(AnalyzeFailureSignature)
@@ -626,13 +650,16 @@ class CognitiveCore(dspy.Module):
         
         logger.info(f"Initialized CognitiveCore with {llm_provider} and model {model}")
 
-        # ### MW INTEGRATION: lightweight per-agent managers cache
-        self._mw_enabled = bool(MW_ENABLED and _MW_AVAILABLE)
-        self._mw_by_agent: Dict[str, MwManager] = {} if self._mw_enabled else {}
+        # Log Mw/Mlt integration status
         if self._mw_enabled:
             logger.info("MwManager integration: ENABLED")
         else:
             logger.info("MwManager integration: DISABLED (missing module or env)")
+
+        if self._mlt_enabled:
+            logger.info("LongTermMemoryManager integration: ENABLED")
+        else:
+            logger.info("LongTermMemoryManager integration: DISABLED (missing module or env)")
 
     def _stable_hash(self, task_type: CognitiveTaskType, agent_id: str, input_data: Dict[str, Any]) -> str:
         """Stable hash of inputs (drop obviously-ephemeral fields if present)."""
@@ -727,16 +754,61 @@ class CognitiveCore(dspy.Module):
         try:
             # Check cache first
             cache_key = self._generate_cache_key(context.task_type, context.agent_id, context.input_data)
-            cached_result = self._get_cached_result(cache_key, context.task_type)
+            cached_result = self._get_cached_result(cache_key, context.task_type, agent_id=context.agent_id)
             if cached_result:
                 logger.info(f"Cache hit for {context.task_type.value} task")
                 return cached_result
             
             # Retrieve and budget facts
             if self.context_broker:
+                # Create agent-specific search functions
+                text_fn = lambda query, k: self._mw_first_text_search(context.agent_id, query, k)
+                vec_fn = lambda query, k: self._mw_first_vector_search(context.agent_id, query, k)
+                
+                # Create a temporary ContextBroker with agent-specific search functions
+                temp_broker = ContextBroker(text_fn, vec_fn, token_budget=1500, ocps_client=self.ocps_client)
+                
                 query = self._build_query(context)
-                facts, sufficiency = self.context_broker.retrieve(query, k=20, task_type=context.task_type)
-                budgeted_facts, summary, final_sufficiency = self.context_broker.budget(facts, context.task_type)
+                facts, sufficiency = temp_broker.retrieve(query, k=20, task_type=context.task_type)
+                budgeted_facts, summary, final_sufficiency = temp_broker.budget(facts, context.task_type)
+                
+                # Store sufficiency for fragment helper
+                self.last_sufficiency = final_sufficiency.__dict__
+                
+                # Backfill Mw with curated facts (sanitized) with TTL using global write-through
+                if self._mw_enabled:
+                    mw = self._mw(context.agent_id)
+                    if mw:
+                        for f in budgeted_facts[:10]:
+                            try:
+                                # Use global write-through for cluster-wide visibility
+                                mw.set_global_item_typed("fact", "global", f.id, f.to_dict(), ttl_s=1800)
+                                # Clear any negative cache for this fact
+                                neg_key = f"_neg:fact:global:{f.id}"
+                                mw.del_global_key_sync(neg_key)
+                            except Exception:
+                                pass
+
+                # Optional promote: on high trust & coverage, store a compact synopsis in Mlt
+                if self._mlt:
+                    try:
+                        if final_sufficiency.coverage > 0.7 and final_sufficiency.trust_score > 0.6:
+                            synopsis = {
+                                "agent_id": context.agent_id,
+                                "task_type": context.task_type.value,
+                                "summary": summary,
+                                "facts": [{"id": f.id, "source": f.source, "score": f.score, "trust": f.trust} for f in budgeted_facts[:5]],
+                                "ts": time.time(),
+                            }
+                            synopsis_id = f"cc:syn:{context.task_type.value}:{int(time.time())}"
+                            self._mlt.store_holon(synopsis_id, synopsis)
+                            
+                            # Also cache synopsis globally for fast access
+                            if self._mw_enabled and mw:
+                                mw.set_global_item_typed("synopsis", "global", f"{context.task_type.value}:{context.agent_id}", 
+                                                       synopsis, ttl_s=3600)
+                    except Exception:
+                        pass
                 
                 # Check if should escalate to deep path
                 if self._should_escalate_to_deep_path(final_sufficiency, context.task_type):
@@ -748,6 +820,16 @@ class CognitiveCore(dspy.Module):
                 knowledge_context = self._build_knowledge_context(budgeted_facts, summary, final_sufficiency)
             else:
                 knowledge_context = {"facts": [], "summary": "No context broker available", "sufficiency": {}}
+                
+                # Add negative cache for expensive deep-path misses
+                if self._mw_enabled and not facts:
+                    mw = self._mw(context.agent_id)
+                    if mw:
+                        try:
+                            query_hash = hashlib.md5(query.encode()).hexdigest()[:12]
+                            mw.set_global_item_typed("_neg", "query", query_hash, "1", ttl_s=60)
+                        except Exception:
+                            pass
             
             # Process with appropriate handler
             handler = self.task_handlers.get(context.task_type)
@@ -768,7 +850,7 @@ class CognitiveCore(dspy.Module):
                 # Could retry or escalate here
             
             # Cache result
-            self._cache_result(cache_key, result, context.task_type)
+            self._cache_result(cache_key, result, context.task_type, agent_id=context.agent_id)
             
             return create_cognitive_result(
                 success=True,
@@ -824,19 +906,18 @@ class CognitiveCore(dspy.Module):
             }
         }
 
-    def _get_cached_result(self, cache_key: str, task_type: CognitiveTaskType) -> Optional[TaskResult]:
+    def _get_cached_result(self, cache_key: str, task_type: CognitiveTaskType, *, agent_id: str) -> Optional[TaskResult]:
         """Get cached result with TTL check."""
         if not self._mw_enabled:
             return None
         
         try:
             # Get agent-specific cache
-            agent_id = "default"  # In practice, extract from context
-            mw = self._mw_by_agent.get(agent_id)
+            mw = self._mw(agent_id)
             if not mw:
                 return None
             
-            cached_data = mw.get(cache_key)
+            cached_data = mw.get_item(cache_key)  # Use sync method
             if not cached_data:
                 return None
             
@@ -844,7 +925,7 @@ class CognitiveCore(dspy.Module):
             ttl = self.cache_ttl_by_task.get(task_type, 600)
             cache_age = time.time() - cached_data.get("cached_at", 0)
             if cache_age > ttl:
-                mw.delete(cache_key)
+                mw.del_global_key_sync(cache_key)  # Use explicit deletion
                 return None
             
             logger.info(f"Cache hit: {cache_key} (age: {cache_age:.1f}s)")
@@ -854,14 +935,13 @@ class CognitiveCore(dspy.Module):
             logger.warning(f"Cache retrieval error: {e}")
             return None
 
-    def _cache_result(self, cache_key: str, result: Dict[str, Any], task_type: CognitiveTaskType):
+    def _cache_result(self, cache_key: str, result: Dict[str, Any], task_type: CognitiveTaskType, *, agent_id: str):
         """Cache result with metadata."""
         if not self._mw_enabled:
             return
         
         try:
-            agent_id = "default"  # In practice, extract from context
-            mw = self._mw_by_agent.get(agent_id)
+            mw = self._mw(agent_id)
             if not mw:
                 return
             
@@ -891,6 +971,78 @@ class CognitiveCore(dspy.Module):
                 logger.debug("MwManager unavailable (init failed): %s", e)
                 return None
         return mgr
+
+    def _mw_text_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
+        """Search text in Mw for agent."""
+        mw = self._mw(agent_id)
+        if not mw:
+            return []
+        # naive example: prefix scan or index lookup if your Mw supports it
+        hits = mw.search_text(q, k=k) if hasattr(mw, "search_text") else []
+        return hits
+
+    def _mlt_text_search(self, q: str, k: int) -> List[Dict[str, Any]]:
+        """Search text in Mlt."""
+        if not self._mlt:
+            return []
+        return self._mlt.search_text(q, k=k) if hasattr(self._mlt, "search_text") else []
+
+    def _mw_vector_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
+        """Search vectors in Mw for agent."""
+        mw = self._mw(agent_id)
+        if not mw:
+            return []
+        hits = mw.search_vector(q, k=k) if hasattr(mw, "search_vector") else []
+        return hits
+
+    def _mlt_vector_search(self, q: str, k: int) -> List[Dict[str, Any]]:
+        """Search vectors in Mlt."""
+        if not self._mlt:
+            return []
+        return self._mlt.search_vector(q, k=k) if hasattr(self._mlt, "search_vector") else []
+
+    def _mw_first_text_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
+        """Search Mw first, then Mlt, with Mw backfill on Mlt hits."""
+        hits = self._mw_text_search(agent_id, q, k)
+        if hits or not self._mlt:
+            return hits
+        # fallback to Mlt and backfill Mw
+        mlt_hits = self._mlt_text_search(q, k)
+        mw = self._mw(agent_id)
+        if mw:
+            for h in mlt_hits:
+                try:
+                    # Use global write-through for cluster-wide visibility
+                    mw.set_global_item_typed("fact", "global", h.get('id', ''), h, ttl_s=1800)
+                except Exception:
+                    pass
+        return mlt_hits
+
+    def _mw_first_vector_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
+        """Search Mw first, then Mlt, with Mw backfill on Mlt hits."""
+        hits = self._mw_vector_search(agent_id, q, k)
+        if hits or not self._mlt:
+            return hits
+        # fallback to Mlt and backfill Mw
+        mlt_hits = self._mlt_vector_search(q, k)
+        mw = self._mw(agent_id)
+        if mw:
+            for h in mlt_hits:
+                try:
+                    # Use global write-through for cluster-wide visibility
+                    mw.set_global_item_typed("fact", "global", h.get('id', ''), h, ttl_s=1800)
+                except Exception:
+                    pass
+        return mlt_hits
+
+    def build_fragments_for_synthesis(self, context: CognitiveContext, facts: List[Fact], summary: str) -> List[Dict[str, Any]]:
+        """Build memory-synthesis fragments for Coordinator."""
+        return [
+            {"agent_id": context.agent_id},
+            {"knowledge_summary": summary},
+            {"top_facts": [f.to_dict() for f in facts[:5]]},
+            {"ocps_sufficiency": getattr(self, "last_sufficiency", {})},
+        ]
     
     def forward(self, context: CognitiveContext) -> Dict[str, Any]:
         """
