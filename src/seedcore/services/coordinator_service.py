@@ -524,34 +524,80 @@ class Coordinator:
             return {"success": False, "error": str(e), "path": "hgnn"}
 
     @app.post(f"{router_prefix}/route-and-execute")
-    async def route_and_execute(self, task: Task):
+    async def route_and_execute(self, task):
         """
         Global entrypoint (paper §6): Predicate-based routing + HGNN escalation.
         """
         cid = uuid.uuid4().hex
         start_time = time.time()
         
-        # normalize
-        task.type = (task.type or "").strip().lower()
+        try:
+            # Log received task for debugging
+            logger.info(f"[Coordinator] Received task request: {task}")
+            logger.info(f"[Coordinator] Task object type: {type(task)}")
+            
+            # Validate task object
+            if task is None:
+                logger.error(f"[Coordinator] Task object is None")
+                raise HTTPException(status_code=400, detail="Task object is required")
+            
+            # Handle both Task and TaskPayload objects
+            if hasattr(task, 'type'):
+                # Task or TaskPayload object
+                if task.type is None:
+                    logger.error(f"[Coordinator] Task type is None. Task: {task}")
+                    raise HTTPException(status_code=400, detail="Task type is required")
+                task_type = (task.type or "").strip().lower()
+            elif isinstance(task, dict) and 'type' in task:
+                # Dictionary with type field
+                task_type = (task.get('type') or "").strip().lower()
+            else:
+                logger.error(f"[Coordinator] Task type is missing. Task: {task}")
+                raise HTTPException(status_code=400, detail="Task type is required")
+            
+            # Normalize task type
+            if hasattr(task, 'type'):
+                task.type = task_type
+            elif isinstance(task, dict):
+                task['type'] = task_type
+                
+        except AttributeError as e:
+            logger.error(f"[Coordinator] AttributeError in route_and_execute: {e}")
+            logger.error(f"[Coordinator] Task object type: {type(task)}")
+            logger.error(f"[Coordinator] Task object attributes: {dir(task) if hasattr(task, '__dict__') else 'No __dict__'}")
+            raise HTTPException(status_code=400, detail=f"Invalid task object: {str(e)}")
+        except Exception as e:
+            logger.error(f"[Coordinator] Unexpected error in route_and_execute: {e}")
+            raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
         # Prefetch context if available
-        self.prefetch_context(task.model_dump())
+        if hasattr(task, 'model_dump'):
+            self.prefetch_context(task.model_dump())
+        elif hasattr(task, 'dict'):
+            self.prefetch_context(task.dict())
+        elif isinstance(task, dict):
+            self.prefetch_context(task)
+        else:
+            logger.warning(f"[Coordinator] Cannot convert task to dict for prefetch_context: {type(task)}")
 
         # Update OCPS and signals
-        escalate = self.ocps.update(task.drift_score)
+        drift_score = getattr(task, 'drift_score', 0.0) if hasattr(task, 'drift_score') else task.get('drift_score', 0.0) if isinstance(task, dict) else 0.0
+        escalate = self.ocps.update(drift_score)
         
         # Update predicate signals
+        task_params = getattr(task, 'params', {}) if hasattr(task, 'params') else task.get('params', {}) if isinstance(task, dict) else {}
         self.predicate_router.update_signals(
             p_fast=self.ocps.p_fast,
-            s_drift=task.drift_score,
-            task_priority=task.params.get("priority", 5),
-            task_complexity=task.params.get("complexity", 0.5),
+            s_drift=drift_score,
+            task_priority=task_params.get("priority", 5),
+            task_complexity=task_params.get("complexity", 0.5),
             memory_utilization=0.5,  # TODO: Get from system metrics
             cpu_utilization=0.3,     # TODO: Get from system metrics
         )
 
         # Use predicate-based routing
-        routing_decision = self.predicate_router.route_task(task.model_dump())
+        task_dict = task.model_dump() if hasattr(task, 'model_dump') else task.dict() if hasattr(task, 'dict') else task if isinstance(task, dict) else {}
+        routing_decision = self.predicate_router.route_task(task_dict)
         
         # Execute based on routing decision
         if routing_decision.action == "fast_path" and routing_decision.organ_id:

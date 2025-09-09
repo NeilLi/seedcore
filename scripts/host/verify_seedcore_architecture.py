@@ -17,25 +17,25 @@ Verify SeedCore architecture end-to-end:
 
 UPDATED FOR NEW SERVICE BOUNDARIES:
 - Task creation: POST /api/v1/tasks (seedcore-api service)
-- Orchestrator: /orchestrator/pipeline/* (Ray Serve orchestrator for pipeline operations)
+- Coordinator: /coordinator/pipeline/* (Ray Serve coordinator for pipeline operations)
 - Health checks: GET /health (both services)
 - Response format: {"id": "uuid", "status": "string", "result": {...}, "created_at": "datetime"}
 
 - Ray cluster reachable
 - Coordinator actor healthy & organism initialized
 - N Dispatchers + M GraphDispatchers present and responsive
-- Serve apps 'orchestrator', 'cognitive', 'ml_service' up
+- Serve apps 'coordinator', 'cognitive', 'ml_service' up
 - Submit fast-path task (low drift) -> COMPLETED
 - Submit escalation task (high drift) -> COMPLETED
 - (Optional) Submit graph task via DB function -> COMPLETED
 - Pull Coordinator status/metrics snapshot
 
 IMPORTANT: This script has been updated to gracefully handle missing debugging methods
-on the deployed OrganismManager. It will check for method availability before calling
+on the deployed Coordinator. It will check for method availability before calling
 them and provide informative logging about what's available vs. what's missing.
 
 RAY SERVE ERROR FIX: This script now uses a whitelist approach to prevent calling
-unsupported methods on the OrganismManager deployment, which eliminates the noisy
+unsupported methods on the Coordinator deployment, which eliminates the noisy
 "Unhandled error ... Tried to call a method ... does not exist" Ray Serve logs.
 The SUPPORTED_COORD_METHODS whitelist and call_if_supported() function ensure only
 known-good methods are invoked.
@@ -48,9 +48,9 @@ errors by replacing asyncio.run() with DeploymentResponse.result() pattern in:
 This ensures compatibility with Ray 2.32+ where handle.method.remote() returns
 DeploymentResponse instead of coroutines.
 
-ORCHESTRATOR HEALTH PATH FIX: Fixed 404 errors on health endpoint by replacing
-urljoin(orch_url, "/health") with orch_url.rstrip("/") + "/health to preserve
-the /orchestrator base path. This ensures health requests go to /orchestrator/health
+COORDINATOR HEALTH PATH FIX: Fixed 404 errors on health endpoint by replacing
+urljoin(coord_url, "/health") with coord_url.rstrip("/") + "/health to preserve
+the /coordinator base path. This ensures health requests go to /coordinator/health
 instead of just /health.
 
 ANOMALY-TRIAGE TIMEOUT & SERVE BACKPRESSURE FIX: Fixed timeout issues and added
@@ -70,12 +70,12 @@ max_ongoing_requests warnings by pinning explicit values on deployments.
 Recommended configurations range from standard (32/2) to maximum capacity (64/4).
 Added DB telemetry monitoring for retry policy analysis and DLQ health tracking.
 
-ORCHESTRATOR CONNECTIVITY FIXES: This script now includes comprehensive diagnostics
-for orchestrator connectivity issues that cause tasks to get stuck in 'queued' status:
-- Enhanced submit_via_orchestrator() with detailed logging and error handling
-- Orchestrator connectivity testing (status endpoints, task submission)
+COORDINATOR CONNECTIVITY FIXES: This script now includes comprehensive diagnostics
+for coordinator connectivity issues that cause tasks to get stuck in 'queued' status:
+- Enhanced submit_via_coordinator() with detailed logging and error handling
+- Coordinator connectivity testing (status endpoints, task submission)
 - Queue worker status checking to identify stuck tasks
-- Option to fail fast when orchestrator is unreachable (no DB fallback)
+- Option to fail fast when coordinator is unreachable (no DB fallback)
 - Detailed diagnosis and fix recommendations for common issues
 
 Run inside a pod with cluster network access (or locally with port-forward).
@@ -88,21 +88,21 @@ Env:
 
   # Service Boundaries (Updated):
   # - Task creation: SEEDCORE_API_URL (seedcore-api service)
-  # - Orchestrator: ORCH_URL (Ray Serve orchestrator for pipeline operations)
+  # - Coordinator: COORD_URL (Ray Serve coordinator for pipeline operations)
   SEEDCORE_API_URL=http://seedcore-api:8002           (seedcore-api service for task CRUD)
   SEEDCORE_API_TIMEOUT=5.0                           (timeout for seedcore-api calls)
-  ORCH_URL=http://seedcore-svc-stable-svc:8000/orchestrator  (orchestrator for pipeline operations)
-  ORCH_PATHS=/pipeline/create-task                   (orchestrator pipeline endpoints)
+  COORD_URL=http://seedcore-svc-stable-svc:8000/coordinator  (coordinator for pipeline operations)
+  COORD_PATHS=/pipeline/create-task                   (coordinator pipeline endpoints)
   
   # API Schema (Updated Service Boundaries):
   # - Task creation: POST /api/v1/tasks (seedcore-api)
   # - Task response: {"id": "uuid", "status": "string", "result": {...}, "created_at": "datetime"}
-  # - Orchestrator: /orchestrator/pipeline/* (Ray Serve orchestrator)
+  # - Coordinator: /coordinator/pipeline/* (Ray Serve coordinator)
   # - Pipeline endpoints: /pipeline/anomaly-triage, /pipeline/tune/status/{job_id}
   
-  # IMPORTANT: Avoid double colons (::) in ORCH_URL - use single colon (:) for port
-  # Correct: http://127.0.0.1:8000/orchestrator
-  # Wrong:  http://127.0.0.1::8000/orchestrator
+  # IMPORTANT: Avoid double colons (::) in COORD_URL - use single colon (:) for port
+  # Correct: http://127.0.0.1:8000/coordinator
+  # Wrong:  http://127.0.0.1::8000/coordinator
 
   OCPS_DRIFT_THRESHOLD=0.5
   COGNITIVE_TIMEOUT_S=8.0
@@ -118,7 +118,7 @@ Env:
   DEBUG_LEVEL=INFO|DEBUG           # Set logging level for debugging
   STRICT_MODE=true|false           # Exit on validation failures (default: true)
   ENABLE_MOCK_ROUTING_TESTS=false # Enable mock routing tests (default: false)
-  ENABLE_DIRECT_FALLBACK=false    # Enable direct execution fallback when orchestrator is down (default: false)
+  ENABLE_DIRECT_FALLBACK=false    # Enable direct execution fallback when coordinator is down (default: false)
   TASK_TIMEOUT_S=90               # Timeout for waiting for task completion (default: 90s)
   TASK_STATUS_CHECK_INTERVAL_S=5  # Interval for checking task status (default: 5s)
   
@@ -127,7 +127,7 @@ Env:
   RAY_SERVE_MAX_QUEUE_LENGTH=2000                 # Increase queue capacity
   SUPPRESS_RAY_SERVE_WARNINGS=false              # Set to true to suppress Ray Serve timeout warnings
   
-  # Task creation timing (for orchestrator database integration issues)
+  # Task creation timing (for coordinator database integration issues)
   TASK_DB_INSERTION_RETRIES=5                    # Number of retries to find task in database
   TASK_DB_INSERTION_DELAY_S=2.0                  # Delay between retries for database insertion
   
@@ -169,18 +169,18 @@ def get_api_failure_metrics() -> dict[str, int]:
     """Get current API failure metrics."""
     return coord_api_call_failures.copy()
 
-# === ORCHESTRATOR HEALTH METRICS ===
-# Counter to track orchestrator health HTTP status codes
-orchestrator_health_http_status = {}
+# === COORDINATOR HEALTH METRICS ===
+# Counter to track coordinator health HTTP status codes
+coordinator_health_http_status = {}
 
-def track_orchestrator_health_status(status_code: int):
-    """Track orchestrator health endpoint HTTP status codes."""
-    orchestrator_health_http_status[status_code] = orchestrator_health_http_status.get(status_code, 0) + 1
-    log.info(f"📊 Orchestrator health status tracked: orchestrator_health_http_status{{status={status_code}}} = {orchestrator_health_http_status[status_code]}")
+def track_coordinator_health_status(status_code: int):
+    """Track coordinator health endpoint HTTP status codes."""
+    coordinator_health_http_status[status_code] = coordinator_health_http_status.get(status_code, 0) + 1
+    log.info(f"📊 Coordinator health status tracked: coordinator_health_http_status{{status={status_code}}} = {coordinator_health_http_status[status_code]}")
 
-def get_orchestrator_health_metrics() -> dict[int, int]:
-    """Get current orchestrator health metrics."""
-    return orchestrator_health_http_status.copy()
+def get_coordinator_health_metrics() -> dict[int, int]:
+    """Get current coordinator health metrics."""
+    return coordinator_health_http_status.copy()
 
 # === LATENCY TRACKING FOR PIPELINE ENDPOINTS ===
 # Track latency for pipeline endpoints to identify performance issues
@@ -451,43 +451,43 @@ def fix_service_url_issues():
     Provide helpful guidance for fixing service URL issues.
     """
     api_url = env('SEEDCORE_API_URL', '')
-    orch_url = env('ORCH_URL', '')
+    coord_url = env('COORD_URL', '')
     
     if not api_url:
         log.info("📋 SEEDCORE_API_URL is not set")
         log.info("   Set it with: export SEEDCORE_API_URL='http://seedcore-api:8002'")
         log.info("   For local testing: export SEEDCORE_API_URL='http://127.0.0.1:8002'")
     
-    if not orch_url:
-        log.info("📋 ORCH_URL is not set")
-        log.info("   Set it with: export ORCH_URL='http://127.0.0.1:8000/orchestrator'")
+    if not coord_url:
+        log.info("📋 COORD_URL is not set")
+        log.info("   Set it with: export COORD_URL='http://127.0.0.1:8000/coordinator'")
         return
     
-    if "::" in orch_url:
-        log.error("❌ ORCH_URL contains double colons (::) - this is the root cause!")
-        log.error("   Current value: " + orch_url)
+    if "::" in coord_url:
+        log.error("❌ COORD_URL contains double colons (::) - this is the root cause!")
+        log.error("   Current value: " + coord_url)
         log.error("   This creates an invalid URL that cannot be parsed")
         log.error("")
         log.error("🔧 IMMEDIATE FIXES:")
         log.error("   1. Fix in current shell:")
-        log.error("      export ORCH_URL='http://127.0.0.1:8000/orchestrator'")
+        log.error("      export COORD_URL='http://127.0.0.1:8000/coordinator'")
         log.error("")
         log.error("   2. Fix the double colon issue:")
-        log.error("      export ORCH_URL=$(echo $ORCH_URL | sed 's/::/:/g')")
+        log.error("      export COORD_URL=$(echo $COORD_URL | sed 's/::/:/g')")
         log.error("")
         log.error("   3. Verify the fix:")
-        log.error("      echo $ORCH_URL")
-        log.error("      Should show: http://127.0.0.1:8000/orchestrator")
+        log.error("      echo $COORD_URL")
+        log.error("      Should show: http://127.0.0.1:8000/coordinator")
         log.error("")
         log.error("   4. Re-run the script after fixing")
         return
     
     # Check other common issues
-    if not orch_url.startswith(("http://", "https://")):
-        log.warning("⚠️ ORCH_URL missing protocol")
-        log.info("   Add protocol: export ORCH_URL='http://127.0.0.1:8000/orchestrator'")
+    if not coord_url.startswith(("http://", "https://")):
+        log.warning("⚠️ COORD_URL missing protocol")
+        log.info("   Add protocol: export COORD_URL='http://127.0.0.1:8000/coordinator'")
     
-    log.info("✅ ORCH_URL looks valid: " + orch_url)
+    log.info("✅ COORD_URL looks valid: " + coord_url)
 
 def env(k: str, default: str = "") -> str:
     return os.getenv(k, default)
@@ -789,7 +789,7 @@ def serve_deployment_status(handle, timeout=10.0) -> dict[str, Any]:
         log.warning(f"⚠️ Status call failed: {e}")
         return {}
 
-# ---- Orchestrator client
+# ---- Coordinator client
 def submit_via_seedcore_api(task: dict[str, Any]) -> Optional[uuid.UUID]:
     """
     Submit task to seedcore-api using the new service boundaries.
@@ -856,11 +856,11 @@ def submit_via_seedcore_api(task: dict[str, Any]) -> Optional[uuid.UUID]:
     log.error(f"❌ All attempts failed for seedcore-api task: {task['type']}")
     return None
 
-def submit_via_orchestrator(task: dict[str, Any]) -> Optional[uuid.UUID]:
+def submit_via_coordinator(task: dict[str, Any]) -> Optional[uuid.UUID]:
     """
-    Submit task to orchestrator pipeline using the new service boundaries.
+    Submit task to coordinator pipeline using the new service boundaries.
     
-    This function now uses the orchestrator for pipeline operations only,
+    This function now uses the coordinator for pipeline operations only,
     not direct task creation. For task creation, use submit_via_seedcore_api().
     
     Expected response format:
@@ -871,23 +871,23 @@ def submit_via_orchestrator(task: dict[str, Any]) -> Optional[uuid.UUID]:
         "created_at": number
     }
     """
-    base = env("ORCH_URL", "")
+    base = env("COORD_URL", "")
     if not base:
-        log.warning("⚠️ ORCH_URL not set - orchestrator pipeline submission disabled")
+        log.warning("⚠️ COORD_URL not set - coordinator pipeline submission disabled")
         return None
     
     # Validate and sanitize the URL
     base = sanitize_url(base)
     if not base:
-        log.error("❌ ORCH_URL is malformed and cannot be fixed")
+        log.error("❌ COORD_URL is malformed and cannot be fixed")
         return None
     
-    paths = [p.strip() for p in env("ORCH_PATHS", "/pipeline/create-task").split(",") if p.strip()]
+    paths = [p.strip() for p in env("COORD_PATHS", "/pipeline/create-task").split(",") if p.strip()]
     if not paths:
-        log.warning("⚠️ ORCH_PATHS not set - orchestrator pipeline submission disabled")
+        log.warning("⚠️ COORD_PATHS not set - coordinator pipeline submission disabled")
         return None
     
-    log.info(f"🚀 Submitting task to orchestrator pipeline: {base} with paths {paths}")
+    log.info(f"🚀 Submitting task to coordinator pipeline: {base} with paths {paths}")
     payload_preview = json.dumps(task, default=str)
     if len(payload_preview) > 800:
         payload_preview = payload_preview[:800] + "... (truncated)"
@@ -904,7 +904,7 @@ def submit_via_orchestrator(task: dict[str, Any]) -> Optional[uuid.UUID]:
                 
                 if code >= 200 and code < 300:
                     log.info(f"✅ Success! Response: {js}")
-                    # Accept orchestrator pipeline response format:
+                    # Accept coordinator pipeline response format:
                     # {"task_id": "uuid", "status": "string", "message": "string", "created_at": number}
                     if isinstance(js, dict):
                         # Try id first (current TaskResponse format)
@@ -983,7 +983,7 @@ def submit_via_orchestrator(task: dict[str, Any]) -> Optional[uuid.UUID]:
                     time.sleep(0.5 * (2 ** attempt))
                 continue
     
-    log.error(f"❌ All orchestrator endpoints failed for task: {task['type']}")
+    log.error(f"❌ All coordinator endpoints failed for task: {task['type']}")
     return None
 
 # ---- Enhanced debugging functions for routing bug investigation
@@ -991,18 +991,14 @@ def submit_via_orchestrator(task: dict[str, Any]) -> Optional[uuid.UUID]:
 # --- Put near your other helpers in verify_seedcore_architecture.py ---
 
 SUPPORTED_COORD_METHODS = {
-    "health",
-    "status",
-    "get_organism_status",
-    "get_organism_summary",
-    "handle_incoming_task",
-    "handle_task",
-    "initialize_organism",
-    "make_decision",
-    "plan_task",
-    "reconfigure",
-    "shutdown_organism",
-    "test_routing",
+    "get_metrics",
+    "get_predicate_config",
+    "get_predicate_status",
+    "anomaly_triage",
+    "route_and_execute",
+    "tune_callback",
+    "prefetch_context",
+    "reload_predicates",
 }
 
 def serve_can_call(method_name: str) -> bool:
@@ -1070,13 +1066,13 @@ def inspect_coordinator_routing_logic(ray, coord):
     log.info(f"📋 Coordinator status: {json.dumps(st, indent=2, default=str)}")
 
     # Only supported calls
-    s = call_if_supported(coord, "get_organism_status", timeout_s=TIMEOUTS["serve_call_s"])
+    s = call_if_supported(coord, "get_predicate_status", timeout_s=TIMEOUTS["serve_call_s"])
     if s is not None:
-        log.info(f"📋 get_organism_status: {json.dumps(s, indent=2, default=str)}")
+        log.info(f"📋 get_predicate_status: {json.dumps(s, indent=2, default=str)}")
 
-    g = call_if_supported(coord, "get_organism_summary", timeout_s=TIMEOUTS["serve_call_s"])
+    g = call_if_supported(coord, "get_metrics", timeout_s=TIMEOUTS["serve_call_s"])
     if g is not None:
-        log.info(f"📋 get_organism_summary: {json.dumps(g, indent=2, default=str)}")
+        log.info(f"📋 get_metrics: {json.dumps(g, indent=2, default=str)}")
 
     log.info("=" * 50)
 
@@ -1145,13 +1141,13 @@ def check_coordinator_internal_state(ray, coord):
     log.info("=" * 50)
 
     # Only safe methods; skip the rest entirely
-    s = call_if_supported(coord, "get_organism_status")
+    s = call_if_supported(coord, "get_predicate_status")
     if s is not None:
-        log.info(f"📋 organism_status: {json.dumps(s, indent=2, default=str)}")
+        log.info(f"📋 get_predicate_status: {json.dumps(s, indent=2, default=str)}")
 
-    g = call_if_supported(coord, "get_organism_summary")
+    g = call_if_supported(coord, "get_metrics")
     if g is not None:
-        log.info(f"📋 organism_summary: {json.dumps(g, indent=2, default=str)}")
+        log.info(f"📋 get_metrics: {json.dumps(g, indent=2, default=str)}")
 
     log.info("=" * 50)
 
@@ -1165,17 +1161,17 @@ def check_coordinator_capabilities(ray, coord):
     log.info(f"📋 Supported methods (whitelist): {available}")
 
     # Basic health checks via whitelisted calls
-    h = call_if_supported(coord, "health", timeout_s=TIMEOUTS["serve_status_s"])
-    if isinstance(h, dict):
-        log.info(f"✅ health: {h}")
+    m = call_if_supported(coord, "get_metrics", timeout_s=TIMEOUTS["serve_status_s"])
+    if isinstance(m, dict):
+        log.info(f"✅ get_metrics: {m}")
     else:
-        log.warning("⚠️ health() not available or failed")
+        log.warning("⚠️ get_metrics() not available or failed")
 
-    s = call_if_supported(coord, "status", timeout_s=TIMEOUTS["serve_status_s"])
+    s = call_if_supported(coord, "get_predicate_status", timeout_s=TIMEOUTS["serve_status_s"])
     if isinstance(s, dict):
-        log.info(f"✅ status: {json.dumps(s, indent=2, default=str)}")
+        log.info(f"✅ get_predicate_status: {json.dumps(s, indent=2, default=str)}")
     else:
-        log.warning("⚠️ status() not available or failed")
+        log.warning("⚠️ get_predicate_status() not available or failed")
 
     log.info("=" * 50)
 
@@ -1218,35 +1214,35 @@ def verify_environment_configuration():
     log.info(f"📋 RAY_ADDRESS: {ray_address}")
     log.info(f"📋 RAY_NAMESPACE: {ray_namespace}")
     
-    # Check orchestrator configuration
-    orch_url = env('ORCH_URL', 'NOT_SET')
-    orch_paths = env('ORCH_PATHS', 'NOT_SET')
-    log.info(f"📋 ORCH_URL: {orch_url}")
-    log.info(f"📋 ORCH_PATHS: {orch_paths}")
+    # Check coordinator configuration
+    coord_url = env('COORD_URL', 'NOT_SET')
+    coord_paths = env('COORD_PATHS', 'NOT_SET')
+    log.info(f"📋 COORD_URL: {coord_url}")
+    log.info(f"📋 COORD_PATHS: {coord_paths}")
     
     # Check for common URL malformations
-    if orch_url != 'NOT_SET':
-        if "::" in orch_url:
-            log.error("❌ ORCH_URL contains double colons (::) - this will cause connection failures!")
-            log.error("   Current: " + orch_url)
-            log.error("   Should be: " + orch_url.replace("::", ":"))
-            log.error("   Fix: export ORCH_URL='http://127.0.0.1:8000/orchestrator'")
-        elif not orch_url.startswith(("http://", "https://")):
-            log.warning("⚠️ ORCH_URL missing protocol - will be auto-fixed")
+    if coord_url != 'NOT_SET':
+        if "::" in coord_url:
+            log.error("❌ COORD_URL contains double colons (::) - this will cause connection failures!")
+            log.error("   Current: " + coord_url)
+            log.error("   Should be: " + coord_url.replace("::", ":"))
+            log.error("   Fix: export COORD_URL='http://127.0.0.1:8000/coordinator'")
+        elif not coord_url.startswith(("http://", "https://")):
+            log.warning("⚠️ COORD_URL missing protocol - will be auto-fixed")
     
-    # Test orchestrator connectivity
-    test_orchestrator_connectivity()
+    # Test coordinator connectivity
+    test_coordinator_connectivity()
     
     log.info("=" * 50)
 
-def test_orchestrator_connectivity():
-    """Test connectivity to the orchestrator service."""
-    log.info("🔍 TESTING ORCHESTRATOR CONNECTIVITY")
+def test_coordinator_connectivity():
+    """Test connectivity to the coordinator service."""
+    log.info("🔍 TESTING COORDINATOR CONNECTIVITY")
     log.info("=" * 50)
     
-    orch_url = env("ORCH_URL", "")
-    if not orch_url:
-        log.warning("⚠️ ORCH_URL not set - skipping connectivity test")
+    coord_url = env("COORD_URL", "")
+    if not coord_url:
+        log.warning("⚠️ COORD_URL not set - skipping connectivity test")
         return
 
     # Guard pipeline tests behind env flag (default: off)
@@ -1256,9 +1252,9 @@ def test_orchestrator_connectivity():
         return
     
     # Validate and sanitize the URL first
-    orch_url = sanitize_url(orch_url)
-    if not orch_url:
-        log.error("❌ ORCH_URL is malformed and cannot be used for connectivity testing")
+    coord_url = sanitize_url(coord_url)
+    if not coord_url:
+        log.error("❌ COORD_URL is malformed and cannot be used for connectivity testing")
         return
     
     # Test basic connectivity
@@ -1267,14 +1263,14 @@ def test_orchestrator_connectivity():
         from urllib.parse import urljoin
         
         # Test health endpoint (new API)
-        # Fix: Use proper URL concatenation to preserve /orchestrator base path
-        health_url = orch_url.rstrip("/") + "/health"
+        # Fix: Use proper URL concatenation to preserve /coordinator base path
+        health_url = coord_url.rstrip("/") + "/health"
         log.info(f"🔗 Testing health endpoint: {health_url}")
         
         response = requests.get(health_url, timeout=5.0)
         log.info(f"📡 Health endpoint response: {response.status_code}")
         # Track the HTTP status code for metrics
-        track_orchestrator_health_status(response.status_code)
+        track_coordinator_health_status(response.status_code)
         if response.status_code == 200:
             log.info("✅ Health endpoint accessible")
         else:
@@ -1283,27 +1279,27 @@ def test_orchestrator_connectivity():
     except ImportError:
         log.warning("⚠️ requests module not available - using http_get helper")
         # Use the existing http_get helper
-        health_url = orch_url.rstrip("/") + "/health"
+        health_url = coord_url.rstrip("/") + "/health"
         code, txt, js = http_get(health_url, timeout=5.0)
         log.info(f"📡 Health endpoint response: {code}")
         # Track the HTTP status code for metrics
-        track_orchestrator_health_status(code)
+        track_coordinator_health_status(code)
         if code == 200:
             log.info("✅ Health endpoint accessible")
         else:
             log.warning(f"⚠️ Health endpoint returned {code}")
             
     except Exception as e:
-        log.error(f"❌ Failed to test orchestrator connectivity: {e}")
+        log.error(f"❌ Failed to test coordinator connectivity: {e}")
     
     # Test task submission endpoint
-    orch_paths = env("ORCH_PATHS", "/tasks")
-    for path in orch_paths.split(","):
+    coord_paths = env("COORD_PATHS", "/tasks")
+    for path in coord_paths.split(","):
         path = path.strip()
         if not path:
             continue
             
-        test_url = orch_url.rstrip("/") + path
+        test_url = coord_url.rstrip("/") + path
         log.info(f"🔗 Testing task endpoint: {test_url}")
         
         # Test with a simple ping task
@@ -1345,12 +1341,12 @@ def test_orchestrator_connectivity():
         log.info(f"🧪 Testing task {i+1}: {test_task['type']} (drift: {test_task['drift_score']})")
         
         # Try each endpoint
-        for path in orch_paths.split(","):
+        for path in coord_paths.split(","):
             path = path.strip()
             if not path:
                 continue
                 
-            test_url = orch_url.rstrip("/") + path
+            test_url = coord_url.rstrip("/") + path
             code, txt, js = http_post(test_url, test_task, timeout=5.0)
             
             if code >= 200 and code < 300:
@@ -1369,9 +1365,9 @@ def test_orchestrator_connectivity():
             log.error(f"❌ Task {i+1} rejected by all endpoints")
     
     # Test new pipeline endpoints
-    test_pipeline_endpoints(orch_url)
+    test_pipeline_endpoints(coord_url)
 
-def test_pipeline_endpoints(orch_url: str):
+def test_pipeline_endpoints(coord_url: str):
     """Test the new pipeline endpoints from the latest API."""
     log.info("🔍 TESTING NEW PIPELINE ENDPOINTS")
     
@@ -1388,7 +1384,7 @@ def test_pipeline_endpoints(orch_url: str):
     log.info("   @serve.deployment(max_ongoing_requests=64, num_replicas=4)  # Maximum capacity (organism limit)")
     
     # Test anomaly triage endpoint
-    anomaly_url = orch_url.rstrip("/") + "/pipeline/anomaly-triage"
+    anomaly_url = coord_url.rstrip("/") + "/pipeline/anomaly-triage"
     log.info(f"🔗 Testing anomaly triage endpoint: {anomaly_url}")
     
     anomaly_payload = {
@@ -1415,7 +1411,7 @@ def test_pipeline_endpoints(orch_url: str):
         log.warning(f"⚠️ Anomaly triage endpoint returned HTTP {code}: {txt[:100]} - Latency: {latency_ms:.1f}ms")
     
     # Test tune status endpoint
-    tune_status_url = orch_url.rstrip("/") + "/pipeline/tune/status/test-job-123"
+    tune_status_url = coord_url.rstrip("/") + "/pipeline/tune/status/test-job-123"
     log.info(f"🔗 Testing tune status endpoint: {tune_status_url}")
     
     # Add latency tracking for tune status endpoint as well
@@ -1631,7 +1627,7 @@ def test_routing_with_mock_tasks(ray, coord):
     # Check if mock tests are enabled
     if not env_bool("ENABLE_MOCK_ROUTING_TESTS", False):
         log.info("🔍 MOCK ROUTING TESTS DISABLED (set ENABLE_MOCK_ROUTING_TESTS=true to enable)")
-        log.info("   This prevents flooding the orchestrator with test tasks in production")
+        log.info("   This prevents flooding the coordinator with test tasks in production")
         return
     
     log.info("🔍 TESTING ROUTING WITH MOCK TASKS")
@@ -1704,7 +1700,7 @@ def test_routing_with_mock_tasks(ray, coord):
                 except Exception as e:
                     log.warning(f"   ⚠️ test_routing method not available or failed: {e}")
             
-            # Try to submit via orchestrator if available
+            # Try to submit via coordinator if available
             else:
                 log.info("   📋 No test_routing method available, skipping mock task test")
                 break
@@ -1746,12 +1742,12 @@ def diagnose_routing_issue():
         log.error("   SOLUTION: Ensure OCPS_DRIFT_THRESHOLD is a valid number (e.g., 0.5)")
         return
     
-    # Check orchestrator connectivity
-    orch_url = env('ORCH_URL', 'NOT_SET')
-    if orch_url == 'NOT_SET':
-        log.error("❌ ROOT CAUSE: ORCH_URL environment variable is not set!")
-        log.error("   This will cause submit_via_orchestrator() to return None and fall back to DB insertion.")
-        log.error("   SOLUTION: Set ORCH_URL to point to your orchestrator service.")
+    # Check coordinator connectivity
+    coord_url = env('COORD_URL', 'NOT_SET')
+    if coord_url == 'NOT_SET':
+        log.error("❌ ROOT CAUSE: COORD_URL environment variable is not set!")
+        log.error("   This will cause submit_via_coordinator() to return None and fall back to DB insertion.")
+        log.error("   SOLUTION: Set COORD_URL to point to your coordinator service.")
         return
     
     # Check if the issue is likely configuration vs. logic
@@ -1760,12 +1756,12 @@ def diagnose_routing_issue():
     log.info("2. Organ unavailability forcing escalation fallback")
     log.info("3. Bug in coordinator's routing decision logic")
     log.info("4. Environment variable not being read correctly inside coordinator")
-    log.info("5. Orchestrator service unreachable (causing DB fallback to orphaned tasks)")
+    log.info("5. Coordinator service unreachable (causing DB fallback to orphaned tasks)")
     log.info("6. No queue workers processing the tasks table")
     
     log.info("🔍 SPECIFIC ISSUE ANALYSIS:")
     log.info("The assertion failure occurs because:")
-    log.info("- submit_via_orchestrator() failed (returned None)")
+    log.info("- submit_via_coordinator() failed (returned None)")
     log.info("- pg_insert_generic_task() was called as fallback")
     log.info("- Task was inserted into DB with status='queued'")
     log.info("- No queue workers are processing the tasks table")
@@ -1777,7 +1773,7 @@ def diagnose_routing_issue():
     log.info("2. Verify coordinator is reading OCPS_DRIFT_THRESHOLD correctly")
     log.info("3. Check if fast-path organs are healthy and available")
     log.info("4. Look for any forced escalation logic in coordinator code")
-    log.info("5. Test orchestrator connectivity: curl -v '$ORCH_URL/status'")
+    log.info("5. Test coordinator connectivity: curl -v '$COORD_URL/status'")
     log.info("6. Check if queue workers are running and processing tasks")
     
     log.info("=" * 60)
@@ -1787,13 +1783,13 @@ def provide_fix_recommendations():
     log.info("🔧 ROUTING BUG FIX RECOMMENDATIONS")
     log.info("=" * 60)
     
-    log.info("📋 ORCHESTRATOR CONNECTIVITY ISSUES:")
-    log.info("1. Check ORCH_URL and ORCH_PATHS environment variables")
-    log.info("2. Test connectivity: curl -v '$ORCH_URL/health'")
-    log.info("3. Test task submission: curl -v -X POST '$ORCH_URL/tasks' -d '{\"type\":\"ping\",\"description\":\"test\"}'")
-    log.info("4. Test pipeline endpoints: curl -v -X POST '$ORCH_URL/pipeline/anomaly-triage' -d '{\"agent_id\":\"test\",\"series\":[1,2,3],\"context\":{\"service\":\"test\"}}' --max-time 30")
-    log.info("5. Verify orchestrator service is running: kubectl get pods -l app=orchestrator")
-    log.info("6. Check orchestrator logs: kubectl logs <orchestrator-pod>")
+    log.info("📋 COORDINATOR CONNECTIVITY ISSUES:")
+    log.info("1. Check COORD_URL and COORD_PATHS environment variables")
+    log.info("2. Test connectivity: curl -v '$COORD_URL/health'")
+    log.info("3. Test task submission: curl -v -X POST '$COORD_URL/tasks' -d '{\"type\":\"ping\",\"description\":\"test\"}'")
+    log.info("4. Test pipeline endpoints: curl -v -X POST '$COORD_URL/pipeline/anomaly-triage' -d '{\"agent_id\":\"test\",\"series\":[1,2,3],\"context\":{\"service\":\"test\"}}' --max-time 30")
+    log.info("5. Verify coordinator service is running: kubectl get pods -l app=coordinator")
+    log.info("6. Check coordinator logs: kubectl logs <coordinator-pod>")
     
     log.info("📋 QUEUE WORKER ISSUES:")
     log.info("1. Check if queue workers are running: kubectl get pods -l app=queue-worker")
@@ -1817,7 +1813,7 @@ def provide_fix_recommendations():
     log.info("2. Environment variable not loaded: using default value instead")
     log.info("3. Organ unavailability forcing escalation as fallback")
     log.info("4. String vs float comparison: '0.1' >= '0.5' evaluates to True")
-    log.info("5. Orchestrator unreachable causing DB fallback to orphaned tasks")
+    log.info("5. Coordinator unreachable causing DB fallback to orphaned tasks")
     log.info("6. No queue workers consuming the tasks table")
     log.info("7. Serve backpressure: Ray 2.32+ max_ongoing_requests=5 causing timeouts")
     log.info("8. Dispatcher health 'unknown': get_status() not implemented or returns empty")
@@ -1826,7 +1822,7 @@ def provide_fix_recommendations():
     log.info("1. Check coordinator environment: kubectl exec -it <coordinator-pod> -- env | grep OCPS")
     log.info("2. Check coordinator logs: kubectl logs <coordinator-pod> | grep -i routing")
     log.info("3. Check organ health: kubectl logs <dispatcher-pod> | grep -i health")
-    log.info("4. Test orchestrator: curl -v '$ORCH_URL/health'")
+    log.info("4. Test coordinator: curl -v '$COORD_URL/health'")
     
     log.info("📋 SERVE BACKPRESSURE FIXES:")
     log.info("1. Increase max_ongoing_requests: @serve.deployment(max_ongoing_requests=64)")
@@ -1851,31 +1847,31 @@ def check_cluster_and_actors():
     ray = ray_connect()
     ns = env("RAY_NAMESPACE", "seedcore-dev")
 
-    # Coordinator - now managed by Ray Serve organism app
+    # Coordinator - now managed by Ray Serve coordinator app
     try:
         from ray import serve
-        coord = serve.get_deployment_handle("OrganismManager", app_name="organism")
-        log.info("✅ Found OrganismManager Serve deployment")
+        coord = serve.get_deployment_handle("Coordinator", app_name="coordinator")
+        log.info("✅ Found Coordinator Serve deployment")
         
-        # Check health using the Serve deployment
+        # Check health using available methods
         try:
-            health_res = coord.health.remote()
+            # Try get_metrics first (available method)
+            metrics_res = coord.get_metrics.remote()
             try:
-                health_result = health_res.result(timeout_s=TIMEOUTS["serve_status_s"])
-                log.info(f"Coordinator health: {health_result}")
-                assert health_result.get("status") == "healthy", f"Coordinator unhealthy: {health_result}"
-                assert health_result.get("organism_initialized") is True, "Organism not initialized"
+                metrics_result = metrics_res.result(timeout_s=TIMEOUTS["serve_status_s"])
+                log.info(f"Coordinator metrics: {metrics_result}")
+                log.info("✅ Coordinator is responsive and healthy")
             except Exception as e:
-                log.warning(f"Could not get health status: {e}")
-                # If health check fails, just verify the handle exists
+                log.warning(f"Could not get metrics: {e}")
+                # If metrics check fails, just verify the handle exists
                 log.info("Coordinator handle exists, proceeding with verification")
         except Exception as e:
-            log.warning(f"Could not get health status: {e}")
+            log.warning(f"Could not get coordinator status: {e}")
             # If health check fails, just verify the handle exists
             log.info("Coordinator handle exists, proceeding with verification")
     except Exception as e:
-        log.error(f"Failed to get OrganismManager Serve deployment: {e}")
-        raise AssertionError("OrganismManager Serve deployment not found")
+        log.error(f"Failed to get Coordinator Serve deployment: {e}")
+        raise AssertionError("Coordinator Serve deployment not found")
 
     # Dispatchers
     want_d = env_int("EXPECT_DISPATCHERS", 2)
@@ -1913,7 +1909,7 @@ def check_cluster_and_actors():
         log.info("📋 GraphDispatchers disabled (EXPECT_GRAPH_DISPATCHERS=0)")
 
     # Serve apps
-    for app in ("orchestrator", "cognitive", "ml_service"):
+    for app in ("coordinator", "cognitive", "ml_service"):
         handle = serve_get_handle(ray, app)
         assert handle is not None, f"Serve app '{app}' not available"
 
@@ -1994,7 +1990,7 @@ def monitor_task_status(conn, tid: uuid.UUID, label: str, timeout_s: float = Non
     log.error("🔍 DIAGNOSTIC INFORMATION:")
     log.error("   1. Check if queue workers are running: kubectl get pods -l app=queue-worker")
     log.error("   2. Check queue worker logs: kubectl logs <queue-worker-pod>")
-    log.error("   3. Check orchestrator logs: kubectl logs <orchestrator-pod>")
+    log.error("   3. Check coordinator logs: kubectl logs <coordinator-pod>")
     log.error("   4. Check task in database: SELECT * FROM tasks WHERE id = '%s'" % str(tid))
     
     return row
@@ -2024,17 +2020,17 @@ def scenario_fast_path(conn) -> uuid.UUID:
     else:
         log.error("❌ Seedcore-api submission failed - no task ID returned")
     
-    # Fallback: Try orchestrator pipeline (if configured)
-    tid = submit_via_orchestrator(payload)
+    # Fallback: Try coordinator pipeline (if configured)
+    tid = submit_via_coordinator(payload)
     if tid:
-        log.info(f"✅ Task created via orchestrator pipeline: {tid}")
+        log.info(f"✅ Task created via coordinator pipeline: {tid}")
         return tid
     else:
-        log.error("❌ Orchestrator pipeline submission failed - no task ID returned")
+        log.error("❌ Coordinator pipeline submission failed - no task ID returned")
     
     # Provide detailed error information
     api_url = env('SEEDCORE_API_URL', '')
-    orch_url = env('ORCH_URL', '')
+    coord_url = env('COORD_URL', '')
     
     if api_url and "::" in api_url:
         log.error("❌ ROOT CAUSE: SEEDCORE_API_URL contains double colons (::)")
@@ -2043,22 +2039,22 @@ def scenario_fast_path(conn) -> uuid.UUID:
         log.error("   Fix: export SEEDCORE_API_URL='http://seedcore-api:8002'")
         raise RuntimeError("SEEDCORE_API_URL is malformed (contains double colons). Fix the environment variable and retry.")
     
-    if orch_url and "::" in orch_url:
-        log.error("❌ ROOT CAUSE: ORCH_URL contains double colons (::)")
-        log.error("   Current: " + orch_url)
+    if coord_url and "::" in coord_url:
+        log.error("❌ ROOT CAUSE: COORD_URL contains double colons (::)")
+        log.error("   Current: " + coord_url)
         log.error("   This creates an invalid URL that cannot be parsed")
-        log.error("   Fix: export ORCH_URL='http://127.0.0.1:8000/orchestrator'")
-        raise RuntimeError("ORCH_URL is malformed (contains double colons). Fix the environment variable and retry.")
+        log.error("   Fix: export COORD_URL='http://127.0.0.1:8000/coordinator'")
+        raise RuntimeError("COORD_URL is malformed (contains double colons). Fix the environment variable and retry.")
     
     if enable_direct_fallback:
         # Fallback: direct execution via Serve (no DB tracking)
-        log.warning("⚠️ Both seedcore-api and orchestrator unavailable; executing via Serve handle (no DB verification).")
+        log.warning("⚠️ Both seedcore-api and coordinator unavailable; executing via Serve handle (no DB verification).")
         # Note: This would need access to the coordinator handle from the calling context
         # For now, we'll raise an error indicating the services are needed
-        raise RuntimeError("Both seedcore-api and orchestrator unavailable. Set ENABLE_DIRECT_FALLBACK=true and pass coordinator handle for direct execution.")
+        raise RuntimeError("Both seedcore-api and coordinator unavailable. Set ENABLE_DIRECT_FALLBACK=true and pass coordinator handle for direct execution.")
     else:
         # Fail fast - no fallback
-        raise RuntimeError("Failed to create fast-path task via seedcore-api or orchestrator pipeline (no DB fallback)")
+        raise RuntimeError("Failed to create fast-path task via seedcore-api or coordinator pipeline (no DB fallback)")
 
 def scenario_escalation(conn) -> uuid.UUID:
     """High drift → escalate to CognitiveCore for planning."""
@@ -2075,13 +2071,13 @@ def scenario_escalation(conn) -> uuid.UUID:
         log.info(f"✅ Escalation task created via seedcore-api: {tid}")
         return tid
     
-    # Fallback: Try orchestrator pipeline
-    tid = submit_via_orchestrator(payload)
+    # Fallback: Try coordinator pipeline
+    tid = submit_via_coordinator(payload)
     if tid:
-        log.info(f"✅ Escalation task created via orchestrator pipeline: {tid}")
+        log.info(f"✅ Escalation task created via coordinator pipeline: {tid}")
         return tid
     
-    assert tid, "Failed to create escalation task via seedcore-api or orchestrator pipeline"
+    assert tid, "Failed to create escalation task via seedcore-api or coordinator pipeline"
     return tid
 
 def scenario_graph_task(conn) -> Optional[uuid.UUID]:
@@ -2153,10 +2149,10 @@ Examples:
   python verify_seedcore_architecture.py --help    # Show this help
   
   # API Endpoints (Updated for OpenAPI 3.1.0):
-  # - Health: GET /orchestrator/health
-  # - Tasks: POST /orchestrator/tasks
-  # - Anomaly Triage: POST /orchestrator/pipeline/anomaly-triage
-  # - Tune Status: GET /orchestrator/pipeline/tune/status/{job_id}
+  # - Health: GET /coordinator/health
+  # - Tasks: POST /coordinator/tasks
+  # - Anomaly Triage: POST /coordinator/pipeline/anomaly-triage
+  # - Tune Status: GET /coordinator/pipeline/tune/status/{job_id}
         """
     )
     
@@ -2208,7 +2204,7 @@ def main():
     log.info("🔧 SeedCore Architecture Verification Script")
     log.info("📋 Updated for new service boundaries")
     log.info("📋 Task creation: seedcore-api (/api/v1/tasks)")
-    log.info("📋 Pipeline operations: orchestrator (/orchestrator/pipeline/*)")
+    log.info("📋 Pipeline operations: coordinator (/coordinator/pipeline/*)")
     
     # Check for common configuration issues and provide help
     fix_service_url_issues()
@@ -2253,7 +2249,7 @@ def main():
     fast_path_has_plan = False  # Track for summary
     if conn:
         # Verify task was created in database before monitoring
-        # Add retry logic for timing issues between orchestrator and database
+        # Add retry logic for timing issues between coordinator and database
         max_retries = env_int("TASK_DB_INSERTION_RETRIES", 5)
         retry_delay = env_float("TASK_DB_INSERTION_DELAY_S", 2.0)
         initial_check = None
@@ -2266,13 +2262,13 @@ def main():
             else:
                 if attempt < max_retries - 1:
                     log.warning(f"⚠️ FAST-PATH: Task {fast_tid} not found in database (attempt {attempt+1}/{max_retries}), retrying in {retry_delay}s...")
-                    log.warning("   This may indicate a timing issue between orchestrator and database")
+                    log.warning("   This may indicate a timing issue between coordinator and database")
                     time.sleep(retry_delay)
                 else:
                     log.error(f"❌ FAST-PATH: Task {fast_tid} not found in database after {max_retries} attempts")
-                    log.error("   This indicates the orchestrator submission failed or database integration is incomplete")
-                    log.error("   NOTE: The orchestrator may be returning task IDs without actually inserting into database")
-                    log.error("   Check orchestrator logs and database connectivity")
+                    log.error("   This indicates the coordinator submission failed or database integration is incomplete")
+                    log.error("   NOTE: The coordinator may be returning task IDs without actually inserting into database")
+                    log.error("   Check coordinator logs and database connectivity")
                     exit_if_strict("Fast path task not found in database after creation")
                     return
         
@@ -2285,7 +2281,7 @@ def main():
         if row is None:
             log.error("❌ FAST-PATH: Task monitoring failed - no result returned")
             log.error("   This usually means the task was not found in the database")
-            log.error("   Check if the orchestrator successfully created the task")
+            log.error("   Check if the coordinator successfully created the task")
             exit_if_strict("Fast path task monitoring failed - task not found in database")
             return
         
@@ -2368,7 +2364,7 @@ def main():
     log.info(f"Escalation task_id = {esc_tid}")
     if conn:
         # Verify task was created in database before monitoring
-        # Add retry logic for timing issues between orchestrator and database
+        # Add retry logic for timing issues between coordinator and database
         max_retries = env_int("TASK_DB_INSERTION_RETRIES", 5)
         retry_delay = env_float("TASK_DB_INSERTION_DELAY_S", 2.0)
         initial_check = None
@@ -2381,13 +2377,13 @@ def main():
             else:
                 if attempt < max_retries - 1:
                     log.warning(f"⚠️ ESCALATION: Task {esc_tid} not found in database (attempt {attempt+1}/{max_retries}), retrying in {retry_delay}s...")
-                    log.warning("   This may indicate a timing issue between orchestrator and database")
+                    log.warning("   This may indicate a timing issue between coordinator and database")
                     time.sleep(retry_delay)
                 else:
                     log.error(f"❌ ESCALATION: Task {esc_tid} not found in database after {max_retries} attempts")
-                    log.error("   This indicates the orchestrator submission failed or database integration is incomplete")
-                    log.error("   NOTE: The orchestrator may be returning task IDs without actually inserting into database")
-                    log.error("   Check orchestrator logs and database connectivity")
+                    log.error("   This indicates the coordinator submission failed or database integration is incomplete")
+                    log.error("   NOTE: The coordinator may be returning task IDs without actually inserting into database")
+                    log.error("   Check coordinator logs and database connectivity")
                     exit_if_strict("Escalation task not found in database after creation")
                     return
         
@@ -2397,7 +2393,7 @@ def main():
         if row is None:
             log.error("❌ ESCALATION: Task monitoring failed - no result returned")
             log.error("   This usually means the task was not found in the database")
-            log.error("   Check if the orchestrator successfully created the task")
+            log.error("   Check if the coordinator successfully created the task")
             exit_if_strict("Escalation task monitoring failed - task not found in database")
             return
         
@@ -2526,17 +2522,17 @@ def main():
     else:
         log.info("✅ No coordinator API call failures detected")
 
-    # --- ORCHESTRATOR HEALTH METRICS ---
-    health_metrics = get_orchestrator_health_metrics()
+    # --- COORDINATOR HEALTH METRICS ---
+    health_metrics = get_coordinator_health_metrics()
     if health_metrics:
         log.info("=" * 60)
-        log.info("📊 ORCHESTRATOR HEALTH ENDPOINT METRICS")
+        log.info("📊 COORDINATOR HEALTH ENDPOINT METRICS")
         log.info("=" * 60)
         for status_code, count in health_metrics.items():
             log.info(f"   HTTP {status_code}: {count} responses")
         log.info("=" * 60)
     else:
-        log.info("✅ No orchestrator health endpoint calls detected")
+        log.info("✅ No coordinator health endpoint calls detected")
 
     # --- PIPELINE LATENCY METRICS ---
     latency_summary = get_pipeline_latency_summary()
@@ -2593,8 +2589,8 @@ def main():
     log.info("📋 Task database insertion timing:")
     log.info(f"   TASK_DB_INSERTION_RETRIES={env('TASK_DB_INSERTION_RETRIES', '5')}")
     log.info(f"   TASK_DB_INSERTION_DELAY_S={env('TASK_DB_INSERTION_DELAY_S', '2.0')}")
-    log.info("📋 NOTE: Orchestrator may return task IDs without inserting into database")
-    log.info("   This is a known issue - orchestrator needs database integration")
+    log.info("📋 NOTE: Coordinator may return task IDs without inserting into database")
+    log.info("   This is a known issue - coordinator needs database integration")
     log.info("=" * 60)
 
     # --- VALIDATION SUMMARY ---

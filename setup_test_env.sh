@@ -4,6 +4,8 @@
 
 echo "Setting up database test environment..."
 
+export PYTHONPATH=/home/ubuntu/project/seedcore/src
+
 # Set database hosts to localhost (for port-forwarding)
 export POSTGRES_HOST=localhost
 export MYSQL_HOST=localhost

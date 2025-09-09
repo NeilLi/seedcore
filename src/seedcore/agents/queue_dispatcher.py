@@ -524,7 +524,7 @@ class Dispatcher:
                     CALL_TIMEOUT_S = int(os.getenv("SERVE_CALL_TIMEOUT_S", "120"))
                     log.info(f"[QueueDispatcher] 🚀 Calling coord_handle.route_and_execute.remote() for task {tid} (timeout={CALL_TIMEOUT_S}s)")
                     
-                    fut = coord_handle.route_and_execute.remote(payload.dict())
+                    fut = coord_handle.route_and_execute.remote(payload)
                     result: Dict[str, Any] = await asyncio.wait_for(fut, timeout=CALL_TIMEOUT_S)
                     log.info(f"[QueueDispatcher] ✅ Received result from Coordinator for task {tid}: {result}")
                     

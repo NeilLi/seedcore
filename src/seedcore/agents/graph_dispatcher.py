@@ -300,6 +300,16 @@ class GraphDispatcher:
 
     # === Task loop (optional; you can also call methods directly) ===
     def run(self, poll_interval: float = TASK_POLL_INTERVAL_S):
+        """Start the run loop in a background thread."""
+        logger.info("🚀 GraphDispatcher '%s' starting run loop with poll_interval=%.1f", self.name, poll_interval)
+        
+        # Start the run loop in a background thread
+        import threading
+        self._run_thread = threading.Thread(target=self._run_loop, args=(poll_interval,), daemon=True)
+        self._run_thread.start()
+        
+    def _run_loop(self, poll_interval: float = TASK_POLL_INTERVAL_S):
+        """Internal run loop that runs in a background thread."""
         logger.info("🚀 GraphDispatcher '%s' run loop started with poll_interval=%.1f", self.name, poll_interval)
         loop_count = 0
         last_task_time = time.time()
