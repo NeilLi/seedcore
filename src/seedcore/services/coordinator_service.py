@@ -3,12 +3,13 @@ import os, time, uuid, httpx, asyncio
 from fastapi import FastAPI, HTTPException
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse
+from pathlib import Path
 from ray import serve
 from pydantic import BaseModel, Field
 import logging
 
 # Import predicate system
-from ..predicates import PredicateRouter, load_predicates, get_metrics
+from ..predicates import PredicateRouter, load_predicates, load_predicates_async, get_metrics
 from ..predicates.metrics import update_ocps_signals, update_energy_signals, record_request, record_latency
 from ..predicates.circuit_breaker import ServiceClient, CircuitBreaker, RetryConfig
 from ..predicates.safe_storage import SafeStorage
@@ -26,10 +27,16 @@ ORG_TIMEOUT = float(os.getenv("ORGANISM_SERVICE_TIMEOUT", "5"))
 SEEDCORE_API_URL = os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002")
 SEEDCORE_API_TIMEOUT = float(os.getenv("SEEDCORE_API_TIMEOUT", "5.0"))
 
-SERVE_GATEWAY = os.getenv("SERVE_GATEWAY", "http://seedcore-svc-stable-svc:8000")
-ML = f"{SERVE_GATEWAY}/ml"
-COG = f"{SERVE_GATEWAY}/cognitive"
+# Use Ray utilities to properly derive gateway URLs
+from ..utils.ray_utils import SERVE_GATEWAY, ML, COG
 ORG = f"{SERVE_GATEWAY}/organism"
+
+# Log the derived gateway URLs for debugging
+logger.info(f"🔗 Coordinator using gateway URLs:")
+logger.info(f"   SERVE_GATEWAY: {SERVE_GATEWAY}")
+logger.info(f"   ML: {ML}")
+logger.info(f"   COG: {COG}")
+logger.info(f"   ORG: {ORG}")
 
 # Additional configuration for Coordinator
 FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
@@ -65,6 +72,22 @@ async def _apost(client: httpx.AsyncClient, url: str, payload: Dict[str, Any],
 
 # ---------- Coordination primitives ----------
 class OCPSValve:
+    """
+    Neural-CUSUM accumulator for drift detection and escalation control.
+    
+    This implements the CUSUM algorithm: S_t = max(0, S_{t-1} + drift - nu)
+    where:
+    - S_t is the current CUSUM statistic
+    - drift is the drift score from the ML service
+    - nu is the drift threshold (typically 0.1)
+    - h is the escalation threshold (from OCPS_DRIFT_THRESHOLD env var)
+    
+    RESET SEMANTICS:
+    - Reset (S = 0) occurs ONLY on escalation (S > h)
+    - This prevents under-escalation and spam escalations
+    - The accumulator builds up drift evidence over time
+    - Once threshold is exceeded, it resets to start fresh
+    """
     def __init__(self, nu: float = 0.1, h: float = None):
         # h is your drift threshold (env OCPS_DRIFT_THRESHOLD)
         self.nu = nu
@@ -74,11 +97,25 @@ class OCPSValve:
         self.esc_hits = 0
 
     def update(self, drift: float) -> bool:
+        """
+        Update CUSUM statistic with new drift score.
+        
+        Args:
+            drift: Drift score from ML service (s_t)
+            
+        Returns:
+            bool: True if escalation triggered, False otherwise
+            
+        Note:
+            Reset occurs ONLY on escalation to prevent under-escalation.
+            This ensures the accumulator builds evidence over time before
+            triggering escalation, preventing false positives.
+        """
         self.S = max(0.0, self.S + drift - self.nu)
         esc = self.S > self.h
         if esc:
             self.esc_hits += 1
-            self.S = 0.0
+            self.S = 0.0  # Reset ONLY on escalation
         else:
             self.fast_hits += 1
         return esc
@@ -174,16 +211,16 @@ class Task(BaseModel):
     description: Optional[str] = ""
     params: Dict[str, Any] = {}
     domain: Optional[str] = None
-    drift_score: float = 0.0
     features: Dict[str, Any] = {}
     history_ids: List[str] = []
+    # Note: drift_score is now computed dynamically via ML service
     # … add fields as needed
 
 class AnomalyTriageRequest(BaseModel):
     agent_id: str
     series: List[float] = []
     context: Dict[str, Any] = {}
-    drift_score: float = 0.0
+    # Note: drift_score is now computed dynamically via ML service
 
 class AnomalyTriageResponse(BaseModel):
     agent_id: str
@@ -218,7 +255,7 @@ class Coordinator:
     def __init__(self):
         # Initialize service clients with conservative circuit breakers
         self.ml_client = ServiceClient(
-            "ml_service", ML, timeout=float(os.getenv("CB_ML_TIMEOUT_S", "2.0")),
+            "ml_service", ML, timeout=float(os.getenv("CB_ML_TIMEOUT_S", "5.0")),
             circuit_breaker=CircuitBreaker(
                 failure_threshold=int(os.getenv("CB_FAIL_THRESHOLD", "5")),
                 recovery_timeout=float(os.getenv("CB_RESET_S", "30.0"))
@@ -262,17 +299,9 @@ class Coordinator:
             logger.warning(f"⚠️ Redis connection failed, using in-memory storage: {e}")
             self.storage = SafeStorage(None)
         
-        # Initialize predicate system
-        try:
-            self.predicate_config = load_predicates(PREDICATES_CONFIG_PATH)
-            self.predicate_router = PredicateRouter(self.predicate_config)
-            logger.info("✅ Predicate system initialized")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to load predicate config, using fallback: {e}")
-            # Create a minimal fallback configuration
-            from ..predicates.loader import create_default_config
-            self.predicate_config = create_default_config()
-            self.predicate_router = PredicateRouter(self.predicate_config)
+        # Initialize predicate system (will be loaded async in __post_init__)
+        self.predicate_config = None
+        self.predicate_router = None
         
         # sensible defaults (avoid cognitive for simple)
         self.routing.set_rule("general_query", "utility_organ_1")
@@ -288,16 +317,117 @@ class Coordinator:
         self.fast_path_latency_slo_ms = FAST_PATH_LATENCY_SLO_MS
         self.max_plan_steps = MAX_PLAN_STEPS
         
-        # Start background tasks
-        asyncio.create_task(self._start_background_tasks())
+        # Initialize predicate system synchronously first
+        try:
+            self.predicate_config = load_predicates(PREDICATES_CONFIG_PATH)
+            self.predicate_router = PredicateRouter(self.predicate_config)
+            logger.info("✅ Predicate system initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load predicate config, using fallback: {e}")
+            # Create a minimal fallback configuration
+            from ..predicates.loader import create_default_config
+            self.predicate_config = create_default_config()
+            self.predicate_router = PredicateRouter(self.predicate_config)
+        
+        # Start background tasks (will be called after initialization)
+        self._background_tasks_started = False
+        self._warmup_started = False
+        
+        logger.info("✅ Coordinator initialized")
+
+    async def _ensure_background_tasks_started(self):
+        """Ensure background tasks are started (called on first request)."""
+        if not self._background_tasks_started:
+            asyncio.create_task(self._start_background_tasks())
+            self._background_tasks_started = True
+            
+        if not self._warmup_started:
+            asyncio.create_task(self._warmup_drift_detector())
+            self._warmup_started = True
+
+    
 
     async def _start_background_tasks(self):
         """Start background maintenance tasks."""
         try:
-            await self.predicate_router.start_background_tasks()
-            logger.info("🚀 Started Coordinator background tasks")
+            # Predicate router should already be initialized synchronously
+            if self.predicate_router is not None:
+                await self.predicate_router.start_background_tasks()
+                logger.info("🚀 Started Coordinator background tasks")
+            else:
+                logger.warning("⚠️ Predicate router not initialized, skipping background tasks")
         except Exception as e:
             logger.error(f"❌ Failed to start background tasks: {e}")
+    
+    async def _warmup_drift_detector(self):
+        """
+        Warm up the drift detector to avoid cold start latency.
+        
+        Uses staggered warmup with jitter to prevent thundering herd when
+        multiple replicas start simultaneously in a cluster.
+        """
+        try:
+            # Staggered warmup with jitter to prevent thundering herd
+            # Each replica waits a random amount of time before warming up
+            import random
+            base_delay = 2.0  # Base delay in seconds
+            jitter = random.uniform(0, 3.0)  # Random jitter 0-3 seconds
+            total_delay = base_delay + jitter
+            
+            logger.info(f"⏳ Staggered warmup: waiting {total_delay:.2f}s (base={base_delay}s, jitter={jitter:.2f}s)")
+            await asyncio.sleep(total_delay)
+            
+            # Call ML service warmup endpoint
+            warmup_request = {
+                "sample_texts": [
+                    "Test task for warmup",
+                    "General query about system status", 
+                    "Anomaly detection task with high priority",
+                    "Execute complex workflow with multiple steps"
+                ]
+            }
+            
+            # First, check if ML service is healthy
+            try:
+                health_response = await self.ml_client.get("/health")
+                if health_response.get("status") != "healthy":
+                    logger.warning(f"⚠️ ML service health check failed: {health_response}")
+                    return
+                logger.info("✅ ML service health check passed")
+            except Exception as e:
+                logger.warning(f"⚠️ ML service health check failed: {e}, skipping warmup")
+                return
+            
+            logger.info(f"🔄 Calling ML service warmup at {self.ml_client.base_url}/drift/warmup")
+            
+            # Try warmup with retries
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = await self.ml_client.post(
+                        "/drift/warmup",
+                        json=warmup_request,
+                        headers=_corr_headers("ml_service", "coordinator_warmup")
+                    )
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # Exponential backoff
+                        logger.warning(f"⚠️ ML service warmup attempt {attempt + 1} failed: {e}, retrying in {wait_time}s", exc_info=True)
+                        await asyncio.sleep(wait_time)
+                    else:
+                        raise  # Re-raise on final attempt
+            
+            if response.get("status") == "success":
+                warmup_time = response.get("warmup_time_ms", 0.0)
+                logger.info(f"✅ Drift detector warmup completed in {warmup_time:.2f}ms (after {total_delay:.2f}s delay)")
+            else:
+                logger.warning(f"⚠️ Drift detector warmup failed: {response.get('error', 'Unknown error')}")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Drift detector warmup failed: {e}", exc_info=True)
+            # Don't fail startup if warmup fails - drift detection will use fallback
+            logger.info("ℹ️ Drift detection will use fallback mode until ML service is available")
 
     def _get_current_energy_state(self, agent_id: str) -> Optional[float]:
         """Get current energy state for an agent."""
@@ -308,6 +438,144 @@ class Coordinator:
         except Exception as e:
             logger.warning(f"Failed to get energy state for agent {agent_id}: {e}")
             return None
+    
+    async def _compute_drift_score(self, task: Dict[str, Any]) -> float:
+        """
+        Compute drift score using the ML service drift detector.
+        
+        This method:
+        1. Calls the ML service /drift/score endpoint
+        2. Extracts drift score from the response
+        3. Falls back to a default value if the service is unavailable
+        4. Tracks performance and error metrics for monitoring
+        
+        Returns:
+            Drift score suitable for OCPSValve integration
+        """
+        start_time = time.time()
+        task_id = task.get("id", "unknown")
+        
+        try:
+            # Build comprehensive text payload for drift detection
+            # Combine description, domain, params, and type for better featurization
+            description = task.get("description", "")
+            domain = task.get("domain", "")
+            task_type = task.get("type", "unknown")
+            params = task.get("params", {})
+            
+            # Build rich text context for drift detection
+            text_parts = []
+            if description:
+                text_parts.append(f"Description: {description}")
+            if domain:
+                text_parts.append(f"Domain: {domain}")
+            if task_type:
+                text_parts.append(f"Type: {task_type}")
+            if params:
+                # Convert params to readable text
+                param_text = ", ".join([f"{k}={v}" for k, v in params.items()])
+                text_parts.append(f"Parameters: {param_text}")
+            
+            # Fallback to task type if no other text available
+            text_payload = " ".join(text_parts) if text_parts else f"Task type: {task_type}"
+            
+            # Log the text payload for debugging
+            logger.info(f"[DriftDetector] Task {task_id}: Text payload: '{text_payload[:100]}{'...' if len(text_payload) > 100 else ''}'")
+            
+            # Prepare request for drift scoring
+            drift_request = {
+                "task": task,
+                "text": text_payload
+            }
+            
+            logger.debug(f"[DriftDetector] Task {task_id}: Calling ML service at {self.ml_client.base_url}/drift/score")
+            logger.debug(f"[DriftDetector] Task {task_id}: Request payload: {drift_request}")
+            
+            # Call ML service drift detector with timeout
+            response = await self.ml_client.post(
+                "/drift/score",
+                json=drift_request,
+                headers=_corr_headers("ml_service", task_id)
+            )
+            
+            logger.debug(f"[DriftDetector] Task {task_id}: ML service response: {response}")
+            
+            processing_time = (time.time() - start_time) * 1000
+            
+            if response.get("status") == "success":
+                drift_score = response.get("drift_score", 0.0)
+                ml_processing_time = response.get("processing_time_ms", 0.0)
+                
+                # Log performance metrics
+                logger.debug(f"[DriftDetector] Task {task_id}: score={drift_score:.4f}, "
+                           f"total_time={processing_time:.2f}ms, ml_time={ml_processing_time:.2f}ms")
+                
+                # Track metrics for monitoring
+                drift_mode = response.get('drift_mode', 'unknown')
+                self.predicate_router.metrics.record_drift_computation("success", drift_mode, processing_time / 1000.0, drift_score)
+                
+                return drift_score
+            else:
+                error_msg = response.get('error', 'Unknown error')
+                logger.warning(f"[DriftDetector] Task {task_id}: ML service returned error: {error_msg}")
+                self.predicate_router.metrics.record_drift_computation("ml_error", "unknown", processing_time / 1000.0, 0.0)
+                return 0.0
+                
+        except Exception as e:
+            processing_time = (time.time() - start_time) * 1000
+            error_msg = str(e) if str(e) else f"{type(e).__name__}"
+            logger.warning(f"[DriftDetector] Task {task_id}: Failed to compute drift score: {error_msg}, using fallback")
+            logger.debug(f"[DriftDetector] Task {task_id}: Exception details: {type(e).__name__}: {error_msg}")
+            import traceback
+            logger.debug(f"[DriftDetector] Task {task_id}: Traceback: {traceback.format_exc()}")
+            
+            # Track error metrics
+            self.predicate_router.metrics.record_drift_computation("error", "unknown", processing_time / 1000.0, 0.0)
+            
+            # Fallback: use a simple heuristic based on task properties
+            fallback_score = self._fallback_drift_score(task)
+            logger.info(f"[DriftDetector] Task {task_id}: Using fallback score {fallback_score:.4f}")
+            return fallback_score
+    
+    def _fallback_drift_score(self, task: Dict[str, Any]) -> float:
+        """
+        Fallback drift score computation when ML service is unavailable.
+        
+        Uses simple heuristics based on task properties.
+        """
+        try:
+            # Base score
+            score = 0.0
+            
+            # Task type influence
+            task_type = str(task.get("type", "unknown")).lower()
+            if task_type == "anomaly_triage":
+                score += 0.3  # Anomaly triage tasks are more likely to indicate drift
+            elif task_type == "execute":
+                score += 0.1  # Execute tasks have moderate drift potential
+            
+            # Priority influence
+            priority = float(task.get("priority", 5))
+            if priority >= 8:
+                score += 0.2  # High priority tasks may indicate system stress
+            elif priority <= 3:
+                score += 0.1  # Low priority tasks might indicate system changes
+            
+            # Complexity influence
+            complexity = float(task.get("complexity", 0.5))
+            score += complexity * 0.2  # More complex tasks have higher drift potential
+            
+            # History influence
+            history_ids = task.get("history_ids", [])
+            if len(history_ids) == 0:
+                score += 0.1  # New tasks without history might indicate drift
+            
+            # Ensure score is in reasonable range
+            return max(0.0, min(1.0, score))
+            
+        except Exception as e:
+            logger.warning(f"Fallback drift score computation failed: {e}")
+            return 0.5  # Neutral fallback
     
     def _persist_job_state(self, job_id: str, state: Dict[str, Any]):
         """Persist job state using safe storage."""
@@ -393,7 +661,6 @@ class Coordinator:
                 "type": task.type,
                 "constraints": {"latency_ms": self.fast_path_latency_slo_ms},
                 "context": {
-                    "drift_score": task.drift_score, 
                     "features": task.features, 
                     "history_ids": task.history_ids
                 },
@@ -417,18 +684,38 @@ class Coordinator:
                     # If no solution_steps, try to extract from other fields
                     steps = result.get("plan", []) or result.get("steps", [])
             
-            validated_plan = self._validate_or_fallback(steps, task.model_dump())
+            validated_plan = self._validate_or_fallback(steps, self._convert_task_to_dict(task))
             
             if validated_plan:
                 logger.info(f"[Coordinator] HGNN decomposition successful: {len(validated_plan)} steps")
                 return validated_plan
             else:
                 logger.warning(f"[Coordinator] HGNN plan validation failed, using fallback")
-                return self._fallback_plan(task.model_dump())
+                return self._fallback_plan(self._convert_task_to_dict(task))
                 
         except Exception as e:
             logger.warning(f"[Coordinator] HGNN decomposition failed: {e}, using fallback")
-            return self._fallback_plan(task.model_dump())
+            return self._fallback_plan(self._convert_task_to_dict(task))
+
+    def _convert_task_to_dict(self, task) -> Dict[str, Any]:
+        """Convert task object to dictionary, handling TaskPayload and other types."""
+        if isinstance(task, dict):
+            return task
+        elif hasattr(task, 'model_dump'):
+            task_dict = task.model_dump()
+            # Handle TaskPayload which has 'task_id' instead of 'id'
+            if hasattr(task, 'task_id') and 'id' not in task_dict:
+                task_dict['id'] = task.task_id
+            return task_dict
+        elif hasattr(task, 'dict'):
+            task_dict = task.dict()
+            # Handle TaskPayload which has 'task_id' instead of 'id'
+            if hasattr(task, 'task_id') and 'id' not in task_dict:
+                task_dict['id'] = task.task_id
+            return task_dict
+        else:
+            logger.warning(f"[Coordinator] Cannot convert task to dict: {type(task)}")
+            return {}
 
     def _fallback_plan(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Create a minimal safe fallback plan when cognitive reasoning is unavailable."""
@@ -528,6 +815,9 @@ class Coordinator:
         """
         Global entrypoint (paper §6): Predicate-based routing + HGNN escalation.
         """
+        # Ensure background tasks are started
+        await self._ensure_background_tasks_started()
+        
         cid = uuid.uuid4().hex
         start_time = time.time()
         
@@ -580,23 +870,36 @@ class Coordinator:
         else:
             logger.warning(f"[Coordinator] Cannot convert task to dict for prefetch_context: {type(task)}")
 
-        # Update OCPS and signals
-        drift_score = getattr(task, 'drift_score', 0.0) if hasattr(task, 'drift_score') else task.get('drift_score', 0.0) if isinstance(task, dict) else 0.0
+        # Compute drift score using ML service
+        task_dict = self._convert_task_to_dict(task)
+        drift_score = await self._compute_drift_score(task_dict)
         escalate = self.ocps.update(drift_score)
         
         # Update predicate signals
         task_params = getattr(task, 'params', {}) if hasattr(task, 'params') else task.get('params', {}) if isinstance(task, dict) else {}
+        
+        # Convert string priority to integer
+        priority = task_params.get("priority", 5)
+        if isinstance(priority, str):
+            priority_map = {"low": 2, "medium": 5, "high": 8, "critical": 10}
+            priority = priority_map.get(priority.lower(), 5)
+        elif not isinstance(priority, int):
+            priority = 5  # Default fallback
+        
+        # Add missing signals for predicate evaluation
         self.predicate_router.update_signals(
             p_fast=self.ocps.p_fast,
             s_drift=drift_score,
-            task_priority=task_params.get("priority", 5),
+            task_priority=priority,
             task_complexity=task_params.get("complexity", 0.5),
             memory_utilization=0.5,  # TODO: Get from system metrics
             cpu_utilization=0.3,     # TODO: Get from system metrics
+            fast_path_latency_ms=50.0,  # TODO: Get from actual metrics
+            hgnn_latency_ms=200.0,      # TODO: Get from actual metrics
+            success_rate=0.95,          # TODO: Get from actual metrics
         )
 
         # Use predicate-based routing
-        task_dict = task.model_dump() if hasattr(task, 'model_dump') else task.dict() if hasattr(task, 'dict') else task if isinstance(task, dict) else {}
         routing_decision = self.predicate_router.route_task(task_dict)
         
         # Execute based on routing decision
@@ -647,6 +950,8 @@ class Coordinator:
     @app.get(f"{router_prefix}/metrics")
     async def get_metrics(self):
         """Get current task execution metrics."""
+        # Ensure background tasks are started
+        await self._ensure_background_tasks_started()
         return self.metrics.get_metrics()
     
     @app.get(f"{router_prefix}/predicates/status")
@@ -774,8 +1079,17 @@ class Coordinator:
         series = payload.series
         context = payload.context
         
-        # Extract drift score for OCPS gating (optional)
-        drift_score = payload.drift_score
+        # Compute drift score using ML service
+        task_data = {
+            "id": f"anomaly_triage_{agent_id}",
+            "type": "anomaly_triage",
+            "description": f"Anomaly triage for agent {agent_id}",
+            "priority": 7,
+            "complexity": 0.8,
+            "series_length": len(series),
+            "context": context
+        }
+        drift_score = await self._compute_drift_score(task_data)
         escalate = self.ocps.update(drift_score)
         
         logger.info(f"[Coordinator] Anomaly triage started for agent {agent_id}, drift={drift_score}, escalate={escalate}, cid={cid}")

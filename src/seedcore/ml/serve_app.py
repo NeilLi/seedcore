@@ -27,7 +27,7 @@ import ray
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from ray import serve
 
-from src.seedcore.utils.ray_utils import get_serve_urls
+from seedcore.utils.ray_utils import get_serve_urls
 
 # ---------------------------------------------------------------------
 # Logging
@@ -162,6 +162,8 @@ async def root():
             "health": "/health",
             "salience_scoring": "/score/salience",
             "anomaly_detection": "/detect/anomaly",
+            "drift_scoring": "/drift/score",
+            "drift_warmup": "/drift/warmup",
             "scaling_prediction": "/predict/scaling",
             "xgboost": {
                 "train": "/xgboost/train",
@@ -187,7 +189,7 @@ async def health_check():
     try:
         import psutil
         try:
-            from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+            from seedcore.ml.models.xgboost_service import get_xgboost_service
             xgb_status = "available" if get_xgboost_service() else "unavailable"
         except Exception:
             xgb_status = "unavailable"
@@ -219,7 +221,7 @@ async def score_salience(request: Dict[str, Any]):
         if not features_list:
             return {"error": "No features provided", "status": "error"}
 
-        from src.seedcore.ml.salience.scorer import SalienceScorer as MLSalienceScorer
+        from seedcore.ml.salience.scorer import SalienceScorer as MLSalienceScorer
         try:
             scorer = MLSalienceScorer()
             scores = scorer.score_features(features_list)
@@ -239,18 +241,57 @@ async def score_salience(request: Dict[str, Any]):
 
 @ml_app.post("/detect/anomaly")
 async def detect_anomaly(request: Dict[str, Any]):
+    """
+    Enhanced anomaly detection using drift scoring service.
+    
+    This endpoint now uses the Neural-CUSUM drift detector instead of simple thresholds.
+    It provides more sophisticated anomaly detection based on task embeddings and runtime metrics.
+    """
     try:
+        from seedcore.ml.drift_detector import compute_drift_score
+        
         data = request.get("data", [])
         if not data:
             return {"error": "No data provided", "status": "error"}
 
+        # Convert data series to task format for drift detection
+        task = {
+            "id": f"anomaly_detection_{int(time.time())}",
+            "type": "anomaly_detection",
+            "description": f"Anomaly detection for series of {len(data)} points",
+            "priority": 6,
+            "complexity": 0.7,
+            "series_data": data,
+            "series_length": len(data),
+            "series_mean": float(np.mean(data)) if data else 0.0,
+            "series_std": float(np.std(data)) if data else 0.0
+        }
+        
+        # Compute drift score
+        drift_result = await compute_drift_score(task)
+        
+        # Convert drift score to anomaly detection results
         anomalies = []
-        for i, point in enumerate(data):
-            if isinstance(point, (int, float)) and point > 0.8:
-                anomalies.append({"index": i, "value": point, "severity": "high"})
+        drift_threshold = 0.5  # Threshold for considering drift as anomaly
+        
+        if drift_result.score > drift_threshold:
+            # High drift detected - flag as anomaly
+            anomalies.append({
+                "index": 0,  # Single anomaly for the entire series
+                "value": drift_result.score,
+                "severity": "high" if drift_result.score > 0.8 else "medium",
+                "drift_score": drift_result.score,
+                "log_likelihood": drift_result.log_likelihood,
+                "confidence": drift_result.confidence
+            })
+        
         return {
             "anomalies": anomalies,
-            "model": "anomaly_detector",
+            "drift_score": drift_result.score,
+            "log_likelihood": drift_result.log_likelihood,
+            "confidence": drift_result.confidence,
+            "processing_time_ms": drift_result.processing_time_ms,
+            "model": "neural_cusum_drift_detector",
             "status": "success",
             "timestamp": time.time(),
         }
@@ -286,6 +327,100 @@ async def predict_scaling(request: Dict[str, Any]):
         logger.error(f"Error in scaling prediction: {e}")
         return {"error": str(e), "status": "error", "timestamp": time.time()}
 
+@ml_app.post("/drift/score")
+async def compute_drift_score(request: Dict[str, Any]):
+    """
+    Compute drift score for a task using Neural-CUSUM drift detector.
+    
+    This endpoint:
+    1. Extracts text embeddings using SentenceTransformer
+    2. Combines with runtime metrics
+    3. Runs through lightweight MLP to produce log-likelihood scores
+    4. Returns drift score suitable for OCPSValve integration
+    
+    Expected to run under 50ms for typical feature sizes.
+    """
+    try:
+        from seedcore.ml.drift_detector import compute_drift_score
+        
+        # Extract task and text from request
+        task = request.get("task", {})
+        text = request.get("text")
+        
+        logger.info(f"[DriftDetector] Received request: task={task}, text='{text[:100] if text else 'None'}'")
+        
+        if not task:
+            logger.error("[DriftDetector] No task provided in request")
+            return {"error": "No task provided", "status": "error"}
+        
+        # Compute drift score using lazy-loaded drift detector
+        logger.debug(f"[DriftDetector] Computing drift score for task: {task.get('id', 'unknown')}")
+        drift_result = await compute_drift_score(task, text)
+        
+        logger.info(f"[DriftDetector] Computed drift score: {drift_result.score:.4f} (mode: {drift_result.drift_mode})")
+        
+        # Return sanitized result
+        return {
+            "drift_score": drift_result.score,
+            "log_likelihood": drift_result.log_likelihood,
+            "confidence": drift_result.confidence,
+            "processing_time_ms": drift_result.processing_time_ms,
+            "model_version": drift_result.model_version,
+            "model_checksum": drift_result.model_checksum,
+            "drift_mode": drift_result.drift_mode,
+            "accuracy_warning": drift_result.accuracy_warning,
+            "status": "success",
+            "timestamp": time.time(),
+        }
+        
+    except Exception as e:
+        import traceback
+        logger.error(f"[DriftDetector] Error in drift scoring: {e}")
+        logger.error(f"[DriftDetector] Traceback: {traceback.format_exc()}")
+        return {"error": str(e), "status": "error", "timestamp": time.time()}
+
+@ml_app.post("/drift/warmup")
+async def warmup_drift_detector(request: Dict[str, Any] = None):
+    """
+    Warm up the drift detector to avoid cold start latency.
+    
+    This endpoint:
+    1. Loads models if not already loaded
+    2. Performs test computations to warm up the system
+    3. Fits fallback featurizer if needed
+    
+    Should be called during service startup to ensure optimal performance.
+    """
+    try:
+        from seedcore.ml.drift_detector import get_drift_detector
+        
+        detector = get_drift_detector()
+        
+        # Extract sample texts from request if provided
+        sample_texts = None
+        if request and "sample_texts" in request:
+            sample_texts = request["sample_texts"]
+        
+        # Perform warmup
+        start_time = time.time()
+        await detector.warmup(sample_texts)
+        warmup_time = (time.time() - start_time) * 1000
+        
+        # Get performance stats
+        stats = detector.get_performance_stats()
+        
+        return {
+            "status": "success",
+            "warmed_up": detector._warmed_up,
+            "warmup_time_ms": warmup_time,
+            "performance_stats": stats,
+            "timestamp": time.time(),
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in drift detector warmup: {e}")
+        return {"error": str(e), "status": "error", "timestamp": time.time()}
+
 
 # ---------------------------------------------------------------------
 # XGBoost (main API under /xgboost/*)
@@ -293,8 +428,8 @@ async def predict_scaling(request: Dict[str, Any]):
 @ml_app.post("/xgboost/train")
 async def train_xgboost_model(request: Dict[str, Any]):
     try:
-        from src.seedcore.ml.models.xgboost_models import TrainModelRequest, TrainModelResponse
-        from src.seedcore.ml.models.xgboost_service import (
+        from seedcore.ml.models.xgboost_models import TrainModelRequest, TrainModelResponse
+        from seedcore.ml.models.xgboost_service import (
             get_xgboost_service,
             TrainingConfig,
             XGBoostConfig,
@@ -351,8 +486,8 @@ async def train_xgboost_model(request: Dict[str, Any]):
 @ml_app.post("/xgboost/predict")
 async def predict_xgboost(request: Dict[str, Any]):
     try:
-        from src.seedcore.ml.models.xgboost_models import PredictRequest, PredictResponse
-        from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+        from seedcore.ml.models.xgboost_models import PredictRequest, PredictResponse
+        from seedcore.ml.models.xgboost_service import get_xgboost_service
 
         predict_request = PredictRequest(**request)
         svc = get_xgboost_service()
@@ -382,11 +517,11 @@ async def predict_xgboost(request: Dict[str, Any]):
 @ml_app.post("/xgboost/batch_predict")
 async def batch_predict_xgboost(request: Dict[str, Any]):
     try:
-        from src.seedcore.ml.models.xgboost_models import (
+        from seedcore.ml.models.xgboost_models import (
             BatchPredictRequest,
             BatchPredictResponse,
         )
-        from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+        from seedcore.ml.models.xgboost_service import get_xgboost_service
 
         batch_request = BatchPredictRequest(**request)
         svc = get_xgboost_service()
@@ -427,8 +562,8 @@ async def batch_predict_xgboost(request: Dict[str, Any]):
 @ml_app.post("/xgboost/load_model")
 async def load_xgboost_model(request: Dict[str, Any]):
     try:
-        from src.seedcore.ml.models.xgboost_models import LoadModelRequest, ModelInfoResponse
-        from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+        from seedcore.ml.models.xgboost_models import LoadModelRequest, ModelInfoResponse
+        from seedcore.ml.models.xgboost_service import get_xgboost_service
 
         load_request = LoadModelRequest(**request)
         svc = get_xgboost_service()
@@ -453,8 +588,8 @@ async def load_xgboost_model(request: Dict[str, Any]):
 @ml_app.get("/xgboost/list_models")
 async def list_xgboost_models():
     try:
-        from src.seedcore.ml.models.xgboost_models import ModelListResponse
-        from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+        from seedcore.ml.models.xgboost_models import ModelListResponse
+        from seedcore.ml.models.xgboost_service import get_xgboost_service
 
         svc = get_xgboost_service()
         if not svc:
@@ -470,8 +605,8 @@ async def list_xgboost_models():
 @ml_app.get("/xgboost/model_info")
 async def get_xgboost_model_info():
     try:
-        from src.seedcore.ml.models.xgboost_models import ModelInfoResponse
-        from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+        from seedcore.ml.models.xgboost_models import ModelInfoResponse
+        from seedcore.ml.models.xgboost_service import get_xgboost_service
 
         svc = get_xgboost_service()
         if not svc:
@@ -487,8 +622,8 @@ async def get_xgboost_model_info():
 @ml_app.delete("/xgboost/delete_model")
 async def delete_xgboost_model(request: Dict[str, Any]):
     try:
-        from src.seedcore.ml.models.xgboost_models import DeleteModelRequest, DeleteModelResponse
-        from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+        from seedcore.ml.models.xgboost_models import DeleteModelRequest, DeleteModelResponse
+        from seedcore.ml.models.xgboost_service import get_xgboost_service
 
         delete_request = DeleteModelRequest(**request)
         svc = get_xgboost_service()
@@ -514,8 +649,8 @@ async def delete_xgboost_model(request: Dict[str, Any]):
 @ml_app.post("/xgboost/tune")
 async def run_tuning_sweep(request: Dict[str, Any]):
     try:
-        from src.seedcore.ml.tuning_service import get_tuning_service
-        from src.seedcore.ml.models.xgboost_models import TuneRequest, TuneResponse
+        from seedcore.ml.tuning_service import get_tuning_service
+        from seedcore.ml.models.xgboost_models import TuneRequest, TuneResponse
 
         tune_request = TuneRequest(**request)
         tuning_service = get_tuning_service()
@@ -548,7 +683,7 @@ def _run_tuning_job_task(status_actor_handle, job_id: str, request: Dict[str, An
     t.start()
 
     try:
-        from src.seedcore.ml.tuning_service import get_tuning_service
+        from seedcore.ml.tuning_service import get_tuning_service
         tuning_service = get_tuning_service()
         result = tuning_service.run_tuning_sweep(
             space_type=request.get("space_type", "default"),
@@ -627,7 +762,7 @@ def _log_flywheel_event(payload: Dict[str, Any]) -> None:
 @ml_app.post("/xgboost/refresh_model")
 async def refresh_xgboost_model():
     try:
-        from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+        from seedcore.ml.models.xgboost_service import get_xgboost_service
         svc = get_xgboost_service()
         if not svc:
             raise HTTPException(status_code=503, detail="XGBoost service unavailable")
@@ -663,7 +798,7 @@ async def refresh_xgboost_model():
 @ml_app.post("/xgboost/promote")
 async def promote_xgboost_model(request: Dict[str, Any]):
     try:
-        from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+        from seedcore.ml.models.xgboost_service import get_xgboost_service
         candidate = request.get("model_path") or request.get("candidate_uri")
         if not candidate:
             raise HTTPException(status_code=400, detail="model_path (or candidate_uri) is required")
@@ -757,12 +892,39 @@ class MLService:
 
         self._salience_scorer = None
         self._xgboost_service = None  # kept for possible future use
+        
+        # Initialize drift detector (lazy initialization)
+        self._drift_detector = None
+        logger.info("✅ MLService initialized (drift detector will be loaded on first use)")
+        
         logger.info("✅ MLService initialized")
+
+    def _get_drift_detector(self):
+        """Get drift detector with lazy initialization."""
+        if self._drift_detector is None:
+            try:
+                from seedcore.ml.drift_detector import get_drift_detector
+                self._drift_detector = get_drift_detector()
+                logger.info("✅ Drift detector loaded on first use")
+            except Exception as e:
+                logger.error(f"❌ Failed to load drift detector: {e}")
+                return None
+        return self._drift_detector
+
+    async def _warmup_drift_detector(self):
+        """Warm up the drift detector to avoid cold start latency."""
+        detector = self._get_drift_detector()
+        if detector:
+            try:
+                await detector.warmup()
+                logger.info("✅ Drift detector warmup completed")
+            except Exception as e:
+                logger.warning(f"⚠️ Drift detector warmup failed: {e}")
 
     def _get_salience_scorer(self):
         if self._salience_scorer is None:
             try:
-                from src.seedcore.ml.salience.scorer import SalienceScorer
+                from seedcore.ml.salience.scorer import SalienceScorer
                 self._salience_scorer = SalienceScorer()
             except Exception as e:
                 logger.error(f"Failed to load salience scorer: {e}")
@@ -789,7 +951,7 @@ def create_serve_app(args: Dict[str, Any]):
         @fastapi_app.get("/xgb/models")
         async def list_models():
             try:
-                from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+                from seedcore.ml.models.xgboost_service import get_xgboost_service
                 svc = get_xgboost_service()
                 if not svc:
                     return {"error": "XGBoost service unavailable"}
@@ -800,7 +962,7 @@ def create_serve_app(args: Dict[str, Any]):
 
         @fastapi_app.get("/xgb/model_info")
         async def model_info():
-            from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+            from seedcore.ml.models.xgboost_service import get_xgboost_service
             svc = get_xgboost_service()
             if not svc:
                 return {"error": "XGBoost service unavailable"}
@@ -813,7 +975,7 @@ def create_serve_app(args: Dict[str, Any]):
                - single list: {"features": [...]}
                - dict row(s): {"data": [{"feature_0": ...}, ...]}
             """
-            from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+            from seedcore.ml.models.xgboost_service import get_xgboost_service
             svc = get_xgboost_service()
             if not svc:
                 return {"error": "XGBoost service unavailable"}
@@ -849,7 +1011,7 @@ def create_serve_app(args: Dict[str, Any]):
 
         @fastapi_app.post("/xgb/load")
         async def xgb_load(payload: dict):
-            from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+            from seedcore.ml.models.xgboost_service import get_xgboost_service
             svc = get_xgboost_service()
             if not svc:
                 return {"error": "XGBoost service unavailable"}
@@ -861,7 +1023,7 @@ def create_serve_app(args: Dict[str, Any]):
 
         @fastapi_app.post("/xgb/refresh")
         async def xgb_refresh():
-            from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+            from seedcore.ml.models.xgboost_service import get_xgboost_service
             svc = get_xgboost_service()
             if not svc:
                 return {"error": "XGBoost service unavailable"}
@@ -870,7 +1032,7 @@ def create_serve_app(args: Dict[str, Any]):
 
         @fastapi_app.post("/xgb/train_sample")
         async def xgb_train_sample(payload: dict = {}):
-            from src.seedcore.ml.models.xgboost_service import get_xgboost_service
+            from seedcore.ml.models.xgboost_service import get_xgboost_service
             svc = get_xgboost_service()
             if not svc:
                 return {"error": "XGBoost service unavailable"}

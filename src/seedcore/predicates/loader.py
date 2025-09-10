@@ -202,9 +202,36 @@ class PredicateLoader:
                 await asyncio.sleep(5)  # Wait before retrying
 
 def load_predicates(config_path: str) -> PredicatesConfig:
-    """Load predicate configuration from file."""
+    """Load predicate configuration from file (sync version)."""
     loader = PredicateLoader(config_path, watch_for_changes=False)
-    return asyncio.run(loader.load())
+    try:
+        # Try to get the current event loop
+        loop = asyncio.get_running_loop()
+        # If we're in an event loop, we can't use asyncio.run()
+        # Instead, we need to use a different approach - run in a new thread
+        import concurrent.futures
+        import threading
+        
+        def run_in_thread():
+            # Create a new event loop in the thread
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(loader.load())
+            finally:
+                new_loop.close()
+        
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_in_thread)
+            return future.result()
+    except RuntimeError:
+        # No event loop running, safe to use asyncio.run()
+        return asyncio.run(loader.load())
+
+async def load_predicates_async(config_path: str) -> PredicatesConfig:
+    """Load predicate configuration from file (async version)."""
+    loader = PredicateLoader(config_path, watch_for_changes=False)
+    return await loader.load()
 
 def validate_predicates(config: PredicatesConfig) -> bool:
     """Validate a predicate configuration."""

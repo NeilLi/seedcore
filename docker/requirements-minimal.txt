@@ -40,8 +40,12 @@ fsspec[http]==2023.10.0   # matches datasets constraint
 pydantic==2.5.0           # required by dspy-ai
 dspy-ai==2.4.4
 
-# ML dependencies for salience scoring
+# ML dependencies for salience scoring and drift detection
 scikit-learn==1.3.0
+sentence-transformers==5.1.0
+transformers==4.56.1
+tokenizers==0.22.0
+safetensors==0.6.2
 
 # XGBoost integration
 xgboost>=2.0.0

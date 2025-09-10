@@ -36,7 +36,7 @@ SIGNALS: Dict[str, SignalSpec] = {
     "s_drift": SignalSpec(
         "s_drift", 
         float, 
-        "Drift slice gᵀh from OCPS",
+        "Drift slice gᵀh from Neural-CUSUM drift detector (ML service)",
         unit="drift_score"
     ),
     "escalation_ratio": SignalSpec(

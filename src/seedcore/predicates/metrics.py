@@ -92,6 +92,11 @@ class PredicateMetrics:
         self.memory_synthesis_attempts = create_safe_counter("coord_memory_synthesis_attempts_total", "Memory synthesis attempts", labelnames=["status"])
         self.memory_synthesis_duration = create_safe_summary("coord_memory_synthesis_seconds", "Memory synthesis duration")
         
+        # Drift detection metrics
+        self.drift_computations = create_safe_counter("coord_drift_computations_total", "Drift computations", labelnames=["status", "drift_mode"])
+        self.drift_computation_duration = create_safe_histogram("coord_drift_computation_seconds", "Drift computation duration", buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0])
+        self.drift_scores = create_safe_histogram("coord_drift_scores", "Drift scores distribution", buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5, 2.0])
+        
         logger.info("✅ Predicate metrics initialized")
     
     def update_ocps_signals(self, p_fast: float, s_drift: float, escalation_ratio: float):
@@ -201,6 +206,12 @@ class PredicateMetrics:
             self.organ_latency_ms.observe(latency_ms)
         elif latency_type == "e2e":
             self.e2e_latency_ms.observe(latency_ms)
+    
+    def record_drift_computation(self, status: str, drift_mode: str, duration_seconds: float, drift_score: float):
+        """Record drift computation metrics."""
+        self.drift_computations.labels(status=status, drift_mode=drift_mode).inc()
+        self.drift_computation_duration.observe(duration_seconds)
+        self.drift_scores.observe(drift_score)
 
 # Global metrics instance
 _metrics = PredicateMetrics()

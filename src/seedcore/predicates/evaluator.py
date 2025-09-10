@@ -90,7 +90,12 @@ class PredicateEvaluator:
         
         # Names (variables)
         if isinstance(node, ast.Name):
-            if node.id in context:
+            # Handle boolean literals
+            if node.id == "true":
+                return True
+            elif node.id == "false":
+                return False
+            elif node.id in context:
                 return context[node.id]
             else:
                 raise ValueError(f"Undefined variable: {node.id}")

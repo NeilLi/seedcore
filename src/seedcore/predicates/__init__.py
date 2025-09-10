@@ -11,7 +11,7 @@ This module provides a comprehensive system for:
 
 from .signals import SIGNALS, get_signal_spec, validate_signal_value, create_signal_context
 from .schema import PredicatesConfig, Rule, GpuGuard, Metadata
-from .loader import load_predicates, validate_predicates
+from .loader import load_predicates, load_predicates_async, validate_predicates
 from .evaluator import PredicateEvaluator, eval_predicate
 from .metrics import PredicateMetrics, get_metrics
 from .router import PredicateRouter
@@ -26,6 +26,7 @@ __all__ = [
     "GpuGuard", 
     "Metadata",
     "load_predicates",
+    "load_predicates_async",
     "validate_predicates",
     "PredicateEvaluator",
     "eval_predicate",

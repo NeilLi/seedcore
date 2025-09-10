@@ -19,7 +19,7 @@ spec:
     applications:
       # ✅ FIX: Replaced the single 'seedcore' app with two distinct applications.
       - name: ml_service
-        import_path: src.seedcore.ml.serve_app:build_ml_service
+        import_path: entrypoints.ml_entrypoint:build_ml_service
         route_prefix: /ml
         deployments:
           - name: MLService
