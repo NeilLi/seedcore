@@ -57,7 +57,7 @@ dependencies = [
     "redis==5.0.1",
     
     # Core ML / DL side deps
-    "ray=2.33.0",
+    "ray==2.33.0",
     "dgl>=2.1",
     "numpy",
     "torchdata==0.7.1",

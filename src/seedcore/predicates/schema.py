@@ -5,7 +5,7 @@ This module defines the structure and validation rules for predicate configurati
 files, ensuring type safety and proper validation of routing rules.
 """
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Literal, Optional, Dict, Any
 import re
 
@@ -16,14 +16,16 @@ class Rule(BaseModel):
     priority: int = Field(default=0, description="Rule priority (higher = more important)")
     description: Optional[str] = Field(default=None, description="Human-readable description")
     
-    @validator("when")
+    @field_validator("when")
+    @classmethod
     def validate_when_expression(cls, v):
         """Basic validation of the when expression."""
         if not v or not v.strip():
             raise ValueError("When expression cannot be empty")
         return v.strip()
     
-    @validator("do")
+    @field_validator("do")
+    @classmethod
     def validate_do_action(cls, v):
         """Basic validation of the do action."""
         if not v or not v.strip():
@@ -37,7 +39,8 @@ class GpuGuard(BaseModel):
     cooldown_minutes: int = Field(..., description="Cooldown period between jobs in minutes", ge=0)
     queue_timeout_minutes: int = Field(default=30, description="Queue timeout in minutes", ge=1)
     
-    @validator("daily_budget_hours")
+    @field_validator("daily_budget_hours")
+    @classmethod
     def validate_daily_budget(cls, v):
         if v > 24:
             raise ValueError("Daily budget cannot exceed 24 hours")
@@ -66,14 +69,16 @@ class PredicatesConfig(BaseModel):
     alerts: Optional[Dict[str, Any]] = Field(default=None, description="Alert configuration")
     fallback: Optional[Dict[str, str]] = Field(default=None, description="Fallback actions")
     
-    @validator("routing", "mutations")
+    @field_validator("routing", "mutations")
+    @classmethod
     def validate_rules_not_empty(cls, v):
         """Ensure rules sections are not empty."""
         if not v:
             raise ValueError("Rules section cannot be empty")
         return v
     
-    @validator("routing")
+    @field_validator("routing")
+    @classmethod
     def validate_routing_rules(cls, v):
         """Validate routing rules have valid actions."""
         valid_actions = {"escalate", "fast_path", "hold", "retry"}
@@ -83,7 +88,8 @@ class PredicatesConfig(BaseModel):
                 raise ValueError(f"Invalid routing action: {action}")
         return v
     
-    @validator("mutations")
+    @field_validator("mutations")
+    @classmethod
     def validate_mutation_rules(cls, v):
         """Validate mutation rules have valid actions."""
         valid_actions = {"submit_tuning", "submit_retrain", "hold", "skip"}

@@ -41,12 +41,9 @@ def test_namespace_consistency():
     effective_namespace = ray_namespace or seedcore_ns or "seedcore-dev"
     logger.info(f"Effective namespace: {effective_namespace}")
     
-    if effective_namespace != "seedcore-dev":
-        logger.warning(f"⚠️ Namespace is {effective_namespace}, expected seedcore-dev")
-        return False
+    assert effective_namespace == "seedcore-dev", f"Namespace is {effective_namespace}, expected seedcore-dev"
     
     logger.info("✅ Namespace consistency check passed")
-    return True
 
 def test_ray_initialization():
     """Test that Ray initializes with the correct namespace."""
@@ -63,9 +60,7 @@ def test_ray_initialization():
         if not ray.is_initialized():
             logger.info(f"Initializing Ray with namespace: {effective_namespace}")
             from seedcore.utils.ray_utils import ensure_ray_initialized
-            if not ensure_ray_initialized(ray_namespace=effective_namespace):
-                logger.error("❌ Failed to initialize Ray connection")
-                return False
+            assert ensure_ray_initialized(ray_namespace=effective_namespace), "Failed to initialize Ray connection"
         else:
             logger.info("Ray already initialized")
         
@@ -74,16 +69,12 @@ def test_ray_initialization():
         current_namespace = getattr(runtime_context, 'namespace', 'unknown')
         logger.info(f"Current Ray namespace: {current_namespace}")
         
-        if current_namespace == effective_namespace:
-            logger.info("✅ Ray namespace matches expected namespace")
-            return True
-        else:
-            logger.error(f"❌ Ray namespace mismatch: got {current_namespace}, expected {effective_namespace}")
-            return False
+        assert current_namespace == effective_namespace, f"Ray namespace mismatch: got {current_namespace}, expected {effective_namespace}"
+        logger.info("✅ Ray namespace matches expected namespace")
             
     except Exception as e:
         logger.error(f"❌ Failed to test Ray initialization: {e}")
-        return False
+        raise
 
 def test_agent_creation():
     """Test that agents can be created in the correct namespace."""

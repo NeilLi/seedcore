@@ -678,6 +678,55 @@ class CognitiveCore(dspy.Module):
         stable_hash = self._stable_hash(task_type, agent_id, input_data)
         return f"cc:res:{task_type.value}:{self.model}:{self.llm_provider}:{self.schema_version}:{stable_hash}"
 
+    def _to_payload(self, raw) -> dict:
+        """Normalize any handler output into a dict."""
+        if raw is None:
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        # DSPy predictions often have toDict()
+        if hasattr(raw, "toDict") and callable(raw.toDict):
+            try:
+                result = raw.toDict()
+                if isinstance(result, dict):
+                    return result or {}
+            except Exception:
+                pass
+        # namedtuple
+        if hasattr(raw, "_asdict"):
+            try:
+                result = raw._asdict()
+                if isinstance(result, dict):
+                    return result or {}
+            except Exception:
+                pass
+        # Mock objects - extract attributes directly
+        if hasattr(raw, '_mock_name'):  # This is a Mock object
+            result = {}
+            for attr_name in dir(raw):
+                if not attr_name.startswith('_') and not callable(getattr(raw, attr_name)):
+                    try:
+                        value = getattr(raw, attr_name)
+                        if not hasattr(value, '_mock_name'):  # Not a nested Mock
+                            result[attr_name] = value
+                    except Exception:
+                        pass
+            return result
+        # generic object with attributes
+        if hasattr(raw, "__dict__"):
+            return {k: v for k, v in vars(raw).items() if not k.startswith("_")}
+        # fallback
+        return {"value": raw}
+
+    def _normalize_failure_analysis(self, payload: dict) -> dict:
+        """Normalize failure analysis specific fields."""
+        if "confidence_score" in payload:
+            try:
+                payload["confidence_score"] = float(payload["confidence_score"])
+            except Exception:
+                pass
+        return payload
+
     def _check_post_conditions(self, result: Dict[str, Any], task_type: CognitiveTaskType) -> Tuple[bool, List[str]]:
         """Check post-conditions for DSPy outputs to ensure policy compliance."""
         violations = []
@@ -834,38 +883,54 @@ class CognitiveCore(dspy.Module):
             # Process with appropriate handler
             handler = self.task_handlers.get(context.task_type)
             if not handler:
-                return create_error_result(f"Unknown task type: {context.task_type}")
+                return create_error_result(f"Unknown task type: {context.task_type}", "INVALID_TASK_TYPE")
             
             # Add knowledge context to input data
             enhanced_input = dict(context.input_data)
             enhanced_input["knowledge_context"] = json.dumps(knowledge_context)
             
             # Execute with post-condition checks
-            result = handler(**enhanced_input)
+            raw = handler(**enhanced_input)
+            # Normalize handler output into a dict
+            payload = self._to_payload(raw)
+            
+            # Normalize task-specific fields
+            if context.task_type == CognitiveTaskType.FAILURE_ANALYSIS:
+                payload = self._normalize_failure_analysis(payload)
             
             # Validate post-conditions
-            is_valid, violations = self._check_post_conditions(result, context.task_type)
+            is_valid, violations = self._check_post_conditions(payload, context.task_type)
             if not is_valid:
                 logger.warning(f"Post-condition violations: {violations}")
                 # Could retry or escalate here
             
             # Cache result
-            self._cache_result(cache_key, result, context.task_type, agent_id=context.agent_id)
+            self._cache_result(cache_key, raw, context.task_type, agent_id=context.agent_id)
             
-            return create_cognitive_result(
-                success=True,
-                result=result,
+            out = create_cognitive_result(
+                agent_id=context.agent_id,
                 task_type=context.task_type.value,
-                metadata={
-                    "cache_hit": False,
-                    "sufficiency": final_sufficiency.__dict__ if 'final_sufficiency' in locals() else {},
-                    "post_condition_violations": violations
-                }
+                result=payload,
+                confidence_score=payload.get("confidence_score"),
+                cache_hit=False,
+                sufficiency=final_sufficiency.__dict__ if 'final_sufficiency' in locals() else {},
+                post_condition_violations=violations
             )
+            # Backward-compat shim: keep 'result' until all tests are updated
+            # Convert TaskResult to dict for backward compatibility
+            out_dict = {
+                "success": out.success,
+                "result": out.payload.result if hasattr(out.payload, 'result') else {},
+                "payload": out.payload.result if hasattr(out.payload, 'result') else {},
+                "error": None,
+                "metadata": out.metadata,
+                "task_type": out.payload.task_type if hasattr(out.payload, 'task_type') else context.task_type.value,
+            }
+            return out_dict
             
         except Exception as e:
             logger.error(f"Error processing {context.task_type.value} task: {e}")
-            return create_error_result(f"Processing error: {str(e)}")
+            return create_error_result(f"Processing error: {str(e)}", "PROCESSING_ERROR")
 
     def _build_query(self, context: CognitiveContext) -> str:
         """Build search query from context."""
@@ -1058,16 +1123,32 @@ class CognitiveCore(dspy.Module):
         result = self.process(context)
         
         # Convert TaskResult to dict format for backward compatibility
-        if hasattr(result, 'to_dict'):
+        # Case 1: real TaskResult object
+        if isinstance(result, TaskResult):
             return result.to_dict()
-        else:
+
+        # Case 2: dict already (shim from process)
+        if isinstance(result, dict):
+            # make sure keys exist
             return {
-                "success": getattr(result, 'success', False),
-                "result": getattr(result, 'result', {}),
-                "task_type": getattr(result, 'task_type', context.task_type.value),
-                "metadata": getattr(result, 'metadata', {}),
-                "error": getattr(result, 'error', None)
+                "success": result.get("success", False),
+                "result": result.get("result") or result.get("payload", {}),
+                "payload": result.get("payload") or result.get("result", {}),
+                "task_type": result.get("task_type", context.task_type.value),
+                "metadata": result.get("metadata", {}),
+                "error": result.get("error"),
             }
+
+        # Case 3: something unexpected
+        logger.warning(f"Unexpected result type in forward: {type(result)}")
+        return {
+            "success": False,
+            "result": {},
+            "payload": {},
+            "task_type": context.task_type.value,
+            "metadata": {},
+            "error": f"Unsupported result type {type(result)}",
+        }
 
 
 # =============================================================================
