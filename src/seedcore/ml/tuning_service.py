@@ -5,15 +5,18 @@ This module provides hyperparameter tuning functionality using Ray Tune,
 specifically for XGBoost models in the SeedCore platform.
 """
 
+from __future__ import annotations
+
 import ray
 import requests
 import logging
 import time
-from ..utils.ray_utils import ensure_ray_initialized
+import os
 import json
 import shutil
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from ..utils.ray_utils import ensure_ray_initialized
+from typing import Dict, Any, Optional, List, Tuple, Union
 from ray import tune
 from ray.tune.schedulers import ASHAScheduler
 from ray.tune.search.basic_variant import BasicVariantGenerator
@@ -21,8 +24,46 @@ from ray.tune.search.basic_variant import BasicVariantGenerator
 from .tuning_config import get_search_space, get_tune_config
 from .models.xgboost_service import get_xgboost_service, XGBoostConfig, TrainingConfig
 from ..memory.flashbulb_client import FlashbulbClient
+from ..predicates.gpu_guard import GPUGuard
+
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover
+    pd = None
 
 logger = logging.getLogger(__name__)
+
+def _validate_dataset(dataset: Any) -> Tuple["pd.DataFrame", str]:
+    """
+    Accepts a Pandas DataFrame or a dict-like { 'X': df/features, 'y': series/col }.
+    Ensures presence of a 'target' label column (or provided y), returns DF and label name.
+    Raises ValueError with helpful message if invalid.
+    """
+    if dataset is None:
+        raise ValueError("dataset is None")
+    if pd is None:
+        raise ValueError("pandas is required for dataset validation but not available")
+
+    # Case 1: already a DataFrame with 'target'
+    if isinstance(dataset, pd.DataFrame):
+        if "target" not in dataset.columns:
+            raise ValueError("dataset DataFrame must contain a 'target' label column")
+        return dataset, "target"
+
+    # Case 2: dict-like with X/y
+    if isinstance(dataset, dict):
+        X = dataset.get("X")
+        y = dataset.get("y")
+        if X is None or y is None:
+            raise ValueError("dict dataset must contain keys 'X' and 'y'")
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("'X' must be a pandas DataFrame")
+        # bind label
+        df = X.copy()
+        df["target"] = y
+        return df, "target"
+
+    raise ValueError("Unsupported dataset type. Provide a pandas DataFrame or dict with 'X' and 'y'.")
 
 def tune_xgb_trainable(config: Dict[str, Any]) -> None:
     """
@@ -43,12 +84,16 @@ def tune_xgb_trainable(config: Dict[str, Any]) -> None:
         
         # Import XGBoost service directly
         from src.seedcore.ml.models.xgboost_service import get_xgboost_service, XGBoostConfig, TrainingConfig
+        from src.seedcore.ml.tuning_service import _validate_dataset  # re-use same helper
         
         # Get XGBoost service
         xgb_service = get_xgboost_service()
         
-        # Create sample dataset for consistency across trials
-        dataset = xgb_service.create_sample_dataset(n_samples=1000, n_features=10)
+        # Dataset: prefer externally supplied (via config), else synthetic
+        dataset = config.get("_dataset")
+        if dataset is None:
+            dataset = xgb_service.create_sample_dataset(n_samples=1000, n_features=10)
+        dataset, label_col = _validate_dataset(dataset)
         
         # Convert config to XGBoostConfig (only include supported parameters)
         xgb_config = XGBoostConfig(
@@ -64,7 +109,7 @@ def tune_xgb_trainable(config: Dict[str, Any]) -> None:
         # Create training config
         training_config = TrainingConfig(
             num_workers=1,  # Use single worker for tuning trials
-            use_gpu=False,
+            use_gpu=config.get("_use_gpu", False),
             cpu_per_worker=1,
             memory_per_worker=1000000000  # 1GB per worker
         )
@@ -75,7 +120,7 @@ def tune_xgb_trainable(config: Dict[str, Any]) -> None:
         
         result = xgb_service.train_model(
             dataset=dataset,
-            label_column="target",
+            label_column=label_col,
             xgb_config=xgb_config,
             training_config=training_config,
             model_name=f"tune_trial_{trial_id}"
@@ -102,9 +147,22 @@ def tune_xgb_trainable(config: Dict[str, Any]) -> None:
         }
         
     except Exception as e:
-        logger.error(f"❌ Trial {trial_id} failed with error: {e}")
+        logger.exception(f"❌ Trial {trial_id} failed")
+        # Emit structured error context (config subset only)
+        try:
+            err_ctx = {
+                "trial_id": trial_id,
+                "error_type": type(e).__name__,
+                "error": str(e)[:500],
+                "config": {k: config.get(k) for k in ["eta","max_depth","subsample","colsample_bytree","num_boost_round"]},
+            }
+            logger.error(f"[trial_error] {err_ctx}")
+        except Exception:
+            pass
         # Report failure by returning metrics with 0 accuracy
-        logger.info(f"📊 Reporting failure for trial {trial_id}: mean_accuracy=0.0")
+        logger.info(
+            f"📊 Reporting failure for trial {trial_id}: mean_accuracy=0.0"
+        )
         return {
             "mean_accuracy": 0.0,
             "logloss": float('inf'),
@@ -148,6 +206,14 @@ class HyperparameterTuningService:
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize FlashbulbClient: {e}")
             self.flashbulb_client = None
+
+        # Initialize Redis-backed GPU Guard
+        try:
+            self.gpu_guard = GPUGuard.from_env()
+            logger.info(f"✅ GPUGuard ready: {self.gpu_guard.get_status()}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize GPUGuard: {e}")
+            self.gpu_guard = GPUGuard(None)  # no-op fallback
     
     def run_tuning_sweep(
         self,
@@ -158,7 +224,9 @@ class HyperparameterTuningService:
         experiment_name: str = "xgboost_tuning",
         progress_callback: Optional[callable] = None,
         status_actor_handle=None,
-        job_id: str = None
+        job_id: str = None,
+        dataset: Optional[Any] = None,
+        expected_gpu_seconds: int = 1800
     ) -> Dict[str, Any]:
         """
         Run a hyperparameter tuning sweep using Ray Tune.
@@ -172,12 +240,26 @@ class HyperparameterTuningService:
             progress_callback: Optional callback function for progress updates
             status_actor_handle: Optional Ray actor handle for direct status updates
             job_id: Optional job ID for status updates
+            dataset: Optional dataset (pd.DataFrame with 'target' or dict{'X','y'})
+            expected_gpu_seconds: reservation for GPU budget admission (seconds)
             
         Returns:
             Dictionary containing tuning results and best model information
         """
         try:
             logger.info(f"🎯 Starting hyperparameter tuning sweep: {experiment_name}")
+
+            # GPU Guard admission (resource-bounded by design)
+            guard_job_id = job_id or f"tune-{int(time.time())}"
+            admit_ok, admit_reason = self.gpu_guard.try_acquire(
+                job_id=guard_job_id,
+                gpu_seconds_budget=int(expected_gpu_seconds),
+            )
+            if not admit_ok:
+                msg = f"GPUGuard admission rejected: {admit_reason}"
+                logger.warning(f"🛑 {msg}")
+                raise RuntimeError(msg)
+            logger.info(f"✅ GPUGuard admitted job {guard_job_id} ({admit_reason})")
             
             if progress_callback:
                 progress_callback("Initializing Ray Tune...")
@@ -186,7 +268,21 @@ class HyperparameterTuningService:
             if ray.is_initialized():
                 logger.info(f"🔍 Ray address: {ray.get_runtime_context().gcs_address}")
                 logger.info(f"🔍 Available resources: {ray.available_resources()}")
-            
+
+            # Validate & attach dataset (if provided)
+            label_col = "target"
+            attached_dataset = None
+            if dataset is not None:
+                try:
+                    from .tuning_service import _validate_dataset as _vd
+                    attached_dataset, label_col = _vd(dataset)
+                    logger.info(
+                        f"📦 Using custom dataset for tuning (label='{label_col}', rows={len(attached_dataset)})"
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ Provided dataset invalid ({e}); falling back to synthetic.")
+                    attached_dataset = None
+
             # Get search space and tuning configuration
             search_space = custom_search_space or get_search_space(space_type)
             tune_config_dict = custom_tune_config or get_tune_config(config_type)
@@ -216,7 +312,11 @@ class HyperparameterTuningService:
             
             if progress_callback:
                 progress_callback("Starting tuning sweep...")
-            
+
+            # Propagate runtime knobs into trainable
+            # (dataset, gpu usage hints, etc.)
+            search_space["_dataset"] = attached_dataset
+            search_space["_use_gpu"] = bool(tune_config_dict.get("use_gpu", False))
             # Configure the tuner
             # Note: In modern Ray Tune, experiment name and local_dir are handled differently
             # We'll use the default local_dir and let Ray handle the experiment naming
@@ -236,6 +336,7 @@ class HyperparameterTuningService:
             logger.info("🚀 Starting tuning sweep...")
             logger.info(f"📁 Experiment name: {experiment_name}")
             results = tuner.fit()
+            sweep_start = time.time()
             total_trials = len(results)
             
             if progress_callback:
@@ -256,8 +357,36 @@ class HyperparameterTuningService:
             if progress_callback:
                 progress_callback("Logging tuning results...")
             
+            # Complete GPU job if GPU Guard is available
+            if self.gpu_guard and job_id:
+                try:
+                    self.gpu_guard.complete_job(job_id, success=True)
+                    logger.info(f"✅ Job {job_id} completed in GPU Guard")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to complete job {job_id} in GPU Guard: {e}")
+            
             # Log successful tuning to flashbulb memory
-            self._log_tuning_success(best_result, experiment_name, promotion_result, total_trials)
+            if self.flashbulb_client:
+                try:
+                    event_data = {
+                        "event_type": "model_tuning_completed",
+                        "timestamp": time.time(),
+                        "outcome": "success",
+                        "experiment_name": experiment_name,
+                        "best_model_path": promotion_result.get("blessed_path"),
+                        "metric_achieved": {
+                            "auc": best_result.metrics.get("mean_accuracy", 0.0),
+                            "logloss": best_result.metrics.get("logloss", float('inf'))
+                        },
+                        "best_params": best_result.config,
+                        "trial_id": best_result.metrics.get("trial_id"),
+                        "promotion_status": promotion_result.get("status"),
+                        "total_trials": total_trials
+                    }
+                    self.flashbulb_client.log_incident(event_data, 0.8)  # High salience for successful tuning
+                    logger.info("✅ Tuning success logged to Flashbulb memory")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to log tuning success to Flashbulb: {e}")
             
             if progress_callback:
                 progress_callback("Tuning sweep completed successfully!")
@@ -286,7 +415,10 @@ class HyperparameterTuningService:
                     logger.info(f"✅ Direct status update sent to actor for job {job_id}")
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to send direct status update to actor: {e}")
-            
+
+            # Mark guard completion (approx wall time as coarse GPU seconds)
+            gpu_secs = max(1.0, time.time() - sweep_start)
+            self.gpu_guard.complete(guard_job_id, actual_gpu_seconds=gpu_secs, success=True)
             return {
                 "status": "success",
                 "experiment_name": experiment_name,
@@ -303,6 +435,9 @@ class HyperparameterTuningService:
             }
             
         except Exception as e:
+            # Ensure guard is released on failure
+            guard_job_id = job_id or "unknown"
+            self.gpu_guard.complete(guard_job_id, actual_gpu_seconds=0.0, success=False)
             error_msg = f"Tuning sweep failed: {str(e)}"
             logger.error(f"❌ {error_msg}")
             if progress_callback:
@@ -474,59 +609,6 @@ class HyperparameterTuningService:
             logger.error(f"❌ Failed to get tuning history: {e}")
             return []
     
-    def _log_tuning_success(self, best_result, experiment_name: str, promotion_result: Dict[str, Any], total_trials: int) -> None:
-        """
-        Log a successful tuning run to flashbulb memory.
-        
-        Args:
-            best_result: Best trial result from Ray Tune
-            experiment_name: Name of the tuning experiment
-            promotion_result: Result of model promotion
-        """
-        if self.flashbulb_client is None:
-            logger.warning("⚠️ FlashbulbClient not available, skipping event logging")
-            return
-        
-        try:
-            # Create flashbulb event data
-            event_data = {
-                "event_type": "model_tuning_completed",
-                "timestamp": time.time(),
-                "outcome": "success",
-                "experiment_name": experiment_name,
-                "best_model_path": promotion_result.get("blessed_path"),
-                "metric_achieved": {
-                    "auc": best_result.metrics.get("mean_accuracy", 0.0),
-                    "logloss": best_result.metrics.get("logloss", float('inf'))
-                },
-                "best_params": best_result.config,
-                "trial_id": best_result.metrics.get("trial_id"),
-                "promotion_status": promotion_result.get("status"),
-                "total_trials": total_trials
-            }
-            
-            # Calculate salience score based on performance improvement
-            auc_score = best_result.metrics.get("mean_accuracy", 0.0)
-            # High salience for AUC > 0.95, medium for > 0.90, low for > 0.85
-            if auc_score > 0.95:
-                salience = 0.95
-            elif auc_score > 0.90:
-                salience = 0.85
-            elif auc_score > 0.85:
-                salience = 0.75
-            else:
-                salience = 0.60
-            
-            # Log to flashbulb memory
-            success = self.flashbulb_client.log_incident(event_data, salience)
-            
-            if success:
-                logger.info(f"✅ Tuning success logged to flashbulb memory with salience {salience}")
-            else:
-                logger.warning("⚠️ Failed to log tuning success to flashbulb memory")
-                
-        except Exception as e:
-            logger.error(f"❌ Error logging tuning success to flashbulb memory: {e}")
     
     def _convert_dict_to_tune_space(self, search_space_dict: Dict[str, Any]) -> Dict[str, Any]:
         """

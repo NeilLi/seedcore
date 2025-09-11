@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from .schema import PredicatesConfig, EvaluationContext, TaskContext, DecisionContext
 from .evaluator import PredicateEvaluator
 from .metrics import get_metrics
-from .gpu_guard import GpuGuardSystem
+from .gpu_guard import GPUGuard
 from .signals import create_signal_context
 
 logger = logging.getLogger(__name__)
@@ -47,9 +47,14 @@ class PredicateRouter:
         # GPU guard is optional based on feature flag
         gpu_guard_enabled = getattr(config, 'gpu_guard_enabled', False)
         if gpu_guard_enabled:
-            self.gpu_guard = GpuGuardSystem(config.gpu_guard)
+            try:
+                self.gpu_guard = GPUGuard.from_env()
+                logger.info("GPU guard enabled with Redis backend")
+            except Exception as e:
+                logger.warning(f"Failed to initialize GPU guard: {e}, using no-op mode")
+                self.gpu_guard = GPUGuard(None)  # no-op fallback
         else:
-            self.gpu_guard = None
+            self.gpu_guard = GPUGuard(None)  # no-op mode
             logger.info("GPU guard disabled by feature flag")
         
         # Signal context cache
@@ -262,7 +267,11 @@ class PredicateRouter:
                         
                         # If submitting a job, check GPU guard
                         if action in ["submit_tuning", "submit_retrain"]:
-                            can_submit, reason = self.gpu_guard.can_submit_job(action.replace("submit_", ""))
+                            job_id = job_id or f"job_{int(time.time())}"
+                            # Estimate GPU seconds needed (tuning: 30min, retrain: 10min)
+                            gpu_seconds = 1800 if action == "submit_tuning" else 600
+                            
+                            can_submit, reason = self.gpu_guard.try_acquire(job_id, gpu_seconds)
                             if not can_submit:
                                 decision = MutationDecision(
                                     action="hold",
@@ -273,22 +282,14 @@ class PredicateRouter:
                                 self.metrics.record_mutation_decision("hold", "gpu_guard_blocked")
                                 return decision
                             
-                            # Submit the job
-                            if self.gpu_guard.submit_job(job_id or f"job_{int(time.time())}", action.replace("submit_", "")):
-                                decision = MutationDecision(
-                                    action=action,
-                                    job_id=job_id,
-                                    reason=f"Matched rule: {rule.description or rule.do}",
-                                    rule_matched=rule.description or rule.do,
-                                    confidence=0.9
-                                )
-                            else:
-                                decision = MutationDecision(
-                                    action="hold",
-                                    reason="Failed to submit job to GPU guard",
-                                    rule_matched=rule.description or rule.do,
-                                    confidence=0.7
-                                )
+                            # Job was admitted by GPU guard
+                            decision = MutationDecision(
+                                action=action,
+                                job_id=job_id,
+                                reason=f"Matched rule: {rule.description or rule.do}",
+                                rule_matched=rule.description or rule.do,
+                                confidence=0.9
+                            )
                         else:
                             decision = MutationDecision(
                                 action=action,
@@ -342,22 +343,24 @@ class PredicateRouter:
     def get_gpu_guard_status(self) -> Dict[str, Any]:
         """Get current GPU guard status."""
         if self.gpu_guard:
-            return self.gpu_guard.get_status()
+            status = self.gpu_guard.get_status()
+            status["guard_ok"] = status.get("inflight_jobs", 0) < status.get("max_concurrency", 1)
+            return status
         else:
             return {"guard_ok": True, "enabled": False, "reason": "GPU guard disabled by feature flag"}
     
     def update_gpu_job_status(self, job_id: str, status: str, success: bool = True):
         """Update GPU job status."""
         if self.gpu_guard:
-            if status == "started":
-                self.gpu_guard.start_job(job_id)
-            elif status == "completed":
-                self.gpu_guard.complete_job(job_id, success)
+            if status == "completed":
+                # Use actual GPU seconds if available, otherwise estimate
+                gpu_seconds = 60.0  # Default estimate
+                self.gpu_guard.complete(job_id, gpu_seconds, success)
             elif status == "failed":
-                self.gpu_guard.fail_job(job_id)
+                self.gpu_guard.complete(job_id, 0.0, success=False)
     
     async def start_background_tasks(self):
         """Start background maintenance tasks."""
-        if self.gpu_guard:
-            await self.gpu_guard.start_background_tasks()
+        # The new GPUGuard doesn't have background tasks, so this is a no-op
+        pass
         logger.info("🚀 Started predicate router background tasks")

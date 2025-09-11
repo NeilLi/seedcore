@@ -5,9 +5,15 @@ This module defines search spaces and configurations for hyperparameter tuning
 using Ray Tune, specifically for XGBoost models in the SeedCore platform.
 """
 
+from __future__ import annotations
+
 from ray import tune
 from typing import Dict, Any, List
 import logging
+import time
+import os
+
+PROVENANCE_VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +51,8 @@ XGBOOST_CONSERVATIVE_SPACE = {
     "alpha": tune.uniform(0.0, 2.0),
     "num_boost_round": 20,  # Reduced for faster testing
     "early_stopping_rounds": 5,  # Reduced for faster testing
+    # runtime knobs propagated to trainable
+    "use_gpu": False,
 }
 
 # Aggressive search space for extensive tuning
@@ -63,6 +71,8 @@ XGBOOST_AGGRESSIVE_SPACE = {
     "min_child_weight": tune.uniform(1.0, 10.0),
     "num_boost_round": tune.randint(100, 300),
     "early_stopping_rounds": 15,
+    # runtime knobs propagated to trainable
+    "use_gpu": True,
 }
 
 # Default tuning configuration
@@ -72,6 +82,7 @@ DEFAULT_TUNE_CONFIG = {
     "time_budget_s": 3600,  # 1 hour time budget
     "grace_period": 10,  # Minimum training iterations before early stopping
     "reduction_factor": 2,  # ASHA reduction factor
+    "use_gpu": False,
 }
 
 # Conservative tuning configuration
@@ -81,6 +92,7 @@ CONSERVATIVE_TUNE_CONFIG = {
     "time_budget_s": 600,  # 10 minutes
     "grace_period": 5,
     "reduction_factor": 2,
+    "use_gpu": False,
 }
 
 # Aggressive tuning configuration
@@ -90,6 +102,7 @@ AGGRESSIVE_TUNE_CONFIG = {
     "time_budget_s": 7200,  # 2 hours
     "grace_period": 15,
     "reduction_factor": 3,
+    "use_gpu": True,
 }
 
 def get_search_space(space_type: str = "default") -> Dict[str, Any]:
@@ -122,7 +135,7 @@ def get_tune_config(config_type: str = "default") -> Dict[str, Any]:
         config_type: Type of tuning config ("default", "conservative", "aggressive")
         
     Returns:
-        Dictionary containing the tuning configuration
+        Dictionary containing the tuning configuration with provenance metadata
     """
     configs = {
         "default": DEFAULT_TUNE_CONFIG,
@@ -134,4 +147,17 @@ def get_tune_config(config_type: str = "default") -> Dict[str, Any]:
         logger.warning(f"Unknown config type '{config_type}', using default")
         config_type = "default"
     
-    return configs[config_type] 
+    cfg = configs[config_type]
+    # Attach provenance for auditability
+    return {
+        **cfg,
+        "_provenance": {
+            "version": PROVENANCE_VERSION,
+            "source": "seedcore.ml.tuning_config",
+            "type": config_type,
+            "created_at": time.time(),
+            "gpu_intent": bool(cfg.get("use_gpu", False)),
+            "host": os.uname().nodename if hasattr(os, "uname") else "unknown",
+        }
+    }
+

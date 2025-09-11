@@ -1,282 +1,202 @@
+from __future__ import annotations
 """
-GPU guard system for resource management and budget control.
+Persistent (Redis-backed) GPU Guard for SeedCore
+------------------------------------------------
+Enforces cluster-wide GPU concurrency and daily budget limits across processes/
+replicas. Designed to be resilient to restarts via Redis keys with TTL.
 
-This module implements the GPU guard that controls when GPU-intensive operations
-like tuning and retraining can be submitted, based on concurrency limits and
-daily budgets.
+Usage (typical):
+    guard = GPUGuard.from_env()
+    ok, reason = guard.try_acquire(job_id, gpu_seconds_budget=1800)
+    if not ok:
+        # reject or queue
+    ... run job ...
+    guard.complete(job_id, actual_gpu_seconds=elapsed_gpu_secs, success=True)
 """
-
+import os
 import time
-import asyncio
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+import json
+import math
 import logging
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Tuple, Dict, Any
 
-from .schema import GpuGuard
-from .metrics import get_metrics
+try:
+    import redis  # type: ignore
+except Exception:
+    redis = None
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class GpuJob:
-    """Represents a GPU job."""
-    job_id: str
-    job_type: str
-    submitted_at: float
-    started_at: Optional[float] = None
-    completed_at: Optional[float] = None
-    status: str = "pending"  # pending, running, completed, failed
-    estimated_duration_s: float = 300.0  # 5 minutes default
 
-class GpuGuardSystem:
-    """GPU guard system for managing GPU resource allocation."""
-    
-    def __init__(self, config: GpuGuard):
-        self.config = config
-        self.metrics = get_metrics()
-        
-        # Job tracking
-        self.jobs: Dict[str, GpuJob] = {}
-        self.active_jobs: List[str] = []
-        self.job_queue: List[str] = []
-        
-        # Budget tracking
-        self.daily_budget_seconds = config.daily_budget_hours * 3600
-        self.budget_used_today = 0.0
-        self.last_budget_reset = time.time()
-        
-        # Cooldown tracking
-        self.last_job_completion = 0.0
-        
-        # Statistics
-        self.total_jobs_submitted = 0
-        self.total_jobs_completed = 0
-        self.total_budget_used = 0.0
-        
-        logger.info(f"✅ GPU Guard initialized: max_concurrent={config.max_concurrent}, "
-                   f"daily_budget={config.daily_budget_hours}h, cooldown={config.cooldown_minutes}m")
-    
-    def can_submit_job(self, job_type: str = "tuning") -> tuple[bool, str]:
+def _utc_midnight_epoch() -> int:
+    now = datetime.now(timezone.utc)
+    midnight = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    return int(midnight.timestamp())
+
+
+class GPUGuard:
+    """
+    Redis-backed budget & concurrency guard.
+    Keys (namespace: gpu_guard):
+      - daily_budget_used:{YYYYMMDD} -> float seconds used (expires +2d)
+      - inflight_jobs -> hash {job_id: start_ts}
+      - settings -> hash {max_concurrency, daily_budget_seconds}
+    """
+    def __init__(
+        self,
+        r: Optional["redis.Redis"],
+        namespace: str = "gpu_guard",
+        max_concurrency: int = 1,
+        daily_budget_seconds: int = 4 * 3600,  # default 4 GPU-hours/day
+    ):
+        self.r = r
+        self.ns = namespace
+        self.max_conc = int(max_concurrency)
+        self.day_budget = int(daily_budget_seconds)
+
+    @classmethod
+    def from_env(cls) -> "GPUGuard":
         """
-        Check if a new GPU job can be submitted.
-        
-        Returns:
-            (can_submit, reason)
+        Construct from env:
+          GPU_GUARD_NAMESPACE  (default: gpu_guard)
+          GPU_GUARD_MAX_CONCURRENCY (default: 1)
+          GPU_GUARD_DAILY_BUDGET_SEC (default: 14400 -> 4h)
         """
-        current_time = time.time()
-        
-        # Check if we're in cooldown period
-        if current_time - self.last_job_completion < self.config.cooldown_minutes * 60:
-            remaining_cooldown = self.config.cooldown_minutes * 60 - (current_time - self.last_job_completion)
-            return False, f"Cooldown active for {remaining_cooldown:.0f}s"
-        
-        # Check concurrency limit
-        if len(self.active_jobs) >= self.config.max_concurrent:
-            return False, f"Concurrency limit reached ({self.config.max_concurrent})"
-        
-        # Check daily budget
-        self._update_daily_budget()
-        if self.budget_used_today >= self.daily_budget_seconds:
-            return False, f"Daily budget exhausted ({self.budget_used_today:.0f}s/{self.daily_budget_seconds:.0f}s)"
-        
-        # Check if there's enough budget for a typical job
-        estimated_job_duration = 300.0  # 5 minutes default
-        if self.budget_used_today + estimated_job_duration > self.daily_budget_seconds:
-            return False, f"Insufficient budget for job (need {estimated_job_duration:.0f}s, have {self.daily_budget_seconds - self.budget_used_today:.0f}s)"
-        
-        return True, "OK"
-    
-    def submit_job(self, job_id: str, job_type: str, estimated_duration_s: float = 300.0) -> bool:
-        """
-        Submit a new GPU job.
-        
-        Args:
-            job_id: Unique job identifier
-            job_type: Type of job (tuning, retrain, etc.)
-            estimated_duration_s: Estimated job duration in seconds
-            
-        Returns:
-            True if job was submitted, False otherwise
-        """
-        can_submit, reason = self.can_submit_job(job_type)
-        
-        if not can_submit:
-            logger.warning(f"❌ Cannot submit GPU job {job_id}: {reason}")
-            return False
-        
-        # Create job record
-        job = GpuJob(
-            job_id=job_id,
-            job_type=job_type,
-            submitted_at=time.time(),
-            estimated_duration_s=estimated_duration_s
-        )
-        
-        self.jobs[job_id] = job
-        self.job_queue.append(job_id)
-        self.total_jobs_submitted += 1
-        
-        # Record metrics
-        self.metrics.record_gpu_job_submitted(job_type)
-        
-        logger.info(f"✅ Submitted GPU job {job_id} ({job_type}, est. {estimated_duration_s:.0f}s)")
-        return True
-    
-    def start_job(self, job_id: str) -> bool:
-        """Mark a job as started."""
-        if job_id not in self.jobs:
-            logger.error(f"❌ Job {job_id} not found")
-            return False
-        
-        job = self.jobs[job_id]
-        if job.status != "pending":
-            logger.error(f"❌ Job {job_id} is not pending (status: {job.status})")
-            return False
-        
-        job.status = "running"
-        job.started_at = time.time()
-        
-        if job_id in self.job_queue:
-            self.job_queue.remove(job_id)
-        
-        self.active_jobs.append(job_id)
-        
-        logger.info(f"🚀 Started GPU job {job_id}")
-        return True
-    
-    def complete_job(self, job_id: str, success: bool = True) -> bool:
-        """Mark a job as completed."""
-        if job_id not in self.jobs:
-            logger.error(f"❌ Job {job_id} not found")
-            return False
-        
-        job = self.jobs[job_id]
-        if job.status != "running":
-            logger.error(f"❌ Job {job_id} is not running (status: {job.status})")
-            return False
-        
-        job.status = "completed" if success else "failed"
-        job.completed_at = time.time()
-        
-        # Calculate actual duration and update budget
-        if job.started_at:
-            actual_duration = job.completed_at - job.started_at
-            self.budget_used_today += actual_duration
-            self.total_budget_used += actual_duration
-            
-            # Record metrics
-            self.metrics.record_gpu_job_completed(job.job_type, job.status, actual_duration)
-        
-        # Remove from active jobs
-        if job_id in self.active_jobs:
-            self.active_jobs.remove(job_id)
-        
-        self.total_jobs_completed += 1
-        self.last_job_completion = time.time()
-        
-        logger.info(f"✅ Completed GPU job {job_id} ({job.status}, duration: {actual_duration:.0f}s)")
-        return True
-    
-    def fail_job(self, job_id: str, reason: str = "Unknown error") -> bool:
-        """Mark a job as failed."""
-        if job_id not in self.jobs:
-            logger.error(f"❌ Job {job_id} not found")
-            return False
-        
-        job = self.jobs[job_id]
-        job.status = "failed"
-        job.completed_at = time.time()
-        
-        # Remove from active jobs and queue
-        if job_id in self.active_jobs:
-            self.active_jobs.remove(job_id)
-        if job_id in self.job_queue:
-            self.job_queue.remove(job_id)
-        
-        logger.warning(f"❌ Failed GPU job {job_id}: {reason}")
-        return True
-    
-    def _update_daily_budget(self):
-        """Update daily budget tracking."""
-        current_time = time.time()
-        
-        # Reset budget if it's a new day
-        if current_time - self.last_budget_reset >= 86400:  # 24 hours
-            self.budget_used_today = 0.0
-            self.last_budget_reset = current_time
-            logger.info("🔄 Reset daily GPU budget")
-    
+        url = os.getenv("REDIS_URL", "redis://redis-master:6379/0")
+        ns = os.getenv("GPU_GUARD_NAMESPACE", "gpu_guard")
+        maxc = int(os.getenv("GPU_GUARD_MAX_CONCURRENCY", "1"))
+        budget = int(os.getenv("GPU_GUARD_DAILY_BUDGET_SEC", "14400"))
+
+        r = None
+        if redis is not None:
+            try:
+                r = redis.from_url(url, decode_responses=True)
+                # quick ping
+                r.ping()
+                logger.info(f"✅ GPUGuard connected to Redis at {url}")
+            except Exception as e:
+                logger.warning(f"⚠️ GPUGuard failed to connect Redis ({url}): {e}. Falling back to no-op guard.")
+                r = None
+        else:
+            logger.warning("⚠️ redis package not available. GPUGuard will be no-op.")
+
+        return cls(r, ns, maxc, budget)
+
+    # ---------- Redis key helpers ----------
+    def _k_settings(self) -> str:
+        return f"{self.ns}:settings"
+
+    def _k_inflight(self) -> str:
+        return f"{self.ns}:inflight_jobs"
+
+    def _k_daily_used(self, yyyymmdd: str) -> str:
+        return f"{self.ns}:daily_budget_used:{yyyymmdd}"
+
+    def _today_tag(self) -> str:
+        now = datetime.now(timezone.utc)
+        return f"{now.year:04d}{now.month:02d}{now.day:02d}"
+
+    # ---------- Public API ----------
     def get_status(self) -> Dict[str, Any]:
-        """Get current GPU guard status."""
-        self._update_daily_budget()
-        
-        return {
-            "guard_ok": self.can_submit_job()[0],
-            "active_jobs": len(self.active_jobs),
-            "queued_jobs": len(self.job_queue),
-            "budget_used_today_s": self.budget_used_today,
-            "budget_remaining_s": self.daily_budget_seconds - self.budget_used_today,
-            "budget_utilization": self.budget_used_today / self.daily_budget_seconds,
-            "total_jobs_submitted": self.total_jobs_submitted,
-            "total_jobs_completed": self.total_jobs_completed,
-            "cooldown_remaining_s": max(0, self.config.cooldown_minutes * 60 - (time.time() - self.last_job_completion)),
-            "config": {
-                "max_concurrent": self.config.max_concurrent,
-                "daily_budget_hours": self.config.daily_budget_hours,
-                "cooldown_minutes": self.config.cooldown_minutes
+        """
+        Returns guard status: concurrency, daily usage, and inflight count.
+        """
+        if self.r is None:
+            return {
+                "backend": "noop",
+                "max_concurrency": self.max_conc,
+                "daily_budget_seconds": self.day_budget,
+                "inflight_jobs": 0,
+                "today_used_seconds": 0.0,
             }
+
+        today = self._today_tag()
+        used = float(self.r.get(self._k_daily_used(today)) or 0.0)
+        inflight = self.r.hlen(self._k_inflight())
+        return {
+            "backend": "redis",
+            "max_concurrency": self.max_conc,
+            "daily_budget_seconds": self.day_budget,
+            "inflight_jobs": inflight,
+            "today_used_seconds": used,
         }
-    
-    def update_metrics(self):
-        """Update Prometheus metrics."""
-        status = self.get_status()
-        
-        self.metrics.update_gpu_guard_signals(
-            queue_depth=status["queued_jobs"],
-            concurrent_jobs=status["active_jobs"],
-            budget_remaining_s=status["budget_remaining_s"],
-            guard_ok=status["guard_ok"]
-        )
-    
-    def cleanup_old_jobs(self, max_age_hours: int = 24):
-        """Clean up old job records."""
-        current_time = time.time()
-        max_age_seconds = max_age_hours * 3600
-        
-        jobs_to_remove = []
-        for job_id, job in self.jobs.items():
-            if current_time - job.submitted_at > max_age_seconds:
-                jobs_to_remove.append(job_id)
-        
-        for job_id in jobs_to_remove:
-            del self.jobs[job_id]
-        
-        if jobs_to_remove:
-            logger.info(f"🧹 Cleaned up {len(jobs_to_remove)} old job records")
-    
-    async def start_background_tasks(self):
-        """Start background maintenance tasks."""
-        async def update_metrics_task():
-            while True:
-                try:
-                    self.update_metrics()
-                    await asyncio.sleep(30)  # Update every 30 seconds
-                except Exception as e:
-                    logger.error(f"Error in metrics update task: {e}")
-                    await asyncio.sleep(60)
-        
-        async def cleanup_task():
-            while True:
-                try:
-                    self.cleanup_old_jobs()
-                    await asyncio.sleep(3600)  # Cleanup every hour
-                except Exception as e:
-                    logger.error(f"Error in cleanup task: {e}")
-                    await asyncio.sleep(3600)
-        
-        # Start background tasks
-        asyncio.create_task(update_metrics_task())
-        asyncio.create_task(cleanup_task())
-        
-        logger.info("🚀 Started GPU guard background tasks")
+
+    def try_acquire(self, job_id: str, gpu_seconds_budget: int) -> Tuple[bool, str]:
+        """
+        Admission control:
+          1) Enforce concurrency
+          2) Enforce daily budget (remaining >= requested budget)
+        On success: mark job inflight with start time.
+        """
+        if not job_id:
+            return False, "missing_job_id"
+        if gpu_seconds_budget <= 0:
+            gpu_seconds_budget = 1
+
+        # No-op mode
+        if self.r is None:
+            logger.info("GPUGuard (noop) admitting job (no Redis).")
+            return True, "ok"
+
+        pipe = self.r.pipeline()
+        try:
+            # Concurrency check
+            inflight_key = self._k_inflight()
+            pipe.hlen(inflight_key)
+            # Budget check
+            today = self._today_tag()
+            daily_key = self._k_daily_used(today)
+            pipe.get(daily_key)
+            res = pipe.execute()
+            inflight = int(res[0] or 0)
+            used = float(res[1] or 0.0)
+
+            if inflight >= self.max_conc:
+                return False, f"concurrency_limit_reached:{inflight}/{self.max_conc}"
+
+            remaining = self.day_budget - used
+            if remaining <= 0:
+                return False, f"daily_budget_exhausted:{used:.0f}s/{self.day_budget}s"
+            if gpu_seconds_budget > remaining:
+                return False, f"insufficient_daily_budget:need={gpu_seconds_budget}s remaining={remaining:.0f}s"
+
+            # Admit: record inflight
+            now = time.time()
+            self.r.hset(inflight_key, job_id, json.dumps({"start_ts": now, "reserve_s": gpu_seconds_budget}))
+            # Keep inflight hash indefinitely; cleanup happens at completion.
+
+            # Initialize daily key TTL to survive until +2 days (reset after midnight)
+            # (so we don't leak keys if system is idle)
+            if not self.r.ttl(daily_key):
+                # expire at end of tomorrow
+                tomorrow_midnight = _utc_midnight_epoch() + 2 * 24 * 3600
+                self.r.setnx(daily_key, used)  # ensure key exists
+                self.r.expireat(daily_key, tomorrow_midnight)
+            return True, "ok"
+        except Exception as e:
+            logger.warning(f"GPUGuard admission failed (soft-allow): {e}")
+            # Soft-allow on guard failure to avoid blocking prod
+            return True, "guard_error_soft_allow"
+
+    def complete(self, job_id: str, actual_gpu_seconds: float, success: bool = True) -> None:
+        """
+        Releases the inflight slot and increments the daily usage with the *actual*
+        GPU seconds (clamped >=0). Always safe to call.
+        """
+        if self.r is None:
+            return
+        try:
+            inflight_key = self._k_inflight()
+            entry_raw = self.r.hget(inflight_key, job_id)
+            if entry_raw:
+                self.r.hdel(inflight_key, job_id)
+
+            today = self._today_tag()
+            daily_key = self._k_daily_used(today)
+            inc = max(0.0, float(actual_gpu_seconds or 0.0))
+            # Use float increment
+            self.r.setnx(daily_key, 0.0)
+            self.r.incrbyfloat(daily_key, inc)
+        except Exception as e:
+            logger.warning(f"GPUGuard completion failed (ignored): {e}")

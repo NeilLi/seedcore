@@ -42,7 +42,8 @@ dependencies = [
     "mysql-connector-python==8.2.0",
     "pymysql>=1.1",
     "aiomysql==0.2.0",
-    "cryptography>=41.0.0",
+    "cryptography>=41.0.0,<44.0.0",
+    "pyOpenSSL>=23.0.0",
     
     # HTTP / networking
     "aiohttp==3.9.1",
