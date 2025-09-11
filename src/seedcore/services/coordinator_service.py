@@ -16,7 +16,10 @@ from ..predicates.safe_storage import SafeStorage
 import redis
 import json
 
-logger = logging.getLogger("seedcore.coordinator")
+
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
 
 # ---------- Config ----------
 ORCH_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10"))
@@ -264,12 +267,12 @@ class Coordinator:
         )
         
         self.cognitive_client = ServiceClient(
-            "cognitive_service", COG, timeout=float(os.getenv("CB_COG_TIMEOUT_S", "4.0")),
+            "cognitive_service", COG, timeout=float(os.getenv("CB_COG_TIMEOUT_S", "8.0")),
             circuit_breaker=CircuitBreaker(
                 failure_threshold=int(os.getenv("CB_FAIL_THRESHOLD", "5")),
                 recovery_timeout=float(os.getenv("CB_RESET_S", "30.0"))
             ),
-            retry_config=RetryConfig(max_attempts=0, base_delay=0.0)  # No retries for cognitive
+            retry_config=RetryConfig(max_attempts=1, base_delay=1.0, max_delay=2.0)  # Allow 1 retry for cognitive
         )
         
         self.organism_client = ServiceClient(

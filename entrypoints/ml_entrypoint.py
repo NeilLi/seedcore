@@ -13,10 +13,6 @@ This service provides ML functionality including:
 This entrypoint is designed to be deployed by Ray Serve YAML configuration.
 """
 
-# Use Ray Serve specific logging setup to force stdout output
-from seedcore.logging_setup import setup_logging
-setup_logging(app_name="seedcore.energy")
-
 import os
 import sys
 import logging
@@ -25,14 +21,19 @@ from typing import Dict, Any
 import ray
 from ray import serve
 
-logger = logging.getLogger("seedcore.ml")
 
 # Add the project root to Python path
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
 
+# Use Ray Serve specific logging setup to force stdout output
+from seedcore.logging_setup import ensure_serve_logger
+logger = ensure_serve_logger("seedcore.ml", level="DEBUG")
+
+from seedcore.utils.ray_utils import ensure_ray_initialized
+
 # Import the ML service components
-from src.seedcore.ml.serve_app import MLService, ml_app
+from seedcore.ml.serve_app import MLService, ml_app
 
 # --- Configuration ---
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")

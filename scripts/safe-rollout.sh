@@ -9,9 +9,9 @@ echo "🚀 Starting safe rollout of predicate system..."
 export METRICS_ENABLED=0
 export GPU_GUARD_ENABLED=0
 export COORD_PREDICATES_PATH=/app/config/predicates-bootstrap.yaml
-export CB_ML_TIMEOUT_S=2
-export CB_COG_TIMEOUT_S=4
-export CB_ORG_TIMEOUT_S=5
+export CB_ML_TIMEOUT_S=5
+export CB_COG_TIMEOUT_S=8
+export CB_ORG_TIMEOUT_S=6
 export CB_FAIL_THRESHOLD=5
 export CB_RESET_S=30
 

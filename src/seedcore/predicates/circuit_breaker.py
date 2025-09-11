@@ -56,6 +56,9 @@ class CircuitBreaker:
             
         except self.expected_exception as e:
             self._on_failure()
+            # Log specific timeout errors for better debugging
+            if hasattr(e, '__class__') and 'Timeout' in e.__class__.__name__:
+                logger.warning(f"Timeout error in circuit breaker: {e.__class__.__name__}: {e}")
             raise e
     
     def _on_success(self):
@@ -157,18 +160,31 @@ class ServiceClient:
         self.circuit_breaker = circuit_breaker or CircuitBreaker()
         self.retry_config = retry_config or RetryConfig()
         
-        # Create HTTP client
+        # Create HTTP client with proper timeout configuration
         import httpx
-        self.http = httpx.AsyncClient(timeout=timeout)
+        self.http = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=min(timeout, 5.0),  # Connection timeout
+                read=timeout,               # Read timeout
+                write=min(timeout, 5.0),    # Write timeout
+                pool=min(timeout, 5.0)      # Pool timeout
+            )
+        )
     
     async def post(self, endpoint: str, json: dict = None, **kwargs) -> dict:
         """Make a POST request with circuit breaker and retry."""
         url = f"{self.base_url}{endpoint}"
         
         async def _make_request():
-            response = await self.http.post(url, json=json, **kwargs)
-            response.raise_for_status()
-            return response.json()
+            try:
+                response = await self.http.post(url, json=json, **kwargs)
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                # Log timeout errors with more context
+                if hasattr(e, '__class__') and 'Timeout' in e.__class__.__name__:
+                    logger.warning(f"HTTP timeout for {self.service_name} POST {endpoint}: {e.__class__.__name__}: {e}")
+                raise e
         
         if self.circuit_breaker:
             return await self.circuit_breaker.call(_make_request)
@@ -180,9 +196,15 @@ class ServiceClient:
         url = f"{self.base_url}{endpoint}"
         
         async def _make_request():
-            response = await self.http.get(url, **kwargs)
-            response.raise_for_status()
-            return response.json()
+            try:
+                response = await self.http.get(url, **kwargs)
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                # Log timeout errors with more context
+                if hasattr(e, '__class__') and 'Timeout' in e.__class__.__name__:
+                    logger.warning(f"HTTP timeout for {self.service_name} GET {endpoint}: {e.__class__.__name__}: {e}")
+                raise e
         
         if self.circuit_breaker:
             return await self.circuit_breaker.call(_make_request)

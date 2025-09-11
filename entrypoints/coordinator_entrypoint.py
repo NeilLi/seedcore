@@ -7,9 +7,6 @@ This service provides the coordinator functionality by importing and using
 the Coordinator service from src.seedcore.services.coordinator_service.
 """
 
-from seedcore.logging_setup import setup_logging
-setup_logging(app_name="seedcore.coordinator")
-
 import os
 import sys
 import logging
@@ -18,14 +15,18 @@ from typing import Dict, Any
 import ray
 from ray import serve
 
-logger = logging.getLogger("seedcore.coordinator")
-
 # Add the project root to Python path
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
 
+from seedcore.logging_setup import setup_logging
+setup_logging(app_name="seedcore.coordinator")
+logger = logging.getLogger("seedcore.coordinator")
+
+from seedcore.utils.ray_utils import ensure_ray_initialized
+
 # Import the Coordinator service
-from src.seedcore.services.coordinator_service import coordinator_deployment
+from seedcore.services.coordinator_service import coordinator_deployment
 
 # --- Configuration ---
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
@@ -45,10 +46,16 @@ def build_coordinator(args: dict = None):
         "SERVE_GATEWAY": os.getenv("SERVE_GATEWAY", "http://seedcore-svc-stable-svc:8000"),
         "SEEDCORE_API_URL": os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002"),
         "SEEDCORE_API_TIMEOUT": os.getenv("SEEDCORE_API_TIMEOUT", "5.0"),
-        "ORCH_HTTP_TIMEOUT": os.getenv("ORCH_HTTP_TIMEOUT", "10"),
-        "ML_SERVICE_TIMEOUT": os.getenv("ML_SERVICE_TIMEOUT", "8"),
-        "COGNITIVE_SERVICE_TIMEOUT": os.getenv("COGNITIVE_SERVICE_TIMEOUT", "15"),
-        "ORGANISM_SERVICE_TIMEOUT": os.getenv("ORGANISM_SERVICE_TIMEOUT", "5"),
+        "ORCH_HTTP_TIMEOUT": os.getenv("ORCH_HTTP_TIMEOUT", "15"),
+        "ML_SERVICE_TIMEOUT": os.getenv("ML_SERVICE_TIMEOUT", "10"),
+        "COGNITIVE_SERVICE_TIMEOUT": os.getenv("COGNITIVE_SERVICE_TIMEOUT", "20"),
+        "ORGANISM_SERVICE_TIMEOUT": os.getenv("ORGANISM_SERVICE_TIMEOUT", "8"),
+        # Circuit breaker timeouts
+        "CB_ML_TIMEOUT_S": os.getenv("CB_ML_TIMEOUT_S", "5.0"),
+        "CB_COG_TIMEOUT_S": os.getenv("CB_COG_TIMEOUT_S", "8.0"),
+        "CB_ORG_TIMEOUT_S": os.getenv("CB_ORG_TIMEOUT_S", "6.0"),
+        "CB_FAIL_THRESHOLD": os.getenv("CB_FAIL_THRESHOLD", "5"),
+        "CB_RESET_S": os.getenv("CB_RESET_S", "30.0"),
         # Tuning configuration
         "TUNE_SPACE_TYPE": os.getenv("TUNE_SPACE_TYPE", "basic"),
         "TUNE_CONFIG_TYPE": os.getenv("TUNE_CONFIG_TYPE", "fast"),

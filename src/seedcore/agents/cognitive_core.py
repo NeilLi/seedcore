@@ -27,6 +27,10 @@ from typing import Dict, Any, Optional, List, Union, cast, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.CognitiveCore", level="DEBUG")
+
 # Try to use MwManager if present; degrade gracefully if not.
 try:
     from src.seedcore.memory.mw_manager import MwManager, get_shared_cache, get_mw_store
@@ -53,8 +57,6 @@ MLT_ENABLED = os.getenv("MLT_ENABLED", "1") in {"1", "true", "True"}
 from ..models.result_schema import (
     create_cognitive_result, create_error_result, TaskResult
 )
-
-logger = logging.getLogger("cognitiveseedcore.CognitiveCore")
 
 
 # =============================================================================

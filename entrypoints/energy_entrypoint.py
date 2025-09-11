@@ -7,9 +7,6 @@ This service runs the energy calculator as a standalone Ray Serve deployment,
 providing energy calculations and optimization for the SeedCore system.
 """
 
-from seedcore.logging_setup import setup_logging
-setup_logging(app_name="seedcore.energy")
-
 import os
 import sys
 import time
@@ -20,13 +17,17 @@ from typing import Dict, Any, Optional
 
 import ray
 from ray import serve
-from seedcore.utils.ray_utils import ensure_ray_initialized
 
-logger = logging.getLogger("seedcore.energy")
 
 # Add the project root to Python path
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
+
+from seedcore.logging_setup import setup_logging
+setup_logging(app_name="seedcore.energy")
+logger = logging.getLogger("seedcore.energy")
+
+from seedcore.utils.ray_utils import ensure_ray_initialized
 
 # Import energy service
 from seedcore.services.energy_service import EnergyService

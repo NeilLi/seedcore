@@ -7,8 +7,6 @@ This service runs the cognitive core and related reasoning services
 as a separate Ray Serve deployment, independent of the main API.
 This entrypoint is designed to be deployed by a driver script.
 """
-from seedcore.logging_setup import setup_logging
-setup_logging(app_name="seedcore.CognitiveCore")
 
 import os
 import sys
@@ -20,12 +18,17 @@ from typing import Dict, Any, Optional
 import ray
 from ray import serve
 from fastapi import FastAPI
-from seedcore.utils.ray_utils import ensure_ray_initialized
 from pydantic import BaseModel
 
 # Add the project root to Python path
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
+
+from seedcore.logging_setup import setup_logging
+setup_logging(app_name="seedcore.CognitiveCore")
+logger = logging.getLogger("seedcore.CognitiveCore")
+
+from seedcore.utils.ray_utils import ensure_ray_initialized
 
 # Import cognitive core components
 from seedcore.agents.cognitive_core import (

@@ -16,11 +16,12 @@ import traceback
 import ray
 from ray import serve
 from fastapi import FastAPI, Request
-from seedcore.utils.ray_utils import ensure_ray_initialized
 
 # Add the app directory to Python path
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
+
+from seedcore.utils.ray_utils import ensure_ray_initialized
 
 # -------------------------------
 # Config

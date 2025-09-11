@@ -20,13 +20,14 @@ from typing import Dict, Any, Optional
 
 import ray
 from ray import serve
-from seedcore.utils.ray_utils import ensure_ray_initialized
-
-logger = logging.getLogger("seedcore.state")
 
 # Add the project root to Python path
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
+
+from seedcore.utils.ray_utils import ensure_ray_initialized
+
+logger = logging.getLogger("seedcore.state")
 
 # Import state service
 from seedcore.services.state_service import StateService

@@ -41,7 +41,11 @@ from typing import Dict, List, Any, Optional
 from .base import Organ
 from ..agents import tier0_manager
 
-logger = logging.getLogger("seedcore.organism")
+logger = logging.getLogger(__name__)
+
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.OrganismManager", level="DEBUG")
 
 # Target namespace for agent actors (prefer SEEDCORE_NS, fallback to RAY_NAMESPACE)
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))

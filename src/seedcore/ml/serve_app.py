@@ -32,7 +32,12 @@ from seedcore.utils.ray_utils import get_serve_urls
 # ---------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.ml", level="DEBUG")
+
+logger.info("✅ ML ServeApp logger initialized and active")
+
 
 # Small pool for any ad-hoc CPU work (kept for parity; most heavy work uses asyncio.to_thread)
 thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
