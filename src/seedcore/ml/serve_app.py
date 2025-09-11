@@ -32,7 +32,6 @@ from seedcore.utils.ray_utils import get_serve_urls
 # ---------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Small pool for any ad-hoc CPU work (kept for parity; most heavy work uses asyncio.to_thread)
