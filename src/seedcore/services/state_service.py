@@ -35,7 +35,7 @@ from ..energy.state import (
     SystemState, 
     MemoryVector
 )
-from ..organs.aggregators import (
+from ..state import (
     AgentStateAggregator,
     MemoryManagerAggregator,
     SystemStateAggregator

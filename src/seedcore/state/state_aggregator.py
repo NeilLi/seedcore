@@ -37,11 +37,9 @@ from ..energy.state import (
     SystemState, 
     MemoryVector
 )
-from .aggregators import (
-    AgentStateAggregator,
-    MemoryManagerAggregator,
-    SystemStateAggregator
-)
+from .agent_state_aggregator import AgentStateAggregator
+from .memory_manager_aggregator import MemoryManagerAggregator
+from .system_state_aggregator import SystemStateAggregator
 
 logger = logging.getLogger(__name__)
 

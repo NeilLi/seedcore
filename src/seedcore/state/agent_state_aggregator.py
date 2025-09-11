@@ -31,7 +31,7 @@ from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 import ray
 
-from ...energy.state import AgentSnapshot
+from ..energy.state import AgentSnapshot
 
 logger = logging.getLogger(__name__)
 
