@@ -3,11 +3,12 @@ import numpy as np
 from seedcore.control.fast_loop import fast_loop_select_agent
 from seedcore.control.slow_loop import slow_loop_update_roles
 from seedcore.control.mem_loop import adaptive_mem_update
+from seedcore.agents.base import Agent
 
 
-class DummyAgent:
+class DummyAgent(Agent):
     def __init__(self, agent_id: str):
-        self.agent_id = agent_id
+        super().__init__(agent_id=agent_id)
         self.role_probs = {"E": 1/3, "S": 1/3, "O": 1/3}
         self.capability = 0.5
         self.mem_util = 0.2

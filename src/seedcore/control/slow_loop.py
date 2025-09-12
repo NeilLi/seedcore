@@ -37,9 +37,9 @@ def slow_loop_update_roles(organs_or_agents: Union[List[Organ], List[Agent]], le
         learning_rate: Rate at which roles are adjusted
     """
     # Determine if we received organs or agents
-    if organs_or_agents and isinstance(organs_or_agents[0], Organ):
+    if organs_or_agents and hasattr(organs_or_agents[0], 'agents'):
         # We received organs, extract all agents
-        all_agents = [agent for organ in organs_or_agents for agent in organ.agents]
+        all_agents = [agent for organ in organs_or_agents for agent in organ.agents.values()]
         print(f"Running slow loop for {len(organs_or_agents)} organs with {len(all_agents)} agents...")
     else:
         # We received agents directly
@@ -159,7 +159,7 @@ def get_role_performance_metrics(organs: List[Organ]) -> dict:
     role_counts = {'E': 0, 'S': 0, 'O': 0}
     
     for organ in organs:
-        for agent in organ.agents:
+        for agent in organ.agents.values():
             for role, prob in agent.role_probs.items():
                 role_metrics[role] += agent.capability * prob
                 role_counts[role] += 1

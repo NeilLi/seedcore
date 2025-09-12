@@ -246,7 +246,23 @@ def compute_energy(
 ) -> Tuple[float, Dict[str, float]]:
     """Compute total energy and per-term breakdown (includes hyper term)."""
     pair = -float(np.sum(weights.W_pair * (H @ H.T)))
-    hyper = -float(np.sum(getattr(weights, "W_hyper", 1.0) * (E_sel if E_sel is not None else 0.0)))
+    
+    # Handle hyper term with proper dimension matching
+    if E_sel is not None and E_sel.size > 0:
+        W_hyper = getattr(weights, "W_hyper", np.array([1.0]))
+        # Ensure W_hyper matches E_sel dimensions
+        if W_hyper.size != E_sel.size:
+            # Pad or truncate W_hyper to match E_sel size
+            if W_hyper.size < E_sel.size:
+                # Pad with the last value
+                W_hyper = np.pad(W_hyper, (0, E_sel.size - W_hyper.size), mode='edge')
+            else:
+                # Truncate to match E_sel size
+                W_hyper = W_hyper[:E_sel.size]
+        hyper = -float(np.sum(W_hyper * E_sel))
+    else:
+        hyper = 0.0
+    
     ent = -float(weights.alpha_entropy) * entropy_of_roles(P)
     reg = float(weights.lambda_reg) * (s_norm ** 2)
     mem = float(weights.beta_mem) * cost_vq(memory_stats)

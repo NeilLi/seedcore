@@ -58,7 +58,7 @@ def adaptive_mem_update(organs: List[Organ], compression_knob: float = 0.5):
     
     # Update agent memory utilization based on compression
     for organ in organs:
-        for agent in organ.agents:
+        for agent in organ.agents.values():
             # Adjust memory utilization inversely to compression
             # Higher compression = lower memory utilization needed
             target_mem_util = 1.0 - compression_knob
@@ -88,7 +88,7 @@ def estimate_memory_gradient(organs: List[Organ], compression_step: float = 0.1)
     # This is a simplified model - in practice you'd need more sophisticated estimation
     energy_change = 0.0
     for organ in organs:
-        for agent in organ.agents:
+        for agent in organ.agents.values():
             # Estimate energy change based on compression change
             mem_util_change = (1.0 - test_compression) - (1.0 - original_compression)
             energy_change += mem_util_change * agent.capability * 0.1
@@ -107,7 +107,7 @@ def get_memory_metrics(organs: List[Organ]) -> dict:
     agent_count = 0
     
     for organ in organs:
-        for agent in organ.agents:
+        for agent in organ.agents.values():
             total_mem_util += agent.mem_util
             agent_count += 1
     
