@@ -22,6 +22,9 @@ from typing import List, Union
 from ..organs.base import Organ
 from ..agents.base import Agent
 from ..energy.api import _ledger
+from ..energy.grad_adapter import get_global_gradient_bus
+from ..energy.calculator import role_entropy_grad
+from ..state.state_aggregator import StateAggregator  # if available during runtime
 
 def slow_loop_update_roles(organs_or_agents: Union[List[Organ], List[Agent]], learning_rate: float = 0.05):
     """
@@ -43,49 +46,73 @@ def slow_loop_update_roles(organs_or_agents: Union[List[Organ], List[Agent]], le
         all_agents = organs_or_agents
         print(f"Running slow loop for {len(all_agents)} agents...")
     
-    for agent in all_agents:
-        # Calculate performance metric based on energy efficiency
-        current_energy = _ledger.total
-        energy_efficiency = 1.0 / (1.0 + abs(current_energy))  # Higher efficiency when energy is closer to 0
-        
-        # Find the current dominant role
-        if not agent.role_probs:
-            continue
-        
-        dominant_role = max(agent.role_probs, key=agent.role_probs.get)
-        
-        # Energy-aware role adjustment
-        if current_energy > 5.0:  # High energy state - need exploration
-            target_role = 'E'
-        elif current_energy < -5.0:  # Low energy state - need specialization
-            target_role = 'S'
-        else:  # Moderate energy state - need optimization
-            target_role = 'O'
-        
-        # Increase the target role's probability based on energy state
-        if target_role in agent.role_probs:
-            increase = (1.0 - agent.role_probs[target_role]) * learning_rate
-            agent.role_probs[target_role] += increase
-            
-            # Decrease other roles' probabilities proportionally
-            total_decrease = increase
-            other_roles = [r for r in agent.role_probs if r != target_role]
-            
-            # Normalize the other roles so they sum to the total decrease
-            current_sum_others = sum(agent.role_probs[r] for r in other_roles)
-            if current_sum_others > 0:
-                for role in other_roles:
-                    agent.role_probs[role] -= total_decrease * (agent.role_probs[role] / current_sum_others)
-        
-        # Ensure probabilities still sum to 1 (correcting for float inaccuracies)
-        total_prob = sum(agent.role_probs.values())
-        for role in agent.role_probs:
-            agent.role_probs[role] /= total_prob
-        
-        # Update capability based on energy efficiency
-        agent.capability = min(1.0, max(0.0, agent.capability + energy_efficiency * 0.1))
-        
-        print(f"Updated agent {agent.agent_id} roles: {agent.role_probs}, capability: {agent.capability:.3f}")
+    try:
+        # Try gradient-driven update (preferred)
+        # Build a minimal unified state snapshot if aggregator available
+        try:
+            from ..organs.organism_manager import organism_manager
+            if organism_manager is not None:
+                import asyncio
+                us = asyncio.run(organism_manager.get_unified_state())
+            else:
+                us = None
+        except Exception:
+            us = None
+        bus = get_global_gradient_bus()
+        grads = bus.latest(us if us is not None else {"agents": {}}, allow_stale=True)
+        # Construct P matrix from current agents
+        P = []
+        for agent in all_agents:
+            if getattr(agent, "role_probs", None):
+                P.append([
+                    float(agent.role_probs.get('E', 0.0)),
+                    float(agent.role_probs.get('S', 0.0)),
+                    float(agent.role_probs.get('O', 0.0)),
+                ])
+        import numpy as np
+        P = np.asarray(P, dtype=np.float32) if P else np.zeros((0, 3), dtype=np.float32)
+        if P.size > 0:
+            dP_entropy = role_entropy_grad(P) * float(grads.dE_dP_entropy)
+            # Apply a small step to role probs along -gradient (descent)
+            step = float(learning_rate)
+            for idx, agent in enumerate(all_agents):
+                if getattr(agent, "role_probs", None) and idx < dP_entropy.shape[0]:
+                    agent.role_probs['E'] = max(0.0, min(1.0, float(agent.role_probs.get('E', 0.0) - step * dP_entropy[idx, 0])))
+                    agent.role_probs['S'] = max(0.0, min(1.0, float(agent.role_probs.get('S', 0.0) - step * dP_entropy[idx, 1])))
+                    agent.role_probs['O'] = max(0.0, min(1.0, float(agent.role_probs.get('O', 0.0) - step * dP_entropy[idx, 2])))
+                    # Renormalize
+                    s = (agent.role_probs['E'] + agent.role_probs['S'] + agent.role_probs['O']) or 1.0
+                    agent.role_probs['E'] /= s
+                    agent.role_probs['S'] /= s
+                    agent.role_probs['O'] /= s
+        print("Gradient-driven role update applied (with fallback if partial)")
+    except Exception:
+        # Fallback: legacy heuristic on ledger totals
+        for agent in all_agents:
+            current_energy = _ledger.total
+            energy_efficiency = 1.0 / (1.0 + abs(current_energy))
+            if not agent.role_probs:
+                continue
+            if current_energy > 5.0:
+                target_role = 'E'
+            elif current_energy < -5.0:
+                target_role = 'S'
+            else:
+                target_role = 'O'
+            if target_role in agent.role_probs:
+                increase = (1.0 - agent.role_probs[target_role]) * learning_rate
+                agent.role_probs[target_role] += increase
+                total_decrease = increase
+                other_roles = [r for r in agent.role_probs if r != target_role]
+                current_sum_others = sum(agent.role_probs[r] for r in other_roles)
+                if current_sum_others > 0:
+                    for role in other_roles:
+                        agent.role_probs[role] -= total_decrease * (agent.role_probs[role] / current_sum_others)
+            total_prob = sum(agent.role_probs.values())
+            for role in agent.role_probs:
+                agent.role_probs[role] /= total_prob
+            agent.capability = min(1.0, max(0.0, agent.capability + energy_efficiency * 0.1))
+            print(f"Updated agent {agent.agent_id} roles (heuristic): {agent.role_probs}, capability: {agent.capability:.3f}")
 
     print("Slow loop finished.")
 

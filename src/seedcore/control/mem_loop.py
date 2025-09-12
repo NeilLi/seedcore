@@ -20,26 +20,41 @@ Adaptive Memory Loop: compression control via dE/dCostVQ (Section 6, 3.x.4 & 7).
 from typing import List
 from ..organs.base import Organ
 from ..energy.api import _ledger
+from ..energy.grad_adapter import get_global_gradient_bus
 
 def adaptive_mem_update(organs: List[Organ], compression_knob: float = 0.5):
     """
     Sweep compression knob, estimate slope dE/dCostVQ for adaptive memory control.
     This function adjusts memory utilization and compression based on energy gradients.
     """
-    # Calculate current memory energy gradient
-    current_mem_energy = _ledger.mem
-    current_total_energy = _ledger.total
-    
-    # Estimate memory efficiency (lower is better)
-    mem_efficiency = abs(current_mem_energy) / (1.0 + abs(current_total_energy))
-    
-    # Adjust compression based on memory efficiency
-    if mem_efficiency > 0.3:  # High memory energy - increase compression
-        compression_knob = min(1.0, compression_knob + 0.1)
-        print(f"High memory energy detected. Increasing compression to {compression_knob:.2f}")
-    elif mem_efficiency < 0.1:  # Low memory energy - decrease compression
-        compression_knob = max(0.0, compression_knob - 0.1)
-        print(f"Low memory energy detected. Decreasing compression to {compression_knob:.2f}")
+    try:
+        # Prefer gradient-driven memory control
+        from ..organs.organism_manager import organism_manager
+        import asyncio
+        us = None
+        try:
+            if organism_manager is not None:
+                us = asyncio.run(organism_manager.get_unified_state())
+        except Exception:
+            us = None
+        bus = get_global_gradient_bus()
+        grads = bus.latest(us if us is not None else {"agents": {}}, allow_stale=True)
+        dE_dm = float(getattr(grads, 'dE_dmem', 0.0))
+        # Simple proportional control on compression knob based on slope sign
+        k = 0.05
+        compression_knob = float(max(0.0, min(1.0, compression_knob - k * dE_dm)))
+        print(f"Gradient-driven compression -> knob={compression_knob:.2f} (dE/dmem={dE_dm:.3f})")
+    except Exception:
+        # Fallback: legacy heuristic based on ledger ratios
+        current_mem_energy = _ledger.mem
+        current_total_energy = _ledger.total
+        mem_efficiency = abs(current_mem_energy) / (1.0 + abs(current_total_energy))
+        if mem_efficiency > 0.3:
+            compression_knob = min(1.0, compression_knob + 0.1)
+            print(f"High memory energy detected. Increasing compression to {compression_knob:.2f}")
+        elif mem_efficiency < 0.1:
+            compression_knob = max(0.0, compression_knob - 0.1)
+            print(f"Low memory energy detected. Decreasing compression to {compression_knob:.2f}")
     
     # Update agent memory utilization based on compression
     for organ in organs:

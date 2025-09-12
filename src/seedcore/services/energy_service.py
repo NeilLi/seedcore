@@ -27,7 +27,7 @@ from ray import serve
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
-from ..energy.state import UnifiedState, AgentSnapshot, OrganState, SystemState, MemoryVector
+from ..models.state import UnifiedState, AgentSnapshot, OrganState, SystemState, MemoryVector
 from ..energy.calculator import (
     compute_energy,
     energy_and_grad,
@@ -35,7 +35,7 @@ from ..energy.calculator import (
     cost_vq,
     role_entropy_grad
 )
-from ..energy.weights import EnergyWeights
+from ..energy.weights import EnergyWeights, adapt_energy_weights
 from ..energy.ledger import EnergyLedger, EnergyTerms
 from ..energy.optimizer import (
     calculate_agent_suitability_score,
@@ -48,9 +48,45 @@ from ..energy.optimizer import (
 logger = logging.getLogger(__name__)
 
 # --- Request/Response Models ---
+class AgentSnapshotPayload(BaseModel):
+    h: List[float]
+    p: Dict[str, float]
+    c: float
+    mem_util: float
+    lifecycle: str
+
+class OrganStatePayload(BaseModel):
+    h: List[float]
+    P: List[List[float]]
+    v_pso: Optional[List[float]] = None
+
+class SystemStatePayload(BaseModel):
+    h_hgnn: Optional[List[float]] = None
+    E_patterns: Optional[List[float]] = None
+    w_mode: Optional[List[float]] = None
+
+class MemoryVectorPayload(BaseModel):
+    ma: Dict[str, Any] = {}
+    mw: Dict[str, Any] = {}
+    mlt: Dict[str, Any] = {}
+    mfb: Dict[str, Any] = {}
+
+class UnifiedStatePayload(BaseModel):
+    agents: Dict[str, AgentSnapshotPayload]
+    organs: Dict[str, OrganStatePayload]
+    system: SystemStatePayload
+    memory: MemoryVectorPayload
+
+class EnergyWeightsPayload(BaseModel):
+    alpha_entropy: Optional[float] = None
+    lambda_reg: Optional[float] = None
+    beta_mem: Optional[float] = None
+    W_pair: Optional[List[List[float]]] = None
+    W_hyper: Optional[List[float]] = None
+
 class EnergyRequest(BaseModel):
-    unified_state: Dict[str, Any]
-    weights: Optional[Dict[str, float]] = None
+    unified_state: UnifiedStatePayload
+    weights: Optional[EnergyWeightsPayload] = None
     include_gradients: bool = False
     include_breakdown: bool = True
 
@@ -62,6 +98,23 @@ class EnergyResponse(BaseModel):
     error: Optional[str] = None
     timestamp: float
     computation_time_ms: float
+
+class FlywheelResultRequest(BaseModel):
+    delta_e: float
+    breakdown: Optional[Dict[str, float]] = None
+    cost: Optional[float] = 0.0
+    scope: Optional[str] = "cluster"
+    scope_id: Optional[str] = "-"
+    p_fast: Optional[float] = 0.9
+    drift: Optional[float] = 0.0
+    beta_mem: Optional[float] = None
+
+class FlywheelResultResponse(BaseModel):
+    success: bool
+    updated_weights: Dict[str, float]
+    ledger_ok: bool
+    balance_after: Optional[float] = None
+    timestamp: float
 
 class OptimizationRequest(BaseModel):
     unified_state: Dict[str, Any]
@@ -122,6 +175,8 @@ class EnergyService:
             lambda_reg=0.01,  # Default regularization weight
             beta_mem=0.05  # Default memory weight
         )
+        # Energy ledger for telemetry and feedback
+        self.ledger = EnergyLedger()
         
         # ASGI app integration
         self._app = app
@@ -256,7 +311,7 @@ class EnergyService:
         
         try:
             # Parse unified state
-            unified_state = self._parse_unified_state(request.unified_state)
+            unified_state = self._parse_unified_state(request.unified_state.dict())
             
             # Extract matrices for energy calculation
             H = unified_state.H_matrix()
@@ -273,10 +328,17 @@ class EnergyService:
             
             # Create weights with appropriate dimensions
             if request.weights:
-                weights = self._parse_weights(request.weights)
-                # Ensure weights have correct dimensions
+                weights = self._parse_weights(request.weights.dict())
+                # Ensure W_pair matches agent count
                 if weights.W_pair.shape[0] != H.shape[0]:
                     weights = self._create_weights_for_state(H, E_sel)
+                # Ensure W_hyper matches E_sel length when provided
+                if E_sel is not None and hasattr(E_sel, "shape"):
+                    n_hyper = int(E_sel.shape[0])
+                    if weights.W_hyper.size != n_hyper:
+                        import numpy as _np
+                        weights.W_hyper = _np.ones(n_hyper, dtype=_np.float32) * 0.1
+                        weights.project()
             else:
                 weights = self._create_weights_for_state(H, E_sel)
             
@@ -333,6 +395,120 @@ class EnergyService:
                 error=str(e),
                 timestamp=time.time(),
                 computation_time_ms=(time.time() - start_time) * 1000
+            )
+
+    @app.post("/gradient", response_model=EnergyResponse)
+    async def gradient_endpoint(self, request: EnergyRequest):
+        """
+        Return per-term energy breakdown for a given unified state and weights.
+        """
+        start_time = time.time()
+        try:
+            unified_state = self._parse_unified_state(request.unified_state.dict())
+            H = unified_state.H_matrix()
+            P = unified_state.P_matrix()
+            E_sel = None
+            if unified_state.system.E_patterns is not None:
+                E_sel = unified_state.system.E_patterns
+            s_norm = float(np.linalg.norm(H)) if H.size > 0 else 0.0
+            weights = self._create_weights_for_state(H, E_sel)
+            if request.weights:
+                weights = self._parse_weights(request.weights.dict())
+                if weights.W_pair.shape[0] != H.shape[0]:
+                    weights = self._create_weights_for_state(H, E_sel)
+                if E_sel is not None and hasattr(E_sel, "shape"):
+                    n_hyper = int(E_sel.shape[0])
+                    if weights.W_hyper.size != n_hyper:
+                        import numpy as _np
+                        weights.W_hyper = _np.ones(n_hyper, dtype=_np.float32) * 0.1
+                        weights.project()
+            memory_stats = {"r_effective": 1.0, "p_compress": 0.0}
+            total_energy, breakdown = compute_energy(H, P, weights, memory_stats, E_sel, s_norm)
+            breakdown["total"] = total_energy
+            computation_time = (time.time() - start_time) * 1000
+            return EnergyResponse(
+                success=True,
+                energy=breakdown,
+                gradients=None,
+                breakdown=breakdown,
+                timestamp=time.time(),
+                computation_time_ms=computation_time,
+            )
+        except Exception as e:
+            return EnergyResponse(
+                success=False,
+                error=str(e),
+                timestamp=time.time(),
+                computation_time_ms=(time.time() - start_time) * 1000,
+            )
+
+    @app.post("/flywheel/result", response_model=FlywheelResultResponse)
+    async def flywheel_result_endpoint(self, request: FlywheelResultRequest):
+        """
+        Ingest ΔE and optional per-term breakdown, update EnergyLedger, and adapt weights.
+        """
+        try:
+            ts = time.time()
+            bd = request.breakdown or {
+                "pair": float(self.ledger.pair),
+                "hyper": float(self.ledger.hyper),
+                "entropy": float(self.ledger.entropy),
+                "reg": float(self.ledger.reg),
+                "mem": float(self.ledger.mem),
+                "total": float(self.ledger.total),
+            }
+            rec = self.ledger.log_step(
+                breakdown=bd,
+                extra={
+                    "ts": ts,
+                    "dE": float(request.delta_e),
+                    "cost": float(request.cost or 0.0),
+                    "scope": str(request.scope or "cluster"),
+                    "scope_id": str(request.scope_id or "-"),
+                    "p_fast": float(request.p_fast or 0.9),
+                    "drift": float(request.drift or 0.0),
+                    "beta_mem": float(self.default_weights.beta_mem),
+                },
+            )
+            ledger_ok = bool(rec.get("ok", True))
+            balance_after = rec.get("balance_after")
+
+            # Option 1: explicit beta_mem override
+            if request.beta_mem is not None:
+                self.default_weights.beta_mem = float(request.beta_mem)
+            else:
+                # Option 2: simple adaptation from ΔE sign
+                sign = 1.0 if request.delta_e > 0 else -1.0
+                self.default_weights.beta_mem = float(
+                    max(0.0, min(1.0, self.default_weights.beta_mem * (1.0 + 0.02 * sign)))
+                )
+
+            # Gentle multi-term adaptation hook (no-ops if matrices empty)
+            try:
+                adapt_energy_weights(
+                    self.default_weights,
+                    dspec=0.0,
+                    dacc=0.0,
+                    dsmart=0.0,
+                    dreason=-request.delta_e,  # encourage descent
+                )
+            except Exception:
+                pass
+
+            return FlywheelResultResponse(
+                success=True,
+                updated_weights=self.default_weights.as_dict(),
+                ledger_ok=ledger_ok,
+                balance_after=balance_after,
+                timestamp=ts,
+            )
+        except Exception:
+            return FlywheelResultResponse(
+                success=False,
+                updated_weights=getattr(self.default_weights, "as_dict", lambda: {})(),
+                ledger_ok=False,
+                balance_after=None,
+                timestamp=time.time(),
             )
     
     @app.post("/optimize-agents", response_model=OptimizationResponse)

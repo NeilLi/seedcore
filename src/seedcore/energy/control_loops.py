@@ -18,6 +18,7 @@ Implements fast/medium/slow ticks and contractivity/Lipschitz guard.
 """
 
 import time
+import asyncio
 import threading
 import logging
 import numpy as np
@@ -25,6 +26,10 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
 from .ledger import EnergyLedger
+from .calculator import energy_and_grad
+from .weights import EnergyWeights
+from ..models.state import UnifiedState, SystemState, MemoryVector, AgentSnapshot, OrganState
+from .grad_adapter import get_global_gradient_bus, Gradients
 # SOLUTION: Remove module-level import to avoid accessing organism_manager before initialization
 # from ..organs.organism_manager import organism_manager
 
@@ -99,22 +104,35 @@ class SlowPSOLoop:
                 if not self.running:
                     break
                 
-                # 0. Medium tick: compute energy snapshot, log tx persistently
+                # 0. Medium tick: compute energy + gradients via unified adapter and persist snapshot
                 try:
-                    # Minimal snapshot: treat current internal terms as breakdown
-                    bd = {
-                        "pair": float(self.ledger.pair),
-                        "hyper": float(self.ledger.hyper),
-                        "entropy": float(self.ledger.entropy),
-                        "reg": float(self.ledger.reg),
-                        "mem": float(self.ledger.mem),
-                        "total": float(self.ledger.total),
-                    }
-                    # For now, approximate cost as 0.0; hook in your cost calc as needed
-                    cost = 0.0
-                    self.ledger.log_step(bd, {"ts": time.time(), "dE": bd["total"], "cost": cost, "scope": "cluster", "scope_id": "-"})
+                    # Producer refresh: compute fresh gradients via bus
+                    bus = get_global_gradient_bus()
+                    ustate = self._get_unified_state_safely()
+                    if ustate is not None:
+                        grads: Gradients = bus.latest(ustate, allow_stale=False)
+                        bd = grads.breakdown
+                        grad = {
+                            "dE/dH": grads.dE_dH,
+                            "dE/dP_entropy": grads.dE_dP_entropy,
+                            "dE/dE_sel": grads.dE_dE_sel,
+                            "dE/dmem": grads.dE_dmem,
+                        }
+                    else:
+                        bd, grad = self._energy_snapshot_and_gradients()
+                    if bd:
+                        # Update ledger terms for visibility
+                        self.ledger.pair = float(bd.get("pair", self.ledger.pair))
+                        self.ledger.hyper = float(bd.get("hyper", self.ledger.hyper))
+                        self.ledger.entropy = float(bd.get("entropy", self.ledger.entropy))
+                        self.ledger.reg = float(bd.get("reg", self.ledger.reg))
+                        self.ledger.mem = float(bd.get("mem", self.ledger.mem))
+                        # Persist transaction (treat total as dE for now)
+                        self.ledger.log_step(bd, {"ts": time.time(), "dE": float(bd.get("total", 0.0)), "cost": 0.0, "scope": "cluster", "scope_id": "-"})
+                    # Stash gradients for controllers
+                    self._last_gradients = grad or {}
                 except Exception:
-                    logger.exception("Failed medium tick persistence")
+                    logger.exception("Failed medium tick compute/persist")
 
                 # 1. Optimize Roles with PSO
                 self.optimize_roles()
@@ -273,6 +291,78 @@ class SlowPSOLoop:
         logger.debug(f"PSO Loop: Applying best solution with fitness {self.global_best_fitness:.4f}")
         # This would actually update agent role probabilities
         # For now, just log the best solution
+
+    # --- Unified adapter to compute energy + gradients ---
+    def _energy_snapshot_and_gradients(self) -> tuple[Dict[str, float], Dict[str, Any]]:
+        """Build inputs from UnifiedState and call energy_and_grad."""
+        try:
+            ustate = self._get_unified_state_safely()
+            if ustate is None:
+                return {}, {}
+            # Accept either typed UnifiedState or dict payload
+            if isinstance(ustate, UnifiedState):
+                H = ustate.H_matrix()
+                P = ustate.P_matrix()
+                E_sel = None
+                if ustate.system and ustate.system.E_patterns is not None:
+                    E_sel = ustate.system.E_patterns
+                s_norm = ustate.s_norm() if hasattr(ustate, "s_norm") else (float(np.linalg.norm(H)) if H.size > 0 else 0.0)
+            else:
+                # Dict fallback
+                agents = ustate.get("agents", {})
+                H = np.vstack([np.asarray(v.get("h", []), dtype=np.float32) for v in agents.values()]) if agents else np.zeros((0, 0), dtype=np.float32)
+                P = np.asarray([[float(v.get("p", {}).get("E", 0.0)), float(v.get("p", {}).get("S", 0.0)), float(v.get("p", {}).get("O", 0.0))] for v in agents.values()], dtype=np.float32) if agents else np.zeros((0, 3), dtype=np.float32)
+                sysd = ustate.get("system", {})
+                E_sel = np.asarray(sysd.get("E_patterns", []), dtype=np.float32) if sysd.get("E_patterns") is not None else None
+                s_norm = float(np.linalg.norm(H)) if H.size > 0 else 0.0
+
+            # Build weights per current dimensions and ledger scalars
+            n_agents = H.shape[0] if H.size > 0 else 1
+            n_hyper = int(E_sel.shape[0]) if E_sel is not None and hasattr(E_sel, "shape") else 1
+            weights = EnergyWeights(
+                W_pair=np.eye(n_agents, dtype=np.float32) * 0.1,
+                W_hyper=np.ones((n_hyper,), dtype=np.float32) * 0.1,
+                alpha_entropy=float(getattr(self.ledger, "alpha", 0.1)),
+                lambda_reg=float(self.ledger.lambda_reg),
+                beta_mem=float(self.ledger.beta_mem),
+            )
+            # Memory stats (coarse)
+            memory_stats = {"r_effective": 1.0, "p_compress": 0.0}
+
+            bd, grad = energy_and_grad(
+                {
+                    "h_agents": H,
+                    "P_roles": P,
+                    "hyper_sel": E_sel,
+                    "s_norm": s_norm,
+                },
+                weights,
+                memory_stats,
+            )
+            return bd, grad
+        except Exception as e:
+            logger.debug(f"energy_and_grad adapter failed: {e}")
+            return {}, {}
+
+    def _get_unified_state_safely(self):
+        """Attempt to fetch UnifiedState from organism manager, handling async/sync styles."""
+        try:
+            val = self.organism.get_unified_state()  # may be coroutine
+            if asyncio.iscoroutine(val):
+                # Run in this background thread
+                return asyncio.run(val)
+            return val
+        except TypeError:
+            # Method likely requires parameters
+            try:
+                val = self.organism.get_unified_state(agent_ids=None)
+                if asyncio.iscoroutine(val):
+                    return asyncio.run(val)
+                return val
+            except Exception:
+                return None
+        except Exception:
+            return None
 
     def tune_regularization(self):
         """Tune regularization weight based on energy composition."""

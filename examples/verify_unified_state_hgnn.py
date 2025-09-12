@@ -23,7 +23,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from seedcore.hgnn.pattern_shim import HGNNPatternShim, SHIM, _key
-from seedcore.energy.state import (
+from seedcore.models.state import (
     UnifiedState, AgentSnapshot, OrganState, 
     SystemState, MemoryVector
 )

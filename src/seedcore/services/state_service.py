@@ -28,7 +28,7 @@ from ray import serve
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
-from ..energy.state import (
+from ..models.state import (
     UnifiedState, 
     AgentSnapshot, 
     OrganState, 

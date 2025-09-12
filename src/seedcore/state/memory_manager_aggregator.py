@@ -30,7 +30,7 @@ import time
 from typing import Dict, List, Optional, Any
 import numpy as np
 
-from ..energy.state import MemoryVector
+from ..models.state import MemoryVector
 
 logger = logging.getLogger(__name__)
 

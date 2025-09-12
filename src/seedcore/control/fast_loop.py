@@ -18,16 +18,41 @@ Fast Loop (~200ms): energy-aware agent selection (Section 6, 3.x.4).
 """
 
 from ..organs.base import Organ
-# Correctly import the ledger instance from the api module
 from ..energy.api import _ledger
+from ..energy.grad_adapter import get_global_gradient_bus
 
 def fast_loop_select_agent(organ: Organ, task):
-    # 1. Select the agent and store it in a variable
+    """Fast cadence selection using gradient cache (fallback to legacy)."""
+    try:
+        # Lightweight unified state: sample from organ if possible
+        try:
+            from ..organs.organism_manager import organism_manager
+            import asyncio
+            us = None
+            if organism_manager is not None:
+                us = asyncio.run(organism_manager.get_unified_state(agent_ids=list(organ.agents.keys())))
+        except Exception:
+            us = None
+        bus = get_global_gradient_bus()
+        grads = bus.latest(us if us is not None else {"agents": {}}, allow_stale=True)
+        # If we have dE/dH, choose agent with steepest local descent proxy
+        if getattr(grads, 'dE_dH', None) is not None and len(organ.agents) > 0:
+            import numpy as np
+            dH = grads.dE_dH
+            # Map dE/dH rows to agent IDs in current organ by order
+            agent_ids = list(organ.agents.keys())
+            best_id = agent_ids[0]
+            best_score = float('inf')
+            for idx, aid in enumerate(agent_ids):
+                if idx < dH.shape[0]:
+                    score = float(np.linalg.norm(dH[idx]))
+                    if score < best_score:
+                        best_score = score
+                        best_id = aid
+            agent = organ.agents[best_id]
+            return agent
+    except Exception:
+        pass
+    # Fallback: legacy selection
     agent = organ.select_agent(task)
-
-    # 2. Update the energy ledger (this code will now run)
-    # NOTE: You will need to add the `add_pair_delta` method to the EnergyLedger class
-    _ledger.add_pair_delta(w=0.8, sim=0.9) # We'll comment this out for now
-
-    # 3. Return the selected agent
     return agent

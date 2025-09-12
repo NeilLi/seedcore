@@ -879,7 +879,7 @@ class OrganismManager:
         if not self._initialized:
             logger.warning("Organism not initialized, returning empty state")
             try:
-                from ..energy.state import UnifiedState, SystemState, MemoryVector
+                from ..models.state import UnifiedState, SystemState, MemoryVector
                 return UnifiedState(
                     agents={}, organs={}, system=SystemState(),
                     memory=MemoryVector(ma={}, mw={}, mlt={}, mfb={})
@@ -891,7 +891,7 @@ class OrganismManager:
         if state_service is None:
             logger.error("State service not available, returning empty state")
             try:
-                from ..energy.state import UnifiedState, SystemState, MemoryVector
+                from ..models.state import UnifiedState, SystemState, MemoryVector
                 return UnifiedState(
                     agents={}, organs={}, system=SystemState(),
                     memory=MemoryVector(ma={}, mw={}, mlt={}, mfb={})
@@ -912,7 +912,7 @@ class OrganismManager:
             if not response.get("success"):
                 logger.error(f"State service failed: {response.get('error')}")
                 try:
-                    from ..energy.state import UnifiedState, SystemState, MemoryVector
+                    from ..models.state import UnifiedState, SystemState, MemoryVector
                     return UnifiedState(
                         agents={}, organs={}, system=SystemState(),
                         memory=MemoryVector(ma={}, mw={}, mlt={}, mfb={})
@@ -924,7 +924,7 @@ class OrganismManager:
 
             # If energy.state classes are available, materialize the typed object
             try:
-                from ..energy.state import UnifiedState, SystemState, MemoryVector, AgentSnapshot, OrganState
+                from ..models.state import UnifiedState, SystemState, MemoryVector, AgentSnapshot, OrganState
                 # Agents
                 agents = {}
                 for agent_id, agent_data in state_dict.get("agents", {}).items():
@@ -966,7 +966,7 @@ class OrganismManager:
         except Exception as e:
             logger.error(f"Failed to get unified state from StateService: {e}")
             try:
-                from ..energy.state import UnifiedState, SystemState, MemoryVector
+                from ..models.state import UnifiedState, SystemState, MemoryVector
                 return UnifiedState(
                     agents={}, organs={}, system=SystemState(),
                     memory=MemoryVector(ma={}, mw={}, mlt={}, mfb={})
