@@ -80,6 +80,7 @@ app = FastAPI(title="SeedCore State Service", version="1.0.0")
         "resources": {"head_node": 0.001},
     },
 )
+@serve.ingress(app)
 class StateService:
     """
     Standalone state aggregation service.
@@ -104,9 +105,6 @@ class StateService:
         
         logger.info("✅ StateService initialized - will connect to organism manager on first request")
     
-    async def __call__(self, request):
-        """Handle HTTP requests through FastAPI."""
-        return await self._app(request.scope, request.receive, request.send)
     
     async def _serve_asgi_lifespan(self, scope, receive, send):
         """ASGI lifespan handler for Ray Serve."""
@@ -483,7 +481,8 @@ class StateService:
     async def _get_system_state(self) -> SystemState:
         """Collect system-level state including E_patterns and h_hgnn."""
         if not self.system_aggregator:
-            return SystemState()
+            # Guarantee default non-empty E_patterns so downstream services have signal
+            return SystemState(E_patterns=np.ones(4, dtype=np.float32))
         return await self.system_aggregator.collect_system_state()
     
     async def _get_memory_stats(self) -> MemoryVector:
