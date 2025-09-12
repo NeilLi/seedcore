@@ -41,7 +41,9 @@ from ..state import (
     SystemStateAggregator
 )
 
-logger = logging.getLogger(__name__)
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.state", level="DEBUG")
 
 # --- Request/Response Models ---
 class StateRequest(BaseModel):

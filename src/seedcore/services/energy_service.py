@@ -45,7 +45,10 @@ from ..energy.optimizer import (
     estimate_task_complexity
 )
 
-logger = logging.getLogger(__name__)
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.energy", level="DEBUG")
+
 
 # --- Request/Response Models ---
 class AgentSnapshotPayload(BaseModel):
