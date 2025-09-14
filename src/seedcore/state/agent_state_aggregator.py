@@ -92,12 +92,16 @@ class AgentStateAggregator:
         
         # Batch collect heartbeats from all agents
         try:
-            heartbeat_refs = [agent.get_heartbeat.remote() for agent in agent_handles]
+            # Preserve order between handles and returned heartbeats
+            ordered_ids = list(agent_handles.keys())
+            ordered_handles = [agent_handles[aid] for aid in ordered_ids]
+
+            heartbeat_refs = [h.get_heartbeat.remote() for h in ordered_handles]
             heartbeats = await self._async_ray_get(heartbeat_refs)
             
             # Build agent snapshots
-            agent_snapshots = {}
-            for i, agent_id in enumerate(agent_handles.keys()):
+            agent_snapshots: Dict[str, AgentSnapshot] = {}
+            for i, agent_id in enumerate(ordered_ids):
                 try:
                     hb = heartbeats[i] if i < len(heartbeats) else {}
                     agent_snapshots[agent_id] = self._build_agent_snapshot(agent_id, hb)

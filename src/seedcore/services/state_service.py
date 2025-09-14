@@ -304,46 +304,15 @@ class StateService:
                 logger.error(f"Failed to collect memory stats: {memory_stats}")
                 memory_stats = MemoryVector(ma={}, mw={}, mlt={}, mfb={})
             
-            # Build unified state
+            # Build unified state then use model's serializer to ensure coherence
             unified_state = UnifiedState(
                 agents=agent_snapshots,
                 organs=organ_states,
                 system=system_state,
                 memory=memory_stats
             )
-            
-            # Convert to JSON-serializable format
-            unified_state_dict = {
-                "agents": {
-                    agent_id: {
-                        "h": agent.h.tolist() if isinstance(agent.h, np.ndarray) else agent.h,
-                        "p": agent.p,
-                        "c": agent.c,
-                        "mem_util": agent.mem_util,
-                        "lifecycle": agent.lifecycle
-                    }
-                    for agent_id, agent in unified_state.agents.items()
-                },
-                "organs": {
-                    organ_id: {
-                        "h": organ.h.tolist() if isinstance(organ.h, np.ndarray) else organ.h,
-                        "P": organ.P.tolist() if isinstance(organ.P, np.ndarray) else organ.P,
-                        "v_pso": organ.v_pso.tolist() if organ.v_pso is not None and isinstance(organ.v_pso, np.ndarray) else organ.v_pso
-                    }
-                    for organ_id, organ in unified_state.organs.items()
-                },
-                "system": {
-                    "h_hgnn": unified_state.system.h_hgnn.tolist() if unified_state.system.h_hgnn is not None and isinstance(unified_state.system.h_hgnn, np.ndarray) else unified_state.system.h_hgnn,
-                    "E_patterns": unified_state.system.E_patterns.tolist() if unified_state.system.E_patterns is not None and isinstance(unified_state.system.E_patterns, np.ndarray) else unified_state.system.E_patterns,
-                    "w_mode": unified_state.system.w_mode.tolist() if unified_state.system.w_mode is not None and isinstance(unified_state.system.w_mode, np.ndarray) else unified_state.system.w_mode
-                },
-                "memory": {
-                    "ma": unified_state.memory.ma,
-                    "mw": unified_state.memory.mw,
-                    "mlt": unified_state.memory.mlt,
-                    "mfb": unified_state.memory.mfb
-                }
-            }
+            unified_state = unified_state.projected()
+            unified_state_dict = unified_state.to_payload()
             
             collection_time = (time.time() - start_time) * 1000
             
