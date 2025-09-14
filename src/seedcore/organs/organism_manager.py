@@ -35,6 +35,8 @@ import concurrent.futures
 import numpy as np
 import traceback
 import random
+import uuid
+import httpx
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -73,6 +75,14 @@ class OrganismManager:
 
         # State service connection (replaces local state aggregator)
         self._state_service = None
+        
+        # Evolution configuration
+        self._energy_url = os.getenv("SEEDCORE_ENERGY_URL", "http://127.0.0.1:8000/energy")
+        self._evolve_min_roi = float(os.getenv("EVOLVE_MIN_ROI", "0.2"))
+        self._evolve_max_cost = float(os.getenv("EVOLVE_MAX_COST", "1e6"))
+        
+        # Memory thresholds (bandit hook)
+        self._memory_thresholds = {}
 
     # -------------------------------------------------------------------------
     # Config / Ray helpers
@@ -1006,6 +1016,451 @@ class OrganismManager:
             summary["error"] = str(e)
 
         return summary
+
+    # -------------------------------------------------------------------------
+    # Evolution Operations
+    # -------------------------------------------------------------------------
+    async def evolve(self, proposal: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute organism evolution operations with guardrails.
+        
+        Args:
+            proposal: Evolution proposal containing:
+                - op: Operation type ('split', 'merge', 'clone', 'retire')
+                - organ_id: Target organ ID
+                - params: Operation-specific parameters
+                
+        Returns:
+            Dict with evolution result including energy measurements
+        """
+        if not self._initialized:
+            return {"success": False, "error": "Organism not initialized"}
+            
+        op = proposal.get("op")
+        organ_id = proposal.get("organ_id")
+        params = proposal.get("params", {})
+        
+        if not op or not organ_id:
+            return {"success": False, "error": "Missing required fields: op, organ_id"}
+            
+        if organ_id not in self.organs:
+            return {"success": False, "error": f"Organ {organ_id} not found"}
+            
+        # Get energy before operation (best-effort)
+        E_before = await self._try_energy_total()
+        
+        # Estimate cost and check guardrails
+        estimated_cost = self._estimate_evolution_cost(op, params)
+        if estimated_cost > self._evolve_max_cost:
+            return {"success": False, "error": f"Estimated cost {estimated_cost} exceeds max {self._evolve_max_cost}"}
+            
+        # Execute operation
+        try:
+            result = await self._execute_evolution_op(op, organ_id, params)
+            if not result.get("success", False):
+                return result
+                
+            # Get energy after operation (best-effort)
+            E_after = await self._try_energy_total()
+            delta_E = E_after - E_before if E_after is not None and E_before is not None else None
+            
+            # Check ROI guardrail
+            if delta_E is not None and estimated_cost > 0:
+                roi = delta_E / estimated_cost
+                if roi < self._evolve_min_roi:
+                    logger.warning(f"Evolution ROI {roi} below minimum {self._evolve_min_roi}")
+                    # Continue execution but log the warning
+                    
+            # Log evolution event to energy system
+            await self._log_evolution_event(
+                op=op,
+                organ_id=organ_id,
+                delta_E_est=delta_E,
+                E_before=E_before,
+                delta_E_realized=delta_E,
+                cost=estimated_cost,
+                success=True
+            )
+            
+            return {
+                "success": True,
+                "op": op,
+                "organ_id": organ_id,
+                "delta_E_est": delta_E,
+                "E_before": E_before,
+                "delta_E_realized": delta_E,
+                "cost": estimated_cost,
+                "result": result.get("result", {})
+            }
+            
+        except Exception as e:
+            logger.error(f"Evolution operation {op} failed: {e}")
+            await self._log_evolution_event(
+                op=op,
+                organ_id=organ_id,
+                delta_E_est=None,
+                E_before=E_before,
+                delta_E_realized=None,
+                cost=estimated_cost,
+                success=False,
+                error=str(e)
+            )
+            return {"success": False, "error": str(e)}
+
+    async def _execute_evolution_op(self, op: str, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a specific evolution operation."""
+        if op == "split":
+            return await self._op_split(organ_id, params)
+        elif op == "merge":
+            return await self._op_merge(organ_id, params)
+        elif op == "clone":
+            return await self._op_clone(organ_id, params)
+        elif op == "retire":
+            return await self._op_retire(organ_id, params)
+        else:
+            return {"success": False, "error": f"Unknown operation: {op}"}
+
+    async def _op_split(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Split an organ into k-1 new organs and repartition agents."""
+        k = params.get("k", 2)
+        if k < 2:
+            return {"success": False, "error": "k must be >= 2 for split operation"}
+            
+        try:
+            organ_handle = self.organs[organ_id]
+            organ_type = await self._async_ray_get(organ_handle.get_status.remote())
+            organ_type = organ_type.get("organ_type", "Unknown")
+            
+            # Get current agents
+            agent_handles = await self._async_ray_get(organ_handle.get_agent_handles.remote())
+            agent_ids = list(agent_handles.keys())
+            
+            if len(agent_ids) < k:
+                return {"success": False, "error": f"Not enough agents ({len(agent_ids)}) to split into {k} organs"}
+                
+            # Create k-1 new organs
+            new_organ_ids = []
+            for i in range(k - 1):
+                new_organ_id = await self._unique_organ_id(f"{organ_id}_split_{i}")
+                new_organ = await self._create_organ(new_organ_id, organ_type)
+                if new_organ:
+                    new_organ_ids.append(new_organ_id)
+                    self.organs[new_organ_id] = new_organ
+                    
+            if not new_organ_ids:
+                return {"success": False, "error": "Failed to create new organs"}
+                
+            # Repartition agents
+            agents_per_organ = len(agent_ids) // k
+            for i, new_organ_id in enumerate(new_organ_ids):
+                start_idx = i * agents_per_organ
+                end_idx = start_idx + agents_per_organ
+                if i == len(new_organ_ids) - 1:  # Last organ gets remaining agents
+                    end_idx = len(agent_ids)
+                    
+                # Move agents to new organ
+                new_organ_handle = self.organs[new_organ_id]
+                for agent_id in agent_ids[start_idx:end_idx]:
+                    agent_handle = agent_handles[agent_id]
+                    await self._async_ray_get(new_organ_handle.register_agent.remote(agent_id, agent_handle))
+                    await self._async_ray_get(organ_handle.remove_agent.remote(agent_id))
+                    self.agent_to_organ_map[agent_id] = new_organ_id
+                    
+            return {
+                "success": True,
+                "result": {
+                    "original_organ": organ_id,
+                    "new_organs": new_organ_ids,
+                    "agents_moved": len(agent_ids) - agents_per_organ
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Split operation failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _op_merge(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge source organs into the target organ."""
+        src_organ_ids = params.get("src_organs", [])
+        if not src_organ_ids:
+            return {"success": False, "error": "No source organs specified"}
+            
+        try:
+            dst_organ_handle = self.organs[organ_id]
+            total_agents_moved = 0
+            
+            for src_organ_id in src_organ_ids:
+                if src_organ_id not in self.organs:
+                    logger.warning(f"Source organ {src_organ_id} not found, skipping")
+                    continue
+                    
+                src_organ_handle = self.organs[src_organ_id]
+                
+                # Get agents from source organ
+                agent_handles = await self._async_ray_get(src_organ_handle.get_agent_handles.remote())
+                
+                # Move agents to destination
+                for agent_id, agent_handle in agent_handles.items():
+                    await self._async_ray_get(dst_organ_handle.register_agent.remote(agent_id, agent_handle))
+                    self.agent_to_organ_map[agent_id] = organ_id
+                    total_agents_moved += 1
+                    
+                # Retire source organ
+                await self._retire_organ_actor(src_organ_id)
+                del self.organs[src_organ_id]
+                
+            return {
+                "success": True,
+                "result": {
+                    "destination_organ": organ_id,
+                    "merged_organs": src_organ_ids,
+                    "agents_moved": total_agents_moved
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Merge operation failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _op_clone(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Clone an organ, optionally moving some agents to the new organ."""
+        move_fraction = params.get("move_fraction", 0.0)
+        
+        try:
+            src_organ_handle = self.organs[organ_id]
+            organ_status = await self._async_ray_get(src_organ_handle.get_status.remote())
+            organ_type = organ_status.get("organ_type", "Unknown")
+            
+            # Create new organ
+            new_organ_id = await self._unique_organ_id(f"{organ_id}_clone")
+            new_organ = await self._create_organ(new_organ_id, organ_type)
+            if not new_organ:
+                return {"success": False, "error": "Failed to create cloned organ"}
+                
+            self.organs[new_organ_id] = new_organ
+            
+            # Optionally move agents
+            agents_moved = 0
+            if move_fraction > 0:
+                agent_handles = await self._async_ray_get(src_organ_handle.get_agent_handles.remote())
+                agent_ids = list(agent_handles.keys())
+                num_to_move = int(len(agent_ids) * move_fraction)
+                
+                for agent_id in agent_ids[:num_to_move]:
+                    agent_handle = agent_handles[agent_id]
+                    await self._async_ray_get(new_organ.register_agent.remote(agent_id, agent_handle))
+                    await self._async_ray_get(src_organ_handle.remove_agent.remote(agent_id))
+                    self.agent_to_organ_map[agent_id] = new_organ_id
+                    agents_moved += 1
+                    
+            return {
+                "success": True,
+                "result": {
+                    "original_organ": organ_id,
+                    "cloned_organ": new_organ_id,
+                    "agents_moved": agents_moved
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Clone operation failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _op_retire(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Retire an organ, optionally migrating agents to another organ."""
+        migrate_to = params.get("migrate_to")
+        
+        try:
+            organ_handle = self.organs[organ_id]
+            
+            # Get agents from organ
+            agent_handles = await self._async_ray_get(organ_handle.get_agent_handles.remote())
+            agents_migrated = 0
+            
+            # Migrate agents if specified
+            if migrate_to and migrate_to in self.organs:
+                dst_organ_handle = self.organs[migrate_to]
+                for agent_id, agent_handle in agent_handles.items():
+                    await self._async_ray_get(dst_organ_handle.register_agent.remote(agent_id, agent_handle))
+                    self.agent_to_organ_map[agent_id] = migrate_to
+                    agents_migrated += 1
+                    
+            # Retire the organ
+            await self._retire_organ_actor(organ_id)
+            del self.organs[organ_id]
+            
+            return {
+                "success": True,
+                "result": {
+                    "retired_organ": organ_id,
+                    "agents_migrated": agents_migrated,
+                    "migrate_to": migrate_to
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Retire operation failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    # -------------------------------------------------------------------------
+    # Evolution Helper Methods
+    # -------------------------------------------------------------------------
+    async def _infer_organ_type(self, organ_id: str) -> str:
+        """Infer organ type from configuration or existing organ."""
+        # First check if organ exists and get its type
+        if organ_id in self.organs:
+            try:
+                status = await self._async_ray_get(self.organs[organ_id].get_status.remote())
+                return status.get("organ_type", "Unknown")
+            except Exception:
+                pass
+                
+        # Check configuration for organ type
+        for config in self.organ_configs:
+            if config.get("id") == organ_id:
+                return config.get("type", "Unknown")
+                
+        return "Unknown"
+
+    async def _create_organ(self, organ_id: str, organ_type: str) -> Optional[ray.actor.ActorHandle]:
+        """Create a new organ actor."""
+        try:
+            ray_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+            organ = Organ.options(
+                name=organ_id,
+                lifetime="detached",
+                num_cpus=0.1,
+                namespace=ray_namespace
+            ).remote(
+                organ_id=organ_id,
+                organ_type=organ_type
+            )
+            logger.info(f"✅ Created new organ: {organ_id} (Type: {organ_type})")
+            return organ
+        except Exception as e:
+            logger.error(f"❌ Failed to create organ {organ_id}: {e}")
+            return None
+
+    async def _retire_organ_actor(self, organ_id: str):
+        """Retire an organ actor."""
+        try:
+            if organ_id in self.organs:
+                organ_handle = self.organs[organ_id]
+                # Try to shutdown gracefully if the organ supports it
+                try:
+                    await self._async_ray_get(organ_handle.shutdown.remote(), timeout=5.0)
+                except Exception:
+                    pass  # Organ may not have shutdown method
+                    
+                # Kill the actor
+                ray.kill(organ_handle)
+                logger.info(f"✅ Retired organ actor: {organ_id}")
+        except Exception as e:
+            logger.error(f"❌ Failed to retire organ {organ_id}: {e}")
+
+    async def _unique_organ_id(self, base_id: str) -> str:
+        """Generate a unique organ ID."""
+        counter = 1
+        candidate_id = base_id
+        while candidate_id in self.organs:
+            candidate_id = f"{base_id}_{counter}"
+            counter += 1
+        return candidate_id
+
+    def _estimate_evolution_cost(self, op: str, params: Dict[str, Any]) -> float:
+        """Estimate the cost of an evolution operation."""
+        # Simple cost estimation based on operation type
+        base_costs = {
+            "split": 1000.0,
+            "merge": 500.0,
+            "clone": 1500.0,
+            "retire": 200.0
+        }
+        return base_costs.get(op, 1000.0)
+
+    # -------------------------------------------------------------------------
+    # Energy Integration
+    # -------------------------------------------------------------------------
+    async def _try_energy_total(self) -> Optional[float]:
+        """Try to get current energy total from energy service (best-effort)."""
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                # Primary: /metrics returns a breakdown with 'total'
+                response = await client.get(f"{self._energy_url}/metrics")
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, dict):
+                        total = data.get("total")
+                        if isinstance(total, (int, float)):
+                            return float(total)
+                # Fallback: GET /gradient returns {breakdown: {...}}
+                response = await client.get(f"{self._energy_url}/gradient")
+                if response.status_code == 200:
+                    data = response.json()
+                    bd = data.get("breakdown") if isinstance(data, dict) else None
+                    if isinstance(bd, dict):
+                        total = bd.get("total")
+                        if isinstance(total, (int, float)):
+                            return float(total)
+        except Exception as e:
+            logger.debug(f"Failed to get energy total: {e}")
+        return None
+
+    async def _log_evolution_event(self, op: str, organ_id: str, delta_E_est: Optional[float], 
+                                 E_before: Optional[float], delta_E_realized: Optional[float], 
+                                 cost: float, success: bool, error: Optional[str] = None):
+        """Log evolution event to energy system (best-effort)."""
+        try:
+            # Map to FlywheelResultRequest schema
+            delta_e = (
+                float(delta_E_realized) if delta_E_realized is not None
+                else (float(delta_E_est) if delta_E_est is not None else 0.0)
+            )
+            payload = {
+                "delta_e": delta_e,
+                "cost": float(cost),
+                "scope": "evolution",
+                "scope_id": str(organ_id),
+            }
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(f"{self._energy_url}/flywheel/result", json=payload)
+        except Exception as e:
+            logger.debug(f"Failed to log evolution event: {e}")
+
+    # -------------------------------------------------------------------------
+    # Memory Interface (Bandit Hook)
+    # -------------------------------------------------------------------------
+    async def set_memory_thresholds(self, thresholds: Dict[str, float]) -> Dict[str, Any]:
+        """Set memory thresholds and return current dE/dmem (best-effort)."""
+        self._memory_thresholds.update(thresholds)
+        
+        # Try to get current dE/dmem from energy gradient
+        dE_dmem = None
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{self._energy_url}/gradient")
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, dict):
+                        grads = data.get("gradients")
+                        if isinstance(grads, dict) and "mem" in grads:
+                            val = grads.get("mem")
+                            if isinstance(val, (int, float)):
+                                dE_dmem = float(val)
+                        if dE_dmem is None:
+                            bd = data.get("breakdown")
+                            if isinstance(bd, dict) and "mem" in bd:
+                                val2 = bd.get("mem")
+                                if isinstance(val2, (int, float)):
+                                    dE_dmem = float(val2)
+        except Exception as e:
+            logger.debug(f"Failed to get memory gradient: {e}")
+            
+        return {
+            "thresholds": self._memory_thresholds,
+            "dE_dmem": dE_dmem,
+            "status": "success"
+        }
 
 
 # Global instance (created by FastAPI lifespan after Ray connects)

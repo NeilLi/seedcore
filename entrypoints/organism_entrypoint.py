@@ -373,6 +373,36 @@ class OrganismService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    # --- Evolution and Memory Endpoints ---
+
+    @app.post("/evolve")
+    async def evolve(self, proposal: Dict[str, Any]):
+        """Execute an evolution operation (split/merge/clone/retire)."""
+        try:
+            if not self._initialized:
+                return {"success": False, "error": "Organism not initialized"}
+
+            result = await self.organism_manager.evolve(proposal)
+
+            # Compute acceptance (best-effort) based on delta_E_est vs cost
+            delta_E_est = result.get("delta_E_est")
+            cost = result.get("cost", 0.0)
+            accepted = bool(delta_E_est is not None and cost is not None and delta_E_est > cost)
+            result["accepted"] = accepted
+            return result
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @app.post("/memory/threshold")
+    async def set_memory_threshold(self, thresholds: Dict[str, float]):
+        """Set memory thresholds for the bandit/memory controller."""
+        try:
+            if not self._initialized:
+                return {"success": False, "error": "Organism not initialized"}
+            return await self.organism_manager.set_memory_thresholds(thresholds)
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     # --- Direct Method Access for Backward Compatibility ---
 
     async def handle_incoming_task(self, task: Dict[str, Any], app_state: Dict[str, Any] = None) -> Dict[str, Any]:
