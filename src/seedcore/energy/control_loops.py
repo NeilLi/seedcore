@@ -26,7 +26,7 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
 from .ledger import EnergyLedger
-from .calculator import energy_and_grad
+from .calculator import energy_and_grad, compute_energy_unified, SystemParameters
 from .weights import EnergyWeights
 from ..models.state import UnifiedState, SystemState, MemoryVector, AgentSnapshot, OrganState
 from .grad_adapter import get_global_gradient_bus, Gradients
@@ -301,12 +301,15 @@ class SlowPSOLoop:
                 return {}, {}
             # Accept either typed UnifiedState or dict payload
             if isinstance(ustate, UnifiedState):
-                H = ustate.H_matrix()
-                P = ustate.P_matrix()
-                E_sel = None
-                if ustate.system and ustate.system.E_patterns is not None:
-                    E_sel = ustate.system.E_patterns
-                s_norm = ustate.s_norm() if hasattr(ustate, "s_norm") else (float(np.linalg.norm(H)) if H.size > 0 else 0.0)
+                try:
+                    uproj = ustate.projected()
+                except Exception:
+                    uproj = ustate
+                state = uproj.to_energy_state()
+                H = state["h_agents"]
+                P = state["P_roles"]
+                E_sel = state.get("hyper_sel")
+                s_norm = float(state.get("s_norm", 0.0))
             else:
                 # Dict fallback
                 agents = ustate.get("agents", {})
@@ -329,16 +332,11 @@ class SlowPSOLoop:
             # Memory stats (coarse)
             memory_stats = {"r_effective": 1.0, "p_compress": 0.0}
 
-            bd, grad = energy_and_grad(
-                {
-                    "h_agents": H,
-                    "P_roles": P,
-                    "hyper_sel": E_sel,
-                    "s_norm": s_norm,
-                },
-                weights,
-                memory_stats,
+            result = compute_energy_unified(
+                uproj if isinstance(ustate, UnifiedState) else {"h_agents": H, "P_roles": P, "hyper_sel": E_sel, "s_norm": s_norm},
+                SystemParameters(weights=weights, memory_stats=memory_stats, include_gradients=True),
             )
+            bd, grad = result.breakdown, (result.gradients or {})
             return bd, grad
         except Exception as e:
             logger.debug(f"energy_and_grad adapter failed: {e}")

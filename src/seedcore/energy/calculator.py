@@ -7,9 +7,10 @@ role-entropy, L2 regularizer, memory cost) and exposes JSON-safe breakdowns.
 import ray  # type: ignore
 import numpy as np  # type: ignore
 import time
-from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
+from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING, Union
 from dataclasses import dataclass, field, asdict
 from .weights import EnergyWeights
+from ..models.state import UnifiedState  # lightweight import; no heavy deps
 
 # Avoid runtime circular import: only import RayAgent for typing
 if TYPE_CHECKING:
@@ -203,32 +204,75 @@ def energy_and_grad(
       - hyper_sel: Optional[np.ndarray] [E]
       - s_norm: float
     """
-    H: np.ndarray = state["h_agents"]
-    P: np.ndarray = state["P_roles"]
-    E_sel: Optional[np.ndarray] = state.get("hyper_sel")
+    # Normalize and enforce dtypes/shapes
+    H: np.ndarray = np.asarray(state.get("h_agents", np.zeros((0, 0), dtype=np.float32)), dtype=np.float32)
+    P: np.ndarray = np.asarray(state.get("P_roles", np.zeros((0, 3), dtype=np.float32)), dtype=np.float32)
+    E_raw = state.get("hyper_sel")
+    if E_raw is None:
+        E_sel: np.ndarray = np.asarray([], dtype=np.float32)
+    else:
+        E_sel = np.asarray(E_raw, dtype=np.float32)
+        if E_sel.ndim == 0:
+            E_sel = E_sel.reshape(1)
     s_norm: float = float(state.get("s_norm", 0.0))
 
-    pair = -float(np.sum(weights.W_pair * (H @ H.T)))
-    # Hyper term uses bounded E_patterns vector from HGNN shim (if provided)
-    hyper = -float(np.sum(weights.W_hyper * (E_sel if E_sel is not None else 0.0)))
+    N = int(H.shape[0]) if H.ndim == 2 else 0
+    K = int(E_sel.shape[0]) if E_sel.size > 0 else 0
+
+    # Ensure weight matrices/vectors are compatible (do not mutate input weights)
+    W_pair = weights.W_pair
+    if N == 0:
+        W_pair_adj = np.zeros((0, 0), dtype=np.float32)
+    else:
+        if W_pair.shape != (N, N):
+            W_pair_adj = np.eye(N, dtype=np.float32) * 0.1
+        else:
+            W_pair_adj = W_pair.astype(np.float32, copy=False)
+
+    if K <= 0:
+        W_hyper_adj: Optional[np.ndarray] = None
+    else:
+        W_hyper_adj = getattr(weights, "W_hyper", np.ones((K,), dtype=np.float32)).astype(np.float32, copy=False)
+        if W_hyper_adj.size != K:
+            # Pad or truncate to match K
+            if W_hyper_adj.size < K:
+                W_hyper_adj = np.pad(W_hyper_adj, (0, K - W_hyper_adj.size), mode='edge')
+            else:
+                W_hyper_adj = W_hyper_adj[:K]
+
+    # Terms
+    if N == 0:
+        pair = 0.0
+        dE_dH = np.zeros_like(H, dtype=np.float32)
+    else:
+        pair = -float(np.sum(W_pair_adj * (H @ H.T)))
+        dE_dH = -2.0 * (W_pair_adj @ H)
+
+    if K <= 0 or W_hyper_adj is None:
+        hyper = 0.0
+        dE_dE_sel = None
+    else:
+        hyper = -float(np.sum(W_hyper_adj * E_sel))
+        dE_dE_sel = -W_hyper_adj.copy()
+
     ent = -float(weights.alpha_entropy) * entropy_of_roles(P)
     reg = float(weights.lambda_reg) * (s_norm ** 2)
     mem = float(weights.beta_mem) * cost_vq(memory_stats)
 
     total = pair + hyper + ent + reg + mem
     breakdown = {
-        "pair": pair,
-        "hyper": hyper,
-        "entropy": ent,
-        "reg": reg,
-        "mem": mem,
-        "total": total,
+        "pair": float(pair),
+        "hyper": float(hyper),
+        "entropy": float(ent),
+        "reg": float(reg),
+        "mem": float(mem),
+        "total": float(total),
     }
 
     grad = {
-        "dE/dH": -2.0 * (weights.W_pair @ H),
+        "dE/dH": dE_dH.astype(np.float32, copy=False),
         "dE/dP_entropy": -float(weights.alpha_entropy),
-        "dE/dE_sel": -weights.W_hyper.copy(),
+        "dE/dE_sel": dE_dE_sel,
         "dE/ds_norm": 2.0 * float(weights.lambda_reg) * s_norm,
         "dE/dmem": float(weights.beta_mem),
     }
@@ -236,6 +280,61 @@ def energy_and_grad(
 
 
 # Extended API for unified state users
+@dataclass
+class SystemParameters:
+    """Compute-time parameters for the energy function.
+
+    Holds model weights and auxiliary telemetry knobs that are not part of state.
+    """
+    weights: EnergyWeights
+    memory_stats: Dict[str, Any]
+    include_gradients: bool = True
+
+
+@dataclass
+class EnergyResult:
+    """Lightweight result structure for in-process compute calls."""
+    breakdown: Dict[str, float]
+    gradients: Optional[Dict[str, Any]] = None
+
+
+def compute_energy_unified(
+    unified: Union[UnifiedState, Dict[str, Any]],
+    params: SystemParameters,
+) -> EnergyResult:
+    """Convenience wrapper accepting UnifiedState or dict payload.
+
+    - Ensures projection/guardrails if UnifiedState is provided via .projected().
+    - Delegates to energy_and_grad or compute_energy based on params.include_gradients.
+    """
+    if hasattr(unified, "to_energy_state"):
+        try:
+            # Defensive projection before compute
+            unified = unified.projected()  # type: ignore[assignment]
+        except Exception:
+            pass
+        state = unified.to_energy_state()  # type: ignore[assignment]
+    else:
+        # Assume dict-like already in energy-state format or similar
+        u = unified  # type: ignore[assignment]
+        state = u
+
+    # Enforce dtypes/shapes (canonicalization)
+    H = np.asarray(state.get("h_agents", np.zeros((0, 0), dtype=np.float32)), dtype=np.float32)
+    P = np.asarray(state.get("P_roles", np.zeros((0, 3), dtype=np.float32)), dtype=np.float32)
+    E_sel = np.asarray(state.get("hyper_sel", np.asarray([], dtype=np.float32)), dtype=np.float32)
+    if E_sel.ndim == 0:
+        E_sel = E_sel.reshape(1)
+    s_norm = float(state.get("s_norm", 0.0))
+    state_dict = {"h_agents": H, "P_roles": P, "hyper_sel": E_sel, "s_norm": s_norm}
+
+    # Compute
+    bd, gd = energy_and_grad(state_dict, params.weights, params.memory_stats)
+    if "total" not in bd:
+        bd["total"] = sum(float(bd.get(k, 0.0)) for k in ("pair", "hyper", "entropy", "reg", "mem"))
+    return EnergyResult(breakdown=bd, gradients=(gd if params.include_gradients else None))
+
+
 def compute_energy(
     H: np.ndarray,
     P: np.ndarray,

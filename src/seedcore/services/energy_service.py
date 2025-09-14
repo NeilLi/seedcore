@@ -33,7 +33,10 @@ from ..energy.calculator import (
     energy_and_grad,
     entropy_of_roles,
     cost_vq,
-    role_entropy_grad
+    role_entropy_grad,
+    compute_energy_unified,
+    SystemParameters,
+    EnergyResult,
 )
 from ..energy.weights import EnergyWeights, adapt_energy_weights
 from ..energy.ledger import EnergyLedger, EnergyTerms
@@ -433,32 +436,22 @@ class EnergyService:
                 "p_compress": 0.0
             }
             
-            # Compute energy
-            if request.include_gradients:
-                breakdown, gradients = energy_and_grad(
-                    {
-                        "h_agents": H,
-                        "P_roles": P,
-                        "hyper_sel": E_sel,
-                        "s_norm": s_norm
-                    },
-                    weights,
-                    memory_stats
-                )
-                
-                # Convert gradients to serializable format
+            # Compute energy using unified convenience wrapper for consistency
+            us_proj = unified_state.projected()
+            result: EnergyResult = compute_energy_unified(
+                us_proj,
+                SystemParameters(weights=weights, memory_stats=memory_stats, include_gradients=bool(request.include_gradients)),
+            )
+            breakdown = result.breakdown
+            # Convert gradients to serializable format when present
+            gradients_serializable = None
+            if request.include_gradients and result.gradients is not None:
                 gradients_serializable = {}
-                for key, value in gradients.items():
+                for key, value in result.gradients.items():
                     if isinstance(value, np.ndarray):
                         gradients_serializable[key] = value.tolist()
                     else:
                         gradients_serializable[key] = value
-            else:
-                total_energy, breakdown = compute_energy(
-                    H, P, weights, memory_stats, E_sel, s_norm
-                )
-                breakdown["total"] = total_energy
-                gradients_serializable = None
             
             computation_time = (time.time() - start_time) * 1000
             
@@ -490,26 +483,27 @@ class EnergyService:
         start_time = time.time()
         try:
             unified_state = self._parse_unified_state(request.unified_state.dict())
-            H = unified_state.H_matrix()
-            P = unified_state.P_matrix()
-            E_sel = None
-            if unified_state.system.E_patterns is not None:
-                E_sel = unified_state.system.E_patterns
-            s_norm = float(np.linalg.norm(H)) if H.size > 0 else 0.0
-            weights = self._create_weights_for_state(H, E_sel)
+            # Project and compute via unified wrapper to ensure guardrails
+            us_proj = unified_state.projected()
+            H = us_proj.H_matrix()
+            E_sel = us_proj.hyper_selection()
+            weights = self._create_weights_for_state(H, E_sel if E_sel.size > 0 else None)
             if request.weights:
-                weights = self._parse_weights(request.weights.dict())
-                if weights.W_pair.shape[0] != H.shape[0]:
-                    weights = self._create_weights_for_state(H, E_sel)
-                if E_sel is not None and hasattr(E_sel, "shape"):
-                    n_hyper = int(E_sel.shape[0])
-                    if weights.W_hyper.size != n_hyper:
-                        import numpy as _np
-                        weights.W_hyper = _np.ones(n_hyper, dtype=_np.float32) * 0.1
-                        weights.project()
+                w = self._parse_weights(request.weights.dict())
+                # Reconcile shapes against projected state
+                if w.W_pair.shape[0] != H.shape[0]:
+                    w = self._create_weights_for_state(H, E_sel if E_sel.size > 0 else None)
+                if E_sel is not None and E_sel.size > 0 and w.W_hyper.size != int(E_sel.shape[0]):
+                    import numpy as _np
+                    w.W_hyper = _np.ones(int(E_sel.shape[0]), dtype=_np.float32) * 0.1
+                    w.project()
+                weights = w
             memory_stats = {"r_effective": 1.0, "p_compress": 0.0}
-            total_energy, breakdown = compute_energy(H, P, weights, memory_stats, E_sel, s_norm)
-            breakdown["total"] = total_energy
+            result = compute_energy_unified(
+                us_proj,
+                SystemParameters(weights=weights, memory_stats=memory_stats, include_gradients=False),
+            )
+            breakdown = result.breakdown
             computation_time = (time.time() - start_time) * 1000
             return EnergyResponse(
                 success=True,
@@ -845,52 +839,18 @@ class EnergyService:
     # --- Helper Methods ---
     
     def _parse_unified_state(self, state_dict: Dict[str, Any]) -> UnifiedState:
-        """Parse unified state dictionary into UnifiedState object."""
+        """Parse unified state dictionary into UnifiedState object.
+
+        Uses `UnifiedState.from_payload` to benefit from centralized projection/typing.
+        """
         try:
-            # Parse agents
-            agents = {}
-            for agent_id, agent_data in state_dict.get("agents", {}).items():
-                agents[agent_id] = AgentSnapshot(
-                    h=np.array(agent_data["h"], dtype=np.float32),
-                    p=agent_data["p"],
-                    c=agent_data["c"],
-                    mem_util=agent_data["mem_util"],
-                    lifecycle=agent_data["lifecycle"]
-                )
-            
-            # Parse organs
-            organs = {}
-            for organ_id, organ_data in state_dict.get("organs", {}).items():
-                organs[organ_id] = OrganState(
-                    h=np.array(organ_data["h"], dtype=np.float32),
-                    P=np.array(organ_data["P"], dtype=np.float32),
-                    v_pso=np.array(organ_data["v_pso"], dtype=np.float32) if organ_data.get("v_pso") else None
-                )
-            
-            # Parse system
-            system_data = state_dict.get("system", {})
-            system = SystemState(
-                h_hgnn=np.array(system_data["h_hgnn"], dtype=np.float32) if system_data.get("h_hgnn") else None,
-                E_patterns=np.array(system_data["E_patterns"], dtype=np.float32) if system_data.get("E_patterns") else None,
-                w_mode=np.array(system_data["w_mode"], dtype=np.float32) if system_data.get("w_mode") else None
-            )
-            
-            # Parse memory
-            memory_data = state_dict.get("memory", {})
-            memory = MemoryVector(
-                ma=memory_data.get("ma", {}),
-                mw=memory_data.get("mw", {}),
-                mlt=memory_data.get("mlt", {}),
-                mfb=memory_data.get("mfb", {})
-            )
-            
-            return UnifiedState(
-                agents=agents,
-                organs=organs,
-                system=system,
-                memory=memory
-            )
-            
+            # If already a UnifiedState-like object, return as-is
+            if isinstance(state_dict, UnifiedState):  # type: ignore[arg-type]
+                return state_dict  # type: ignore[return-value]
+            # Normalize potential Pydantic/BaseModel input
+            if hasattr(state_dict, "dict"):
+                state_dict = state_dict.dict()
+            return UnifiedState.from_payload(state_dict)
         except Exception as e:
             logger.error(f"Failed to parse unified state: {e}")
             raise ValueError(f"Invalid unified state format: {e}")

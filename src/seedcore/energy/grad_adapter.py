@@ -6,7 +6,7 @@ import time
 import os
 import numpy as np  # type: ignore
 
-from .calculator import energy_and_grad
+from .calculator import energy_and_grad, compute_energy_unified, SystemParameters
 from .weights import EnergyWeights
 
 
@@ -26,7 +26,7 @@ class GradientSource:
 
 
 class InProcEnergySource(GradientSource):
-    """Compute gradients in-process via energy_and_grad."""
+    """Compute gradients in-process via unified wrapper."""
 
     def __init__(self, default_alpha: float = 0.1, default_lambda: float = 0.01, default_beta_mem: float = 0.05):
         self.default_alpha = float(default_alpha)
@@ -46,13 +46,16 @@ class InProcEnergySource(GradientSource):
 
     def compute(self, unified_state) -> Gradients:
         # Accept either typed UnifiedState or a dict with agents/system
-        if hasattr(unified_state, "H_matrix"):
-            H = unified_state.H_matrix()
-            P = unified_state.P_matrix()
-            E_sel = unified_state.hyper_selection() if hasattr(unified_state, "hyper_selection") else (
-                unified_state.system.E_patterns if getattr(unified_state, "system", None) else None
-            )
-            s_norm = unified_state.s_norm() if hasattr(unified_state, "s_norm") else (float(np.linalg.norm(H)) if H.size > 0 else 0.0)
+        if hasattr(unified_state, "to_energy_state"):
+            try:
+                us = unified_state.projected()
+            except Exception:
+                us = unified_state
+            state = us.to_energy_state()
+            H = state["h_agents"]
+            P = state["P_roles"]
+            E_sel = state.get("hyper_sel")
+            s_norm = float(state.get("s_norm", 0.0))
         else:
             agents = unified_state.get("agents", {})
             H = np.vstack([np.asarray(v.get("h", []), dtype=np.float32) for v in agents.values()]) if agents else np.zeros((0, 0), dtype=np.float32)
@@ -63,11 +66,13 @@ class InProcEnergySource(GradientSource):
 
         weights = self._shape_weights(H, E_sel)
         memory_stats = {"r_effective": 1.0, "p_compress": 0.0}
-        breakdown, grad = energy_and_grad(
-            {"h_agents": H, "P_roles": P, "hyper_sel": E_sel, "s_norm": s_norm},
-            weights,
-            memory_stats,
+        result = compute_energy_unified(
+            # If unified_state has to_energy_state, wrapper will project and convert
+            unified_state if hasattr(unified_state, "to_energy_state") else {"h_agents": H, "P_roles": P, "hyper_sel": E_sel, "s_norm": s_norm},
+            SystemParameters(weights=weights, memory_stats=memory_stats, include_gradients=True),
         )
+        breakdown = result.breakdown
+        grad = result.gradients or {}
         return Gradients(
             at=time.time() * 1000,
             dE_dH=grad.get("dE/dH"),
