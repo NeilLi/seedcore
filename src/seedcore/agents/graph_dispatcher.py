@@ -3,7 +3,8 @@ import os
 import json
 import time
 import logging
-from typing import Any, Dict, List, Optional
+import threading
+from typing import Any, Dict, List, Optional, Tuple
 
 import ray
 import sqlalchemy as sa
@@ -19,26 +20,31 @@ logger = logging.getLogger(__name__)
 EMBED_TIMEOUT_S       = float(os.getenv("GRAPH_EMBED_TIMEOUT_S", "600"))
 UPSERT_TIMEOUT_S      = float(os.getenv("GRAPH_UPSERT_TIMEOUT_S", "600"))
 HEARTBEAT_PING_S      = float(os.getenv("GRAPH_HEARTBEAT_PING_S", "5"))
+LEASE_EXTENSION_S     = int(os.getenv("GRAPH_LEASE_EXTENSION_S", "600"))   # extend lease this many seconds per ping
 DB_POOL_SIZE          = int(os.getenv("GRAPH_DB_POOL_SIZE", "5"))
 DB_MAX_OVERFLOW       = int(os.getenv("GRAPH_DB_MAX_OVERFLOW", "5"))
 DB_POOL_RECYCLE_S     = int(os.getenv("GRAPH_DB_POOL_RECYCLE_S", "600"))
 DB_ECHO               = os.getenv("GRAPH_DB_ECHO", "false").lower() in ("1","true","yes")
 TASK_POLL_INTERVAL_S  = float(os.getenv("GRAPH_TASK_POLL_INTERVAL_S", "1.0"))
 EMBED_BATCH_CHUNK     = int(os.getenv("GRAPH_EMBED_BATCH_CHUNK", "0"))  # 0 = disabled
-# RUN_AFTER_ENABLED removed - always use run_after filter for safety
 LOG_DSN               = os.getenv("GRAPH_LOG_DSN", "masked").lower()    # "plain" to print full DSN (not recommended)
 STRICT_JSON_RESULT    = os.getenv("GRAPH_STRICT_JSON_RESULT", "true").lower() in ("1","true","yes")
 
-# Recommended database indexes for optimal performance:
-# CREATE INDEX CONCURRENTLY idx_tasks_status_type_created ON tasks (status, type, created_at);
-# CREATE INDEX CONCURRENTLY idx_tasks_status_run_after ON tasks (status, run_after) WHERE run_after IS NOT NULL;
-# CREATE INDEX CONCURRENTLY idx_tasks_type_status ON tasks (type, status) WHERE type IN ('graph_embed', 'graph_rag_query');
+# supported task types (legacy + HGNN-aware)
+GRAPH_TASK_TYPES = (
+    "graph_embed",
+    "graph_rag_query",
+    # HGNN-aware v2 that accept UUID/text IDs and map via graph_node_map:
+    "graph_embed_v2",
+    "graph_rag_query_v2",
+    # maintenance / mapping:
+    "graph_sync_nodes",
+)
 
 def _redact_dsn(dsn: str) -> str:
     if LOG_DSN == "plain":
         return dsn
     try:
-        # naive mask of password segment ...://user:pass@host/...
         if "@" in dsn and "://" in dsn and ":" in dsn.split("://", 1)[1]:
             head, tail = dsn.split("://", 1)
             userpass, hostpart = tail.split("@", 1)
@@ -53,16 +59,28 @@ def _redact_dsn(dsn: str) -> str:
 class GraphDispatcher:
     """
     Handles graph-related tasks:
-      - graph_embed: compute and store embeddings for a k-hop neighborhood
-        params: {"start_ids":[int,...], "k":2}
-      - graph_rag_query: neighborhood + vector search to augment context
-        params: {"start_ids":[int,...], "k":2, "topk": 10}
+
+      Legacy:
+        - graph_embed:        params {"start_ids":[int,...], "k":2}
+        - graph_rag_query:    params {"start_ids":[int,...], "k":2, "topk":10}
+
+      HGNN-aware:
+        - graph_embed_v2:     params may include any of:
+                                {"start_node_ids":[int,...]}                       # as before
+                                {"start_task_ids":[uuid,...]}                       # task UUIDs -> ensure_task_node()
+                                {"start_agent_ids":[text,...]}                      # agent ids  -> ensure_agent_node()
+                                {"start_organ_ids":[text,...]}                      # organ ids  -> ensure_organ_node()
+                              plus {"k":2}
+        - graph_rag_query_v2: same inputs as graph_embed_v2 + {"topk":10}
+
+      Maintenance:
+        - graph_sync_nodes:   calls backfill_task_nodes() to populate graph_node_map for tasks
     """
 
     def __init__(self, dsn: Optional[str] = None, name: str = "seedcore_graph_dispatcher", checkpoint_path: Optional[str] = None):
-        logger.info("🚀 GraphDispatcher '%s' starting initialization...", name)
+        logger.info("🚀 GraphDispatcher '%s' init...", name)
         start_time = time.time()
-        
+
         self.dsn = dsn or PG_DSN
         self.name = name
         self._running = True
@@ -75,84 +93,179 @@ class GraphDispatcher:
             "last_complete_ms": None,
         }
         self._embedder_name = f"{name}_embedder"
-        
-        # Phase 1: Database engine setup
-        logger.info("📊 GraphDispatcher '%s' phase 1: Setting up database engine with DSN: %s",
-                    self.name, _redact_dsn(self.dsn))
+
+        # --- DB engine ---
+        logger.info("📊 GraphDispatcher '%s' DB engine: %s", self.name, _redact_dsn(self.dsn))
+        self.engine = sa.create_engine(
+            self.dsn,
+            future=True,
+            pool_size=DB_POOL_SIZE,
+            max_overflow=DB_MAX_OVERFLOW,
+            pool_pre_ping=True,
+            pool_recycle=DB_POOL_RECYCLE_S,
+            echo=DB_ECHO,
+        )
+        with self.engine.begin() as conn:
+            conn.execute(text("SELECT 1"))
+
+        # --- GraphEmbedder actor ---
         try:
-            # robust pool + pre_ping to kill dead connections
-            self.engine = sa.create_engine(
-                self.dsn,
-                future=True,
-                pool_size=DB_POOL_SIZE,
-                max_overflow=DB_MAX_OVERFLOW,
-                pool_pre_ping=True,
-                pool_recycle=DB_POOL_RECYCLE_S,
-                echo=DB_ECHO,
-            )
-            logger.info("✅ GraphDispatcher '%s' database engine created successfully", self.name)
-        except Exception as e:
-            logger.error("❌ GraphDispatcher '%s' failed to create database engine: %s", self.name, e)
-            raise
-        
-        # Phase 2: Test database connectivity
-        logger.info("🔗 GraphDispatcher '%s' phase 2: Testing database connectivity", self.name)
-        try:
-            with self.engine.begin() as conn:
-                conn.execute(text("SELECT 1"))
-            logger.info("✅ GraphDispatcher '%s' database connectivity test passed", self.name)
-        except Exception as e:
-            logger.error("❌ GraphDispatcher '%s' database connectivity test failed: %s", self.name, e)
-            raise
-        
-        # Phase 3: GraphEmbedder actor setup
-        embedder_name = self._embedder_name
-        logger.info("🤖 GraphDispatcher '%s' phase 3: Setting up GraphEmbedder actor '%s'", self.name, embedder_name)
-        
-        try:
-            self.embedder = ray.get_actor(embedder_name, namespace=AGENT_NAMESPACE)
-            logger.info("✅ GraphDispatcher '%s' reusing existing GraphEmbedder: %s", self.name, embedder_name)
+            self.embedder = ray.get_actor(self._embedder_name, namespace=AGENT_NAMESPACE)
+            logger.info("✅ Reusing GraphEmbedder: %s", self._embedder_name)
         except ValueError:
-            # Actor doesn't exist, create a new one
-            logger.info("🆕 GraphDispatcher '%s' creating new GraphEmbedder: %s", self.name, embedder_name)
-            try:
-                self.embedder = GraphEmbedder.options(
-                    name=embedder_name,
-                    lifetime="detached",
-                    namespace=AGENT_NAMESPACE
-                ).remote(checkpoint_path)
-                logger.info("✅ GraphDispatcher '%s' created new GraphEmbedder: %s", self.name, embedder_name)
-            except Exception as e:
-                logger.error("❌ GraphDispatcher '%s' failed to create GraphEmbedder: %s", self.name, e)
-                raise
-        
-        # Phase 4: Test GraphEmbedder responsiveness
-        logger.info("🧪 GraphDispatcher '%s' phase 4: Testing GraphEmbedder responsiveness", self.name)
+            self.embedder = GraphEmbedder.options(
+                name=self._embedder_name,
+                lifetime="detached",
+                namespace=AGENT_NAMESPACE,
+            ).remote(checkpoint_path)
+            logger.info("✅ Created GraphEmbedder: %s", self._embedder_name)
+
+        # quick ping (best-effort)
         try:
-            # Test if the embedder is responsive
-            test_result = ray.get(self.embedder.ping.remote(), timeout=10)
-            if test_result == "pong":
-                logger.info("✅ GraphDispatcher '%s' GraphEmbedder ping test passed", self.name)
-            else:
-                logger.warning("⚠️ GraphDispatcher '%s' GraphEmbedder ping returned unexpected result: %s", self.name, test_result)
-        except AttributeError as e:
-            if "'ActorHandle' object has no attribute 'ping'" in str(e):
-                logger.warning("⚠️ GraphDispatcher '%s' GraphEmbedder doesn't have ping method - this is expected for older versions", self.name)
-            else:
-                logger.error("❌ GraphDispatcher '%s' GraphEmbedder ping test failed (AttributeError): %s", self.name, e)
-        except Exception as e:
-            logger.error("❌ GraphDispatcher '%s' GraphEmbedder ping test failed: %s", self.name, e)
-            # Don't raise here - GraphEmbedder might be slow to start but could recover
-        
-        init_time = time.time() - start_time
-        logger.info("🎉 GraphDispatcher '%s' initialization completed in %.2f seconds", self.name, init_time)
-        
-        # Mark as ready for health checks
+            ray.get(self.embedder.ping.remote(), timeout=10)
+        except Exception:
+            logger.debug("Embedder ping skipped/failed (non-fatal).")
+
         self._startup_complete = True
-        self._startup_time = init_time
+        self._startup_time = time.time() - start_time
+        logger.info("🎉 GraphDispatcher '%s' ready in %.2fs", self.name, self._startup_time)
+
+    # ---------------- Utils ----------------
+
+    def _heartbeat_thread(self, task_id: str, stop_evt: threading.Event):
+        """Extend lease + bump heartbeat while long work runs."""
+        q = text("""
+            UPDATE tasks
+               SET last_heartbeat = NOW(),
+                   lease_expires_at = NOW() + (:extend || ' seconds')::interval
+             WHERE id = :id
+               AND status = 'running'
+               AND owner_id = :owner
+        """)
+        while not stop_evt.wait(HEARTBEAT_PING_S):
+            try:
+                with self.engine.begin() as conn:
+                    conn.execute(q, {"id": task_id, "owner": self.name, "extend": LEASE_EXTENSION_S})
+            except Exception as e:
+                logger.debug("heartbeat update failed for %s: %s", task_id, e)
+
+    def _start_heartbeat(self, task_id: str) -> threading.Event:
+        ev = threading.Event()
+        t = threading.Thread(target=self._heartbeat_thread, args=(task_id, ev), daemon=True)
+        t.start()
+        # stash on self to keep reference
+        setattr(self, f"_hb_{task_id}", (ev, t))
+        return ev
+
+    def _stop_heartbeat(self, task_id: str):
+        tup = getattr(self, f"_hb_{task_id}", None)
+        if tup:
+            ev, t = tup
+            ev.set()
+            try:
+                t.join(timeout=2)
+            except Exception:
+                pass
+            delattr(self, f"_hb_{task_id}")
+
+    # ---- HGNN helpers: map external IDs -> numeric node_ids via graph_node_map ----
+
+    def _ensure_task_nodes(self, task_uuids: List[str]) -> List[int]:
+        if not task_uuids:
+            return []
+        q = text("SELECT ensure_task_node(:tid) AS node_id")
+        node_ids: List[int] = []
+        with self.engine.begin() as conn:
+            for tid in task_uuids:
+                row = conn.execute(q, {"tid": tid}).mappings().first()
+                if row and row["node_id"] is not None:
+                    node_ids.append(int(row["node_id"]))
+        return node_ids
+
+    def _ensure_agent_nodes(self, agent_ids: List[str]) -> List[int]:
+        if not agent_ids:
+            return []
+        q = text("SELECT ensure_agent_node(:aid) AS node_id")
+        node_ids: List[int] = []
+        with self.engine.begin() as conn:
+            for aid in agent_ids:
+                row = conn.execute(q, {"aid": aid}).mappings().first()
+                if row and row["node_id"] is not None:
+                    node_ids.append(int(row["node_id"]))
+        return node_ids
+
+    def _ensure_organ_nodes(self, organ_ids: List[str]) -> List[int]:
+        if not organ_ids:
+            return []
+        q = text("SELECT ensure_organ_node(:oid) AS node_id")
+        node_ids: List[int] = []
+        with self.engine.begin() as conn:
+            for oid in organ_ids:
+                row = conn.execute(q, {"oid": oid}).mappings().first()
+                if row and row["node_id"] is not None:
+                    node_ids.append(int(row["node_id"]))
+        return node_ids
+
+    def _resolve_start_node_ids(self, params: Dict[str, Any]) -> Tuple[List[int], Dict[str, Any]]:
+        """
+        Accepts multiple forms:
+          - start_node_ids / start_ids: direct numeric node IDs
+          - start_task_ids: list of UUIDs -> ensure_task_node()
+          - start_agent_ids: list of text -> ensure_agent_node()
+          - start_organ_ids: list of text -> ensure_organ_node()
+        Returns (node_id list, debug dict)
+        """
+        debug: Dict[str, Any] = {"sources": {}}
+        node_ids: List[int] = []
+
+        # numeric node ids (legacy)
+        for key in ("start_node_ids", "start_ids"):
+            ids = params.get(key)
+            if isinstance(ids, list) and ids and isinstance(ids[0], int):
+                node_ids.extend([int(x) for x in ids])
+                debug["sources"][key] = len(ids)
+
+        # HGNN mappings
+        t_ids = params.get("start_task_ids") or []
+        a_ids = params.get("start_agent_ids") or []
+        o_ids = params.get("start_organ_ids") or []
+
+        if t_ids:
+            tids = [str(x) for x in t_ids]
+            tids_nodes = self._ensure_task_nodes(tids)
+            node_ids.extend(tids_nodes)
+            debug["sources"]["start_task_ids"] = len(tids)
+
+        if a_ids:
+            aids = [str(x) for x in a_ids]
+            aids_nodes = self._ensure_agent_nodes(aids)
+            node_ids.extend(aids_nodes)
+            debug["sources"]["start_agent_ids"] = len(aids)
+
+        if o_ids:
+            oids = [str(x) for x in o_ids]
+            oids_nodes = self._ensure_organ_nodes(oids)
+            node_ids.extend(oids_nodes)
+            debug["sources"]["start_organ_ids"] = len(oids)
+
+        # de-dup + keep order
+        seen = set()
+        node_ids = [x for x in node_ids if (x not in seen and not seen.add(x))]
+        debug["node_count"] = len(node_ids)
+        return node_ids, debug
+
+    def _fetch_node_meta(self, node_ids: List[int]) -> List[Dict[str, Any]]:
+        """Return raw rows from graph_node_map as JSON-ish dicts (best effort)."""
+        if not node_ids:
+            return []
+        q = text("SELECT to_jsonb(t) AS j FROM graph_node_map t WHERE t.node_id = ANY(:ids)")
+        with self.engine.begin() as conn:
+            rows = conn.execute(q, {"ids": node_ids}).mappings().all()
+        return [r["j"] for r in rows if r and r.get("j") is not None]
+
+    # ---------------- Health / control ----------------
 
     def get_startup_status(self) -> Dict[str, Any]:
-        """Get detailed startup status information."""
         return {
             "startup_complete": getattr(self, '_startup_complete', False),
             "startup_time": getattr(self, '_startup_time', None),
@@ -164,45 +277,9 @@ class GraphDispatcher:
         }
 
     def ping(self) -> str:
-        """Simple ping for basic responsiveness check."""
-        ping_start = time.time()
-        logger.debug("🏓 GraphDispatcher '%s' ping() called at %.3f", self.name, ping_start)
-        
-        try:
-            # Check if startup is complete
-            if not getattr(self, '_startup_complete', False):
-                logger.warning("⚠️ GraphDispatcher '%s' ping: startup not complete yet", self.name)
-                return "pong"  # Still return pong to indicate actor is alive
-            
-            # Quick health check - verify we can access our components
-            if not hasattr(self, 'engine') or self.engine is None:
-                logger.warning("⚠️ GraphDispatcher '%s' ping: engine not available", self.name)
-                return "pong"  # Still return pong to indicate actor is alive
-            
-            if not hasattr(self, 'embedder') or self.embedder is None:
-                logger.warning("⚠️ GraphDispatcher '%s' ping: embedder not available", self.name)
-                return "pong"  # Still return pong to indicate actor is alive
-            
-            # Test database connection quickly
-            try:
-                with self.engine.begin() as conn:
-                    conn.execute(text("SELECT 1"))
-                logger.debug("✅ GraphDispatcher '%s' ping: database connection OK", self.name)
-            except Exception as e:
-                logger.warning("⚠️ GraphDispatcher '%s' ping: database connection issue: %s", self.name, e)
-                # Don't fail ping for DB issues - actor is still alive
-            
-            ping_duration = time.time() - ping_start
-            logger.debug("🏓 GraphDispatcher '%s' ping() completed in %.3f seconds", self.name, ping_duration)
-            
-            return "pong"
-        except Exception as e:
-            logger.error("❌ GraphDispatcher '%s' ping() failed: %s", self.name, e)
-            # Still return pong to indicate actor is alive, even if there are issues
-            return "pong"
+        return "pong"
 
     def get_metrics(self) -> Dict[str, Any]:
-        """Lightweight counters for observability."""
         return dict(self._metrics, timestamp=time.time())
 
     def set_log_level(self, level: str = "INFO") -> bool:
@@ -211,161 +288,70 @@ class GraphDispatcher:
             return True
         except Exception:
             return False
-    
-    def heartbeat(self) -> Dict[str, Any]:
-        """Enhanced heartbeat with detailed health information."""
-        heartbeat_start = time.time()
-        logger.debug("💓 GraphDispatcher '%s' heartbeat() called", self.name)
-        
-        try:
-            # Comprehensive health checks
-            health_checks = {
-                "engine_available": False,
-                "engine_connected": False,
-                "embedder_available": False,
-                "embedder_responsive": False,
-                "database_query_ok": False,
-            }
-            
-            # Check engine availability
-            if hasattr(self, 'engine') and self.engine is not None:
-                health_checks["engine_available"] = True
-                
-                # Test database connection
-                try:
-                    with self.engine.begin() as conn:
-                        result = conn.execute(text("SELECT 1 as test")).scalar()
-                        if result == 1:
-                            health_checks["engine_connected"] = True
-                            health_checks["database_query_ok"] = True
-                except Exception as e:
-                    logger.warning("⚠️ GraphDispatcher '%s' heartbeat: database connection failed: %s", self.name, e)
-            
-            # Check embedder availability
-            if hasattr(self, 'embedder') and self.embedder is not None:
-                health_checks["embedder_available"] = True
-                
-                # Test embedder responsiveness (with timeout)
-                try:
-                    embedder_ping = ray.get(self.embedder.ping.remote(), timeout=5)
-                    if embedder_ping == "pong":
-                        health_checks["embedder_responsive"] = True
-                except AttributeError as e:
-                    if "'ActorHandle' object has no attribute 'ping'" in str(e):
-                        logger.debug("GraphDispatcher '%s' heartbeat: GraphEmbedder doesn't have ping method", self.name)
-                        # Consider embedder available but not testable via ping
-                        health_checks["embedder_responsive"] = True
-                    else:
-                        logger.warning("⚠️ GraphDispatcher '%s' heartbeat: embedder ping failed (AttributeError): %s", self.name, e)
-                except Exception as e:
-                    logger.warning("⚠️ GraphDispatcher '%s' heartbeat: embedder ping failed: %s", self.name, e)
-            
-            # Determine overall health status
-            critical_issues = []
-            if not health_checks["engine_available"]:
-                critical_issues.append("engine_missing")
-            if not health_checks["engine_connected"]:
-                critical_issues.append("engine_disconnected")
-            if not health_checks["embedder_available"]:
-                critical_issues.append("embedder_missing")
-            
-            if critical_issues:
-                health_status = f"unhealthy_{'_'.join(critical_issues)}"
-            elif not health_checks["embedder_responsive"]:
-                health_status = "degraded_embedder_unresponsive"
-            elif not health_checks["database_query_ok"]:
-                health_status = "degraded_database_issues"
-            else:
-                health_status = "healthy"
-            
-            heartbeat_duration = time.time() - heartbeat_start
-            logger.debug("💓 GraphDispatcher '%s' heartbeat completed in %.3f seconds", self.name, heartbeat_duration)
-            
-            return {
-                "status": health_status,
-                "timestamp": time.time(),
-                "heartbeat_duration_ms": round(heartbeat_duration * 1000, 2),
-                "name": self.name,
-                "health_checks": health_checks,
-                "critical_issues": critical_issues,
-            }
-        except Exception as e:
-            logger.error("❌ GraphDispatcher '%s' heartbeat failed: %s", self.name, e)
-            return {
-                "status": "error",
-                "timestamp": time.time(),
-                "error": str(e),
-                "name": self.name,
-            }
 
-    # === Task loop (optional; you can also call methods directly) ===
+    def heartbeat(self) -> Dict[str, Any]:
+        return {
+            "status": "healthy" if self._startup_complete else "initializing",
+            "timestamp": time.time(),
+            "name": self.name,
+        }
+
+    # ---------------- Run loop ----------------
+
     def run(self, poll_interval: float = TASK_POLL_INTERVAL_S):
-        """Start the run loop in a background thread."""
-        logger.info("🚀 GraphDispatcher '%s' starting run loop with poll_interval=%.1f", self.name, poll_interval)
-        
-        # Start the run loop in a background thread
-        import threading
+        logger.info("🚀 GraphDispatcher '%s' run loop (poll=%.1fs)", self.name, poll_interval)
         self._run_thread = threading.Thread(target=self._run_loop, args=(poll_interval,), daemon=True)
         self._run_thread.start()
-        
+
     def _run_loop(self, poll_interval: float = TASK_POLL_INTERVAL_S):
-        """Internal run loop that runs in a background thread."""
-        logger.info("🚀 GraphDispatcher '%s' run loop started with poll_interval=%.1f", self.name, poll_interval)
         loop_count = 0
-        last_task_time = time.time()
-        
         while self._running:
             try:
                 loop_count += 1
-                current_time = time.time()
-                
-                # Log periodic status
-                if loop_count % 100 == 0:  # Every 100 iterations
-                    uptime = current_time - last_task_time
-                    logger.info("🔄 GraphDispatcher '%s' run loop iteration %d, uptime: %.1fs", self.name, loop_count, uptime)
-                
                 task = self._claim_next_task()
                 if not task:
                     time.sleep(poll_interval)
                     continue
-                
-                last_task_time = current_time
                 self._process(task)
-                
             except Exception as e:
-                logger.exception("❌ GraphDispatcher '%s' run loop error at iteration %d: %s", self.name, loop_count, e)
+                logger.exception("run loop error: %s", e)
                 time.sleep(2.0)
 
     def stop(self) -> bool:
-        """Request the run loop to stop."""
         self._running = False
         return True
 
-    # === Core ===
+    # ---------------- DB task ops ----------------
+
     def _claim_next_task(self) -> Optional[Dict[str, Any]]:
+        # include lease ownership + expiry; include retry; filter by run_after
         q = """
         UPDATE tasks
-        SET status='running',
-            locked_by=:name,
-            locked_at=NOW()
-        WHERE id = (
-          SELECT id FROM tasks
-          WHERE status IN ('queued','retry')
-            AND type IN ('graph_embed','graph_rag_query')
-            AND (run_after IS NULL OR run_after <= NOW())
-          ORDER BY created_at ASC
-          LIMIT 1
-        )
+           SET status='running',
+               locked_by=:name,
+               locked_at=NOW(),
+               owner_id=:name,
+               last_heartbeat = NOW(),
+               lease_expires_at = NOW() + (:lease || ' seconds')::interval
+         WHERE id = (
+           SELECT id FROM tasks
+            WHERE status IN ('queued','retry')
+              AND type = ANY(:types)
+              AND (run_after IS NULL OR run_after <= NOW())
+            ORDER BY created_at ASC
+            LIMIT 1
+         )
         RETURNING id, type, params::text;
         """
         try:
-            sql = text(q)
             with self.engine.begin() as conn:
-                row = conn.execute(sql, {"name": self.name}).mappings().first()
+                row = conn.execute(
+                    text(q),
+                    {"name": self.name, "lease": LEASE_EXTENSION_S, "types": list(GRAPH_TASK_TYPES)},
+                ).mappings().first()
             return dict(row) if row else None
         except Exception as e:
-            logger.error("❌ GraphDispatcher '%s' failed to claim next task: %s", self.name, e)
-            # Don't raise - let the run loop continue and retry
+            logger.error("claim_next_task failed: %s", e)
             return None
 
     def _complete(self, task_id, result=None, error=None, retry_after=None):
@@ -374,158 +360,188 @@ class GraphDispatcher:
                 new_status = "retry" if retry_after else "failed"
                 q = """
                 UPDATE tasks
-                SET status=:st, error=:err, attempts=attempts+1,
-                    run_after=NOW() + (:retry * INTERVAL '1 second')
-                WHERE id=:id
+                   SET status=:st,
+                       error=:err,
+                       attempts=attempts+1,
+                       run_after=CASE WHEN :retry > 0 THEN NOW() + (:retry || ' seconds')::interval ELSE run_after END
+                 WHERE id=:id
                 """
                 params = {"st": new_status, "err": str(error), "retry": retry_after or 0, "id": task_id}
-                logger.info("📝 GraphDispatcher '%s' completing task %s with status: %s", self.name, task_id, new_status)
             else:
-                # Ensure we always have a structured result, never None or empty
-                structured_result = result if result is not None else {"status": "completed", "message": "Task completed successfully"}
+                structured_result = result if result is not None else {"status": "completed"}
                 if STRICT_JSON_RESULT:
-                    # guard against non-JSON-serializable values
                     try:
                         json.dumps(structured_result)
                     except Exception:
-                        structured_result = {"status": "completed", "note": "Non-JSON result was sanitized"}
-                q = "UPDATE tasks SET status='completed', result=:res WHERE id=:id"
+                        structured_result = {"status": "completed", "note": "Non-JSON result sanitized"}
+                q = "UPDATE tasks SET status='completed', result=:res, error=NULL WHERE id=:id"
                 params = {"res": json.dumps(structured_result), "id": task_id}
-                logger.info("✅ GraphDispatcher '%s' completing task %s successfully", self.name, task_id)
-            
+
             with self.engine.begin() as conn:
                 conn.execute(text(q), params)
-            self._metrics["tasks_completed"] += 0 if error else 1
+
             if error:
                 self._metrics["tasks_failed"] += 1
+            else:
+                self._metrics["tasks_completed"] += 1
         except Exception as e:
-            logger.error("❌ GraphDispatcher '%s' failed to complete task %s: %s", self.name, task_id, e)
-            # Don't raise - this is a completion operation
+            logger.error("complete() failed for %s: %s", task_id, e)
+
+    # ---------------- Task processing ----------------
 
     def _process(self, task: Dict[str, Any]):
         tid = task["id"]
         ttype = task["type"]
-        logger.info("🔄 GraphDispatcher '%s' processing task %s of type %s", self.name, tid, ttype)
         self._metrics["tasks_claimed"] += 1
         self._metrics["last_task_id"] = tid
         t0 = time.time()
-        
+
+        # start a heartbeat ticker for long work
+        hb_ev = self._start_heartbeat(tid)
+
         try:
             params = json.loads(task["params"])
         except Exception as e:
-            logger.error("❌ GraphDispatcher '%s' failed to parse task %s params: %s", self.name, tid, e)
+            self._stop_heartbeat(tid)
             self._complete(tid, error=f"Invalid task params: {e}")
             return
-        
-        try:
-            if ttype == "graph_embed":
-                start_ids: List[int] = params.get("start_ids") or []
-                k: int = int(params.get("k", 2))
-                if not isinstance(start_ids, list):
-                    raise ValueError("start_ids must be a list of node ids")
 
-                # optional chunking to avoid mega-queries
-                if EMBED_BATCH_CHUNK and len(start_ids) > EMBED_BATCH_CHUNK:
+        try:
+            if ttype in ("graph_embed", "graph_embed_v2"):
+                # resolve node ids (legacy: start_ids; v2: map UUID/text ids)
+                node_ids, debug = self._resolve_start_node_ids(params)
+                k = int(params.get("k", 2))
+                if not node_ids:
+                    raise ValueError("No start nodes resolved")
+
+                # chunking support
+                if EMBED_BATCH_CHUNK and len(node_ids) > EMBED_BATCH_CHUNK:
                     all_maps: Dict[int, List[float]] = {}
-                    for i in range(0, len(start_ids), EMBED_BATCH_CHUNK):
-                        chunk = start_ids[i:i+EMBED_BATCH_CHUNK]
+                    for i in range(0, len(node_ids), EMBED_BATCH_CHUNK):
+                        chunk = node_ids[i:i+EMBED_BATCH_CHUNK]
                         emb_map = ray.get(self.embedder.compute_embeddings.remote(chunk, k), timeout=EMBED_TIMEOUT_S)
                         all_maps.update(emb_map or {})
                     emb_map = all_maps
                 else:
-                    emb_map = ray.get(self.embedder.compute_embeddings.remote(start_ids, k), timeout=EMBED_TIMEOUT_S)
+                    emb_map = ray.get(self.embedder.compute_embeddings.remote(node_ids, k), timeout=EMBED_TIMEOUT_S)
 
                 n = ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
-                # Always write structured result
-                result = {"embedded": n, "start_ids": start_ids, "k": k, "embedding_count": len(emb_map)}
+
+                # richer result with node meta (optional)
+                meta_nodes = self._fetch_node_meta(list(emb_map.keys()))
+                result = {
+                    "embedded": n,
+                    "k": k,
+                    "start_node_count": len(node_ids),
+                    "embedding_count": len(emb_map or {}),
+                    "start_debug": debug,
+                    "node_meta": meta_nodes[:64],  # cap result size
+                }
+                self._stop_heartbeat(tid)
                 self._complete(tid, result=result)
-                logger.info("graph_embed task %s completed: %d nodes", tid, n)
+                return
 
-            elif ttype == "graph_rag_query":
-                # basic ANN over pgvector
-                start_ids: List[int] = params.get("start_ids") or []
-                k: int = int(params.get("k", 2))
-                topk: int = int(params.get("topk", 10))
+            if ttype in ("graph_rag_query", "graph_rag_query_v2"):
+                import numpy as np
 
-                # ensure embeddings exist for the seed neighborhood
-                emb_map = ray.get(self.embedder.compute_embeddings.remote(start_ids, k), timeout=EMBED_TIMEOUT_S)
+                node_ids, debug = self._resolve_start_node_ids(params)
+                k = int(params.get("k", 2))
+                topk = int(params.get("topk", 10))
+                if not node_ids:
+                    raise ValueError("No start nodes resolved")
+
+                # ensure embeddings exist for seeds
+                emb_map = ray.get(self.embedder.compute_embeddings.remote(node_ids, k), timeout=EMBED_TIMEOUT_S)
                 ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
 
-                # query nearest neighbors (l2) across graph_embeddings
-                # (Use a centroid over the embedded neighborhood for a quick query)
-                import numpy as np
                 vecs = list(emb_map.values())
                 centroid = np.asarray(vecs, dtype="float32").mean(0).tolist() if vecs else None
 
-                hits = []
+                hits: List[Dict[str, Any]] = []
                 if centroid:
-                    # try JSONB::vector cast first (project-specific), then fallback to text::vector
                     centroid_json = json.dumps(centroid)
                     centroid_vec_literal = "[" + ",".join(f"{x:.6f}" for x in centroid) + "]"
                     try:
                         with self.engine.begin() as conn:
-                            sql = text("""
-                              SELECT node_id, emb <-> (:centroid::jsonb::vector) AS dist
-                              FROM graph_embeddings
-                              ORDER BY emb <-> (:centroid::jsonb::vector)
-                              LIMIT :k
-                            """)
-                            rows = conn.execute(sql, {"centroid": centroid_json, "k": topk}).mappings().all()
+                            rows = conn.execute(
+                                text("""
+                                  SELECT node_id, emb <-> (:c::jsonb::vector) AS dist
+                                    FROM graph_embeddings
+                                ORDER BY emb <-> (:c::jsonb::vector)
+                                   LIMIT :k
+                                """),
+                                {"c": centroid_json, "k": topk},
+                            ).mappings().all()
                             hits = [{"node_id": r["node_id"], "score": float(r["dist"])} for r in rows]
-                    except Exception as cast_err:
-                        logger.debug("JSONB::vector cast failed, falling back to text::vector: %s", cast_err)
+                    except Exception:
                         with self.engine.begin() as conn:
-                            sql = text("""
-                              SELECT node_id, emb <-> (:centroid)::vector AS dist
-                              FROM graph_embeddings
-                              ORDER BY emb <-> (:centroid)::vector
-                              LIMIT :k
-                            """)
-                            rows = conn.execute(sql, {"centroid": centroid_vec_literal, "k": topk}).mappings().all()
+                            rows = conn.execute(
+                                text("""
+                                  SELECT node_id, emb <-> (:c)::vector AS dist
+                                    FROM graph_embeddings
+                                ORDER BY emb <-> (:c)::vector
+                                   LIMIT :k
+                                """),
+                                {"c": centroid_vec_literal, "k": topk},
+                            ).mappings().all()
                             hits = [{"node_id": r["node_id"], "score": float(r["dist"])} for r in rows]
 
-                # Always write structured result with fallbacks
-                context = {
-                    "neighbors": hits or [], 
-                    "seed_count": len(emb_map) if emb_map else 0,
-                    "start_ids": start_ids,
+                meta_nodes = self._fetch_node_meta([h["node_id"] for h in hits])
+                result = {
+                    "neighbors": hits,
+                    "neighbor_count": len(hits),
+                    "seed_count": len(emb_map or {}),
                     "k": k,
                     "topk": topk,
                     "centroid_computed": centroid is not None,
-                    "embedding_count": len(emb_map) if emb_map else 0
+                    "start_debug": debug,
+                    "node_meta": meta_nodes[:64],
                 }
-                self._complete(tid, result=context)
-                logger.info("graph_rag_query task %s completed: %d hits", tid, len(hits))
-
-            else:
-                # Always write structured result even for unsupported task types
-                result = {
-                    "error": f"Unsupported task type: {ttype}",
-                    "supported_types": ["graph_embed", "graph_rag_query"],
-                    "task_type": ttype,
-                    "params": params
-                }
+                self._stop_heartbeat(tid)
                 self._complete(tid, result=result)
-                logger.warning("Unsupported task type %s for task %s", ttype, tid)
+                return
+
+            if ttype == "graph_sync_nodes":
+                # ensure every existing task has a node in graph_node_map
+                with self.engine.begin() as conn:
+                    # optional: versioned function name; fall back if not present
+                    try:
+                        r = conn.execute(text("SELECT backfill_task_nodes() AS updated")).mappings().first()
+                        updated = int(r["updated"]) if r and r.get("updated") is not None else None
+                    except Exception:
+                        # tolerate absence
+                        updated = None
+                self._stop_heartbeat(tid)
+                self._complete(tid, result={"backfill_task_nodes": updated})
+                return
+
+            # Unknown type
+            self._stop_heartbeat(tid)
+            self._complete(
+                tid,
+                result={
+                    "error": f"Unsupported task type: {ttype}",
+                    "supported_types": list(GRAPH_TASK_TYPES),
+                },
+            )
 
         except Exception as e:
             logger.exception("Task %s failed: %s", tid, e)
+            self._stop_heartbeat(tid)
             self._complete(tid, error=str(e), retry_after=30)
         finally:
             self._metrics["last_complete_ms"] = round((time.time() - t0) * 1000.0, 2)
 
+    # ---------------- Cleanup ----------------
+
     def cleanup(self):
-        """Cleanup resources including the GraphEmbedder actor."""
         try:
             if hasattr(self, 'embedder'):
                 ray.get(self.embedder.close.remote(), timeout=30)
-                logger.info("GraphEmbedder actor cleaned up successfully.")
         except Exception as e:
-            logger.warning("Failed to cleanup GraphEmbedder actor: %s", e)
-        
+            logger.warning("failed to cleanup embedder: %s", e)
         try:
             if hasattr(self, 'engine'):
                 self.engine.dispose()
-                logger.info("Database engine disposed successfully.")
         except Exception as e:
-            logger.warning("Failed to dispose database engine: %s", e)
+            logger.warning("failed to dispose engine: %s", e)
