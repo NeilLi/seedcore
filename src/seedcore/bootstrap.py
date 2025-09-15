@@ -55,7 +55,7 @@ logger.propagate = True
 
 def _resolve_ns() -> str:
     """Single source of truth for the Ray namespace."""
-    return os.getenv("RAY_NAMESPACE") or os.getenv("SEEDCORE_NS") or "seedcore-dev"
+    return os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
 def get_ray_namespace() -> str:
     """Prefer explicit env, else Ray runtime context, else a default value."""

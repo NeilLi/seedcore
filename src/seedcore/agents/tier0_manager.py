@@ -38,6 +38,9 @@ from ..energy.optimizer import select_best_agent, score_agent
 
 logger = logging.getLogger("seedcore.Tier0MemoryManager")
 
+# Target namespace for agent actors (prefer SEEDCORE_NS, fallback to RAY_NAMESPACE)
+AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+
 class Tier0MemoryManager:
     """
     Manages Tier 0 per-agent memory (Ma) using Ray actors.
@@ -80,11 +83,11 @@ class Tier0MemoryManager:
                     try:
                         # Try explicit namespace first (prefer SEEDCORE_NS), then fallback
                         try:
-                            ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                            ns = AGENT_NAMESPACE
                             handle = ray.get_actor(actor_name, namespace=ns)
                         except Exception:
                             # Fallback to explicit namespace (prefer SEEDCORE_NS)
-                            ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                            ns = AGENT_NAMESPACE
                             handle = ray.get_actor(actor_name, namespace=ns)
                         # Sanity check
                         resolved_id = ray.get(handle.get_id.remote())
@@ -148,7 +151,7 @@ class Tier0MemoryManager:
                 options_kwargs["namespace"] = namespace
             else:
                 # Get namespace from environment
-                env_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                env_namespace = AGENT_NAMESPACE
                 if env_namespace:
                     options_kwargs["namespace"] = env_namespace
 
@@ -367,7 +370,7 @@ class Tier0MemoryManager:
                                     handle = None
                             # Fallback to explicit namespace (prefer SEEDCORE_NS)
                             if handle is None:
-                                ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                                ns = AGENT_NAMESPACE
                                 handle = ray.get_actor(name, namespace=ns)
                             discovered[name] = handle
                         except Exception:
@@ -399,7 +402,7 @@ class Tier0MemoryManager:
                                         handle = None
                                 if handle is None:
                                     # Use explicit namespace (prefer SEEDCORE_NS)
-                                    ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                                    ns = AGENT_NAMESPACE
                                     handle = ray.get_actor(name, namespace=ns)
                                 discovered[name] = handle
                             except Exception:

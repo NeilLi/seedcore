@@ -165,7 +165,7 @@ async def debug_agent_discovery():
     try:
         if ensure_ray_initialized():
             details["ray"]["initialized"] = True
-            details["ray"]["namespace"] = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+            details["ray"]["namespace"] = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
         else:
             details["ray"]["error"] = "Failed to connect to Ray"
     except Exception as e:

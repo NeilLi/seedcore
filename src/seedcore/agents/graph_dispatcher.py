@@ -12,7 +12,7 @@ from sqlalchemy import text
 from seedcore.graph.embeddings import GraphEmbedder, upsert_embeddings
 
 PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))
-RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 logger = logging.getLogger(__name__)
 
 # ---- tunables / env knobs ----
@@ -110,7 +110,7 @@ class GraphDispatcher:
         logger.info("🤖 GraphDispatcher '%s' phase 3: Setting up GraphEmbedder actor '%s'", self.name, embedder_name)
         
         try:
-            self.embedder = ray.get_actor(embedder_name, namespace=RAY_NAMESPACE)
+            self.embedder = ray.get_actor(embedder_name, namespace=AGENT_NAMESPACE)
             logger.info("✅ GraphDispatcher '%s' reusing existing GraphEmbedder: %s", self.name, embedder_name)
         except ValueError:
             # Actor doesn't exist, create a new one
@@ -119,7 +119,7 @@ class GraphDispatcher:
                 self.embedder = GraphEmbedder.options(
                     name=embedder_name,
                     lifetime="detached",
-                    namespace=RAY_NAMESPACE
+                    namespace=AGENT_NAMESPACE
                 ).remote(checkpoint_path)
                 logger.info("✅ GraphDispatcher '%s' created new GraphEmbedder: %s", self.name, embedder_name)
             except Exception as e:

@@ -25,7 +25,7 @@ def connect():
     # 1. Inside a Ray pod (head/worker): RAY_ADDRESS is not set, Ray connects to its local instance.
     # 2. As a client (seedcore-api): RAY_ADDRESS is set to "ray://<...>" and it connects to the cluster.
     ray_address = os.getenv("RAY_ADDRESS", "auto")
-    namespace = os.getenv("RAY_NAMESPACE", "seedcore-dev")
+    namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
     logging.info(f"Attempting to connect to Ray at address '{ray_address}' in namespace '{namespace}'...")
     

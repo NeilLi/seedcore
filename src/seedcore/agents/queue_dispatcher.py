@@ -40,7 +40,7 @@ except Exception:  # pragma: no cover
 
 # --------- ENV / Defaults ----------
 PG_DSN               = os.getenv("PG_DSN") or os.getenv("SEEDCORE_PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore")
-RAY_NS               = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+AGENT_NAMESPACE      = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
 DISPATCHER_COUNT     = int(os.getenv("DISPATCHER_COUNT", "2"))
 CLAIM_BATCH_SIZE     = int(os.getenv("CLAIM_BATCH_SIZE", "8"))
@@ -162,7 +162,7 @@ LIMIT 1
 
 # ------------- Dispatcher (PG -> OrganismManager Serve Deployment -> PG) -------------
 
-@ray.remote(lifetime="detached", num_cpus=0.1, namespace=RAY_NS)
+@ray.remote(lifetime="detached", num_cpus=0.1, namespace=AGENT_NAMESPACE)
 class Dispatcher:
     def __init__(self, dsn: str, name: str):
         self.dsn = dsn
@@ -889,7 +889,7 @@ class Dispatcher:
             }
 
 # ------------- Reaper (returns stuck RUNNING tasks → RETRY) -------------
-@ray.remote(name="seedcore_reaper", lifetime="detached", num_cpus=0.05, namespace=RAY_NS)
+@ray.remote(name="seedcore_reaper", lifetime="detached", num_cpus=0.05, namespace=AGENT_NAMESPACE)
 class Reaper:
     def __init__(self, dsn: str):
         self.dsn = dsn
@@ -999,7 +999,7 @@ class Reaper:
                     owner_id = r.get("owner_id")
                     if owner_id:
                         try:
-                            a = ray.get_actor(owner_id, namespace=os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev")))
+                            a = ray.get_actor(owner_id, namespace=AGENT_NAMESPACE)
                             pong = ray.get(a.ping.remote(), timeout=2)
                             owner_dead = (pong != "pong")  # your Dispatcher/Reaper ping returns "pong"
                         except Exception:
@@ -1133,7 +1133,7 @@ class Reaper:
 def _get_or_create(name: str, cls, *args, **kwargs):
     try:
         # Use explicit namespace (prefer SEEDCORE_NS)
-        ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+        ns = AGENT_NAMESPACE
         return ray.get_actor(name, namespace=ns)
     except Exception:
         return cls.options(name=name).remote(*args, **kwargs)
@@ -1162,7 +1162,7 @@ def start_detached_pipeline(
         "coordinator": "Serve deployment: coordinator/Coordinator",
         "dispatchers": [f"seedcore_dispatcher_{i}" for i in range(dispatcher_count)],
         "reaper": "seedcore_reaper",
-        "namespace": RAY_NS,
+        "namespace": AGENT_NAMESPACE,
     }
 
 if __name__ == "__main__":

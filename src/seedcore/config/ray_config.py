@@ -37,7 +37,7 @@ class RayConfig:
             self.is_remote = True
         
         # Get namespace from environment, default to "seedcore-dev" for consistency
-        self.namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+        self.namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
     
     @classmethod
     def from_env(cls) -> 'RayConfig':

@@ -97,7 +97,7 @@ class SeedCoreHealthService:
         try:
             if not ray.is_initialized():
                 # Get namespace from environment, default to "seedcore-dev" for consistency
-                ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+                ray_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
                 if not ensure_ray_initialized(ray_namespace=ray_namespace):
                     raise RuntimeError(f"Failed to initialize Ray connection (namespace={ray_namespace})")
                 logger.info("✅ Ray initialized successfully")

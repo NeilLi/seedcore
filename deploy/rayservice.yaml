@@ -225,7 +225,7 @@ spec:
             - name: DGL_GRAPHBOLT_SKIP
               value: "0"
             - name: RAY_NAMESPACE
-              value: "serve"
+              value: "seedcore-dev"
             - name: SEEDCORE_NS
               value: "seedcore-dev"
             - name: XGB_STORAGE_PATH

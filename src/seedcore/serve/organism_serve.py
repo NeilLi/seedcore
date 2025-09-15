@@ -64,7 +64,7 @@ class OrganismServeClient:
         """
         self.base_url = base_url or os.getenv("ORGANISM_BASE_URL", "http://localhost:8000")
         self.serve_app_name = serve_app_name
-        self.namespace = namespace or os.getenv("RAY_NAMESPACE", "seedcore-dev")
+        self.namespace = namespace or os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
         
         # Health check endpoint
         self.health_url = urljoin(self.base_url, f"/{serve_app_name}/health")
