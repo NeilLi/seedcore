@@ -358,7 +358,12 @@ class EnergyService:
         import os
         import json
         import urllib.request
-        base = os.getenv("STATE_BASE_URL", "http://127.0.0.1:8000/state")
+        try:
+            from seedcore.utils.ray_utils import SERVE_GATEWAY
+            default_state = f"{SERVE_GATEWAY}/state"
+        except Exception:
+            default_state = "http://127.0.0.1:8000/state"
+        base = os.getenv("STATE_BASE_URL", default_state)
         url = f"{base}/health"
         try:
             with urllib.request.urlopen(url, timeout=2.0) as r:

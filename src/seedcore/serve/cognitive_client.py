@@ -45,8 +45,17 @@ class CognitiveServiceClient:
     """
     Client for the deployed cognitive service that matches the entrypoint interface.
     """
-    def __init__(self, base_url: str = "http://127.0.0.1:8000", timeout_s: float = 8.0):
-        self.base_url = base_url
+    def __init__(self, base_url: str = None, timeout_s: float = 8.0):
+        # Prefer centralized gateway discovery
+        if base_url is None:
+            try:
+                from seedcore.utils.ray_utils import COG
+                self.base_url = COG
+            except Exception:
+                # Fallback to localhost if utils unavailable
+                self.base_url = "http://127.0.0.1:8000"
+        else:
+            self.base_url = base_url
         self.timeout_s = timeout_s
         self._client = None
         

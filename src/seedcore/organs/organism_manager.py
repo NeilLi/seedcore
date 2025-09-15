@@ -76,8 +76,13 @@ class OrganismManager:
         # State service connection (replaces local state aggregator)
         self._state_service = None
         
-        # Evolution configuration
-        self._energy_url = os.getenv("SEEDCORE_ENERGY_URL", "http://127.0.0.1:8000/energy")
+        # Evolution configuration - use centralized SERVE gateway
+        try:
+            from seedcore.utils.ray_utils import SERVE_GATEWAY
+            default_energy = f"{SERVE_GATEWAY}/energy"
+        except Exception:
+            default_energy = "http://127.0.0.1:8000/energy"
+        self._energy_url = os.getenv("SEEDCORE_ENERGY_URL", default_energy)
         self._evolve_min_roi = float(os.getenv("EVOLVE_MIN_ROI", "0.2"))
         self._evolve_max_cost = float(os.getenv("EVOLVE_MAX_COST", "1e6"))
         

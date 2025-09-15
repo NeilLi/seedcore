@@ -21,6 +21,9 @@ live Ray actors and memory managers.
 import asyncio
 import logging
 import time
+import os
+import json
+import urllib.request
 from typing import Dict, List, Optional, Any
 import numpy as np
 import ray
@@ -42,6 +45,7 @@ from ..state import (
 )
 
 from seedcore.logging_setup import ensure_serve_logger
+from seedcore.utils.ray_utils import COG
 
 logger = ensure_serve_logger("seedcore.state", level="DEBUG")
 
@@ -64,6 +68,7 @@ class HealthResponse(BaseModel):
     service: str
     initialized: bool
     organism_connected: bool
+    cognitive_connected: bool
     error: Optional[str] = None
 
 # --- FastAPI App ---
@@ -92,6 +97,7 @@ class StateService:
     
     def __init__(self):
         self.organism_manager = None
+        self.cognitive_service = None
         self._initialized = False
         self._init_lock = asyncio.Lock()
         
@@ -99,6 +105,11 @@ class StateService:
         self.agent_aggregator = None
         self.memory_aggregator = None
         self.system_aggregator = None
+        # Base URLs (HTTP fallbacks)
+        try:
+            self._cog_base = os.getenv("COGNITIVE_BASE_URL", COG)
+        except Exception:
+            self._cog_base = os.getenv("COGNITIVE_BASE_URL", "http://127.0.0.1:8000/cognitive")
         
         # ASGI app integration
         self._app = app
@@ -150,6 +161,16 @@ class StateService:
                 self.agent_aggregator = AgentStateAggregator(organism_handle, cache_ttl=5.0)
                 self.memory_aggregator = MemoryManagerAggregator(organism_handle, cache_ttl=5.0)
                 self.system_aggregator = SystemStateAggregator(organism_handle, cache_ttl=5.0)
+
+                # Try to attach CognitiveService (Serve) as an optional provider for E_patterns
+                try:
+                    self.cognitive_service = serve.get_deployment_handle(
+                        "CognitiveService", app_name="cognitive"
+                    )
+                    logger.info("✅ StateService connected to CognitiveService via Serve handle (app: cognitive)")
+                except Exception as e:
+                    self.cognitive_service = None
+                    logger.warning(f"⚠️ CognitiveService handle not available: {e} (will use HTTP fallback {self._cog_base})")
                 
                 self._initialized = True
                 logger.info("✅ StateService connected to organism manager")
@@ -183,6 +204,7 @@ class StateService:
                 await self._lazy_init()
             
             organism_connected = False
+            cognitive_connected = False
             if self.organism_manager:
                 try:
                     # Try to get organism status to verify connection
@@ -190,12 +212,16 @@ class StateService:
                     organism_connected = True
                 except Exception:
                     organism_connected = False
-            
+
+            # Probe cognitive availability (best-effort)
+            cognitive_connected = await self._probe_cognitive()
+
             return HealthResponse(
-                status="healthy" if self._initialized and organism_connected else "unhealthy",
+                status="healthy" if self._initialized and (organism_connected or cognitive_connected) else "unhealthy",
                 service="state-service",
                 initialized=self._initialized,
-                organism_connected=organism_connected
+                organism_connected=organism_connected,
+                cognitive_connected=cognitive_connected
             )
         except Exception as e:
             return HealthResponse(
@@ -203,6 +229,7 @@ class StateService:
                 service="state-service",
                 initialized=self._initialized,
                 organism_connected=False,
+                cognitive_connected=False,
                 error=str(e)
             )
     
@@ -357,6 +384,34 @@ class StateService:
     
     # --- Specialized State Collection Methods ---
     
+    async def _probe_cognitive(self) -> bool:
+        """Best-effort probe of CognitiveService (Serve handle → HTTP)."""
+        # Try Serve handle call first (expects a 'status' or 'health' callable, if exposed)
+        if self.cognitive_service is not None:
+            try:
+                if hasattr(self.cognitive_service, "health"):
+                    resp = await self.cognitive_service.health.remote()
+                    status = None
+                    if isinstance(resp, dict):
+                        status = resp.get("status")
+                    elif hasattr(resp, "model_dump"):
+                        status = resp.model_dump().get("status")
+                    elif hasattr(resp, "dict"):
+                        status = resp.dict().get("status")
+                    else:
+                        status = getattr(resp, "status", None)
+                    if str(status).lower() == "healthy":
+                        return True
+            except Exception:
+                pass
+        # Fallback to HTTP
+        try:
+            with urllib.request.urlopen(f"{self._cog_base}/health", timeout=1.5) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            return str(data.get("status", "")).lower() == "healthy"
+        except Exception:
+            return False
+
     async def _get_agent_snapshots(self, agent_ids: List[str]) -> Dict[str, AgentSnapshot]:
         """Collect agent state from Ray actors."""
         if not self.agent_aggregator:
@@ -452,11 +507,81 @@ class StateService:
             return {}
     
     async def _get_system_state(self) -> SystemState:
-        """Collect system-level state including E_patterns and h_hgnn."""
-        if not self.system_aggregator:
-            # Guarantee default non-empty E_patterns so downstream services have signal
-            return SystemState(E_patterns=np.ones(4, dtype=np.float32))
-        return await self.system_aggregator.collect_system_state()
+        """Collect system-level state including E_patterns and h_hgnn.
+        Uses aggregator first, then CognitiveService fallback, then defaults.
+        """
+        # 1) Try primary aggregator
+        agg_state: Optional[SystemState] = None
+        if self.system_aggregator:
+            try:
+                agg_state = await self.system_aggregator.collect_system_state()
+            except Exception as e:
+                logger.debug(f"system_aggregator failed, will try cognitive fallback: {e}")
+                agg_state = None
+
+        # 2) If E_patterns missing/empty, try CognitiveService probe (handle → HTTP)
+        patterns: Optional[np.ndarray] = None
+        if agg_state is None or getattr(agg_state, "E_patterns", None) is None \
+           or (isinstance(getattr(agg_state, "E_patterns", None), np.ndarray) and getattr(agg_state, "E_patterns").size == 0):
+            patterns = await self._fetch_cognitive_patterns()
+        else:
+            # Respect aggregator value
+            try:
+                ep = np.asarray(getattr(agg_state, "E_patterns"), dtype=np.float32)
+                if ep.size == 0:
+                    patterns = await self._fetch_cognitive_patterns()
+                else:
+                    patterns = ep
+            except Exception:
+                patterns = await self._fetch_cognitive_patterns()
+
+        # 3) Always provide a non-empty vector as last resort
+        if patterns is None or getattr(patterns, "size", 0) == 0:
+            patterns = np.ones(4, dtype=np.float32)
+
+        # Preserve h_hgnn/w_mode if available from aggregator
+        h_hgnn = getattr(agg_state, "h_hgnn", None) if agg_state else None
+        w_mode = getattr(agg_state, "w_mode", None) if agg_state else None
+        return SystemState(h_hgnn=h_hgnn, E_patterns=patterns, w_mode=w_mode)
+
+    async def _fetch_cognitive_patterns(self) -> Optional[np.ndarray]:
+        """Try to retrieve E_patterns from CognitiveService with multiple strategies.
+        Returns None if not available.
+        """
+        # A) Serve handle with methods that may return patterns/metrics
+        if self.cognitive_service is not None:
+            for method in ("get_patterns", "metrics", "status"):
+                try:
+                    if hasattr(self.cognitive_service, method):
+                        resp = await getattr(self.cognitive_service, method).remote()
+                        vec = self._extract_patterns_from_obj(resp)
+                        if vec is not None and getattr(vec, "size", 0) > 0:
+                            return vec
+                except Exception:
+                    pass
+        # B) HTTP fallbacks: /patterns, /metrics, /status
+        for path in ("/patterns", "/metrics", "/status"):
+            try:
+                with urllib.request.urlopen(f"{self._cog_base}{path}", timeout=1.5) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                vec = self._extract_patterns_from_obj(data)
+                if vec is not None and getattr(vec, "size", 0) > 0:
+                    return vec
+            except Exception:
+                continue
+        return None
+
+    def _extract_patterns_from_obj(self, obj: Any) -> Optional[np.ndarray]:
+        """Heuristically pull a numeric vector out of common payloads."""
+        try:
+            if isinstance(obj, dict):
+                for key in ("E_patterns", "patterns", "pattern_vec", "embedding"):
+                    if key in obj:
+                        arr = np.asarray(obj[key], dtype=np.float32)
+                        return arr.reshape(-1) if arr.ndim > 1 else arr
+        except Exception:
+            pass
+        return None
     
     async def _get_memory_stats(self) -> MemoryVector:
         """Collect memory manager statistics from all memory tiers."""

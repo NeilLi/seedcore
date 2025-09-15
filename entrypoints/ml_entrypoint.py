@@ -79,10 +79,11 @@ def main():
     """Main entrypoint for running the ML service directly."""
     logger.info("🚀 Starting ML Service...")
     try:
-        # Initialize Ray connection
-        if not ray.is_initialized():
-            ray.init(address=RAY_ADDR, namespace=RAY_NS)
-        
+        # Initialize Ray connection using shared utility (idempotent)
+        if not ensure_ray_initialized(ray_address=RAY_ADDR, ray_namespace=RAY_NS):
+            logger.error("❌ Failed to initialize Ray connection")
+            sys.exit(1)
+
         # Deploy the ML service
         serve.run(
             build_ml_service(),
