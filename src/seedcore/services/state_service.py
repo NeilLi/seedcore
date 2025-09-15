@@ -128,15 +128,15 @@ class StateService:
                 return
                 
             try:
-                # Get the organism manager from Ray - try multiple namespaces
+                # Get the organism manager from Ray Serve - try different app names
                 organism_handle = None
-                for namespace in ["seedcore-dev", "serve", "default"]:
+                for app_name in ["organism", "coordinator"]:
                     try:
-                        organism_handle = ray.get_actor("OrganismManager", namespace=namespace)
-                        logger.info(f"✅ StateService connected to organism manager in namespace: {namespace}")
+                        organism_handle = serve.get_deployment_handle("OrganismManager", app_name=app_name)
+                        logger.info(f"✅ StateService connected to organism manager with app_name: {app_name}")
                         break
                     except Exception as e:
-                        logger.debug(f"Failed to connect to organism manager in namespace {namespace}: {e}")
+                        logger.debug(f"Failed to connect to organism manager with app_name {app_name}: {e}")
                         continue
                 
                 if organism_handle is None:
@@ -178,6 +178,10 @@ class StateService:
     async def health(self):
         """Health check endpoint."""
         try:
+            # Trigger lazy initialization if not already done
+            if not self._initialized:
+                await self._lazy_init()
+            
             organism_connected = False
             if self.organism_manager:
                 try:

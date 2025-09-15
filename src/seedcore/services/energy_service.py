@@ -217,21 +217,17 @@ class EnergyService:
                 return
                 
             try:
-                # Get the state service from Ray - try multiple namespaces
-                state_handle = None
-                for namespace in ["seedcore-dev", "serve", "default"]:
-                    try:
-                        state_handle = ray.get_actor("StateService", namespace=namespace)
-                        logger.info(f"✅ EnergyService connected to state service in namespace: {namespace}")
-                        break
-                    except Exception as e:
-                        logger.debug(f"Failed to connect to state service in namespace {namespace}: {e}")
-                        continue
-                
-                if state_handle is None:
-                    logger.warning("⚠️ State service not available - EnergyService will work with direct state input only")
-                else:
+                # Get the state service from Ray Serve - use direct app name from config
+                import os
+                state_app_name = os.getenv("STATE_APP_NAME", "state")
+                try:
+                    state_handle = serve.get_deployment_handle("StateService", app_name=state_app_name)
+                    logger.info(f"✅ EnergyService connected to state service with app_name: {state_app_name}")
                     self.state_service = state_handle
+                except Exception as e:
+                    logger.warning(f"⚠️ State service not available with app_name {state_app_name}: {e}")
+                    logger.warning("⚠️ EnergyService will work with direct state input only")
+                    self.state_service = None
                 
                 self._initialized = True
                 logger.info("✅ EnergyService initialized")
@@ -334,20 +330,62 @@ class EnergyService:
                 memory=MemoryVectorPayload(ma={}, mw={}, mlt={}, mfb={})
             )
     
+    # --- Helper methods for robust state service probing ---
+    
+    async def _probe_state_via_handle(self) -> bool:
+        """Probe state service via Ray Serve handle with robust result normalization."""
+        if not self.state_service:
+            return False
+        try:
+            # Call the health endpoint via handle
+            resp = await self.state_service.health.remote()
+            # Normalize possible return types: dict, BaseModel, dataclass, obj
+            if isinstance(resp, dict):
+                status = resp.get("status")
+            elif hasattr(resp, "model_dump"):          # pydantic v2
+                status = resp.model_dump().get("status")
+            elif hasattr(resp, "dict"):                 # pydantic v1
+                status = resp.dict().get("status")
+            else:
+                status = getattr(resp, "status", None)  # dataclass/attr object
+            return str(status).lower() == "healthy"
+        except Exception as e:
+            logger.debug(f"_probe_state_via_handle failed: {e}")
+            return False
+
+    async def _probe_state_via_http(self) -> bool:
+        """Fallback HTTP probe to state service health endpoint."""
+        import os
+        import json
+        import urllib.request
+        base = os.getenv("STATE_BASE_URL", "http://127.0.0.1:8000/state")
+        url = f"{base}/health"
+        try:
+            with urllib.request.urlopen(url, timeout=2.0) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            status = str(data.get("status", "")).lower()
+            return status == "healthy"
+        except Exception as e:
+            logger.debug(f"_probe_state_via_http failed: {e}")
+            return False
+
     # --- Health and Status Endpoints ---
     
     @app.get("/health", response_model=HealthResponse)
     async def health(self):
-        """Health check endpoint."""
+        """Health check endpoint with robust state service probing."""
         try:
-            state_service_connected = False
-            if self.state_service:
-                try:
-                    # Try to get state service health
-                    health_response = await self.state_service.health.remote()
-                    state_service_connected = health_response.get("status") == "healthy"
-                except Exception:
-                    state_service_connected = False
+            # Trigger lazy initialization if not already done
+            if not self._initialized:
+                await self._lazy_init()
+
+            # Try handle first, then HTTP fallback
+            state_service_connected = await self._probe_state_via_handle()
+            if not state_service_connected:
+                logger.info("🔄 Handle probe failed, trying HTTP fallback...")
+                state_service_connected = await self._probe_state_via_http()
+            
+            logger.info(f"✅ State service connected: {state_service_connected}")
             
             return HealthResponse(
                 status="healthy" if self._initialized and state_service_connected else "unhealthy",
@@ -356,6 +394,7 @@ class EnergyService:
                 state_service_connected=state_service_connected
             )
         except Exception as e:
+            logger.error(f"❌ Health check failed: {e}")
             return HealthResponse(
                 status="unhealthy",
                 service="energy-service",
