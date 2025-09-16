@@ -2,12 +2,32 @@
 from __future__ import annotations
 import torch
 import torch.nn as nn
-import dgl
-import dgl.nn as dglnn
 from typing import Dict, Tuple, Optional
+
+# DGL will be imported when needed to avoid import errors during testing
+DGL_AVAILABLE = None
+dgl = None
+dglnn = None
+
+def _ensure_dgl():
+    """Ensure DGL is available, import if needed."""
+    global DGL_AVAILABLE, dgl, dglnn
+    if DGL_AVAILABLE is None:
+        try:
+            import dgl
+            import dgl.nn as dglnn
+            DGL_AVAILABLE = True
+        except (ImportError, FileNotFoundError):
+            DGL_AVAILABLE = False
+            dgl = None
+            dglnn = None
+    return DGL_AVAILABLE
 
 class SAGE(nn.Module):
     def __init__(self, in_feats: int, h_feats: int = 128, layers: int = 2):
+        if not _ensure_dgl():
+            raise ImportError("DGL is not available. Please install DGL to use this class.")
+        
         super().__init__()
         self.convs = nn.ModuleList()
         self.convs.append(dglnn.SAGEConv(in_feats, h_feats, aggregator_type="mean"))

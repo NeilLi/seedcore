@@ -52,7 +52,7 @@ def print_status(status: str, message: str):
     color = color_map.get(status, Colors.END)
     print(f"{color}{status}:{Colors.END} {message}")
 
-def test_endpoint(method: str, endpoint: str, data: Optional[Dict[str, Any]] = None, expected_status: int = 200) -> bool:
+def _test_endpoint(method: str, endpoint: str, data: Optional[Dict[str, Any]] = None, expected_status: int = 200) -> bool:
     """Test a single endpoint and return success status."""
     url = f"{BASE_URL}{ROUTE_PREFIX}{endpoint}"
     
@@ -100,22 +100,14 @@ def test_health_endpoints():
     """Test health and root endpoints."""
     print(f"\n{Colors.BOLD}🔍 Testing Health Endpoints{Colors.END}")
     
-    success_count = 0
-    total_count = 3  # Updated to include /info endpoint
-    
     # Test health endpoint
-    if test_endpoint("GET", "/health"):
-        success_count += 1
+    assert _test_endpoint("GET", "/health"), "Health endpoint should be accessible"
     
     # Test root endpoint
-    if test_endpoint("GET", "/"):
-        success_count += 1
+    assert _test_endpoint("GET", "/"), "Root endpoint should be accessible"
     
     # Test info endpoint
-    if test_endpoint("GET", "/info"):
-        success_count += 1
-    
-    return success_count, total_count
+    assert _test_endpoint("GET", "/info"), "Info endpoint should be accessible"
 
 def test_cognitive_endpoints():
     """Test all cognitive reasoning endpoints."""
@@ -147,34 +139,21 @@ def test_cognitive_endpoints():
         ("POST", "/assess-capabilities", {"agent_id": test_data["agent_id"], "performance_data": test_data["performance_data"], "current_capabilities": test_data["current_capabilities"], "target_capabilities": test_data["target_capabilities"]})
     ]
     
-    success_count = 0
-    total_count = len(endpoints)
-    
     for method, endpoint, data in endpoints:
-        if test_endpoint(method, endpoint, data):
-            success_count += 1
-    
-    return success_count, total_count
+        assert _test_endpoint(method, endpoint, data), f"Endpoint {method} {endpoint} should be accessible"
 
 def test_error_handling():
     """Test error handling with invalid requests."""
     print(f"\n{Colors.BOLD}⚠️  Testing Error Handling{Colors.END}")
     
-    success_count = 0
-    total_count = 2
-    
     # Test with missing required fields
     invalid_data = {"incident_context": {}} # This is correct, agent_id is missing
     
     # Test with invalid data
-    if test_endpoint("POST", "/reason-about-failure", invalid_data, expected_status=422):
-        success_count += 1
+    assert _test_endpoint("POST", "/reason-about-failure", invalid_data, expected_status=422), "Should return 422 for missing required fields"
     
     # Test with completely invalid data
-    if test_endpoint("POST", "/plan-task", {}, expected_status=422):
-        success_count += 1
-    
-    return success_count, total_count
+    assert _test_endpoint("POST", "/plan-task", {}, expected_status=422), "Should return 422 for empty data"
 
 def test_service_info():
     """Display service information and configuration."""
@@ -283,41 +262,15 @@ def main():
         
         return
     
-    total_success = 0
-    total_tests = 0
-    
     # Run all tests
-    success, count = test_health_endpoints()
-    total_success += success
-    total_tests += count
-    
-    success, count = test_cognitive_endpoints()
-    total_success += success
-    total_tests += count
-    
-    success, count = test_error_handling()
-    total_success += success
-    total_tests += count
+    test_health_endpoints()
+    test_cognitive_endpoints()
+    test_error_handling()
     
     # Display service information
     test_service_info()
     
-    # Summary
-    print(f"\n{Colors.BOLD}📊 Test Summary{Colors.END}")
-    print(f"Tests Passed: {total_success}/{total_tests}")
-    success_rate = (total_success / total_tests * 100) if total_tests > 0 else 0
-    
-    if success_rate >= 90:
-        print_status("OK", f"Success Rate: {success_rate:.1f}% - Excellent!")
-    elif success_rate >= 70:
-        print_status("WARN", f"Success Rate: {success_rate:.1f}% - Good, but some issues")
-    else:
-        print_status("ERROR", f"Success Rate: {success_rate:.1f}% - Multiple issues detected")
-    
-    if total_success == total_tests:
-        print(f"\n{Colors.GREEN}🎉 All tests passed! Cognitive service is working correctly.{Colors.END}")
-    else:
-        print(f"\n{Colors.YELLOW}⚠️  Some tests failed. Check the output above for details.{Colors.END}")
+    print(f"\n{Colors.GREEN}🎉 All tests passed! Cognitive service is working correctly.{Colors.END}")
 
 if __name__ == "__main__":
     main()

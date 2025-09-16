@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 import logging
 
 try:  # Optional dependency - repository may not exist in all deployments
-    from .graph_task_repository import GraphTaskRepository  # type: ignore
+    from ..graph.graph_task_repository import GraphTaskRepository  # type: ignore
 except ImportError:  # pragma: no cover - keep coordinator resilient when module missing
     GraphTaskRepository = None  # type: ignore
 
@@ -23,7 +23,6 @@ import json
 
 
 from seedcore.logging_setup import ensure_serve_logger
-from .graph_task_repository import GraphTaskRepository
 
 logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
 
@@ -64,6 +63,13 @@ TUNE_CONFIG_TYPE = os.getenv("TUNE_CONFIG_TYPE", "fast")
 TUNE_EXPERIMENT_PREFIX = os.getenv("TUNE_EXPERIMENT_PREFIX", "coordinator-tune")
 
 # ---------- Small helpers ----------
+import inspect
+
+async def _maybe_call(func, *a, **kw):
+    """Helper to safely call either sync or async functions."""
+    r = func(*a, **kw)
+    return await r if inspect.isawaitable(r) else r
+
 def _corr_headers(target: str, cid: str) -> Dict[str, str]:
     return {
         "Content-Type": "application/json",
@@ -301,6 +307,7 @@ class Coordinator:
 
         self.graph_repository = None  # Lazily instantiated GraphTaskRepository
         self._graph_repo_checked = False
+        self.graph_task_repo = self._get_graph_repository()  # Consistent attribute name
 
         
         # Initialize safe storage (Redis with in-memory fallback)
@@ -400,15 +407,21 @@ class Coordinator:
                 ]
             }
             
-            # First, check if ML service is healthy
+            # First, check if ML service is healthy with circuit-breaker metrics
             try:
                 health_response = await self.ml_client.get("/health")
                 if health_response.get("status") != "healthy":
                     logger.warning(f"⚠️ ML service health check failed: {health_response}")
+                    # Record circuit-breaker metrics for failed health check
+                    self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "health_check_failed")
                     return
                 logger.info("✅ ML service health check passed")
+                # Record circuit-breaker metrics for successful health check
+                self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "health_check_success")
             except Exception as e:
                 logger.warning(f"⚠️ ML service health check failed: {e}, skipping warmup")
+                # Record circuit-breaker metrics for health check exception
+                self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "health_check_exception")
                 return
             
             logger.info(f"🔄 Calling ML service warmup at {self.ml_client.base_url}/drift/warmup")
@@ -434,11 +447,17 @@ class Coordinator:
             if response.get("status") == "success":
                 warmup_time = response.get("warmup_time_ms", 0.0)
                 logger.info(f"✅ Drift detector warmup completed in {warmup_time:.2f}ms (after {total_delay:.2f}s delay)")
+                # Record circuit-breaker metrics for successful warmup
+                self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "warmup_success")
             else:
                 logger.warning(f"⚠️ Drift detector warmup failed: {response.get('error', 'Unknown error')}")
+                # Record circuit-breaker metrics for failed warmup
+                self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "warmup_failed")
                 
         except Exception as e:
             logger.warning(f"⚠️ Drift detector warmup failed: {e}", exc_info=True)
+            # Record circuit-breaker metrics for warmup exception
+            self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "warmup_exception")
             # Don't fail startup if warmup fails - drift detection will use fallback
             logger.info("ℹ️ Drift detection will use fallback mode until ML service is available")
 
@@ -794,7 +813,7 @@ class Coordinator:
             logger.warning(f"Plan validation failed: invalid format or too many steps ({len(plan) if isinstance(plan, list) else 'not a list'})")
             return None
 
-        for step in plan:
+        for idx, step in enumerate(plan):
             if not isinstance(step, dict):
                 logger.warning(f"Plan validation failed: step is not a dict: {step}")
                 return None
@@ -802,6 +821,18 @@ class Coordinator:
             if "organ_id" not in step or "task" not in step:
                 logger.warning(f"Plan validation failed: step missing required fields: {step}")
                 return None
+            
+            # Ensure stable IDs exist in plan for reliable edge creation
+            if "id" not in step and "step_id" not in step:
+                step["id"] = f"step_{idx}_{uuid.uuid4().hex[:8]}"
+                step["step_id"] = step["id"]
+            
+            # Ensure task has stable ID
+            if isinstance(step.get("task"), dict):
+                task_data = step["task"]
+                if "id" not in task_data and "task_id" not in task_data:
+                    task_data["id"] = f"subtask_{idx}_{uuid.uuid4().hex[:8]}"
+                    task_data["task_id"] = task_data["id"]
 
         return plan
 
@@ -826,7 +857,7 @@ class Coordinator:
 
         return self.graph_repository
 
-    def _persist_plan_subtasks(
+    async def _persist_plan_subtasks(
         self,
         task: Task,
         plan: List[Dict[str, Any]],
@@ -846,7 +877,7 @@ class Coordinator:
             return []
 
         try:
-            inserted = repo.insert_subtasks(task.id, plan)
+            inserted = await _maybe_call(repo.insert_subtasks, task.id, plan)
         except Exception as exc:
             logger.warning(
                 "[Coordinator] insert_subtasks failed for task %s: %s",
@@ -863,7 +894,7 @@ class Coordinator:
                     if child_value is None:
                         continue
                     try:
-                        repo.add_dependency(root_db_id, child_value)
+                        await _maybe_call(repo.add_dependency, root_db_id, child_value)
                     except Exception as exc:
                         logger.error(
                             f"[Coordinator] Failed to add root dependency {root_db_id} -> {child_value}: {exc}"
@@ -876,7 +907,7 @@ class Coordinator:
                 )
 
         try:
-            self._register_task_dependencies(plan, inserted)
+            await self._register_task_dependencies(plan, inserted)
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error(
                 "[Coordinator] Failed to register task dependencies for %s: %s",
@@ -886,7 +917,7 @@ class Coordinator:
 
         return inserted
 
-    def _register_task_dependencies(self, plan: List[Dict[str, Any]], inserted_subtasks: Any) -> None:
+    async def _register_task_dependencies(self, plan: List[Dict[str, Any]], inserted_subtasks: Any) -> None:
         """Record dependency edges (parent → child) for inserted subtasks."""
         repo = self._get_graph_repository()
         if repo is None or not hasattr(repo, "add_dependency"):
@@ -994,7 +1025,7 @@ class Coordinator:
                     continue
 
                 try:
-                    repo.add_dependency(parent_value, child_value)
+                    await _maybe_call(repo.add_dependency, parent_value, child_value)
                 except Exception as exc:  # pragma: no cover - repository errors should not crash coordinator
                     logger.error(
                         f"[Coordinator] Failed to add dependency {parent_key} -> {child_key}: {exc}"
@@ -1199,9 +1230,24 @@ class Coordinator:
         organ_timeout = params.get("organ_timeout_s", 30.0)
         try:
             organ_timeout = float(organ_timeout)
+            # Clamp organ_timeout to reasonable bounds (1s to 300s)
+            organ_timeout = max(1.0, min(300.0, organ_timeout))
         except (TypeError, ValueError):
             organ_timeout = 30.0
 
+        # Inject computed drift_score and energy budgets before persisting
+        task_dict["drift_score"] = await self._compute_drift_score(task_dict)
+        
+        # Ensure params has token/energy settings if present in predicates
+        if "params" not in task_dict:
+            task_dict["params"] = {}
+        
+        # Add energy budget information if available
+        if hasattr(self, 'predicate_router') and self.predicate_router:
+            energy_budget = getattr(self.predicate_router, 'get_energy_budget', lambda: None)()
+            if energy_budget is not None:
+                task_dict["params"]["energy_budget"] = energy_budget
+        
         try:
             await self.graph_task_repo.create_task(task_dict, agent_id=agent_id, organ_id=organ_id)
         except Exception as e:
@@ -1245,6 +1291,19 @@ class Coordinator:
             if isinstance(getattr(task, "params", None), dict):
                 root_agent_id = task.params.get("agent_id")
 
+            # Inject computed drift_score and energy budgets for root task
+            root_task_dict["drift_score"] = await self._compute_drift_score(root_task_dict)
+            
+            # Ensure params has token/energy settings if present in predicates
+            if "params" not in root_task_dict:
+                root_task_dict["params"] = {}
+            
+            # Add energy budget information if available
+            if hasattr(self, 'predicate_router') and self.predicate_router:
+                energy_budget = getattr(self.predicate_router, 'get_energy_budget', lambda: None)()
+                if energy_budget is not None:
+                    root_task_dict["params"]["energy_budget"] = energy_budget
+
             root_db_id: Optional[uuid.UUID] = None
             repo = self._get_graph_repository()
             if repo is not None and hasattr(repo, "create_task"):
@@ -1266,7 +1325,7 @@ class Coordinator:
                 )
 
             try:
-                self._persist_plan_subtasks(task, plan, root_db_id=root_db_id)
+                await self._persist_plan_subtasks(task, plan, root_db_id=root_db_id)
             except Exception as persist_exc:
                 logger.warning(
                     "[Coordinator] Failed to persist HGNN subtasks for task %s: %s",
@@ -1289,6 +1348,19 @@ class Coordinator:
                 step["task"] = subtask_dict
 
                 sub_agent_id = self._extract_agent_id(subtask_dict) or root_agent_id
+
+                # Inject computed drift_score and energy budgets for subtask
+                subtask_dict["drift_score"] = await self._compute_drift_score(subtask_dict)
+                
+                # Ensure params has token/energy settings if present in predicates
+                if "params" not in subtask_dict:
+                    subtask_dict["params"] = {}
+                
+                # Add energy budget information if available
+                if hasattr(self, 'predicate_router') and self.predicate_router:
+                    energy_budget = getattr(self.predicate_router, 'get_energy_budget', lambda: None)()
+                    if energy_budget is not None:
+                        subtask_dict["params"]["energy_budget"] = energy_budget
 
                 try:
                     child_db_id = await self.graph_task_repo.create_task(

@@ -3,8 +3,25 @@ from __future__ import annotations
 import os, math, time
 from typing import Dict, List, Tuple, Any, Optional
 from neo4j import GraphDatabase
-import dgl
-import torch
+
+# DGL will be imported when needed to avoid import errors during testing
+DGL_AVAILABLE = None
+dgl = None
+torch = None
+
+def _ensure_dgl():
+    """Ensure DGL is available, import if needed."""
+    global DGL_AVAILABLE, dgl, torch
+    if DGL_AVAILABLE is None:
+        try:
+            import dgl
+            import torch
+            DGL_AVAILABLE = True
+        except (ImportError, FileNotFoundError):
+            DGL_AVAILABLE = False
+            dgl = None
+            torch = None
+    return DGL_AVAILABLE
 
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
@@ -77,6 +94,9 @@ class GraphLoader:
           x_dict:             {ntype: features tensor}
           edge_weight_dict:   {canonical_etype: tensor of edge weights (e.g., time decay)}
         """
+        if not _ensure_dgl():
+            raise ImportError("DGL is not available. Please install DGL to use this function.")
+        
         now = time.time()
         with self.driver.session() as s:
             # 1) gather nodes within k hops
