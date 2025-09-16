@@ -4,9 +4,16 @@
 
 -- First, check if we need to fix anything
 DO $$
+DECLARE
+    enum_exists BOOLEAN;
+    has_uppercase_values BOOLEAN;
+    uppercase_count INTEGER;
 BEGIN
-    -- If the enum doesn't exist, create it with correct lowercase values
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'taskstatus') THEN
+    -- Check if the enum exists
+    SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'taskstatus') INTO enum_exists;
+    
+    IF NOT enum_exists THEN
+        -- Create the enum with correct lowercase values
         CREATE TYPE taskstatus AS ENUM (
             'created',
             'queued', 
@@ -24,21 +31,32 @@ BEGIN
             RAISE NOTICE 'Added retry to taskstatus enum';
         END IF;
         
-        -- Ensure any existing uppercase values are converted to lowercase
-        UPDATE tasks 
-        SET status = CASE 
-            WHEN status = 'CREATED' THEN 'created'
-            WHEN status = 'QUEUED' THEN 'queued'
-            WHEN status = 'RUNNING' THEN 'running'
-            WHEN status = 'COMPLETED' THEN 'completed'
-            WHEN status = 'FAILED' THEN 'failed'
-            WHEN status = 'CANCELLED' THEN 'cancelled'
-            WHEN status = 'RETRY' THEN 'retry'
-            ELSE status  -- keep existing lowercase values
-        END
-        WHERE status IN ('CREATED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED', 'RETRY');
+        -- Check if there are any uppercase values in the tasks table (cast to text for comparison)
+        SELECT EXISTS (
+            SELECT 1 FROM tasks 
+            WHERE status::text IN ('CREATED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED', 'RETRY')
+        ) INTO has_uppercase_values;
         
-        RAISE NOTICE 'Updated existing task status values to lowercase';
+        IF has_uppercase_values THEN
+            -- Convert any existing uppercase values to lowercase (cast to text for comparison)
+            UPDATE tasks 
+            SET status = CASE 
+                WHEN status::text = 'CREATED' THEN 'created'::taskstatus
+                WHEN status::text = 'QUEUED' THEN 'queued'::taskstatus
+                WHEN status::text = 'RUNNING' THEN 'running'::taskstatus
+                WHEN status::text = 'COMPLETED' THEN 'completed'::taskstatus
+                WHEN status::text = 'FAILED' THEN 'failed'::taskstatus
+                WHEN status::text = 'CANCELLED' THEN 'cancelled'::taskstatus
+                WHEN status::text = 'RETRY' THEN 'retry'::taskstatus
+                ELSE status  -- keep existing lowercase values
+            END
+            WHERE status::text IN ('CREATED', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED', 'RETRY');
+            
+            GET DIAGNOSTICS uppercase_count = ROW_COUNT;
+            RAISE NOTICE 'Updated % task status values from uppercase to lowercase', uppercase_count;
+        ELSE
+            RAISE NOTICE 'No uppercase task status values found - enum is already consistent';
+        END IF;
     END IF;
 END$$;
 

@@ -1,16 +1,24 @@
 -- Migration: Create tasks table for Coordinator + Dispatcher system
 -- This table stores tasks that will be processed by the Dispatcher actors
 
--- Create the taskstatus enum type
-CREATE TYPE taskstatus AS ENUM (
-    'created',
-    'queued', 
-    'running',
-    'completed',
-    'failed',
-    'cancelled',
-    'retry'
-);
+-- Create the taskstatus enum type (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'taskstatus') THEN
+        CREATE TYPE taskstatus AS ENUM (
+            'created',
+            'queued', 
+            'running',
+            'completed',
+            'failed',
+            'cancelled',
+            'retry'
+        );
+        RAISE NOTICE 'Created taskstatus enum type';
+    ELSE
+        RAISE NOTICE 'taskstatus enum type already exists, skipping creation';
+    END IF;
+END$$;
 
 -- Create tasks table
 CREATE TABLE IF NOT EXISTS tasks (
