@@ -52,3 +52,5 @@ INSERT INTO facts (text, tags, meta_data) VALUES
     ('PostgreSQL provides excellent JSON support', ARRAY['database', 'json'], '{"source": "technical", "verified": true}'),
     ('FastAPI offers modern Python web development', ARRAY['framework', 'python'], '{"source": "development", "rating": 5}')
 ON CONFLICT (id) DO NOTHING;
+
+
