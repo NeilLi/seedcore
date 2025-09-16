@@ -1,12 +1,17 @@
 # coordinator_service.py
 import os, time, uuid, httpx, asyncio
 from fastapi import FastAPI, HTTPException
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Iterable, Set, Tuple
 from urllib.parse import urlparse
 from pathlib import Path
 from ray import serve
 from pydantic import BaseModel, Field
 import logging
+
+try:  # Optional dependency - repository may not exist in all deployments
+    from .graph_task_repository import GraphTaskRepository  # type: ignore
+except ImportError:  # pragma: no cover - keep coordinator resilient when module missing
+    GraphTaskRepository = None  # type: ignore
 
 # Import predicate system
 from ..predicates import PredicateRouter, load_predicates, load_predicates_async, get_metrics
@@ -293,7 +298,10 @@ class Coordinator:
         self.ocps = OCPSValve()
         self.routing = RoutingDirectory()
         self.metrics = MetricsTracker()
-        self.graph_task_repo = GraphTaskRepository()
+
+        self.graph_repository = None  # Lazily instantiated GraphTaskRepository
+        self._graph_repo_checked = False
+
         
         # Initialize safe storage (Redis with in-memory fallback)
         try:
@@ -785,17 +793,392 @@ class Coordinator:
         if not isinstance(plan, list) or len(plan) > self.max_plan_steps:
             logger.warning(f"Plan validation failed: invalid format or too many steps ({len(plan) if isinstance(plan, list) else 'not a list'})")
             return None
-            
+
         for step in plan:
             if not isinstance(step, dict):
                 logger.warning(f"Plan validation failed: step is not a dict: {step}")
                 return None
-                
+
             if "organ_id" not in step or "task" not in step:
                 logger.warning(f"Plan validation failed: step missing required fields: {step}")
                 return None
-                
+
         return plan
+
+    def _get_graph_repository(self):
+        """Return a lazily-instantiated GraphTaskRepository if available."""
+        if self.graph_repository is not None or self._graph_repo_checked:
+            return self.graph_repository
+
+        self._graph_repo_checked = True
+
+        if GraphTaskRepository is None:
+            return None
+
+        try:
+            self.graph_repository = GraphTaskRepository()
+        except TypeError as exc:
+            logger.debug(f"GraphTaskRepository instantiation failed (signature mismatch): {exc}")
+            self.graph_repository = None
+        except Exception as exc:  # pragma: no cover - defensive logging for unexpected errors
+            logger.warning(f"GraphTaskRepository initialization failed: {exc}")
+            self.graph_repository = None
+
+        return self.graph_repository
+
+    def _persist_plan_subtasks(
+        self,
+        task: Task,
+        plan: List[Dict[str, Any]],
+        *,
+        root_db_id: Optional[uuid.UUID] = None,
+    ):
+        """Insert subtasks for the HGNN plan and register dependency edges."""
+        if not plan:
+            return []
+
+        repo = self._get_graph_repository()
+        if repo is None:
+            return []
+
+        if not hasattr(repo, "insert_subtasks"):
+            logger.debug("GraphTaskRepository missing insert_subtasks; skipping subtask persistence")
+            return []
+
+        try:
+            inserted = repo.insert_subtasks(task.id, plan)
+        except Exception as exc:
+            logger.warning(
+                "[Coordinator] insert_subtasks failed for task %s: %s",
+                getattr(task, "id", "unknown"),
+                exc,
+            )
+            return []
+
+        if root_db_id is not None and hasattr(repo, "add_dependency"):
+            try:
+                for idx, record in enumerate(inserted or []):
+                    fallback_step = plan[idx] if idx < len(plan) else None
+                    child_value = self._resolve_child_task_id(record, fallback_step)
+                    if child_value is None:
+                        continue
+                    try:
+                        repo.add_dependency(root_db_id, child_value)
+                    except Exception as exc:
+                        logger.error(
+                            f"[Coordinator] Failed to add root dependency {root_db_id} -> {child_value}: {exc}"
+                        )
+            except Exception as exc:
+                logger.error(
+                    "[Coordinator] Failed to register root dependency edges for %s: %s",
+                    getattr(task, "id", "unknown"),
+                    exc,
+                )
+
+        try:
+            self._register_task_dependencies(plan, inserted)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error(
+                "[Coordinator] Failed to register task dependencies for %s: %s",
+                getattr(task, "id", "unknown"),
+                exc,
+            )
+
+        return inserted
+
+    def _register_task_dependencies(self, plan: List[Dict[str, Any]], inserted_subtasks: Any) -> None:
+        """Record dependency edges (parent → child) for inserted subtasks."""
+        repo = self._get_graph_repository()
+        if repo is None or not hasattr(repo, "add_dependency"):
+            return
+
+        plan_steps = list(plan or [])
+        inserted = list(inserted_subtasks or [])
+
+        if not plan_steps or not inserted:
+            return
+
+        alias_to_child: Dict[str, Any] = {}
+        index_to_child: Dict[int, Any] = {}
+        known_child_keys: Set[str] = set()
+
+        for idx, record in enumerate(inserted):
+            fallback_step = plan_steps[idx] if idx < len(plan_steps) else None
+            child_value = self._resolve_child_task_id(record, fallback_step)
+            if child_value is None:
+                continue
+
+            child_key = self._canonicalize_identifier(child_value)
+            if not child_key:
+                continue
+
+            index_to_child[idx] = child_value
+            known_child_keys.add(child_key)
+            alias_to_child[child_key] = child_value
+
+            for alias in self._collect_record_aliases(record):
+                alias_to_child[alias] = child_value
+
+            if fallback_step is not None:
+                for alias in self._collect_step_aliases(fallback_step):
+                    alias_to_child[alias] = child_value
+
+        if not index_to_child:
+            logger.debug("No subtask identifiers resolved; skipping dependency registration")
+            return
+
+        invalid_refs: Set[str] = set()
+        edges_added: Set[Tuple[str, str]] = set()
+
+        for idx, step in enumerate(plan_steps):
+            dependencies = step.get("depends_on") if isinstance(step, dict) else getattr(step, "depends_on", None)
+            if not dependencies:
+                continue
+
+            child_value = index_to_child.get(idx)
+            if child_value is None:
+                for alias in self._collect_step_aliases(step):
+                    child_value = alias_to_child.get(alias)
+                    if child_value is not None:
+                        break
+
+            if child_value is None:
+                logger.warning(f"[Coordinator] Skipping dependency recording for step {idx}: missing child task ID")
+                continue
+
+            child_key = self._canonicalize_identifier(child_value)
+
+            for dep_entry in self._iter_dependency_entries(dependencies):
+                dep_token = self._extract_dependency_token(dep_entry)
+                if dep_token is None:
+                    dep_repr = repr(dep_entry)
+                    if dep_repr not in invalid_refs:
+                        logger.warning(f"[Coordinator] Ignoring invalid dependency reference {dep_repr} for child {child_key}")
+                        invalid_refs.add(dep_repr)
+                    continue
+
+                parent_value = None
+                if isinstance(dep_token, int):
+                    parent_value = index_to_child.get(dep_token)
+                else:
+                    parent_key = self._canonicalize_identifier(dep_token)
+                    parent_value = alias_to_child.get(parent_key)
+                    if parent_value is None and parent_key.isdigit():
+                        parent_value = index_to_child.get(int(parent_key))
+
+                if parent_value is None:
+                    dep_key = self._canonicalize_identifier(dep_token)
+                    if dep_key not in invalid_refs:
+                        logger.warning(
+                            f"[Coordinator] Dependency reference {dep_entry!r} for child {child_key} does not match any known subtask"
+                        )
+                        invalid_refs.add(dep_key)
+                    continue
+
+                parent_key = self._canonicalize_identifier(parent_value)
+
+                if parent_key not in known_child_keys:
+                    if parent_key not in invalid_refs:
+                        logger.warning(
+                            f"[Coordinator] Dependency parent {parent_key} for child {child_key} is unknown; skipping"
+                        )
+                        invalid_refs.add(parent_key)
+                    continue
+
+                if parent_key == child_key:
+                    logger.warning(f"[Coordinator] Skipping self-dependency for task {child_key}")
+                    continue
+
+                edge_key = (parent_key, child_key)
+                if edge_key in edges_added:
+                    continue
+
+                try:
+                    repo.add_dependency(parent_value, child_value)
+                except Exception as exc:  # pragma: no cover - repository errors should not crash coordinator
+                    logger.error(
+                        f"[Coordinator] Failed to add dependency {parent_key} -> {child_key}: {exc}"
+                    )
+                else:
+                    edges_added.add(edge_key)
+
+    def _iter_dependency_entries(self, dependencies: Any) -> Iterable[Any]:
+        if dependencies is None:
+            return []
+
+        if isinstance(dependencies, (list, tuple, set)):
+            for item in dependencies:
+                if isinstance(item, (list, tuple, set)):
+                    for nested in self._iter_dependency_entries(item):
+                        yield nested
+                else:
+                    yield item
+        else:
+            yield dependencies
+
+    def _resolve_child_task_id(self, record: Any, fallback_step: Any) -> Any:
+        """Extract the task identifier for a persisted subtask."""
+        if record is not None:
+            if isinstance(record, dict):
+                for key in ("task_id", "id", "child_task_id", "subtask_id"):
+                    if key in record:
+                        token = self._extract_dependency_token(record[key])
+                        if token is not None:
+                            return token
+                if "task" in record:
+                    token = self._extract_dependency_token(record["task"])
+                    if token is not None:
+                        return token
+            else:
+                for attr in ("task_id", "id", "child_task_id", "subtask_id"):
+                    if hasattr(record, attr):
+                        token = self._extract_dependency_token(getattr(record, attr))
+                        if token is not None:
+                            return token
+                if hasattr(record, "task"):
+                    token = self._extract_dependency_token(getattr(record, "task"))
+                    if token is not None:
+                        return token
+
+        if fallback_step is not None:
+            if isinstance(fallback_step, dict):
+                for key in ("task_id", "id", "step_id"):
+                    if key in fallback_step:
+                        token = self._extract_dependency_token(fallback_step[key])
+                        if token is not None:
+                            return token
+                if "task" in fallback_step:
+                    token = self._extract_dependency_token(fallback_step["task"])
+                    if token is not None:
+                        return token
+            else:
+                for attr in ("task_id", "id", "step_id"):
+                    if hasattr(fallback_step, attr):
+                        token = self._extract_dependency_token(getattr(fallback_step, attr))
+                        if token is not None:
+                            return token
+                if hasattr(fallback_step, "task"):
+                    token = self._extract_dependency_token(getattr(fallback_step, "task"))
+                    if token is not None:
+                        return token
+
+        return None
+
+    def _collect_record_aliases(self, record: Any) -> Set[str]:
+        aliases: Set[str] = set()
+
+        if isinstance(record, dict):
+            aliases.update(self._collect_aliases_from_mapping(record))
+            maybe_task = record.get("task")
+            if isinstance(maybe_task, dict):
+                aliases.update(self._collect_aliases_from_mapping(maybe_task))
+            maybe_meta = record.get("metadata")
+            if isinstance(maybe_meta, dict):
+                aliases.update(self._collect_aliases_from_mapping(maybe_meta))
+        else:
+            aliases.update(self._collect_aliases_from_object(record))
+
+        return aliases
+
+    def _collect_step_aliases(self, step: Any) -> Set[str]:
+        aliases: Set[str] = set()
+
+        if isinstance(step, dict):
+            aliases.update(self._collect_aliases_from_mapping(step))
+            maybe_task = step.get("task")
+            if isinstance(maybe_task, dict):
+                aliases.update(self._collect_aliases_from_mapping(maybe_task))
+            maybe_meta = step.get("metadata")
+            if isinstance(maybe_meta, dict):
+                aliases.update(self._collect_aliases_from_mapping(maybe_meta))
+        else:
+            aliases.update(self._collect_aliases_from_object(step))
+
+        return aliases
+
+    def _collect_aliases_from_mapping(self, mapping: Dict[str, Any]) -> Set[str]:
+        aliases: Set[str] = set()
+        alias_keys = {"task_id", "id", "step_id", "original_task_id", "child_task_id", "source_task_id", "parent_task_id"}
+
+        for key in alias_keys:
+            if key in mapping:
+                token = self._extract_dependency_token(mapping[key])
+                if token is not None:
+                    aliases.add(self._canonicalize_identifier(token))
+
+        for value in mapping.values():
+            if isinstance(value, dict):
+                aliases.update(self._collect_aliases_from_mapping(value))
+
+        return aliases
+
+    def _collect_aliases_from_object(self, obj: Any) -> Set[str]:
+        aliases: Set[str] = set()
+        alias_keys = ("task_id", "id", "step_id", "original_task_id", "child_task_id", "source_task_id", "parent_task_id")
+
+        for key in alias_keys:
+            if hasattr(obj, key):
+                token = self._extract_dependency_token(getattr(obj, key))
+                if token is not None:
+                    aliases.add(self._canonicalize_identifier(token))
+
+        for attr in ("task", "metadata"):
+            if hasattr(obj, attr):
+                value = getattr(obj, attr)
+                if isinstance(value, dict):
+                    aliases.update(self._collect_aliases_from_mapping(value))
+
+        return aliases
+
+    def _extract_dependency_token(self, ref: Any) -> Any:
+        if ref is None:
+            return None
+
+        if isinstance(ref, (list, tuple, set)):
+            for item in ref:
+                token = self._extract_dependency_token(item)
+                if token is not None:
+                    return token
+            return None
+
+        if isinstance(ref, dict):
+            for key in ("task_id", "id", "parent_task_id", "source_task_id", "step_id", "child_task_id", "task"):
+                if key in ref:
+                    token = self._extract_dependency_token(ref[key])
+                    if token is not None:
+                        return token
+            return None
+
+        for attr in ("task_id", "id", "parent_task_id", "source_task_id", "step_id", "child_task_id"):
+            if hasattr(ref, attr):
+                token = self._extract_dependency_token(getattr(ref, attr))
+                if token is not None:
+                    return token
+
+        if isinstance(ref, float) and ref.is_integer():
+            return int(ref)
+
+        return ref
+
+    def _canonicalize_identifier(self, value: Any) -> str:
+        if value is None:
+            return ""
+
+        if isinstance(value, uuid.UUID):
+            return str(value)
+
+        if isinstance(value, bool):
+            return "1" if value else "0"
+
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if isinstance(value, float):
+                if value.is_integer():
+                    value = int(value)
+                else:
+                    return str(value)
+            return str(value)
+
+        return str(value)
 
     def _make_escalation_result(self, results: List[Dict[str, Any]], plan: List[Dict[str, Any]], success: bool) -> Dict[str, Any]:
         """Create a properly formatted escalation result."""
@@ -857,17 +1240,40 @@ class Coordinator:
                 self.metrics.track_metrics("hgnn_fallback", rr.get("success", False), latency_ms)
                 return {"success": rr.get("success", False), "result": rr, "path": "hgnn_fallback"}
 
+            root_task_dict = self._convert_task_to_dict(task)
+            root_agent_id = None
+            if isinstance(getattr(task, "params", None), dict):
+                root_agent_id = task.params.get("agent_id")
+
             root_db_id: Optional[uuid.UUID] = None
+            repo = self._get_graph_repository()
+            if repo is not None and hasattr(repo, "create_task"):
+                try:
+                    root_db_id = await repo.create_task(
+                        root_task_dict,
+                        agent_id=root_agent_id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[Coordinator] Failed to persist root HGNN task %s: %s",
+                        root_task_dict.get("id"),
+                        e,
+                    )
+                    root_db_id = None
+            else:
+                logger.debug(
+                    "[Coordinator] graph_task_repo not configured; skipping root task persistence"
+                )
+
             try:
-                root_db_id = await self.graph_task_repo.create_task(
-                    root_task_dict,
-                    agent_id=root_agent_id,
-                )
-            except Exception as e:
+                self._persist_plan_subtasks(task, plan, root_db_id=root_db_id)
+            except Exception as persist_exc:
                 logger.warning(
-                    f"[Coordinator] Failed to persist root HGNN task {root_task_dict.get('id')}: {e}"
+                    "[Coordinator] Failed to persist HGNN subtasks for task %s: %s",
+                    getattr(task, "id", "unknown"),
+                    persist_exc,
                 )
-                root_db_id = None
+
 
             # Execute steps sequentially
             results = []
