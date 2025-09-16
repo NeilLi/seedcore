@@ -1,7 +1,7 @@
 # coordinator_service.py
 import os, time, uuid, httpx, asyncio
 from fastapi import FastAPI, HTTPException
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urlparse
 from pathlib import Path
 from ray import serve
@@ -18,6 +18,7 @@ import json
 
 
 from seedcore.logging_setup import ensure_serve_logger
+from .graph_task_repository import GraphTaskRepository
 
 logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
 
@@ -292,6 +293,7 @@ class Coordinator:
         self.ocps = OCPSValve()
         self.routing = RoutingDirectory()
         self.metrics = MetricsTracker()
+        self.graph_task_repo = GraphTaskRepository()
         
         # Initialize safe storage (Redis with in-memory fallback)
         try:
@@ -641,6 +643,51 @@ class Coordinator:
         else:
             return data
 
+    def _normalize_task_dict(self, task_like: Any) -> Tuple[uuid.UUID, Dict[str, Any]]:
+        task_dict = self._convert_task_to_dict(task_like) or {}
+        raw_id = task_dict.get("id") or task_dict.get("task_id")
+        try:
+            task_uuid = uuid.UUID(str(raw_id)) if raw_id else uuid.uuid4()
+        except (ValueError, TypeError):
+            task_uuid = uuid.uuid4()
+        task_id_str = str(task_uuid)
+        task_dict["id"] = task_id_str
+        self._sync_task_identity(task_like, task_id_str)
+        return task_uuid, task_dict
+
+    def _sync_task_identity(self, task_like: Any, task_id: str) -> None:
+        if isinstance(task_like, dict):
+            task_like["id"] = task_id
+            return
+        for attr in ("id", "task_id"):
+            if hasattr(task_like, attr):
+                try:
+                    setattr(task_like, attr, task_id)
+                except Exception:
+                    continue
+
+    def _extract_agent_id(self, task_dict: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(task_dict, dict):
+            return None
+        candidate = task_dict.get("agent_id") or task_dict.get("agent")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+        params = task_dict.get("params")
+        if isinstance(params, dict):
+            for key in ("agent_id", "agent", "owner_agent_id"):
+                value = params.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+        metadata = task_dict.get("metadata")
+        if isinstance(metadata, dict):
+            for key in ("agent_id", "agent"):
+                value = metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
+
     def prefetch_context(self, task: Dict[str, Any]) -> None:
         """Hook for Mw/Mlt prefetch as per §8.6 Unified RAG Operations. No-op until memory wired."""
         pass
@@ -762,10 +809,27 @@ class Coordinator:
         }
 
     async def _execute_fast(self, task: Task, organ_id: str, cid: str) -> Dict[str, Any]:
+        _, task_dict = self._normalize_task_dict(task)
+        agent_id = self._extract_agent_id(task_dict)
+
+        params = task_dict.get("params") if isinstance(task_dict.get("params"), dict) else {}
+        organ_timeout = params.get("organ_timeout_s", 30.0)
+        try:
+            organ_timeout = float(organ_timeout)
+        except (TypeError, ValueError):
+            organ_timeout = 30.0
+
+        try:
+            await self.graph_task_repo.create_task(task_dict, agent_id=agent_id, organ_id=organ_id)
+        except Exception as e:
+            logger.warning(
+                f"[Coordinator] Failed to persist fast path task {task_dict.get('id')}: {e}"
+            )
+
         payload = {
             "organ_id": organ_id,
-            "task": task.model_dump(),
-            "organ_timeout_s": float(task.params.get("organ_timeout_s", 30.0))
+            "task": task_dict,
+            "organ_timeout_s": organ_timeout,
         }
         return await _apost(
             self.http, f"{ORG}/execute-on-organ", payload,
@@ -778,26 +842,63 @@ class Coordinator:
         Falls back to round-robin if Cognitive fails.
         """
         start_time = time.time()
-        
+        _, root_task_dict = self._normalize_task_dict(task)
+        root_agent_id = self._extract_agent_id(root_task_dict)
+
         try:
             # Get decomposition plan
             plan = await self._hgnn_decompose(task)
-            
+
             if not plan:
                 # Fallback to random organ execution
                 rr = await _apost(self.http, f"{ORG}/execute-on-random",
-                                  {"task": task.model_dump()}, _corr_headers("organism", cid), timeout=ORG_TIMEOUT)
+                                  {"task": root_task_dict}, _corr_headers("organism", cid), timeout=ORG_TIMEOUT)
                 latency_ms = (time.time() - start_time) * 1000
                 self.metrics.track_metrics("hgnn_fallback", rr.get("success", False), latency_ms)
                 return {"success": rr.get("success", False), "result": rr, "path": "hgnn_fallback"}
 
+            root_db_id: Optional[uuid.UUID] = None
+            try:
+                root_db_id = await self.graph_task_repo.create_task(
+                    root_task_dict,
+                    agent_id=root_agent_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[Coordinator] Failed to persist root HGNN task {root_task_dict.get('id')}: {e}"
+                )
+                root_db_id = None
+
             # Execute steps sequentially
             results = []
-            for step in plan:
+            for idx, step in enumerate(plan):
                 organ_id = step.get("organ_id")
-                subtask = step.get("task", task.model_dump())
+                raw_subtask = step.get("task")
+                if isinstance(raw_subtask, dict):
+                    subtask_payload = raw_subtask
+                else:
+                    subtask_payload = dict(self._convert_task_to_dict(task))
+
+                _, subtask_dict = self._normalize_task_dict(subtask_payload)
+                step["task"] = subtask_dict
+
+                sub_agent_id = self._extract_agent_id(subtask_dict) or root_agent_id
+
+                try:
+                    child_db_id = await self.graph_task_repo.create_task(
+                        subtask_dict,
+                        agent_id=sub_agent_id,
+                        organ_id=organ_id,
+                    )
+                    if root_db_id:
+                        await self.graph_task_repo.add_dependency(root_db_id, child_db_id)
+                except Exception as e:
+                    logger.warning(
+                        f"[Coordinator] Failed to persist HGNN subtask {subtask_dict.get('id')} (step {idx + 1}): {e}"
+                    )
+
                 r = await _apost(self.http, f"{ORG}/execute-on-organ",
-                                 {"organ_id": organ_id, "task": subtask},
+                                 {"organ_id": organ_id, "task": subtask_dict},
                                  _corr_headers("organism", cid), timeout=ORG_TIMEOUT)
                 results.append({"organ_id": organ_id, **r})
             
