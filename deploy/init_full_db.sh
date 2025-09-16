@@ -15,18 +15,19 @@ MIGRATION_002="${SCRIPT_DIR}/migrations/002_graph_embeddings.sql"
 MIGRATION_003="${SCRIPT_DIR}/migrations/003_graph_task_types.sql"
 MIGRATION_004="${SCRIPT_DIR}/migrations/004_fix_taskstatus_enum.sql"
 MIGRATION_005="${SCRIPT_DIR}/migrations/005_consolidate_task_schema.sql"
-MIGRATION_006="${SCRIPT_DIR}/migrations/002_create_facts_table.sql"
-MIGRATION_007="${SCRIPT_DIR}/migrations/006_add_task_lease_columns.sql"
+MIGRATION_006="${SCRIPT_DIR}/migrations/006_add_task_lease_columns.sql"
+MIGRATION_007="${SCRIPT_DIR}/migrations/007_hgnn_graph_schema.sql"
 # HGNN base graph schema (task layer)
-MIGRATION_008="${SCRIPT_DIR}/migrations/007_hgnn_graph_schema.sql"
+MIGRATION_008="${SCRIPT_DIR}/migrations/008_hgnn_agent_layer.sql"
 # NEW: HGNN agent/organ layer extensions
-MIGRATION_009="${SCRIPT_DIR}/migrations/008_hgnn_agent_layer.sql"
+MIGRATION_009="${SCRIPT_DIR}/migrations/009_create_facts_table.sql"
+MIGRATION_010="${SCRIPT_DIR}/migrations/010_task_fact_integration.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" \
   "$MIGRATION_005" "$MIGRATION_006" "$MIGRATION_007" "$MIGRATION_008" \
-  "$MIGRATION_009"
+  "$MIGRATION_009" "$MIGRATION_010"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -43,9 +44,10 @@ echo "   - 003: $MIGRATION_003"
 echo "   - 004: $MIGRATION_004"
 echo "   - 005: $MIGRATION_005 (NEW: Consolidated task schema)"
 echo "   - 006: $MIGRATION_006"
-echo "   - 007: $MIGRATION_007 (NEW: Task lease columns for stale recovery)"
-echo "   - 008: $MIGRATION_008 (HGNN base graph schema)"
-echo "   - 009: $MIGRATION_009 (NEW: HGNN agent/organ layer + relations)"
+echo "   - 007: $MIGRATION_007 (HGNN base graph schema)"
+echo "   - 008: $MIGRATION_008 (NEW: HGNN agent/organ layer + relations)"
+echo "   - 009: $MIGRATION_009 (Create facts table)"
+echo "   - 010: $MIGRATION_010 (NEW: Task-Fact integration + view update)"
 
 find_pg_pod() {
   local sel pod
@@ -140,24 +142,29 @@ kubectl -n "$NAMESPACE" cp "$MIGRATION_005" "$POSTGRES_POD:/tmp/005_consolidate_
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/005_consolidate_task_schema.sql"
 
 # Migration 006
-echo "⚙️  Running migration 006: Create facts table..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_006" "$POSTGRES_POD:/tmp/006_create_facts_table.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/006_create_facts_table.sql"
+echo "⚙️  Running migration 006: Add task lease columns for stale task recovery..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_006" "$POSTGRES_POD:/tmp/006_add_task_lease_columns.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/006_add_task_lease_columns.sql"
 
 # Migration 007
-echo "⚙️  Running migration 007: Add task lease columns for stale task recovery..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_007" "$POSTGRES_POD:/tmp/007_add_task_lease_columns.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/007_add_task_lease_columns.sql"
+echo "⚙️  Running migration 007: HGNN base graph schema..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_007" "$POSTGRES_POD:/tmp/007_hgnn_graph_schema.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/007_hgnn_graph_schema.sql"
 
 # Migration 008
-echo "⚙️  Running migration 008: HGNN base graph schema..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_008" "$POSTGRES_POD:/tmp/008_hgnn_graph_schema.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/008_hgnn_graph_schema.sql"
+echo "⚙️  Running migration 008: HGNN agent/organ layer + relations..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_008" "$POSTGRES_POD:/tmp/008_hgnn_agent_layer.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/008_hgnn_agent_layer.sql"
 
 # Migration 009 (NEW)
-echo "⚙️  Running migration 009: HGNN agent/organ layer + relations..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_009" "$POSTGRES_POD:/tmp/009_hgnn_agent_layer.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/009_hgnn_agent_layer.sql"
+echo "⚙️  Running migration 009: Create facts table..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_009" "$POSTGRES_POD:/tmp/009_create_facts_table.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/009_create_facts_table.sql"
+
+# Migration 010 (NEW)
+echo "⚙️  Running migration 010: Task-Fact integration + view update..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_010" "$POSTGRES_POD:/tmp/010_task_fact_integration.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/010_task_fact_integration.sql"
 
 # 6) Verify schema
 echo "✅ Verifying schema..."
@@ -193,7 +200,7 @@ echo "📊 HGNN task-layer resource tables:"
 for tbl in artifact capability memory_cell \
            task_depends_on_task task_produces_artifact task_uses_capability \
            task_reads_memory task_writes_memory task_executed_by_organ task_owned_by_agent \
-           organ_provides_capability agent_owns_memory_cell
+           organ_provides_capability agent_owns_memory_cell task_reads_fact task_produces_fact
 do
   kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
     psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ $tbl" || true
@@ -204,7 +211,7 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_embeddings"
 
 echo "📊 Key HGNN functions:"
-for fn in ensure_task_node ensure_agent_node ensure_organ_node backfill_task_nodes \
+for fn in ensure_task_node ensure_agent_node ensure_organ_node ensure_fact_node backfill_task_nodes \
           create_graph_embed_task_v2 create_graph_rag_task_v2
 do
   kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
