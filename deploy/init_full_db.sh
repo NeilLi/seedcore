@@ -17,13 +17,16 @@ MIGRATION_004="${SCRIPT_DIR}/migrations/004_fix_taskstatus_enum.sql"
 MIGRATION_005="${SCRIPT_DIR}/migrations/005_consolidate_task_schema.sql"
 MIGRATION_006="${SCRIPT_DIR}/migrations/002_create_facts_table.sql"
 MIGRATION_007="${SCRIPT_DIR}/migrations/006_add_task_lease_columns.sql"
-# NEW: comprehensive two-layer HGNN schema (task layer + agent/organ layer)
+# HGNN base graph schema (task layer)
 MIGRATION_008="${SCRIPT_DIR}/migrations/007_hgnn_graph_schema.sql"
+# NEW: HGNN agent/organ layer extensions
+MIGRATION_009="${SCRIPT_DIR}/migrations/008_hgnn_agent_layer.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" \
-  "$MIGRATION_005" "$MIGRATION_006" "$MIGRATION_007" "$MIGRATION_008"
+  "$MIGRATION_005" "$MIGRATION_006" "$MIGRATION_007" "$MIGRATION_008" \
+  "$MIGRATION_009"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -41,7 +44,8 @@ echo "   - 004: $MIGRATION_004"
 echo "   - 005: $MIGRATION_005 (NEW: Consolidated task schema)"
 echo "   - 006: $MIGRATION_006"
 echo "   - 007: $MIGRATION_007 (NEW: Task lease columns for stale recovery)"
-echo "   - 008: $MIGRATION_008 (NEW: HGNN two-layer graph schema + cross-layer edges)"
+echo "   - 008: $MIGRATION_008 (HGNN base graph schema)"
+echo "   - 009: $MIGRATION_009 (NEW: HGNN agent/organ layer + relations)"
 
 find_pg_pod() {
   local sel pod
@@ -145,10 +149,15 @@ echo "⚙️  Running migration 007: Add task lease columns for stale task recov
 kubectl -n "$NAMESPACE" cp "$MIGRATION_007" "$POSTGRES_POD:/tmp/007_add_task_lease_columns.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/007_add_task_lease_columns.sql"
 
-# Migration 008 (NEW)
-echo "⚙️  Running migration 008: HGNN two-layer graph schema + cross-layer edges..."
+# Migration 008
+echo "⚙️  Running migration 008: HGNN base graph schema..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_008" "$POSTGRES_POD:/tmp/008_hgnn_graph_schema.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/008_hgnn_graph_schema.sql"
+
+# Migration 009 (NEW)
+echo "⚙️  Running migration 009: HGNN agent/organ layer + relations..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_009" "$POSTGRES_POD:/tmp/009_hgnn_agent_layer.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/009_hgnn_agent_layer.sql"
 
 # 6) Verify schema
 echo "✅ Verifying schema..."
