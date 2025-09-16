@@ -778,7 +778,13 @@ class Coordinator:
 
         return self.graph_repository
 
-    def _persist_plan_subtasks(self, task: Task, plan: List[Dict[str, Any]]):
+    def _persist_plan_subtasks(
+        self,
+        task: Task,
+        plan: List[Dict[str, Any]],
+        *,
+        root_db_id: Optional[uuid.UUID] = None,
+    ):
         """Insert subtasks for the HGNN plan and register dependency edges."""
         if not plan:
             return []
@@ -800,6 +806,26 @@ class Coordinator:
                 exc,
             )
             return []
+
+        if root_db_id is not None and hasattr(repo, "add_dependency"):
+            try:
+                for idx, record in enumerate(inserted or []):
+                    fallback_step = plan[idx] if idx < len(plan) else None
+                    child_value = self._resolve_child_task_id(record, fallback_step)
+                    if child_value is None:
+                        continue
+                    try:
+                        repo.add_dependency(root_db_id, child_value)
+                    except Exception as exc:
+                        logger.error(
+                            f"[Coordinator] Failed to add root dependency {root_db_id} -> {child_value}: {exc}"
+                        )
+            except Exception as exc:
+                logger.error(
+                    "[Coordinator] Failed to register root dependency edges for %s: %s",
+                    getattr(task, "id", "unknown"),
+                    exc,
+                )
 
         try:
             self._register_task_dependencies(plan, inserted)
@@ -1147,9 +1173,33 @@ class Coordinator:
                 self.metrics.track_metrics("hgnn_fallback", rr.get("success", False), latency_ms)
                 return {"success": rr.get("success", False), "result": rr, "path": "hgnn_fallback"}
 
-            # Persist HGNN subtasks and dependency edges when the repository is available
+            root_task_dict = self._convert_task_to_dict(task)
+            root_agent_id = None
+            if isinstance(getattr(task, "params", None), dict):
+                root_agent_id = task.params.get("agent_id")
+
+            root_db_id: Optional[uuid.UUID] = None
+            repo = self._get_graph_repository()
+            if repo is not None and hasattr(repo, "create_task"):
+                try:
+                    root_db_id = await repo.create_task(
+                        root_task_dict,
+                        agent_id=root_agent_id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[Coordinator] Failed to persist root HGNN task %s: %s",
+                        root_task_dict.get("id"),
+                        e,
+                    )
+                    root_db_id = None
+            else:
+                logger.debug(
+                    "[Coordinator] graph_task_repo not configured; skipping root task persistence"
+                )
+
             try:
-                self._persist_plan_subtasks(task, plan)
+                self._persist_plan_subtasks(task, plan, root_db_id=root_db_id)
             except Exception as persist_exc:
                 logger.warning(
                     "[Coordinator] Failed to persist HGNN subtasks for task %s: %s",
