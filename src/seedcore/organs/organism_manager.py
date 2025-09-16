@@ -534,6 +534,14 @@ class OrganismManager:
             return {'E': 0.7, 'S': 0.2, 'O': 0.1}  # action
         elif organ_type == "Utility":
             return {'E': 0.2, 'S': 0.3, 'O': 0.5}  # observation
+        elif organ_type == "Graph":
+            return {'E': 0.4, 'S': 0.4, 'O': 0.2}  # graph processing
+        elif organ_type == "Fact":
+            return {'E': 0.3, 'S': 0.5, 'O': 0.2}  # fact management
+        elif organ_type == "Resource":
+            return {'E': 0.5, 'S': 0.3, 'O': 0.2}  # resource management
+        elif organ_type == "AgentLayer":
+            return {'E': 0.4, 'S': 0.4, 'O': 0.2}  # agent layer management
         else:
             return {'E': 0.33, 'S': 0.33, 'O': 0.34}  # balanced
 
@@ -598,6 +606,32 @@ class OrganismManager:
         """Execute a task on a randomly selected organ."""
         if not self.organs:
             raise RuntimeError("No organs available")
+        
+        # Enhanced routing based on task type (Migration 007+)
+        ttype = task.get("type", "").lower()
+        
+        # Route graph tasks to graph dispatcher if available
+        if ttype in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2", 
+                     "graph_sync_nodes", "graph_fact_embed", "graph_fact_query"):
+            if "graph_dispatcher" in self.organs:
+                return await self.execute_task_on_organ("graph_dispatcher", task)
+        
+        # Route fact operations to utility organ if available
+        if ttype in ("fact_search", "fact_store"):
+            if "utility_organ_1" in self.organs:
+                return await self.execute_task_on_organ("utility_organ_1", task)
+        
+        # Route resource management to utility organ if available
+        if ttype in ("artifact_manage", "capability_manage", "memory_cell_manage"):
+            if "utility_organ_1" in self.organs:
+                return await self.execute_task_on_organ("utility_organ_1", task)
+        
+        # Route agent layer management to utility organ if available
+        if ttype in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
+            if "utility_organ_1" in self.organs:
+                return await self.execute_task_on_organ("utility_organ_1", task)
+        
+        # Fallback to random selection
         organ_id = random.choice(list(self.organs.keys()))
         return await self.execute_task_on_organ(organ_id, task)
 
@@ -624,6 +658,45 @@ class OrganismManager:
         if not ttype:
             logger.error(f"[OrganismManager] ❌ Task {task_id} missing required type field")
             return {"success": False, "error": "task.type is required"}
+
+        # Enhanced parameter validation for new node types (Migration 007+)
+        params = task.get("params", {})
+        if ttype in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2", "graph_sync_nodes"):
+            # Validate graph task parameters
+            required_params = ["start_node_ids", "k"]
+            for param in required_params:
+                if param not in params:
+                    logger.warning(f"[OrganismManager] ⚠️ Graph task {task_id} missing parameter: {param}")
+            
+            # Log new node type parameters if present
+            new_node_params = ["start_fact_ids", "start_artifact_ids", "start_capability_ids", 
+                             "start_memory_cell_ids", "start_model_ids", "start_policy_ids", 
+                             "start_service_ids", "start_skill_ids"]
+            for param in new_node_params:
+                if param in params and params[param]:
+                    logger.info(f"[OrganismManager] 📋 Graph task {task_id} includes {param}: {len(params[param])} items")
+        
+        elif ttype in ("graph_fact_embed", "graph_fact_query"):
+            # Validate fact task parameters
+            if "start_fact_ids" not in params:
+                logger.warning(f"[OrganismManager] ⚠️ Fact task {task_id} missing start_fact_ids parameter")
+        
+        elif ttype in ("fact_search", "fact_store"):
+            # Validate fact operation parameters
+            if ttype == "fact_search" and "query" not in params:
+                logger.warning(f"[OrganismManager] ⚠️ Fact search task {task_id} missing query parameter")
+            elif ttype == "fact_store" and "text" not in params:
+                logger.warning(f"[OrganismManager] ⚠️ Fact store task {task_id} missing text parameter")
+        
+        elif ttype in ("artifact_manage", "capability_manage", "memory_cell_manage"):
+            # Validate resource management parameters
+            if "action" not in params:
+                logger.warning(f"[OrganismManager] ⚠️ Resource management task {task_id} missing action parameter")
+        
+        elif ttype in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
+            # Validate agent layer management parameters
+            if "action" not in params:
+                logger.warning(f"[OrganismManager] ⚠️ Agent layer management task {task_id} missing action parameter")
 
         # 1) Builtins (app_state.builtin_task_handlers)
         logger.info(f"[OrganismManager] 🔍 Checking builtin handlers for '{ttype}'")
@@ -751,6 +824,75 @@ class OrganismManager:
                 return {"success": True, "path": "api_handler", "result": debug_info}
             except Exception as e:
                 return {"success": False, "path": "api_handler", "error": str(e)}
+
+        # Graph task handlers (Migration 007+)
+        elif ttype in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2", "graph_sync_nodes"):
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                # Route graph tasks to graph dispatcher
+                params = task.get("params", {})
+                organ_id = params.get("organ_id", "graph_dispatcher")
+                task_data = params.get("task_data", task)
+                result = await self.execute_task_on_organ(organ_id, task_data)
+                return {"success": True, "path": "graph_handler", "result": result}
+            except Exception as e:
+                return {"success": False, "path": "graph_handler", "error": str(e)}
+
+        # Facts system handlers (Migration 009)
+        elif ttype in ("graph_fact_embed", "graph_fact_query"):
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                # Route fact tasks to graph dispatcher
+                params = task.get("params", {})
+                organ_id = params.get("organ_id", "graph_dispatcher")
+                task_data = params.get("task_data", task)
+                result = await self.execute_task_on_organ(organ_id, task_data)
+                return {"success": True, "path": "fact_handler", "result": result}
+            except Exception as e:
+                return {"success": False, "path": "fact_handler", "error": str(e)}
+
+        elif ttype in ("fact_search", "fact_store"):
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                # Route fact operations to utility organ
+                params = task.get("params", {})
+                organ_id = params.get("organ_id", "utility_organ_1")
+                task_data = params.get("task_data", task)
+                result = await self.execute_task_on_organ(organ_id, task_data)
+                return {"success": True, "path": "fact_handler", "result": result}
+            except Exception as e:
+                return {"success": False, "path": "fact_handler", "error": str(e)}
+
+        # Resource management handlers (Migration 007)
+        elif ttype in ("artifact_manage", "capability_manage", "memory_cell_manage"):
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                # Route resource management to utility organ
+                params = task.get("params", {})
+                organ_id = params.get("organ_id", "utility_organ_1")
+                task_data = params.get("task_data", task)
+                result = await self.execute_task_on_organ(organ_id, task_data)
+                return {"success": True, "path": "resource_handler", "result": result}
+            except Exception as e:
+                return {"success": False, "path": "resource_handler", "error": str(e)}
+
+        # Agent layer management handlers (Migration 008)
+        elif ttype in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
+            try:
+                if not self._initialized:
+                    return {"success": False, "error": "Organism not initialized"}
+                # Route agent layer management to utility organ
+                params = task.get("params", {})
+                organ_id = params.get("organ_id", "utility_organ_1")
+                task_data = params.get("task_data", task)
+                result = await self.execute_task_on_organ(organ_id, task_data)
+                return {"success": True, "path": "agent_layer_handler", "result": result}
+            except Exception as e:
+                return {"success": False, "path": "agent_layer_handler", "error": str(e)}
 
         # No local handler
         return {"success": False, "path": "none", "error": f"No local handler for task.type='{ttype}'"}

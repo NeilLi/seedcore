@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import json
+import logging
 from typing import Dict, List, Tuple, Optional
 
 import torch
@@ -11,6 +12,7 @@ from sqlalchemy import text
 from .loader import GraphLoader
 from .models import SAGE
 
+logger = logging.getLogger(__name__)
 PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))
 
 # ====== Tunables ======
@@ -68,17 +70,27 @@ class GraphEmbedder:
         Compute embeddings for the k-hop neighborhood around the given node_ids.
         Return: {node_id: [float, ..., len=GRAPH_H_FEATS]}
         """
-        g, idx_map, X = self.loader.load_k_hop(start_ids=start_ids, k=k)
-        if g is None or g.num_nodes() == 0:
+        try:
+            result = self.loader.load_k_hop(start_ids=start_ids, k=k)
+            if result is None:
+                logger.warning(f"load_k_hop returned None for start_ids={start_ids}, k={k}")
+                return {}
+            
+            g, idx_map, X = result
+            if g is None or g.num_nodes() == 0:
+                return {}
+
+            with torch.no_grad():
+                Z = self.model(g, X.to(self.device))  # shape: [num_nodes, GRAPH_H_FEATS]
+                Z = Z.to("cpu")
+
+            inv = {v: k for k, v in idx_map.items()}
+            # NOTE: keep Python lists for portability / JSON-ability
+            return {inv[i]: Z[i].tolist() for i in range(Z.shape[0])}
+            
+        except Exception as e:
+            logger.error(f"Error computing embeddings for start_ids={start_ids}, k={k}: {e}")
             return {}
-
-        with torch.no_grad():
-            Z = self.model(g, X.to(self.device))  # shape: [num_nodes, GRAPH_H_FEATS]
-            Z = Z.to("cpu")
-
-        inv = {v: k for k, v in idx_map.items()}
-        # NOTE: keep Python lists for portability / JSON-ability
-        return {inv[i]: Z[i].tolist() for i in range(Z.shape[0])}
 
     def ping(self) -> str:
         return "pong"
@@ -127,18 +139,23 @@ def upsert_embeddings(
     # Build param rows once; we’ll executemany in chunks
     rows = []
     for nid, vec in emb_map.items():
+        # Handle props: if we have props_map and the node is in it, use it; otherwise use empty jsonb
+        props_value = '{}'  # Default to empty JSONB
+        if props_map and nid in props_map:
+            props_value = json.dumps(props_map[nid])
+        
         rows.append({
             "nid": int(nid),
             "vec": json.dumps(vec),  # will cast via ::jsonb::vector in SQL
             "label": (label_map or {}).get(nid),
-            "props": json.dumps((props_map or {}).get(nid)) if (props_map and nid in props_map) else None,
+            "props": props_value,
         })
 
     # SQL with optional label/props; if None, keep existing (COALESCE logic on update)
     # NOTE: we do not set created_at/updated_at here explicitly; trigger updates updated_at.
     sql = text("""
         INSERT INTO graph_embeddings (node_id, emb, label, props)
-        VALUES (:nid, (:vec)::jsonb::vector, :label, COALESCE(:props::jsonb, props))
+        VALUES (:nid, (:vec)::jsonb::vector, :label, (:props)::jsonb)
         ON CONFLICT (node_id) DO UPDATE
             SET emb = EXCLUDED.emb,
                 label = COALESCE(EXCLUDED.label, graph_embeddings.label),

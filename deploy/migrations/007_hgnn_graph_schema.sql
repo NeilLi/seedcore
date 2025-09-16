@@ -342,8 +342,8 @@ CREATE OR REPLACE FUNCTION create_graph_embed_task_v2(
     start_node_ids INTEGER[],
     k_hops INTEGER DEFAULT 2,
     description TEXT DEFAULT NULL,
-    agent_id TEXT DEFAULT NULL,
-    organ_id TEXT DEFAULT NULL
+    p_agent_id TEXT DEFAULT NULL,
+    p_organ_id TEXT DEFAULT NULL
 ) RETURNS UUID AS $$
 DECLARE
     task_id UUID;
@@ -359,20 +359,20 @@ BEGIN
     ) RETURNING id INTO task_id;
 
     -- attach cross-layer edges if provided
-    IF agent_id IS NOT NULL THEN
-        INSERT INTO agent_registry(agent_id) VALUES (agent_id)
+    IF p_agent_id IS NOT NULL THEN
+        INSERT INTO agent_registry(agent_id) VALUES (p_agent_id)
         ON CONFLICT (agent_id) DO NOTHING;
         INSERT INTO task_owned_by_agent(task_id, agent_id)
-        VALUES (task_id, agent_id)
+        VALUES (task_id, p_agent_id)
         ON CONFLICT DO NOTHING;
     END IF;
 
-    IF organ_id IS NOT NULL THEN
+    IF p_organ_id IS NOT NULL THEN
         INSERT INTO organ_registry(organ_id, agent_id)
-        VALUES (organ_id, agent_id)  -- agent_id may be NULL
+        VALUES (p_organ_id, p_agent_id)  -- p_agent_id may be NULL
         ON CONFLICT (organ_id) DO NOTHING;
         INSERT INTO task_executed_by_organ(task_id, organ_id)
-        VALUES (task_id, organ_id)
+        VALUES (task_id, p_organ_id)
         ON CONFLICT DO NOTHING;
     END IF;
 
@@ -385,8 +385,8 @@ CREATE OR REPLACE FUNCTION create_graph_rag_task_v2(
     k_hops INTEGER DEFAULT 2,
     top_k INTEGER DEFAULT 10,
     description TEXT DEFAULT NULL,
-    agent_id TEXT DEFAULT NULL,
-    organ_id TEXT DEFAULT NULL
+    p_agent_id TEXT DEFAULT NULL,
+    p_organ_id TEXT DEFAULT NULL
 ) RETURNS UUID AS $$
 DECLARE
     task_id UUID;
@@ -401,20 +401,20 @@ BEGIN
         0.0
     ) RETURNING id INTO task_id;
 
-    IF agent_id IS NOT NULL THEN
-        INSERT INTO agent_registry(agent_id) VALUES (agent_id)
+    IF p_agent_id IS NOT NULL THEN
+        INSERT INTO agent_registry(agent_id) VALUES (p_agent_id)
         ON CONFLICT (agent_id) DO NOTHING;
         INSERT INTO task_owned_by_agent(task_id, agent_id)
-        VALUES (task_id, agent_id)
+        VALUES (task_id, p_agent_id)
         ON CONFLICT DO NOTHING;
     END IF;
 
-    IF organ_id IS NOT NULL THEN
+    IF p_organ_id IS NOT NULL THEN
         INSERT INTO organ_registry(organ_id, agent_id)
-        VALUES (organ_id, agent_id)
+        VALUES (p_organ_id, p_agent_id)
         ON CONFLICT (organ_id) DO NOTHING;
         INSERT INTO task_executed_by_organ(task_id, organ_id)
-        VALUES (task_id, organ_id)
+        VALUES (task_id, p_organ_id)
         ON CONFLICT DO NOTHING;
     END IF;
 

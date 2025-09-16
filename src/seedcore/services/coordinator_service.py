@@ -273,7 +273,8 @@ class Coordinator:
             "ml_service", ML, timeout=float(os.getenv("CB_ML_TIMEOUT_S", "5.0")),
             circuit_breaker=CircuitBreaker(
                 failure_threshold=int(os.getenv("CB_FAIL_THRESHOLD", "5")),
-                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0"))
+                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0")),
+                expected_exception=(httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException)
             ),
             retry_config=RetryConfig(max_attempts=1, base_delay=1.0, max_delay=2.0)
         )
@@ -282,7 +283,8 @@ class Coordinator:
             "cognitive_service", COG, timeout=float(os.getenv("CB_COG_TIMEOUT_S", "8.0")),
             circuit_breaker=CircuitBreaker(
                 failure_threshold=int(os.getenv("CB_FAIL_THRESHOLD", "5")),
-                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0"))
+                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0")),
+                expected_exception=(httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException)
             ),
             retry_config=RetryConfig(max_attempts=1, base_delay=1.0, max_delay=2.0)  # Allow 1 retry for cognitive
         )
@@ -291,7 +293,8 @@ class Coordinator:
             "organism_service", ORG, timeout=float(os.getenv("CB_ORG_TIMEOUT_S", "5.0")),
             circuit_breaker=CircuitBreaker(
                 failure_threshold=int(os.getenv("CB_FAIL_THRESHOLD", "5")),
-                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0"))
+                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0")),
+                expected_exception=(httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException)
             ),
             retry_config=RetryConfig(max_attempts=0, base_delay=0.0)  # No retries for organism
         )
@@ -327,6 +330,30 @@ class Coordinator:
         self.routing.set_rule("general_query", "utility_organ_1")
         self.routing.set_rule("health_check", "utility_organ_1")
         self.routing.set_rule("execute", "actuator_organ_1")
+        
+        # Graph task routing (Migration 007+)
+        self.routing.set_rule("graph_embed", "graph_dispatcher")
+        self.routing.set_rule("graph_rag_query", "graph_dispatcher")
+        self.routing.set_rule("graph_embed_v2", "graph_dispatcher")
+        self.routing.set_rule("graph_rag_query_v2", "graph_dispatcher")
+        self.routing.set_rule("graph_sync_nodes", "graph_dispatcher")
+        
+        # Facts system routing (Migration 009)
+        self.routing.set_rule("graph_fact_embed", "graph_dispatcher")
+        self.routing.set_rule("graph_fact_query", "graph_dispatcher")
+        self.routing.set_rule("fact_search", "utility_organ_1")
+        self.routing.set_rule("fact_store", "utility_organ_1")
+        
+        # Resource management routing (Migration 007)
+        self.routing.set_rule("artifact_manage", "utility_organ_1")
+        self.routing.set_rule("capability_manage", "utility_organ_1")
+        self.routing.set_rule("memory_cell_manage", "utility_organ_1")
+        
+        # Agent layer routing (Migration 008)
+        self.routing.set_rule("model_manage", "utility_organ_1")
+        self.routing.set_rule("policy_manage", "utility_organ_1")
+        self.routing.set_rule("service_manage", "utility_organ_1")
+        self.routing.set_rule("skill_manage", "utility_organ_1")
         
         # Escalation concurrency control
         self.escalation_max_inflight = COGNITIVE_MAX_INFLIGHT
@@ -553,6 +580,19 @@ class Coordinator:
                 self.predicate_router.metrics.record_drift_computation("ml_error", "unknown", processing_time / 1000.0, 0.0)
                 return 0.0
                 
+        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+            processing_time = (time.time() - start_time) * 1000
+            error_msg = str(e) if str(e) else f"{type(e).__name__}"
+            logger.warning(f"[DriftDetector] Task {task_id}: ML service timeout after {processing_time:.2f}ms: {error_msg}, using fallback")
+            
+            # Track timeout metrics
+            self.predicate_router.metrics.record_drift_computation("timeout", "unknown", processing_time / 1000.0, 0.0)
+            
+            # Fallback: use a simple heuristic based on task properties
+            fallback_score = self._fallback_drift_score(task)
+            logger.info(f"[DriftDetector] Task {task_id}: Using fallback score {fallback_score:.4f}")
+            return fallback_score
+            
         except Exception as e:
             processing_time = (time.time() - start_time) * 1000
             error_msg = str(e) if str(e) else f"{type(e).__name__}"
@@ -585,6 +625,14 @@ class Coordinator:
                 score += 0.3  # Anomaly triage tasks are more likely to indicate drift
             elif task_type == "execute":
                 score += 0.1  # Execute tasks have moderate drift potential
+            elif task_type in ("graph_fact_embed", "graph_fact_query"):
+                score += 0.2  # Fact operations have moderate drift potential
+            elif task_type in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2"):
+                score += 0.15  # Graph operations have moderate drift potential
+            elif task_type in ("artifact_manage", "capability_manage", "memory_cell_manage"):
+                score += 0.1  # Resource management has low drift potential
+            elif task_type in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
+                score += 0.05  # Agent layer management has very low drift potential
             
             # Priority influence
             priority = float(task.get("priority", 5))
@@ -739,7 +787,16 @@ class Coordinator:
                 "constraints": {"latency_ms": self.fast_path_latency_slo_ms},
                 "context": {
                     "features": task.features, 
-                    "history_ids": task.history_ids
+                    "history_ids": task.history_ids,
+                    # Add support for new node types (Migration 007+)
+                    "start_fact_ids": getattr(task, 'start_fact_ids', []),
+                    "start_artifact_ids": getattr(task, 'start_artifact_ids', []),
+                    "start_capability_ids": getattr(task, 'start_capability_ids', []),
+                    "start_memory_cell_ids": getattr(task, 'start_memory_cell_ids', []),
+                    "start_model_ids": getattr(task, 'start_model_ids', []),
+                    "start_policy_ids": getattr(task, 'start_policy_ids', []),
+                    "start_service_ids": getattr(task, 'start_service_ids', []),
+                    "start_skill_ids": getattr(task, 'start_skill_ids', []),
                 },
                 "available_organs": [],  # Could be populated from organism status
             }
@@ -802,6 +859,23 @@ class Coordinator:
         organ_id = self.routing.resolve(ttype, task.get("domain"))
         if organ_id:
             return [{"organ_id": organ_id, "task": task}]
+        
+        # Special handling for graph tasks (Migration 007+)
+        if ttype in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2", 
+                     "graph_fact_embed", "graph_fact_query", "graph_sync_nodes"):
+            return [{"organ_id": "graph_dispatcher", "task": task}]
+        
+        # Special handling for fact operations (Migration 009)
+        if ttype in ("fact_search", "fact_store"):
+            return [{"organ_id": "utility_organ_1", "task": task}]
+        
+        # Special handling for resource management (Migration 007)
+        if ttype in ("artifact_manage", "capability_manage", "memory_cell_manage"):
+            return [{"organ_id": "utility_organ_1", "task": task}]
+        
+        # Special handling for agent layer management (Migration 008)
+        if ttype in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
+            return [{"organ_id": "utility_organ_1", "task": task}]
         
         # Fallback: use first available organ (simple round-robin)
         # This would need to be populated from organism status in practice

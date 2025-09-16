@@ -60,6 +60,10 @@ class CircuitBreaker:
             if hasattr(e, '__class__') and 'Timeout' in e.__class__.__name__:
                 logger.warning(f"Timeout error in circuit breaker: {e.__class__.__name__}: {e}")
             raise e
+        except Exception as e:
+            # Log unexpected exceptions but don't count them as circuit breaker failures
+            logger.error(f"Unexpected exception in circuit breaker: {e.__class__.__name__}: {e}")
+            raise e
     
     def _on_success(self):
         """Handle successful call."""

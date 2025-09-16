@@ -97,6 +97,9 @@ class PredicateMetrics:
         self.drift_computation_duration = create_safe_histogram("coord_drift_computation_seconds", "Drift computation duration", buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0])
         self.drift_scores = create_safe_histogram("coord_drift_scores", "Drift scores distribution", buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5, 2.0])
         
+        # Circuit breaker metrics
+        self.circuit_breaker_events = create_safe_counter("coord_circuit_breaker_events_total", "Circuit breaker events", labelnames=["service", "event_type"])
+        
         logger.info("✅ Predicate metrics initialized")
     
     def update_ocps_signals(self, p_fast: float, s_drift: float, escalation_ratio: float):
@@ -212,6 +215,10 @@ class PredicateMetrics:
         self.drift_computations.labels(status=status, drift_mode=drift_mode).inc()
         self.drift_computation_duration.observe(duration_seconds)
         self.drift_scores.observe(drift_score)
+    
+    def record_circuit_breaker_event(self, service: str, event_type: str):
+        """Record circuit breaker events."""
+        self.circuit_breaker_events.labels(service=service, event_type=event_type).inc()
 
 # Global metrics instance
 _metrics = PredicateMetrics()

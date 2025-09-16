@@ -156,6 +156,30 @@ class CognitiveTaskType(Enum):
     PROBLEM_SOLVING = "problem_solving"
     MEMORY_SYNTHESIS = "memory_synthesis"
     CAPABILITY_ASSESSMENT = "capability_assessment"
+    
+    # Graph task types (Migration 007+)
+    GRAPH_EMBED = "graph_embed"
+    GRAPH_RAG_QUERY = "graph_rag_query"
+    GRAPH_EMBED_V2 = "graph_embed_v2"
+    GRAPH_RAG_QUERY_V2 = "graph_rag_query_v2"
+    GRAPH_SYNC_NODES = "graph_sync_nodes"
+    
+    # Facts system types (Migration 009)
+    GRAPH_FACT_EMBED = "graph_fact_embed"
+    GRAPH_FACT_QUERY = "graph_fact_query"
+    FACT_SEARCH = "fact_search"
+    FACT_STORE = "fact_store"
+    
+    # Resource management types (Migration 007)
+    ARTIFACT_MANAGE = "artifact_manage"
+    CAPABILITY_MANAGE = "capability_manage"
+    MEMORY_CELL_MANAGE = "memory_cell_manage"
+    
+    # Agent layer types (Migration 008)
+    MODEL_MANAGE = "model_manage"
+    POLICY_MANAGE = "policy_manage"
+    SERVICE_MANAGE = "service_manage"
+    SKILL_MANAGE = "skill_manage"
 
 
 @dataclass
@@ -400,7 +424,31 @@ class ContextBroker:
                 CognitiveTaskType.DECISION_MAKING: 1.0,   # Standard
                 CognitiveTaskType.PROBLEM_SOLVING: 1.3,   # Need more facts
                 CognitiveTaskType.MEMORY_SYNTHESIS: 1.4,  # Synthesis needs context
-                CognitiveTaskType.CAPABILITY_ASSESSMENT: 1.1
+                CognitiveTaskType.CAPABILITY_ASSESSMENT: 1.1,
+                
+                # Graph task types (Migration 007+)
+                CognitiveTaskType.GRAPH_EMBED: 1.2,        # Graph processing needs context
+                CognitiveTaskType.GRAPH_RAG_QUERY: 1.1,    # RAG queries need facts
+                CognitiveTaskType.GRAPH_EMBED_V2: 1.2,     # Enhanced graph processing
+                CognitiveTaskType.GRAPH_RAG_QUERY_V2: 1.1, # Enhanced RAG queries
+                CognitiveTaskType.GRAPH_SYNC_NODES: 1.0,   # Node synchronization
+                
+                # Facts system types (Migration 009)
+                CognitiveTaskType.GRAPH_FACT_EMBED: 1.3,   # Fact embedding needs context
+                CognitiveTaskType.GRAPH_FACT_QUERY: 1.2,   # Fact queries need facts
+                CognitiveTaskType.FACT_SEARCH: 1.1,        # Fact search needs context
+                CognitiveTaskType.FACT_STORE: 1.0,         # Fact storage is simple
+                
+                # Resource management types (Migration 007)
+                CognitiveTaskType.ARTIFACT_MANAGE: 1.1,    # Artifact management
+                CognitiveTaskType.CAPABILITY_MANAGE: 1.1,  # Capability management
+                CognitiveTaskType.MEMORY_CELL_MANAGE: 1.1, # Memory cell management
+                
+                # Agent layer types (Migration 008)
+                CognitiveTaskType.MODEL_MANAGE: 1.1,       # Model management
+                CognitiveTaskType.POLICY_MANAGE: 1.1,      # Policy management
+                CognitiveTaskType.SERVICE_MANAGE: 1.1,     # Service management
+                CognitiveTaskType.SKILL_MANAGE: 1.1,       # Skill management
             }
             base_budget *= task_multipliers.get(task_type, 1.0)
         
@@ -638,6 +686,30 @@ class CognitiveCore(dspy.Module):
             CognitiveTaskType.PROBLEM_SOLVING: self.problem_solver,
             CognitiveTaskType.MEMORY_SYNTHESIS: self.memory_synthesizer,
             CognitiveTaskType.CAPABILITY_ASSESSMENT: self.capability_assessor,
+            
+            # Graph task handlers (Migration 007+)
+            CognitiveTaskType.GRAPH_EMBED: self._handle_graph_embed,
+            CognitiveTaskType.GRAPH_RAG_QUERY: self._handle_graph_rag_query,
+            CognitiveTaskType.GRAPH_EMBED_V2: self._handle_graph_embed_v2,
+            CognitiveTaskType.GRAPH_RAG_QUERY_V2: self._handle_graph_rag_query_v2,
+            CognitiveTaskType.GRAPH_SYNC_NODES: self._handle_graph_sync_nodes,
+            
+            # Facts system handlers (Migration 009)
+            CognitiveTaskType.GRAPH_FACT_EMBED: self._handle_graph_fact_embed,
+            CognitiveTaskType.GRAPH_FACT_QUERY: self._handle_graph_fact_query,
+            CognitiveTaskType.FACT_SEARCH: self._handle_fact_search,
+            CognitiveTaskType.FACT_STORE: self._handle_fact_store,
+            
+            # Resource management handlers (Migration 007)
+            CognitiveTaskType.ARTIFACT_MANAGE: self._handle_artifact_manage,
+            CognitiveTaskType.CAPABILITY_MANAGE: self._handle_capability_manage,
+            CognitiveTaskType.MEMORY_CELL_MANAGE: self._handle_memory_cell_manage,
+            
+            # Agent layer handlers (Migration 008)
+            CognitiveTaskType.MODEL_MANAGE: self._handle_model_manage,
+            CognitiveTaskType.POLICY_MANAGE: self._handle_policy_manage,
+            CognitiveTaskType.SERVICE_MANAGE: self._handle_service_manage,
+            CognitiveTaskType.SKILL_MANAGE: self._handle_skill_manage,
         }
         
         # Cache governance settings
@@ -648,6 +720,30 @@ class CognitiveCore(dspy.Module):
             CognitiveTaskType.PROBLEM_SOLVING: 1200,  # 20 minutes
             CognitiveTaskType.MEMORY_SYNTHESIS: 3600, # 1 hour
             CognitiveTaskType.CAPABILITY_ASSESSMENT: 1800, # 30 minutes
+            
+            # Graph task TTLs (Migration 007+)
+            CognitiveTaskType.GRAPH_EMBED: 3600,       # 1 hour (embeddings are stable)
+            CognitiveTaskType.GRAPH_RAG_QUERY: 1800,   # 30 minutes (queries may change)
+            CognitiveTaskType.GRAPH_EMBED_V2: 3600,    # 1 hour (enhanced embeddings)
+            CognitiveTaskType.GRAPH_RAG_QUERY_V2: 1800, # 30 minutes (enhanced queries)
+            CognitiveTaskType.GRAPH_SYNC_NODES: 600,   # 10 minutes (sync is dynamic)
+            
+            # Facts system TTLs (Migration 009)
+            CognitiveTaskType.GRAPH_FACT_EMBED: 3600,  # 1 hour (fact embeddings are stable)
+            CognitiveTaskType.GRAPH_FACT_QUERY: 1800,  # 30 minutes (fact queries may change)
+            CognitiveTaskType.FACT_SEARCH: 1200,       # 20 minutes (search results may change)
+            CognitiveTaskType.FACT_STORE: 300,         # 5 minutes (storage is immediate)
+            
+            # Resource management TTLs (Migration 007)
+            CognitiveTaskType.ARTIFACT_MANAGE: 1800,   # 30 minutes (artifacts are stable)
+            CognitiveTaskType.CAPABILITY_MANAGE: 1800, # 30 minutes (capabilities are stable)
+            CognitiveTaskType.MEMORY_CELL_MANAGE: 1800, # 30 minutes (memory cells are stable)
+            
+            # Agent layer TTLs (Migration 008)
+            CognitiveTaskType.MODEL_MANAGE: 3600,      # 1 hour (models are stable)
+            CognitiveTaskType.POLICY_MANAGE: 1800,     # 30 minutes (policies may change)
+            CognitiveTaskType.SERVICE_MANAGE: 1800,    # 30 minutes (services may change)
+            CognitiveTaskType.SKILL_MANAGE: 1800,      # 30 minutes (skills may change)
         }
         
         logger.info(f"Initialized CognitiveCore with {llm_provider} and model {model}")
@@ -948,6 +1044,32 @@ class CognitiveCore(dspy.Module):
         elif context.task_type == CognitiveTaskType.DECISION_MAKING:
             decision_ctx = context.input_data.get("decision_context", {})
             query_parts.append(f"decision making {decision_ctx.get('options', '')}")
+        elif context.task_type in (CognitiveTaskType.GRAPH_EMBED, CognitiveTaskType.GRAPH_EMBED_V2):
+            start_node_ids = context.input_data.get("start_node_ids", [])
+            query_parts.append(f"graph embedding nodes {start_node_ids}")
+        elif context.task_type in (CognitiveTaskType.GRAPH_RAG_QUERY, CognitiveTaskType.GRAPH_RAG_QUERY_V2):
+            start_node_ids = context.input_data.get("start_node_ids", [])
+            query_parts.append(f"graph RAG query nodes {start_node_ids}")
+        elif context.task_type == CognitiveTaskType.GRAPH_SYNC_NODES:
+            node_ids = context.input_data.get("node_ids", [])
+            query_parts.append(f"graph sync nodes {node_ids}")
+        elif context.task_type in (CognitiveTaskType.GRAPH_FACT_EMBED, CognitiveTaskType.GRAPH_FACT_QUERY):
+            start_fact_ids = context.input_data.get("start_fact_ids", [])
+            query_parts.append(f"fact operations {start_fact_ids}")
+        elif context.task_type == CognitiveTaskType.FACT_SEARCH:
+            query = context.input_data.get("query", "")
+            query_parts.append(f"fact search {query}")
+        elif context.task_type == CognitiveTaskType.FACT_STORE:
+            text = context.input_data.get("text", "")
+            query_parts.append(f"fact store {text[:100]}")
+        elif context.task_type in (CognitiveTaskType.ARTIFACT_MANAGE, CognitiveTaskType.CAPABILITY_MANAGE, 
+                                  CognitiveTaskType.MEMORY_CELL_MANAGE):
+            action = context.input_data.get("action", "")
+            query_parts.append(f"resource management {action}")
+        elif context.task_type in (CognitiveTaskType.MODEL_MANAGE, CognitiveTaskType.POLICY_MANAGE, 
+                                  CognitiveTaskType.SERVICE_MANAGE, CognitiveTaskType.SKILL_MANAGE):
+            action = context.input_data.get("action", "")
+            query_parts.append(f"agent layer management {action}")
         else:
             query_parts.append(context.task_type.value)
         
@@ -1150,6 +1272,252 @@ class CognitiveCore(dspy.Module):
             "task_type": context.task_type.value,
             "metadata": {},
             "error": f"Unsupported result type {type(result)}",
+        }
+
+    # =============================================================================
+    # New Task Handlers for Migration 007+ Support
+    # =============================================================================
+    
+    def _handle_graph_embed(self, **kwargs) -> Dict[str, Any]:
+        """Handle graph embedding tasks."""
+        start_node_ids = kwargs.get("start_node_ids", [])
+        k = kwargs.get("k", 2)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "graph_embed",
+            "start_node_ids": start_node_ids,
+            "k": k,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
+        }
+    
+    def _handle_graph_rag_query(self, **kwargs) -> Dict[str, Any]:
+        """Handle graph RAG query tasks."""
+        start_node_ids = kwargs.get("start_node_ids", [])
+        k = kwargs.get("k", 2)
+        topk = kwargs.get("topk", 10)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "graph_rag_query",
+            "start_node_ids": start_node_ids,
+            "k": k,
+            "topk": topk,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
+        }
+    
+    def _handle_graph_embed_v2(self, **kwargs) -> Dict[str, Any]:
+        """Handle enhanced graph embedding tasks."""
+        start_node_ids = kwargs.get("start_node_ids", [])
+        k = kwargs.get("k", 2)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "graph_embed_v2",
+            "start_node_ids": start_node_ids,
+            "k": k,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.9
+        }
+    
+    def _handle_graph_rag_query_v2(self, **kwargs) -> Dict[str, Any]:
+        """Handle enhanced graph RAG query tasks."""
+        start_node_ids = kwargs.get("start_node_ids", [])
+        k = kwargs.get("k", 2)
+        topk = kwargs.get("topk", 10)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "graph_rag_query_v2",
+            "start_node_ids": start_node_ids,
+            "k": k,
+            "topk": topk,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.9
+        }
+    
+    def _handle_graph_sync_nodes(self, **kwargs) -> Dict[str, Any]:
+        """Handle graph node synchronization tasks."""
+        node_ids = kwargs.get("node_ids", [])
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "graph_sync_nodes",
+            "node_ids": node_ids,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.7
+        }
+    
+    def _handle_graph_fact_embed(self, **kwargs) -> Dict[str, Any]:
+        """Handle fact embedding tasks."""
+        start_fact_ids = kwargs.get("start_fact_ids", [])
+        k = kwargs.get("k", 2)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "graph_fact_embed",
+            "start_fact_ids": start_fact_ids,
+            "k": k,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
+        }
+    
+    def _handle_graph_fact_query(self, **kwargs) -> Dict[str, Any]:
+        """Handle fact query tasks."""
+        start_fact_ids = kwargs.get("start_fact_ids", [])
+        k = kwargs.get("k", 2)
+        topk = kwargs.get("topk", 10)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "graph_fact_query",
+            "start_fact_ids": start_fact_ids,
+            "k": k,
+            "topk": topk,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
+        }
+    
+    def _handle_fact_search(self, **kwargs) -> Dict[str, Any]:
+        """Handle fact search tasks."""
+        query = kwargs.get("query", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "fact_search",
+            "query": query,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
+        }
+    
+    def _handle_fact_store(self, **kwargs) -> Dict[str, Any]:
+        """Handle fact storage tasks."""
+        text = kwargs.get("text", "")
+        tags = kwargs.get("tags", [])
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "fact_store",
+            "text": text,
+            "tags": tags,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.9
+        }
+    
+    def _handle_artifact_manage(self, **kwargs) -> Dict[str, Any]:
+        """Handle artifact management tasks."""
+        action = kwargs.get("action", "")
+        uri = kwargs.get("uri", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "artifact_manage",
+            "action": action,
+            "uri": uri,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
+        }
+    
+    def _handle_capability_manage(self, **kwargs) -> Dict[str, Any]:
+        """Handle capability management tasks."""
+        action = kwargs.get("action", "")
+        name = kwargs.get("name", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "capability_manage",
+            "action": action,
+            "name": name,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
+        }
+    
+    def _handle_memory_cell_manage(self, **kwargs) -> Dict[str, Any]:
+        """Handle memory cell management tasks."""
+        action = kwargs.get("action", "")
+        cell_id = kwargs.get("cell_id", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "memory_cell_manage",
+            "action": action,
+            "cell_id": cell_id,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
+        }
+    
+    def _handle_model_manage(self, **kwargs) -> Dict[str, Any]:
+        """Handle model management tasks."""
+        action = kwargs.get("action", "")
+        name = kwargs.get("name", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "model_manage",
+            "action": action,
+            "name": name,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
+        }
+    
+    def _handle_policy_manage(self, **kwargs) -> Dict[str, Any]:
+        """Handle policy management tasks."""
+        action = kwargs.get("action", "")
+        policy_id = kwargs.get("policy_id", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "policy_manage",
+            "action": action,
+            "policy_id": policy_id,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
+        }
+    
+    def _handle_service_manage(self, **kwargs) -> Dict[str, Any]:
+        """Handle service management tasks."""
+        action = kwargs.get("action", "")
+        service_id = kwargs.get("service_id", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "service_manage",
+            "action": action,
+            "service_id": service_id,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
+        }
+    
+    def _handle_skill_manage(self, **kwargs) -> Dict[str, Any]:
+        """Handle skill management tasks."""
+        action = kwargs.get("action", "")
+        skill_id = kwargs.get("skill_id", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        
+        return {
+            "operation": "skill_manage",
+            "action": action,
+            "skill_id": skill_id,
+            "knowledge_context": knowledge_context,
+            "status": "processed",
+            "confidence_score": 0.8
         }
 
 

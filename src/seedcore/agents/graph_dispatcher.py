@@ -37,6 +37,9 @@ GRAPH_TASK_TYPES = (
     # HGNN-aware v2 that accept UUID/text IDs and map via graph_node_map:
     "graph_embed_v2",
     "graph_rag_query_v2",
+    # facts system support (Migration 009):
+    "graph_fact_embed",
+    "graph_fact_query",
     # maintenance / mapping:
     "graph_sync_nodes",
 )
@@ -70,6 +73,14 @@ class GraphDispatcher:
                                 {"start_task_ids":[uuid,...]}                       # task UUIDs -> ensure_task_node()
                                 {"start_agent_ids":[text,...]}                      # agent ids  -> ensure_agent_node()
                                 {"start_organ_ids":[text,...]}                      # organ ids  -> ensure_organ_node()
+                                {"start_fact_ids":[uuid,...]}                       # fact UUIDs -> ensure_fact_node() (Migration 009)
+                                {"start_artifact_ids":[uuid,...]}                   # artifact UUIDs -> ensure_artifact_node() (Migration 007)
+                                {"start_capability_ids":[uuid,...]}                 # capability UUIDs -> ensure_capability_node() (Migration 007)
+                                {"start_memory_cell_ids":[uuid,...]}                # memory_cell UUIDs -> ensure_memory_cell_node() (Migration 007)
+                                {"start_model_ids":[text,...]}                      # model names -> ensure_model_node() (Migration 008)
+                                {"start_policy_ids":[text,...]}                     # policy names -> ensure_policy_node() (Migration 008)
+                                {"start_service_ids":[text,...]}                    # service names -> ensure_service_node() (Migration 008)
+                                {"start_skill_ids":[text,...]}                      # skill names -> ensure_skill_node() (Migration 008)
                               plus {"k":2}
         - graph_rag_query_v2: same inputs as graph_embed_v2 + {"topk":10}
 
@@ -206,6 +217,110 @@ class GraphDispatcher:
                     node_ids.append(int(row["node_id"]))
         return node_ids
 
+    def _ensure_fact_nodes(self, fact_uuids: List[str]) -> List[int]:
+        """Ensure fact nodes exist in graph_node_map (Migration 009)."""
+        if not fact_uuids:
+            return []
+        q = text("SELECT ensure_fact_node(:fid) AS node_id")
+        node_ids: List[int] = []
+        with self.engine.begin() as conn:
+            for fid in fact_uuids:
+                row = conn.execute(q, {"fid": fid}).mappings().first()
+                if row and row["node_id"] is not None:
+                    node_ids.append(int(row["node_id"]))
+        return node_ids
+
+    def _ensure_artifact_nodes(self, artifact_uuids: List[str]) -> List[int]:
+        """Ensure artifact nodes exist in graph_node_map (Migration 007)."""
+        if not artifact_uuids:
+            return []
+        q = text("SELECT ensure_artifact_node(:aid) AS node_id")
+        node_ids: List[int] = []
+        with self.engine.begin() as conn:
+            for aid in artifact_uuids:
+                row = conn.execute(q, {"aid": aid}).mappings().first()
+                if row and row["node_id"] is not None:
+                    node_ids.append(int(row["node_id"]))
+        return node_ids
+
+    def _ensure_capability_nodes(self, capability_uuids: List[str]) -> List[int]:
+        """Ensure capability nodes exist in graph_node_map (Migration 007)."""
+        if not capability_uuids:
+            return []
+        q = text("SELECT ensure_capability_node(:cid) AS node_id")
+        node_ids: List[int] = []
+        with self.engine.begin() as conn:
+            for cid in capability_uuids:
+                row = conn.execute(q, {"cid": cid}).mappings().first()
+                if row and row["node_id"] is not None:
+                    node_ids.append(int(row["node_id"]))
+        return node_ids
+
+    def _ensure_memory_cell_nodes(self, memory_cell_uuids: List[str]) -> List[int]:
+        """Ensure memory_cell nodes exist in graph_node_map (Migration 007)."""
+        if not memory_cell_uuids:
+            return []
+        q = text("SELECT ensure_memory_cell_node(:mid) AS node_id")
+        node_ids: List[int] = []
+        with self.engine.begin() as conn:
+            for mid in memory_cell_uuids:
+                row = conn.execute(q, {"mid": mid}).mappings().first()
+                if row and row["node_id"] is not None:
+                    node_ids.append(int(row["node_id"]))
+        return node_ids
+
+    def _ensure_model_nodes(self, model_names: List[str]) -> List[int]:
+        """Ensure model nodes exist in graph_node_map (Migration 008)."""
+        if not model_names:
+            return []
+        q = text("SELECT ensure_model_node(:mname) AS node_id")
+        node_ids: List[int] = []
+        with self.engine.begin() as conn:
+            for mname in model_names:
+                row = conn.execute(q, {"mname": mname}).mappings().first()
+                if row and row["node_id"] is not None:
+                    node_ids.append(int(row["node_id"]))
+        return node_ids
+
+    def _ensure_policy_nodes(self, policy_names: List[str]) -> List[int]:
+        """Ensure policy nodes exist in graph_node_map (Migration 008)."""
+        if not policy_names:
+            return []
+        q = text("SELECT ensure_policy_node(:pname) AS node_id")
+        node_ids: List[int] = []
+        with self.engine.begin() as conn:
+            for pname in policy_names:
+                row = conn.execute(q, {"pname": pname}).mappings().first()
+                if row and row["node_id"] is not None:
+                    node_ids.append(int(row["node_id"]))
+        return node_ids
+
+    def _ensure_service_nodes(self, service_names: List[str]) -> List[int]:
+        """Ensure service nodes exist in graph_node_map (Migration 008)."""
+        if not service_names:
+            return []
+        q = text("SELECT ensure_service_node(:sname) AS node_id")
+        node_ids: List[int] = []
+        with self.engine.begin() as conn:
+            for sname in service_names:
+                row = conn.execute(q, {"sname": sname}).mappings().first()
+                if row and row["node_id"] is not None:
+                    node_ids.append(int(row["node_id"]))
+        return node_ids
+
+    def _ensure_skill_nodes(self, skill_names: List[str]) -> List[int]:
+        """Ensure skill nodes exist in graph_node_map (Migration 008)."""
+        if not skill_names:
+            return []
+        q = text("SELECT ensure_skill_node(:sname) AS node_id")
+        node_ids: List[int] = []
+        with self.engine.begin() as conn:
+            for sname in skill_names:
+                row = conn.execute(q, {"sname": sname}).mappings().first()
+                if row and row["node_id"] is not None:
+                    node_ids.append(int(row["node_id"]))
+        return node_ids
+
     def _resolve_start_node_ids(self, params: Dict[str, Any]) -> Tuple[List[int], Dict[str, Any]]:
         """
         Accepts multiple forms:
@@ -213,6 +328,14 @@ class GraphDispatcher:
           - start_task_ids: list of UUIDs -> ensure_task_node()
           - start_agent_ids: list of text -> ensure_agent_node()
           - start_organ_ids: list of text -> ensure_organ_node()
+          - start_fact_ids: list of UUIDs -> ensure_fact_node() (Migration 009)
+          - start_artifact_ids: list of UUIDs -> ensure_artifact_node() (Migration 007)
+          - start_capability_ids: list of UUIDs -> ensure_capability_node() (Migration 007)
+          - start_memory_cell_ids: list of UUIDs -> ensure_memory_cell_node() (Migration 007)
+          - start_model_ids: list of text -> ensure_model_node() (Migration 008)
+          - start_policy_ids: list of text -> ensure_policy_node() (Migration 008)
+          - start_service_ids: list of text -> ensure_service_node() (Migration 008)
+          - start_skill_ids: list of text -> ensure_skill_node() (Migration 008)
         Returns (node_id list, debug dict)
         """
         debug: Dict[str, Any] = {"sources": {}}
@@ -225,7 +348,7 @@ class GraphDispatcher:
                 node_ids.extend([int(x) for x in ids])
                 debug["sources"][key] = len(ids)
 
-        # HGNN mappings
+        # HGNN mappings - Core entities (Migration 007)
         t_ids = params.get("start_task_ids") or []
         a_ids = params.get("start_agent_ids") or []
         o_ids = params.get("start_organ_ids") or []
@@ -247,6 +370,67 @@ class GraphDispatcher:
             oids_nodes = self._ensure_organ_nodes(oids)
             node_ids.extend(oids_nodes)
             debug["sources"]["start_organ_ids"] = len(oids)
+
+        # Facts system (Migration 009)
+        f_ids = params.get("start_fact_ids") or []
+        if f_ids:
+            fids = [str(x) for x in f_ids]
+            fids_nodes = self._ensure_fact_nodes(fids)
+            node_ids.extend(fids_nodes)
+            debug["sources"]["start_fact_ids"] = len(fids)
+
+        # Resource entities (Migration 007)
+        art_ids = params.get("start_artifact_ids") or []
+        cap_ids = params.get("start_capability_ids") or []
+        mem_ids = params.get("start_memory_cell_ids") or []
+
+        if art_ids:
+            artids = [str(x) for x in art_ids]
+            artids_nodes = self._ensure_artifact_nodes(artids)
+            node_ids.extend(artids_nodes)
+            debug["sources"]["start_artifact_ids"] = len(artids)
+
+        if cap_ids:
+            capids = [str(x) for x in cap_ids]
+            capids_nodes = self._ensure_capability_nodes(capids)
+            node_ids.extend(capids_nodes)
+            debug["sources"]["start_capability_ids"] = len(capids)
+
+        if mem_ids:
+            memids = [str(x) for x in mem_ids]
+            memids_nodes = self._ensure_memory_cell_nodes(memids)
+            node_ids.extend(memids_nodes)
+            debug["sources"]["start_memory_cell_ids"] = len(memids)
+
+        # Agent layer extensions (Migration 008)
+        mod_ids = params.get("start_model_ids") or []
+        pol_ids = params.get("start_policy_ids") or []
+        srv_ids = params.get("start_service_ids") or []
+        skl_ids = params.get("start_skill_ids") or []
+
+        if mod_ids:
+            modids = [str(x) for x in mod_ids]
+            modids_nodes = self._ensure_model_nodes(modids)
+            node_ids.extend(modids_nodes)
+            debug["sources"]["start_model_ids"] = len(modids)
+
+        if pol_ids:
+            polids = [str(x) for x in pol_ids]
+            polids_nodes = self._ensure_policy_nodes(polids)
+            node_ids.extend(polids_nodes)
+            debug["sources"]["start_policy_ids"] = len(polids)
+
+        if srv_ids:
+            srvid = [str(x) for x in srv_ids]
+            srvid_nodes = self._ensure_service_nodes(srvid)
+            node_ids.extend(srvid_nodes)
+            debug["sources"]["start_service_ids"] = len(srvid)
+
+        if skl_ids:
+            sklids = [str(x) for x in skl_ids]
+            sklids_nodes = self._ensure_skill_nodes(sklids)
+            node_ids.extend(sklids_nodes)
+            debug["sources"]["start_skill_ids"] = len(sklids)
 
         # de-dup + keep order
         seen = set()
@@ -500,6 +684,97 @@ class GraphDispatcher:
                 self._stop_heartbeat(tid)
                 self._complete(tid, result=result)
                 return
+
+            if ttype in ("graph_fact_embed", "graph_fact_query"):
+                # Facts system support (Migration 009)
+                node_ids, debug = self._resolve_start_node_ids(params)
+                k = int(params.get("k", 2))
+                if not node_ids:
+                    raise ValueError("No start nodes resolved for facts operation")
+
+                if ttype == "graph_fact_embed":
+                    # Embed facts (similar to graph_embed)
+                    if EMBED_BATCH_CHUNK and len(node_ids) > EMBED_BATCH_CHUNK:
+                        all_maps: Dict[int, List[float]] = {}
+                        for i in range(0, len(node_ids), EMBED_BATCH_CHUNK):
+                            chunk = node_ids[i:i+EMBED_BATCH_CHUNK]
+                            emb_map = ray.get(self.embedder.compute_embeddings.remote(chunk, k), timeout=EMBED_TIMEOUT_S)
+                            all_maps.update(emb_map or {})
+                        emb_map = all_maps
+                    else:
+                        emb_map = ray.get(self.embedder.compute_embeddings.remote(node_ids, k), timeout=EMBED_TIMEOUT_S)
+
+                    n = ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
+
+                    meta_nodes = self._fetch_node_meta(list(emb_map.keys()))
+                    result = {
+                        "embedded": n,
+                        "k": k,
+                        "start_node_count": len(node_ids),
+                        "embedding_count": len(emb_map or {}),
+                        "start_debug": debug,
+                        "node_meta": meta_nodes[:64],
+                        "operation_type": "fact_embed"
+                    }
+                    self._stop_heartbeat(tid)
+                    self._complete(tid, result=result)
+                    return
+
+                elif ttype == "graph_fact_query":
+                    # Query facts (similar to graph_rag_query)
+                    import numpy as np
+
+                    # ensure embeddings exist for seeds
+                    emb_map = ray.get(self.embedder.compute_embeddings.remote(node_ids, k), timeout=EMBED_TIMEOUT_S)
+                    ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
+
+                    vecs = list(emb_map.values())
+                    centroid = np.asarray(vecs, dtype="float32").mean(0).tolist() if vecs else None
+
+                    hits: List[Dict[str, Any]] = []
+                    if centroid:
+                        centroid_json = json.dumps(centroid)
+                        centroid_vec_literal = "[" + ",".join(f"{x:.6f}" for x in centroid) + "]"
+                        try:
+                            with self.engine.begin() as conn:
+                                rows = conn.execute(
+                                    text("""
+                                      SELECT node_id, emb <-> (:c::jsonb::vector) AS dist
+                                        FROM graph_embeddings
+                                    ORDER BY emb <-> (:c::jsonb::vector)
+                                       LIMIT :k
+                                    """),
+                                    {"c": centroid_json, "k": int(params.get("topk", 10))},
+                                ).mappings().all()
+                                hits = [{"node_id": r["node_id"], "score": float(r["dist"])} for r in rows]
+                        except Exception:
+                            with self.engine.begin() as conn:
+                                rows = conn.execute(
+                                    text("""
+                                      SELECT node_id, emb <-> (:c)::vector AS dist
+                                        FROM graph_embeddings
+                                    ORDER BY emb <-> (:c)::vector
+                                       LIMIT :k
+                                    """),
+                                    {"c": centroid_vec_literal, "k": int(params.get("topk", 10))},
+                                ).mappings().all()
+                                hits = [{"node_id": r["node_id"], "score": float(r["dist"])} for r in rows]
+
+                    meta_nodes = self._fetch_node_meta([h["node_id"] for h in hits])
+                    result = {
+                        "neighbors": hits,
+                        "neighbor_count": len(hits),
+                        "seed_count": len(emb_map or {}),
+                        "k": k,
+                        "topk": int(params.get("topk", 10)),
+                        "centroid_computed": centroid is not None,
+                        "start_debug": debug,
+                        "node_meta": meta_nodes[:64],
+                        "operation_type": "fact_query"
+                    }
+                    self._stop_heartbeat(tid)
+                    self._complete(tid, result=result)
+                    return
 
             if ttype == "graph_sync_nodes":
                 # ensure every existing task has a node in graph_node_map

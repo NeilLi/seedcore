@@ -72,9 +72,102 @@ class GraphLoader:
         limit_nodes: int = 5000,
         limit_rels: int = 20000,
     ) -> Tuple[dgl.DGLGraph, Dict[int, int], torch.Tensor]:
-        ...
-        # keep your original implementation intact
-        ...
+        """
+        Load k-hop neighborhood as homogeneous DGL graph (legacy implementation).
+        
+        Returns:
+            g: DGLGraph with homogeneous node/edge types
+            idx_map: {neo4j_id -> local_id} mapping
+            X: Node features tensor [num_nodes, feature_dim]
+        """
+        if not _ensure_dgl():
+            raise ImportError("DGL is not available. Please install DGL to use this function.")
+        
+        if not start_ids:
+            # Return empty graph
+            empty_g = dgl.graph(([], []))
+            return empty_g, {}, torch.empty(0, 128)  # 128 is GRAPH_H_FEATS
+        
+        with self.driver.session() as s:
+            # 1) Gather nodes within k hops
+            q_nodes = f"""
+            MATCH (s) WHERE id(s) IN $start_ids
+            MATCH p=(s)-[*..{k}]-(m)
+            WITH COLLECT(DISTINCT m) + COLLECT(DISTINCT s) AS ns
+            UNWIND ns AS n
+            WITH DISTINCT n LIMIT $limit_nodes
+            RETURN id(n) AS id, labels(n) AS labels, properties(n) AS props
+            """
+            nodes = s.run(q_nodes, start_ids=start_ids, limit_nodes=limit_nodes).data()
+            
+            # Fallback to just start nodes if no neighbors found
+            if not nodes:
+                nodes = s.run(
+                    "MATCH (n) WHERE id(n) IN $start_ids RETURN id(n) AS id, labels(n) AS labels, properties(n) AS props",
+                    start_ids=start_ids
+                ).data()
+            
+            if not nodes:
+                # Return empty graph
+                empty_g = dgl.graph(([], []))
+                return empty_g, {}, torch.empty(0, 128)
+            
+            # 2) Create node ID mapping
+            idx_map = {int(r["id"]): i for i, r in enumerate(nodes)}
+            all_ids = list(idx_map.keys())
+            
+            # 3) Collect edges between these nodes
+            q_edges = """
+            MATCH (u)-[r]->(v)
+            WHERE id(u) IN $ids AND id(v) IN $ids
+            RETURN id(u) AS src, id(v) AS dst
+            LIMIT $limit_rels
+            """
+            edges = s.run(q_edges, ids=all_ids, limit_rels=limit_rels).data()
+            
+            if not edges:
+                # No edges found, create isolated nodes
+                src_ids = []
+                dst_ids = []
+            else:
+                src_ids = [idx_map[int(e["src"])] for e in edges]
+                dst_ids = [idx_map[int(e["dst"])] for e in edges]
+            
+            # 4) Create DGL graph
+            g = dgl.graph((src_ids, dst_ids), num_nodes=len(nodes))
+            
+            # 5) Create node features (deterministic based on node properties)
+            X = torch.zeros(len(nodes), 128)  # GRAPH_H_FEATS = 128
+            
+            for i, node in enumerate(nodes):
+                # Create deterministic features based on node properties
+                props = node.get("props", {})
+                labels = node.get("labels", [])
+                
+                # Use node ID as seed for deterministic features
+                node_id = int(node["id"])
+                torch.manual_seed(node_id % (2**32))
+                
+                # Create features based on node properties
+                feature_vec = torch.randn(128)
+                
+                # Add some structure based on labels
+                if "Task" in labels:
+                    feature_vec[0] = 1.0
+                if "Agent" in labels:
+                    feature_vec[1] = 1.0
+                if "Memory" in labels:
+                    feature_vec[2] = 1.0
+                
+                # Add property-based features
+                if "priority" in props:
+                    feature_vec[3] = float(props["priority"]) / 10.0
+                if "complexity" in props:
+                    feature_vec[4] = float(props["complexity"])
+                
+                X[i] = feature_vec
+            
+            return g, idx_map, X
 
     # -------------------- new heterograph path for HGNN + LTM --------------------
     def load_k_hop_hetero(

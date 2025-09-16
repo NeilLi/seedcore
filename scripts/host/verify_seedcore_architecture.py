@@ -113,7 +113,8 @@ Env:
   EXPECT_DISPATCHERS=2
   EXPECT_GRAPH_DISPATCHERS=0          # Set to 0 to disable GraphDispatchers
   STRICT_GRAPH_DISPATCHERS=false      # Allow fewer GraphDispatchers than expected
-  VERIFY_GRAPH_TASK=true|false
+  VERIFY_GRAPH_TASK=true|false        # Enable legacy graph task verification
+  VERIFY_HGNN_TASK=true|false         # Enable HGNN graph task verification (Migration 007+)
   DEBUG_ROUTING=true|false          # Enable comprehensive routing debugging
   DEBUG_LEVEL=INFO|DEBUG           # Set logging level for debugging
   STRICT_MODE=true|false           # Exit on validation failures (default: true)
@@ -721,6 +722,325 @@ def pg_create_graph_rag_task(conn, node_ids: list[int], hops: int, topk: int, de
     except Exception as e:
         log.warning(f"create_graph_rag_task call failed: {e}")
     return tid
+
+def pg_create_graph_rag_task_v2(conn, node_ids: list[int], hops: int, topk: int, description: str, agent_id: str = None, organ_id: str = None) -> Optional[uuid.UUID]:
+    """Create graph RAG task with agent/organ integration (Migration 007+)."""
+    tid = None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT create_graph_rag_task_v2(%s::int[], %s::int, %s::int, %s, %s, %s);",
+                        (node_ids, hops, topk, description, agent_id, organ_id))
+            row = cur.fetchone()
+            if row and row[0]:
+                tid = row[0]
+                log.info(f"Created graph RAG task v2 with ID: {tid} (agent: {agent_id}, organ: {organ_id})")
+            else:
+                log.warning("create_graph_rag_task_v2 returned no task ID")
+    except Exception as e:
+        log.warning(f"create_graph_rag_task_v2 call failed: {e}")
+    return tid
+
+# ---- Database Schema Verification Functions ----
+def verify_database_schema(conn):
+    """Verify that all recent migrations have been applied correctly."""
+    if not conn:
+        log.warning("⚠️ No database connection - cannot verify schema")
+        return False
+    
+    log.info("🔍 VERIFYING DATABASE SCHEMA")
+    log.info("=" * 50)
+    
+    schema_ok = True
+    
+    # Check Migration 006: Task lease columns
+    log.info("📋 Checking Migration 006: Task lease columns...")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT column_name, data_type 
+                FROM information_schema.columns 
+                WHERE table_name = 'tasks' 
+                AND column_name IN ('owner_id', 'lease_expires_at', 'last_heartbeat')
+                ORDER BY column_name
+            """)
+            lease_columns = cur.fetchall()
+            
+            expected_lease_columns = ['lease_expires_at', 'last_heartbeat', 'owner_id']
+            found_lease_columns = [row[0] for row in lease_columns]
+            
+            for col in expected_lease_columns:
+                if col in found_lease_columns:
+                    log.info(f"   ✅ {col} column exists")
+                else:
+                    log.error(f"   ❌ {col} column missing")
+                    schema_ok = False
+    except Exception as e:
+        log.error(f"   ❌ Error checking lease columns: {e}")
+        schema_ok = False
+    
+    # Check Migration 007: HGNN graph schema
+    log.info("📋 Checking Migration 007: HGNN graph schema...")
+    hgnn_tables = [
+        'graph_node_map', 'agent_registry', 'organ_registry',
+        'artifact', 'capability', 'memory_cell',
+        'task_depends_on_task', 'task_produces_artifact', 'task_uses_capability',
+        'task_reads_memory', 'task_writes_memory',
+        'task_executed_by_organ', 'task_owned_by_agent'
+    ]
+    
+    try:
+        with conn.cursor() as cur:
+            for table in hgnn_tables:
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = %s
+                    )
+                """, (table,))
+                exists = cur.fetchone()[0]
+                if exists:
+                    log.info(f"   ✅ {table} table exists")
+                else:
+                    log.error(f"   ❌ {table} table missing")
+                    schema_ok = False
+    except Exception as e:
+        log.error(f"   ❌ Error checking HGNN tables: {e}")
+        schema_ok = False
+    
+    # Check Migration 008: Agent layer extensions
+    log.info("📋 Checking Migration 008: Agent layer extensions...")
+    agent_tables = [
+        'model', 'policy', 'service', 'skill',
+        'agent_member_of_organ', 'agent_collab_agent',
+        'organ_provides_skill', 'organ_uses_service',
+        'organ_governed_by_policy', 'agent_uses_model'
+    ]
+    
+    try:
+        with conn.cursor() as cur:
+            for table in agent_tables:
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = %s
+                    )
+                """, (table,))
+                exists = cur.fetchone()[0]
+                if exists:
+                    log.info(f"   ✅ {table} table exists")
+                else:
+                    log.error(f"   ❌ {table} table missing")
+                    schema_ok = False
+    except Exception as e:
+        log.error(f"   ❌ Error checking agent layer tables: {e}")
+        schema_ok = False
+    
+    # Check Migration 009: Facts system
+    log.info("📋 Checking Migration 009: Facts system...")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'facts'
+                )
+            """)
+            facts_exists = cur.fetchone()[0]
+            if facts_exists:
+                log.info("   ✅ facts table exists")
+                
+                # Check facts table structure
+                cur.execute("""
+                    SELECT column_name, data_type 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'facts' 
+                    ORDER BY column_name
+                """)
+                facts_columns = cur.fetchall()
+                expected_facts_columns = ['created_at', 'id', 'meta_data', 'tags', 'text', 'updated_at']
+                found_facts_columns = [row[0] for row in facts_columns]
+                
+                for col in expected_facts_columns:
+                    if col in found_facts_columns:
+                        log.info(f"   ✅ facts.{col} column exists")
+                    else:
+                        log.error(f"   ❌ facts.{col} column missing")
+                        schema_ok = False
+            else:
+                log.error("   ❌ facts table missing")
+                schema_ok = False
+    except Exception as e:
+        log.error(f"   ❌ Error checking facts system: {e}")
+        schema_ok = False
+    
+    # Check Migration 010: Task-fact integration
+    log.info("📋 Checking Migration 010: Task-fact integration...")
+    fact_tables = ['task_reads_fact', 'task_produces_fact']
+    
+    try:
+        with conn.cursor() as cur:
+            for table in fact_tables:
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = %s
+                    )
+                """, (table,))
+                exists = cur.fetchone()[0]
+                if exists:
+                    log.info(f"   ✅ {table} table exists")
+                else:
+                    log.error(f"   ❌ {table} table missing")
+                    schema_ok = False
+    except Exception as e:
+        log.error(f"   ❌ Error checking task-fact integration tables: {e}")
+        schema_ok = False
+    
+    # Check views
+    log.info("📋 Checking database views...")
+    views = ['hgnn_edges', 'task_embeddings']
+    
+    try:
+        with conn.cursor() as cur:
+            for view in views:
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.views 
+                        WHERE table_name = %s
+                    )
+                """, (view,))
+                exists = cur.fetchone()[0]
+                if exists:
+                    log.info(f"   ✅ {view} view exists")
+                else:
+                    log.error(f"   ❌ {view} view missing")
+                    schema_ok = False
+    except Exception as e:
+        log.error(f"   ❌ Error checking views: {e}")
+        schema_ok = False
+    
+    # Check functions
+    log.info("📋 Checking database functions...")
+    functions = [
+        'ensure_task_node', 'ensure_agent_node', 'ensure_organ_node',
+        'ensure_fact_node', 'cleanup_stale_running_tasks',
+        'create_graph_rag_task_v2', 'backfill_task_nodes'
+    ]
+    
+    try:
+        with conn.cursor() as cur:
+            for func in functions:
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.routines 
+                        WHERE routine_name = %s AND routine_type = 'FUNCTION'
+                    )
+                """, (func,))
+                exists = cur.fetchone()[0]
+                if exists:
+                    log.info(f"   ✅ {func}() function exists")
+                else:
+                    log.warning(f"   ⚠️ {func}() function missing (may be optional)")
+    except Exception as e:
+        log.error(f"   ❌ Error checking functions: {e}")
+        schema_ok = False
+    
+    if schema_ok:
+        log.info("✅ Database schema verification completed successfully")
+    else:
+        log.error("❌ Database schema verification failed - some migrations may be missing")
+    
+    return schema_ok
+
+def verify_hgnn_graph_structure(conn):
+    """Verify HGNN graph structure and relationships."""
+    if not conn:
+        log.warning("⚠️ No database connection - cannot verify HGNN structure")
+        return False
+    
+    log.info("🔍 VERIFYING HGNN GRAPH STRUCTURE")
+    log.info("=" * 50)
+    
+    try:
+        with conn.cursor() as cur:
+            # Check graph_node_map has entries
+            cur.execute("SELECT COUNT(*) FROM graph_node_map")
+            node_count = cur.fetchone()[0]
+            log.info(f"📊 Graph node map entries: {node_count}")
+            
+            # Check hgnn_edges view
+            cur.execute("SELECT COUNT(*) FROM hgnn_edges")
+            edge_count = cur.fetchone()[0]
+            log.info(f"📊 HGNN edges: {edge_count}")
+            
+            # Check edge types
+            cur.execute("""
+                SELECT edge_type, COUNT(*) as count 
+                FROM hgnn_edges 
+                GROUP BY edge_type 
+                ORDER BY count DESC
+            """)
+            edge_types = cur.fetchall()
+            log.info("📊 Edge types distribution:")
+            for edge_type, count in edge_types:
+                log.info(f"   {edge_type}: {count}")
+            
+            # Check task_embeddings view
+            cur.execute("SELECT COUNT(*) FROM task_embeddings")
+            embedding_count = cur.fetchone()[0]
+            log.info(f"📊 Task embeddings: {embedding_count}")
+            
+            log.info("✅ HGNN graph structure verification completed")
+            return True
+            
+    except Exception as e:
+        log.error(f"❌ Error verifying HGNN structure: {e}")
+        return False
+
+def verify_facts_system(conn):
+    """Verify facts system functionality."""
+    if not conn:
+        log.warning("⚠️ No database connection - cannot verify facts system")
+        return False
+    
+    log.info("🔍 VERIFYING FACTS SYSTEM")
+    log.info("=" * 50)
+    
+    try:
+        with conn.cursor() as cur:
+            # Check facts table has data
+            cur.execute("SELECT COUNT(*) FROM facts")
+            facts_count = cur.fetchone()[0]
+            log.info(f"📊 Total facts: {facts_count}")
+            
+            # Check facts with tags
+            cur.execute("SELECT COUNT(*) FROM facts WHERE array_length(tags, 1) > 0")
+            tagged_facts = cur.fetchone()[0]
+            log.info(f"📊 Facts with tags: {tagged_facts}")
+            
+            # Check task-fact relationships
+            cur.execute("SELECT COUNT(*) FROM task_reads_fact")
+            reads_count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM task_produces_fact")
+            produces_count = cur.fetchone()[0]
+            log.info(f"📊 Task-fact relationships: {reads_count} reads, {produces_count} produces")
+            
+            # Test full-text search
+            cur.execute("""
+                SELECT id, text, tags 
+                FROM facts 
+                WHERE to_tsvector('english', text) @@ plainto_tsquery('english', 'SeedCore')
+                LIMIT 3
+            """)
+            search_results = cur.fetchall()
+            log.info(f"📊 Full-text search test: {len(search_results)} results for 'SeedCore'")
+            
+            log.info("✅ Facts system verification completed")
+            return True
+            
+    except Exception as e:
+        log.error(f"❌ Error verifying facts system: {e}")
+        return False
 
 # ---- Ray helpers
 def ray_connect():
@@ -1444,21 +1764,31 @@ def check_current_task_status(conn, task_id: uuid.UUID = None):
     try:
         with conn.cursor() as cur:
             if task_id:
-                # Check specific task
-                cur.execute("SELECT * FROM tasks WHERE id = %s", (str(task_id),))
+                # Check specific task with new lease columns
+                cur.execute("""
+                    SELECT id, status, attempts, owner_id, lease_expires_at, last_heartbeat, 
+                           type, drift_score, created_at, updated_at
+                    FROM tasks WHERE id = %s
+                """, (str(task_id),))
                 row = cur.fetchone()
                 if row:
                     log.info(f"📋 Task {task_id}:")
-                    log.info(f"   Status: {row[3] if len(row) > 3 else 'unknown'}")
-                    log.info(f"   Attempts: {row[7] if len(row) > 7 else 'unknown'}")
+                    log.info(f"   Status: {row[1] if len(row) > 1 else 'unknown'}")
+                    log.info(f"   Type: {row[6] if len(row) > 6 else 'unknown'}")
+                    log.info(f"   Attempts: {row[2] if len(row) > 2 else 'unknown'}")
+                    log.info(f"   Owner ID: {row[3] if len(row) > 3 else 'unknown'}")
+                    log.info(f"   Lease Expires: {row[4] if len(row) > 4 else 'unknown'}")
+                    log.info(f"   Last Heartbeat: {row[5] if len(row) > 5 else 'unknown'}")
+                    log.info(f"   Drift Score: {row[7] if len(row) > 7 else 'unknown'}")
                     log.info(f"   Created: {row[8] if len(row) > 8 else 'unknown'}")
                     log.info(f"   Updated: {row[9] if len(row) > 9 else 'unknown'}")
                 else:
                     log.warning(f"⚠️ Task {task_id} not found in database")
             else:
-                # Check all recent tasks
+                # Check all recent tasks with lease information
                 cur.execute("""
-                    SELECT id, type, status, attempts, created_at, updated_at
+                    SELECT id, type, status, attempts, owner_id, lease_expires_at, last_heartbeat,
+                           drift_score, created_at, updated_at
                     FROM tasks 
                     WHERE created_at > NOW() - INTERVAL '1 hour'
                     ORDER BY created_at DESC
@@ -1469,13 +1799,14 @@ def check_current_task_status(conn, task_id: uuid.UUID = None):
                 if rows:
                     log.info("📋 Recent tasks (last hour):")
                     for row in rows:
-                        task_id, task_type, status, attempts, created_at, updated_at = row
+                        task_id, task_type, status, attempts, owner_id, lease_expires, last_heartbeat, drift_score, created_at, updated_at = row
                         age_seconds = (time.time() - created_at.timestamp()) if created_at else 0
-                        log.info(f"   {task_id}: {task_type} -> {status} (attempts: {attempts}, age: {age_seconds:.1f}s)")
+                        lease_info = f"owner:{owner_id}" if owner_id else "no-owner"
+                        log.info(f"   {task_id}: {task_type} -> {status} (attempts: {attempts}, age: {age_seconds:.1f}s, {lease_info})")
                 else:
                     log.info("📋 No recent tasks found in database")
                 
-                # Check for stuck tasks
+                # Check for stuck tasks with lease analysis
                 cur.execute("""
                     SELECT COUNT(*) as stuck_count
                     FROM tasks 
@@ -1490,6 +1821,21 @@ def check_current_task_status(conn, task_id: uuid.UUID = None):
                     log.warning("   This indicates queue workers are not processing tasks")
                 else:
                     log.info("✅ No stuck tasks found")
+                
+                # Check for stale running tasks (lease expired)
+                cur.execute("""
+                    SELECT COUNT(*) as stale_count
+                    FROM tasks 
+                    WHERE status = 'running' 
+                    AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+                """)
+                
+                stale_count = cur.fetchone()[0]
+                if stale_count > 0:
+                    log.warning(f"⚠️ Found {stale_count} stale running tasks (lease expired)")
+                    log.warning("   These tasks may need cleanup using cleanup_stale_running_tasks()")
+                else:
+                    log.info("✅ No stale running tasks found")
                     
     except Exception as e:
         log.error(f"❌ Failed to check task status: {e}")
@@ -2097,6 +2443,31 @@ def scenario_graph_task(conn) -> Optional[uuid.UUID]:
         log.warning(f"Graph task submission skipped: {e}")
         return None
 
+def scenario_hgnn_graph_task(conn) -> Optional[uuid.UUID]:
+    """Test HGNN graph task with agent/organ integration (Migration 007+)."""
+    if not conn:
+        return None
+    try:
+        # Create a graph RAG task v2 with agent/organ integration
+        task_id = pg_create_graph_rag_task_v2(
+            conn, 
+            node_ids=[123, 456], 
+            hops=2, 
+            topk=8, 
+            description="HGNN graph task with agent/organ integration",
+            agent_id="test-agent-001",
+            organ_id="test-organ-001"
+        )
+        if task_id:
+            log.info(f"✅ Submitted HGNN graph task v2 with ID: {task_id}")
+            return task_id
+        else:
+            log.warning("⚠️ Failed to create HGNN graph task v2")
+            return None
+    except Exception as e:
+        log.warning(f"⚠️ HGNN graph task creation failed: {e}")
+        return None
+
 def scenario_debug_routing(ray, coord):
     """Debug routing issues by running comprehensive diagnostics."""
     log.info("🔍 RUNNING ROUTING DEBUG DIAGNOSTICS")
@@ -2230,6 +2601,28 @@ def main():
     if not conn:
         log.warning("⚠️ DB unavailable; skipping fast-path and escalation validation")
         log.warning("   Set SEEDCORE_PG_DSN environment variable for full verification")
+    else:
+        # Verify database schema and new features
+        log.info("🔍 VERIFYING DATABASE SCHEMA AND NEW FEATURES")
+        log.info("=" * 60)
+        
+        # Check if all recent migrations are applied
+        schema_ok = verify_database_schema(conn)
+        if not schema_ok:
+            log.warning("⚠️ Database schema verification failed - some migrations may be missing")
+            log.warning("   Run the migration scripts to ensure all features are available")
+        
+        # Verify HGNN graph structure
+        hgnn_ok = verify_hgnn_graph_structure(conn)
+        if not hgnn_ok:
+            log.warning("⚠️ HGNN graph structure verification failed")
+        
+        # Verify facts system
+        facts_ok = verify_facts_system(conn)
+        if not facts_ok:
+            log.warning("⚠️ Facts system verification failed")
+        
+        log.info("=" * 60)
 
     # Cluster & actors up?
     ray, coord, want_g, found_g = check_cluster_and_actors()
@@ -2358,6 +2751,20 @@ def main():
             log.warning("⚠️ Graph task verification skipped - no task ID or DB connection")
     else:
         log.info("📋 Graph task verification disabled (VERIFY_GRAPH_TASK=false)")
+    
+    # Optional: HGNN Graph task with agent/organ integration (Migration 007+)
+    if env_bool("VERIFY_HGNN_TASK", True) and conn:
+        log.info("🔍 VERIFYING HGNN GRAPH TASK PROCESSING")
+        log.info("=" * 50)
+        hgnn_tid = scenario_hgnn_graph_task(conn)
+        if hgnn_tid:
+            log.info(f"⏳ Waiting for HGNN graph task {hgnn_tid} to complete...")
+            wait_for_completion(conn, hgnn_tid, "HGNN-GRAPH", timeout_s=150.0)
+            log.info("✅ HGNN graph task verification completed successfully")
+        else:
+            log.warning("⚠️ HGNN graph task verification skipped - no task ID")
+    else:
+        log.info("📋 HGNN graph task verification disabled (VERIFY_HGNN_TASK=false or no DB connection)")
 
     # Escalation
     esc_tid = scenario_escalation(conn)
