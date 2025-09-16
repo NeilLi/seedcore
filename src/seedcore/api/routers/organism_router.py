@@ -4,7 +4,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 
 # Import the new organism serve client
-from ...serve.organism_serve import get_organism_client
+from ...serve.organism_client import get_organism_client
 
 
 router = APIRouter()

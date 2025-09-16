@@ -106,7 +106,7 @@ from ..models.result_schema import (
 )
 
 # Serve modules are now running as separate services
-# from ..serve.cognitive_serve import CognitiveCoreClient
+# from ..serve.cognitive_client import CognitiveServiceClient
 from ..energy.weights import EnergyWeights
 from ..energy.calculator import energy_and_grad
 # State classes moved to organism_manager.py and StateAggregator class
