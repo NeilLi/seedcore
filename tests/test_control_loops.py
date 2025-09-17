@@ -27,15 +27,15 @@ class DummyOrgan:
     def __init__(self, organ_id: str, organ_type: str = "test"):
         self.organ_id = organ_id
         self.organ_type = organ_type
-        self.agents = []  # List of agents for easy iteration in tests
+        self.agents = {}  # Dictionary of agents (agent_id -> agent) to match real Organ interface
     
     def register(self, agent):
         """Register an agent with this organ (for testing compatibility)"""
-        self.agents.append(agent)
+        self.agents[agent.agent_id] = agent
     
     def register_agent(self, agent_id: str, agent_handle):
         """Alternative registration method that matches the real Organ interface"""
-        self.agents.append(agent_handle)
+        self.agents[agent_id] = agent_handle
 
 # Test-specific version of slow_loop_update_roles that works with DummyOrgan
 def mock_slow_loop_update_roles(organs_or_agents, learning_rate: float = 0.05):
@@ -45,7 +45,7 @@ def mock_slow_loop_update_roles(organs_or_agents, learning_rate: float = 0.05):
     # Determine if we received organs or agents by checking if first item has 'agents' attribute
     if organs_or_agents and hasattr(organs_or_agents[0], 'agents'):
         # We received organs, extract all agents
-        all_agents = [agent for organ in organs_or_agents for agent in organ.agents]
+        all_agents = [agent for organ in organs_or_agents for agent in organ.agents.values()]
         print(f"Running slow loop for {len(organs_or_agents)} organs with {len(all_agents)} agents...")
     else:
         # We received agents directly

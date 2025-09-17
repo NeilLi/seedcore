@@ -22,6 +22,10 @@ import logging
 # Add the project root to the Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+# Import mock dependencies BEFORE any other imports
+import mock_ray_dependencies
+import mock_xgboost_service
+
 from src.seedcore.ml.salience.scorer import SalienceScorer
 from src.seedcore.ml.serve_app import SalienceServiceClient
 

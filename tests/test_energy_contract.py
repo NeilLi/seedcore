@@ -6,49 +6,30 @@ import pytest
 import sys
 import types
 
-# Stub ray to avoid optional dependency impact in unit tests
+# Import the centralized Ray mock instead of creating our own
+import mock_ray_dependencies
+
+# Define the remote decorator for serve module
 def ray_remote_decorator(*args, **kwargs):
     """Mock decorator for @ray.remote that returns the original class."""
     def decorator(cls):
         return cls
     return decorator
 
-# Create comprehensive ray stub with commonly used modules
-class RayStub:
-    """Comprehensive Ray stub that mimics the Ray module structure."""
-    
-    def __init__(self):
-        self.remote = ray_remote_decorator
-        self.get_runtime_context = lambda: types.SimpleNamespace(namespace="test")
-        self.init = lambda **kwargs: None
-        self.shutdown = lambda: None
-        
-        # Mock ray.serve module
-        serve_stub = types.SimpleNamespace()
-        serve_stub.deployment = ray_remote_decorator
-        serve_stub.start = lambda **kwargs: None
-        serve_stub.shutdown = lambda: None
-        self.serve = serve_stub
-        
-        # Mock ray.exceptions module
-        exceptions_stub = types.SimpleNamespace()
-        exceptions_stub.RayActorError = Exception  # Use base Exception as fallback
-        self.exceptions = exceptions_stub
-
-# Create the main ray module stub
-ray_stub = RayStub()
-
-# Create submodule stubs and register them
+# Create submodule stubs for specific modules we need
 ray_serve_stub = types.SimpleNamespace()
 ray_serve_stub.deployment = ray_remote_decorator
 ray_serve_stub.start = lambda **kwargs: None
 ray_serve_stub.shutdown = lambda: None
+ray_serve_stub.ingress = lambda app: (lambda cls: cls)
 
 ray_exceptions_stub = types.SimpleNamespace()
 ray_exceptions_stub.RayActorError = Exception
 
-# Register all the modules
-sys.modules["ray"] = ray_stub
+# Import the centralized Ray mock instead of creating our own
+import mock_ray_dependencies
+
+# Register only the specific modules we need that aren't in the centralized mock
 sys.modules["ray.serve"] = ray_serve_stub
 sys.modules["ray.exceptions"] = ray_exceptions_stub
 

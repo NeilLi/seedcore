@@ -5,6 +5,10 @@ This module tests all aspects of the connection pooling system including
 async/sync operations, Ray integration, health checks, and metrics.
 """
 
+# Import mock dependencies BEFORE any other imports
+import mock_database_dependencies
+import mock_ray_dependencies
+
 import pytest
 import asyncio
 import time

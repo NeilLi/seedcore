@@ -6,12 +6,22 @@ This script tests the real energy calculation engine and energy-aware agent sele
 with incremental updates and energy ledger functionality.
 """
 
+# Import mock dependencies BEFORE any other imports
+import mock_ray_dependencies
+
 import os
 import sys
 import asyncio
 import ray
 import numpy as np
 from typing import Dict, Any
+
+# Ensure we're using the correct Ray mock
+if not hasattr(ray, 'get') or not hasattr(ray, 'remote'):
+    print("⚠️  Ray mock not properly loaded, re-importing...")
+    import importlib
+    importlib.reload(mock_ray_dependencies)
+    import ray
 
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

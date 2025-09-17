@@ -8,6 +8,9 @@ import sys
 import os
 from pathlib import Path
 
+# Load DGL mock before importing anything that might touch dgl
+import mock_dgl_dependencies  # noqa: F401
+
 # Add src to path for imports
 src_path = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_path))

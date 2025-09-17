@@ -148,7 +148,7 @@ def test_model_management():
         print(f"❌ Model management test failed: {e}")
         return False
 
-def test_simple_prediction(model_path):
+def run_simple_prediction(model_path):
     """Test simple prediction."""
     print_step("Testing Simple Prediction")
     
@@ -248,7 +248,7 @@ def main():
     # Test 5: Simple Prediction
     prediction_ok = False
     if model_path:
-        prediction_ok = test_simple_prediction(model_path)
+        prediction_ok = run_simple_prediction(model_path)
     
     # Test 6: Energy Logging
     energy_log_ok = test_energy_logging()

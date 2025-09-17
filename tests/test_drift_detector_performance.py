@@ -5,12 +5,17 @@ These tests ensure that the drift detector meets the 50ms latency requirement
 for typical feature sizes and provides reliable drift scoring.
 """
 
+import os
+import sys
 import asyncio
 import time
 import pytest
 import numpy as np
 from typing import Dict, Any, List
 import logging
+
+# Add the project root to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -75,7 +80,7 @@ class TestDriftDetectorPerformance:
     @pytest.mark.asyncio
     async def test_drift_detector_latency(self, sample_tasks):
         """Test that drift detector meets 50ms latency requirement."""
-        from seedcore.ml.drift_detector import get_drift_detector
+        from src.seedcore.ml.drift_detector import get_drift_detector
         
         detector = get_drift_detector()
         
@@ -131,7 +136,7 @@ class TestDriftDetectorPerformance:
     @pytest.mark.asyncio
     async def test_drift_detector_text_length_scaling(self, sample_texts):
         """Test that drift detector performance scales reasonably with text length."""
-        from seedcore.ml.drift_detector import get_drift_detector
+        from src.seedcore.ml.drift_detector import get_drift_detector
         
         detector = get_drift_detector()
         
@@ -176,7 +181,7 @@ class TestDriftDetectorPerformance:
     @pytest.mark.asyncio
     async def test_drift_detector_concurrent_requests(self, sample_tasks):
         """Test drift detector performance under concurrent load."""
-        from seedcore.ml.drift_detector import get_drift_detector
+        from src.seedcore.ml.drift_detector import get_drift_detector
         
         detector = get_drift_detector()
         
@@ -229,7 +234,7 @@ class TestDriftDetectorPerformance:
         
         # This test would require the ML service to be running
         # For now, we'll test the drift detector directly
-        from seedcore.ml.drift_detector import get_drift_detector
+        from src.seedcore.ml.drift_detector import get_drift_detector
         
         detector = get_drift_detector()
         
@@ -267,7 +272,7 @@ async def test_end_to_end_drift_pipeline():
     # This test would require the full system to be running
     # For now, we'll test the components individually
     
-    from seedcore.ml.drift_detector import get_drift_detector
+    from src.seedcore.ml.drift_detector import get_drift_detector
     
     detector = get_drift_detector()
     

@@ -2,21 +2,26 @@
 Tests for the predicate-based routing system.
 """
 
+import os
+import sys
 import pytest
 import tempfile
 import yaml
 from pathlib import Path
 
-from seedcore.predicates import (
+# Add the project root to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from src.seedcore.predicates import (
     PredicateRouter, 
     load_predicates, 
     create_signal_context,
     validate_signal_value,
     get_signal_spec
 )
-from seedcore.predicates.schema import PredicatesConfig, Rule, GpuGuard, Metadata
-from seedcore.predicates.evaluator import PredicateEvaluator
-from seedcore.predicates.loader import create_default_config, save_default_config
+from src.seedcore.predicates.schema import PredicatesConfig, Rule, GpuGuard, Metadata
+from src.seedcore.predicates.evaluator import PredicateEvaluator
+from src.seedcore.predicates.loader import create_default_config, save_default_config
 
 class TestPredicateEvaluator:
     """Test the predicate evaluator."""
@@ -228,29 +233,24 @@ class TestGPUGuard:
         
         status = router.get_gpu_guard_status()
         assert "guard_ok" in status
-        assert "active_jobs" in status
-        assert "budget_remaining_s" in status
+        assert "inflight_jobs" in status
+        assert "today_used_seconds" in status
     
     def test_gpu_job_submission(self):
         """Test GPU job submission."""
         config = create_default_config()
         router = PredicateRouter(config)
         
-        # Should be able to submit a job initially
-        can_submit, reason = router.gpu_guard.can_submit_job("tuning")
-        assert can_submit == True
-        
-        # Submit a job
-        success = router.gpu_guard.submit_job("test_job_1", "tuning")
-        assert success == True
-        
-        # Start the job
-        started = router.gpu_guard.start_job("test_job_1")
-        assert started == True
+        # Should be able to acquire a job initially
+        can_acquire, reason = router.gpu_guard.try_acquire("test_job_1", 100)
+        assert can_acquire == True
         
         # Complete the job
-        completed = router.gpu_guard.complete_job("test_job_1", success=True)
-        assert completed == True
+        router.gpu_guard.complete("test_job_1", 50.0, success=True)
+        
+        # Check status
+        status = router.get_gpu_guard_status()
+        assert status["inflight_jobs"] == 0
 
 if __name__ == "__main__":
     pytest.main([__file__])
