@@ -144,8 +144,8 @@ echo -e "${BLUE}📋 TEST 4: Testing critical application queries${NC}"
 
 # Test task creation
 run_sql_command "
-INSERT INTO tasks (type, status, description) 
-VALUES ('migration_test', 'queued', 'Test task for migration verification')
+INSERT INTO tasks (type, status, description, run_after) 
+VALUES ('migration_test', 'queued', 'Test task for migration verification', NOW() + INTERVAL '10 minutes')
 ON CONFLICT DO NOTHING;
 " "Creating test task"
 
@@ -183,10 +183,11 @@ run_sql_command "
 WITH task_to_update AS (
     SELECT id FROM tasks 
     WHERE type = 'migration_test' AND status = 'queued' 
+    ORDER BY created_at DESC
     LIMIT 1
 )
 UPDATE tasks 
-SET status = 'running', locked_by = 'test_dispatcher', locked_at = NOW()
+SET status = 'running', locked_by = 'test_dispatcher', locked_at = NOW(), run_after = NULL
 WHERE id IN (SELECT id FROM task_to_update);
 " "Testing status update"
 

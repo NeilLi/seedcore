@@ -152,7 +152,7 @@ def _env_float(k: str, d: float) -> float:
 
 TIMEOUTS = {
     "serve_call_s": _env_float("SERVE_CALL_TIMEOUT_S", 8.0),
-    "serve_status_s": _env_float("SERVE_STATUS_TIMEOUT_S", 5.0),
+    "serve_status_s": _env_float("SERVE_STATUS_TIMEOUT_S", 8.0),
     "http_s": _env_float("HTTP_TIMEOUT_S", 8.0),
     "http_pipeline_s": _env_float("HTTP_PIPELINE_TIMEOUT_S", 30.0),
 }
@@ -512,7 +512,7 @@ def env_bool(k: str, d: bool=False) -> bool:
 def setup_ray_serve_environment_early():
     """Set up Ray Serve environment variables early to avoid timeout warnings."""
     # Set Ray Serve queue length response deadline to reduce warnings
-    queue_deadline = env("RAY_SERVE_QUEUE_LENGTH_RESPONSE_DEADLINE_S", "2.0")
+    queue_deadline = env("RAY_SERVE_QUEUE_LENGTH_RESPONSE_DEADLINE_S", "5.0")
     os.environ["RAY_SERVE_QUEUE_LENGTH_RESPONSE_DEADLINE_S"] = queue_deadline
     
     # Additional Ray Serve configuration to reduce backpressure
@@ -1047,7 +1047,7 @@ def ray_connect():
     import ray  # type: ignore
     
     # Log the Ray Serve environment variables that were set early
-    queue_deadline = env("RAY_SERVE_QUEUE_LENGTH_RESPONSE_DEADLINE_S", "2.0")
+    queue_deadline = env("RAY_SERVE_QUEUE_LENGTH_RESPONSE_DEADLINE_S", "5.0")
     max_queue = env("RAY_SERVE_MAX_QUEUE_LENGTH", "2000")
     log.info(f"🔧 Ray Serve config: QUEUE_DEADLINE={queue_deadline}s, MAX_QUEUE={max_queue}")
     
@@ -1095,7 +1095,7 @@ def serve_get_handle(ray, app_name: str):
         log.warning(f"Serve handle for '{app_name}' not available: {e}")
         return None
 
-def serve_deployment_status(handle, timeout=10.0) -> dict[str, Any]:
+def serve_deployment_status(handle, timeout=15.0) -> dict[str, Any]:
     """Get status from a Serve deployment handle."""
     try:
         resp = handle.status.remote()  # DeploymentResponse
@@ -1341,7 +1341,7 @@ def call_if_supported(coord, method_name: str, *args, timeout_s: Optional[float]
                 if "InvalidStateError" in str(e) and "CANCELLED" in str(e):
                     if attempt < max_retries:
                         log.debug(f"📋 Call '{method_name}' was cancelled (attempt {attempt+1}/{max_retries+1}), retrying...")
-                        time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                        time.sleep(0.75 * (attempt + 1))  # Slightly longer backoff
                         continue
                     else:
                         log.debug(f"📋 Call '{method_name}' was cancelled after {max_retries+1} attempts")
@@ -1350,7 +1350,7 @@ def call_if_supported(coord, method_name: str, *args, timeout_s: Optional[float]
                 elif "queue length" in str(e).lower():
                     if attempt < max_retries:
                         log.debug(f"📋 Call '{method_name}' failed due to queue timeout (attempt {attempt+1}/{max_retries+1}), retrying...")
-                        time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                        time.sleep(0.75 * (attempt + 1))  # Slightly longer backoff
                         continue
                     else:
                         log.debug(f"📋 Call '{method_name}' failed due to queue length timeout after {max_retries+1} attempts")
@@ -1365,7 +1365,7 @@ def call_if_supported(coord, method_name: str, *args, timeout_s: Optional[float]
             if "InvalidStateError" in str(e) and "CANCELLED" in str(e):
                 if attempt < max_retries:
                     log.debug(f"📋 Call '{method_name}' was cancelled during setup (attempt {attempt+1}/{max_retries+1}), retrying...")
-                    time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                    time.sleep(0.75 * (attempt + 1))  # Slightly longer backoff
                     continue
                 else:
                     log.debug(f"📋 Call '{method_name}' was cancelled during setup after {max_retries+1} attempts")
@@ -1695,6 +1695,7 @@ def test_pipeline_endpoints(coord_url: str):
     log.info("💡 NOTE: Ray 2.32+ default max_ongoing_requests=5 (was 100)")
     log.info("   This can cause queuing and timeouts on heavy endpoints")
     log.info("   Fix: @serve.deployment(max_ongoing_requests=64, num_replicas=2)")
+    log.info("   Also consider increasing RAY_SERVE_QUEUE_LENGTH_RESPONSE_DEADLINE_S to 5.0s")
     log.info("   Or increase client timeout (now set to 30s for anomaly-triage)")
     
     # Deployment configuration recommendations to eliminate warnings

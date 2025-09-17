@@ -110,8 +110,9 @@ INSERT INTO tasks (type, status, description)
 VALUES ('verification_test', 'created', 'Test task with created status');
 
 -- Test queued status
-INSERT INTO tasks (type, status, description) 
-VALUES ('verification_test', 'queued', 'Test task with queued status');
+-- Make it non-claimable to avoid background workers flipping it to running
+INSERT INTO tasks (type, status, description, run_after)
+VALUES ('verification_test', 'queued', 'Test task with queued status', NOW() + INTERVAL '10 minutes');
 
 -- Test running status
 INSERT INTO tasks (type, status, description) 
