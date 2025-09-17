@@ -33,7 +33,9 @@ logger = ensure_serve_logger("seedcore.CognitiveCore", level="DEBUG")
 
 # Try to use MwManager if present; degrade gracefully if not.
 try:
-    from src.seedcore.memory.mw_manager import MwManager, get_shared_cache, get_mw_store
+    from src.seedcore.bootstrap import get_shared_cache, get_mw_store
+    from src.seedcore.memory.mw_store import MwStore
+    MwManager = MwStore  # Alias for backward compatibility
     _MW_AVAILABLE = True
 except Exception:
     MwManager = None  # type: ignore

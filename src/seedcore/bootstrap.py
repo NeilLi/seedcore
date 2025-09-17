@@ -101,6 +101,33 @@ def _ready_ping(handle) -> None:
             time.sleep(0.5)
 
 # -----------------------------------------------------------------------------
+# Helper functions for actor creation
+# -----------------------------------------------------------------------------
+
+def _apply_ray_remote(actor_cls):
+    """Apply @ray.remote decorator to actor class if not already decorated."""
+    if not hasattr(actor_cls, 'remote'):
+        import ray
+        return ray.remote(actor_cls)
+    return actor_cls
+
+def _create_shared_cache(name: str, namespace: str, **options):
+    """Create or get existing shared_cache actor."""
+    import ray
+    RaySharedCache = _apply_ray_remote(SharedCache)
+    return RaySharedCache.options(
+        name=name, lifetime="detached", namespace=namespace, get_if_exists=True, **options
+    ).remote()
+
+def _create_mw_store(name: str, namespace: str, **options):
+    """Create or get existing mw_store actor."""
+    import ray
+    RayMwStore = _apply_ray_remote(MwStore)
+    return RayMwStore.options(
+        name=name, lifetime="detached", namespace=namespace, get_if_exists=True, **options
+    ).remote()
+
+# -----------------------------------------------------------------------------
 # Core: get-or-create for named detached actors
 # -----------------------------------------------------------------------------
 
@@ -139,29 +166,12 @@ def bootstrap_actors():
     logger.info("Bootstrapping singletons in namespace %s", ns)
 
     try:
-        # Lazy import Ray only when needed
-        import ray
-        
         logger.info("🔍 Creating shared_cache actor...")
-        # Apply @ray.remote decorator to the class if not already decorated
-        if not hasattr(SharedCache, 'remote'):
-            RaySharedCache = ray.remote(SharedCache)
-        else:
-            RaySharedCache = SharedCache
-        shared_cache = RaySharedCache.options(
-            name="shared_cache", lifetime="detached", namespace=ns, get_if_exists=True
-        ).remote()
+        shared_cache = _create_shared_cache("shared_cache", ns)
         logger.info(f"✅ shared_cache created: {shared_cache}")
         
         logger.info("🔍 Creating mw_store actor...")
-        # Apply @ray.remote decorator to the class if not already decorated
-        if not hasattr(MwStore, 'remote'):
-            RayMwStore = ray.remote(MwStore)
-        else:
-            RayMwStore = MwStore
-        mw_store = RayMwStore.options(
-            name="mw", lifetime="detached", namespace=ns, get_if_exists=True
-        ).remote()
+        mw_store = _create_mw_store("mw", ns)
         logger.info(f"✅ mw_store created: {mw_store}")
         
         logger.info("🎉 All singleton actors bootstrapped successfully!")
@@ -186,40 +196,19 @@ def bootstrap_memory_actors():
     logger.info("Bootstrapping memory actors in namespace %s", memory_ns)
 
     try:
-        # Lazy import Ray only when needed
-        import ray
-        
         logger.info("🔍 Creating shared_cache actor in memory namespace...")
-        # Apply @ray.remote decorator to the class if not already decorated
-        if not hasattr(SharedCache, 'remote'):
-            RaySharedCache = ray.remote(SharedCache)
-        else:
-            RaySharedCache = SharedCache
-        shared_cache = RaySharedCache.options(
-            name=MEMORY_CONFIG.shared_cache_name, lifetime="detached", namespace=memory_ns, get_if_exists=True
-        ).remote()
+        shared_cache = _create_shared_cache(MEMORY_CONFIG.shared_cache_name, memory_ns)
         logger.info(f"✅ shared_cache created: {shared_cache}")
         
         logger.info("🔍 Creating mw_store actor in memory namespace...")
-        # Apply @ray.remote decorator to the class if not already decorated
-        if not hasattr(MwStore, 'remote'):
-            RayMwStore = ray.remote(MwStore)
-        else:
-            RayMwStore = MwStore
-        mw_store = RayMwStore.options(
-            name=MEMORY_CONFIG.mw_actor_name, lifetime="detached", namespace=memory_ns, get_if_exists=True
-        ).remote()
+        mw_store = _create_mw_store(MEMORY_CONFIG.mw_actor_name, memory_ns)
         logger.info(f"✅ mw_store created: {mw_store}")
         
         # Create sharded cache actors in parallel batches
         logger.info(f"🔍 Creating {MEMORY_CONFIG.num_shards} sharded cache actors in memory namespace...")
         shard_handles = []
         
-        # Apply @ray.remote decorator to the class if not already decorated
-        if not hasattr(SharedCacheShard, 'remote'):
-            RaySharedCacheShard = ray.remote(SharedCacheShard)
-        else:
-            RaySharedCacheShard = SharedCacheShard
+        RaySharedCacheShard = _apply_ray_remote(SharedCacheShard)
         
         # Create shards in parallel batches to avoid sequential bottleneck
         batch_size = min(MEMORY_CONFIG.bootstrap_batch_size, MEMORY_CONFIG.num_shards)
@@ -266,30 +255,12 @@ def bootstrap_memory_actors():
 
 
 def get_shared_cache():
-    # Lazy import Ray only when needed
-    import ray
     ns = _resolve_ns()
-    # Apply @ray.remote decorator to the class if not already decorated
-    if not hasattr(SharedCache, 'remote'):
-        RaySharedCache = ray.remote(SharedCache)
-    else:
-        RaySharedCache = SharedCache
-    return RaySharedCache.options(
-        name="shared_cache", lifetime="detached", namespace=ns, get_if_exists=True
-    ).remote()
+    return _create_shared_cache("shared_cache", ns)
 
 def get_mw_store():  # note: **mw**, not mv
-    # Lazy import Ray only when needed
-    import ray
     ns = _resolve_ns()
-    # Apply @ray.remote decorator to the class if not already decorated
-    if not hasattr(MwStore, 'remote'):
-        RayMwStore = ray.remote(MwStore)
-    else:
-        RayMwStore = MwStore
-    return RayMwStore.options(
-        name="mw", lifetime="detached", namespace=ns, get_if_exists=True
-    ).remote()
+    return _create_mw_store("mw", ns)
 
 __all__ = [
     "bootstrap_actors",
