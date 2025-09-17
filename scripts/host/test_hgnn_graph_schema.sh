@@ -57,3 +57,5 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
 
 echo ""
 echo "🎉 If you see 'OK' statuses above and no errors, 007 migration is installed correctly."
+
+

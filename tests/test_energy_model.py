@@ -95,7 +95,7 @@ def test_real_energy_calculations():
     # Create mock agents for testing
     agents = []
     for i in range(3):
-        agent = RayAgent.remote(f"test_agent_{i}")
+        agent = RayAgent.remote(f"test_agent_{i}", organ_id="test_organ_1")
         # Set different role probabilities for testing
         if i == 0:
             ray.get(agent.update_role_probs.remote({'E': 0.8, 'S': 0.2, 'O': 0.0}))
@@ -231,7 +231,7 @@ def test_agent_energy_proxy():
     print("\n🧪 Testing Agent Energy Proxy...")
     
     # Create an agent
-    agent = RayAgent.remote("test_proxy_agent")
+    agent = RayAgent.remote("test_proxy_agent", organ_id="test_organ_1")
     
     # Update agent metrics
     ray.get(agent.update_local_metrics.remote(0.8, 0.9, 3))

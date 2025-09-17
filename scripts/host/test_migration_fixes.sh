@@ -205,11 +205,121 @@ ORDER BY created_at DESC
 LIMIT 3;
 " "Testing graph_tasks view (after update)"
 
-# Test 5: Cleanup and final verification
-echo -e "${BLUE}📋 TEST 5: Cleanup and final verification${NC}"
+# Test 5: Runtime Registry (Migrations 011 & 012)
+echo -e "${BLUE}📋 TEST 5: Testing Runtime Registry (Migrations 011 & 012)${NC}"
+
+# Test cluster metadata table
+run_sql_command "
+SELECT 
+    id,
+    current_epoch,
+    updated_at
+FROM cluster_metadata;
+" "Testing cluster_metadata table"
+
+# Test registry_instance table structure
+run_sql_command "
+SELECT 
+    column_name,
+    data_type,
+    is_nullable
+FROM information_schema.columns 
+WHERE table_name = 'registry_instance'
+ORDER BY ordinal_position;
+" "Testing registry_instance table structure"
+
+# Test InstanceStatus enum
+run_sql_command "
+SELECT unnest(enum_range(NULL::instancestatus)) as status_value;
+" "Testing InstanceStatus enum values"
+
+# Test runtime registry functions
+run_sql_command "
+-- Test set_current_epoch function
+SELECT set_current_epoch(gen_random_uuid());
+" "Testing set_current_epoch function"
+
+# Test register_instance function
+run_sql_command "
+-- Test register_instance function
+SELECT register_instance(
+    gen_random_uuid(),
+    'test_organ_1',
+    (SELECT current_epoch FROM cluster_metadata WHERE id = 1),
+    'test_organ_1',
+    '/test/route',
+    'test_node_1',
+    '127.0.0.1'::inet,
+    12345
+);
+" "Testing register_instance function"
+
+# Test set_instance_status function
+run_sql_command "
+-- Test set_instance_status function
+WITH test_instance AS (
+    SELECT instance_id FROM registry_instance 
+    WHERE logical_id = 'test_organ_1' 
+    ORDER BY started_at DESC 
+    LIMIT 1
+)
+SELECT set_instance_status(instance_id, 'alive'::instancestatus)
+FROM test_instance;
+" "Testing set_instance_status function"
+
+# Test beat function
+run_sql_command "
+-- Test beat function
+WITH test_instance AS (
+    SELECT instance_id FROM registry_instance 
+    WHERE logical_id = 'test_organ_1' 
+    ORDER BY started_at DESC 
+    LIMIT 1
+)
+SELECT beat(instance_id)
+FROM test_instance;
+" "Testing beat function"
+
+# Test active_instances view
+run_sql_command "
+SELECT 
+    logical_id,
+    status,
+    last_heartbeat,
+    started_at
+FROM active_instances
+WHERE logical_id = 'test_organ_1';
+" "Testing active_instances view"
+
+# Test active_instance view
+run_sql_command "
+SELECT 
+    logical_id,
+    status,
+    last_heartbeat,
+    started_at
+FROM active_instance
+WHERE logical_id = 'test_organ_1';
+" "Testing active_instance view"
+
+# Test expire_stale_instances function
+run_sql_command "
+-- Test expire_stale_instances function (should return 0 for recent instances)
+SELECT expire_stale_instances(1) as expired_count;
+" "Testing expire_stale_instances function"
+
+# Test expire_old_epoch_instances function
+run_sql_command "
+-- Test expire_old_epoch_instances function (should return 0 for current epoch)
+SELECT expire_old_epoch_instances() as expired_count;
+" "Testing expire_old_epoch_instances function"
+
+# Test 6: Cleanup and final verification
+echo -e "${BLUE}📋 TEST 6: Cleanup and final verification${NC}"
 
 # Clean up test data
-run_sql_command "DELETE FROM tasks WHERE type = 'migration_test';" "Cleaning up test data"
+run_sql_command "DELETE FROM tasks WHERE type = 'migration_test';" "Cleaning up test tasks"
+run_sql_command "DELETE FROM registry_instance WHERE logical_id = 'test_organ_1';" "Cleaning up test registry instances"
 
 # Final status check
 run_sql_command "
@@ -223,7 +333,17 @@ SELECT
     COUNT(*) as value
 FROM pg_enum e
 JOIN pg_type t ON e.enumtypid = t.oid
-WHERE t.typname = 'taskstatus';
+WHERE t.typname = 'taskstatus'
+UNION ALL
+SELECT 
+    'Registry instances:' as metric,
+    COUNT(*) as value
+FROM registry_instance
+UNION ALL
+SELECT 
+    'Active instances:' as metric,
+    COUNT(*) as value
+FROM active_instances;
 " "Final status check"
 
 # Summary
@@ -238,6 +358,10 @@ echo -e "   ✅ Enum values are consistently lowercase"
 echo -e "   ✅ View creation works without column rename conflicts"
 echo -e "   ✅ All task operations work correctly"
 echo -e "   ✅ Critical queries function properly"
+echo -e "   ✅ Runtime registry tables created successfully"
+echo -e "   ✅ Runtime registry functions work correctly"
+echo -e "   ✅ Instance status management functions properly"
+echo -e "   ✅ Active instance views return correct data"
 echo ""
 echo -e "${BLUE}💡 Next steps:${NC}"
 echo -e "   • Update application code to use lowercase status values"

@@ -111,6 +111,7 @@ class Tier0MemoryManager:
         num_gpus: Optional[float] = None,
         resources: Optional[Dict[str, float]] = None,
         namespace: Optional[str] = None,
+        organ_id: Optional[str] = None,
     ) -> str:
         """
         Create a new Ray agent actor.
@@ -118,6 +119,7 @@ class Tier0MemoryManager:
         Args:
             agent_id: Unique identifier for the agent
             role_probs: Initial role probabilities
+            organ_id: ID of the organ this agent belongs to
             
         Returns:
             The agent ID if successful
@@ -159,9 +161,10 @@ class Tier0MemoryManager:
                 agent_handle = RayAgent.options(**options_kwargs).remote(
                     agent_id=agent_id,
                     initial_role_probs=role_probs,
+                    organ_id=organ_id,
                 )
             else:
-                agent_handle = RayAgent.remote(agent_id, role_probs)
+                agent_handle = RayAgent.remote(agent_id, role_probs, organ_id)
             self.agents[agent_id] = agent_handle
             
             # Initialize heartbeat and stats

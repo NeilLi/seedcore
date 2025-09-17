@@ -25,6 +25,7 @@ import json
 import random
 import ast
 import operator
+import uuid
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 import logging
@@ -116,6 +117,8 @@ class RayAgent:
                  checkpoint_cfg: Optional[Dict[str, Any]] = None):
         # 1. Agent Identity and State
         self.agent_id = agent_id
+        self.instance_id = uuid.uuid4().hex  # Use UUID for instance_id
+        self.organ_id = organ_id or "_"  # Set organ_id properly
         
         # 2. Initialize AgentState with COA specifications
         self.state = AgentState(
@@ -177,10 +180,9 @@ class RayAgent:
         # --- Initialize private memory (lifetime-only persistence) ---
         self._privmem = AgentPrivateMemory(agent_id=self.agent_id, alpha=0.1)
         # Optional checkpoint store (disabled by default)
-        self._organ_id = organ_id or "_"
         self._ckpt_cfg = checkpoint_cfg or {"enabled": False}
         self._ckpt_store: CheckpointStore = CheckpointStoreFactory.from_config(self._ckpt_cfg)
-        self._ckpt_key = f"{self._organ_id}/{self.agent_id}"
+        self._ckpt_key = f"{self.organ_id}/{self.agent_id}"
         self._maybe_restore()
         
         # Initialize memory managers asynchronously to avoid hanging
@@ -204,7 +206,7 @@ class RayAgent:
             from ..memory.long_term_memory import LongTermMemoryManager
             
             # Use provided organ_id or fallback to generated one
-            organ_id = self._organ_id or f"organ_for_{self.agent_id}"
+            organ_id = self.organ_id or f"organ_for_{self.agent_id}"
             self.mw_manager = MwManager(organ_id=organ_id)
             self.mlt_manager = LongTermMemoryManager()
             
@@ -317,6 +319,34 @@ class RayAgent:
     def ping(self) -> Dict[str, Any]:
         """Cheap liveness RPC used by Tier-0 to detect/prune dead handles."""
         return {"id": self.agent_id, "ts": time.time()}
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Returns comprehensive status information for the agent."""
+        current_time = time.time()
+        uptime = current_time - self.created_at
+        
+        return {
+            "agent_id": self.agent_id,
+            "organ_id": self.organ_id,
+            "instance_id": self.instance_id,
+            "uptime_s": round(uptime, 3),
+            "status": "healthy",
+            "lifecycle_state": self.lifecycle_state,
+            "capability_score": round(self.capability_score, 3),
+            "memory_utilization": round(self.mem_util, 3),
+            "tasks_processed": self.tasks_processed,
+            "successful_tasks": self.successful_tasks,
+            "success_rate": round(self.successful_tasks / max(self.tasks_processed, 1), 3),
+            "role_probabilities": self.role_probs.copy(),
+            "energy_state": self.energy_state.copy(),
+            "memory_writes": self.memory_writes,
+            "memory_hits_on_writes": self.memory_hits_on_writes,
+            "salient_events_logged": self.salient_events_logged,
+            "idle_ticks": self.idle_ticks,
+            "archived": self._archived,
+            "last_heartbeat": self.last_heartbeat,
+            "created_at": self.created_at,
+        }
     
     def update_role_probs(self, new_role_probs: Dict[str, float]):
         """Updates the agent's role probabilities."""

@@ -57,6 +57,15 @@ RAY_NAMESPACE = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-de
 
 HEALTH_TIMEOUT_S = int(os.getenv("ORGANISM_HEALTH_TIMEOUT_S", "180"))
 HEALTH_INTERVAL_S = float(os.getenv("ORGANISM_HEALTH_TIMEOUT_S", "2.0"))
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Robust environment variable parsing for boolean values."""
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.lower() in ("1", "true", "yes", "y", "on")
+
+# Rolling init flag controls epoch rotation behavior in OrganismManager
+ROLLING_INIT = _env_bool("SEEDCORE_ROLLING_INIT", False)
 
 def _load_config(path: Path) -> dict:
     import yaml
@@ -153,6 +162,7 @@ def _init_via_ray(cfg: dict) -> bool:
         
         log.info("🚀 Calling initialize_organism via Serve handle…")
         log.info(f"🔧 Using namespace '{RAY_NAMESPACE}' for organ/agent creation")
+        log.info(f"🔧 Rolling init: {ROLLING_INIT} (false rotates epoch; true keeps epoch)")
         resp = h.initialize_organism.remote()
         result = _resolve_ray_response(resp, timeout_s=120)
         log.info(f"📋 initialize_organism response: {result}")
@@ -195,7 +205,11 @@ def _wait_health(timeout_s: int, interval_s: float) -> bool:
             if r.status_code == 200:
                 data = r.json()
                 if data.get("organism_initialized"):
-                    log.info("✅ Organism health: initialized")
+                    # Enrich readiness logs with route and epoch expectations
+                    status = data.get("status")
+                    route = "/organism/health"
+                    init_mode = "rolling" if ROLLING_INIT else "hard"
+                    log.info(f"✅ Organism health: initialized (status={status}, route={route}, mode={init_mode})")
                     return True
                 log.info("⏳ Organism still initializing...")
             else:
@@ -208,6 +222,9 @@ def _wait_health(timeout_s: int, interval_s: float) -> bool:
 
 def bootstrap_organism() -> bool:
     """Public entry used by bootstrap_entry.py. Returns True/False (no sys.exit here)."""
+    init_mode = "rolling" if ROLLING_INIT else "hard"
+    log.info(f"🚀 Starting organism bootstrap in {init_mode} mode (SEEDCORE_ROLLING_INIT={os.getenv('SEEDCORE_ROLLING_INIT', 'unset')})")
+    
     try:
         cfg = _load_config(DEFAULT_CONFIG_PATH)
     except Exception:

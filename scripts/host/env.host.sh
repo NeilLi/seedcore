@@ -101,7 +101,7 @@ export MAX_PLAN_STEPS=16
 ### Performance & SLOs
 export FAST_PATH_LATENCY_SLO_MS=1000
 export RAY_SERVE_MAX_QUEUE_LENGTH=2000
-export RAY_SERVE_QUEUE_LENGTH_RESPONSE_DEADLINE_S=2.0
+export RAY_SERVE_QUEUE_LENGTH_RESPONSE_DEADLINE_S=5.0
 
 echo "[seedcore-dev] Environment variables set."
 

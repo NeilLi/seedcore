@@ -26,7 +26,7 @@ async def run_scenario():
     ensure_ray_initialized()
 
     # 1. Create a pool of worker agents and one observer agent
-    workers = [RayAgent.remote(agent_id=f"Worker-{i}") for i in range(NUM_WORKER_AGENTS)]
+    workers = [RayAgent.remote(agent_id=f"Worker-{i}", organ_id="worker_organ_1") for i in range(NUM_WORKER_AGENTS)]
     
     # Get namespace from environment, default to "seedcore-dev" for consistency
     ray_namespace = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))

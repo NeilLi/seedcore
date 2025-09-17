@@ -20,11 +20,26 @@ upstream to the energy system. See §4, §6, and §3.x gradient proxies.
 """
 
 from __future__ import annotations
+import asyncio
+import contextlib
+import os
+import socket
+import uuid
+import random
+import signal
+import logging
 import ray
-from typing import List, Any, TYPE_CHECKING, Dict
+from typing import List, Any, TYPE_CHECKING, Dict, Optional
 
 if TYPE_CHECKING:
     from ..agents.ray_actor import RayAgent
+
+logger = logging.getLogger(__name__)
+
+# Configurable heartbeat parameters
+HB_BASE = float(os.getenv("RUNTIME_HB_BASE_S", "3.0"))     # 3s
+HB_JITTER = float(os.getenv("RUNTIME_HB_JITTER_S", "2.0")) # +[0..2]s
+HB_BACKOFF_MAX = float(os.getenv("RUNTIME_HB_BACKOFF_S", "10.0"))
 
 @ray.remote
 class Organ:
@@ -35,10 +50,106 @@ class Organ:
     reflecting the "swarm-of-swarms" model central to the COA framework.
     """
     
-    def __init__(self, organ_id: str, organ_type: str):
+    def __init__(self, organ_id: str, organ_type: str, serve_route: Optional[str] = None):
         self.organ_id = organ_id
         self.organ_type = organ_type
+        self.serve_route = serve_route
         self.agents: Dict[str, 'RayAgent'] = {}
+
+        # Runtime registry fields
+        self.instance_id = uuid.uuid4().hex
+        self._repo = None
+        self._hb_task: Optional[asyncio.Task] = None
+        self._started = False
+        self._closing = asyncio.Event()
+
+    # ------------------------------------------------------------------
+    # Runtime registry helpers
+    # ------------------------------------------------------------------
+    async def _repo_lazy(self):
+        if self._repo is None:
+            from ..graph.agent_graph_repository import AgentGraphRepository
+            self._repo = AgentGraphRepository()
+        return self._repo
+
+    async def start(self) -> Dict[str, Any]:
+        """Register in runtime registry and start heartbeats after readiness."""
+        if self._started:
+            return {"status": "alive", "instance_id": self.instance_id, "logical_id": self.organ_id}
+        
+        repo = await self._repo_lazy()
+
+        # Register in 'starting' status
+        await repo.register_instance(
+            instance_id=self.instance_id,
+            logical_id=self.organ_id,
+            cluster_epoch=await repo.get_current_cluster_epoch(),
+            actor_name=self.organ_id,
+            serve_route=self.serve_route,
+            node_id=os.getenv("RAY_NODE_ID") or "",
+            ip_address=socket.gethostbyname(socket.gethostname()),
+            pid=os.getpid(),
+        )
+        logger.info(f"✅ Organ instance {self.instance_id} (logical: {self.organ_id}) registered for epoch {await repo.get_current_cluster_epoch()}")
+
+        # Probe dependencies / Serve readiness here if applicable
+        # await self._probe_ready()
+
+        # Mark alive after readiness
+        await repo.set_instance_status(self.instance_id, "alive")
+        logger.info(f"✅ Organ instance {self.instance_id} (logical: {self.organ_id}) marked alive")
+
+        # Heartbeat with jitter+backoff
+        self._hb_task = asyncio.create_task(self._heartbeat_loop())
+        
+        # Try to handle SIGTERM to mark dead early
+        try:
+            loop = asyncio.get_running_loop()
+            loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.create_task(self.close()))
+        except Exception:
+            pass  # Signal handling not available in all contexts
+        
+        self._started = True
+        return {"status": "alive", "instance_id": self.instance_id, "logical_id": self.organ_id}
+
+    async def _heartbeat_loop(self):
+        repo = await self._repo_lazy()
+        backoff = 0.5
+        while not self._closing.is_set():
+            try:
+                await repo.beat(self.instance_id)
+                backoff = 0.5  # reset on success
+            except Exception as e:
+                # transient DB hiccup—bounded backoff
+                logger.warning(f"❌ Organ heartbeat for {self.organ_id} failed: {e}, backing off {backoff}s")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, HB_BACKOFF_MAX)
+            
+            # jittered sleep
+            try:
+                await asyncio.wait_for(self._closing.wait(), timeout=HB_BASE + random.random() * HB_JITTER)
+            except asyncio.TimeoutError:
+                pass  # normal path: timeout from wait_for -> loop again
+
+    async def close(self) -> Dict[str, Any]:
+        """Stop heartbeats and mark dead in runtime registry."""
+        if self._closing.is_set():
+            return {"status": "dead", "instance_id": self.instance_id}
+        
+        logger.info(f"🛑 Organ instance {self.instance_id} (logical: {self.organ_id}) closing...")
+        self._closing.set()
+        
+        if self._hb_task:
+            self._hb_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._hb_task
+        
+        repo = await self._repo_lazy()
+        with contextlib.suppress(Exception):
+            await repo.set_instance_status(self.instance_id, "dead")
+        
+        logger.info(f"✅ Organ instance {self.instance_id} (logical: {self.organ_id}) marked dead.")
+        return {"status": "dead", "instance_id": self.instance_id}
 
     def register_agent(self, agent_id: str, agent_handle: 'RayAgent'):
         """Registers a Ray agent actor with this organ."""
@@ -72,6 +183,7 @@ class Organ:
         return {
             "organ_id": self.organ_id,
             "organ_type": self.organ_type,
+            "instance_id": str(self.instance_id),
             "agent_count": len(self.agents),
             "agent_ids": list(self.agents.keys()),
             "status": "healthy"  # Explicit status field for health checks

@@ -37,6 +37,8 @@ import traceback
 import random
 import uuid
 import httpx
+import json
+import contextlib
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -51,6 +53,13 @@ logger = ensure_serve_logger("seedcore.OrganismManager", level="DEBUG")
 
 # Target namespace for agent actors (prefer SEEDCORE_NS, fallback to RAY_NAMESPACE)
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Robust environment variable parsing for boolean values."""
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.lower() in ("1", "true", "yes", "y", "on")
 
 
 class OrganismManager:
@@ -88,6 +97,14 @@ class OrganismManager:
         
         # Memory thresholds (bandit hook)
         self._memory_thresholds = {}
+        
+        # Agent graph repository (lazy initialization)
+        self._agent_graph_repo = None
+        self._agent_graph_repo_checked = False
+        
+        # Runtime registry configuration
+        self.rolling = _env_bool("SEEDCORE_ROLLING_INIT", False)
+        self._recon_task: Optional[asyncio.Task] = None
 
     # -------------------------------------------------------------------------
     # Config / Ray helpers
@@ -377,6 +394,26 @@ class OrganismManager:
 
                         self.organs[organ_id] = existing_organ
 
+                        # Persist organ to registry (best-effort)
+                        repo = self._get_agent_graph_repository()
+                        if repo:
+                            try:
+                                await repo.ensure_organ(
+                                    organ_id=organ_id, 
+                                    kind=organ_type, 
+                                    props=json.dumps({"ray_namespace": organ_namespace})
+                                )
+                                logger.info(f"✅ Persisted existing organ '{organ_id}' to registry")
+                            except Exception as e:
+                                logger.error(f"❌ Persist existing organ '{organ_id}' failed: {e}")
+
+                        # Start runtime heartbeats (idempotent)
+                        try:
+                            start_info = await self._async_ray_get(existing_organ.start.remote())
+                            logger.info(f"✅ Organ '{organ_id}' started: {start_info}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Failed to start organ '{organ_id}': {e}")
+
                     except ValueError:
                         logger.info(f"🚀 Creating new organ: {organ_id} (Type: {organ_type})")
                         ray_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
@@ -398,6 +435,26 @@ class OrganismManager:
                         if not await self._test_organ_health_async(self.organs[organ_id], organ_id):
                             logger.error(f"❌ New organ {organ_id} is not healthy")
                             raise Exception(f"New organ {organ_id} failed health check")
+                        
+                        # Persist new organ to registry (best-effort)
+                        repo = self._get_agent_graph_repository()
+                        if repo:
+                            try:
+                                await repo.ensure_organ(
+                                    organ_id=organ_id, 
+                                    kind=organ_type, 
+                                    props=json.dumps({"ray_namespace": ray_namespace})
+                                )
+                                logger.info(f"✅ Persisted new organ '{organ_id}' to registry")
+                            except Exception as e:
+                                logger.error(f"❌ Persist new organ '{organ_id}' failed: {e}")
+
+                        # Start runtime heartbeats (idempotent)
+                        try:
+                            start_info = await self._async_ray_get(self.organs[organ_id].start.remote())
+                            logger.info(f"✅ Organ '{organ_id}' started: {start_info}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Failed to start organ '{organ_id}': {e}")
 
                 except Exception as e:
                     logger.error(f"❌ Failed to create/get organ {organ_id}: {e}")
@@ -454,6 +511,21 @@ class OrganismManager:
 
                     if agent_id in existing_agents:
                         logger.info(f"✅ Reusing existing agent: {agent_id}")
+                        
+                        # Persist existing agent and ensure link to organ (best-effort)
+                        repo = self._get_agent_graph_repository()
+                        if repo:
+                            try:
+                                await repo.ensure_agent(
+                                    agent_id=agent_id, 
+                                    display_name=agent_id, 
+                                    props=json.dumps({"ray_namespace": AGENT_NAMESPACE})
+                                )
+                                await repo.link_agent_to_organ(agent_id=agent_id, organ_id=organ_id)
+                                logger.info(f"✅ Ensured existing agent '{agent_id}' linked to organ '{organ_id}' in DB")
+                            except Exception as e:
+                                logger.error(f"❌ Persist/link existing agent '{agent_id}'→'{organ_id}' failed: {e}")
+                        
                         self.agent_to_organ_map[agent_id] = organ_id
                         agent_count += 1
                         continue
@@ -468,6 +540,7 @@ class OrganismManager:
                             name=agent_id,
                             lifetime="detached",
                             num_cpus=0.1,
+                            organ_id=organ_id,
                         )
 
                         agent_handle = tier0_manager.get_agent(agent_id)
@@ -484,6 +557,20 @@ class OrganismManager:
                         logger.info(f"📝 Registering agent {agent_id} with organ {organ_id}...")
                         await self._async_ray_get(organ_handle.register_agent.remote(agent_id, agent_handle))
                         logger.info(f"✅ Agent {agent_id} registered with organ {organ_id}")
+
+                        # Persist agent and link to organ (best-effort)
+                        repo = self._get_agent_graph_repository()
+                        if repo:
+                            try:
+                                await repo.ensure_agent(
+                                    agent_id=agent_id, 
+                                    display_name=agent_id, 
+                                    props=json.dumps({"ray_namespace": AGENT_NAMESPACE})
+                                )
+                                await repo.link_agent_to_organ(agent_id=agent_id, organ_id=organ_id)
+                                logger.info(f"✅ Linked agent '{agent_id}' to organ '{organ_id}' in DB")
+                            except Exception as e:
+                                logger.error(f"❌ Persist/link agent '{agent_id}'→'{organ_id}' failed: {e}")
 
                         self.agent_to_organ_map[agent_id] = organ_id
                         agent_count += 1
@@ -606,6 +693,25 @@ class OrganismManager:
         """Execute a task on a randomly selected organ."""
         if not self.organs:
             raise RuntimeError("No organs available")
+        
+        # Graph-based routing (skill/service-aware)
+        required_skill = (task.get("params") or {}).get("required_skill")
+        required_service = (task.get("params") or {}).get("required_service")
+        repo = self._get_agent_graph_repository()
+
+        if repo and (required_skill or required_service):
+            try:
+                if required_skill:
+                    organ_id = await repo.find_organ_by_skill(required_skill)
+                else:
+                    organ_id = await repo.find_organ_by_service(required_service)
+                if organ_id and organ_id in self.organs:
+                    logger.info(f"🧠 Routing task to organ '{organ_id}' based on graph ({required_skill or required_service})")
+                    return await self.execute_task_on_organ(organ_id, task)
+                else:
+                    logger.warning(f"⚠️ Graph suggested organ '{organ_id}' not active; falling back")
+            except Exception as e:
+                logger.error(f"❌ Graph-based routing failed: {e}; falling back")
         
         # Enhanced routing based on task type (Migration 007+)
         ttype = task.get("type", "").lower()
@@ -936,6 +1042,19 @@ class OrganismManager:
             try:
                 logger.info(f"🔄 Attempt {attempt + 1}/{max_retries} to initialize organism...")
 
+                # 0) Rotate epoch unless rolling mode (env-controlled)
+                try:
+                    repo = self._get_agent_graph_repository()
+                    if repo and not self.rolling:
+                        import uuid as _uuid
+                        new_epoch = str(_uuid.uuid4())
+                        await repo.set_current_cluster_epoch(new_epoch)
+                        logger.info(f"[organism] hard init: rotated epoch={new_epoch}")
+                    else:
+                        logger.info("[organism] rolling init: keeping current epoch")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to manage cluster epoch: {e}")
+
                 await self._check_ray_cluster_health()
                 await self._cleanup_dead_actors()
                 await self._recover_stale_tasks()
@@ -950,6 +1069,13 @@ class OrganismManager:
 
                 self._initialized = True
                 logger.info("✅ Organism initialization complete.")
+                # Start reconciliation loop (best-effort)
+                try:
+                    if self._recon_task is None or self._recon_task.done():
+                        self._recon_task = asyncio.create_task(self._reconcile_loop())
+                        logger.info("✅ Started registry reconciliation loop")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to start reconcile loop: {e}")
                 return
 
             except Exception as e:
@@ -966,9 +1092,34 @@ class OrganismManager:
         """Shut down the organism and stop background tasks."""
         logger.info("🛑 Shutting down organism...")
         await self._stop_background_health_checks()
+        
+        # Cancel reconciliation task
+        if self._recon_task:
+            self._recon_task.cancel()
+            with contextlib.suppress(Exception):
+                await self._recon_task
+        
         # Note: detached Ray actors persist until explicitly terminated (out of scope here)
         self._initialized = False
         logger.info("✅ Organism shutdown complete")
+
+    async def _reconcile_loop(self):
+        """Background loop to expire stale/old-epoch instances in registry."""
+        while True:
+            try:
+                await asyncio.sleep(15)
+                repo = self._get_agent_graph_repository()
+                if repo:
+                    stale = await repo.expire_stale_instances(timeout_seconds=15)
+                    old = await repo.expire_old_epoch_instances()
+                    if stale or old:
+                        logger.info(f"[reconcile] stale={stale}, old_epoch={old}")
+                else:
+                    logger.warning("[reconcile] AgentGraphRepository not available, skipping reconciliation")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[reconcile] error: {e}")
 
     # -------------------------------------------------------------------------
     # Task execution helpers / status updates
@@ -1026,6 +1177,21 @@ class OrganismManager:
                 logger.warning(f"Failed to connect to state service: {e}")
                 self._state_service = None
         return self._state_service
+
+    def _get_agent_graph_repository(self):
+        """Get or create the agent graph repository (lazy initialization)."""
+        if self._agent_graph_repo is not None or self._agent_graph_repo_checked:
+            return self._agent_graph_repo
+
+        self._agent_graph_repo_checked = True
+        try:
+            from seedcore.graph.agent_graph_repository import AgentGraphRepository
+            self._agent_graph_repo = AgentGraphRepository()
+            logger.debug("✅ AgentGraphRepository initialized")
+        except Exception as exc:
+            logger.warning(f"AgentGraphRepository initialization failed: {exc}")
+            self._agent_graph_repo = None
+        return self._agent_graph_repo
 
     async def get_unified_state(self, agent_ids: Optional[List[str]] = None):
         """
@@ -1495,9 +1661,14 @@ class OrganismManager:
                 organ_handle = self.organs[organ_id]
                 # Try to shutdown gracefully if the organ supports it
                 try:
-                    await self._async_ray_get(organ_handle.shutdown.remote(), timeout=5.0)
+                    # Prefer close() to mark dead in runtime registry
+                    await self._async_ray_get(organ_handle.close.remote(), timeout=5.0)
                 except Exception:
-                    pass  # Organ may not have shutdown method
+                    # Fallback to optional shutdown()
+                    try:
+                        await self._async_ray_get(organ_handle.shutdown.remote(), timeout=5.0)
+                    except Exception:
+                        pass  # Organ may not have shutdown method
                     
                 # Kill the actor
                 ray.kill(organ_handle)

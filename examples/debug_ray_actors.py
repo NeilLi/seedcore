@@ -56,7 +56,7 @@ def test_ray_agent_without_numpy():
         from seedcore.agents.ray_actor import RayAgent
         
         # Create agent
-        agent = RayAgent.remote("test_agent_1", {'E': 0.6, 'S': 0.3, 'O': 0.1})
+        agent = RayAgent.remote("test_agent_1", {'E': 0.6, 'S': 0.3, 'O': 0.1}, "test_organ_1")
         print(f"✅ RayAgent created: {agent}")
         
         # Test methods
@@ -86,7 +86,7 @@ def test_ray_agent_creation():
         from seedcore.agents import RayAgent
         
         # Create agent
-        agent = RayAgent.remote("test_agent_1", {'E': 0.6, 'S': 0.3, 'O': 0.1})
+        agent = RayAgent.remote("test_agent_1", {'E': 0.6, 'S': 0.3, 'O': 0.1}, "test_organ_1")
         print(f"✅ RayAgent created: {agent}")
         
         # Test methods

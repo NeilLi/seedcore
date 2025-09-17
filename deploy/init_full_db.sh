@@ -22,12 +22,14 @@ MIGRATION_008="${SCRIPT_DIR}/migrations/008_hgnn_agent_layer.sql"
 # NEW: HGNN agent/organ layer extensions
 MIGRATION_009="${SCRIPT_DIR}/migrations/009_create_facts_table.sql"
 MIGRATION_010="${SCRIPT_DIR}/migrations/010_task_fact_integration.sql"
+MIGRATION_011="${SCRIPT_DIR}/migrations/011_add_runtime_registry.sql"
+MIGRATION_012="${SCRIPT_DIR}/migrations/012_runtime_registry_functions.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" \
   "$MIGRATION_005" "$MIGRATION_006" "$MIGRATION_007" "$MIGRATION_008" \
-  "$MIGRATION_009" "$MIGRATION_010"
+  "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" "$MIGRATION_012"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -48,6 +50,8 @@ echo "   - 007: $MIGRATION_007 (HGNN base graph schema)"
 echo "   - 008: $MIGRATION_008 (NEW: HGNN agent/organ layer + relations)"
 echo "   - 009: $MIGRATION_009 (Create facts table)"
 echo "   - 010: $MIGRATION_010 (NEW: Task-Fact integration + view update)"
+echo "   - 011: $MIGRATION_011 (NEW: Runtime registry tables & views)"
+echo "   - 012: $MIGRATION_012 (NEW: Runtime registry functions)"
 
 find_pg_pod() {
   local sel pod
@@ -166,6 +170,16 @@ echo "⚙️  Running migration 010: Task-Fact integration + view update..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_010" "$POSTGRES_POD:/tmp/010_task_fact_integration.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/010_task_fact_integration.sql"
 
+# Migration 011 (NEW)
+echo "⚙️  Running migration 011: Runtime registry tables & views..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_011" "$POSTGRES_POD:/tmp/011_add_runtime_registry.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/011_add_runtime_registry.sql"
+
+# Migration 012 (NEW)
+echo "⚙️  Running migration 012: Runtime registry functions..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_012" "$POSTGRES_POD:/tmp/012_runtime_registry_functions.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/012_runtime_registry_functions.sql"
+
 # 6) Verify schema
 echo "✅ Verifying schema..."
 
@@ -213,6 +227,21 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 echo "📊 Key HGNN functions:"
 for fn in ensure_task_node ensure_agent_node ensure_organ_node ensure_fact_node backfill_task_nodes \
           create_graph_embed_task_v2 create_graph_rag_task_v2
+do
+  kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+    psql -U "$DB_USER" -d "$DB_NAME" -c "\df+ $fn" || true
+done
+
+echo "📊 Runtime registry tables:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ cluster_metadata"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ registry_instance"
+
+echo "📊 Runtime registry views:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ active_instances"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ active_instance"
+
+echo "📊 Runtime registry functions:"
+for fn in set_current_epoch register_instance set_instance_status beat expire_stale_instances expire_old_epoch_instances
 do
   kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
     psql -U "$DB_USER" -d "$DB_NAME" -c "\df+ $fn" || true

@@ -51,8 +51,8 @@ async def run_scenario():
 
     try:
         print("\n🤖 Creating agents for collaborative task...")
-        agent_a = RayAgent.remote(agent_id="Agent-A")
-        agent_b = RayAgent.remote(agent_id="Agent-B")
+        agent_a = RayAgent.remote(agent_id="Agent-A", organ_id="collaborative_organ_1")
+        agent_b = RayAgent.remote(agent_id="Agent-B", organ_id="collaborative_organ_1")
         
         await asyncio.sleep(2)
         

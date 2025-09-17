@@ -12,7 +12,7 @@ def run_scenario():
     ensure_ray_initialized()
 
     # 1. Create an agent
-    agent = RayAgent.remote(agent_id="Agent-Critical-Ops")
+    agent = RayAgent.remote(agent_id="Agent-Critical-Ops", organ_id="critical_organ_1")
     
     # 2. Define a high-stakes task
     high_stakes_task = {

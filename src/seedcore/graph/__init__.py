@@ -10,6 +10,7 @@ This module provides:
 
 # Import GraphTaskRepository first as it's needed by coordinator
 from .graph_task_repository import GraphTaskRepository
+from .agent_graph_repository import AgentGraphRepository
 
 # Make DGL-dependent imports optional to avoid import errors during testing
 try:
@@ -20,11 +21,12 @@ try:
     
     __all__ = [
         "GraphTaskRepository",
+        "AgentGraphRepository",
         "GraphLoader",
         "SAGE", 
         "GraphEmbedder",
         "upsert_embeddings"
     ]
 except (ImportError, FileNotFoundError) as e:
-    # If DGL is not available, only export GraphTaskRepository
-    __all__ = ["GraphTaskRepository"]
+    # If DGL is not available, only export GraphTaskRepository and AgentGraphRepository
+    __all__ = ["GraphTaskRepository", "AgentGraphRepository"]
