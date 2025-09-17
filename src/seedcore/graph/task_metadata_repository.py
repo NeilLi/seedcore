@@ -7,7 +7,7 @@ import uuid
 from typing import Any, Dict, Optional, Union
 
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError, DataError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from seedcore.database import get_async_pg_session_factory
@@ -16,7 +16,7 @@ from seedcore.models.task import Task
 logger = logging.getLogger(__name__)
 
 
-class GraphTaskRepository:
+class TaskMetadataRepository:
     """Lightweight repository for persisting task graph metadata.
 
     The repository exposes high-level helpers that take care of:
@@ -154,8 +154,40 @@ class GraphTaskRepository:
                     )
 
                 return task_id
-            except SQLAlchemyError:
-                logger.exception("Failed to persist graph task %s", task_id)
+            except IntegrityError as e:
+                logger.error(
+                    "Integrity constraint violation while persisting task %s: %s. "
+                    "This may indicate duplicate task_id or invalid foreign key references.",
+                    task_id, str(e)
+                )
+                raise
+            except OperationalError as e:
+                logger.error(
+                    "Database operational error while persisting task %s: %s. "
+                    "This may indicate connection issues or database unavailability.",
+                    task_id, str(e)
+                )
+                raise
+            except DataError as e:
+                logger.error(
+                    "Data error while persisting task %s: %s. "
+                    "This may indicate invalid data types or constraint violations.",
+                    task_id, str(e)
+                )
+                raise
+            except SQLAlchemyError as e:
+                logger.error(
+                    "SQLAlchemy error while persisting task %s: %s. "
+                    "Task metadata: type=%s, agent_id=%s, organ_id=%s",
+                    task_id, str(e), task_type, agent_id, organ_id
+                )
+                raise
+            except Exception as e:
+                logger.error(
+                    "Unexpected error while persisting task %s: %s. "
+                    "Task metadata: type=%s, agent_id=%s, organ_id=%s",
+                    task_id, str(e), task_type, agent_id, organ_id
+                )
                 raise
 
     async def add_dependency(
@@ -186,8 +218,38 @@ class GraphTaskRepository:
                     )
                     await session.execute(text("SELECT ensure_task_node(:task_id)"), {"task_id": parent_id})
                     await session.execute(text("SELECT ensure_task_node(:task_id)"), {"task_id": child_id})
-            except SQLAlchemyError:
-                logger.exception("Failed to add dependency %s -> %s", parent_id, child_id)
+            except IntegrityError as e:
+                logger.error(
+                    "Integrity constraint violation while adding dependency %s -> %s: %s. "
+                    "This may indicate invalid task IDs or circular dependencies.",
+                    parent_id, child_id, str(e)
+                )
+                raise
+            except OperationalError as e:
+                logger.error(
+                    "Database operational error while adding dependency %s -> %s: %s. "
+                    "This may indicate connection issues or database unavailability.",
+                    parent_id, child_id, str(e)
+                )
+                raise
+            except DataError as e:
+                logger.error(
+                    "Data error while adding dependency %s -> %s: %s. "
+                    "This may indicate invalid data types.",
+                    parent_id, child_id, str(e)
+                )
+                raise
+            except SQLAlchemyError as e:
+                logger.error(
+                    "SQLAlchemy error while adding dependency %s -> %s: %s",
+                    parent_id, child_id, str(e)
+                )
+                raise
+            except Exception as e:
+                logger.error(
+                    "Unexpected error while adding dependency %s -> %s: %s",
+                    parent_id, child_id, str(e)
+                )
                 raise
 
     @staticmethod

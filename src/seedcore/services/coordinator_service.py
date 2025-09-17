@@ -9,9 +9,9 @@ from pydantic import BaseModel, Field
 import logging
 
 try:  # Optional dependency - repository may not exist in all deployments
-    from ..graph.task_metadata_repository import GraphTaskRepository  # type: ignore
+    from ..graph.task_metadata_repository import TaskMetadataRepository  # type: ignore
 except ImportError:  # pragma: no cover - keep coordinator resilient when module missing
-    GraphTaskRepository = None  # type: ignore
+    TaskMetadataRepository = None  # type: ignore
 
 # Import predicate system
 from ..predicates import PredicateRouter, load_predicates, load_predicates_async, get_metrics
@@ -917,16 +917,16 @@ class Coordinator:
 
         self._graph_repo_checked = True
 
-        if GraphTaskRepository is None:
+        if TaskMetadataRepository is None:
             return None
 
         try:
-            self.graph_repository = GraphTaskRepository()
+            self.graph_repository = TaskMetadataRepository()
         except TypeError as exc:
-            logger.debug(f"GraphTaskRepository instantiation failed (signature mismatch): {exc}")
+            logger.debug(f"TaskMetadataRepository instantiation failed (signature mismatch): {exc}")
             self.graph_repository = None
         except Exception as exc:  # pragma: no cover - defensive logging for unexpected errors
-            logger.warning(f"GraphTaskRepository initialization failed: {exc}")
+            logger.warning(f"TaskMetadataRepository initialization failed: {exc}")
             self.graph_repository = None
 
         return self.graph_repository

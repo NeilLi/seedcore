@@ -8,8 +8,8 @@ This module provides:
 - pgvector integration for graph embeddings
 """
 
-# Import GraphTaskRepository first as it's needed by coordinator
-from .task_metadata_repository import GraphTaskRepository
+# Import TaskMetadataRepository first as it's needed by coordinator
+from .task_metadata_repository import TaskMetadataRepository
 from .agent_repository import AgentGraphRepository
 
 # Make DGL-dependent imports optional to avoid import errors during testing
@@ -20,7 +20,7 @@ try:
     from .embeddings import GraphEmbedder, upsert_embeddings
     
     __all__ = [
-        "GraphTaskRepository",
+        "TaskMetadataRepository",
         "AgentGraphRepository",
         "GraphLoader",
         "SAGE", 
@@ -29,4 +29,4 @@ try:
     ]
 except (ImportError, FileNotFoundError) as e:
     # If DGL is not available, only export GraphTaskRepository and AgentGraphRepository
-    __all__ = ["GraphTaskRepository", "AgentGraphRepository"]
+    __all__ = ["TaskMetadataRepository", "AgentGraphRepository"]
