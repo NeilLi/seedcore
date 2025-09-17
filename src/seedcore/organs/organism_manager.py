@@ -1185,7 +1185,7 @@ class OrganismManager:
 
         self._agent_graph_repo_checked = True
         try:
-            from seedcore.graph.agent_graph_repository import AgentGraphRepository
+            from seedcore.graph.agent_repository import AgentGraphRepository
             self._agent_graph_repo = AgentGraphRepository()
             logger.debug("✅ AgentGraphRepository initialized")
         except Exception as exc:

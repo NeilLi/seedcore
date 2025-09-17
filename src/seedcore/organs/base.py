@@ -68,7 +68,7 @@ class Organ:
     # ------------------------------------------------------------------
     async def _repo_lazy(self):
         if self._repo is None:
-            from ..graph.agent_graph_repository import AgentGraphRepository
+            from ..graph.agent_repository import AgentGraphRepository
             self._repo = AgentGraphRepository()
         return self._repo
 

@@ -9,8 +9,8 @@ This module provides:
 """
 
 # Import GraphTaskRepository first as it's needed by coordinator
-from .graph_task_repository import GraphTaskRepository
-from .agent_graph_repository import AgentGraphRepository
+from .task_metadata_repository import GraphTaskRepository
+from .agent_repository import AgentGraphRepository
 
 # Make DGL-dependent imports optional to avoid import errors during testing
 try:

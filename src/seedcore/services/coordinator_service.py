@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 import logging
 
 try:  # Optional dependency - repository may not exist in all deployments
-    from ..graph.graph_task_repository import GraphTaskRepository  # type: ignore
+    from ..graph.task_metadata_repository import GraphTaskRepository  # type: ignore
 except ImportError:  # pragma: no cover - keep coordinator resilient when module missing
     GraphTaskRepository = None  # type: ignore
 
