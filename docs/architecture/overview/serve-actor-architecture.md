@@ -12,6 +12,13 @@ This document provides a comprehensive overview of the SeedCore system architect
 - [Architecture Diagram](#architecture-diagram)
 - [Health Indicators](#health-indicators)
 - [Scaling and Distribution](#scaling-and-distribution)
+ - [Task Taxonomy and Routing](#task-taxonomy-and-routing)
+ - [HGNN Graph and GraphDispatcher](#hgnn-graph-and-graphdispatcher)
+ - [Graph Embeddings Pipeline](#graph-embeddings-pipeline)
+ - [Facts, Resources, and Agent Layer Integration](#facts-resources-and-agent-layer-integration)
+ - [Resiliency: Drift Detection and Circuit Breakers](#resiliency-drift-detection-and-circuit-breakers)
+ - [Data Layer and Migrations](#data-layer-and-migrations)
+ - [Verification Workflow](#verification-workflow)
 
 ## System Overview
 
@@ -367,6 +374,27 @@ Coordinator Service
 │  └─────────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Task Taxonomy and Routing
+
+SeedCore routes tasks based on type, complexity, and drift signals. The `Coordinator` maintains a minimal `RoutingDirectory` that maps task types to the appropriate organ/dispatcher. Recent migrations introduced graph, facts, resources, and agent-layer task families.
+
+### Routing Directory (selected rules)
+
+- **general_query → utility_organ_1**
+- **health_check → utility_organ_1**
+- **execute → actuator_organ_1**
+- **graph_embed | graph_rag_query | graph_embed_v2 | graph_rag_query_v2 | graph_sync_nodes → graph_dispatcher**
+- **graph_fact_embed | graph_fact_query → graph_dispatcher**
+- **fact_store | fact_search → utility_organ_1**
+- **artifact_manage | capability_manage | memory_cell_manage → utility_organ_1**
+- **model_manage | policy_manage | service_manage | skill_manage → utility_organ_1**
+
+### Fast Path vs Escalation
+
+- The `OCPSValve` applies a neural-CUSUM style accumulation of drift to decide fast-path execution vs escalation to `CognitiveService` (HGNN planning).
+- Reset semantics: accumulator resets only on escalation to avoid under-escalation and to build evidence over time.
+- Concurrency controls and latency SLOs guide escalation throughput.
 
 ## Health Indicators
 
@@ -1140,3 +1168,71 @@ telemetry = mw.get_telemetry()
 ---
 
 *This document provides a comprehensive overview of the SeedCore architecture. For detailed implementation specifics, refer to the individual component documentation in the `docs/architecture/components/` directory.*
+
+## HGNN Graph and GraphDispatcher
+
+The graph execution path is handled by a dedicated `GraphDispatcher` actor and supporting graph utilities. It processes graph embedding and RAG queries, synchronizes nodes, and integrates with facts/resources/agent-layer entities.
+
+### Responsibilities
+
+- Resolve start nodes from rich params: `start_node_ids`, `start_fact_ids`, `start_artifact_ids`, `start_capability_ids`, `start_memory_cell_ids`, `start_model_ids`, `start_policy_ids`, `start_service_ids`, `start_skill_ids`.
+- Ensure presence of entities in the graph store via `_ensure_*_nodes` methods (creates nodes if needed according to migration semantics).
+- Dispatch compute to `GraphEmbedder` and persist results.
+- Handle fact-oriented graph tasks: `graph_fact_embed`, `graph_fact_query`.
+
+### Task Types (graph)
+
+- **graph_embed / graph_embed_v2**: compute embeddings for a k-hop neighborhood.
+- **graph_rag_query / graph_rag_query_v2**: retrieve graph-augmented context and answers.
+- **graph_sync_nodes**: reconcile external entities into graph nodes.
+- **graph_fact_embed | graph_fact_query**: fact-centric graph operations.
+
+## Graph Embeddings Pipeline
+
+End-to-end flow from Neo4j to Postgres vectors:
+
+1. `GraphLoader.load_k_hop(start_ids, k)`
+   - Queries Neo4j for k-hop subgraph, builds a homogeneous DGL graph, returns `(g, idx_map, X)` where `X` are deterministic 128-dim features.
+2. `GraphEmbedder.compute_embeddings(node_ids, k)`
+   - Runs the HGNN to produce `Z`; returns a mapping `{node_id: list[float]}` with robust error handling and logging.
+3. `upsert_embeddings(emb_map, label_map, props_map)`
+   - Bulk upsert into `graph_embeddings` using SQLAlchemy `executemany`.
+   - Parameters are normalized in Python: `props` always a JSON string (default `'{}'`), `vec` as JSON list string; SQL casts use `(:vec)::jsonb::vector` and `(:props)::jsonb` to avoid placeholder parsing ambiguity.
+
+This pipeline eliminates previous `NoneType` unpack errors and `psycopg2` syntax errors near placeholders, and provides stable embeddings persistence.
+
+## Facts, Resources, and Agent Layer Integration
+
+Recent migrations added first-class entities and tasks:
+
+- **Facts system (Migration 009)**: Facts become addressable graph nodes; tasks `graph_fact_embed`, `graph_fact_query`, plus utility tasks `fact_store`, `fact_search`.
+- **Resources (Migration 007)**: `artifact_manage`, `capability_manage`, `memory_cell_manage` for resource governance.
+- **Agent layer (Migration 008)**: `model_manage`, `policy_manage`, `service_manage`, `skill_manage` to orchestrate agent capabilities.
+
+Updates span `Coordinator` routing, `OrganismManager` task handlers, and `CognitiveService` enums/handlers with tailored token budgets, cache TTLs, and query building.
+
+## Resiliency: Drift Detection and Circuit Breakers
+
+- **Drift Detection (OCPSValve)**: Uses cumulative drift with thresholds to choose fast-path vs HGNN escalation; drift score sourced from ML service.
+- **Timeout Handling**: Service clients define circuit breakers with `expected_exception=(httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException)`; timeouts are treated as expected and metered, not fatal.
+- **Metrics**: `PredicateMetrics.record_circuit_breaker_event(service, event_type)` records breaker events. Drift computation logs latency and falls back to a heuristic score when ML times out.
+
+These measures prevent cascading failures and provide consistent behavior under transient outages.
+
+## Data Layer and Migrations
+
+Summary of relevant changes:
+
+- **007 HGNN Graph Schema**: Functions `create_graph_embed_task_v2` and `create_graph_rag_task_v2` accept optional agent/organ IDs. Parameter names changed to `p_agent_id`/`p_organ_id` to remove ambiguity with column names in `ON CONFLICT` clauses.
+- **008 Agent Layer**: Registries for models, policies, services, and skills with corresponding management tasks.
+- **009 Facts System**: Fact entities and graph integration; fact-centric graph tasks and utilities.
+- **Embeddings Upsert**: `graph_embeddings` accepts `emb` vectors via JSONB→vector cast; props stored as JSONB, with conflict updates keeping existing values when new values are null.
+
+## Verification Workflow
+
+The script `scripts/host/verify_seedcore_architecture.py` validates end-to-end health and new capabilities:
+
+- Confirms Serve apps and dispatcher actors, with improved compatibility for Ray 2.32+ handle responses.
+- Verifies schema (migrations applied), HGNN graph structure, and facts system.
+- Submits optional HGNN graph task scenario via DB function `create_graph_rag_task_v2`; controlled by `VERIFY_HGNN_TASK`.
+- Enhancements include latency/heartbeat metrics, lease-aware task status checks, and safer coordinator debugging calls.
