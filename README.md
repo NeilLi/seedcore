@@ -16,31 +16,67 @@ git clone <repository-url>
 cd seedcore
 ```
 
-### 2. Start the Kubernetes Cluster
+### 2. Build Docker Image
+```bash
+./build.sh
+```
+
+### 3. Start the Kubernetes Cluster
 ```bash
 cd deploy
 ./setup-kind-only.sh
 ```
 
-### 3. Deploy Core Services
+### 4. Deploy Core Services
 ```bash
-# Deploy databases and Ray services
-./setup-ray-serve.sh
-
-# Deploy standalone API (optional)
-./deploy-seedcore-api.sh
-
-# Initialize databases
-./init_databases_k8s.sh
+# Deploy databases (PostgreSQL, MySQL, Redis, Neo4j)
+./setup-cores.sh
 ```
 
-### 4. Setup Port Forwarding
+### 5. Initialize Databases
+```bash
+# Initialize database schema and runtime registry
+./init-databases.sh
+```
+
+### 6. Deploy Persistent Storage and Ingress
+```bash
+# Deploy persistent volume claims
+kubectl apply -f k8s/seedcore-data-pvc.yaml
+
+# Deploy ingress routing
+kubectl apply -f k8s/ingress-routing.yaml
+
+# Deploy ingress controller
+./deploy-k8s-ingress.sh
+```
+
+### 7. Deploy Ray Services
+```bash
+# Deploy Ray cluster and Ray Serve
+./setup-ray-serve.sh
+```
+
+### 8. Bootstrap System Components
+```bash
+# Bootstrap organism and dispatchers
+./bootstrap_organism.sh
+./bootstrap_dispatchers.sh
+```
+
+### 9. Deploy SeedCore API
+```bash
+# Deploy standalone API service
+./deploy-seedcore-api.sh
+```
+
+### 10. Setup Port Forwarding
 ```bash
 # Start port forwarding for development access
 ./port-forward.sh
 ```
 
-### 5. Verify Installation
+### 11. Verify Installation
 ```bash
 # Check Ray dashboard
 curl http://localhost:8265/api/version
@@ -50,34 +86,44 @@ curl http://localhost:8002/health
 
 # Check energy system
 curl http://localhost:8002/healthz/energy
+
+# Check runtime registry
+curl http://localhost:8002/healthz/runtime-registry
 ```
 
 ## 🏗️ Architecture Overview
 
-### Kubernetes + KubeRay Architecture
-```
-SeedCore Platform (Kubernetes)
-├── Kind Cluster (seedcore-dev)
-│   ├── KubeRay Operator (kuberay-system)
-│   ├── RayService (seedcore-svc)
-│   │   ├── Ray Head Node (Cluster Management)
-│   │   ├── Ray Workers (Distributed Processing)
-│   │   └── Ray Serve (HTTP API)
-│   ├── Database Services (Helm Charts)
-│   │   ├── PostgreSQL
-│   │   ├── MySQL
-│   │   ├── Redis (Master + Replicas)
-│   │   └── Neo4j
-│   └── SeedCore API (Standalone Service)
-```
+SeedCore implements a distributed, intelligent organism architecture using Ray Serve for service orchestration and Ray Actors for distributed computation. The system features a robust **epoch-based runtime registry** that provides comprehensive actor lifecycle management, cluster coordination, and fault tolerance.
 
-### Service Architecture
+### Key Architectural Components
+
+#### Runtime Registry and Actor Lifecycle
+- **Epoch-Based Cluster Management**: Prevents split-brain scenarios with advisory-locked epoch updates
+- **Instance Registry**: Tracks all active Ray actors and Serve deployments with health monitoring
+- **Jittered Heartbeats**: Reduces synchronization effects with bounded exponential backoff
+- **Graceful Shutdown**: Clean actor termination with SIGTERM handling and registry cleanup
+
+#### Service Architecture
 - **Ray Head Service**: `seedcore-svc-head-svc` (ClusterIP: None)
   - Ports: 10001 (Ray), 8265 (Dashboard), 6379, 8080, 8000
 - **Ray Serve Service**: `seedcore-svc-serve-svc` (ClusterIP)
   - Port: 8000 (HTTP API)
 - **SeedCore API**: `seedcore-api` (ClusterIP)
   - Port: 8002 (Standalone API)
+
+#### Database Integration
+- **PostgreSQL**: Primary database with pgvector extension for embeddings
+- **MySQL**: Secondary database for specific workloads
+- **Redis**: Caching and session management
+- **Neo4j**: Graph database for complex relationships
+- **Runtime Registry**: Epoch-based cluster state management
+
+### Detailed Architecture Documentation
+
+For comprehensive architecture details, see:
+- **[Serve ↔ Actor Architecture](docs/architecture/overview/serve-actor-architecture.md)**: Complete system architecture with runtime registry integration
+- **[Runtime Registry](docs/architecture/overview/serve-actor-architecture.md#runtime-registry-and-actor-lifecycle)**: Epoch-based cluster management and actor lifecycle
+- **[Database Schema](docs/architecture/overview/serve-actor-architecture.md#data-layer-and-migrations)**: Complete database schema and migration process
 
 ## 🧠 Core Features
 
@@ -99,6 +145,14 @@ SeedCore Platform (Kubernetes)
 - **Memory Loop**: Adaptive compression and memory utilization control
 - **Energy Model Foundation**: Intelligent energy-aware agent selection and optimization
 
+### Runtime Registry and Actor Lifecycle
+- **Epoch-Based Cluster Management**: Prevents split-brain scenarios with advisory-locked epoch updates
+- **Instance Registry**: Tracks all active Ray actors and Serve deployments with comprehensive metadata
+- **Jittered Heartbeats**: Reduces synchronization effects with bounded exponential backoff on failures
+- **Graceful Shutdown**: Clean actor termination with SIGTERM handling and registry cleanup
+- **Stale Instance Cleanup**: Automatic detection and cleanup of dead instances
+- **Health Monitoring**: Real-time actor health status and heartbeat freshness tracking
+
 ### 🎯 XGBoost Machine Learning Integration
 - **Distributed Training**: Train XGBoost models across your Ray cluster
 - **Hyperparameter Tuning**: ✅ **FULLY OPERATIONAL** - Automated hyperparameter optimization using Ray Tune with ASHA scheduler
@@ -113,31 +167,57 @@ SeedCore Platform (Kubernetes)
 
 ### 1. Complete Setup (Recommended)
 ```bash
-cd deploy
-./setup-ray-serve.sh
-./deploy-seedcore-api.sh
-./init_databases_k8s.sh
-./port-forward.sh
-```
+# Build Docker image
+./build.sh
 
-### 2. Step-by-Step Setup
-```bash
+cd deploy
+
 # Create Kind cluster
 ./setup-kind-only.sh
 
-# Deploy databases
+# Deploy core services
 ./setup-cores.sh
+
+# Initialize databases
+./init-databases.sh
+
+# Deploy storage and ingress
+kubectl apply -f k8s/seedcore-data-pvc.yaml
+kubectl apply -f k8s/ingress-routing.yaml
+./deploy-k8s-ingress.sh
 
 # Deploy Ray services
 ./setup-ray-serve.sh
 
-# Deploy standalone API
+# Bootstrap system components
+./bootstrap_organism.sh
+./bootstrap_dispatchers.sh
+
+# Deploy API
 ./deploy-seedcore-api.sh
 
-# Initialize databases
-./init_databases_k8s.sh
-
 # Setup port forwarding
+./port-forward.sh
+```
+
+### 2. Step-by-Step Setup
+Follow the detailed steps in the [Quick Start](#-quick-start-kubernetes--kuberay) section above for a complete walkthrough.
+
+### 3. Development Environment
+```bash
+# Quick development setup
+make dev
+
+# Or manual setup
+./build.sh
+cd deploy
+./setup-kind-only.sh
+./setup-cores.sh
+./init-databases.sh
+./setup-ray-serve.sh
+./bootstrap_organism.sh
+./bootstrap_dispatchers.sh
+./deploy-seedcore-api.sh
 ./port-forward.sh
 ```
 
@@ -227,9 +307,21 @@ kubectl logs -l app=seedcore-api -n seedcore-dev -f
 
 ### 1. Start Development Environment
 ```bash
+# Build Docker image
+./build.sh
+
 cd deploy
+
+# Complete setup
 ./setup-kind-only.sh
+./setup-cores.sh
+./init-databases.sh
+kubectl apply -f k8s/seedcore-data-pvc.yaml
+kubectl apply -f k8s/ingress-routing.yaml
+./deploy-k8s-ingress.sh
 ./setup-ray-serve.sh
+./bootstrap_organism.sh
+./bootstrap_dispatchers.sh
 ./deploy-seedcore-api.sh
 ./port-forward.sh
 ```
@@ -243,11 +335,33 @@ Your project code is mounted at `/project` inside the cluster, so changes are im
 curl http://localhost:8000/ml/health
 curl http://localhost:8002/health
 
+# Test runtime registry
+curl http://localhost:8002/healthz/runtime-registry
+
 # Test via Ray client
 kubectl exec -it $(kubectl get pods -l ray.io/node-type=head -n seedcore-dev -o jsonpath='{.items[0].metadata.name}') -n seedcore-dev -- python -c "import ray; ray.init(); print('Ray connected!')"
 ```
 
-### 4. Cleanup
+### 4. Monitor System Health
+```bash
+# Check Ray dashboard
+kubectl port-forward svc/seedcore-svc-head-svc 8265:8265 -n seedcore-dev
+
+# Check runtime registry status
+kubectl exec -it $(kubectl get pods -l ray.io/node-type=head -n seedcore-dev -o jsonpath='{.items[0].metadata.name}') -n seedcore-dev -- python -c "
+import asyncio
+from seedcore.graph.agent_repository import AgentGraphRepository
+async def check_registry():
+    repo = AgentGraphRepository()
+    instances = await repo.list_active_instances()
+    print(f'Active instances: {len(instances)}')
+    for inst in instances:
+        print(f'  {inst.logical_id}: {inst.status} (heartbeat: {inst.last_heartbeat})')
+asyncio.run(check_registry())
+"
+```
+
+### 5. Cleanup
 ```bash
 # Stop port forwarding
 pkill -f "kubectl.*port-forward"
@@ -335,6 +449,9 @@ kubectl apply -f deploy/keda/scaledobject-serve.yaml -n seedcore-dev
 
 ## 📖 Additional Documentation
 
+- **Architecture Overview**: [Serve ↔ Actor Architecture](docs/architecture/overview/serve-actor-architecture.md) - Complete system architecture with runtime registry integration
+- **Runtime Registry**: [Runtime Registry and Actor Lifecycle](docs/architecture/overview/serve-actor-architecture.md#runtime-registry-and-actor-lifecycle) - Epoch-based cluster management and actor lifecycle
+- **Database Schema**: [Data Layer and Migrations](docs/architecture/overview/serve-actor-architecture.md#data-layer-and-migrations) - Complete database schema and migration process
 - **Kubernetes Setup**: [KIND_CLUSTER_REFERENCE.md](deploy/KIND_CLUSTER_REFERENCE.md)
 - **Ray Configuration**: [RAY_CONFIGURATION_PATTERN.md](docs/RAY_CONFIGURATION_PATTERN.md)
 - **API Updates**: [README_SEEDCORE_API_UPDATES.md](docs/README_SEEDCORE_API_UPDATES.md)

@@ -5,6 +5,7 @@ This document provides a comprehensive overview of the SeedCore system architect
 ## Table of Contents
 
 - [System Overview](#system-overview)
+- [Runtime Registry and Actor Lifecycle](#runtime-registry-and-actor-lifecycle)
 - [Serve Applications (Logical Apps)](#serve-applications-logical-apps)
 - [Serve Deployments → Ray Actors](#serve-deployments--ray-actors)
 - [Control Plane Actors](#control-plane-actors)
@@ -25,6 +26,209 @@ This document provides a comprehensive overview of the SeedCore system architect
 SeedCore implements a distributed, intelligent organism architecture using Ray Serve for service orchestration and Ray Actors for distributed computation. The system is designed to be scalable, fault-tolerant, and capable of handling complex cognitive workloads.
 
 The architecture follows a **microservices pattern** where each logical service is deployed as a Ray Serve application, which in turn spawns one or more Ray Actors to handle the actual computation and state management.
+
+## Runtime Registry and Actor Lifecycle
+
+SeedCore implements a robust **epoch-based runtime registry** system that provides comprehensive actor lifecycle management, cluster coordination, and fault tolerance. This system ensures reliable actor discovery, health monitoring, and graceful handling of cluster changes.
+
+### Epoch-Based Cluster Management
+
+The runtime registry uses **cluster epochs** (UUIDs) to track cluster state changes and prevent split-brain scenarios:
+
+#### Cluster Metadata
+- **Single-row cluster metadata** with advisory-locked epoch updates
+- **Advisory locking** prevents concurrent epoch changes during cluster rotation
+- **Automatic epoch creation** for new clusters or missing metadata
+
+#### Epoch Rotation Process
+1. **Advisory Lock Acquisition**: System acquires exclusive lock (key=42) for epoch updates
+2. **Epoch Update**: Updates `cluster_metadata.current_epoch` with new UUID
+3. **Instance Registration**: New instances register with current epoch
+4. **Stale Cleanup**: Old epoch instances are marked as dead during rotation
+
+### Instance Registry Schema
+
+The `registry_instance` table tracks all active Ray actors and Serve deployments:
+
+```sql
+CREATE TABLE registry_instance (
+  instance_id    UUID PRIMARY KEY,           -- Unique actor instance identifier
+  logical_id     TEXT NOT NULL,              -- Logical service name (e.g., 'cognitive_organ_1')
+  cluster_epoch  UUID NOT NULL,              -- Current cluster epoch
+  status         InstanceStatus NOT NULL,    -- starting|alive|draining|dead
+  actor_name     TEXT,                       -- Ray actor name for named actors
+  serve_route    TEXT,                       -- Serve deployment route
+  node_id        TEXT,                       -- Ray node identifier
+  ip_address     INET,                       -- Instance IP address
+  pid            INT,                        -- Process ID
+  started_at     TIMESTAMPTZ NOT NULL,       -- Registration timestamp
+  stopped_at     TIMESTAMPTZ,                -- Termination timestamp
+  last_heartbeat TIMESTAMPTZ NOT NULL        -- Last heartbeat timestamp
+);
+```
+
+### Actor Lifecycle Management
+
+#### 1. Instance Registration (`Organ.start()`)
+
+When an Organ actor starts:
+
+```python
+async def start(self) -> Dict[str, Any]:
+    # Generate unique instance ID
+    self.instance_id = uuid.uuid4().hex
+    
+    # Register in 'starting' status
+    await repo.register_instance(
+        instance_id=self.instance_id,
+        logical_id=self.organ_id,
+        cluster_epoch=await repo.get_current_cluster_epoch(),
+        actor_name=self.organ_id,
+        serve_route=self.serve_route,
+        node_id=os.getenv("RAY_NODE_ID"),
+        ip_address=socket.gethostbyname(socket.gethostname()),
+        pid=os.getpid(),
+    )
+    
+    # Mark alive after readiness checks
+    await repo.set_instance_status(self.instance_id, "alive")
+    
+    # Start heartbeat loop
+    self._hb_task = asyncio.create_task(self._heartbeat_loop())
+```
+
+#### 2. Heartbeat Management
+
+**Jittered Heartbeats with Bounded Backoff**:
+
+```python
+async def _heartbeat_loop(self):
+    backoff = 0.5  # Initial backoff
+    while not self._closing.is_set():
+        try:
+            await repo.beat(self.instance_id)
+            backoff = 0.5  # Reset on success
+        except Exception as e:
+            # Bounded exponential backoff on failures
+            backoff = min(backoff * 2, HB_BACKOFF_MAX)
+            await asyncio.sleep(backoff)
+        
+        # Jittered sleep: HB_BASE + random(0, HB_JITTER)
+        await asyncio.wait_for(
+            self._closing.wait(), 
+            timeout=HB_BASE + random.random() * HB_JITTER
+        )
+```
+
+**Configuration**:
+- `RUNTIME_HB_BASE_S=3.0`: Base heartbeat interval
+- `RUNTIME_HB_JITTER_S=2.0`: Random jitter range
+- `RUNTIME_HB_BACKOFF_S=10.0`: Maximum backoff on failures
+
+#### 3. Graceful Shutdown (`Organ.close()`)
+
+```python
+async def close(self) -> Dict[str, Any]:
+    self._closing.set()  # Signal shutdown
+    
+    # Cancel heartbeat task
+    if self._hb_task:
+        self._hb_task.cancel()
+        await self._hb_task
+    
+    # Mark as dead in registry
+    await repo.set_instance_status(self.instance_id, "dead")
+    
+    return {"status": "dead", "instance_id": self.instance_id}
+```
+
+### Runtime Registry Views
+
+#### Active Instances Monitoring
+```sql
+-- All alive instances in current epoch with recent heartbeats
+CREATE VIEW active_instances AS
+SELECT ri.*
+FROM registry_instance ri
+JOIN cluster_metadata cm ON ri.cluster_epoch = cm.current_epoch
+WHERE ri.status = 'alive'
+  AND ri.last_heartbeat > (now() - INTERVAL '15 seconds');
+```
+
+#### Best Instance Selection
+```sql
+-- One best instance per logical_id (for named actors)
+CREATE VIEW active_instance AS
+SELECT DISTINCT ON (ri.logical_id)
+  ri.*
+FROM registry_instance ri
+JOIN cluster_metadata cm ON ri.cluster_epoch = cm.current_epoch
+WHERE ri.status = 'alive'
+  AND ri.last_heartbeat > (now() - INTERVAL '15 seconds')
+ORDER BY ri.logical_id, ri.last_heartbeat DESC;
+```
+
+### Stale Instance Cleanup
+
+**Automatic Expiration**:
+```sql
+-- Mark stale instances as dead
+CREATE FUNCTION expire_stale_instances(timeout_seconds INT DEFAULT 15)
+RETURNS INT AS $$
+  UPDATE registry_instance
+  SET status = 'dead', stopped_at = COALESCE(stopped_at, now())
+  WHERE status = 'alive' 
+    AND last_heartbeat < (now() - INTERVAL '1 second' * timeout_seconds);
+  GET DIAGNOSTICS cnt = ROW_COUNT;
+  RETURN cnt;
+$$;
+```
+
+### Database Integration
+
+The runtime registry integrates with the existing database schema through:
+
+#### Migration Sequence
+1. **Migration 011**: Creates `cluster_metadata` and `registry_instance` tables
+2. **Migration 012**: Implements registry functions and views
+3. **Database Initialization**: `init_full_db.sh` applies all migrations
+
+#### Repository Pattern
+- **`AgentGraphRepository`**: Async repository with connection pooling
+- **Lazy Initialization**: Connection pools created on first use
+- **Error Handling**: Comprehensive error handling with detailed logging
+- **Transaction Safety**: All operations wrapped in proper transactions
+
+### Fault Tolerance Features
+
+#### 1. Split-Brain Prevention
+- **Advisory locking** prevents concurrent epoch changes
+- **Epoch-based registration** ensures instances only see current cluster state
+- **Stale cleanup** removes instances from previous epochs
+
+#### 2. Network Partition Handling
+- **Bounded backoff** prevents thundering herd on network issues
+- **Jittered heartbeats** reduce synchronization effects
+- **Graceful degradation** with circuit breaker patterns
+
+#### 3. Process Lifecycle Management
+- **SIGTERM handling** for graceful shutdown
+- **Process ID tracking** for debugging and monitoring
+- **Node ID correlation** for Ray cluster topology awareness
+
+### Monitoring and Observability
+
+#### Health Indicators
+- **Instance Status**: `starting` → `alive` → `draining` → `dead`
+- **Heartbeat Frequency**: Configurable with jitter and backoff
+- **Stale Detection**: 15-second timeout for heartbeat expiration
+- **Epoch Tracking**: Cluster-wide epoch consistency monitoring
+
+#### Metrics Collection
+- **Instance Counts**: Per-logical-id and per-status counts
+- **Heartbeat Latency**: Database write performance monitoring
+- **Epoch Rotation**: Cluster change frequency and timing
+- **Stale Cleanup**: Dead instance detection and cleanup rates
 
 ## Serve Applications (Logical Apps)
 
@@ -124,11 +328,18 @@ Besides service replicas, Serve maintains several control plane actors:
 
 ### 3. Core Service Interactions
 
+#### Runtime Registry Integration
+- **All Ray actors** register with the runtime registry on startup
+- **Epoch-based coordination** ensures cluster consistency
+- **Heartbeat monitoring** provides real-time health status
+- **Graceful shutdown** ensures clean actor termination
+
 #### Coordinator & OrganismManager
 - **Coordinator** (Actor 5) handles global task routing and coordination
 - Uses OCPS valve for drift detection and escalation decisions
 - Routes tasks to **OrganismManager** for local execution
 - **OrganismManager** (Actor 8) manages organ lifecycle and agent distribution
+- **Runtime registry** tracks all organ instances and their health status
 
 #### CognitiveService Integration
 - **CognitiveService** (Actors 1 & 4) provides reasoning and planning capabilities
@@ -168,11 +379,18 @@ The SeedCore system implements a sophisticated task workflow that moves through 
 - **Coordinator Service** - Global task routing and escalation
 - **OrganismManager** - Local organ management and execution
 
+**Runtime Registry Integration**: Before task processing:
+- **Actor Discovery**: Query `active_instances` view for available organs
+- **Health Validation**: Verify target actors have recent heartbeats
+- **Epoch Consistency**: Ensure all actors are in current cluster epoch
+- **Load Balancing**: Select best available instance per logical_id
+
 **Routing Decision**: Coordinator determines task routing based on:
 - OCPS valve drift detection (fast-path vs escalation)
 - Task type and complexity
 - Current system load and escalation capacity
-- Available organs and agent capabilities
+- Available organs and agent capabilities (from runtime registry)
+- Actor health status and heartbeat freshness
 
 ### 2. Agent Selection and Memory Management
 
@@ -280,22 +498,28 @@ After task completion, the system updates multiple metrics:
 Task Arrival (Queue Dispatcher)
      ↓
 Coordinator Service
+├─ Runtime Registry Query (active_instances)
+├─ Health Validation (heartbeat freshness)
 ├─ OCPS Valve Check (fast-path vs escalation)
 │
 ├─ Fast Path: Direct to OrganismManager
 │   └─ Organ (container) → Tier0MemoryManager → RayAgent
+│       ├─ Runtime Registry: Register instance
+│       ├─ Heartbeat Loop: Jittered + backoff
+│       └─ Graceful Shutdown: Mark dead on close
 │
 └─ Escalation Path: CognitiveService → OrganismManager
    ├─ HGNN decomposition (CognitiveService)
    ├─ Plan validation and execution
    └─ Organ (container) → Tier0MemoryManager → RayAgent
+       ├─ Runtime Registry: Instance lifecycle
        ├─ Execute task
        │    ├─ Memory lookup: Mw → Mlt → Mfb
        │    ├─ Cognitive reasoning (optional)
        │    └─ Produce result
        │
        ├─ Update performance + energy metrics
-       ├─ Emit heartbeat
+       ├─ Emit heartbeat (via runtime registry)
        └─ Possibly archive/log to Mlt & Mfb
 ```
 
@@ -1221,11 +1445,116 @@ These measures prevent cascading failures and provide consistent behavior under 
 
 ## Data Layer and Migrations
 
-Summary of relevant changes:
+The SeedCore system uses a comprehensive database schema that supports both traditional task management and advanced graph-based operations. The database layer is designed to be scalable, maintainable, and capable of handling complex relationships between tasks, agents, organs, and resources.
+
+### Runtime Registry Database Schema
+
+The runtime registry extends the existing database schema with two new tables:
+
+#### Cluster Metadata Table
+```sql
+CREATE TABLE cluster_metadata (
+  id            INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  current_epoch UUID NOT NULL,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+#### Instance Registry Table
+```sql
+CREATE TABLE registry_instance (
+  instance_id    UUID PRIMARY KEY,
+  logical_id     TEXT NOT NULL,
+  cluster_epoch  UUID NOT NULL,
+  status         InstanceStatus NOT NULL DEFAULT 'starting',
+  actor_name     TEXT,
+  serve_route    TEXT,
+  node_id        TEXT,
+  ip_address     INET,
+  pid            INT,
+  started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  stopped_at     TIMESTAMPTZ,
+  last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+### Migration Process
+
+The runtime registry is integrated through a systematic migration process:
+
+#### Migration 011: Runtime Registry Tables
+- Creates `cluster_metadata` table for epoch management
+- Creates `registry_instance` table for actor tracking
+- Defines `InstanceStatus` enum type
+- Creates indexes for performance optimization
+- Implements monitoring views (`active_instances`, `active_instance`)
+
+#### Migration 012: Runtime Registry Functions
+- Implements `set_current_epoch()` with advisory locking
+- Implements `register_instance()` for actor registration
+- Implements `set_instance_status()` for lifecycle management
+- Implements `beat()` for heartbeat updates
+- Implements `expire_stale_instances()` for cleanup
+
+#### Database Initialization Script
+The `init_full_db.sh` script orchestrates the complete database setup:
+
+```bash
+# Migration 011: Runtime registry tables & views
+echo "⚙️  Running migration 011: Runtime registry tables & views..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_011" "$POSTGRES_POD:/tmp/011_add_runtime_registry.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/011_add_runtime_registry.sql"
+
+# Migration 012: Runtime registry functions
+echo "⚙️  Running migration 012: Runtime registry functions..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_012" "$POSTGRES_POD:/tmp/012_runtime_registry_functions.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/012_runtime_registry_functions.sql"
+```
+
+### Repository Integration
+
+The runtime registry integrates with the existing repository pattern:
+
+#### AgentGraphRepository
+- **Async Connection Pooling**: Uses `asyncpg` for high-performance database access
+- **Lazy Initialization**: Connection pools created on first use
+- **Error Handling**: Comprehensive error handling with detailed logging
+- **Transaction Safety**: All operations wrapped in proper transactions
+
+#### Database Connection Management
+- **Connection Pooling**: Min 1, max 10 connections per repository
+- **DSN Configuration**: Uses `PG_DSN` from `database.py` configuration
+- **Health Monitoring**: Connection health tracked via heartbeat operations
+- **Graceful Degradation**: Bounded backoff on connection failures
+
+### Schema Verification
+
+The initialization script includes comprehensive schema verification:
+
+```bash
+echo "📊 Runtime registry tables:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ cluster_metadata"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ registry_instance"
+
+echo "📊 Runtime registry views:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ active_instances"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ active_instance"
+
+echo "📊 Runtime registry functions:"
+for fn in set_current_epoch register_instance set_instance_status beat expire_stale_instances expire_old_epoch_instances
+do
+  kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+    psql -U "$DB_USER" -d "$DB_NAME" -c "\df+ $fn" || true
+done
+```
+
+### Summary of Relevant Changes
 
 - **007 HGNN Graph Schema**: Functions `create_graph_embed_task_v2` and `create_graph_rag_task_v2` accept optional agent/organ IDs. Parameter names changed to `p_agent_id`/`p_organ_id` to remove ambiguity with column names in `ON CONFLICT` clauses.
 - **008 Agent Layer**: Registries for models, policies, services, and skills with corresponding management tasks.
 - **009 Facts System**: Fact entities and graph integration; fact-centric graph tasks and utilities.
+- **011 Runtime Registry**: Epoch-based cluster management with actor lifecycle tracking and heartbeat monitoring.
+- **012 Runtime Functions**: Advisory-locked epoch management and comprehensive instance lifecycle functions.
 - **Embeddings Upsert**: `graph_embeddings` accepts `emb` vectors via JSONB→vector cast; props stored as JSONB, with conflict updates keeping existing values when new values are null.
 
 ## Verification Workflow
