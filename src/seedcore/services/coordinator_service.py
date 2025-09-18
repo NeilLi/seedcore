@@ -1553,7 +1553,7 @@ class Coordinator:
         return {
             "success": success,
             "escalated": True,
-            "plan_source": "cognitive_core",
+            "plan_source": "cognitive_service",
             "plan": plan,
             "results": results,
             "path": "hgnn"

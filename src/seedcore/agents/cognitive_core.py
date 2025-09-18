@@ -31,7 +31,6 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from seedcore.logging_setup import setup_logging
-import logging
 
 setup_logging("seedcore.CognitiveCore")
 logger = logging.getLogger("seedcore.CognitiveCore")
@@ -683,7 +682,13 @@ class CognitiveCore(dspy.Module):
                                 mw.set_global_item_typed("fact", "global", f.id, f.to_dict(), ttl_s=1800)
                                 # Clear any negative cache for this fact
                                 neg_key = f"_neg:fact:global:{f.id}"
-                                mw.del_global_key_sync(neg_key)
+                                if hasattr(mw, "del_key_sync"):
+                                    mw.del_key_sync(neg_key)
+                                elif hasattr(mw, "delete"):
+                                    mw.delete(neg_key)
+                                else:
+                                    # last resort: overwrite with tiny TTL
+                                    mw.set(neg_key, {"expired": True}, ttl_s=1)
                             except Exception:
                                 pass
 
@@ -900,7 +905,13 @@ class CognitiveCore(dspy.Module):
             ttl = self.cache_ttl_by_task.get(task_type, 600)
             cache_age = time.time() - cached_data.get("cached_at", 0)
             if cache_age > ttl:
-                mw.del_global_key_sync(cache_key)  # Use explicit deletion
+                if hasattr(mw, "del_key_sync"):
+                    mw.del_key_sync(cache_key)
+                elif hasattr(mw, "delete"):
+                    mw.delete(cache_key)
+                else:
+                    # last resort: overwrite with tiny TTL
+                    mw.set(cache_key, {"expired": True}, ttl_s=1)
                 return None
             
             logger.info(f"Cache hit: {cache_key} (age: {cache_age:.1f}s)")
@@ -1232,7 +1243,6 @@ class CognitiveCore(dspy.Module):
     
     def _assert_no_routing_awareness(self, result: Dict[str, Any]) -> None:
         """Assert that Cognitive output doesn't contain routing decisions."""
-        import json
         result_str = json.dumps(result).lower()
         forbidden = ("organ_id", "instance_id")
         if any(k in result_str for k in forbidden):

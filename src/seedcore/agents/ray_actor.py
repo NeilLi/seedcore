@@ -78,14 +78,8 @@ def _safe_eval_arith(expr: str) -> float:
 # NEW: Import the FlashbulbClient
 from ..memory.flashbulb_client import FlashbulbClient
 
-# NEW: Import the Cognitive Core
-from .cognitive_core import (
-    CognitiveCore, 
-    CognitiveContext, 
-    CognitiveTaskType,
-    initialize_cognitive_core,
-    get_cognitive_core
-)
+# NEW: Import the Cognitive Service Client
+from ..serve.cognitive_client import CognitiveServiceClient
 
 # === COA §6/§8: agent-private memory vector h_i ∈ R^128 ===
 from .private_memory import AgentPrivateMemory, PeerEvent
@@ -174,8 +168,8 @@ class RayAgent:
         self.mlt_manager = None
         self.mfb_client = None
         
-        # --- Initialize cognitive core ---
-        self.cognitive_core = None
+        # --- Initialize cognitive service client ---
+        self._cog = None
 
         # --- Initialize private memory (lifetime-only persistence) ---
         self._privmem = AgentPrivateMemory(agent_id=self.agent_id, alpha=0.1)
@@ -227,17 +221,35 @@ class RayAgent:
     def _initialize_cognitive_systems(self):
         """Initialize cognitive reasoning systems."""
         try:
-            # Get or initialize the global cognitive core
-            self.cognitive_core = get_cognitive_core()
-            if self.cognitive_core is None:
-                # Initialize with default settings
-                self.cognitive_core = initialize_cognitive_core()
-            
-            logger.info(f"✅ Agent {self.agent_id} initialized with cognitive core")
+            # Initialize the cognitive service client
+            self._cog = CognitiveServiceClient()  # base_url auto-discovers via COG or uses localhost
+            logger.info(f"✅ Agent {self.agent_id} initialized with CognitiveServiceClient")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize cognitive core for {self.agent_id}: {e}")
-            self.cognitive_core = None
+            logger.warning(f"⚠️ Failed to create CognitiveServiceClient for {self.agent_id}: {e}")
+            self._cog = None
     
+    def _normalize_cog_resp(self, resp: dict) -> dict:
+        """Normalize cognitive service response to consistent format."""
+        if not isinstance(resp, dict):
+            return {"success": False, "payload": {}, "meta": {}, "error": "Invalid response"}
+        payload = resp.get("result") or resp.get("payload") or {}
+        meta = resp.get("metadata") or resp.get("meta") or {}
+        return {
+            "success": bool(resp.get("success", True if payload else False)),
+            "payload": payload,
+            "meta": meta,
+            "error": resp.get("error"),
+        }
+
+    async def shutdown(self):
+        """Clean shutdown of the actor and its resources."""
+        try:
+            if self._cog and hasattr(self._cog, "aclose"):
+                await self._cog.aclose()
+        except Exception as e:
+            logger.warning(f"Error during cognitive client shutdown: {e}")
+        logger.info(f"Agent {self.agent_id} shutdown complete")
+
     def _mw_put_json(self, key: str, obj: Dict[str, Any], ttl_s: int = 600) -> bool:
         """Put JSON object to Mw with TTL."""
         if not self.mw_manager:
@@ -1375,8 +1387,8 @@ class RayAgent:
         Returns:
             Dictionary containing analysis results
         """
-        if not self.cognitive_core:
-            return {"success": False, "reason": "Cognitive core not initialized."}
+        if not self._cog:
+            return {"success": False, "reason": "Cognitive service not available."}
         if not self.mfb_client:
             return {"success": False, "reason": "Memory client not available."}
 
@@ -1386,21 +1398,17 @@ class RayAgent:
             if not incident_context_dict:
                 return {"success": False, "reason": "Incident not found."}
             
-            # Create cognitive context
-            context = CognitiveContext(
+            # Call cognitive service via HTTP client
+            resp = await self._cog.reason_about_failure(
                 agent_id=self.agent_id,
-                task_type=CognitiveTaskType.FAILURE_ANALYSIS,
-                input_data=incident_context_dict,
-                memory_context=self._get_memory_context(),
-                energy_context=self.get_energy_state(),
-                lifecycle_context=self._get_lifecycle_context()
+                incident_context=incident_context_dict,
+                knowledge_context=self._get_memory_context(),  # optional enrich
             )
-            
-            # Perform cognitive reasoning
-            reasoning_result = self.cognitive_core(context)
+            norm = self._normalize_cog_resp(resp)
+            payload = norm["payload"]
             
             # Calculate energy cost for reasoning
-            reg_delta = 0.01 * len(reasoning_result.get("thought", ""))
+            reg_delta = 0.01 * len(str(payload.get("thought", "")))
             
             # Update energy state
             current_energy = self.get_energy_state()
@@ -1411,10 +1419,12 @@ class RayAgent:
                 "success": True,
                 "agent_id": self.agent_id,
                 "incident_id": incident_id,
-                "thought_process": reasoning_result.get("thought", ""),
-                "proposed_solution": reasoning_result.get("proposed_solution", ""),
-                "confidence_score": reasoning_result.get("confidence_score", 0.0),
-                "energy_cost": reg_delta
+                "thought_process": payload.get("thought", ""),
+                "proposed_solution": payload.get("proposed_solution", ""),
+                "confidence_score": payload.get("confidence_score", 0.0),
+                "energy_cost": reg_delta,
+                "meta": norm["meta"],
+                "error": norm["error"],
             }
             
         except Exception as e:
@@ -1437,37 +1447,29 @@ class RayAgent:
         Returns:
             Dictionary containing task plan
         """
-        if not self.cognitive_core:
-            return {"success": False, "reason": "Cognitive core not initialized."}
+        if not self._cog:
+            return {"success": False, "reason": "Cognitive service not available."}
 
         try:
-            # Prepare input data
-            input_data = {
-                "task_description": task_description,
-                "agent_capabilities": self._get_agent_capabilities(),
-                "available_resources": available_resources or {}
-            }
-            
-            # Create cognitive context
-            context = CognitiveContext(
+            # Call cognitive service via HTTP client
+            resp = await self._cog.plan_task(
                 agent_id=self.agent_id,
-                task_type=CognitiveTaskType.TASK_PLANNING,
-                input_data=input_data,
-                memory_context=self._get_memory_context(),
-                energy_context=self.get_energy_state(),
-                lifecycle_context=self._get_lifecycle_context()
+                task_description=task_description,
+                current_capabilities=self._get_agent_capabilities(),
+                available_tools=available_resources or {}
             )
-            
-            # Perform cognitive reasoning
-            planning_result = self.cognitive_core(context)
+            norm = self._normalize_cog_resp(resp)
+            payload = norm["payload"]
             
             return {
                 "success": True,
                 "agent_id": self.agent_id,
                 "task_description": task_description,
-                "step_by_step_plan": planning_result.get("step_by_step_plan", ""),
-                "estimated_complexity": planning_result.get("estimated_complexity", ""),
-                "risk_assessment": planning_result.get("risk_assessment", "")
+                "step_by_step_plan": payload.get("step_by_step_plan", ""),
+                "estimated_complexity": payload.get("estimated_complexity", ""),
+                "risk_assessment": payload.get("risk_assessment", ""),
+                "meta": norm["meta"],
+                "error": norm["error"],
             }
             
         except Exception as e:
@@ -1490,36 +1492,29 @@ class RayAgent:
         Returns:
             Dictionary containing decision results
         """
-        if not self.cognitive_core:
-            return {"success": False, "reason": "Cognitive core not initialized."}
+        if not self._cog:
+            return {"success": False, "reason": "Cognitive service not available."}
 
         try:
-            # Prepare input data
-            input_data = {
-                "decision_context": decision_context,
-                "historical_data": historical_data or {}
-            }
-            
-            # Create cognitive context
-            context = CognitiveContext(
+            # Call cognitive service via HTTP client
+            resp = await self._cog.make_decision(
                 agent_id=self.agent_id,
-                task_type=CognitiveTaskType.DECISION_MAKING,
-                input_data=input_data,
-                memory_context=self._get_memory_context(),
-                energy_context=self.get_energy_state(),
-                lifecycle_context=self._get_lifecycle_context()
+                decision_context=decision_context,
+                historical_data=historical_data or {},
+                knowledge_context=self._get_memory_context()
             )
-            
-            # Perform cognitive reasoning
-            decision_result = self.cognitive_core(context)
+            norm = self._normalize_cog_resp(resp)
+            payload = norm["payload"]
             
             return {
                 "success": True,
                 "agent_id": self.agent_id,
-                "reasoning": decision_result.get("reasoning", ""),
-                "decision": decision_result.get("decision", ""),
-                "confidence": decision_result.get("confidence", 0.0),
-                "alternative_options": decision_result.get("alternative_options", "")
+                "reasoning": payload.get("reasoning", ""),
+                "decision": payload.get("decision", ""),
+                "confidence": payload.get("confidence", 0.0),
+                "meta": norm["meta"],
+                "error": norm["error"],
+                "alternative_options": payload.get("alternative_options", "")
             }
             
         except Exception as e:
@@ -1541,35 +1536,27 @@ class RayAgent:
         Returns:
             Dictionary containing synthesis results
         """
-        if not self.cognitive_core:
-            return {"success": False, "reason": "Cognitive core not initialized."}
+        if not self._cog:
+            return {"success": False, "reason": "Cognitive service not available."}
 
         try:
-            # Prepare input data
-            input_data = {
-                "memory_fragments": memory_fragments,
-                "synthesis_goal": synthesis_goal
-            }
-            
-            # Create cognitive context
-            context = CognitiveContext(
+            # Call cognitive service via HTTP client
+            resp = await self._cog.synthesize_memory(
                 agent_id=self.agent_id,
-                task_type=CognitiveTaskType.MEMORY_SYNTHESIS,
-                input_data=input_data,
-                memory_context=self._get_memory_context(),
-                energy_context=self.get_energy_state(),
-                lifecycle_context=self._get_lifecycle_context()
+                memory_fragments=memory_fragments,
+                synthesis_goal=synthesis_goal
             )
-            
-            # Perform cognitive reasoning
-            synthesis_result = self.cognitive_core(context)
+            norm = self._normalize_cog_resp(resp)
+            payload = norm["payload"]
             
             return {
                 "success": True,
                 "agent_id": self.agent_id,
-                "synthesized_insight": synthesis_result.get("synthesized_insight", ""),
-                "confidence_level": synthesis_result.get("confidence_level", 0.0),
-                "related_patterns": synthesis_result.get("related_patterns", "")
+                "synthesized_insight": payload.get("synthesized_insight", ""),
+                "confidence_level": payload.get("confidence_level", 0.0),
+                "related_patterns": payload.get("related_patterns", ""),
+                "meta": norm["meta"],
+                "error": norm["error"],
             }
             
         except Exception as e:
@@ -1590,36 +1577,28 @@ class RayAgent:
         Returns:
             Dictionary containing assessment results
         """
-        if not self.cognitive_core:
-            return {"success": False, "reason": "Cognitive core not initialized."}
+        if not self._cog:
+            return {"success": False, "reason": "Cognitive service not available."}
 
         try:
-            # Prepare input data
-            input_data = {
-                "performance_data": self._get_performance_data(),
-                "current_capabilities": self._get_agent_capabilities(),
-                "target_capabilities": target_capabilities or {}
-            }
-            
-            # Create cognitive context
-            context = CognitiveContext(
+            # Call cognitive service via HTTP client
+            resp = await self._cog.assess_capabilities(
                 agent_id=self.agent_id,
-                task_type=CognitiveTaskType.CAPABILITY_ASSESSMENT,
-                input_data=input_data,
-                memory_context=self._get_memory_context(),
-                energy_context=self.get_energy_state(),
-                lifecycle_context=self._get_lifecycle_context()
+                performance_data=self._get_performance_data(),
+                current_capabilities=self._get_agent_capabilities(),
+                target_capabilities=target_capabilities or {}
             )
-            
-            # Perform cognitive reasoning
-            assessment_result = self.cognitive_core(context)
+            norm = self._normalize_cog_resp(resp)
+            payload = norm["payload"]
             
             return {
                 "success": True,
                 "agent_id": self.agent_id,
-                "capability_gaps": assessment_result.get("capability_gaps", ""),
-                "improvement_plan": assessment_result.get("improvement_plan", ""),
-                "priority_recommendations": assessment_result.get("priority_recommendations", "")
+                "capability_gaps": payload.get("capability_gaps", ""),
+                "improvement_plan": payload.get("improvement_plan", ""),
+                "priority_recommendations": payload.get("priority_recommendations", ""),
+                "meta": norm["meta"],
+                "error": norm["error"],
             }
             
         except Exception as e:

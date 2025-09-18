@@ -205,6 +205,38 @@ class CognitiveServiceClient(BaseServiceClient):
         }
         return await self.post("/reason-about-failure", json=request_data)
     
+    # Generic forward endpoint (optional but recommended)
+    async def forward(self,
+                      agent_id: str,
+                      task_type: str,
+                      input_data: Dict[str, Any],
+                      memory_context: Dict[str, Any] = None,
+                      energy_context: Dict[str, Any] = None,
+                      lifecycle_context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Generic forward method for any cognitive task type.
+        
+        Args:
+            agent_id: Agent identifier
+            task_type: Type of cognitive task
+            input_data: Task-specific input data
+            memory_context: Memory context (optional)
+            energy_context: Energy context (optional)
+            lifecycle_context: Lifecycle context (optional)
+            
+        Returns:
+            Cognitive processing result
+        """
+        body = {
+            "agent_id": agent_id,
+            "task_type": task_type,
+            "input_data": input_data,
+            "memory_context": memory_context or {},
+            "energy_context": energy_context or {},
+            "lifecycle_context": lifecycle_context or {},
+        }
+        return await self.post("/forward", json=body)
+
     # Service Information
     async def get_service_info(self) -> Dict[str, Any]:
         """Get cognitive service information."""

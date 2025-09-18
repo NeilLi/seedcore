@@ -344,7 +344,7 @@ def _is_plan_like(items):
         item = items[0]
         if isinstance(item, dict):
             # Check for explicit HGNN markers
-            if (item.get("plan_source") == "cognitive_core" or 
+            if (item.get("plan_source") == "cognitive_service" or 
                 "solution_steps" in item or 
                 item.get("kind") == "escalated"):
                 return True
@@ -2025,7 +2025,7 @@ def test_routing_with_mock_tasks(ray, coord):
                                 log.info("✅ Escalation confirmed: HGNN decomposition plan")
                                 # Check for required escalation metadata
                                 plan_source = result.get('plan_source')
-                                if plan_source == "cognitive_core":
+                                if plan_source == "cognitive_service":
                                     log.info(f"   ✅ Plan source confirmed: {plan_source}")
                                 else:
                                     log.warning(f"   ⚠️ Missing or incorrect plan_source: {plan_source}")
@@ -3292,7 +3292,7 @@ def main():
             return
         
         # Log metadata for debugging
-        metadata = {k: v for k, v in res.items() if k in ["escalated", "plan_source", "planner", "cognitive_core_version"]}
+        metadata = {k: v for k, v in res.items() if k in ["escalated", "plan_source", "planner", "cognitive_service_version"]}
         if metadata:
             log.info(f"📋 Escalation metadata: {metadata}")
             

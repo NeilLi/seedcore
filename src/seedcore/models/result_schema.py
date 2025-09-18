@@ -76,7 +76,7 @@ class EscalatedResult(BaseModel):
     model_config = {"extra": "ignore"}
     
     solution_steps: List[TaskStep] = Field(..., description="List of decomposed solution steps")
-    plan_source: str = Field(default="cognitive_core", description="Source of the decomposition plan")
+    plan_source: str = Field(default="cognitive_service", description="Source of the decomposition plan")
     estimated_complexity: Optional[str] = Field(None, description="Estimated task complexity")
     explanations: Optional[str] = Field(None, description="Explanation of the decomposition strategy")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional escalation metadata")
@@ -155,7 +155,7 @@ def create_fast_path_result(
 
 def create_escalated_result(
     solution_steps: List[TaskStep],
-    plan_source: str = "cognitive_core",
+    plan_source: str = "cognitive_service",
     estimated_complexity: Optional[str] = None,
     explanations: Optional[str] = None,
     **metadata
