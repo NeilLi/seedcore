@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 class MLServiceClient(BaseServiceClient):
     """
     Client for the deployed ML service that handles:
+    - LLM: chat/completions, embeddings, rerank
     - Drift detection and scoring
     - Salience scoring
     - Anomaly detection
@@ -197,6 +198,72 @@ class MLServiceClient(BaseServiceClient):
             Scaling prediction result
         """
         return await self.post("/predict/scaling", json=metrics)
+    
+    # --- LLM Endpoints ---
+    async def chat(self, model: str, messages: List[Dict[str, str]], **params) -> Dict[str, Any]:
+        """
+        Chat/completions via MLService.
+        
+        Args:
+            model: Model name to use for chat
+            messages: List of message dictionaries with "role" and "content" keys
+            **params: Additional parameters for the chat request
+            
+        Returns:
+            Chat completion response
+        """
+        payload = {"model": model, "messages": messages, **params}
+        return await self.post("/chat", json=payload)
+
+    async def embeddings(self, model: str, inputs: List[str] | str, **params) -> Dict[str, Any]:
+        """
+        Embeddings via MLService.
+        
+        Args:
+            model: Model name to use for embeddings
+            inputs: Single string or list of strings to embed
+            **params: Additional parameters for the embeddings request
+            
+        Returns:
+            Embeddings response
+        """
+        payload = {"model": model, "input": inputs, **params}
+        return await self.post("/embeddings", json=payload)
+
+    async def rerank(self, model: str, query: str, documents: List[str], top_k: int = 10, **params) -> Dict[str, Any]:
+        """
+        Rerank via MLService.
+        
+        Args:
+            model: Model name to use for reranking
+            query: Query string
+            documents: List of documents to rerank
+            top_k: Number of top results to return
+            **params: Additional parameters for the rerank request
+            
+        Returns:
+            Rerank response
+        """
+        payload = {"model": model, "query": query, "documents": documents, "top_k": top_k, **params}
+        return await self.post("/rerank", json=payload)
+
+    async def list_models(self) -> Dict[str, Any]:
+        """
+        List available models from MLService.
+        
+        Returns:
+            List of available models
+        """
+        return await self.get("/models")
+
+    async def health(self) -> Dict[str, Any]:
+        """
+        Check MLService health status.
+        
+        Returns:
+            Health status response
+        """
+        return await self.get("/health")
     
     # Service Information
     async def get_service_info(self) -> Dict[str, Any]:

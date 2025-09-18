@@ -164,6 +164,12 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "health": "/health",
+            "llm": {
+                "chat": "/chat",
+                "embeddings": "/embeddings", 
+                "rerank": "/rerank",
+                "models": "/models"
+            },
             "salience_scoring": "/score/salience",
             "anomaly_detection": "/detect/anomaly",
             "drift_scoring": "/drift/score",
@@ -221,24 +227,60 @@ async def health_check():
 @ml_app.post("/score/salience")
 async def score_salience(request: Dict[str, Any]):
     try:
+        # Support both old format (features) and new format (text/context)
         features_list = request.get("features", [])
-        if not features_list:
-            return {"error": "No features provided", "status": "error"}
+        text = request.get("text")
+        context = request.get("context", {})
+        
+        if not features_list and not text:
+            return {"error": "No features or text provided", "status": "error"}
 
         from seedcore.ml.salience.scorer import SalienceScorer as MLSalienceScorer
         try:
             scorer = MLSalienceScorer()
-            scores = scorer.score_features(features_list)
+            
+            if text:
+                # New format: compute salience for text
+                # TODO: Implement actual text-based salience scoring
+                # For now, return a simple score based on text length and context
+                score = min(1.0, len(text.split()) / 100.0)  # Simple heuristic
+                if context:
+                    # Adjust score based on context
+                    priority = context.get("priority", 5)
+                    score *= (priority / 10.0)
+                
+                return {
+                    "score": score,
+                    "model": "ml_salience_scorer",
+                    "status": "success",
+                    "timestamp": time.time(),
+                }
+            else:
+                # Old format: score features list
+                scores = scorer.score_features(features_list)
+                return {
+                    "scores": scores,
+                    "model": "ml_salience_scorer",
+                    "status": "success",
+                    "timestamp": time.time(),
+                }
         except Exception as e:
             logger.error(f"Error loading salience scorer: {e}")
-            scores = [0.5] * len(features_list)
-
-        return {
-            "scores": scores,
-            "model": "ml_salience_scorer",
-            "status": "success",
-            "timestamp": time.time(),
-        }
+            if text:
+                return {
+                    "score": 0.5,
+                    "model": "ml_salience_scorer",
+                    "status": "success",
+                    "timestamp": time.time(),
+                }
+            else:
+                scores = [0.5] * len(features_list)
+                return {
+                    "scores": scores,
+                    "model": "ml_salience_scorer",
+                    "status": "success",
+                    "timestamp": time.time(),
+                }
     except Exception as e:
         logger.error(f"Error in salience scoring: {e}")
         return {"error": str(e), "status": "error", "timestamp": time.time()}
@@ -423,6 +465,206 @@ async def warmup_drift_detector(request: Dict[str, Any] = None):
         
     except Exception as e:
         logger.error(f"Error in drift detector warmup: {e}")
+        return {"error": str(e), "status": "error", "timestamp": time.time()}
+
+
+# ---------------------------------------------------------------------
+# LLM Endpoints (chat, embeddings, rerank)
+# ---------------------------------------------------------------------
+@ml_app.post("/chat")
+async def chat_completions(request: Dict[str, Any]):
+    """
+    Chat/completions endpoint for LLM inference.
+    
+    Expected request format:
+    {
+        "model": "llama3-8b",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "temperature": 0.7,
+        "max_tokens": 100
+    }
+    """
+    try:
+        model = request.get("model", "default")
+        messages = request.get("messages", [])
+        
+        if not messages:
+            return {"error": "No messages provided", "status": "error"}
+        
+        # TODO: Implement actual LLM inference
+        # This is a stub implementation
+        response_text = f"LLM response for model '{model}' with {len(messages)} messages"
+        
+        return {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": response_text
+                },
+                "finish_reason": "stop"
+            }],
+            "model": model,
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            },
+            "status": "success",
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in chat completions: {e}")
+        return {"error": str(e), "status": "error", "timestamp": time.time()}
+
+@ml_app.post("/embeddings")
+async def embeddings(request: Dict[str, Any]):
+    """
+    Embeddings endpoint for text embeddings.
+    
+    Expected request format:
+    {
+        "model": "embedding-model",
+        "input": "text to embed" or ["text1", "text2"]
+    }
+    """
+    try:
+        model = request.get("model", "default-embedding")
+        inputs = request.get("input", [])
+        
+        if not inputs:
+            return {"error": "No input provided", "status": "error"}
+        
+        # Handle both string and list inputs
+        if isinstance(inputs, str):
+            inputs = [inputs]
+        
+        # TODO: Implement actual embedding inference
+        # This is a stub implementation
+        embeddings_data = []
+        for i, text in enumerate(inputs):
+            # Generate fake embedding vector (dimension 384)
+            embedding = [0.1 * (i + j) for j in range(384)]
+            embeddings_data.append({
+                "object": "embedding",
+                "index": i,
+                "embedding": embedding
+            })
+        
+        return {
+            "object": "list",
+            "data": embeddings_data,
+            "model": model,
+            "usage": {
+                "prompt_tokens": sum(len(text.split()) for text in inputs),
+                "total_tokens": sum(len(text.split()) for text in inputs)
+            },
+            "status": "success",
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in embeddings: {e}")
+        return {"error": str(e), "status": "error", "timestamp": time.time()}
+
+@ml_app.post("/rerank")
+async def rerank(request: Dict[str, Any]):
+    """
+    Rerank endpoint for document reranking.
+    
+    Expected request format:
+    {
+        "model": "rerank-model",
+        "query": "search query",
+        "documents": ["doc1", "doc2", "doc3"],
+        "top_k": 10
+    }
+    """
+    try:
+        model = request.get("model", "default-rerank")
+        query = request.get("query", "")
+        documents = request.get("documents", [])
+        top_k = request.get("top_k", 10)
+        
+        if not query or not documents:
+            return {"error": "Query and documents are required", "status": "error"}
+        
+        # TODO: Implement actual reranking
+        # This is a stub implementation
+        results = []
+        for i, doc in enumerate(documents):
+            # Generate fake relevance score
+            score = 0.9 - (i * 0.1)  # Decreasing scores
+            results.append({
+                "index": i,
+                "relevance_score": score,
+                "document": doc
+            })
+        
+        # Sort by relevance score and take top_k
+        results.sort(key=lambda x: x["relevance_score"], reverse=True)
+        results = results[:top_k]
+        
+        return {
+            "model": model,
+            "results": results,
+            "usage": {
+                "total_tokens": len(query.split()) + sum(len(doc.split()) for doc in documents)
+            },
+            "status": "success",
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in rerank: {e}")
+        return {"error": str(e), "status": "error", "timestamp": time.time()}
+
+@ml_app.get("/models")
+async def list_models():
+    """
+    List available models from the ML service.
+    """
+    try:
+        # TODO: Implement actual model listing
+        # This is a stub implementation
+        models = {
+            "object": "list",
+            "data": [
+                {
+                    "id": "llama3-8b",
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "seedcore-ml"
+                },
+                {
+                    "id": "mistral-7b",
+                    "object": "model", 
+                    "created": int(time.time()),
+                    "owned_by": "seedcore-ml"
+                },
+                {
+                    "id": "embedding-model",
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "seedcore-ml"
+                },
+                {
+                    "id": "rerank-model",
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "seedcore-ml"
+                }
+            ]
+        }
+        
+        return {
+            **models,
+            "status": "success",
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error listing models: {e}")
         return {"error": str(e), "status": "error", "timestamp": time.time()}
 
 
