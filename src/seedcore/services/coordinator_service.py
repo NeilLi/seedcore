@@ -1,7 +1,7 @@
 # coordinator_service.py
-import os, time, uuid, httpx, asyncio
+import os, time, uuid, httpx, asyncio, random
 from fastapi import FastAPI, HTTPException
-from typing import Dict, Any, List, Optional, Iterable, Set, Tuple
+from typing import Dict, Any, List, Optional, Iterable, Set, Tuple, NamedTuple
 from urllib.parse import urlparse
 from pathlib import Path
 from ray import serve
@@ -143,36 +143,82 @@ class OCPSValve:
         tot = self.fast_hits + self.esc_hits
         return (self.fast_hits / tot) if tot else 1.0
 
-class RoutingDirectory:
-    """
-    Minimal routing: map task_type[/domain] -> organ_id.
-    The Coordinator owns this (global), but can refresh from Organism status if desired.
-    """
-    def __init__(self):
-        self.by_task: Dict[str, str] = {}
-        self.by_domain: Dict[tuple, str] = {}
+# Route cache structures
+class RouteEntry(NamedTuple):
+    logical_id: str
+    epoch: str
+    resolved_from: str
+    instance_id: Optional[str] = None
+    cached_at: float = 0.0
 
-    @staticmethod
-    def _norm(x: Optional[str]) -> Optional[str]:
-        return str(x).strip().lower() if x is not None else None
+class RouteCache:
+    """Tiny TTL route cache with single-flight to avoid dogpiles."""
+    
+    def __init__(self, ttl_s: float = 3.0, jitter_s: float = 0.5):
+        self.ttl_s = ttl_s
+        self.jitter_s = jitter_s
+        self._cache: Dict[Tuple[str, Optional[str]], Tuple[RouteEntry, float]] = {}
+        self._lock = asyncio.Lock()
+        self._inflight: Dict[Tuple[str, Optional[str]], asyncio.Future] = {}
 
-    def set_rule(self, task_type: str, organ_id: str, domain: Optional[str] = None):
-        tt = self._norm(task_type); dm = self._norm(domain)
-        if tt is None: return
-        if dm: self.by_domain[(tt, dm)] = organ_id
-        else:  self.by_task[tt] = organ_id
+    def _expired(self, expires_at: float) -> bool:
+        return time.monotonic() > expires_at
 
-    def resolve(self, task_type: Optional[str], domain: Optional[str]) -> Optional[str]:
-        tt = self._norm(task_type); dm = self._norm(domain)
-        if not tt: return None
-        if (tt, dm) in self.by_domain: return self.by_domain[(tt, dm)]
-        return self.by_task.get(tt)
+    def _expires_at(self) -> float:
+        return time.monotonic() + self.ttl_s + random.uniform(0, self.jitter_s)
+
+    def get(self, key: Tuple[str, Optional[str]]) -> Optional[RouteEntry]:
+        v = self._cache.get(key)
+        if not v:
+            return None
+        entry, expires_at = v
+        if self._expired(expires_at):
+            self._cache.pop(key, None)
+            return None
+        return entry
+
+    def set(self, key: Tuple[str, Optional[str]], entry: RouteEntry) -> None:
+        self._cache[key] = (entry, self._expires_at())
+
+    async def singleflight(self, key: Tuple[str, Optional[str]]):
+        """Ensure only one resolve for a given key at a time (prevents dogpiles).
+
+        Yields a tuple (future, is_leader). Exactly one caller per key will
+        have is_leader=True and is responsible for computing the result and
+        completing the future. All others should await the future result.
+        """
+        async with self._lock:
+            fut = self._inflight.get(key)
+            is_leader = False
+            if fut is None:
+                fut = asyncio.get_event_loop().create_future()
+                self._inflight[key] = fut
+                is_leader = True
+        try:
+            yield fut, is_leader
+        finally:
+            # Only the leader clears the inflight map entry after completion
+            if is_leader:
+                async with self._lock:
+                    self._inflight.pop(key, None)
+
+    def clear(self):
+        """Clear the cache."""
+        self._cache.clear()
+
 
 # ---------- Metrics tracking ----------
 class MetricsTracker:
     """Track task execution metrics for monitoring and optimization."""
     def __init__(self):
         self._task_metrics = {
+            # Routing metrics
+            "route_cache_hit_total": 0,
+            "route_remote_total": 0,
+            "route_remote_latency_ms": [],
+            "route_remote_fail_total": 0,
+            "bulk_resolve_items": 0,
+            "bulk_resolve_failed_items": 0,
             "total_tasks": 0,
             "successful_tasks": 0,
             "failed_tasks": 0,
@@ -294,8 +340,25 @@ class Coordinator:
             limits=httpx.Limits(max_keepalive_connections=100, max_connections=200),
         )
         self.ocps = OCPSValve()
-        self.routing = RoutingDirectory()
         self.metrics = MetricsTracker()
+        
+        # Tiny TTL route cache with single-flight
+        self.route_cache = RouteCache(
+            ttl_s=float(os.getenv("ROUTE_CACHE_TTL_S", "3.0")),
+            jitter_s=float(os.getenv("ROUTE_CACHE_JITTER_S", "0.5"))
+        )
+        self._last_seen_epoch = None  # Track organism epoch for cache invalidation
+        
+        # Feature flag for safe rollout
+        def _env_bool(name: str, default: bool = False) -> bool:
+            """Robust environment variable parsing for boolean values."""
+            val = os.getenv(name)
+            if val is None:
+                return default
+            return val.lower() in ("1", "true", "yes", "y", "on")
+        
+        self.routing_remote_enabled = _env_bool("ROUTING_REMOTE", False)
+        self.routing_remote_types = set(os.getenv("ROUTING_REMOTE_TYPES", "graph_embed,graph_rag_query,graph_embed_v2,graph_rag_query_v2").split(","))
 
         self.graph_repository = None  # Lazily instantiated GraphTaskRepository
         self._graph_repo_checked = False
@@ -315,34 +378,8 @@ class Coordinator:
         self.predicate_config = None
         self.predicate_router = None
         
-        # sensible defaults (avoid cognitive for simple)
-        self.routing.set_rule("general_query", "utility_organ_1")
-        self.routing.set_rule("health_check", "utility_organ_1")
-        self.routing.set_rule("execute", "actuator_organ_1")
-        
-        # Graph task routing (Migration 007+)
-        self.routing.set_rule("graph_embed", "graph_dispatcher")
-        self.routing.set_rule("graph_rag_query", "graph_dispatcher")
-        self.routing.set_rule("graph_embed_v2", "graph_dispatcher")
-        self.routing.set_rule("graph_rag_query_v2", "graph_dispatcher")
-        self.routing.set_rule("graph_sync_nodes", "graph_dispatcher")
-        
-        # Facts system routing (Migration 009)
-        self.routing.set_rule("graph_fact_embed", "graph_dispatcher")
-        self.routing.set_rule("graph_fact_query", "graph_dispatcher")
-        self.routing.set_rule("fact_search", "utility_organ_1")
-        self.routing.set_rule("fact_store", "utility_organ_1")
-        
-        # Resource management routing (Migration 007)
-        self.routing.set_rule("artifact_manage", "utility_organ_1")
-        self.routing.set_rule("capability_manage", "utility_organ_1")
-        self.routing.set_rule("memory_cell_manage", "utility_organ_1")
-        
-        # Agent layer routing (Migration 008)
-        self.routing.set_rule("model_manage", "utility_organ_1")
-        self.routing.set_rule("policy_manage", "utility_organ_1")
-        self.routing.set_rule("service_manage", "utility_organ_1")
-        self.routing.set_rule("skill_manage", "utility_organ_1")
+        # Routing is now handled by OrganismManager via resolve-route endpoints
+        # Old static routing rules are preserved in _static_route_fallback method
         
         # Escalation concurrency control
         self.escalation_max_inflight = COGNITIVE_MAX_INFLIGHT
@@ -588,6 +625,237 @@ class Coordinator:
             logger.info(f"[DriftDetector] Task {task_id}: Using fallback score {fallback_score:.4f}")
             return fallback_score
     
+    def _normalize(self, x: Optional[str]) -> Optional[str]:
+        """Normalize string for consistent matching."""
+        return str(x).strip().lower() if x is not None else None
+
+    def _static_route_fallback(self, task_type: str, domain: Optional[str]) -> str:
+        """Fallback routing using static rules when organism is unavailable."""
+        # Domain-specific overrides (restore any domain-specific rules that were removed)
+        STATIC_DOMAIN_RULES = {
+            # Add any domain-specific overrides here
+            # Example: ("execute", "robot_arm"): "actuator_organ_2",
+            # Example: ("graph_rag_query", "facts"): "graph_dispatcher",
+        }
+        
+        # Check domain-specific rules first
+        if (task_type, (domain or "")) in STATIC_DOMAIN_RULES:
+            return STATIC_DOMAIN_RULES[(task_type, domain or "")]
+        
+        # Generic task type rules
+        if task_type in ["general_query", "health_check", "fact_search", "fact_store",
+                        "artifact_manage", "capability_manage", "memory_cell_manage",
+                        "model_manage", "policy_manage", "service_manage", "skill_manage"]:
+            return "utility_organ_1"
+        if task_type == "execute":
+            return "actuator_organ_1"
+        if task_type in ["graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2",
+                        "graph_sync_nodes", "graph_fact_embed", "graph_fact_query"]:
+            return "graph_dispatcher"
+        return "utility_organ_1"  # Ultimate fallback
+
+    async def _resolve_route_cached(self, task_type: str, domain: Optional[str], *,
+                                   preferred_logical_id: Optional[str] = None,
+                                   cid: Optional[str] = None) -> str:
+        """Resolve route with caching and single-flight."""
+        t = self._normalize(task_type)
+        d = self._normalize(domain)
+        key = (t, d)
+
+        # Check feature flag
+        if not self.routing_remote_enabled or t not in self.routing_remote_types:
+            return self._static_route_fallback(t, d)
+
+        # 1) Try cache
+        cached = self.route_cache.get(key)
+        if cached:
+            self.metrics._task_metrics["route_cache_hit_total"] += 1
+            logger.info(f"[Coordinator] Route cache hit for ({t}, {d}): {cached.logical_id} from={cached.resolved_from} epoch={cached.epoch}")
+            return cached.logical_id
+
+        # 2) Single-flight: if another coroutine is already resolving this key, await it
+        async for (fut, is_leader) in self.route_cache.singleflight(key):
+            # double-check cache after acquiring the singleflight slot
+            cached = self.route_cache.get(key)
+            if cached:
+                if is_leader and not fut.done():
+                    fut.set_result(cached.logical_id)
+                return cached.logical_id
+
+            # 3) Remote resolve (primary)
+            start_time = time.time()
+            try:
+                payload = {"task": {"type": t, "domain": d, "params": {}}}
+                if preferred_logical_id:
+                    payload["preferred_logical_id"] = preferred_logical_id
+
+                # Clamp resolve timeout to keep fast-path SLO (30-50ms budget)
+                resolve_timeout = min(0.05, self.organism_client.timeout)  # 50ms max
+                resp = await self.organism_client.post(
+                    "/resolve-route", json=payload,
+                    headers=_corr_headers("organism", cid or uuid.uuid4().hex),
+                    timeout=resolve_timeout
+                )
+                # Expected response: { logical_id, resolved_from, epoch, instance_id? }
+                # CONTRACT: logical_id is required for execution; instance_id is telemetry only
+                # Execution uses logical_id and Organism chooses healthy instance at call time
+                logical_id = resp["logical_id"] if "logical_id" in resp else resp.get("organ_id")
+                epoch = resp.get("epoch", "")
+                resolved_from = resp.get("resolved_from", "unknown")
+                instance_id = resp.get("instance_id")  # Telemetry only - don't pin instances
+
+                # Track metrics
+                latency_ms = (time.time() - start_time) * 1000
+                self.metrics._task_metrics["route_remote_total"] += 1
+                self.metrics._task_metrics["route_remote_latency_ms"].append(latency_ms)
+
+                entry = RouteEntry(logical_id=logical_id, epoch=epoch,
+                                 resolved_from=resolved_from, instance_id=instance_id,
+                                 cached_at=time.time())
+                self.route_cache.set(key, entry)
+
+                # Optional epoch-aware invalidation: if epoch changes suddenly, clear cache
+                if self._last_seen_epoch and epoch and epoch != self._last_seen_epoch:
+                    # Epoch rotated; keep the new entry but clear older keys
+                    self.route_cache.clear()
+                if epoch:
+                    self._last_seen_epoch = epoch
+
+                logger.info(f"[Coordinator] Route resolved for ({t}, {d}): {logical_id} from={resolved_from} epoch={epoch} latency={latency_ms:.1f}ms")
+                if is_leader and not fut.done():
+                    fut.set_result(logical_id)
+                return logical_id
+
+            except Exception as e:
+                # 4) Fallback: use static defaults
+                self.metrics._task_metrics["route_remote_fail_total"] += 1
+                logical_id = self._static_route_fallback(t, d)
+                # Always complete the future - either with result or exception
+                if is_leader and not fut.done():
+                    fut.set_result(logical_id)
+                logger.warning(f"[Coordinator] Route resolution failed for ({t}, {d}), using fallback: {e}")
+                return logical_id
+
+    async def _bulk_resolve_routes_cached(self, steps: List[Dict[str, Any]], cid: str) -> Dict[int, str]:
+        """
+        Given HGNN steps (each has step['task'] with type/domain),
+        return a mapping: { step_index -> logical_id }.
+        De-duplicates (type, domain) pairs to minimize network calls.
+        """
+        # 1) Group indices by unique (type, domain) pairs and check cache
+        pairs: Dict[Tuple[str, Optional[str]], List[int]] = {}
+        mapping: Dict[int, str] = {}  # final result
+        to_resolve = []
+
+        for idx, step in enumerate(steps):
+            subtask = step.get("task") or {}
+            t = self._normalize(subtask.get("type"))
+            d = self._normalize(subtask.get("domain"))
+            key = (t, d)
+            
+            if not t:
+                continue  # skip; executor will fallback
+            
+            if key not in pairs:
+                pairs[key] = []
+            pairs[key].append(idx)
+
+            # Check cache for this (type, domain) pair
+            cached = self.route_cache.get(key)
+            if cached:
+                # Apply cached result to all indices with this (type, domain)
+                for step_idx in pairs[key]:
+                    mapping[step_idx] = cached.logical_id
+            else:
+                # Only add to resolve list if not already added
+                if key not in [item["key"] for item in to_resolve]:
+                    to_resolve.append({
+                        "key": f"{t}|{d}",
+                        "type": t, 
+                        "domain": d,
+                        "preferred_logical_id": step.get("organ_hint")  # Forward hints
+                    })
+
+        if not to_resolve:
+            return mapping  # all from cache
+
+        # 2) Remote bulk resolve
+        start_time = time.time()
+        try:
+            # Clamp bulk resolve timeout (allow more time for bulk operations)
+            bulk_timeout = min(0.1, self.organism_client.timeout)  # 100ms max for bulk
+            resp = await self.organism_client.post(
+                "/resolve-routes",
+                json={"tasks": to_resolve},
+                headers=_corr_headers("organism", cid),
+                timeout=bulk_timeout
+            )
+            
+            # Track bulk resolve metrics
+            latency_ms = (time.time() - start_time) * 1000
+            self.metrics._task_metrics["bulk_resolve_items"] += len(to_resolve)
+            logger.info(f"[Coordinator] Bulk resolve completed: {len(to_resolve)} items in {latency_ms:.1f}ms")
+            # resp: { epoch, results: [ {key, logical_id, status, ...}, ... ] }
+            epoch = resp.get("epoch")
+            if epoch and self._last_seen_epoch and epoch != self._last_seen_epoch:
+                # epoch rotated => flush stale cache
+                self.route_cache.clear()
+            if epoch:
+                self._last_seen_epoch = epoch
+
+            # Create mapping from key to result
+            key_to_result = {}
+            for r in resp.get("results", []):
+                key = r.get("key")
+                if key:
+                    key_to_result[key] = r
+
+            # Fan-out results to all indices with matching (type, domain)
+            for item in to_resolve:
+                key = item["key"]
+                result = key_to_result.get(key, {})
+                status = result.get("status", "error")
+                
+                if status == "ok" and result.get("logical_id"):
+                    logical_id = result["logical_id"]
+                    # Parse key back to (type, domain)
+                    t, d = key.split("|", 1)
+                    d = d if d else None
+                    
+                    # Backfill cache
+                    self.route_cache.set((t, d), RouteEntry(
+                        logical_id=logical_id,
+                        epoch=result.get("epoch", epoch or ""),
+                        resolved_from=result.get("resolved_from", "bulk"),
+                        instance_id=result.get("instance_id"),
+                        cached_at=time.time()
+                    ))
+                    
+                    # Apply to all indices with this (type, domain)
+                    for step_idx in pairs[(t, d)]:
+                        mapping[step_idx] = logical_id
+                else:
+                    # Fallback for this (type, domain) pair
+                    t, d = key.split("|", 1)
+                    d = d if d else None
+                    logical_id = self._static_route_fallback(t, d)
+                    for step_idx in pairs[(t, d)]:
+                        mapping[step_idx] = logical_id
+                        
+            return mapping
+
+        except Exception as e:
+            # Complete fallback: local rules for all unresolved
+            self.metrics._task_metrics["bulk_resolve_failed_items"] += len(to_resolve)
+            logger.warning(f"[Coordinator] Bulk route resolution failed, using fallback: {e}")
+            for item in to_resolve:
+                t, d = item["key"].split("|", 1)
+                d = d if d else None
+                logical_id = self._static_route_fallback(t, d)
+                for step_idx in pairs[(t, d)]:
+                    mapping[step_idx] = logical_id
+            return mapping
+
     def _fallback_drift_score(self, task: Dict[str, Any]) -> float:
         """
         Fallback drift score computation when ML service is unavailable.
@@ -834,31 +1102,10 @@ class Coordinator:
         """Create a minimal safe fallback plan when cognitive reasoning is unavailable."""
         ttype = (task.get("type") or task.get("task_type") or "").strip().lower()
         
-        # Try to find an organ that supports this task type
-        organ_id = self.routing.resolve(ttype, task.get("domain"))
-        if organ_id:
-            return [{"organ_id": organ_id, "task": task}]
+        # Use static fallback routing (new routing is async)
+        organ_id = self._static_route_fallback(ttype, task.get("domain"))
         
-        # Special handling for graph tasks (Migration 007+)
-        if ttype in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2", 
-                     "graph_fact_embed", "graph_fact_query", "graph_sync_nodes"):
-            return [{"organ_id": "graph_dispatcher", "task": task}]
-        
-        # Special handling for fact operations (Migration 009)
-        if ttype in ("fact_search", "fact_store"):
-            return [{"organ_id": "utility_organ_1", "task": task}]
-        
-        # Special handling for resource management (Migration 007)
-        if ttype in ("artifact_manage", "capability_manage", "memory_cell_manage"):
-            return [{"organ_id": "utility_organ_1", "task": task}]
-        
-        # Special handling for agent layer management (Migration 008)
-        if ttype in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
-            return [{"organ_id": "utility_organ_1", "task": task}]
-        
-        # Fallback: use first available organ (simple round-robin)
-        # This would need to be populated from organism status in practice
-        return [{"organ_id": "utility_organ_1", "task": task}]
+        return [{"organ_id": organ_id, "task": task}]
 
     def _validate_or_fallback(self, plan: List[Dict[str, Any]], task: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         """Validate the plan from CognitiveCore and return fallback if invalid."""
@@ -1386,6 +1633,26 @@ class Coordinator:
                     persist_exc,
                 )
 
+
+            # Bulk resolve routes for all steps in the plan
+            try:
+                idx_to_logical = await self._bulk_resolve_routes_cached(plan, cid)
+                # Stamp resolved organ_ids into each step
+                for idx, step in enumerate(plan):
+                    if "organ_id" not in step or not step["organ_id"]:
+                        step["organ_id"] = idx_to_logical.get(idx) or self._static_route_fallback(
+                            self._normalize(step.get("task", {}).get("type")),
+                            self._normalize(step.get("task", {}).get("domain"))
+                        )
+            except Exception as e:
+                logger.warning(f"[Coordinator] Bulk route resolution failed, using fallback: {e}")
+                # Fallback: use static routing for each step
+                for idx, step in enumerate(plan):
+                    if "organ_id" not in step or not step["organ_id"]:
+                        step["organ_id"] = self._static_route_fallback(
+                            self._normalize(step.get("task", {}).get("type")),
+                            self._normalize(step.get("task", {}).get("domain"))
+                        )
 
             # Execute steps sequentially
             results = []

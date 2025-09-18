@@ -24,6 +24,7 @@ from ray import serve
 from fastapi import FastAPI
 from seedcore.utils.ray_utils import ensure_ray_initialized
 from pydantic import BaseModel
+from typing import List
 
 
 # Add the project root to Python path
@@ -70,6 +71,43 @@ class OrganismStatusResponse(BaseModel):
     organism_initialized: bool
     organism_info: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+
+# Routing models
+class ResolveRouteRequest(BaseModel):
+    task: Dict[str, Any]
+    preferred_logical_id: Optional[str] = None
+
+class ResolveRouteResponse(BaseModel):
+    logical_id: str
+    resolved_from: str
+    epoch: str
+    instance_id: Optional[str] = None
+
+class BulkResolveItem(BaseModel):
+    index: Optional[int] = None  # Optional for key-based de-duplication
+    key: Optional[str] = None    # For de-duplication: "type|domain"
+    type: str
+    domain: Optional[str] = None
+    preferred_logical_id: Optional[str] = None
+
+class BulkResolveRequest(BaseModel):
+    tasks: List[BulkResolveItem]
+
+class BulkResolveResult(BaseModel):
+    index: Optional[int] = None  # Optional for key-based responses
+    key: Optional[str] = None    # For de-duplication responses
+    logical_id: Optional[str] = None
+    resolved_from: Optional[str] = None
+    epoch: Optional[str] = None
+    instance_id: Optional[str] = None
+    status: str = "ok"  # "ok" | "fallback" | "no_active_instance" | "unknown_type" | "error"
+    error: Optional[str] = None
+    cache_hit: bool = False
+    cache_age_ms: Optional[float] = None
+
+class BulkResolveResponse(BaseModel):
+    epoch: str
+    results: List[BulkResolveResult]
 
 # --- FastAPI app for ingress ---
 app = FastAPI(title="SeedCore Organism Service", version="1.0.0")
@@ -372,6 +410,161 @@ class OrganismService:
             return {"success": True, **result}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    # --- Routing Endpoints ---
+
+    @app.post("/resolve-route", response_model=ResolveRouteResponse)
+    async def resolve_route(self, request: ResolveRouteRequest):
+        """Resolve a single task to its target organ."""
+        try:
+            if not self._initialized:
+                return {"logical_id": "utility_organ_1", "resolved_from": "fallback", 
+                       "epoch": "unknown", "error": "Organism not initialized"}
+            
+            task = request.task
+            task_type = task.get("type")
+            domain = task.get("domain")
+            preferred_logical_id = request.preferred_logical_id
+            
+            # Get current epoch (mock for now)
+            current_epoch = "epoch-" + str(int(time.time()))
+            
+            # Resolve using routing directory
+            logical_id, resolved_from = await self.organism_manager.routing.resolve(
+                task_type, domain, preferred_logical_id, current_epoch
+            )
+            
+            if not logical_id:
+                return {"logical_id": "utility_organ_1", "resolved_from": "fallback", 
+                       "epoch": current_epoch, "error": "No route found"}
+            
+            # Get instance info if available
+            instance_id = None
+            if resolved_from in ["preferred", "domain", "task", "default"]:
+                instance = await self.organism_manager.routing._get_active_instance(logical_id, current_epoch)
+                if instance:
+                    instance_id = instance.get("instance_id")
+            
+            return {
+                "logical_id": logical_id,
+                "resolved_from": resolved_from,
+                "epoch": current_epoch,
+                "instance_id": instance_id
+            }
+        except Exception as e:
+            logger.error(f"Route resolution failed: {e}")
+            return {"logical_id": "utility_organ_1", "resolved_from": "fallback", 
+                   "epoch": "unknown", "error": str(e)}
+
+    @app.post("/resolve-routes", response_model=BulkResolveResponse)
+    async def resolve_routes(self, request: BulkResolveRequest):
+        """Resolve multiple tasks to their target organs in one request."""
+        try:
+            if not self._initialized:
+                return {"epoch": "unknown", "results": []}
+            
+            # Get current epoch (mock for now)
+            current_epoch = "epoch-" + str(int(time.time()))
+            results = []
+            
+            for item in request.tasks:
+                try:
+                    # Resolve using routing directory
+                    logical_id, resolved_from = await self.organism_manager.routing.resolve(
+                        item.type, item.domain, item.preferred_logical_id, current_epoch
+                    )
+                    
+                    if not logical_id:
+                        results.append(BulkResolveResult(
+                            index=item.index, key=item.key, status="unknown_type",
+                            epoch=current_epoch, error="No route found"
+                        ))
+                        continue
+                    
+                    # Get instance info if available
+                    instance_id = None
+                    cache_hit = False
+                    cache_age_ms = None
+                    
+                    if resolved_from in ["preferred", "domain", "task", "default"]:
+                        instance = await self.organism_manager.routing._get_active_instance(logical_id, current_epoch)
+                        if instance:
+                            instance_id = instance.get("instance_id")
+                            # Check if this was a cache hit
+                            cache_hit = instance.get("cache_hit", False)
+                            cache_age_ms = instance.get("cache_age_ms")
+                        else:
+                            results.append(BulkResolveResult(
+                                index=item.index, key=item.key, status="no_active_instance",
+                                logical_id=logical_id, epoch=current_epoch,
+                                error=f"No active instance for {logical_id}"
+                            ))
+                            continue
+                    
+                    results.append(BulkResolveResult(
+                        index=item.index, key=item.key, status="ok",
+                        logical_id=logical_id, resolved_from=resolved_from,
+                        epoch=current_epoch, instance_id=instance_id,
+                        cache_hit=cache_hit, cache_age_ms=cache_age_ms
+                    ))
+                    
+                except Exception as e:
+                    results.append(BulkResolveResult(
+                        index=item.index, key=item.key, status="error",
+                        epoch=current_epoch, error=str(e)
+                    ))
+            
+            return {"epoch": current_epoch, "results": results}
+            
+        except Exception as e:
+            logger.error(f"Bulk route resolution failed: {e}")
+            return {"epoch": "unknown", "results": []}
+
+    @app.get("/routing/rules")
+    async def get_routing_rules(self):
+        """Get current routing rules."""
+        try:
+            if not self._initialized:
+                return {"error": "Organism not initialized"}
+            
+            return self.organism_manager.routing.get_rules()
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.put("/routing/rules")
+    async def update_routing_rules(self, rules: Dict[str, Any]):
+        """Update routing rules."""
+        try:
+            if not self._initialized:
+                return {"error": "Organism not initialized"}
+            
+            # Add/update rules
+            for rule in rules.get("add", []):
+                self.organism_manager.routing.set_rule(
+                    rule["task_type"], rule["logical_id"], rule.get("domain")
+                )
+            
+            # Remove rules
+            for rule in rules.get("remove", []):
+                self.organism_manager.routing.remove_rule(
+                    rule["task_type"], rule.get("domain")
+                )
+            
+            return {"success": True, "rules": self.organism_manager.routing.get_rules()}
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.post("/routing/refresh")
+    async def refresh_routing_cache(self):
+        """Refresh routing cache (useful after epoch rotation)."""
+        try:
+            if not self._initialized:
+                return {"error": "Organism not initialized"}
+            
+            self.organism_manager.routing.clear_cache()
+            return {"success": True}
+        except Exception as e:
+            return {"error": str(e)}
 
     # --- Evolution and Memory Endpoints ---
 

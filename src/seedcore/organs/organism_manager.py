@@ -40,7 +40,7 @@ import httpx
 import json
 import contextlib
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, NamedTuple, Tuple
 
 from .base import Organ
 from ..agents import tier0_manager
@@ -60,6 +60,213 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if val is None:
         return default
     return val.lower() in ("1", "true", "yes", "y", "on")
+
+# Routing structures
+class RouteEntry(NamedTuple):
+    logical_id: str
+    epoch: str
+    resolved_from: str
+    instance_id: Optional[str] = None
+    cached_at: float = 0.0
+
+class RoutingDirectory:
+    """
+    Routing directory with runtime registry integration.
+    Maps task_type[/domain] -> logical_id with active instance validation.
+    """
+    
+    def __init__(self):
+        # Static routing rules
+        self.rules_by_task: Dict[str, str] = {}
+        self.rules_by_domain: Dict[Tuple[str, str], str] = {}
+        
+        # Runtime cache for active instances (short TTL)
+        self._instance_cache: Dict[str, Tuple[Dict[str, Any], float]] = {}
+        self._cache_ttl = 3.0  # seconds
+        self._lock = asyncio.Lock()
+        
+        # Load sensible defaults
+        self._load_default_rules()
+    
+    def _load_default_rules(self):
+        """Load sensible default routing rules."""
+        # Utility tasks
+        utility_tasks = [
+            "general_query", "health_check", "fact_search", "fact_store",
+            "artifact_manage", "capability_manage", "memory_cell_manage",
+            "model_manage", "policy_manage", "service_manage", "skill_manage"
+        ]
+        for task in utility_tasks:
+            self.rules_by_task[task] = "utility_organ_1"
+        
+        # Actuation tasks
+        self.rules_by_task["execute"] = "actuator_organ_1"
+        
+        # Graph tasks (Migration 007+)
+        graph_tasks = [
+            "graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2",
+            "graph_sync_nodes", "graph_fact_embed", "graph_fact_query"
+        ]
+        for task in graph_tasks:
+            self.rules_by_task[task] = "graph_dispatcher"
+    
+    @staticmethod
+    def _normalize(x: Optional[str]) -> Optional[str]:
+        """Normalize string for consistent matching."""
+        return str(x).strip().lower() if x is not None else None
+    
+    def set_rule(self, task_type: str, logical_id: str, domain: Optional[str] = None):
+        """Set a routing rule."""
+        tt = self._normalize(task_type)
+        dm = self._normalize(domain)
+        if tt is None:
+            return
+        if dm:
+            self.rules_by_domain[(tt, dm)] = logical_id
+        else:
+            self.rules_by_task[tt] = logical_id
+    
+    def remove_rule(self, task_type: str, domain: Optional[str] = None):
+        """Remove a routing rule."""
+        tt = self._normalize(task_type)
+        dm = self._normalize(domain)
+        if tt is None:
+            return
+        if dm:
+            self.rules_by_domain.pop((tt, dm), None)
+        else:
+            self.rules_by_task.pop(tt, None)
+    
+    def get_rules(self) -> Dict[str, Any]:
+        """Get current routing rules."""
+        return {
+            "rules_by_task": self.rules_by_task.copy(),
+            "rules_by_domain": {f"{k[0]}/{k[1]}": v for k, v in self.rules_by_domain.items()}
+        }
+    
+    async def _get_active_instance(self, logical_id: str, current_epoch: str) -> Optional[Dict[str, Any]]:
+        """Get active instance for logical_id from runtime registry with single-flight."""
+        cache_key = f"{logical_id}:{current_epoch}"
+        now = time.time()
+        
+        # Check cache first
+        if cache_key in self._instance_cache:
+            instance_data, cached_at = self._instance_cache[cache_key]
+            if now - cached_at < self._cache_ttl:
+                # Return with cache metadata
+                return {
+                    **instance_data,
+                    "cache_hit": True,
+                    "cache_age_ms": (now - cached_at) * 1000
+                }
+        
+        # Single-flight for registry queries
+        async with self._lock:
+            # Double-check cache after acquiring lock
+            if cache_key in self._instance_cache:
+                instance_data, cached_at = self._instance_cache[cache_key]
+                if now - cached_at < self._cache_ttl:
+                    return {
+                        **instance_data,
+                        "cache_hit": True,
+                        "cache_age_ms": (now - cached_at) * 1000
+                    }
+            
+            # Query runtime registry
+            try:
+                # This would query the active_instance view from migrations 011/012
+                # For now, we'll simulate this with a simple check
+                # In production, this would be a database query to active_instance view
+                instance_data = await self._query_runtime_registry(logical_id, current_epoch)
+                if instance_data:
+                    self._instance_cache[cache_key] = (instance_data, now)
+                    return {
+                        **instance_data,
+                        "cache_hit": False,
+                        "cache_age_ms": 0.0
+                    }
+                return None
+            except Exception as e:
+                logger.warning(f"Failed to query runtime registry for {logical_id}: {e}")
+                return None
+    
+    async def _query_runtime_registry(self, logical_id: str, current_epoch: str) -> Optional[Dict[str, Any]]:
+        """Query the runtime registry for active instances."""
+        # TODO: Implement actual database query to active_instance view
+        # For now, return a mock response
+        return {
+            "logical_id": logical_id,
+            "instance_id": f"instance-{logical_id}-{current_epoch[:8]}",
+            "status": "alive",
+            "epoch": current_epoch
+        }
+    
+    async def resolve(self, task_type: str, domain: Optional[str] = None, 
+                     preferred_logical_id: Optional[str] = None,
+                     current_epoch: Optional[str] = None) -> Tuple[Optional[str], str]:
+        """
+        Resolve task_type/domain to logical_id with active instance validation.
+        
+        Returns:
+            Tuple of (logical_id, resolved_from) where resolved_from is one of:
+            - "domain": matched by (task_type, domain) rule
+            - "task": matched by task_type rule  
+            - "default": used category default
+            - "fallback": used utility_organ_1 fallback
+        """
+        tt = self._normalize(task_type)
+        dm = self._normalize(domain)
+        
+        if not tt:
+            return None, "error"
+        
+        # Use preferred if provided and valid
+        if preferred_logical_id:
+            if current_epoch:
+                instance = await self._get_active_instance(preferred_logical_id, current_epoch)
+                if instance:
+                    return preferred_logical_id, "preferred"
+        
+        # Try domain-specific rule first
+        if dm and (tt, dm) in self.rules_by_domain:
+            logical_id = self.rules_by_domain[(tt, dm)]
+            if current_epoch:
+                instance = await self._get_active_instance(logical_id, current_epoch)
+                if instance:
+                    return logical_id, "domain"
+        
+        # Try task-type rule
+        if tt in self.rules_by_task:
+            logical_id = self.rules_by_task[tt]
+            if current_epoch:
+                instance = await self._get_active_instance(logical_id, current_epoch)
+                if instance:
+                    return logical_id, "task"
+        
+        # Fallback to category defaults
+        if tt in ["general_query", "health_check", "fact_search", "fact_store",
+                 "artifact_manage", "capability_manage", "memory_cell_manage",
+                 "model_manage", "policy_manage", "service_manage", "skill_manage"]:
+            logical_id = "utility_organ_1"
+        elif tt == "execute":
+            logical_id = "actuator_organ_1"
+        elif tt in ["graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2",
+                   "graph_sync_nodes", "graph_fact_embed", "graph_fact_query"]:
+            logical_id = "graph_dispatcher"
+        else:
+            logical_id = "utility_organ_1"  # Ultimate fallback
+        
+        if current_epoch:
+            instance = await self._get_active_instance(logical_id, current_epoch)
+            if instance:
+                return logical_id, "default"
+        
+        # If no active instance found, still return the logical_id for fallback
+        return logical_id, "fallback"
+    
+    def clear_cache(self):
+        """Clear the instance cache."""
+        self._instance_cache.clear()
 
 
 class OrganismManager:
@@ -105,6 +312,10 @@ class OrganismManager:
         # Runtime registry configuration
         self.rolling = _env_bool("SEEDCORE_ROLLING_INIT", False)
         self._recon_task: Optional[asyncio.Task] = None
+        
+        # Routing directory with runtime registry integration
+        self.routing = RoutingDirectory()
+        self._current_epoch = None
 
     # -------------------------------------------------------------------------
     # Config / Ray helpers

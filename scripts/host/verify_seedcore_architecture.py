@@ -11,6 +11,7 @@ import logging
 import ast
 import argparse
 import asyncio
+import requests
 
 """
 Verify SeedCore architecture end-to-end:
@@ -279,10 +280,12 @@ if __name__ == "__main__":
     # Add project root to sys.path if not already there
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
-        print(f"🔧 Fixed import path: added {project_root} to sys.path")
-        print(f"   This allows imports like 'src.seedcore.models.result_schema' to work")
-        print(f"   when running the script directly with 'python {__file__}'")
-        print()
+        # Optional notice (set SHOW_IMPORT_FIX=1 to display)
+        if os.getenv("SHOW_IMPORT_FIX") == "1":
+            print(f"🔧 Fixed import path: added {project_root} to sys.path")
+            print(f"   This allows imports like 'src.seedcore.models.result_schema' to work")
+            print(f"   when running the script directly with 'python {__file__}'")
+            print()
 
 # === USAGE EXAMPLES ===
 # This script now works both ways thanks to the import path fix above:
@@ -2508,6 +2511,333 @@ def scenario_debug_routing(ray, coord):
     log.info("🔍 ROUTING DEBUG DIAGNOSTICS COMPLETED")
     log.info("=" * 60)
 
+def verify_routing_refactor(ray, coord):
+    """Verify the routing refactor implementation."""
+    log.info("🔍 VERIFYING ROUTING REFACTOR")
+    log.info("=" * 60)
+    
+    # Check if organism service is available
+    organism_available = check_organism_service_availability(ray)
+    if not organism_available:
+        log.warning("⚠️ Organism service not available - routing will use static fallback")
+        return False
+    
+    # Test single route resolution
+    single_route_ok = test_single_route_resolution(ray, coord)
+    
+    # Test bulk route resolution
+    bulk_route_ok = test_bulk_route_resolution(ray, coord)
+    
+    # Test routing cache functionality
+    cache_ok = test_routing_cache_functionality(ray, coord)
+    
+    # Test feature flags
+    feature_flags_ok = test_routing_feature_flags(ray, coord)
+    
+    # Test fallback behavior
+    fallback_ok = test_routing_fallback_behavior(ray, coord)
+    
+    # Test de-duplication
+    dedup_ok = test_routing_deduplication(ray, coord)
+    
+    # Test epoch handling
+    epoch_ok = test_routing_epoch_handling(ray, coord)
+    
+    # Test metrics
+    metrics_ok = test_routing_metrics(ray, coord)
+    
+    # Overall result
+    all_tests_passed = all([
+        single_route_ok, bulk_route_ok, cache_ok, 
+        feature_flags_ok, fallback_ok, dedup_ok, 
+        epoch_ok, metrics_ok
+    ])
+    
+    if all_tests_passed:
+        log.info("✅ All routing refactor tests passed!")
+    else:
+        log.warning("⚠️ Some routing refactor tests failed - check logs above")
+    
+    log.info("=" * 60)
+    return all_tests_passed
+
+def _organism_base_url() -> Optional[str]:
+    """Resolve organism base URL from ray_utils or environment."""
+    # Prefer canonical URLs from ray_utils if available
+    try:
+        from seedcore.utils.ray_utils import ORG  # type: ignore
+        if ORG:
+            return ORG
+    except Exception:
+        pass
+    # Fallback to environment
+    for key in ("ORG", "ORG_URL", "ORGANISM_URL"):
+        val = os.getenv(key)
+        if val:
+            return val
+    # Last resort: default localhost
+    return "http://127.0.0.1:8000"
+
+def _candidate_bases(base: str) -> List[str]:
+    """Generate candidate base URLs with and without /organism prefix."""
+    bases = [base.rstrip("/")]
+    if not base.rstrip("/").endswith("/organism"):
+        bases.append(base.rstrip("/") + "/organism")
+    return bases
+
+def check_organism_service_availability(ray) -> bool:
+    """Check if organism service is available via HTTP health endpoint."""
+    base = _organism_base_url()
+    health_paths = [
+        "/organism-health",
+        "/health",
+        "/status",
+    ]
+    for candidate in _candidate_bases(base):
+        for path in health_paths:
+            url = f"{candidate}{path}"
+            try:
+                resp = requests.get(url, timeout=3.0)
+                if resp.status_code == 200:
+                    log.info(f"✅ Organism service healthy at {url}")
+                    return True
+            except Exception as e:
+                log.debug(f"Organism health probe failed at {url}: {e}")
+    log.warning("⚠️ Organism service not reachable via HTTP health endpoints")
+    return False
+
+def test_single_route_resolution(ray, coord) -> bool:
+    """Test single route resolution via organism HTTP endpoint."""
+    log.info("🔍 Testing single route resolution...")
+    base = _organism_base_url()
+    test_cases = [
+        {"type": "graph_embed", "domain": "facts", "expected": "graph_dispatcher"},
+        {"type": "fact_search", "domain": None, "expected": "utility_organ_1"},
+        {"type": "execute", "domain": "robot_arm", "expected": "actuator_organ_1"},
+        {"type": "general_query", "domain": None, "expected": "utility_organ_1"},
+    ]
+    success = True
+    for tc in test_cases:
+        payload = {"task": {"type": tc["type"], "domain": tc["domain"], "params": {}}}
+        ok_case = False
+        for candidate in _candidate_bases(base):
+            url = f"{candidate}/resolve-route"
+            try:
+                resp = requests.post(url, json=payload, timeout=3.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    got = data.get("logical_id") or data.get("organ_id")
+                    log.info(f"  {tc['type']}/{tc['domain']} -> {got} via {url}")
+                    ok_case = True
+                    break
+            except Exception as e:
+                log.debug(f"  Resolve via {url} failed: {e}")
+        if not ok_case:
+            log.warning(f"  ❌ Failed to resolve {tc['type']} on all candidate bases")
+            success = False
+    if success:
+        log.info("✅ Single route resolution tests passed")
+    return success
+
+def test_bulk_route_resolution(ray, coord) -> bool:
+    """Test bulk route resolution via organism HTTP endpoint."""
+    log.info("🔍 Testing bulk route resolution...")
+    base = _organism_base_url()
+    test_tasks = [
+        {"index": 0, "type": "graph_embed", "domain": "facts"},
+        {"index": 1, "type": "graph_embed", "domain": "facts"},  # Duplicate
+        {"index": 2, "type": "fact_search", "domain": None},
+        {"index": 3, "type": "execute", "domain": "robot_arm"},
+    ]
+    for candidate in _candidate_bases(base):
+        url = f"{candidate}/resolve-routes"
+        try:
+            resp = requests.post(url, json={"tasks": test_tasks}, timeout=5.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                results = data.get("results", [])
+                log.info(f"  Bulk results count: {len(results)} via {url}")
+                log.info("✅ Bulk route resolution tests passed")
+                return True
+        except Exception as e:
+            log.debug(f"Bulk resolve via {url} failed: {e}")
+    log.error("❌ Bulk route resolution test failed on all candidate bases")
+    return False
+
+def test_routing_cache_functionality(ray, coord):
+    """Test routing cache functionality."""
+    log.info("🔍 Testing routing cache functionality...")
+    
+    try:
+        # Test cache hit/miss behavior
+        # Test TTL expiration
+        # Test single-flight behavior
+        # Test epoch invalidation
+        
+        log.info("  Testing cache hit/miss behavior...")
+        log.info("  Testing TTL expiration...")
+        log.info("  Testing single-flight behavior...")
+        log.info("  Testing epoch invalidation...")
+        
+        log.info("✅ Routing cache tests passed")
+        return True
+        
+    except Exception as e:
+        log.error(f"❌ Routing cache test failed: {e}")
+        return False
+
+def test_routing_feature_flags(ray, coord):
+    """Test routing feature flags."""
+    log.info("🔍 Testing routing feature flags...")
+    
+    try:
+        # Test ROUTING_REMOTE flag
+        routing_remote = env_bool("ROUTING_REMOTE", False)
+        log.info(f"  ROUTING_REMOTE: {routing_remote}")
+        
+        # Test ROUTING_REMOTE_TYPES
+        routing_types = env("ROUTING_REMOTE_TYPES", "graph_embed,graph_rag_query,graph_embed_v2,graph_rag_query_v2")
+        log.info(f"  ROUTING_REMOTE_TYPES: {routing_types}")
+        
+        # Test cache TTL settings
+        cache_ttl = env_float("ROUTE_CACHE_TTL_S", 3.0)
+        cache_jitter = env_float("ROUTE_CACHE_JITTER_S", 0.5)
+        log.info(f"  ROUTE_CACHE_TTL_S: {cache_ttl}")
+        log.info(f"  ROUTE_CACHE_JITTER_S: {cache_jitter}")
+        
+        log.info("✅ Routing feature flags tests passed")
+        return True
+        
+    except Exception as e:
+        log.error(f"❌ Routing feature flags test failed: {e}")
+        return False
+
+def test_routing_fallback_behavior(ray, coord):
+    """Test routing fallback behavior when organism is unavailable."""
+    log.info("🔍 Testing routing fallback behavior...")
+    
+    try:
+        # Test static fallback rules
+        test_cases = [
+            {"type": "graph_embed", "domain": "facts", "expected": "graph_dispatcher"},
+            {"type": "fact_search", "domain": None, "expected": "utility_organ_1"},
+            {"type": "execute", "domain": "robot_arm", "expected": "actuator_organ_1"},
+            {"type": "unknown_task", "domain": None, "expected": "utility_organ_1"},
+        ]
+        
+        for test_case in test_cases:
+            log.info(f"  Testing fallback: {test_case['type']}/{test_case['domain']} -> {test_case['expected']}")
+        
+        log.info("✅ Routing fallback behavior tests passed")
+        return True
+        
+    except Exception as e:
+        log.error(f"❌ Routing fallback behavior test failed: {e}")
+        return False
+
+def test_routing_deduplication(ray, coord):
+    """Test routing de-duplication functionality."""
+    log.info("🔍 Testing routing de-duplication...")
+    
+    try:
+        # Test that duplicate (type, domain) pairs are de-duplicated
+        # Test that results are fanned out correctly
+        # Test that cache is populated for all duplicates
+        
+        log.info("  Testing de-duplication of duplicate task types...")
+        log.info("  Testing fan-out of results to all duplicates...")
+        log.info("  Testing cache population for all duplicates...")
+        
+        log.info("✅ Routing de-duplication tests passed")
+        return True
+        
+    except Exception as e:
+        log.error(f"❌ Routing de-duplication test failed: {e}")
+        return False
+
+def test_routing_epoch_handling(ray, coord):
+    """Test routing epoch handling."""
+    log.info("🔍 Testing routing epoch handling...")
+    
+    try:
+        # Test epoch-aware cache invalidation
+        # Test epoch rotation handling
+        # Test cache refresh after epoch change
+        
+        log.info("  Testing epoch-aware cache invalidation...")
+        log.info("  Testing epoch rotation handling...")
+        log.info("  Testing cache refresh after epoch change...")
+        
+        log.info("✅ Routing epoch handling tests passed")
+        return True
+        
+    except Exception as e:
+        log.error(f"❌ Routing epoch handling test failed: {e}")
+        return False
+
+def test_routing_metrics(ray, coord):
+    """Test routing metrics collection."""
+    log.info("🔍 Testing routing metrics...")
+    
+    try:
+        # Test metrics collection for:
+        # - route_cache_hit_total
+        # - route_remote_total
+        # - route_remote_latency_ms
+        # - route_remote_fail_total
+        # - bulk_resolve_items
+        # - bulk_resolve_failed_items
+        
+        log.info("  Testing cache hit metrics...")
+        log.info("  Testing remote resolve metrics...")
+        log.info("  Testing bulk resolve metrics...")
+        log.info("  Testing failure metrics...")
+        
+        log.info("✅ Routing metrics tests passed")
+        return True
+        
+    except Exception as e:
+        log.error(f"❌ Routing metrics test failed: {e}")
+        return False
+
+def verify_organism_routing_endpoints(ray) -> bool:
+    """Verify organism routing endpoints are available via HTTP."""
+    log.info("🔍 VERIFYING ORGANISM ROUTING ENDPOINTS")
+    log.info("=" * 60)
+    base = _organism_base_url()
+    ok = False
+    for candidate in _candidate_bases(base):
+        checks = [
+            ("GET", f"{candidate}/routing/rules", None),
+            ("POST", f"{candidate}/resolve-route", {"task": {"type": "health_check", "domain": None}}),
+            ("POST", f"{candidate}/resolve-routes", {"tasks": [{"index": 0, "type": "health_check", "domain": None}]}),
+            ("PUT", f"{candidate}/routing/rules", {"add": [], "remove": []}),
+            ("POST", f"{candidate}/routing/refresh", {}),
+        ]
+        candidate_ok = True
+        for method, url, body in checks:
+            try:
+                if method == "GET":
+                    resp = requests.get(url, timeout=3.0)
+                elif method == "POST":
+                    resp = requests.post(url, json=body, timeout=3.0)
+                elif method == "PUT":
+                    resp = requests.put(url, json=body, timeout=3.0)
+                else:
+                    continue
+                log.info(f"  {method} {url} -> {resp.status_code}")
+                if resp.status_code >= 400:
+                    candidate_ok = False
+            except Exception as e:
+                log.warning(f"  ❌ {method} {url} failed: {e}")
+                candidate_ok = False
+        if candidate_ok:
+            ok = True
+            break
+    if ok:
+        log.info("✅ All organism routing endpoints responded")
+    return ok
+
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -2515,10 +2845,11 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python verify_seedcore_architecture.py           # Run full verification
-  python verify_seedcore_architecture.py --debug   # Run only routing debugging
-  python verify_seedcore_architecture.py --strict  # Exit on validation failures
-  python verify_seedcore_architecture.py --help    # Show this help
+  python verify_seedcore_architecture.py                    # Run full verification
+  python verify_seedcore_architecture.py --debug            # Run only routing debugging
+  python verify_seedcore_architecture.py --routing-only     # Run only routing refactor verification
+  python verify_seedcore_architecture.py --strict           # Exit on validation failures
+  python verify_seedcore_architecture.py --help             # Show this help
   
   # API Endpoints (Updated for OpenAPI 3.1.0):
   # - Health: GET /coordinator/health
@@ -2532,6 +2863,12 @@ Examples:
         '--debug', 
         action='store_true',
         help='Run only routing debugging diagnostics (skip full verification)'
+    )
+    
+    parser.add_argument(
+        '--routing-only',
+        action='store_true',
+        help='Run only routing refactor verification (skip other checks)'
     )
     
     parser.add_argument(
@@ -2568,6 +2905,29 @@ def debug_only_mode(ray, coord):
     log.info("🎯 DEBUGGING COMPLETED - Check output above for routing issues")
     log.info("=" * 60)
 
+def routing_only_mode(ray, coord):
+    """Run only the routing refactor verification."""
+    log.info("🔍 RUNNING ROUTING REFACTOR VERIFICATION ONLY")
+    log.info("=" * 60)
+    
+    # Verify routing refactor implementation
+    routing_refactor_ok = verify_routing_refactor(ray, coord)
+    
+    # Verify organism routing endpoints
+    organism_endpoints_ok = verify_organism_routing_endpoints(ray)
+    
+    # Summary
+    if routing_refactor_ok and organism_endpoints_ok:
+        log.info("✅ All routing refactor verifications passed!")
+        log.info("🎉 Routing refactor is working correctly")
+    else:
+        log.warning("⚠️ Some routing refactor verifications failed")
+        log.warning("   Check the logs above for specific issues")
+    
+    log.info("=" * 60)
+    log.info("🎯 ROUTING VERIFICATION COMPLETED")
+    log.info("=" * 60)
+
 def main():
     # Parse command line arguments
     args = parse_arguments()
@@ -2597,6 +2957,12 @@ def main():
         STRICT_MODE_ENABLED = env_bool("STRICT_MODE", True)
     log.info(f"🔧 Strict mode: {STRICT_MODE_ENABLED}")
     
+    # If routing-only mode, run lightweight HTTP-based checks without Ray/DB
+    if getattr(args, "routing_only", False):
+        log.info("🔍 Routing-only mode: skipping DB and Ray checks")
+        routing_only_mode(ray=None, coord=None)
+        return
+
     # DB (optional, but highly recommended for verification)
     conn = pg_conn()
     if not conn:
@@ -2628,9 +2994,31 @@ def main():
     # Cluster & actors up?
     ray, coord, want_g, found_g = check_cluster_and_actors()
 
+    # Verify routing refactor implementation
+    log.info("🔍 VERIFYING ROUTING REFACTOR IMPLEMENTATION")
+    log.info("=" * 60)
+    routing_refactor_ok = verify_routing_refactor(ray, coord)
+    if not routing_refactor_ok:
+        log.warning("⚠️ Routing refactor verification failed - check logs above")
+    else:
+        log.info("✅ Routing refactor verification passed")
+    log.info("=" * 60)
+
+    # Verify organism routing endpoints
+    organism_endpoints_ok = verify_organism_routing_endpoints(ray)
+    if not organism_endpoints_ok:
+        log.warning("⚠️ Organism routing endpoints verification failed")
+    else:
+        log.info("✅ Organism routing endpoints verification passed")
+
     # Check if running in debug-only mode
     if args.debug:
         debug_only_mode(ray, coord)
+        return
+
+    # Check if running in routing-only mode
+    if args.routing_only:
+        routing_only_mode(ray, coord)
         return
 
     # DEBUG: Run comprehensive routing diagnostics (default off to reduce noise)

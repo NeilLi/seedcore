@@ -190,6 +190,41 @@ class OrganismServiceClient(BaseServiceClient):
     async def get_organism_health(self) -> Dict[str, Any]:
         """Get organism health status."""
         return await self.get("/organism-health")
+
+    # --- Routing Methods ---
+    
+    async def resolve_route(self, task: dict, preferred_logical_id: Optional[str] = None) -> dict:
+        """Resolve a single task to its target organ."""
+        payload = {"task": task}
+        if preferred_logical_id:
+            payload["preferred_logical_id"] = preferred_logical_id
+        return await self.post("/resolve-route", json=payload)
+
+    async def resolve_routes(self, tasks: List[dict]) -> dict:
+        """Resolve multiple tasks to their target organs in one request."""
+        # Convert tasks to the expected format
+        task_items = []
+        for idx, task in enumerate(tasks):
+            task_items.append({
+                "index": idx,
+                "type": task.get("type", ""),
+                "domain": task.get("domain"),
+                "preferred_logical_id": task.get("preferred_logical_id")
+            })
+        
+        return await self.post("/resolve-routes", json={"tasks": task_items})
+
+    async def get_routing_rules(self) -> dict:
+        """Get current routing rules."""
+        return await self.get("/routing/rules")
+
+    async def update_routing_rules(self, rules: dict) -> dict:
+        """Update routing rules."""
+        return await self.put("/routing/rules", json=rules)
+
+    async def refresh_routing_cache(self) -> dict:
+        """Refresh routing cache (useful after epoch rotation)."""
+        return await self.post("/routing/refresh")
     
     # Organism Management
     async def initialize_organism(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
