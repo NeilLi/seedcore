@@ -11,8 +11,10 @@ Key Enhancements:
 - Dynamic token budgeting based on OCPS signals
 - Hardened cache governance with TTL per task type
 - Post-condition checks for DSPy outputs
-- OCPS integration for fast/deep path routing
+- OCPS-informed budgeting and escalation hints (no routing)
 - Fact sanitization and conflict detection
+
+Note: Coordinator decides fast vs escalate; Organism resolves/executes.
 """
 
 import dspy
@@ -27,9 +29,11 @@ from typing import Dict, Any, Optional, List, Union, cast, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
-from seedcore.logging_setup import ensure_serve_logger
+from seedcore.logging_setup import setup_logging
+import logging
 
-logger = ensure_serve_logger("seedcore.CognitiveCore", level="DEBUG")
+logger = logging.getLogger("seedcore.CognitiveCore")
+logger.setLevel(logging.DEBUG)
 
 # Try to use MwManager if present; degrade gracefully if not.
 try:
@@ -714,26 +718,26 @@ class CognitiveCore(dspy.Module):
             CognitiveTaskType.SKILL_MANAGE: self._handle_skill_manage,
         }
         
-        # Cache governance settings
+        # Cache governance settings - shorter TTLs for sufficiency-bearing results
         self.cache_ttl_by_task = {
-            CognitiveTaskType.FAILURE_ANALYSIS: 300,  # 5 minutes
-            CognitiveTaskType.TASK_PLANNING: 1800,    # 30 minutes
-            CognitiveTaskType.DECISION_MAKING: 600,   # 10 minutes
-            CognitiveTaskType.PROBLEM_SOLVING: 1200,  # 20 minutes
-            CognitiveTaskType.MEMORY_SYNTHESIS: 3600, # 1 hour
-            CognitiveTaskType.CAPABILITY_ASSESSMENT: 1800, # 30 minutes
+            CognitiveTaskType.FAILURE_ANALYSIS: 300,  # 5 minutes (volatile analysis)
+            CognitiveTaskType.TASK_PLANNING: 600,     # 10 minutes (sufficiency data)
+            CognitiveTaskType.DECISION_MAKING: 600,   # 10 minutes (sufficiency data)
+            CognitiveTaskType.PROBLEM_SOLVING: 600,   # 10 minutes (sufficiency data)
+            CognitiveTaskType.MEMORY_SYNTHESIS: 1800, # 30 minutes (no sufficiency)
+            CognitiveTaskType.CAPABILITY_ASSESSMENT: 600, # 10 minutes (sufficiency data)
             
-            # Graph task TTLs (Migration 007+)
-            CognitiveTaskType.GRAPH_EMBED: 3600,       # 1 hour (embeddings are stable)
-            CognitiveTaskType.GRAPH_RAG_QUERY: 1800,   # 30 minutes (queries may change)
-            CognitiveTaskType.GRAPH_EMBED_V2: 3600,    # 1 hour (enhanced embeddings)
-            CognitiveTaskType.GRAPH_RAG_QUERY_V2: 1800, # 30 minutes (enhanced queries)
-            CognitiveTaskType.GRAPH_SYNC_NODES: 600,   # 10 minutes (sync is dynamic)
+            # Graph task TTLs (Migration 007+) - shorter for sufficiency-bearing
+            CognitiveTaskType.GRAPH_EMBED: 600,        # 10 minutes (sufficiency data)
+            CognitiveTaskType.GRAPH_RAG_QUERY: 600,    # 10 minutes (sufficiency data)
+            CognitiveTaskType.GRAPH_EMBED_V2: 600,     # 10 minutes (sufficiency data)
+            CognitiveTaskType.GRAPH_RAG_QUERY_V2: 600, # 10 minutes (sufficiency data)
+            CognitiveTaskType.GRAPH_SYNC_NODES: 1800,  # 30 minutes (no sufficiency)
             
-            # Facts system TTLs (Migration 009)
-            CognitiveTaskType.GRAPH_FACT_EMBED: 3600,  # 1 hour (fact embeddings are stable)
-            CognitiveTaskType.GRAPH_FACT_QUERY: 1800,  # 30 minutes (fact queries may change)
-            CognitiveTaskType.FACT_SEARCH: 1200,       # 20 minutes (search results may change)
+            # Facts system TTLs (Migration 009) - shorter for sufficiency-bearing
+            CognitiveTaskType.GRAPH_FACT_EMBED: 600,   # 10 minutes (sufficiency data)
+            CognitiveTaskType.GRAPH_FACT_QUERY: 600,   # 10 minutes (sufficiency data)
+            CognitiveTaskType.FACT_SEARCH: 600,        # 10 minutes (sufficiency data)
             CognitiveTaskType.FACT_STORE: 300,         # 5 minutes (storage is immediate)
             
             # Resource management TTLs (Migration 007)
@@ -918,8 +922,13 @@ class CognitiveCore(dspy.Module):
                 temp_broker = ContextBroker(text_fn, vec_fn, token_budget=1500, ocps_client=self.ocps_client)
                 
                 query = self._build_query(context)
+                retrieve_start = time.time()
                 facts, sufficiency = temp_broker.retrieve(query, k=20, task_type=context.task_type)
+                retrieve_end = time.time()
+                
+                budget_start = time.time()
                 budgeted_facts, summary, final_sufficiency = temp_broker.budget(facts, context.task_type)
+                budget_end = time.time()
                 
                 # Store sufficiency for fragment helper
                 self.last_sufficiency = final_sufficiency.__dict__
@@ -960,21 +969,24 @@ class CognitiveCore(dspy.Module):
                         pass
                 
                 # Check if should escalate to deep path
-                if self._should_escalate_to_deep_path(final_sufficiency, context.task_type):
-                    logger.info(f"Escalating {context.task_type.value} to deep path due to low sufficiency")
-                    # In a full implementation, this would route to HGNN
-                    # For now, we'll continue with enhanced processing
+                escalate_hint = self._should_escalate_to_deep_path(final_sufficiency, context.task_type)
+                if escalate_hint:
+                    logger.info(f"Suggesting escalation for {context.task_type.value} due to low sufficiency")
+                    # Coordinator will decide whether to escalate based on this hint
                 
-                # Build knowledge context
+                # Build knowledge context with escalation hint
                 knowledge_context = self._build_knowledge_context(budgeted_facts, summary, final_sufficiency)
+                knowledge_context["escalate_hint"] = escalate_hint
             else:
-                knowledge_context = {"facts": [], "summary": "No context broker available", "sufficiency": {}}
+                knowledge_context = {"facts": [], "summary": "No context broker available", "sufficiency": {}, "escalate_hint": False}
                 
                 # Add negative cache for expensive deep-path misses
-                if self._mw_enabled and not facts:
+                if self._mw_enabled:
                     mw = self._mw(context.agent_id)
                     if mw:
                         try:
+                            # Build a simple query for negative caching
+                            query = self._build_query(context)
                             query_hash = hashlib.md5(query.encode()).hexdigest()[:12]
                             mw.set_global_item_typed("_neg", "query", query_hash, "1", ttl_s=60)
                         except Exception:
@@ -998,14 +1010,37 @@ class CognitiveCore(dspy.Module):
             if context.task_type == CognitiveTaskType.FAILURE_ANALYSIS:
                 payload = self._normalize_failure_analysis(payload)
             
+            # Check if this is a planning-style task that should return a plan
+            escalate_hint = knowledge_context.get("escalate_hint", False)
+            sufficiency = knowledge_context.get("sufficiency", {})
+            confidence = payload.get("confidence_score")
+            
+            # Add planner timing metrics
+            planner_timings = {}
+            if 'retrieve_start' in locals() and 'retrieve_end' in locals():
+                planner_timings["retrieve_ms"] = int((retrieve_end - retrieve_start) * 1000)
+            if 'budget_start' in locals() and 'budget_end' in locals():
+                planner_timings["budget_ms"] = int((budget_end - budget_start) * 1000)
+            planner_timings["plan_build_ms"] = int((time.time() - (budget_end if 'budget_end' in locals() else time.time())) * 1000)
+            
+            if "task" in payload:
+                # This is a single-step proposal, wrap it as a plan
+                plan_result = self._wrap_single_step_as_plan(
+                    payload["task"], 
+                    escalate_hint, 
+                    sufficiency,
+                    confidence
+                )
+                # Update payload to include the plan
+                payload["solution_steps"] = plan_result["solution_steps"]
+                payload["meta"] = plan_result["meta"]
+                payload["meta"]["planner_timings_ms"] = planner_timings
+            
             # Validate post-conditions
             is_valid, violations = self._check_post_conditions(payload, context.task_type)
             if not is_valid:
                 logger.warning(f"Post-condition violations: {violations}")
                 # Could retry or escalate here
-            
-            # Cache result
-            self._cache_result(cache_key, raw, context.task_type, agent_id=context.agent_id)
             
             out = create_cognitive_result(
                 agent_id=context.agent_id,
@@ -1026,6 +1061,13 @@ class CognitiveCore(dspy.Module):
                 "metadata": out.metadata,
                 "task_type": out.payload.task_type if hasattr(out.payload, 'task_type') else context.task_type.value,
             }
+            
+            # Cache the final standardized dict
+            self._cache_result(cache_key, out_dict, context.task_type, agent_id=context.agent_id)
+            
+            # Guardrail: Ensure Cognitive doesn't select organs
+            self._assert_no_routing_awareness(out_dict)
+            
             return out_dict
             
         except Exception as e:
@@ -1097,7 +1139,7 @@ class CognitiveCore(dspy.Module):
             }
         }
 
-    def _get_cached_result(self, cache_key: str, task_type: CognitiveTaskType, *, agent_id: str) -> Optional[TaskResult]:
+    def _get_cached_result(self, cache_key: str, task_type: CognitiveTaskType, *, agent_id: str) -> Optional[Dict[str, Any]]:
         """Get cached result with TTL check."""
         if not self._mw_enabled:
             return None
@@ -1120,7 +1162,7 @@ class CognitiveCore(dspy.Module):
                 return None
             
             logger.info(f"Cache hit: {cache_key} (age: {cache_age:.1f}s)")
-            return TaskResult(**cached_data["result"])
+            return cached_data["result"]  # Return the final dict directly
             
         except Exception as e:
             logger.warning(f"Cache retrieval error: {e}")
@@ -1281,246 +1323,356 @@ class CognitiveCore(dspy.Module):
     # =============================================================================
     
     def _handle_graph_embed(self, **kwargs) -> Dict[str, Any]:
-        """Handle graph embedding tasks."""
+        """Propose graph embedding step."""
         start_node_ids = kwargs.get("start_node_ids", [])
         k = kwargs.get("k", 2)
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "graph_embed",
-            "start_node_ids": start_node_ids,
-            "k": k,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "graph_embed",
+                "domain": self._norm_domain("graph"),
+                "params": {
+                    "start_node_ids": start_node_ids,
+                    "k": k,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
     
     def _handle_graph_rag_query(self, **kwargs) -> Dict[str, Any]:
-        """Handle graph RAG query tasks."""
+        """Propose graph RAG query step."""
         start_node_ids = kwargs.get("start_node_ids", [])
         k = kwargs.get("k", 2)
         topk = kwargs.get("topk", 10)
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "graph_rag_query",
-            "start_node_ids": start_node_ids,
-            "k": k,
-            "topk": topk,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "graph_rag_query",
+                "domain": self._norm_domain("graph"),
+                "params": {
+                    "start_node_ids": start_node_ids,
+                    "k": k,
+                    "topk": topk,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
     
     def _handle_graph_embed_v2(self, **kwargs) -> Dict[str, Any]:
-        """Handle enhanced graph embedding tasks."""
+        """Propose enhanced graph embedding step."""
         start_node_ids = kwargs.get("start_node_ids", [])
         k = kwargs.get("k", 2)
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "graph_embed_v2",
-            "start_node_ids": start_node_ids,
-            "k": k,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "graph_embed_v2",
+                "domain": self._norm_domain("graph"),
+                "params": {
+                    "start_node_ids": start_node_ids,
+                    "k": k,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.9
         }
     
     def _handle_graph_rag_query_v2(self, **kwargs) -> Dict[str, Any]:
-        """Handle enhanced graph RAG query tasks."""
+        """Propose enhanced graph RAG query step."""
         start_node_ids = kwargs.get("start_node_ids", [])
         k = kwargs.get("k", 2)
         topk = kwargs.get("topk", 10)
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "graph_rag_query_v2",
-            "start_node_ids": start_node_ids,
-            "k": k,
-            "topk": topk,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "graph_rag_query_v2",
+                "domain": self._norm_domain("graph"),
+                "params": {
+                    "start_node_ids": start_node_ids,
+                    "k": k,
+                    "topk": topk,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.9
         }
     
     def _handle_graph_sync_nodes(self, **kwargs) -> Dict[str, Any]:
-        """Handle graph node synchronization tasks."""
+        """Propose graph node synchronization step."""
         node_ids = kwargs.get("node_ids", [])
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "graph_sync_nodes",
-            "node_ids": node_ids,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "graph_sync_nodes",
+                "domain": self._norm_domain("graph"),
+                "params": {
+                    "node_ids": node_ids,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.7
         }
     
     def _handle_graph_fact_embed(self, **kwargs) -> Dict[str, Any]:
-        """Handle fact embedding tasks."""
+        """Propose fact embedding step."""
         start_fact_ids = kwargs.get("start_fact_ids", [])
         k = kwargs.get("k", 2)
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "graph_fact_embed",
-            "start_fact_ids": start_fact_ids,
-            "k": k,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "graph_fact_embed",
+                "domain": self._norm_domain("facts"),
+                "params": {
+                    "start_fact_ids": start_fact_ids,
+                    "k": k,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
     
     def _handle_graph_fact_query(self, **kwargs) -> Dict[str, Any]:
-        """Handle fact query tasks."""
+        """Propose fact query step."""
         start_fact_ids = kwargs.get("start_fact_ids", [])
         k = kwargs.get("k", 2)
         topk = kwargs.get("topk", 10)
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "graph_fact_query",
-            "start_fact_ids": start_fact_ids,
-            "k": k,
-            "topk": topk,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "graph_fact_query",
+                "domain": self._norm_domain("facts"),
+                "params": {
+                    "start_fact_ids": start_fact_ids,
+                    "k": k,
+                    "topk": topk,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
     
     def _handle_fact_search(self, **kwargs) -> Dict[str, Any]:
-        """Handle fact search tasks."""
+        """Propose fact search step."""
         query = kwargs.get("query", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "fact_search",
-            "query": query,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "fact_search",
+                "domain": self._norm_domain("facts"),
+                "params": {
+                    "query": query,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
     
     def _handle_fact_store(self, **kwargs) -> Dict[str, Any]:
-        """Handle fact storage tasks."""
+        """Propose fact storage step."""
         text = kwargs.get("text", "")
         tags = kwargs.get("tags", [])
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "fact_store",
-            "text": text,
-            "tags": tags,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "fact_store",
+                "domain": self._norm_domain("facts"),
+                "params": {
+                    "text": text,
+                    "tags": tags,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.9
         }
     
     def _handle_artifact_manage(self, **kwargs) -> Dict[str, Any]:
-        """Handle artifact management tasks."""
+        """Propose artifact management step."""
         action = kwargs.get("action", "")
         uri = kwargs.get("uri", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "artifact_manage",
-            "action": action,
-            "uri": uri,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "artifact_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "uri": uri,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
     
     def _handle_capability_manage(self, **kwargs) -> Dict[str, Any]:
-        """Handle capability management tasks."""
+        """Propose capability management step."""
         action = kwargs.get("action", "")
         name = kwargs.get("name", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "capability_manage",
-            "action": action,
-            "name": name,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "capability_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "name": name,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
     
     def _handle_memory_cell_manage(self, **kwargs) -> Dict[str, Any]:
-        """Handle memory cell management tasks."""
+        """Propose memory cell management step."""
         action = kwargs.get("action", "")
         cell_id = kwargs.get("cell_id", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "memory_cell_manage",
-            "action": action,
-            "cell_id": cell_id,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "memory_cell_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "cell_id": cell_id,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
     
     def _handle_model_manage(self, **kwargs) -> Dict[str, Any]:
-        """Handle model management tasks."""
+        """Propose model management step."""
         action = kwargs.get("action", "")
         name = kwargs.get("name", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "model_manage",
-            "action": action,
-            "name": name,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "model_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "name": name,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
     
     def _handle_policy_manage(self, **kwargs) -> Dict[str, Any]:
-        """Handle policy management tasks."""
+        """Propose policy management step."""
         action = kwargs.get("action", "")
         policy_id = kwargs.get("policy_id", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "policy_manage",
-            "action": action,
-            "policy_id": policy_id,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "policy_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "policy_id": policy_id,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
     
     def _handle_service_manage(self, **kwargs) -> Dict[str, Any]:
-        """Handle service management tasks."""
+        """Propose service management step."""
         action = kwargs.get("action", "")
         service_id = kwargs.get("service_id", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "service_manage",
-            "action": action,
-            "service_id": service_id,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "service_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "service_id": service_id,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
     
     def _handle_skill_manage(self, **kwargs) -> Dict[str, Any]:
-        """Handle skill management tasks."""
+        """Propose skill management step."""
         action = kwargs.get("action", "")
         skill_id = kwargs.get("skill_id", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
         
         return {
-            "operation": "skill_manage",
-            "action": action,
-            "skill_id": skill_id,
-            "knowledge_context": knowledge_context,
-            "status": "processed",
+            "task": {
+                "type": "skill_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "skill_id": skill_id,
+                    "knowledge_context": knowledge_context
+                }
+            },
             "confidence_score": 0.8
         }
+    
+    def _create_plan_from_steps(self, steps: List[Dict[str, Any]], escalate_hint: bool = False, 
+                               sufficiency: Optional[Dict[str, Any]] = None, 
+                               confidence: Optional[float] = None) -> Dict[str, Any]:
+        """Create a uniform plan format from task steps."""
+        return {
+            "solution_steps": steps,
+            "meta": {
+                "escalate_hint": escalate_hint,
+                "sufficiency": sufficiency or {},
+                "confidence": confidence,
+                "plan_type": "cognitive_proposal",
+                "step_count": len(steps)
+            }
+        }
+    
+    def _wrap_single_step_as_plan(self, task: Dict[str, Any], escalate_hint: bool = False,
+                                 sufficiency: Optional[Dict[str, Any]] = None,
+                                 confidence: Optional[float] = None) -> Dict[str, Any]:
+        """Wrap a single task as a 1-step plan."""
+        return self._create_plan_from_steps([task], escalate_hint, sufficiency, confidence)
+    
+    def _norm_domain(self, domain: Optional[str]) -> Optional[str]:
+        """Normalize domain to standard taxonomy."""
+        if not domain:
+            return None
+        domain = domain.strip().lower()
+        # Map common variations to standard domains
+        domain_map = {
+            "fact": "facts",
+            "admin": "management", 
+            "mgmt": "management",
+            "util": "utility"
+        }
+        return domain_map.get(domain, domain)
+    
+    def _assert_no_routing_awareness(self, result: Dict[str, Any]) -> None:
+        """Assert that Cognitive output doesn't contain routing decisions."""
+        import json
+        result_str = json.dumps(result).lower()
+        forbidden = ("organ_id", "instance_id")
+        if any(k in result_str for k in forbidden):
+            raise ValueError("Cognitive must not select organs/instances - routing decisions belong to Coordinator/Organism")
+        # Extra: forbid router-specific fields accidentally leaking
+        if '"resolve-route"' in result_str or '"resolve-routes"' in result_str:
+            raise ValueError("Cognitive must not call routing APIs")
 
 
 # =============================================================================

@@ -25,9 +25,11 @@ import redis
 import json
 
 
-from seedcore.logging_setup import ensure_serve_logger
+from seedcore.logging_setup import setup_logging
+import logging
 
-logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
+logger = logging.getLogger("seedcore.coordinator")
+logger.setLevel(logging.DEBUG)
 
 # ---------- Config ----------
 ORCH_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10"))
@@ -628,6 +630,20 @@ class Coordinator:
     def _normalize(self, x: Optional[str]) -> Optional[str]:
         """Normalize string for consistent matching."""
         return str(x).strip().lower() if x is not None else None
+    
+    def _norm_domain(self, domain: Optional[str]) -> Optional[str]:
+        """Normalize domain to standard taxonomy."""
+        if not domain:
+            return None
+        domain = str(domain).strip().lower()
+        # Map common variations to standard domains
+        domain_map = {
+            "fact": "facts",
+            "admin": "management", 
+            "mgmt": "management",
+            "util": "utility"
+        }
+        return domain_map.get(domain, domain)
 
     def _static_route_fallback(self, task_type: str, domain: Optional[str]) -> str:
         """Fallback routing using static rules when organism is unavailable."""
@@ -750,7 +766,7 @@ class Coordinator:
         for idx, step in enumerate(steps):
             subtask = step.get("task") or {}
             t = self._normalize(subtask.get("type"))
-            d = self._normalize(subtask.get("domain"))
+            d = self._norm_domain(subtask.get("domain"))  # Use domain normalizer
             key = (t, d)
             
             if not t:
@@ -1056,14 +1072,35 @@ class Coordinator:
             
             # Extract solution steps from cognitive response
             steps = []
+            meta = {}
             if plan.get("success") and plan.get("result"):
                 # The cognitive service returns {success, agent_id, result, error}
                 # We need to extract the solution steps from the result
                 result = plan.get("result", {})
                 steps = result.get("solution_steps", [])
+                meta = result.get("meta", {})
                 if not steps:
                     # If no solution_steps, try to extract from other fields
                     steps = result.get("plan", []) or result.get("steps", [])
+            
+            # Ingest Cognitive meta data
+            if meta:
+                # Feed escalate_hint into predicate signals
+                escalate_hint = meta.get("escalate_hint", False)
+                if escalate_hint and hasattr(self, 'predicate_router') and self.predicate_router:
+                    # Update predicate signals with escalation hint
+                    self.predicate_router.update_signals(escalate_hint=escalate_hint)
+                
+                # Add planner timings to metrics if available
+                planner_timings = meta.get("planner_timings_ms", {})
+                if planner_timings:
+                    logger.info(f"[Coordinator] Cognitive planner timings: {planner_timings}")
+                    # Could add to metrics here if needed
+                
+                # Log confidence score if available
+                confidence = meta.get("confidence")
+                if confidence is not None:
+                    logger.info(f"[Coordinator] Cognitive plan confidence: {confidence}")
             
             validated_plan = self._validate_or_fallback(steps, self._convert_task_to_dict(task))
             
@@ -1118,8 +1155,8 @@ class Coordinator:
                 logger.warning(f"Plan validation failed: step is not a dict: {step}")
                 return None
 
-            if "organ_id" not in step or "task" not in step:
-                logger.warning(f"Plan validation failed: step missing required fields: {step}")
+            if "task" not in step or not isinstance(step["task"], dict):
+                logger.warning(f"Plan validation failed: step missing 'task' dict: {step}")
                 return None
             
             # Ensure stable IDs exist in plan for reliable edge creation
@@ -1522,9 +1559,28 @@ class Coordinator:
             "path": "hgnn"
         }
 
-    async def _execute_fast(self, task: Task, organ_id: str, cid: str) -> Dict[str, Any]:
+    async def _execute_fast(self, task: Task, cid: str) -> Dict[str, Any]:
         _, task_dict = self._normalize_task_dict(task)
         agent_id = self._extract_agent_id(task_dict)
+        
+        # Resolve route via TTL cache + Organism
+        organ_id = None
+        try:
+            # Optional: preferred hint from predicates
+            preferred = getattr(self.predicate_router, "preferred_logical_id", lambda *_: None)(task_dict)
+            route = await self._resolve_route_cached(
+                task_dict.get("type", ""), 
+                task_dict.get("domain"), 
+                preferred_logical_id=preferred,
+                cid=cid
+            )
+            organ_id = route
+        except Exception as e:
+            logger.warning(f"resolve-route failed ({e}); using static fallback")
+            organ_id = self._static_route_fallback(
+                self._normalize(task_dict.get("type")),
+                self._norm_domain(task_dict.get("domain"))
+            )
 
         params = task_dict.get("params") if isinstance(task_dict.get("params"), dict) else {}
         organ_timeout = params.get("organ_timeout_s", 30.0)
@@ -1560,10 +1616,13 @@ class Coordinator:
             "task": task_dict,
             "organ_timeout_s": organ_timeout,
         }
-        return await _apost(
+        result = await _apost(
             self.http, f"{ORG}/execute-on-organ", payload,
             _corr_headers("organism", cid), timeout=ORG_TIMEOUT
         )
+        # Include organ_id in the response for tracking
+        result["organ_id"] = organ_id
+        return result
 
     async def _execute_hgnn(self, task: Task, cid: str) -> Dict[str, Any]:
         """
@@ -1805,16 +1864,16 @@ class Coordinator:
         routing_decision = self.predicate_router.route_task(task_dict)
         
         # Execute based on routing decision
-        if routing_decision.action == "fast_path" and routing_decision.organ_id:
+        if routing_decision.action == "fast_path":
             try:
-                resp = await self._execute_fast(task, routing_decision.organ_id, cid)
+                resp = await self._execute_fast(task, cid)  # Remove organ_id parameter
                 latency_ms = (time.time() - start_time) * 1000
                 self.metrics.track_metrics("fast", resp.get("success", False), latency_ms)
                 record_request("fast", resp.get("success", False))
                 record_latency("e2e", latency_ms)
                 return {
                     "success": resp.get("success", False), "result": resp,
-                    "path": "fast", "p_fast": self.ocps.p_fast, "organ_id": routing_decision.organ_id, 
+                    "path": "fast", "p_fast": self.ocps.p_fast, "organ_id": resp.get("organ_id"), 
                     "correlation_id": cid, "routing_reason": routing_decision.reason
                 }
             except Exception as e:
