@@ -257,21 +257,33 @@ Every deployment spawns one or more **`ServeReplica` actors**, plus global actor
 - **Ray Actor ID**: Actor 2
 - **Purpose**: Dedicated ML inference service for model serving
 
-### 2. Cognitive → CognitiveService
+### 2. Cognitive → CognitiveService (Planner-Only)
 
 - **ServeDeployment**: `CognitiveService`
 - **Actors**: `ServeReplica:cognitive:CognitiveService`
 - **Replicas**: `2 RUNNING`
 - **Ray Actor IDs**: Actor 1 and Actor 4
-- **Purpose**: Parallel workers for reasoning and planning tasks
+- **Purpose**: Pure planner that generates abstract task steps with `{"task": {...}}` format
+- **Key Features**:
+  - **No routing decisions**: Enforced by guardrails against organ_id/instance_id
+  - **Normalized domains**: Standard taxonomy ("graph", "facts", "management", "utility")
+  - **Planning API**: Wraps steps into solution_steps with rich metadata
+  - **Meta data**: escalate_hint, sufficiency, confidence, planner_timings_ms
+  - **Cache optimization**: 10-minute TTL for sufficiency-bearing results
 - **Distribution**: Replicas are distributed across different Ray nodes for redundancy
 
-### 3. Coordinator → Coordinator
+### 3. Coordinator → Coordinator (Governor)
 
 - **ServeDeployment**: `Coordinator`
 - **Replicas**: `1 RUNNING`
 - **Ray Actor ID**: Actor 5
-- **Purpose**: Global coordination, task routing, OCPS valve, and HGNN escalation
+- **Purpose**: Global coordination, routing orchestration, OCPS valve, and bulk resolution
+- **Key Features**:
+  - **Route resolution**: Fast-path via Organism with TTL cache + single-flight
+  - **Bulk resolution**: HGNN plans resolved in single call to Organism
+  - **Plan validation**: Accepts abstract steps, auto-stamps step_id
+  - **Meta data ingestion**: Feeds Cognitive hints into predicate signals
+  - **Static fallback**: Resilient fallback when Organism unavailable
 - **Route Prefix**: `/pipeline`
 
 ### 4. State → StateService
@@ -290,12 +302,18 @@ Every deployment spawns one or more **`ServeReplica` actors**, plus global actor
 - **Purpose**: Energy tracking and performance metrics collection
 - **Memory**: 1GB allocated for energy state management
 
-### 6. Organism → OrganismManager
+### 6. Organism → OrganismManager (Dispatcher)
 
 - **ServeDeployment**: `OrganismManager`
 - **Replicas**: `1 RUNNING`
 - **Ray Actor ID**: Actor 8
-- **Purpose**: Local organ management, agent distribution, and direct task execution
+- **Purpose**: Dispatcher that owns routing directory and resolves abstract steps to specific organs
+- **Key Features**:
+  - **Routing Directory**: Migrated from Coordinator, integrated with runtime registry
+  - **Bulk Resolve API**: `/resolve-route` and `/resolve-routes` endpoints
+  - **Rule Management**: CRUD operations for routing rules with cache refresh
+  - **Epoch Awareness**: Invalidates cache on cluster epoch rotation
+  - **Active Instance Validation**: Queries runtime registry with health checks
 - **Memory**: 2GB allocated for organism state management
 - **Route Prefix**: `/organism`
 
@@ -334,23 +352,34 @@ Besides service replicas, Serve maintains several control plane actors:
 - **Heartbeat monitoring** provides real-time health status
 - **Graceful shutdown** ensures clean actor termination
 
-#### Coordinator & OrganismManager
-- **Coordinator** (Actor 5) handles global task routing and coordination
-- Uses OCPS valve for drift detection and escalation decisions
-- Routes tasks to **OrganismManager** for local execution
-- **OrganismManager** (Actor 8) manages organ lifecycle and agent distribution
-- **Runtime registry** tracks all organ instances and their health status
+#### Three-Tier Routing Architecture
 
-#### CognitiveService Integration
-- **CognitiveService** (Actors 1 & 4) provides reasoning and planning capabilities
-- Called by **Coordinator** for HGNN decomposition and escalation
-- Serves as the "Cognitive organ" for complex task planning
+**Cognitive Service (Planner-Only)**:
+- **CognitiveService** (Actors 1 & 4) generates abstract task steps with `{"task": {...}}` format
+- **No routing decisions**: Enforced by guardrails against organ_id/instance_id
+- **Planning API**: Wraps steps into solution_steps with rich metadata
+- **Meta data**: Provides escalate_hint, sufficiency, confidence, planner_timings_ms
 
-#### Coordinator Service Flow
-- Receives tasks from Queue Dispatcher
-- Applies OCPS valve for fast-path vs escalation decisions
-- Routes simple tasks directly to OrganismManager
-- Escalates complex tasks through CognitiveService for planning
+**Coordinator Service (Governor)**:
+- **Coordinator** (Actor 5) orchestrates routing decisions and system coordination
+- **Fast Path**: Resolves single routes via Organism with TTL cache + single-flight
+- **HGNN Path**: Bulk resolves all plan steps in one call to Organism
+- **Plan validation**: Accepts abstract steps, auto-stamps step_id
+- **Meta data ingestion**: Feeds Cognitive hints into predicate signals
+
+**Organism Manager (Dispatcher)**:
+- **OrganismManager** (Actor 8) owns routing directory and resolves abstract steps to organs
+- **Bulk Resolve API**: `/resolve-route` and `/resolve-routes` endpoints
+- **Runtime registry integration**: Queries active instances with health validation
+- **Epoch awareness**: Invalidates cache on cluster epoch rotation
+
+#### Service Flow Patterns
+
+**Fast Path Flow**:
+- Task → Coordinator → OCPS Valve → Organism (resolve route) → Organ (execute)
+
+**Escalation Path Flow**:
+- Task → Coordinator → OCPS Valve → Cognitive (plan) → Coordinator (bulk resolve) → Organism (execute)
 
 #### MLService Integration
 - Independent ML-focused endpoint
@@ -497,36 +526,49 @@ After task completion, the system updates multiple metrics:
 ```
 Task Arrival (Queue Dispatcher)
      ↓
-Coordinator Service
+Coordinator Service (Governor)
 ├─ Runtime Registry Query (active_instances)
 ├─ Health Validation (heartbeat freshness)
 ├─ OCPS Valve Check (fast-path vs escalation)
 │
-├─ Fast Path: Direct to OrganismManager
+├─ Fast Path: Organism Resolution → Direct Execution
+│   ├─ Route Resolution: Organism (resolve-route) + TTL Cache
+│   ├─ Static Fallback: If Organism unavailable
 │   └─ Organ (container) → Tier0MemoryManager → RayAgent
 │       ├─ Runtime Registry: Register instance
 │       ├─ Heartbeat Loop: Jittered + backoff
 │       └─ Graceful Shutdown: Mark dead on close
 │
-└─ Escalation Path: CognitiveService → OrganismManager
-   ├─ HGNN decomposition (CognitiveService)
-   ├─ Plan validation and execution
-   └─ Organ (container) → Tier0MemoryManager → RayAgent
-       ├─ Runtime Registry: Instance lifecycle
-       ├─ Execute task
-       │    ├─ Memory lookup: Mw → Mlt → Mfb
-       │    ├─ Cognitive reasoning (optional)
-       │    └─ Produce result
-       │
-       ├─ Update performance + energy metrics
-       ├─ Emit heartbeat (via runtime registry)
-       └─ Possibly archive/log to Mlt & Mfb
+└─ Escalation Path: Cognitive Planning → Bulk Resolution → Execution
+   ├─ Cognitive Service (Planner-Only)
+   │   ├─ Generate abstract plan: {"task": {...}} format
+   │   ├─ Meta data: escalate_hint, sufficiency, confidence
+   │   └─ Planning API: solution_steps with timings
+   │
+   ├─ Coordinator (Bulk Resolution)
+   │   ├─ Plan validation: abstract steps only
+   │   ├─ Bulk resolve: Organism (resolve-routes) + TTL Cache
+   │   ├─ Stamp organ_id: Into each plan step
+   │   └─ Static fallback: Per-step if resolution fails
+   │
+   └─ Organism Manager (Dispatcher)
+       └─ Organ (container) → Tier0MemoryManager → RayAgent
+           ├─ Runtime Registry: Instance lifecycle
+           ├─ Execute task
+           │    ├─ Memory lookup: Mw → Mlt → Mfb
+           │    ├─ Cognitive reasoning (optional)
+           │    └─ Produce result
+           │
+           ├─ Update performance + energy metrics
+           ├─ Emit heartbeat (via runtime registry)
+           └─ Possibly archive/log to Mlt & Mfb
 ```
 
 ### Key Architectural Points
 
-- **Coordinator** = Global coordination, OCPS valve, routing decisions, HGNN escalation
-- **OrganismManager** = Local organ management, agent distribution, direct execution
+- **Cognitive Service** = Pure planner, generates abstract task steps, no routing decisions
+- **Coordinator Service** = Governor, OCPS valve, routing orchestration, bulk resolution
+- **Organism Manager** = Dispatcher, owns routing directory, resolves abstract steps to organs
 - **Tier0MemoryManager** = Registry/selector utility, not a Ray actor
 - **Organ** = Wrapper container, creates and supervises RayAgents
 - **RayAgent** = Real worker, stateful, owns private memory, cognitive access, telemetry
@@ -534,6 +576,54 @@ Coordinator Service
   - **Mw** = Fast, volatile working memory
   - **Mlt** = Durable long-term store
   - **Mfb** = Rare, high-salience flashbulb events
+
+### Routing Architecture Benefits
+
+- **Clean Separation**: Planner, Governor, and Dispatcher have distinct responsibilities
+- **Bulk Efficiency**: Single bulk resolve call instead of N individual route lookups
+- **Resilient Fallbacks**: Multiple layers of fallback ensure system availability
+- **Cache Optimization**: TTL cache with single-flight prevents thundering herd
+- **Epoch Awareness**: Cache invalidation on cluster changes maintains consistency
+
+## Recent Architecture Refactors
+
+### Refactor 1: Routing Directory Migration (Commit d31699ee)
+
+**Migration**: `RoutingDirectory` moved from `Coordinator` → `OrganismManager`
+
+**Key Changes**:
+- **Runtime Registry Integration**: Routing now queries active instances with health validation
+- **Bulk Resolve API**: Added `/resolve-route` and `/resolve-routes` endpoints
+- **Rule Management**: CRUD operations for routing rules with cache refresh
+- **Epoch Awareness**: Cache invalidation on cluster epoch rotation
+- **Coordinator TTL Cache**: 3-second TTL with jitter, single-flight, epoch-aware
+
+**Benefits**:
+- **Centralized Routing**: All routing decisions owned by Organism Manager
+- **Performance**: Bulk resolve reduces N network calls → 1 per HGNN plan
+- **Resilience**: Coordinator-side cache with static fallback ensures availability
+
+### Refactor 2: Cognitive Planner-Only Architecture (Commit 9920006a)
+
+**Cognitive Service Changes**:
+- **Handler Format**: All handlers return `{"task": {...}, "confidence_score": ...}` format
+- **No Routing Awareness**: Guardrails prevent organ_id/instance_id in outputs
+- **Domain Normalization**: Standard taxonomy ("graph", "facts", "management", "utility")
+- **Planning API**: Wraps single/multi steps into solution_steps with rich metadata
+- **Cache Optimization**: 10-minute TTL for sufficiency-bearing results
+
+**Coordinator Service Changes**:
+- **Plan Validation**: Accepts abstract steps with only `{"task": {...}}` format
+- **Route Resolution**: Fast-path and HGNN both resolve via Organism
+- **Bulk Resolution**: Single call to Organism for all plan steps
+- **Meta Data Ingestion**: Feeds Cognitive hints into predicate signals
+- **Static Fallback**: Resilient fallback when Organism unavailable
+
+**Architecture Impact**:
+- **Clean Separation**: Cognitive (planner), Coordinator (governor), Organism (dispatcher)
+- **Bulk Efficiency**: 1 bulk resolve call instead of N individual lookups
+- **Resilient Design**: Multiple fallback layers ensure system availability
+- **Performance**: TTL cache with single-flight prevents thundering herd
 
 ## Architecture Diagram
 
@@ -601,10 +691,70 @@ Coordinator Service
 
 ## Task Taxonomy and Routing
 
-SeedCore routes tasks based on type, complexity, and drift signals. The `Coordinator` maintains a minimal `RoutingDirectory` that maps task types to the appropriate organ/dispatcher. Recent migrations introduced graph, facts, resources, and agent-layer task families.
+SeedCore implements a **three-tier routing architecture** that cleanly separates planning, routing, and execution responsibilities. The system routes tasks based on type, complexity, and drift signals through a sophisticated coordination between Cognitive (planner), Coordinator (governor), and Organism (dispatcher).
 
-### Routing Directory (selected rules)
+### Architecture Overview
 
+The routing system follows a **Governor → Dispatcher → Planner** pattern:
+
+- **Cognitive Service**: Pure planner that generates abstract task steps with `{"task": {...}}` format
+- **Coordinator Service**: Governor that decides fast-path vs escalation and orchestrates routing
+- **Organism Manager**: Dispatcher that resolves abstract steps to specific organs and executes tasks
+
+### Routing Flow
+
+#### 1. Fast Path (Simple Tasks)
+```
+Task → Coordinator → OCPS Valve → Organism (resolve route) → Organ (execute)
+```
+
+#### 2. Escalation Path (Complex Tasks)
+```
+Task → Coordinator → OCPS Valve → Cognitive (plan) → Coordinator (bulk resolve) → Organism (execute)
+```
+
+### Cognitive Service (Planner-Only)
+
+The Cognitive service has been refactored to be **planner-only** with no routing or execution decisions:
+
+#### Handler Output Format
+- **All handlers** return `{"task": {...}, "confidence_score": ...}` format
+- **No organ_id or instance_id** in outputs (enforced by guardrails)
+- **Normalized domains**: `"graph"`, `"facts"`, `"management"`, `"utility"`
+- **Planning API**: Wraps single/multi steps into `solution_steps` with rich metadata
+
+#### Planning Metadata
+- **escalate_hint**: Boolean suggestion for escalation
+- **sufficiency**: Retrieval sufficiency data for routing decisions
+- **confidence**: Confidence score for plan quality
+- **planner_timings_ms**: Performance metrics for observability
+
+### Coordinator Service (Governor)
+
+The Coordinator orchestrates routing decisions and maintains system-wide coordination:
+
+#### Route Resolution
+- **Fast Path**: Resolves single routes via Organism with TTL cache + single-flight
+- **HGNN Path**: Bulk resolves all plan steps in one call to Organism
+- **Static Fallback**: Provides resilient fallback when Organism is unavailable
+- **Cache Strategy**: 3-second TTL with jitter, epoch-aware invalidation
+
+#### Plan Validation
+- **Abstract Steps**: Accepts plans with only `{"task": {...}}` format
+- **Auto-stamping**: Generates stable `step_id` if missing
+- **Domain Normalization**: Ensures consistent domain taxonomy
+
+### Organism Manager (Dispatcher)
+
+The Organism Manager owns all routing and execution decisions:
+
+#### Routing Directory
+- **Runtime Registry Integration**: Queries active instances with health validation
+- **Bulk Resolve API**: `/resolve-route` and `/resolve-routes` endpoints
+- **Rule Management**: CRUD operations for routing rules with cache refresh
+- **Epoch Awareness**: Invalidates cache on cluster epoch rotation
+
+#### Selected Routing Rules
 - **general_query → utility_organ_1**
 - **health_check → utility_organ_1**
 - **execute → actuator_organ_1**
@@ -617,8 +767,9 @@ SeedCore routes tasks based on type, complexity, and drift signals. The `Coordin
 ### Fast Path vs Escalation
 
 - The `OCPSValve` applies a neural-CUSUM style accumulation of drift to decide fast-path execution vs escalation to `CognitiveService` (HGNN planning).
-- Reset semantics: accumulator resets only on escalation to avoid under-escalation and to build evidence over time.
-- Concurrency controls and latency SLOs guide escalation throughput.
+- **Reset semantics**: accumulator resets only on escalation to avoid under-escalation and to build evidence over time.
+- **Concurrency controls** and latency SLOs guide escalation throughput.
+- **Meta data ingestion**: Cognitive's escalation hints feed back into predicate signals for improved decision-making.
 
 ## Health Indicators
 

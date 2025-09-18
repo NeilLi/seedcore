@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 DSPy Cognitive Core v2 for SeedCore Agents.
 
@@ -24,18 +26,17 @@ import hashlib
 import os
 import re
 import time
-import math
-from typing import Dict, Any, Optional, List, Union, cast, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
 from seedcore.logging_setup import setup_logging
 import logging
 
+setup_logging("seedcore.CognitiveCore")
 logger = logging.getLogger("seedcore.CognitiveCore")
-logger.setLevel(logging.DEBUG)
 
-# Try to use MwManager if present; degrade gracefully if not.
+# Optional Mw/Mlt dependencies
 try:
     from src.seedcore.bootstrap import get_shared_cache, get_mw_store
     from src.seedcore.memory.mw_store import MwStore
@@ -49,7 +50,6 @@ except Exception:
 
 MW_ENABLED = os.getenv("MW_ENABLED", "1") in {"1", "true", "True"}
 
-# Try to use LongTermMemoryManager if present; degrade gracefully if not.
 try:
     from src.seedcore.memory.long_term_memory import LongTermMemoryManager
     _MLT_AVAILABLE = True
@@ -59,449 +59,12 @@ except Exception:
 
 MLT_ENABLED = os.getenv("MLT_ENABLED", "1") in {"1", "true", "True"}
 
-# Import the new centralized result schema
-from ..models.result_schema import (
-    create_cognitive_result, create_error_result, TaskResult
-)
+# Centralized result schema
+from ..models.result_schema import create_cognitive_result, TaskResult, create_error_result
 
 
 # =============================================================================
-# Enhanced Fact Schema with Provenance and Trust
-# =============================================================================
-
-@dataclass
-class Fact:
-    """Enhanced fact schema with provenance, trust, and policy flags."""
-    id: str
-    text: str
-    score: float
-    source: str
-    source_uri: Optional[str] = None
-    timestamp: Optional[float] = None
-    trust: float = 0.5
-    signature: Optional[str] = None
-    staleness_s: Optional[float] = None
-    instructions_present: bool = False
-    sanitized_text: Optional[str] = None
-    conflict_set: List[str] = field(default_factory=list)
-    
-    def __post_init__(self):
-        """Sanitize text and compute staleness on initialization."""
-        if self.sanitized_text is None:
-            self.sanitized_text = self._sanitize_text(self.text)
-        
-        if self.timestamp is not None and self.staleness_s is None:
-            self.staleness_s = time.time() - self.timestamp
-    
-    def _sanitize_text(self, text: str) -> str:
-        """Sanitize text by removing code blocks, URLs, mentions, and executable content."""
-        # Remove code blocks
-        text = re.sub(r'```[\s\S]*?```', '[CODE_BLOCK_REMOVED]', text)
-        text = re.sub(r'`[^`]+`', '[INLINE_CODE_REMOVED]', text)
-        
-        # Remove URLs
-        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '[URL_REMOVED]', text)
-        
-        # Remove mentions and user references
-        text = re.sub(r'@\w+', '[MENTION_REMOVED]', text)
-        
-        # Remove executable patterns
-        text = re.sub(r'<script[\s\S]*?</script>', '[SCRIPT_REMOVED]', text, flags=re.IGNORECASE)
-        text = re.sub(r'<iframe[\s\S]*?</iframe>', '[IFRAME_REMOVED]', text, flags=re.IGNORECASE)
-        
-        # Collapse whitespace
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        # Check for instruction patterns
-        self.instructions_present = bool(re.search(r'(?:instruction|command|execute|run|do|perform)', text, re.IGNORECASE))
-        
-        return text
-    
-    def is_stale(self, max_age_s: float = 3600) -> bool:
-        """Check if fact is stale based on maximum age."""
-        if self.staleness_s is None:
-            return False
-        return self.staleness_s > max_age_s
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert fact to dictionary for serialization."""
-        return {
-            'id': self.id,
-            'text': self.text,
-            'sanitized_text': self.sanitized_text,
-            'score': self.score,
-            'source': self.source,
-            'source_uri': self.source_uri,
-            'timestamp': self.timestamp,
-            'trust': self.trust,
-            'signature': self.signature,
-            'staleness_s': self.staleness_s,
-            'instructions_present': self.instructions_present,
-            'conflict_set': self.conflict_set
-        }
-
-
-@dataclass
-class RetrievalSufficiency:
-    """Retrieval sufficiency metrics for OCPS integration."""
-    coverage: float  # How well the facts cover the query
-    diversity: float  # How diverse the retrieved facts are
-    agreement: float  # How much the facts agree with each other
-    token_budget: int  # Available token budget
-    token_est: int  # Estimated tokens for retrieved facts
-    conflict_count: int  # Number of conflicting facts
-    staleness_ratio: float  # Ratio of stale facts
-    trust_score: float  # Average trust score of facts
-
-
-class CognitiveTaskType(Enum):
-    """Types of cognitive tasks that agents can perform."""
-    FAILURE_ANALYSIS = "failure_analysis"
-    TASK_PLANNING = "task_planning"
-    DECISION_MAKING = "decision_making"
-    PROBLEM_SOLVING = "problem_solving"
-    MEMORY_SYNTHESIS = "memory_synthesis"
-    CAPABILITY_ASSESSMENT = "capability_assessment"
-    
-    # Graph task types (Migration 007+)
-    GRAPH_EMBED = "graph_embed"
-    GRAPH_RAG_QUERY = "graph_rag_query"
-    GRAPH_EMBED_V2 = "graph_embed_v2"
-    GRAPH_RAG_QUERY_V2 = "graph_rag_query_v2"
-    GRAPH_SYNC_NODES = "graph_sync_nodes"
-    
-    # Facts system types (Migration 009)
-    GRAPH_FACT_EMBED = "graph_fact_embed"
-    GRAPH_FACT_QUERY = "graph_fact_query"
-    FACT_SEARCH = "fact_search"
-    FACT_STORE = "fact_store"
-    
-    # Resource management types (Migration 007)
-    ARTIFACT_MANAGE = "artifact_manage"
-    CAPABILITY_MANAGE = "capability_manage"
-    MEMORY_CELL_MANAGE = "memory_cell_manage"
-    
-    # Agent layer types (Migration 008)
-    MODEL_MANAGE = "model_manage"
-    POLICY_MANAGE = "policy_manage"
-    SERVICE_MANAGE = "service_manage"
-    SKILL_MANAGE = "skill_manage"
-
-
-@dataclass
-class CognitiveContext:
-    """Context information for cognitive tasks."""
-    agent_id: str
-    task_type: CognitiveTaskType
-    input_data: Dict[str, Any]
-    memory_context: Optional[Dict[str, Any]] = None
-    energy_context: Optional[Dict[str, Any]] = None
-    lifecycle_context: Optional[Dict[str, Any]] = None
-
-
-# =============================================================================
-# Enhanced Context Broker with RRF, MMR, and Dynamic Budgeting
-# =============================================================================
-
-class ContextBroker:
-    """
-    Enhanced context broker with RRF fusion, MMR diversity, and dynamic token budgeting.
-    Integrates with OCPS for retrieval sufficiency signals.
-    """
-    def __init__(self, text_search_func, vector_search_func, token_budget: int = 1500, 
-                 ocps_client=None, energy_client=None):
-        self.text_search = text_search_func
-        self.vector_search = vector_search_func
-        self.base_token_budget = token_budget
-        self.token_budget = token_budget
-        self.ocps_client = ocps_client
-        self.energy_client = energy_client
-        self.schema_version = "v2.0"
-        logger.info(f"ContextBroker v2 initialized with base token budget of {token_budget}.")
-
-    def retrieve(self, query: str, k: int = 20, task_type: Optional[CognitiveTaskType] = None) -> Tuple[List[Fact], RetrievalSufficiency]:
-        """Enhanced retrieval with RRF fusion, MMR diversity, and sufficiency metrics."""
-        # Multi-query expansion for better coverage
-        expanded_queries = self._expand_query(query)
-        
-        # Retrieve from both sources
-        text_hits = []
-        vec_hits = []
-        for eq in expanded_queries:
-            text_hits.extend(self.text_search(eq, k=k//len(expanded_queries)))
-            vec_hits.extend(self.vector_search(eq, k=k//len(expanded_queries)))
-        
-        # Convert to Fact objects
-        text_facts = [self._dict_to_fact(hit, "text") for hit in text_hits]
-        vec_facts = [self._dict_to_fact(hit, "vector") for hit in vec_hits]
-        
-        # RRF fusion with source weighting
-        fused_facts = self._rrf_fuse(text_facts, vec_facts)
-        
-        # MMR diversification
-        diversified_facts = self._mmr_diversify(fused_facts, query, k)
-        
-        # Calculate sufficiency metrics
-        sufficiency = self._calculate_sufficiency(diversified_facts, query)
-        
-        return diversified_facts, sufficiency
-
-    def budget(self, facts: List[Fact], task_type: Optional[CognitiveTaskType] = None) -> Tuple[List[Fact], str, RetrievalSufficiency]:
-        """Dynamic token budgeting based on OCPS signals and energy state."""
-        # Update token budget based on current conditions
-        self._update_dynamic_budget(task_type)
-        
-        # Filter facts by staleness and trust
-        fresh_facts = [f for f in facts if not f.is_stale() and f.trust > 0.3]
-        
-        # Budget facts to fit token limit
-        kept, current_tokens = [], 0
-        for fact in fresh_facts:
-            tokens = self._estimate_tokens(fact.sanitized_text or fact.text)
-            if current_tokens + tokens > self.token_budget:
-                logger.warning(f"Token budget of {self.token_budget} reached. Truncating facts.")
-                break
-            kept.append(fact)
-            current_tokens += tokens
-        
-        # Calculate final sufficiency
-        sufficiency = self._calculate_sufficiency(kept, "")
-        sufficiency.token_budget = self.token_budget
-        sufficiency.token_est = current_tokens
-        
-        summary = self._summarize(kept)
-        return kept, summary, sufficiency
-
-    def _expand_query(self, query: str) -> List[str]:
-        """Expand query with synonyms and task facets for better coverage."""
-        # Simple expansion - in production, use more sophisticated methods
-        expanded = [query]
-        
-        # Add synonyms for common terms
-        synonyms = {
-            "error": ["failure", "issue", "problem", "bug"],
-            "performance": ["speed", "efficiency", "throughput"],
-            "memory": ["storage", "cache", "buffer"],
-            "task": ["job", "work", "operation", "process"]
-        }
-        
-        for term, syns in synonyms.items():
-            if term.lower() in query.lower():
-                for syn in syns[:2]:  # Limit to 2 synonyms per term
-                    expanded.append(query.lower().replace(term.lower(), syn))
-        
-        return expanded[:3]  # Limit to 3 expanded queries
-
-    def _dict_to_fact(self, hit: Dict[str, Any], source_type: str) -> Fact:
-        """Convert dictionary hit to Fact object."""
-        return Fact(
-            id=hit.get("id", ""),
-            text=hit.get("text", ""),
-            score=hit.get("score", 0.0),
-            source=hit.get("source", source_type),
-            source_uri=hit.get("source_uri"),
-            timestamp=hit.get("timestamp", time.time()),
-            trust=hit.get("trust", 0.5),
-            signature=hit.get("signature")
-        )
-
-    def _rrf_fuse(self, text_facts: List[Fact], vec_facts: List[Fact]) -> List[Fact]:
-        """Reciprocal Rank Fusion with source reliability weighting."""
-        # Source reliability weights
-        text_weight = 0.6  # Text search is more reliable
-        vec_weight = 0.4   # Vector search for semantic similarity
-        
-        # Create combined ranking
-        all_facts = {}
-        for i, fact in enumerate(text_facts):
-            if fact.id not in all_facts:
-                all_facts[fact.id] = fact
-            # RRF: 1 / (rank + k), where k=60 is typical
-            rrf_score = text_weight / (i + 60)
-            all_facts[fact.id].score += rrf_score
-        
-        for i, fact in enumerate(vec_facts):
-            if fact.id not in all_facts:
-                all_facts[fact.id] = fact
-            rrf_score = vec_weight / (i + 60)
-            all_facts[fact.id].score += rrf_score
-        
-        # Sort by combined RRF score
-        return sorted(all_facts.values(), key=lambda x: x.score, reverse=True)
-
-    def _mmr_diversify(self, facts: List[Fact], query: str, k: int) -> List[Fact]:
-        """Maximal Marginal Relevance diversification to avoid near-duplicates."""
-        if len(facts) <= k:
-            return facts
-        
-        # Simple MMR implementation
-        selected = []
-        remaining = facts.copy()
-        
-        # Start with highest scoring fact
-        if remaining:
-            selected.append(remaining.pop(0))
-        
-        # Select remaining facts with MMR
-        while len(selected) < k and remaining:
-            best_fact = None
-            best_score = -1
-            
-            for fact in remaining:
-                # MMR score = λ * relevance - (1-λ) * max_similarity
-                relevance = fact.score
-                max_sim = max(self._similarity(fact, sel) for sel in selected) if selected else 0
-                mmr_score = 0.7 * relevance - 0.3 * max_sim
-                
-                if mmr_score > best_score:
-                    best_score = mmr_score
-                    best_fact = fact
-            
-            if best_fact:
-                selected.append(best_fact)
-                remaining.remove(best_fact)
-            else:
-                break
-        
-        return selected
-
-    def _similarity(self, fact1: Fact, fact2: Fact) -> float:
-        """Simple similarity between two facts (Jaccard similarity)."""
-        words1 = set((fact1.sanitized_text or fact1.text).lower().split())
-        words2 = set((fact2.sanitized_text or fact2.text).lower().split())
-        
-        if not words1 or not words2:
-            return 0.0
-        
-        intersection = len(words1.intersection(words2))
-        union = len(words1.union(words2))
-        
-        return intersection / union if union > 0 else 0.0
-
-    def _calculate_sufficiency(self, facts: List[Fact], query: str) -> RetrievalSufficiency:
-        """Calculate retrieval sufficiency metrics for OCPS integration."""
-        if not facts:
-            return RetrievalSufficiency(0.0, 0.0, 0.0, self.token_budget, 0, 0, 0.0, 0.0)
-        
-        # Coverage: how many facts are relevant (score > 0.5)
-        coverage = sum(1 for f in facts if f.score > 0.5) / len(facts)
-        
-        # Diversity: average pairwise dissimilarity
-        if len(facts) <= 1:
-            diversity = 1.0
-        else:
-            similarities = []
-            for i in range(len(facts)):
-                for j in range(i + 1, len(facts)):
-                    similarities.append(self._similarity(facts[i], facts[j]))
-            diversity = 1.0 - (sum(similarities) / len(similarities)) if similarities else 1.0
-        
-        # Agreement: how much facts agree (low conflict)
-        conflict_count = sum(len(f.conflict_set) for f in facts)
-        agreement = 1.0 - (conflict_count / len(facts)) if facts else 1.0
-        
-        # Staleness ratio
-        stale_count = sum(1 for f in facts if f.is_stale())
-        staleness_ratio = stale_count / len(facts) if facts else 0.0
-        
-        # Trust score
-        trust_score = sum(f.trust for f in facts) / len(facts) if facts else 0.0
-        
-        return RetrievalSufficiency(
-            coverage=coverage,
-            diversity=diversity,
-            agreement=agreement,
-            token_budget=self.token_budget,
-            token_est=sum(self._estimate_tokens(f.sanitized_text or f.text) for f in facts),
-            conflict_count=conflict_count,
-            staleness_ratio=staleness_ratio,
-            trust_score=trust_score
-        )
-
-    def _update_dynamic_budget(self, task_type: Optional[CognitiveTaskType] = None):
-        """Update token budget based on OCPS signals and energy state."""
-        base_budget = self.base_token_budget
-        
-        # Adjust based on task type
-        if task_type:
-            task_multipliers = {
-                CognitiveTaskType.FAILURE_ANALYSIS: 1.2,  # Need more context
-                CognitiveTaskType.TASK_PLANNING: 1.5,     # Complex planning
-                CognitiveTaskType.DECISION_MAKING: 1.0,   # Standard
-                CognitiveTaskType.PROBLEM_SOLVING: 1.3,   # Need more facts
-                CognitiveTaskType.MEMORY_SYNTHESIS: 1.4,  # Synthesis needs context
-                CognitiveTaskType.CAPABILITY_ASSESSMENT: 1.1,
-                
-                # Graph task types (Migration 007+)
-                CognitiveTaskType.GRAPH_EMBED: 1.2,        # Graph processing needs context
-                CognitiveTaskType.GRAPH_RAG_QUERY: 1.1,    # RAG queries need facts
-                CognitiveTaskType.GRAPH_EMBED_V2: 1.2,     # Enhanced graph processing
-                CognitiveTaskType.GRAPH_RAG_QUERY_V2: 1.1, # Enhanced RAG queries
-                CognitiveTaskType.GRAPH_SYNC_NODES: 1.0,   # Node synchronization
-                
-                # Facts system types (Migration 009)
-                CognitiveTaskType.GRAPH_FACT_EMBED: 1.3,   # Fact embedding needs context
-                CognitiveTaskType.GRAPH_FACT_QUERY: 1.2,   # Fact queries need facts
-                CognitiveTaskType.FACT_SEARCH: 1.1,        # Fact search needs context
-                CognitiveTaskType.FACT_STORE: 1.0,         # Fact storage is simple
-                
-                # Resource management types (Migration 007)
-                CognitiveTaskType.ARTIFACT_MANAGE: 1.1,    # Artifact management
-                CognitiveTaskType.CAPABILITY_MANAGE: 1.1,  # Capability management
-                CognitiveTaskType.MEMORY_CELL_MANAGE: 1.1, # Memory cell management
-                
-                # Agent layer types (Migration 008)
-                CognitiveTaskType.MODEL_MANAGE: 1.1,       # Model management
-                CognitiveTaskType.POLICY_MANAGE: 1.1,      # Policy management
-                CognitiveTaskType.SERVICE_MANAGE: 1.1,     # Service management
-                CognitiveTaskType.SKILL_MANAGE: 1.1,       # Skill management
-            }
-            base_budget *= task_multipliers.get(task_type, 1.0)
-        
-        # Adjust based on energy state (if available)
-        if self.energy_client:
-            try:
-                energy_state = self.energy_client.get_current_energy()
-                # Reduce budget when energy is low
-                if energy_state.get("total_energy", 1.0) < 0.5:
-                    base_budget *= 0.8
-            except Exception as e:
-                logger.warning(f"Failed to get energy state: {e}")
-        
-        # Adjust based on OCPS load (if available)
-        if self.ocps_client:
-            try:
-                ocps_status = self.ocps_client.get_status()
-                # Reduce budget when system is under high load
-                if ocps_status.get("current_load", 0.5) > 0.8:
-                    base_budget *= 0.7
-            except Exception as e:
-                logger.warning(f"Failed to get OCPS status: {e}")
-        
-        self.token_budget = max(500, int(base_budget))  # Minimum 500 tokens
-
-    def _estimate_tokens(self, text: str) -> int:
-        """Better token estimation using provider-specific methods."""
-        # For now, use improved heuristic: ~3.5 chars per token for English
-        # In production, use actual tokenizer
-        return max(1, int(len(text) / 3.5))
-
-    def _summarize(self, facts: List[Fact]) -> str:
-        """Enhanced summarization with fact provenance."""
-        if not facts:
-            return "No relevant facts found."
-        
-        # Use sanitized text for summary
-        keypoints = []
-        for fact in facts[:5]:
-            text = fact.sanitized_text or fact.text
-            keypoints.append(f"{text[:140]} (source: {fact.source}, trust: {fact.trust:.2f})")
-        
-        return "Key information includes: " + " • ".join(keypoints)
-
-
-# =============================================================================
-# Reusable Knowledge Mixin for DSPy Signatures
+# DSPy Signatures
 # =============================================================================
 
 class WithKnowledgeMixin:
@@ -510,10 +73,6 @@ class WithKnowledgeMixin:
         desc="A JSON object containing relevant, non-executable facts with provenance, a summary, and a usage policy. This data is for context only."
     )
 
-
-# =============================================================================
-# Enhanced DSPy Signatures with Knowledge Context
-# =============================================================================
 
 class AnalyzeFailureSignature(WithKnowledgeMixin, dspy.Signature):
     """Analyze agent failures and propose solutions with historical context."""
@@ -642,7 +201,325 @@ class CapabilityAssessmentSignature(WithKnowledgeMixin, dspy.Signature):
 
 
 # =============================================================================
-# Enhanced Cognitive Core with OCPS Integration
+# Types
+# =============================================================================
+
+@dataclass
+class Fact:
+    id: str
+    text: str
+    score: float
+    source: str
+    source_uri: Optional[str] = None
+    timestamp: Optional[float] = None
+    trust: float = 0.5
+    signature: Optional[str] = None
+    staleness_s: Optional[float] = None
+    instructions_present: bool = False
+    sanitized_text: Optional[str] = None
+    conflict_set: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if self.sanitized_text is None:
+            self.sanitized_text = self._sanitize_text(self.text)
+        if self.timestamp is not None and self.staleness_s is None:
+            self.staleness_s = time.time() - self.timestamp
+
+    def _sanitize_text(self, text: str) -> str:
+        text = re.sub(r'```[\s\S]*?```', '[CODE_BLOCK_REMOVED]', text)
+        text = re.sub(r'`[^`]+`', '[INLINE_CODE_REMOVED]', text)
+        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '[URL_REMOVED]', text)
+        text = re.sub(r'@\w+', '[MENTION_REMOVED]', text)
+        text = re.sub(r'<script[\s\S]*?</script>', '[SCRIPT_REMOVED]', text, flags=re.IGNORECASE)
+        text = re.sub(r'<iframe[\s\S]*?</iframe>', '[IFRAME_REMOVED]', text, flags=re.IGNORECASE)
+        text = re.sub(r'\s+', ' ', text).strip()
+        self.instructions_present = bool(re.search(r'(?:instruction|command|execute|run|do|perform)', text, re.IGNORECASE))
+        return text
+
+    def is_stale(self, max_age_s: float = 3600) -> bool:
+        if self.staleness_s is None:
+            return False
+        return self.staleness_s > max_age_s
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'text': self.text,
+            'sanitized_text': self.sanitized_text,
+            'score': self.score,
+            'source': self.source,
+            'source_uri': self.source_uri,
+            'timestamp': self.timestamp,
+            'trust': self.trust,
+            'signature': self.signature,
+            'staleness_s': self.staleness_s,
+            'instructions_present': self.instructions_present,
+            'conflict_set': self.conflict_set
+        }
+
+
+@dataclass
+class RetrievalSufficiency:
+    coverage: float
+    diversity: float
+    agreement: float
+    token_budget: int
+    token_est: int
+    conflict_count: int
+    staleness_ratio: float
+    trust_score: float
+
+
+class CognitiveTaskType(Enum):
+    FAILURE_ANALYSIS = "failure_analysis"
+    TASK_PLANNING = "task_planning"
+    DECISION_MAKING = "decision_making"
+    PROBLEM_SOLVING = "problem_solving"
+    MEMORY_SYNTHESIS = "memory_synthesis"
+    CAPABILITY_ASSESSMENT = "capability_assessment"
+
+    # Graph tasks
+    GRAPH_EMBED = "graph_embed"
+    GRAPH_RAG_QUERY = "graph_rag_query"
+    GRAPH_EMBED_V2 = "graph_embed_v2"
+    GRAPH_RAG_QUERY_V2 = "graph_rag_query_v2"
+    GRAPH_SYNC_NODES = "graph_sync_nodes"
+
+    # Facts system
+    GRAPH_FACT_EMBED = "graph_fact_embed"
+    GRAPH_FACT_QUERY = "graph_fact_query"
+    FACT_SEARCH = "fact_search"
+    FACT_STORE = "fact_store"
+
+    # Resource management
+    ARTIFACT_MANAGE = "artifact_manage"
+    CAPABILITY_MANAGE = "capability_manage"
+    MEMORY_CELL_MANAGE = "memory_cell_manage"
+
+    # Agent layer
+    MODEL_MANAGE = "model_manage"
+    POLICY_MANAGE = "policy_manage"
+    SERVICE_MANAGE = "service_manage"
+    SKILL_MANAGE = "skill_manage"
+
+
+@dataclass
+class CognitiveContext:
+    agent_id: str
+    task_type: CognitiveTaskType
+    input_data: Dict[str, Any]
+    memory_context: Optional[Dict[str, Any]] = None
+    energy_context: Optional[Dict[str, Any]] = None
+    lifecycle_context: Optional[Dict[str, Any]] = None
+
+
+# =============================================================================
+# Context Broker
+# =============================================================================
+
+class ContextBroker:
+    def __init__(self, text_search_func, vector_search_func, token_budget: int = 1500, ocps_client=None, energy_client=None):
+        self.text_search = text_search_func
+        self.vector_search = vector_search_func
+        self.base_token_budget = token_budget
+        self.token_budget = token_budget
+        self.ocps_client = ocps_client
+        self.energy_client = energy_client
+        self.schema_version = "v2.0"
+        logger.info(f"ContextBroker v2 initialized with base token budget of {token_budget}.")
+
+    def retrieve(self, query: str, k: int = 20, task_type: Optional[CognitiveTaskType] = None) -> Tuple[List[Fact], RetrievalSufficiency]:
+        expanded_queries = self._expand_query(query)
+        text_hits: List[Dict[str, Any]] = []
+        vec_hits: List[Dict[str, Any]] = []
+        for eq in expanded_queries:
+            text_hits.extend(self.text_search(eq, k=k // max(1, len(expanded_queries))))
+            vec_hits.extend(self.vector_search(eq, k=k // max(1, len(expanded_queries))))
+        text_facts = [self._dict_to_fact(hit, "text") for hit in text_hits]
+        vec_facts = [self._dict_to_fact(hit, "vector") for hit in vec_hits]
+        fused_facts = self._rrf_fuse(text_facts, vec_facts)
+        diversified_facts = self._mmr_diversify(fused_facts, query, k)
+        sufficiency = self._calculate_sufficiency(diversified_facts, query)
+        return diversified_facts, sufficiency
+
+    def budget(self, facts: List[Fact], task_type: Optional[CognitiveTaskType] = None) -> Tuple[List[Fact], str, RetrievalSufficiency]:
+        self._update_dynamic_budget(task_type)
+        fresh_facts = [f for f in facts if not f.is_stale() and f.trust > 0.3]
+        kept: List[Fact] = []
+        current_tokens = 0
+        for fact in fresh_facts:
+            tokens = self._estimate_tokens(fact.sanitized_text or fact.text)
+            if current_tokens + tokens > self.token_budget:
+                logger.warning(f"Token budget of {self.token_budget} reached. Truncating facts.")
+                break
+            kept.append(fact)
+            current_tokens += tokens
+        sufficiency = self._calculate_sufficiency(kept, "")
+        sufficiency.token_budget = self.token_budget
+        sufficiency.token_est = current_tokens
+        summary = self._summarize(kept)
+        return kept, summary, sufficiency
+
+    def _expand_query(self, query: str) -> List[str]:
+        expanded = [query]
+        synonyms = {
+            "error": ["failure", "issue", "problem", "bug"],
+            "performance": ["speed", "efficiency", "throughput"],
+            "memory": ["storage", "cache", "buffer"],
+            "task": ["job", "work", "operation", "process"],
+        }
+        for term, syns in synonyms.items():
+            if term.lower() in query.lower():
+                for syn in syns[:2]:
+                    expanded.append(query.lower().replace(term.lower(), syn))
+        return expanded[:3]
+
+    def _dict_to_fact(self, hit: Dict[str, Any], source_type: str) -> Fact:
+        return Fact(
+            id=hit.get("id", ""),
+            text=hit.get("text", ""),
+            score=hit.get("score", 0.0),
+            source=hit.get("source", source_type),
+            source_uri=hit.get("source_uri"),
+            timestamp=hit.get("timestamp", time.time()),
+            trust=hit.get("trust", 0.5),
+            signature=hit.get("signature"),
+        )
+
+    def _rrf_fuse(self, text_facts: List[Fact], vec_facts: List[Fact]) -> List[Fact]:
+        text_weight = 0.6
+        vec_weight = 0.4
+        all_facts: Dict[str, Fact] = {}
+        for i, fact in enumerate(text_facts):
+            if fact.id not in all_facts:
+                all_facts[fact.id] = fact
+            all_facts[fact.id].score += text_weight / (i + 60)
+        for i, fact in enumerate(vec_facts):
+            if fact.id not in all_facts:
+                all_facts[fact.id] = fact
+            all_facts[fact.id].score += vec_weight / (i + 60)
+        return sorted(all_facts.values(), key=lambda x: x.score, reverse=True)
+
+    def _mmr_diversify(self, facts: List[Fact], query: str, k: int) -> List[Fact]:
+        if len(facts) <= k:
+            return facts
+        selected: List[Fact] = []
+        remaining = facts.copy()
+        if remaining:
+            selected.append(remaining.pop(0))
+        while len(selected) < k and remaining:
+            best_fact: Optional[Fact] = None
+            best_score = -1.0
+            for fact in remaining:
+                relevance = fact.score
+                max_sim = max(self._similarity(fact, sel) for sel in selected) if selected else 0
+                mmr_score = 0.7 * relevance - 0.3 * max_sim
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_fact = fact
+            if best_fact:
+                selected.append(best_fact)
+                remaining.remove(best_fact)
+            else:
+                break
+        return selected
+
+    def _similarity(self, fact1: Fact, fact2: Fact) -> float:
+        words1 = set((fact1.sanitized_text or fact1.text).lower().split())
+        words2 = set((fact2.sanitized_text or fact2.text).lower().split())
+        if not words1 or not words2:
+            return 0.0
+        intersection = len(words1.intersection(words2))
+        union = len(words1.union(words2))
+        return intersection / union if union > 0 else 0.0
+
+    def _calculate_sufficiency(self, facts: List[Fact], query: str) -> RetrievalSufficiency:
+        if not facts:
+            return RetrievalSufficiency(0.0, 0.0, 0.0, self.token_budget, 0, 0, 0.0, 0.0)
+        coverage = sum(1 for f in facts if f.score > 0.5) / len(facts)
+        if len(facts) <= 1:
+            diversity = 1.0
+        else:
+            similarities: List[float] = []
+            for i in range(len(facts)):
+                for j in range(i + 1, len(facts)):
+                    similarities.append(self._similarity(facts[i], facts[j]))
+            diversity = 1.0 - (sum(similarities) / len(similarities)) if similarities else 1.0
+        conflict_count = sum(len(f.conflict_set) for f in facts)
+        agreement = 1.0 - (conflict_count / len(facts)) if facts else 1.0
+        stale_count = sum(1 for f in facts if f.is_stale())
+        staleness_ratio = stale_count / len(facts) if facts else 0.0
+        trust_score = sum(f.trust for f in facts) / len(facts) if facts else 0.0
+        return RetrievalSufficiency(
+            coverage=coverage,
+            diversity=diversity,
+            agreement=agreement,
+            token_budget=self.token_budget,
+            token_est=sum(self._estimate_tokens(f.sanitized_text or f.text) for f in facts),
+            conflict_count=conflict_count,
+            staleness_ratio=staleness_ratio,
+            trust_score=trust_score,
+        )
+
+    def _update_dynamic_budget(self, task_type: Optional[CognitiveTaskType] = None):
+        base_budget = self.base_token_budget
+        if task_type:
+            task_multipliers = {
+                CognitiveTaskType.FAILURE_ANALYSIS: 1.2,
+                CognitiveTaskType.TASK_PLANNING: 1.5,
+                CognitiveTaskType.DECISION_MAKING: 1.0,
+                CognitiveTaskType.PROBLEM_SOLVING: 1.3,
+                CognitiveTaskType.MEMORY_SYNTHESIS: 1.4,
+                CognitiveTaskType.CAPABILITY_ASSESSMENT: 1.1,
+                CognitiveTaskType.GRAPH_EMBED: 1.2,
+                CognitiveTaskType.GRAPH_RAG_QUERY: 1.1,
+                CognitiveTaskType.GRAPH_EMBED_V2: 1.2,
+                CognitiveTaskType.GRAPH_RAG_QUERY_V2: 1.1,
+                CognitiveTaskType.GRAPH_SYNC_NODES: 1.0,
+                CognitiveTaskType.GRAPH_FACT_EMBED: 1.3,
+                CognitiveTaskType.GRAPH_FACT_QUERY: 1.2,
+                CognitiveTaskType.FACT_SEARCH: 1.1,
+                CognitiveTaskType.FACT_STORE: 1.0,
+                CognitiveTaskType.ARTIFACT_MANAGE: 1.1,
+                CognitiveTaskType.CAPABILITY_MANAGE: 1.1,
+                CognitiveTaskType.MEMORY_CELL_MANAGE: 1.1,
+                CognitiveTaskType.MODEL_MANAGE: 1.1,
+                CognitiveTaskType.POLICY_MANAGE: 1.1,
+                CognitiveTaskType.SERVICE_MANAGE: 1.1,
+                CognitiveTaskType.SKILL_MANAGE: 1.1,
+            }
+            base_budget *= task_multipliers.get(task_type, 1.0)
+        if self.energy_client:
+            try:
+                energy_state = self.energy_client.get_current_energy()
+                if energy_state.get("total_energy", 1.0) < 0.5:
+                    base_budget *= 0.8
+            except Exception as e:
+                logger.warning(f"Failed to get energy state: {e}")
+        if self.ocps_client:
+            try:
+                ocps_status = self.ocps_client.get_status()
+                if ocps_status.get("current_load", 0.5) > 0.8:
+                    base_budget *= 0.7
+            except Exception as e:
+                logger.warning(f"Failed to get OCPS status: {e}")
+        self.token_budget = max(500, int(base_budget))
+
+    def _estimate_tokens(self, text: str) -> int:
+        return max(1, int(len(text) / 3.5))
+
+    def _summarize(self, facts: List[Fact]) -> str:
+        if not facts:
+            return "No relevant facts found."
+        keypoints: List[str] = []
+        for fact in facts[:5]:
+            text = fact.sanitized_text or fact.text
+            keypoints.append(f"{text[:140]} (source: {fact.source}, trust: {fact.trust:.2f})")
+        return "Key information includes: " + " • ".join(keypoints)
+
+
+# =============================================================================
+# Cognitive Service
 # =============================================================================
 
 class CognitiveCore(dspy.Module):
@@ -765,144 +642,7 @@ class CognitiveCore(dspy.Module):
         else:
             logger.info("LongTermMemoryManager integration: DISABLED (missing module or env)")
 
-    def _stable_hash(self, task_type: CognitiveTaskType, agent_id: str, input_data: Dict[str, Any]) -> str:
-        """Stable hash of inputs (drop obviously-ephemeral fields if present)."""
-        # Shallow sanitize to improve cache hit rate.
-        sanitized = dict(input_data)
-        # Drop ephemeral fields that shouldn't affect caching
-        for key in ["timestamp", "created_at", "updated_at", "id", "request_id"]:
-            sanitized.pop(key, None)
-        
-        # Create stable hash
-        content = f"{task_type.value}:{agent_id}:{json.dumps(sanitized, sort_keys=True)}"
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
-
-    def _generate_cache_key(self, task_type: CognitiveTaskType, agent_id: str, input_data: Dict[str, Any]) -> str:
-        """Generate hardened cache key with provider, model, and schema version."""
-        stable_hash = self._stable_hash(task_type, agent_id, input_data)
-        return f"cc:res:{task_type.value}:{self.model}:{self.llm_provider}:{self.schema_version}:{stable_hash}"
-
-    def _to_payload(self, raw) -> dict:
-        """Normalize any handler output into a dict."""
-        if raw is None:
-            return {}
-        if isinstance(raw, dict):
-            return raw
-        # DSPy predictions often have toDict()
-        if hasattr(raw, "toDict") and callable(raw.toDict):
-            try:
-                result = raw.toDict()
-                if isinstance(result, dict):
-                    return result or {}
-            except Exception:
-                pass
-        # namedtuple
-        if hasattr(raw, "_asdict"):
-            try:
-                result = raw._asdict()
-                if isinstance(result, dict):
-                    return result or {}
-            except Exception:
-                pass
-        # Mock objects - extract attributes directly
-        if hasattr(raw, '_mock_name'):  # This is a Mock object
-            result = {}
-            for attr_name in dir(raw):
-                if not attr_name.startswith('_') and not callable(getattr(raw, attr_name)):
-                    try:
-                        value = getattr(raw, attr_name)
-                        if not hasattr(value, '_mock_name'):  # Not a nested Mock
-                            result[attr_name] = value
-                    except Exception:
-                        pass
-            return result
-        # generic object with attributes
-        if hasattr(raw, "__dict__"):
-            return {k: v for k, v in vars(raw).items() if not k.startswith("_")}
-        # fallback
-        return {"value": raw}
-
-    def _normalize_failure_analysis(self, payload: dict) -> dict:
-        """Normalize failure analysis specific fields."""
-        if "confidence_score" in payload:
-            try:
-                payload["confidence_score"] = float(payload["confidence_score"])
-            except Exception:
-                pass
-        return payload
-
-    def _check_post_conditions(self, result: Dict[str, Any], task_type: CognitiveTaskType) -> Tuple[bool, List[str]]:
-        """Check post-conditions for DSPy outputs to ensure policy compliance."""
-        violations = []
-        
-        # Check confidence score bounds
-        if "confidence_score" in result:
-            conf = result["confidence_score"]
-            if isinstance(conf, str):
-                try:
-                    conf = float(conf)
-                except ValueError:
-                    conf = 0.0
-            if not (0.0 <= conf <= 1.0):
-                violations.append(f"Confidence score {conf} out of bounds [0.0, 1.0]")
-        
-        # Check for PII patterns
-        text_fields = ["thought", "proposed_solution", "reasoning", "decision", "solution_approach"]
-        for field in text_fields:
-            if field in result and isinstance(result[field], str):
-                text = result[field].lower()
-                # Simple PII detection
-                if any(pattern in text for pattern in ["ssn", "social security", "credit card", "password"]):
-                    violations.append(f"Potential PII detected in {field}")
-        
-        # Check for executable content
-        for field in text_fields:
-            if field in result and isinstance(result[field], str):
-                text = result[field]
-                if re.search(r'```[\s\S]*?```', text) or re.search(r'`[^`]+`', text):
-                    violations.append(f"Code blocks detected in {field}")
-        
-        # Check numeric ranges for specific fields
-        if task_type == CognitiveTaskType.TASK_PLANNING and "estimated_complexity" in result:
-            try:
-                complexity = float(result["estimated_complexity"])
-                if not (1.0 <= complexity <= 10.0):
-                    violations.append(f"Complexity score {complexity} out of bounds [1.0, 10.0]")
-            except (ValueError, TypeError):
-                violations.append("Invalid complexity score format")
-        
-        return len(violations) == 0, violations
-
-    def _should_escalate_to_deep_path(self, sufficiency: RetrievalSufficiency, task_type: CognitiveTaskType) -> bool:
-        """Determine if task should be escalated to deep path based on retrieval sufficiency."""
-        if not self.ocps_client:
-            return False
-        
-        # Escalation criteria
-        low_coverage = sufficiency.coverage < 0.6
-        low_diversity = sufficiency.diversity < 0.5
-        high_conflict = sufficiency.conflict_count > 2
-        high_staleness = sufficiency.staleness_ratio > 0.3
-        low_trust = sufficiency.trust_score < 0.4
-        
-        # Complex tasks more likely to escalate
-        complex_tasks = {CognitiveTaskType.TASK_PLANNING, CognitiveTaskType.PROBLEM_SOLVING, CognitiveTaskType.MEMORY_SYNTHESIS}
-        is_complex = task_type in complex_tasks
-        
-        # Escalate if multiple conditions met
-        escalation_score = sum([
-            low_coverage, low_diversity, high_conflict, high_staleness, low_trust
-        ])
-        
-        should_escalate = (escalation_score >= 2) or (is_complex and escalation_score >= 1)
-        
-        if should_escalate:
-            logger.info(f"Escalating {task_type.value} to deep path: coverage={sufficiency.coverage:.2f}, "
-                       f"diversity={sufficiency.diversity:.2f}, conflicts={sufficiency.conflict_count}")
-        
-        return should_escalate
-
-    def process(self, context: CognitiveContext) -> TaskResult:
+    def process(self, context: CognitiveContext) -> Dict[str, Any]:
         """Enhanced process method with OCPS integration and cache governance."""
         try:
             # Check cache first
@@ -1072,7 +812,246 @@ class CognitiveCore(dspy.Module):
             
         except Exception as e:
             logger.error(f"Error processing {context.task_type.value} task: {e}")
-            return create_error_result(f"Processing error: {str(e)}", "PROCESSING_ERROR")
+            return create_error_result(f"Processing error: {str(e)}", "PROCESSING_ERROR").to_dict()
+
+    def forward(self, context: CognitiveContext) -> Dict[str, Any]:
+        """
+        Enhanced forward method with OCPS integration and cache governance.
+        
+        Args:
+            context: CognitiveContext containing task information and agent state
+            
+        Returns:
+            Dict containing the cognitive processing result with enhanced metadata
+        """
+        # Use the enhanced process method
+        result = self.process(context)
+        
+        # Convert TaskResult to dict format for backward compatibility
+        # Case 1: real TaskResult object
+        if isinstance(result, TaskResult):
+            return result.to_dict()
+
+        # Case 2: dict already (shim from process)
+        if isinstance(result, dict):
+            # make sure keys exist
+            return {
+                "success": result.get("success", False),
+                "result": result.get("result") or result.get("payload", {}),
+                "payload": result.get("payload") or result.get("result", {}),
+                "task_type": result.get("task_type", context.task_type.value),
+                "metadata": result.get("metadata", {}),
+                "error": result.get("error"),
+            }
+
+        # Case 3: something unexpected
+        logger.warning(f"Unexpected result type in forward: {type(result)}")
+        return {
+            "success": False,
+            "result": {},
+            "payload": {},
+            "task_type": context.task_type.value,
+            "metadata": {},
+            "error": f"Unsupported result type {type(result)}",
+        }
+
+    def build_fragments_for_synthesis(self, context: CognitiveContext, facts: List[Fact], summary: str) -> List[Dict[str, Any]]:
+        """Build memory-synthesis fragments for Coordinator."""
+        return [
+            {"agent_id": context.agent_id},
+            {"knowledge_summary": summary},
+            {"top_facts": [f.to_dict() for f in facts[:5]]},
+            {"ocps_sufficiency": getattr(self, "last_sufficiency", {})},
+        ]
+
+    # ------------------------ Helper Methods ------------------------
+    def _generate_cache_key(self, task_type: CognitiveTaskType, agent_id: str, input_data: Dict[str, Any]) -> str:
+        """Generate hardened cache key with provider, model, and schema version."""
+        stable_hash = self._stable_hash(task_type, agent_id, input_data)
+        return f"cc:res:{task_type.value}:{self.model}:{self.llm_provider}:{self.schema_version}:{stable_hash}"
+
+    def _stable_hash(self, task_type: CognitiveTaskType, agent_id: str, input_data: Dict[str, Any]) -> str:
+        """Stable hash of inputs (drop obviously-ephemeral fields if present)."""
+        # Shallow sanitize to improve cache hit rate.
+        sanitized = dict(input_data)
+        # Drop ephemeral fields that shouldn't affect caching
+        for key in ["timestamp", "created_at", "updated_at", "id", "request_id"]:
+            sanitized.pop(key, None)
+        
+        # Create stable hash
+        content = f"{task_type.value}:{agent_id}:{json.dumps(sanitized, sort_keys=True)}"
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+    def _get_cached_result(self, cache_key: str, task_type: CognitiveTaskType, *, agent_id: str) -> Optional[Dict[str, Any]]:
+        """Get cached result with TTL check."""
+        if not self._mw_enabled:
+            return None
+        try:
+            # Get agent-specific cache
+            mw = self._mw(agent_id)
+            if not mw:
+                return None
+            
+            cached_data = mw.get_item(cache_key)  # Use sync method
+            if not cached_data:
+                return None
+            
+            # Check TTL
+            ttl = self.cache_ttl_by_task.get(task_type, 600)
+            cache_age = time.time() - cached_data.get("cached_at", 0)
+            if cache_age > ttl:
+                mw.del_global_key_sync(cache_key)  # Use explicit deletion
+                return None
+            
+            logger.info(f"Cache hit: {cache_key} (age: {cache_age:.1f}s)")
+            return cached_data["result"]  # Return the final dict directly
+            
+        except Exception as e:
+            logger.warning(f"Cache retrieval error: {e}")
+            return None
+
+    def _cache_result(self, cache_key: str, result: Dict[str, Any], task_type: CognitiveTaskType, *, agent_id: str):
+        """Cache result with metadata."""
+        if not self._mw_enabled:
+            return
+        
+        try:
+            mw = self._mw(agent_id)
+            if not mw:
+                return
+            
+            cache_data = {
+                "result": result,
+                "cached_at": time.time(),
+                "task_type": task_type.value,
+                "schema_version": self.schema_version
+            }
+            
+            mw.set(cache_key, cache_data)
+            logger.info(f"Cached result: {cache_key}")
+            
+        except Exception as e:
+            logger.warning(f"Cache storage error: {e}")
+
+    def _to_payload(self, raw) -> dict:
+        """Normalize any handler output into a dict."""
+        if raw is None:
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        # DSPy predictions often have toDict()
+        if hasattr(raw, "toDict") and callable(raw.toDict):
+            try:
+                result = raw.toDict()
+                if isinstance(result, dict):
+                    return result or {}
+            except Exception:
+                pass
+        # namedtuple
+        if hasattr(raw, "_asdict"):
+            try:
+                result = raw._asdict()
+                if isinstance(result, dict):
+                    return result or {}
+            except Exception:
+                pass
+        # Mock objects - extract attributes directly
+        if hasattr(raw, '_mock_name'):  # This is a Mock object
+            result = {}
+            for attr_name in dir(raw):
+                if not attr_name.startswith('_') and not callable(getattr(raw, attr_name)):
+                    try:
+                        value = getattr(raw, attr_name)
+                        if not hasattr(value, '_mock_name'):  # Not a nested Mock
+                            result[attr_name] = value
+                    except Exception:
+                        pass
+            return result
+        # generic object with attributes
+        if hasattr(raw, "__dict__"):
+            return {k: v for k, v in vars(raw).items() if not k.startswith("_")}
+        # fallback
+        return {"value": raw}
+
+    def _normalize_failure_analysis(self, payload: dict) -> dict:
+        """Normalize failure analysis specific fields."""
+        if "confidence_score" in payload:
+            try:
+                payload["confidence_score"] = float(payload["confidence_score"])
+            except Exception:
+                pass
+        return payload
+
+    def _check_post_conditions(self, result: Dict[str, Any], task_type: CognitiveTaskType) -> Tuple[bool, List[str]]:
+        """Check post-conditions for DSPy outputs to ensure policy compliance."""
+        violations = []
+        
+        # Check confidence score bounds
+        if "confidence_score" in result:
+            conf = result["confidence_score"]
+            if isinstance(conf, str):
+                try:
+                    conf = float(conf)
+                except ValueError:
+                    conf = 0.0
+            if not (0.0 <= conf <= 1.0):
+                violations.append(f"Confidence score {conf} out of bounds [0.0, 1.0]")
+        
+        # Check for PII patterns
+        text_fields = ["thought", "proposed_solution", "reasoning", "decision", "solution_approach"]
+        for field in text_fields:
+            if field in result and isinstance(result[field], str):
+                text = result[field].lower()
+                # Simple PII detection
+                if any(pattern in text for pattern in ["ssn", "social security", "credit card", "password"]):
+                    violations.append(f"Potential PII detected in {field}")
+        
+        # Check for executable content
+        for field in text_fields:
+            if field in result and isinstance(result[field], str):
+                text = result[field]
+                if re.search(r'```[\s\S]*?```', text) or re.search(r'`[^`]+`', text):
+                    violations.append(f"Code blocks detected in {field}")
+        
+        # Check numeric ranges for specific fields
+        if task_type == CognitiveTaskType.TASK_PLANNING and "estimated_complexity" in result:
+            try:
+                complexity = float(result["estimated_complexity"])
+                if not (1.0 <= complexity <= 10.0):
+                    violations.append(f"Complexity score {complexity} out of bounds [1.0, 10.0]")
+            except (ValueError, TypeError):
+                violations.append("Invalid complexity score format")
+        
+        return len(violations) == 0, violations
+
+    def _should_escalate_to_deep_path(self, sufficiency: RetrievalSufficiency, task_type: CognitiveTaskType) -> bool:
+        """Determine if task should be escalated to deep path based on retrieval sufficiency."""
+        if not self.ocps_client:
+            return False
+        
+        # Escalation criteria
+        low_coverage = sufficiency.coverage < 0.6
+        low_diversity = sufficiency.diversity < 0.5
+        high_conflict = sufficiency.conflict_count > 2
+        high_staleness = sufficiency.staleness_ratio > 0.3
+        low_trust = sufficiency.trust_score < 0.4
+        
+        # Complex tasks more likely to escalate
+        complex_tasks = {CognitiveTaskType.TASK_PLANNING, CognitiveTaskType.PROBLEM_SOLVING, CognitiveTaskType.MEMORY_SYNTHESIS}
+        is_complex = task_type in complex_tasks
+        
+        # Escalate if multiple conditions met
+        escalation_score = sum([
+            low_coverage, low_diversity, high_conflict, high_staleness, low_trust
+        ])
+        
+        should_escalate = (escalation_score >= 2) or (is_complex and escalation_score >= 1)
+        
+        if should_escalate:
+            logger.info(f"Suggesting escalation for {task_type.value}: coverage={sufficiency.coverage:.2f}, "
+                       f"diversity={sufficiency.diversity:.2f}, conflicts={sufficiency.conflict_count}")
+        
+        return should_escalate
 
     def _build_query(self, context: CognitiveContext) -> str:
         """Build search query from context."""
@@ -1138,58 +1117,6 @@ class CognitiveCore(dspy.Module):
                 "sanitized": True
             }
         }
-
-    def _get_cached_result(self, cache_key: str, task_type: CognitiveTaskType, *, agent_id: str) -> Optional[Dict[str, Any]]:
-        """Get cached result with TTL check."""
-        if not self._mw_enabled:
-            return None
-        
-        try:
-            # Get agent-specific cache
-            mw = self._mw(agent_id)
-            if not mw:
-                return None
-            
-            cached_data = mw.get_item(cache_key)  # Use sync method
-            if not cached_data:
-                return None
-            
-            # Check TTL
-            ttl = self.cache_ttl_by_task.get(task_type, 600)
-            cache_age = time.time() - cached_data.get("cached_at", 0)
-            if cache_age > ttl:
-                mw.del_global_key_sync(cache_key)  # Use explicit deletion
-                return None
-            
-            logger.info(f"Cache hit: {cache_key} (age: {cache_age:.1f}s)")
-            return cached_data["result"]  # Return the final dict directly
-            
-        except Exception as e:
-            logger.warning(f"Cache retrieval error: {e}")
-            return None
-
-    def _cache_result(self, cache_key: str, result: Dict[str, Any], task_type: CognitiveTaskType, *, agent_id: str):
-        """Cache result with metadata."""
-        if not self._mw_enabled:
-            return
-        
-        try:
-            mw = self._mw(agent_id)
-            if not mw:
-                return
-            
-            cache_data = {
-                "result": result,
-                "cached_at": time.time(),
-                "task_type": task_type.value,
-                "schema_version": self.schema_version
-            }
-            
-            mw.set(cache_key, cache_data)
-            logger.info(f"Cached result: {cache_key}")
-            
-        except Exception as e:
-            logger.warning(f"Cache storage error: {e}")
 
     def _mw(self, agent_id: str) -> Optional[MwManager]:
         """Get or create MwManager for agent."""
@@ -1268,366 +1195,6 @@ class CognitiveCore(dspy.Module):
                     pass
         return mlt_hits
 
-    def build_fragments_for_synthesis(self, context: CognitiveContext, facts: List[Fact], summary: str) -> List[Dict[str, Any]]:
-        """Build memory-synthesis fragments for Coordinator."""
-        return [
-            {"agent_id": context.agent_id},
-            {"knowledge_summary": summary},
-            {"top_facts": [f.to_dict() for f in facts[:5]]},
-            {"ocps_sufficiency": getattr(self, "last_sufficiency", {})},
-        ]
-    
-    def forward(self, context: CognitiveContext) -> Dict[str, Any]:
-        """
-        Enhanced forward method with OCPS integration and cache governance.
-        
-        Args:
-            context: CognitiveContext containing task information and agent state
-            
-        Returns:
-            Dict containing the cognitive processing result with enhanced metadata
-        """
-        # Use the enhanced process method
-        result = self.process(context)
-        
-        # Convert TaskResult to dict format for backward compatibility
-        # Case 1: real TaskResult object
-        if isinstance(result, TaskResult):
-            return result.to_dict()
-
-        # Case 2: dict already (shim from process)
-        if isinstance(result, dict):
-            # make sure keys exist
-            return {
-                "success": result.get("success", False),
-                "result": result.get("result") or result.get("payload", {}),
-                "payload": result.get("payload") or result.get("result", {}),
-                "task_type": result.get("task_type", context.task_type.value),
-                "metadata": result.get("metadata", {}),
-                "error": result.get("error"),
-            }
-
-        # Case 3: something unexpected
-        logger.warning(f"Unexpected result type in forward: {type(result)}")
-        return {
-            "success": False,
-            "result": {},
-            "payload": {},
-            "task_type": context.task_type.value,
-            "metadata": {},
-            "error": f"Unsupported result type {type(result)}",
-        }
-
-    # =============================================================================
-    # New Task Handlers for Migration 007+ Support
-    # =============================================================================
-    
-    def _handle_graph_embed(self, **kwargs) -> Dict[str, Any]:
-        """Propose graph embedding step."""
-        start_node_ids = kwargs.get("start_node_ids", [])
-        k = kwargs.get("k", 2)
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "graph_embed",
-                "domain": self._norm_domain("graph"),
-                "params": {
-                    "start_node_ids": start_node_ids,
-                    "k": k,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
-    def _handle_graph_rag_query(self, **kwargs) -> Dict[str, Any]:
-        """Propose graph RAG query step."""
-        start_node_ids = kwargs.get("start_node_ids", [])
-        k = kwargs.get("k", 2)
-        topk = kwargs.get("topk", 10)
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "graph_rag_query",
-                "domain": self._norm_domain("graph"),
-                "params": {
-                    "start_node_ids": start_node_ids,
-                    "k": k,
-                    "topk": topk,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
-    def _handle_graph_embed_v2(self, **kwargs) -> Dict[str, Any]:
-        """Propose enhanced graph embedding step."""
-        start_node_ids = kwargs.get("start_node_ids", [])
-        k = kwargs.get("k", 2)
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "graph_embed_v2",
-                "domain": self._norm_domain("graph"),
-                "params": {
-                    "start_node_ids": start_node_ids,
-                    "k": k,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.9
-        }
-    
-    def _handle_graph_rag_query_v2(self, **kwargs) -> Dict[str, Any]:
-        """Propose enhanced graph RAG query step."""
-        start_node_ids = kwargs.get("start_node_ids", [])
-        k = kwargs.get("k", 2)
-        topk = kwargs.get("topk", 10)
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "graph_rag_query_v2",
-                "domain": self._norm_domain("graph"),
-                "params": {
-                    "start_node_ids": start_node_ids,
-                    "k": k,
-                    "topk": topk,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.9
-        }
-    
-    def _handle_graph_sync_nodes(self, **kwargs) -> Dict[str, Any]:
-        """Propose graph node synchronization step."""
-        node_ids = kwargs.get("node_ids", [])
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "graph_sync_nodes",
-                "domain": self._norm_domain("graph"),
-                "params": {
-                    "node_ids": node_ids,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.7
-        }
-    
-    def _handle_graph_fact_embed(self, **kwargs) -> Dict[str, Any]:
-        """Propose fact embedding step."""
-        start_fact_ids = kwargs.get("start_fact_ids", [])
-        k = kwargs.get("k", 2)
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "graph_fact_embed",
-                "domain": self._norm_domain("facts"),
-                "params": {
-                    "start_fact_ids": start_fact_ids,
-                    "k": k,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
-    def _handle_graph_fact_query(self, **kwargs) -> Dict[str, Any]:
-        """Propose fact query step."""
-        start_fact_ids = kwargs.get("start_fact_ids", [])
-        k = kwargs.get("k", 2)
-        topk = kwargs.get("topk", 10)
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "graph_fact_query",
-                "domain": self._norm_domain("facts"),
-                "params": {
-                    "start_fact_ids": start_fact_ids,
-                    "k": k,
-                    "topk": topk,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
-    def _handle_fact_search(self, **kwargs) -> Dict[str, Any]:
-        """Propose fact search step."""
-        query = kwargs.get("query", "")
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "fact_search",
-                "domain": self._norm_domain("facts"),
-                "params": {
-                    "query": query,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
-    def _handle_fact_store(self, **kwargs) -> Dict[str, Any]:
-        """Propose fact storage step."""
-        text = kwargs.get("text", "")
-        tags = kwargs.get("tags", [])
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "fact_store",
-                "domain": self._norm_domain("facts"),
-                "params": {
-                    "text": text,
-                    "tags": tags,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.9
-        }
-    
-    def _handle_artifact_manage(self, **kwargs) -> Dict[str, Any]:
-        """Propose artifact management step."""
-        action = kwargs.get("action", "")
-        uri = kwargs.get("uri", "")
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "artifact_manage",
-                "domain": self._norm_domain("management"),
-                "params": {
-                    "action": action,
-                    "uri": uri,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
-    def _handle_capability_manage(self, **kwargs) -> Dict[str, Any]:
-        """Propose capability management step."""
-        action = kwargs.get("action", "")
-        name = kwargs.get("name", "")
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "capability_manage",
-                "domain": self._norm_domain("management"),
-                "params": {
-                    "action": action,
-                    "name": name,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
-    def _handle_memory_cell_manage(self, **kwargs) -> Dict[str, Any]:
-        """Propose memory cell management step."""
-        action = kwargs.get("action", "")
-        cell_id = kwargs.get("cell_id", "")
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "memory_cell_manage",
-                "domain": self._norm_domain("management"),
-                "params": {
-                    "action": action,
-                    "cell_id": cell_id,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
-    def _handle_model_manage(self, **kwargs) -> Dict[str, Any]:
-        """Propose model management step."""
-        action = kwargs.get("action", "")
-        name = kwargs.get("name", "")
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "model_manage",
-                "domain": self._norm_domain("management"),
-                "params": {
-                    "action": action,
-                    "name": name,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
-    def _handle_policy_manage(self, **kwargs) -> Dict[str, Any]:
-        """Propose policy management step."""
-        action = kwargs.get("action", "")
-        policy_id = kwargs.get("policy_id", "")
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "policy_manage",
-                "domain": self._norm_domain("management"),
-                "params": {
-                    "action": action,
-                    "policy_id": policy_id,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
-    def _handle_service_manage(self, **kwargs) -> Dict[str, Any]:
-        """Propose service management step."""
-        action = kwargs.get("action", "")
-        service_id = kwargs.get("service_id", "")
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "service_manage",
-                "domain": self._norm_domain("management"),
-                "params": {
-                    "action": action,
-                    "service_id": service_id,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
-    def _handle_skill_manage(self, **kwargs) -> Dict[str, Any]:
-        """Propose skill management step."""
-        action = kwargs.get("action", "")
-        skill_id = kwargs.get("skill_id", "")
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        
-        return {
-            "task": {
-                "type": "skill_manage",
-                "domain": self._norm_domain("management"),
-                "params": {
-                    "action": action,
-                    "skill_id": skill_id,
-                    "knowledge_context": knowledge_context
-                }
-            },
-            "confidence_score": 0.8
-        }
-    
     def _create_plan_from_steps(self, steps: List[Dict[str, Any]], escalate_hint: bool = False, 
                                sufficiency: Optional[Dict[str, Any]] = None, 
                                confidence: Optional[float] = None) -> Dict[str, Any]:
@@ -1674,6 +1241,104 @@ class CognitiveCore(dspy.Module):
         if '"resolve-route"' in result_str or '"resolve-routes"' in result_str:
             raise ValueError("Cognitive must not call routing APIs")
 
+    # ------------------------ Non-DSPy task handlers ------------------------
+    def _handle_graph_embed(self, **kwargs) -> Dict[str, Any]:
+        start_node_ids = kwargs.get("start_node_ids", [])
+        k = kwargs.get("k", 2)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "graph_embed", "domain": self._norm_domain("graph"), "params": {"start_node_ids": start_node_ids, "k": k, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
+    def _handle_graph_rag_query(self, **kwargs) -> Dict[str, Any]:
+        start_node_ids = kwargs.get("start_node_ids", [])
+        k = kwargs.get("k", 2)
+        topk = kwargs.get("topk", 10)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "graph_rag_query", "domain": self._norm_domain("graph"), "params": {"start_node_ids": start_node_ids, "k": k, "topk": topk, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
+    def _handle_graph_embed_v2(self, **kwargs) -> Dict[str, Any]:
+        start_node_ids = kwargs.get("start_node_ids", [])
+        k = kwargs.get("k", 2)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "graph_embed_v2", "domain": self._norm_domain("graph"), "params": {"start_node_ids": start_node_ids, "k": k, "knowledge_context": knowledge_context}}, "confidence_score": 0.9}
+
+    def _handle_graph_rag_query_v2(self, **kwargs) -> Dict[str, Any]:
+        start_node_ids = kwargs.get("start_node_ids", [])
+        k = kwargs.get("k", 2)
+        topk = kwargs.get("topk", 10)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "graph_rag_query_v2", "domain": self._norm_domain("graph"), "params": {"start_node_ids": start_node_ids, "k": k, "topk": topk, "knowledge_context": knowledge_context}}, "confidence_score": 0.9}
+
+    def _handle_graph_sync_nodes(self, **kwargs) -> Dict[str, Any]:
+        node_ids = kwargs.get("node_ids", [])
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "graph_sync_nodes", "domain": self._norm_domain("graph"), "params": {"node_ids": node_ids, "knowledge_context": knowledge_context}}, "confidence_score": 0.7}
+
+    def _handle_graph_fact_embed(self, **kwargs) -> Dict[str, Any]:
+        start_fact_ids = kwargs.get("start_fact_ids", [])
+        k = kwargs.get("k", 2)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "graph_fact_embed", "domain": self._norm_domain("facts"), "params": {"start_fact_ids": start_fact_ids, "k": k, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
+    def _handle_graph_fact_query(self, **kwargs) -> Dict[str, Any]:
+        start_fact_ids = kwargs.get("start_fact_ids", [])
+        k = kwargs.get("k", 2)
+        topk = kwargs.get("topk", 10)
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "graph_fact_query", "domain": self._norm_domain("facts"), "params": {"start_fact_ids": start_fact_ids, "k": k, "topk": topk, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
+    def _handle_fact_search(self, **kwargs) -> Dict[str, Any]:
+        query = kwargs.get("query", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "fact_search", "domain": self._norm_domain("facts"), "params": {"query": query, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
+    def _handle_fact_store(self, **kwargs) -> Dict[str, Any]:
+        text = kwargs.get("text", "")
+        tags = kwargs.get("tags", [])
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "fact_store", "domain": self._norm_domain("facts"), "params": {"text": text, "tags": tags, "knowledge_context": knowledge_context}}, "confidence_score": 0.9}
+
+    def _handle_artifact_manage(self, **kwargs) -> Dict[str, Any]:
+        action = kwargs.get("action", "")
+        uri = kwargs.get("uri", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "artifact_manage", "domain": self._norm_domain("management"), "params": {"action": action, "uri": uri, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
+    def _handle_capability_manage(self, **kwargs) -> Dict[str, Any]:
+        action = kwargs.get("action", "")
+        name = kwargs.get("name", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "capability_manage", "domain": self._norm_domain("management"), "params": {"action": action, "name": name, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
+    def _handle_memory_cell_manage(self, **kwargs) -> Dict[str, Any]:
+        action = kwargs.get("action", "")
+        cell_id = kwargs.get("cell_id", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "memory_cell_manage", "domain": self._norm_domain("management"), "params": {"action": action, "cell_id": cell_id, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
+    def _handle_model_manage(self, **kwargs) -> Dict[str, Any]:
+        action = kwargs.get("action", "")
+        name = kwargs.get("name", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "model_manage", "domain": self._norm_domain("management"), "params": {"action": action, "name": name, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
+    def _handle_policy_manage(self, **kwargs) -> Dict[str, Any]:
+        action = kwargs.get("action", "")
+        policy_id = kwargs.get("policy_id", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "policy_manage", "domain": self._norm_domain("management"), "params": {"action": action, "policy_id": policy_id, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
+    def _handle_service_manage(self, **kwargs) -> Dict[str, Any]:
+        action = kwargs.get("action", "")
+        service_id = kwargs.get("service_id", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "service_manage", "domain": self._norm_domain("management"), "params": {"action": action, "service_id": service_id, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
+    def _handle_skill_manage(self, **kwargs) -> Dict[str, Any]:
+        action = kwargs.get("action", "")
+        skill_id = kwargs.get("skill_id", "")
+        knowledge_context = kwargs.get("knowledge_context", "{}")
+        return {"task": {"type": "skill_manage", "domain": self._norm_domain("management"), "params": {"action": action, "skill_id": skill_id, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+
 
 # =============================================================================
 # Global Cognitive Core Instance Management
@@ -1682,7 +1347,7 @@ class CognitiveCore(dspy.Module):
 COGNITIVE_CORE_INSTANCE: Optional[CognitiveCore] = None
 
 
-def initialize_cognitive_core(llm_provider: str = "openai", model: str = "gpt-4o", context_broker: Optional[ContextBroker] = None) -> CognitiveCore:
+def initialize_cognitive_core(llm_provider: str = "openai", model: str = "gpt-4o", context_broker: Optional[ContextBroker] = None, ocps_client=None) -> CognitiveCore:
     """Initialize the global cognitive core instance."""
     global COGNITIVE_CORE_INSTANCE
     
@@ -1696,7 +1361,7 @@ def initialize_cognitive_core(llm_provider: str = "openai", model: str = "gpt-4o
                 raise ValueError(f"Unsupported LLM provider: {llm_provider}")
             
             dspy.settings.configure(lm=llm)
-            COGNITIVE_CORE_INSTANCE = CognitiveCore(llm_provider, model, context_broker)
+            COGNITIVE_CORE_INSTANCE = CognitiveCore(llm_provider, model, context_broker, ocps_client=ocps_client)
             logger.info(f"Initialized global cognitive core with {llm_provider} and {model}")
             
         except Exception as e:

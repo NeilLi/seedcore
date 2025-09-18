@@ -30,12 +30,14 @@ logger = logging.getLogger("seedcore.CognitiveCore")
 
 from seedcore.utils.ray_utils import ensure_ray_initialized
 
-# Import cognitive core components
+# Import cognitive service components
+from seedcore.services.cognitive_service import (
+    CognitiveService,
+    initialize_cognitive_service,
+)
 from seedcore.agents.cognitive_core import (
-    CognitiveCore,
     CognitiveContext,
     CognitiveTaskType,
-    initialize_cognitive_core,
 )
 
 # --- Configuration ---
@@ -85,22 +87,22 @@ logger = logging.getLogger(__name__)
     },
 )
 @serve.ingress(app)
-class CognitiveService:
+class CognitiveServeService:
     def __init__(self):
         # This is the core of the pattern:
-        # Initialize the cognitive_core ONCE when the replica is created.
-        # The model is now "warm" and ready for fast inference.
-        print("🚀 Initializing warm cognitive_core for new replica...")
-        self.cognitive_core: CognitiveCore = initialize_cognitive_core()
-        print("✅ Cognitive_core is warm and ready.")
+        # Initialize the cognitive_service ONCE when the replica is created.
+        # The service is now "warm" and ready for fast inference.
+        print("🚀 Initializing warm cognitive_service for new replica...")
+        self.cognitive_service: CognitiveService = initialize_cognitive_service()
+        print("✅ Cognitive_service is warm and ready.")
 
     # --- All API endpoints are now methods of this class ---
 
     @app.get("/health")
     async def health(self):
         """Health check endpoint."""
-        return {
-            "status": "healthy", 
+        health_status = self.cognitive_service.health_check()
+        health_status.update({
             "service": "cognitive-warm-replica",
             "route_prefix": "/cognitive",
             "ray_namespace": RAY_NS,
@@ -117,7 +119,8 @@ class CognitiveService:
                     "/assess-capabilities"
                 ]
             }
-        }
+        })
+        return health_status
 
     @app.get("/")
     async def root(self):
@@ -176,8 +179,8 @@ class CognitiveService:
                 task_type=CognitiveTaskType.FAILURE_ANALYSIS,
                 input_data=input_data
             )
-            logger.info(f"Created cognitive context for agent {request.agent_id}, calling cognitive_core")
-            result = self.cognitive_core(context)
+            logger.info(f"Created cognitive context for agent {request.agent_id}, calling cognitive_service")
+            result = self.cognitive_service.forward_cognitive_task(context)
             processing_time = time.time() - start_time
             logger.info(f"Completed reason-about-failure for agent {request.agent_id} in {processing_time:.2f}s")
             return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)
@@ -207,7 +210,7 @@ class CognitiveService:
                     "available_resources": request.available_tools or {}
                 }
             )
-            result = self.cognitive_core(context)
+            result = self.cognitive_service.forward_cognitive_task(context)
             return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)
         except Exception as e:
             return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
@@ -239,8 +242,8 @@ class CognitiveService:
                 task_type=CognitiveTaskType.DECISION_MAKING,
                 input_data=input_data
             )
-            logger.info(f"Created cognitive context for agent {request.agent_id}, calling cognitive_core")
-            result = self.cognitive_core(context)
+            logger.info(f"Created cognitive context for agent {request.agent_id}, calling cognitive_service")
+            result = self.cognitive_service.forward_cognitive_task(context)
             processing_time = time.time() - start_time
             logger.info(f"Completed make-decision for agent {request.agent_id} in {processing_time:.2f}s")
             return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)
@@ -287,7 +290,7 @@ class CognitiveService:
                     "available_tools": available_tools or {}
                 }
             )
-            result = self.cognitive_core(context)
+            result = self.cognitive_service.forward_cognitive_task(context)
             return CognitiveResponse(success=True, agent_id=agent_id, result=result)
         except Exception as e:
             return CognitiveResponse(success=False, agent_id=agent_id, result={}, error=str(e))
@@ -316,7 +319,7 @@ class CognitiveService:
                     "synthesis_goal": request.synthesis_goal
                 }
             )
-            result = self.cognitive_core(context)
+            result = self.cognitive_service.forward_cognitive_task(context)
             return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)
         except Exception as e:
             return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
@@ -333,7 +336,7 @@ class CognitiveService:
                     "target_capabilities": request.target_capabilities or {}
                 }
             )
-            result = self.cognitive_core(context)
+            result = self.cognitive_service.forward_cognitive_task(context)
             return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)
         except Exception as e:
             return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
@@ -341,7 +344,7 @@ class CognitiveService:
 
 # --- Main Entrypoint ---
 # At module level so Ray Serve YAML can import directly
-cognitive_app = CognitiveService.bind()
+cognitive_app = CognitiveServeService.bind()
 
 def build_cognitive_app(args: dict = None):
     """
@@ -356,7 +359,7 @@ def build_cognitive_app(args: dict = None):
     Returns:
         Bound Serve application
     """
-    return CognitiveService.bind()
+    return CognitiveServeService.bind()
 
 def main():
     print("🚀 Starting deployment driver for Cognitive Service...")
