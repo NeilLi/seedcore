@@ -1,347 +1,249 @@
-# Copyright 2024 SeedCore Contributors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the Apache License, Version 2.0 (the "License");
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
+#!/usr/bin/env python3
 """
-Organism Serve Client for SeedCore
+Organism Service Client for SeedCore (Updated)
 
-This module provides a client interface to communicate with the organism
-deployed as a Ray Serve application, replacing the old plain Ray actor approach.
-
-The client handles:
-- HTTP requests to the organism Serve endpoints
-- Fallback to direct Serve handle calls when possible
-- Proper error handling and retries
-- Integration with existing task processing workflows
+This client provides a clean interface to the deployed organism service
+using the new base client architecture.
 """
 
-import os
 import logging
-import time
-import asyncio
-from typing import Dict, Any, Optional, Union
-import requests
-from urllib.parse import urljoin
-
-import ray
-from ray import serve
+from typing import Dict, Any, Optional, List
+from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
 
 logger = logging.getLogger(__name__)
 
-class OrganismServeClient:
+class OrganismServiceClient(BaseServiceClient):
     """
-    Client for communicating with the organism deployed as a Ray Serve application.
-    
-    This replaces the old plain Ray actor approach and provides:
-    - HTTP endpoint access for external clients
-    - Direct Serve handle access for internal Ray operations
-    - Proper error handling and health checking
-    - Fallback mechanisms for reliability
+    Client for the deployed organism service that handles:
+    - Task execution
+    - Organ management
+    - Decision making
+    - Task planning
+    - Organism status monitoring
     """
     
     def __init__(self, 
-                 base_url: str = None,
-                 serve_app_name: str = "organism",
-                 namespace: str = None):
+                 base_url: str = None, 
+                 timeout: float = 10.0):
+        # Use centralized gateway discovery
+        if base_url is None:
+            try:
+                from seedcore.utils.ray_utils import SERVE_GATEWAY
+                base_url = f"{SERVE_GATEWAY}/organism"
+            except Exception:
+                base_url = "http://127.0.0.1:8000/organism"
+        
+        # Configure circuit breaker for organism service
+        circuit_breaker = CircuitBreaker(
+            failure_threshold=5,
+            recovery_timeout=30.0,
+            expected_exception=(Exception,)  # Catch all exceptions
+        )
+        
+        # Configure retry for organism service
+        retry_config = RetryConfig(
+            max_attempts=2,
+            base_delay=1.0,
+            max_delay=5.0
+        )
+        
+        super().__init__(
+            service_name="organism_service",
+            base_url=base_url,
+            timeout=timeout,
+            circuit_breaker=circuit_breaker,
+            retry_config=retry_config
+        )
+    
+    # Task Execution
+    async def execute_on_organ(self, 
+                             organ_name: str,
+                             task: Dict[str, Any],
+                             app_state: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Initialize the organism serve client.
+        Execute a task on a specific organ.
         
         Args:
-            base_url: Base URL for HTTP endpoints (e.g., "http://localhost:8000")
-            serve_app_name: Name of the Serve application
-            namespace: Ray namespace for direct Serve handle access
-        """
-        self.base_url = base_url or os.getenv("ORGANISM_BASE_URL", "http://localhost:8000")
-        self.serve_app_name = serve_app_name
-        self.namespace = namespace or os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
-        
-        # Health check endpoint
-        self.health_url = urljoin(self.base_url, f"/{serve_app_name}/health")
-        
-        # Task handling endpoint
-        self.handle_task_url = urljoin(self.base_url, f"/{serve_app_name}/handle-task")
-        
-        # Status endpoints
-        self.status_url = urljoin(self.base_url, f"/{serve_app_name}/status")
-        self.organism_status_url = urljoin(self.base_url, f"/{serve_app_name}/organism-status")
-        self.organism_summary_url = urljoin(self.base_url, f"/{serve_app_name}/organism-summary")
-        
-        # Serve handle for direct access (when available)
-        self._serve_handle = None
-        self._serve_handle_available = False
-        
-        # Initialize Serve handle if possible
-        self._init_serve_handle()
-    
-    def _init_serve_handle(self):
-        """Initialize the Serve handle for direct access if possible."""
-        try:
-            # Try to get the Serve handle
-            self._serve_handle = serve.get_app_handle(self.serve_app_name)
-            self._serve_handle_available = True
-            logger.info(f"✅ Serve handle available for {self.serve_app_name}")
-        except Exception as e:
-            logger.warning(f"⚠️ Serve handle not available: {e}")
-            self._serve_handle_available = False
-            self._serve_handle = None
-    
-    async def health_check(self) -> Dict[str, Any]:
-        """
-        Check the health of the organism service.
-        
-        Returns:
-            Health status dictionary
-        """
-        try:
-            response = requests.get(self.health_url, timeout=5.0)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"❌ Health check failed: {e}")
-            return {
-                "status": "unhealthy",
-                "error": str(e),
-                "organism_initialized": False
-            }
-    
-    async def get_status(self) -> Dict[str, Any]:
-        """
-        Get the detailed status of the organism service.
-        
-        Returns:
-            Status dictionary
-        """
-        try:
-            response = requests.get(self.status_url, timeout=5.0)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"❌ Status check failed: {e}")
-            return {
-                "status": "unhealthy",
-                "error": str(e),
-                "organism_initialized": False
-            }
-    
-    async def handle_incoming_task(self, 
-                                 task: Dict[str, Any], 
-                                 app_state: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Handle an incoming task through the organism service.
-        
-        This is the main method that replaces the old plain Ray actor task handling.
-        
-        Args:
-            task: Task dictionary with type, params, description, domain, drift_score
+            organ_name: Name of the organ
+            task: Task to execute
             app_state: Optional application state
             
         Returns:
-            Task result dictionary
+            Task execution result
         """
-        task_id = task.get('id', 'unknown')
-        logger.info(f"[OrganismServeClient] 🎯 Received task {task_id} for processing")
-        logger.info(f"[OrganismServeClient] 📋 Task details: type={task.get('type')}, domain={task.get('domain')}")
-        
-        # Try Serve handle first (faster, internal)
-        if self._serve_handle_available and self._serve_handle:
-            try:
-                logger.info(f"[OrganismServeClient] 🔄 Using Serve handle for task {task_id}")
-                result = await self._serve_handle.handle_incoming_task.remote(task, app_state)
-                logger.info(f"[OrganismServeClient] ✅ Serve handle completed for task {task_id}: success={result.get('success')}")
-                return result
-            except Exception as e:
-                logger.warning(f"[OrganismServeClient] ⚠️ Serve handle failed for task {task_id}, falling back to HTTP: {e}")
-                self._serve_handle_available = False
-        
-        # Fallback to HTTP endpoint
-        try:
-            logger.debug("🌐 Using HTTP endpoint for task handling")
-            payload = {
-                "task_type": task.get("type", ""),
-                "params": task.get("params", {}),
-                "description": task.get("description", ""),
-                "domain": task.get("domain", "general"),
-                "drift_score": task.get("drift_score", 0.0),
-                "app_state": app_state or {}
-            }
-            
-            response = requests.post(self.handle_task_url, json=payload, timeout=30.0)
-            response.raise_for_status()
-            result = response.json()
-            
-            # Check if the result indicates success
-            if not result.get("success", True):
-                logger.error(f"❌ Task handling failed: {result.get('error', 'Unknown error')}")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ HTTP task handling failed: {e}")
-            return {
-                "success": False,
-                "error": f"Task handling failed: {str(e)}",
-                "task_type": task.get("type", "unknown")
-            }
+        request_data = {
+            "organ_name": organ_name,
+            "task": task,
+            "app_state": app_state or {}
+        }
+        return await self.post("/execute-on-organ", json=request_data)
     
+    async def handle_task(self, 
+                         task: Dict[str, Any],
+                         app_state: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Handle a task through the organism service.
+        
+        Args:
+            task: Task to handle
+            app_state: Optional application state
+            
+        Returns:
+            Task handling result
+        """
+        request_data = {
+            "task": task,
+            "app_state": app_state or {}
+        }
+        return await self.post("/handle-task", json=request_data)
+    
+    # Decision Making
     async def make_decision(self, 
-                           task: Dict[str, Any], 
-                           app_state: Dict[str, Any] = None) -> Dict[str, Any]:
+                          task: Dict[str, Any],
+                          app_state: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Make a decision through the organism service.
         
         Args:
-            task: Task dictionary
+            task: Task for decision making
             app_state: Optional application state
             
         Returns:
-            Decision result dictionary
+            Decision result
         """
-        # Try Serve handle first
-        if self._serve_handle_available and self._serve_handle:
-            try:
-                result = await self._serve_handle.make_decision.remote(task, app_state)
-                return result
-            except Exception as e:
-                logger.warning(f"⚠️ Serve handle failed for decision: {e}")
-        
-        # Fallback: use handle_incoming_task with decision task type
-        decision_task = {
-            "type": "make_decision",
-            "params": task,
-            "description": "Decision making request",
-            "domain": "decision",
-            "drift_score": 0.0
+        request_data = {
+            "task": task,
+            "app_state": app_state or {}
         }
-        return await self.handle_incoming_task(decision_task, app_state)
+        return await self.post("/make-decision", json=request_data)
     
+    # Task Planning
     async def plan_task(self, 
-                       task: Dict[str, Any], 
+                       task: Dict[str, Any],
                        app_state: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Plan a task through the organism service.
         
         Args:
-            task: Task dictionary
+            task: Task to plan
             app_state: Optional application state
             
         Returns:
-            Planning result dictionary
+            Task planning result
         """
-        # Try Serve handle first
-        if self._serve_handle_available and self._serve_handle:
-            try:
-                result = await self._serve_handle.plan_task.remote(task, app_state)
-                return result
-            except Exception as e:
-                logger.warning(f"⚠️ Serve handle failed for planning: {e}")
-        
-        # Fallback: use handle_incoming_task with planning task type
-        planning_task = {
-            "type": "plan_task",
-            "params": task,
-            "description": "Task planning request",
-            "domain": "planning",
-            "drift_score": 0.0
+        request_data = {
+            "task": task,
+            "app_state": app_state or {}
         }
-        return await self.handle_incoming_task(planning_task, app_state)
+        return await self.post("/plan-task", json=request_data)
     
-    async def get_organism_status(self) -> Dict[str, Any]:
+    # Organ Management
+    async def get_organ_status(self, organ_name: str = None) -> Dict[str, Any]:
         """
-        Get detailed status of all organs in the organism.
-        
-        Returns:
-            Organism status dictionary
-        """
-        try:
-            response = requests.get(self.organism_status_url, timeout=5.0)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"❌ Organism status check failed: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def get_organism_summary(self) -> Dict[str, Any]:
-        """
-        Get a summary of the organism's current state.
-        
-        Returns:
-            Organism summary dictionary
-        """
-        try:
-            response = requests.get(self.organism_summary_url, timeout=5.0)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"❌ Organism summary check failed: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def wait_for_ready(self, timeout: float = 60.0) -> bool:
-        """
-        Wait for the organism service to be ready.
+        Get status of a specific organ or all organs.
         
         Args:
-            timeout: Maximum time to wait in seconds
+            organ_name: Optional organ name
             
         Returns:
-            True if ready, False if timeout
+            Organ status information
         """
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            try:
-                status = await self.get_status()
-                if status.get("status") == "healthy" and status.get("organism_initialized"):
-                    logger.info("✅ Organism service is ready")
-                    return True
-                elif status.get("status") == "initializing":
-                    logger.info("⏳ Organism service still initializing, waiting...")
-                    await asyncio.sleep(2)
-                else:
-                    logger.warning(f"⚠️ Organism service status: {status}")
-                    await asyncio.sleep(2)
-            except Exception as e:
-                logger.warning(f"⚠️ Waiting for organism service: {e}")
-                await asyncio.sleep(2)
-        
-        logger.error(f"❌ Organism service not ready after {timeout} seconds")
-        return False
+        if organ_name:
+            return await self.get(f"/organs/{organ_name}")
+        else:
+            return await self.get("/organs")
     
-    def is_available(self) -> bool:
+    async def get_organ_capabilities(self, organ_name: str) -> Dict[str, Any]:
         """
-        Check if the organism service is available.
+        Get capabilities of a specific organ.
         
+        Args:
+            organ_name: Name of the organ
+            
         Returns:
-            True if available, False otherwise
+            Organ capabilities
         """
-        try:
-            # Quick health check
-            response = requests.get(self.health_url, timeout=2.0)
-            return response.status_code == 200
-        except:
-            return False
-
-
-# Global instance for backward compatibility
-organism_client: Optional[OrganismServeClient] = None
-
-def get_organism_client() -> OrganismServeClient:
-    """
-    Get the global organism client instance.
+        return await self.get(f"/organs/{organ_name}/capabilities")
     
-    Returns:
-        OrganismServeClient instance
-    """
-    global organism_client
-    if organism_client is None:
-        organism_client = OrganismServeClient()
-    return organism_client
+    async def update_organ_config(self, organ_name: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update configuration of a specific organ.
+        
+        Args:
+            organ_name: Name of the organ
+            config: New configuration
+            
+        Returns:
+            Update result
+        """
+        return await self.put(f"/organs/{organ_name}/config", json=config)
+    
+    # Organism Status
+    async def get_organism_status(self) -> Dict[str, Any]:
+        """Get detailed status of all organs in the organism."""
+        return await self.get("/organism-status")
+    
+    async def get_organism_summary(self) -> Dict[str, Any]:
+        """Get a summary of the organism's current state."""
+        return await self.get("/organism-summary")
+    
+    async def get_organism_health(self) -> Dict[str, Any]:
+        """Get organism health status."""
+        return await self.get("/organism-health")
+    
+    # Organism Management
+    async def initialize_organism(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Initialize the organism.
+        
+        Args:
+            config: Optional initialization configuration
+            
+        Returns:
+            Initialization result
+        """
+        request_data = config or {}
+        return await self.post("/initialize", json=request_data)
+    
+    async def shutdown_organism(self) -> Dict[str, Any]:
+        """Shutdown the organism."""
+        return await self.post("/shutdown")
+    
+    async def restart_organism(self) -> Dict[str, Any]:
+        """Restart the organism."""
+        return await self.post("/restart")
+    
+    # Organism Monitoring
+    async def get_organism_metrics(self) -> Dict[str, Any]:
+        """Get organism performance metrics."""
+        return await self.get("/metrics")
+    
+    async def get_organism_logs(self, log_level: str = "INFO", limit: int = 100) -> Dict[str, Any]:
+        """
+        Get organism logs.
+        
+        Args:
+            log_level: Log level filter
+            limit: Maximum number of log entries
+            
+        Returns:
+            Log entries
+        """
+        params = {
+            "level": log_level,
+            "limit": limit
+        }
+        return await self.get("/logs", params=params)
+    
+    # Service Information
+    async def get_service_info(self) -> Dict[str, Any]:
+        """Get organism service information."""
+        return await self.get("/info")
+    
+    async def is_healthy(self) -> bool:
+        """Check if the organism service is healthy."""
+        try:
+            health = await self.health_check()
+            return health.get("status") == "healthy"
+        except Exception:
+            return False

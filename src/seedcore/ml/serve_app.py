@@ -903,6 +903,15 @@ class MLService:
         
         logger.info("✅ MLService initialized")
 
+        # Schedule background warmup to reduce cold start latency
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            loop.create_task(self._warmup_drift_detector())
+            logger.info("🔄 Scheduled drift detector background warmup")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not schedule background warmup: {e}")
+
     def _get_drift_detector(self):
         """Get drift detector with lazy initialization."""
         if self._drift_detector is None:

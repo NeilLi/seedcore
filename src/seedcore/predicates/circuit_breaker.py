@@ -149,8 +149,15 @@ async def retry_with_backoff(func: Callable,
     # Should never reach here
     raise last_exception
 
+# ServiceClient has been moved to seedcore.serve.base_client
+# This is kept for backward compatibility during migration
 class ServiceClient:
-    """HTTP client with circuit breaker and retry logic."""
+    """
+    DEPRECATED: Use seedcore.serve.base_client.BaseServiceClient instead.
+    
+    This class is kept for backward compatibility but will be removed in a future version.
+    Please migrate to the new service clients in seedcore.serve package.
+    """
     
     def __init__(self, 
                  service_name: str,
@@ -158,70 +165,44 @@ class ServiceClient:
                  timeout: float = 10.0,
                  circuit_breaker: CircuitBreaker = None,
                  retry_config: RetryConfig = None):
+        import warnings
+        warnings.warn(
+            "ServiceClient is deprecated. Use seedcore.serve.base_client.BaseServiceClient instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
+        # Import the new base client
+        from seedcore.serve.base_client import BaseServiceClient
+        
+        # Create the new client instance
+        self._client = BaseServiceClient(
+            service_name=service_name,
+            base_url=base_url,
+            timeout=timeout,
+            circuit_breaker=circuit_breaker,
+            retry_config=retry_config
+        )
+        
+        # Expose the old interface
         self.service_name = service_name
         self.base_url = base_url
         self.timeout = timeout
-        self.circuit_breaker = circuit_breaker or CircuitBreaker()
-        self.retry_config = retry_config or RetryConfig()
-        
-        # Create HTTP client with proper timeout configuration
-        import httpx
-        self.http = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                connect=min(timeout, 5.0),  # Connection timeout
-                read=timeout,               # Read timeout
-                write=min(timeout, 5.0),    # Write timeout
-                pool=min(timeout, 5.0)      # Pool timeout
-            )
-        )
+        self.circuit_breaker = circuit_breaker
+        self.retry_config = retry_config
     
     async def post(self, endpoint: str, json: dict = None, **kwargs) -> dict:
         """Make a POST request with circuit breaker and retry."""
-        url = f"{self.base_url}{endpoint}"
-        
-        async def _make_request():
-            try:
-                response = await self.http.post(url, json=json, **kwargs)
-                response.raise_for_status()
-                return response.json()
-            except Exception as e:
-                # Log timeout errors with more context
-                if hasattr(e, '__class__') and 'Timeout' in e.__class__.__name__:
-                    logger.warning(f"HTTP timeout for {self.service_name} POST {endpoint}: {e.__class__.__name__}: {e}")
-                raise e
-        
-        if self.circuit_breaker:
-            return await self.circuit_breaker.call(_make_request)
-        else:
-            return await retry_with_backoff(_make_request, self.retry_config)
+        return await self._client.post(endpoint, json=json, **kwargs)
     
     async def get(self, endpoint: str, **kwargs) -> dict:
         """Make a GET request with circuit breaker and retry."""
-        url = f"{self.base_url}{endpoint}"
-        
-        async def _make_request():
-            try:
-                response = await self.http.get(url, **kwargs)
-                response.raise_for_status()
-                return response.json()
-            except Exception as e:
-                # Log timeout errors with more context
-                if hasattr(e, '__class__') and 'Timeout' in e.__class__.__name__:
-                    logger.warning(f"HTTP timeout for {self.service_name} GET {endpoint}: {e.__class__.__name__}: {e}")
-                raise e
-        
-        if self.circuit_breaker:
-            return await self.circuit_breaker.call(_make_request)
-        else:
-            return await retry_with_backoff(_make_request, self.retry_config)
+        return await self._client.get(endpoint, **kwargs)
     
     def get_metrics(self) -> dict:
         """Get circuit breaker metrics."""
-        return {
-            "service": self.service_name,
-            "circuit_breaker": self.circuit_breaker.get_state() if self.circuit_breaker else None
-        }
+        return self._client.get_metrics()
     
     async def close(self):
         """Close the HTTP client."""
-        await self.http.aclose()
+        await self._client.close()

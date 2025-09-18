@@ -16,7 +16,10 @@ except ImportError:  # pragma: no cover - keep coordinator resilient when module
 # Import predicate system
 from ..predicates import PredicateRouter, load_predicates, load_predicates_async, get_metrics
 from ..predicates.metrics import update_ocps_signals, update_energy_signals, record_request, record_latency
-from ..predicates.circuit_breaker import ServiceClient, CircuitBreaker, RetryConfig
+from ..predicates.circuit_breaker import CircuitBreaker, RetryConfig
+from ..serve.ml_client import MLServiceClient
+from ..serve.cognitive_client import CognitiveServiceClient
+from ..serve.organism_client import OrganismServiceClient
 from ..predicates.safe_storage import SafeStorage
 import redis
 import json
@@ -269,34 +272,20 @@ router_prefix = "/pipeline"
 class Coordinator:
     def __init__(self):
         # Initialize service clients with conservative circuit breakers
-        self.ml_client = ServiceClient(
-            "ml_service", ML, timeout=float(os.getenv("CB_ML_TIMEOUT_S", "5.0")),
-            circuit_breaker=CircuitBreaker(
-                failure_threshold=int(os.getenv("CB_FAIL_THRESHOLD", "5")),
-                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0")),
-                expected_exception=(httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException)
-            ),
-            retry_config=RetryConfig(max_attempts=1, base_delay=1.0, max_delay=2.0)
+        self.ml_client = MLServiceClient(
+            base_url=ML, 
+            timeout=float(os.getenv("CB_ML_TIMEOUT_S", "5.0")),
+            warmup_timeout=float(os.getenv("CB_ML_WARMUP_TIMEOUT_S", "30.0"))
         )
         
-        self.cognitive_client = ServiceClient(
-            "cognitive_service", COG, timeout=float(os.getenv("CB_COG_TIMEOUT_S", "8.0")),
-            circuit_breaker=CircuitBreaker(
-                failure_threshold=int(os.getenv("CB_FAIL_THRESHOLD", "5")),
-                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0")),
-                expected_exception=(httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException)
-            ),
-            retry_config=RetryConfig(max_attempts=1, base_delay=1.0, max_delay=2.0)  # Allow 1 retry for cognitive
+        self.cognitive_client = CognitiveServiceClient(
+            base_url=COG, 
+            timeout=float(os.getenv("CB_COG_TIMEOUT_S", "8.0"))
         )
         
-        self.organism_client = ServiceClient(
-            "organism_service", ORG, timeout=float(os.getenv("CB_ORG_TIMEOUT_S", "5.0")),
-            circuit_breaker=CircuitBreaker(
-                failure_threshold=int(os.getenv("CB_FAIL_THRESHOLD", "5")),
-                recovery_timeout=float(os.getenv("CB_RESET_S", "30.0")),
-                expected_exception=(httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException)
-            ),
-            retry_config=RetryConfig(max_attempts=0, base_delay=0.0)  # No retries for organism
+        self.organism_client = OrganismServiceClient(
+            base_url=ORG, 
+            timeout=float(os.getenv("CB_ORG_TIMEOUT_S", "5.0"))
         )
         
         # Legacy HTTP client for backward compatibility
@@ -434,21 +423,14 @@ class Coordinator:
                 ]
             }
             
-            # First, check if ML service is healthy with circuit-breaker metrics
+            # First, check if ML service is healthy
             try:
-                health_response = await self.ml_client.get("/health")
-                if health_response.get("status") != "healthy":
-                    logger.warning(f"⚠️ ML service health check failed: {health_response}")
-                    # Record circuit-breaker metrics for failed health check
-                    self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "health_check_failed")
+                if not await self.ml_client.is_healthy():
+                    logger.warning("⚠️ ML service health check failed, skipping warmup")
                     return
                 logger.info("✅ ML service health check passed")
-                # Record circuit-breaker metrics for successful health check
-                self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "health_check_success")
             except Exception as e:
                 logger.warning(f"⚠️ ML service health check failed: {e}, skipping warmup")
-                # Record circuit-breaker metrics for health check exception
-                self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "health_check_exception")
                 return
             
             logger.info(f"🔄 Calling ML service warmup at {self.ml_client.base_url}/drift/warmup")
@@ -457,10 +439,8 @@ class Coordinator:
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    response = await self.ml_client.post(
-                        "/drift/warmup",
-                        json=warmup_request,
-                        headers=_corr_headers("ml_service", "coordinator_warmup")
+                    response = await self.ml_client.warmup_drift_detector(
+                        sample_texts=warmup_request.get("sample_texts")
                     )
                     break  # Success, exit retry loop
                 except Exception as e:
@@ -550,11 +530,10 @@ class Coordinator:
             logger.debug(f"[DriftDetector] Task {task_id}: Calling ML service at {self.ml_client.base_url}/drift/score")
             logger.debug(f"[DriftDetector] Task {task_id}: Request payload: {drift_request}")
             
-            # Call ML service drift detector with timeout
-            response = await self.ml_client.post(
-                "/drift/score",
-                json=drift_request,
-                headers=_corr_headers("ml_service", task_id)
+            # Call ML service drift detector
+            response = await self.ml_client.compute_drift_score(
+                task=drift_request["task"],
+                text=drift_request["text"]
             )
             
             logger.debug(f"[DriftDetector] Task {task_id}: ML service response: {response}")
@@ -1751,9 +1730,7 @@ class Coordinator:
         logger.info(f"[Coordinator] Anomaly triage started for agent {agent_id}, drift={drift_score}, escalate={escalate}, cid={cid}")
 
         # 1. Detect anomalies via ML service
-        anomalies = await self.ml_client.post("/detect/anomaly", 
-                                             json={"data": series}, 
-                                             headers=_corr_headers("ml_service", cid))
+        anomalies = await self.ml_client.detect_anomaly({"data": series})
 
         # 2. Reason about failure (only if escalating or no OCPS gating)
         reason = {}
@@ -1795,12 +1772,12 @@ class Coordinator:
                 # Get current energy state for E_before
                 current_energy = self._get_current_energy_state(agent_id)
                 
-                tuning_job = await self.ml_client.post("/xgboost/tune/submit",
-                                                       json={"space_type": TUNE_SPACE_TYPE,
-                                                             "config_type": TUNE_CONFIG_TYPE,
-                                                             "experiment_name": f"{TUNE_EXPERIMENT_PREFIX}-{agent_id}-{cid}",
-                                                             "callback_url": f"{SEEDCORE_API_URL}/pipeline/ml/tune/callback"},
-                                                       headers=_corr_headers("ml_service", cid))
+                tuning_job = await self.ml_client.submit_tuning_job({
+                    "space_type": TUNE_SPACE_TYPE,
+                    "config_type": TUNE_CONFIG_TYPE,
+                    "experiment_name": f"{TUNE_EXPERIMENT_PREFIX}-{agent_id}-{cid}",
+                    "callback_url": f"{SEEDCORE_API_URL}/pipeline/ml/tune/callback"
+                })
                 
                 # Persist E_before for later ΔE calculation
                 if tuning_job.get("job_id") and current_energy is not None:
