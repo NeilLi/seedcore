@@ -17,6 +17,202 @@ from typing import Dict, Any, List
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# Mark this module for forked execution to ensure clean Ray state
+pytestmark = pytest.mark.forked
+
+@pytest.fixture(autouse=True)
+def mock_ray_deterministic():
+    """
+    Automatically mock Ray for deterministic testing.
+    
+    This fixture ensures all tests see a predictable Ray stub that doesn't
+    depend on a real Ray cluster, making tests deterministic and fast.
+    """
+    import types
+    import sys
+    
+    # Create a comprehensive fake Ray module
+    fake_ray = types.SimpleNamespace()
+    
+    # Mock essential Ray functions
+    fake_ray.is_initialized = lambda: True
+    fake_ray.init = lambda **kwargs: None
+    fake_ray.shutdown = lambda: None
+    fake_ray.get_actor = lambda name, namespace=None: None
+    def _fake_ray_get(obj_ref, timeout=None):
+        # Unwrap our MockObjectRef or pass through
+        if hasattr(obj_ref, 'value'):
+            return obj_ref.value
+        return obj_ref
+    fake_ray.get = _fake_ray_get
+    fake_ray.wait = lambda object_refs, timeout=None, num_returns=None: (object_refs, [])
+    fake_ray.cluster_resources = lambda: {"CPU": 4.0, "memory": 8000000000.0}
+    fake_ray.get_runtime_context = lambda: types.SimpleNamespace(
+        namespace="test-namespace",
+        gcs_address="test-address"
+    )
+    
+    # Mock RayActor class for testing
+    class MockRayActor:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            
+        def remote(self, *args, **kwargs):
+            return self
+            
+        def options(self, **kwargs):
+            return self
+            
+        def __getattr__(self, name):
+            # Return a method that creates a MockObjectRef when called
+            def method_wrapper(*args, **kwargs):
+                if name == "get_heartbeat":
+                    return MockObjectRef(self.get_heartbeat())
+                elif name == "execute_task":
+                    return MockObjectRef(self.execute_task(args[0] if args else {}))
+                elif name == "get_summary_stats":
+                    return MockObjectRef(self.get_summary_stats())
+                elif name == "get_id":
+                    return MockObjectRef(self.get_id())
+                elif name == "ping":
+                    return MockObjectRef(self.ping())
+                elif name == "archive":
+                    return MockObjectRef(self.archive())
+                elif name == "get_private_memory_vector":
+                    return MockObjectRef(self.get_private_memory_vector())
+                elif name == "get_private_memory_telemetry":
+                    return MockObjectRef(self.get_private_memory_telemetry())
+                elif name == "get_state":
+                    return MockObjectRef(self.get_state())
+                elif name == "reset_metrics":
+                    return MockObjectRef(self.reset_metrics())
+                else:
+                    return MockObjectRef("mock-result")
+            return method_wrapper
+            
+        def get_id(self):
+            return "mock-agent-id"
+            
+        def get_heartbeat(self):
+            return {
+                "role_probs": {"E": 0.5, "S": 0.3, "O": 0.2},
+                "performance_metrics": {"cpu_usage": 0.1, "memory_usage": 0.2}
+            }
+            
+        def get_summary_stats(self):
+            return {
+                "tasks_processed": 10,
+                "capability_score": 0.8,
+                "mem_util": 0.3,
+                "memory_writes": 5,
+                "peer_interactions_count": 3
+            }
+            
+        def execute_task(self, task_data):
+            return {
+                "success": True,
+                "agent_id": "mock-agent-id",
+                "task_id": task_data.get("task_id", "unknown"),
+                "result": "mock result"
+            }
+            
+        def ping(self):
+            return True
+            
+        def archive(self):
+            return True
+            
+        def get_private_memory_vector(self):
+            return {"h": [0.1, 0.2, 0.3]}
+            
+        def get_private_memory_telemetry(self):
+            return {"timestamp": 1234567890, "status": "active"}
+            
+        def get_state(self):
+            return {"h": [0.1, 0.2, 0.3], "state": "active"}
+            
+        def reset_metrics(self):
+            return True
+    
+    class MockObjectRef:
+        def __init__(self, value=None):
+            self.value = value or "mock-result"
+            
+        def __call__(self):
+            return self.value
+            
+        def __getattr__(self, name):
+            # Allow attribute access to return the value
+            return getattr(self.value, name, self.value)
+    
+    # Add the mock RayActor class
+    fake_ray.RayAgent = MockRayActor
+    
+    # Store original ray module if it exists
+    original_ray = sys.modules.get("ray")
+    
+    # Replace with fake ray module
+    sys.modules["ray"] = fake_ray
+    
+    yield fake_ray
+    
+    # Restore original ray module
+    if original_ray is not None:
+        sys.modules["ray"] = original_ray
+    elif "ray" in sys.modules:
+        sys.modules.pop("ray", None)
+
+def teardown_module(module):
+    """Ensure Ray is properly shut down after tests to prevent state contamination."""
+    try:
+        import ray
+        if _ray_is_initialized(ray):
+            ray.shutdown()
+            print("✅ Ray shut down in teardown_module")
+    except Exception as e:
+        print(f"Ray teardown skipped: {e}")
+
+def _ray_is_initialized(ray_mod) -> bool:
+    """
+    Safe helper to check if Ray is initialized.
+    
+    This function safely checks if Ray is initialized, handling cases where
+    the ray module might not have the is_initialized function or where
+    it might raise an exception.
+    
+    Args:
+        ray_mod: The ray module (or mock)
+        
+    Returns:
+        bool: True if Ray is initialized, False otherwise
+    """
+    try:
+        is_init_func = getattr(ray_mod, "is_initialized", None)
+        if callable(is_init_func):
+            return is_init_func()
+        return False
+    except Exception:
+        return False
+
+def _ray_cluster_resources(ray_mod) -> dict:
+    """
+    Safe helper to get Ray cluster resources.
+    
+    Args:
+        ray_mod: The ray module (or mock)
+        
+    Returns:
+        dict: Cluster resources or empty dict if unavailable
+    """
+    try:
+        cluster_resources_func = getattr(ray_mod, "cluster_resources", None)
+        if callable(cluster_resources_func):
+            return cluster_resources_func()
+        return {}
+    except Exception:
+        return {}
+
 def ensure_ray():
     """Cross-version Ray initialization helper that works with old and new Ray versions."""
     # Prefer public import path first (covers Ray versions where top-level export is lazy)
@@ -32,12 +228,8 @@ def ensure_ray():
         import ray  # type: ignore
         init_attr = getattr(ray, 'init', None)
         if callable(init_attr):
-            # If available, avoid reinit when possible; otherwise, init idempotently
-            is_init = getattr(ray, 'is_initialized', None)
-            if callable(is_init):
-                if not is_init():
-                    init_attr(ignore_reinit_error=True)
-            else:
+            # Use safe helper to check if Ray is initialized
+            if not _ray_is_initialized(ray):
                 init_attr(ignore_reinit_error=True)
             return
     except Exception:
@@ -61,8 +253,13 @@ def ray_get(obj):
             return get_attr(obj)
     except Exception:
         pass
-    # Fallback for mocks: return .value if present, else the object
-    return getattr(obj, 'value', obj)
+    # Fallback for mocks: return .value if present, else call the object
+    if hasattr(obj, 'value'):
+        return obj.value
+    elif callable(obj):
+        return obj()
+    else:
+        return obj
 
 from src.seedcore.tier0.tier0_manager import Tier0MemoryManager
 from src.seedcore.agents.ray_actor import RayAgent

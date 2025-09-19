@@ -14,6 +14,16 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+def teardown_module(module):
+    """Ensure Ray is properly shut down after tests to prevent state contamination."""
+    try:
+        import ray
+        if ray.is_initialized():
+            ray.shutdown()
+            print("✅ Ray shut down in teardown_module")
+    except Exception as e:
+        print(f"Ray teardown skipped: {e}")
+
 def test_xgboost_service():
     """Test the XGBoost service functionality."""
     

@@ -10,7 +10,7 @@ and Ray tasks.
 import os
 import logging
 from functools import lru_cache
-from typing import Optional, AsyncGenerator, Dict, Any
+from typing import Optional, AsyncGenerator, Dict, Any, Generator
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
@@ -165,14 +165,21 @@ NEO4J_FETCH_SIZE = get_env_int_setting("NEO4J_FETCH_SIZE", 1000)  # driver defau
 
 @lru_cache
 def get_async_pg_engine() -> AsyncEngine:
-    if "+" not in PG_DSN:
-        async_dsn = PG_DSN.replace("postgresql://", "postgresql+asyncpg://")
-    else:
-        async_dsn = PG_DSN
-    hostname = urlparse(async_dsn).hostname
+    # Prefer explicit async DSN if provided
+    dsn = get_env_setting("PG_DSN_ASYNC", "").strip()
+    if not dsn:
+        dsn = PG_DSN.strip()
+
+    # Normalize to async driver regardless of incoming scheme/driver
+    # e.g., postgresql://..., postgresql+psycopg://..., postgresql+psycopg2://...
+    import re
+    dsn = re.sub(r"^postgresql(\+[a-z0-9_]+)?://", "postgresql+asyncpg://", dsn, flags=re.IGNORECASE)
+
+    hostname = urlparse(dsn).hostname
     logger.info(f"Creating async PostgreSQL engine for {hostname} (pool_size={PG_POOL_SIZE})")
+
     return create_async_engine(
-        async_dsn,
+        dsn,
         pool_size=PG_POOL_SIZE,
         max_overflow=PG_MAX_OVERFLOW,
         pool_timeout=PG_POOL_TIMEOUT,
@@ -243,7 +250,6 @@ def get_neo4j_driver():
     Get a cached Async Neo4j driver with connection pooling.
     IMPORTANT: Do NOT close this driver per request; keep it warm.
     """
-    # Build driver config
     driver_kwargs: Dict[str, Any] = dict(
         auth=(NEO4J_USER, NEO4J_PASSWORD),
         max_connection_pool_size=NEO4J_POOL_SIZE,
@@ -251,6 +257,7 @@ def get_neo4j_driver():
         max_connection_lifetime=NEO4J_MAX_CONNECTION_LIFETIME,
         max_transaction_retry_time=NEO4J_MAX_TX_RETRY_TIME,
         encrypted=NEO4J_ENCRYPTED,
+        # keep_alive may not be supported by some versions; we'll try and fall back
         keep_alive=NEO4J_KEEP_ALIVE,
     )
 
@@ -262,6 +269,13 @@ def get_neo4j_driver():
 
     try:
         return AsyncGraphDatabase.driver(NEO4J_URI, **driver_kwargs)
+    except TypeError as e:
+        # Fallback: remove keep_alive if unsupported
+        if "keep_alive" in driver_kwargs:
+            logger.warning("Neo4j driver does not support keep_alive kwarg, retrying without it: %s", e)
+            driver_kwargs.pop("keep_alive", None)
+            return AsyncGraphDatabase.driver(NEO4J_URI, **driver_kwargs)
+        raise
     except Exception as e:
         logger.error(f"Failed to create Neo4j driver: {e}")
         raise
@@ -351,14 +365,14 @@ def get_sync_mysql_session() -> Session:
 # Legacy Compatibility (SQL)
 # ─────────────────────────────────────────────────────────────────────
 
-def get_db_session():
+def get_db_session() -> Generator[Session, None, None]:
     db = get_sync_pg_session()
     try:
         yield db
     finally:
         db.close()
 
-def get_mysql_session():
+def get_mysql_session() -> Generator[Session, None, None]:
     db = get_sync_mysql_session()
     try:
         yield db
@@ -373,7 +387,7 @@ async def check_pg_health() -> bool:
     try:
         async with get_async_pg_session_factory()() as session:
             result = await session.execute(text("SELECT 1"))
-            return result.scalar() == 1
+            return (result.scalar_one_or_none() == 1)
     except Exception as e:
         logger.error(f"PostgreSQL health check failed: {e}")
         return False
@@ -382,7 +396,7 @@ async def check_mysql_health() -> bool:
     try:
         async with get_async_mysql_session_factory()() as session:
             result = await session.execute(text("SELECT 1"))
-            return result.scalar() == 1
+            return (result.scalar_one_or_none() == 1)
     except Exception as e:
         logger.error(f"MySQL health check failed: {e}")
         return False

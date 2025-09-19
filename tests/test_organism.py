@@ -11,6 +11,16 @@ import time
 import os
 from typing import Dict, Any
 
+def teardown_module(module):
+    """Ensure Ray is properly shut down after tests to prevent state contamination."""
+    try:
+        import ray
+        if ray.is_initialized():
+            ray.shutdown()
+            print("✅ Ray shut down in teardown_module")
+    except Exception as e:
+        print(f"Ray teardown skipped: {e}")
+
 def test_organism_endpoints():
     """Test the organism endpoints to verify the implementation."""
     # When running inside the container, use the internal service address

@@ -11,8 +11,6 @@ import os
 import logging
 from typing import Any, Dict, List, Optional, Union, Tuple
 from dataclasses import dataclass
-import numpy as np
-import pandas as pd
 
 # Mock Ray module
 class MockRay:
@@ -23,7 +21,8 @@ class MockRay:
         """Mock ray.init() - always returns True."""
         return True
     
-    def is_initialized(self):
+    @staticmethod
+    def is_initialized():
         """Mock ray.is_initialized() - always returns True."""
         return True
     
@@ -43,7 +42,11 @@ class MockRay:
         if args and callable(args[0]) and not kwargs:
             cls = args[0]
             def remote_method(*args, **kwargs):
-                return MockActor()
+                # Extract agent_id from args if available
+                agent_id = None
+                if args and len(args) > 0:
+                    agent_id = args[0]
+                return MockActor(agent_id=agent_id)
             def options_method(**kwargs):
                 # Return self to allow chaining: actor.options(...).remote(...)
                 return cls
@@ -54,7 +57,11 @@ class MockRay:
         elif args and not callable(args[0]):
             def decorator(cls):
                 def remote_method(*args, **kwargs):
-                    return MockActor()
+                    # Extract agent_id from args if available
+                    agent_id = None
+                    if args and len(args) > 0:
+                        agent_id = args[0]
+                    return MockActor(agent_id=agent_id)
                 def options_method(**kwargs):
                     # Return self to allow chaining: actor.options(...).remote(...)
                     return cls
@@ -66,7 +73,11 @@ class MockRay:
         else:
             def decorator(cls):
                 def remote_method(*args, **kwargs):
-                    return MockActor()
+                    # Extract agent_id from args if available
+                    agent_id = None
+                    if args and len(args) > 0:
+                        agent_id = args[0]
+                    return MockActor(agent_id=agent_id)
                 def options_method(**kwargs):
                     # Return self to allow chaining: actor.options(...).remote(...)
                     return cls
@@ -99,6 +110,14 @@ class MockRay:
     def get_runtime_context():
         """Mock ray.get_runtime_context() - returns mock runtime context."""
         return MockRuntimeContext()
+    
+    @staticmethod
+    def wait(object_refs, timeout=None):
+        """Mock ray.wait() - returns ready and not_ready lists."""
+        if isinstance(object_refs, list):
+            return object_refs, []
+        else:
+            return [object_refs], []
     
     class serve:
         """Mock Ray Serve module."""
@@ -158,12 +177,73 @@ class MockRay:
 class MockActor:
     """Mock Ray actor."""
     
-    def __init__(self):
+    def __init__(self, agent_id=None):
         self.name = "mock_actor"
+        self.agent_id = agent_id or "mock_agent"
+        self._task_count = 0  # Track task count for testing
+        # Provide RemoteCallable wrappers for methods that tests call with .remote
+        class RemoteCallable:
+            def __init__(self, func):
+                self._func = func
+            def __call__(self, *args, **kwargs):
+                return self._func(*args, **kwargs)
+            def remote(self, *args, **kwargs):
+                return self._func(*args, **kwargs)
+
+        self.ping = RemoteCallable(lambda: MockObjectRef("pong"))
+        self.get_id = RemoteCallable(lambda: MockObjectRef(self.agent_id))
+        self.get_heartbeat = RemoteCallable(lambda: MockObjectRef({
+            'role_probs': {'E': 0.5, 'S': 0.3, 'O': 0.2},
+            'performance_metrics': {
+                'capability_score_c': 0.8,
+                'mem_util': 0.3,
+                'tasks_processed': self._task_count
+            }
+        }))
+        self.get_summary_stats = RemoteCallable(lambda: MockObjectRef({
+            'tasks_processed': self._task_count,
+            'capability_score': 0.8,
+            'mem_util': 0.3,
+            'memory_writes': 10,
+            'peer_interactions_count': 5
+        }))
+        def _exec(task_data):
+            self._task_count += 1
+            return MockObjectRef({
+                'success': True,
+                'agent_id': self.agent_id,
+                'task_id': task_data.get('task_id', 'mock_task'),
+                'execution_time': 0.1,
+                'quality': 0.8
+            })
+        self.execute_task = RemoteCallable(_exec)
+        self.update_role_probs = RemoteCallable(lambda new_probs: MockObjectRef(True))
+        self.update_local_metrics = RemoteCallable(lambda capability, role_efficiency, mem_hits: MockObjectRef(True))
+        self.get_energy_proxy = RemoteCallable(lambda: MockObjectRef({
+            'capability': 0.8,
+            'entropy_contribution': 0.6,
+            'mem_util': 0.3,
+            'state_norm': 0.7,
+            'memory_utilization': 0.3,
+            'energy_score': 0.7,
+            'role_efficiency': 0.9
+        }))
     
     def remote(self, *args, **kwargs):
         """Mock remote method call."""
         return MockObjectRef()
+    
+    # After method definitions, attach .remote wrappers for explicit methods
+    def __post_init_remote__(self):
+        for method_name in [
+            'ping', 'get_id', 'get_heartbeat', 'get_summary_stats',
+            'execute_task', 'update_role_probs', 'update_local_metrics',
+            'get_energy_proxy'
+        ]:
+            method = getattr(self, method_name, None)
+            if callable(method):
+                # Already handled by RemoteCallable, no-op
+                pass
     
     def __getattr__(self, name):
         """Mock attribute access - returns a mock method."""
@@ -182,9 +262,8 @@ class MockActor:
             elif name == 'update_role_probs':
                 return MockObjectRef(True)  # Success response
             elif name == 'get_state_embedding':
-                # Return a proper numpy array for state embedding
-                import numpy as np
-                return MockObjectRef(np.random.randn(128))  # 128-dimensional embedding
+                # Return a proper array for state embedding
+                return MockObjectRef([0.1] * 128)  # 128-dimensional embedding
             elif name == 'get_energy_proxy':
                 # Return a proper energy proxy dictionary
                 return MockObjectRef({
@@ -237,8 +316,7 @@ class MockActor:
         elif name == 'update_role_probs':
             mock_method.remote = lambda *args, **kwargs: MockObjectRef(True)
         elif name == 'get_state_embedding':
-            import numpy as np
-            mock_method.remote = lambda *args, **kwargs: MockObjectRef(np.random.randn(128))
+            mock_method.remote = lambda *args, **kwargs: MockObjectRef([0.1] * 128)
         elif name == 'get_energy_proxy':
             mock_method.remote = lambda *args, **kwargs: MockObjectRef({
                 'capability': 0.8,
@@ -349,8 +427,8 @@ class MockXGBoostModel:
         """Mock predict method."""
         if hasattr(data, 'shape'):
             # Return random predictions
-            return np.random.random(data.shape[0])
-        return np.random.random(1)
+            return [0.5] * data.shape[0]
+        return [0.5]
     
     def save_model(self, path):
         """Mock save_model method."""
@@ -370,8 +448,8 @@ class MockBooster:
     def predict(self, data):
         """Mock predict method."""
         if hasattr(data, 'shape'):
-            return np.random.random(data.shape[0])
-        return np.random.random(1)
+            return [0.5] * data.shape[0]
+        return [0.5]
 
 # Mock Ray logger
 class MockLogger:
@@ -393,21 +471,89 @@ class MockLogger:
         self.logger.debug(msg, *args, **kwargs)
 
 # Create mock modules
-mock_ray = MockRay()
-# Ensure serve is accessible as an attribute
-mock_ray.serve = MockRay.serve
 mock_xgboost_ray = type('MockXGBoostRay', (), {
     'RayDMatrix': MockRayDMatrix,
     'train': mock_train,
     'RayParams': type('RayParams', (), {}),
-    'predict': lambda *args, **kwargs: np.random.random(1)
+    'predict': lambda *args, **kwargs: [0.5]
 })()
 
-# Mock the modules in sys.modules before they're imported
-sys.modules['ray'] = mock_ray
-sys.modules['ray.logger'] = MockLogger()
-sys.modules['ray.serve'] = mock_ray.serve
-sys.modules['ray.exceptions'] = mock_ray.exceptions
+import types
+
+# Build a proper module-type mock for ray
+ray_mod = types.ModuleType('ray')
+
+def _ray_init(*args, **kwargs):
+    return True
+
+def _ray_is_initialized():
+    return True
+
+def _ray_shutdown():
+    return None
+
+def _ray_get_actor(name, namespace=None):
+    return MockActor(agent_id=name)
+
+def _ray_get(obj, timeout=None):
+    if isinstance(obj, list):
+        return [item.value if hasattr(item, 'value') else item for item in obj]
+    return obj.value if hasattr(obj, 'value') else obj
+
+def _ray_put(obj):
+    return obj
+
+def _ray_kill(actor):
+    return None
+
+def _ray_get_runtime_context():
+    return MockRuntimeContext()
+
+def _ray_wait(object_refs, timeout=None):
+    if isinstance(object_refs, list):
+        return object_refs, []
+    return [object_refs], []
+
+def _ray_remote(*r_args, **r_kwargs):
+    def decorator(obj):
+        def remote_method(*args, **kwargs):
+            agent_id = args[0] if args else None
+            return MockActor(agent_id=agent_id)
+        def options_method(**kwargs):
+            return obj
+        setattr(obj, 'remote', staticmethod(remote_method))
+        setattr(obj, 'options', staticmethod(options_method))
+        return obj
+    if r_args and callable(r_args[0]) and not r_kwargs:
+        return decorator(r_args[0])
+    return decorator
+
+# Assign functions to module
+ray_mod.init = _ray_init
+ray_mod.is_initialized = _ray_is_initialized
+ray_mod.shutdown = _ray_shutdown
+ray_mod.remote = _ray_remote
+ray_mod.get_actor = _ray_get_actor
+ray_mod.get = _ray_get
+ray_mod.put = _ray_put
+ray_mod.kill = _ray_kill
+ray_mod.get_runtime_context = _ray_get_runtime_context
+ray_mod.wait = _ray_wait
+
+# Submodules
+ray_mod.logger = MockLogger()
+ray_mod.exceptions = MockRay.exceptions
+# serve submodule
+ray_mod.serve = MockRay.serve
+# air submodule
+ray_air = types.ModuleType('ray.air')
+ray_air.config = MockRay.air.config
+
+# Register in sys.modules
+sys.modules['ray'] = ray_mod
+sys.modules['ray.logger'] = ray_mod.logger
+sys.modules['ray.serve'] = ray_mod.serve
+sys.modules['ray.exceptions'] = ray_mod.exceptions
 sys.modules['ray.core'] = type('MockRayCore', (), {})()
 sys.modules['ray.core.generated'] = type('MockRayCoreGenerated', (), {})()
 sys.modules['ray.core.generated.ray_client_pb2'] = type('MockRayClientPb2', (), {})()
@@ -415,8 +561,8 @@ sys.modules['ray.util'] = type('MockRayUtil', (), {})()
 sys.modules['ray.util.client'] = type('MockRayUtilClient', (), {})()
 sys.modules['ray.util.client.server'] = type('MockRayUtilClientServer', (), {})()
 sys.modules['ray.util.client.server.server'] = type('MockRayUtilClientServerServer', (), {})()
-sys.modules['ray.air'] = mock_ray.air
-sys.modules['ray.air.config'] = mock_ray.air.config
+sys.modules['ray.air'] = ray_air
+sys.modules['ray.air.config'] = ray_air.config
 sys.modules['xgboost_ray'] = mock_xgboost_ray
 sys.modules['xgboost_ray.main'] = mock_xgboost_ray
 sys.modules['xgboost_ray.matrix'] = mock_xgboost_ray
@@ -427,6 +573,79 @@ mock_logging_setup = type('MockLoggingSetup', (), {
     'setup_logging': lambda *args, **kwargs: None
 })()
 sys.modules['seedcore.logging_setup'] = mock_logging_setup
+
+# Mock registry module
+mock_registry = type('MockRegistry', (), {
+    'RegistryClient': type('MockRegistryClient', (), {
+        '__init__': lambda self, *args, **kwargs: None,
+        'register': lambda self: None,
+        'set_status': lambda self, status: None,
+        'beat': lambda self: None
+    }),
+    'list_active_instances': lambda: []
+})()
+sys.modules['seedcore.registry'] = mock_registry
+
+# Mock specs module
+mock_specs = type('MockSpecs', (), {
+    'AgentSpec': type('MockAgentSpec', (), {
+        '__init__': lambda self, *args, **kwargs: None
+    }),
+    'OrganSpec': type('MockOrganSpec', (), {
+        '__init__': lambda self, *args, **kwargs: None
+    }),
+    'GraphClient': type('MockGraphClient', (), {
+        'list_agent_specs': lambda self: [],
+        'list_organ_specs': lambda self: []
+    })
+})()
+sys.modules['seedcore.tier0.specs'] = mock_specs
+
+# Mock database module (only if not already provided by mock_database_dependencies)
+mock_database = type('MockDatabase', (), {
+    'get_async_pg_session_factory': lambda: lambda: type('MockSession', (), {
+        '__enter__': lambda self: self,
+        '__exit__': lambda self, *args: None,
+        'execute': lambda self, query, params=None: type('MockResult', (), {
+            'first': lambda: type('MockRow', (), {'__getitem__': lambda self, i: 'test_epoch' if i == 0 else None})()
+        })(),
+        'commit': lambda self: None
+    })(),
+    'get_async_pg_engine': lambda: type('MockEngine', (), {})(),
+    'get_sync_pg_engine': lambda: type('MockEngine', (), {})(),
+    'get_async_mysql_engine': lambda: type('MockEngine', (), {})(),
+    'get_sync_mysql_engine': lambda: type('MockEngine', (), {})(),
+    'get_neo4j_driver': lambda: type('MockDriver', (), {})(),
+    'get_db_session': lambda: iter([type('MockSession', (), {'close': lambda: None})()]),
+    'get_mysql_session': lambda: iter([type('MockSession', (), {'close': lambda: None})()]),
+    'check_pg_health': lambda: True,
+    'check_mysql_health': lambda: True,
+    'check_neo4j_health': lambda: True,
+    'PG_DSN': 'postgresql://test:test@localhost/test',
+    'MYSQL_DSN': 'mysql://test:test@localhost/test',
+    'NEO4J_URI': 'bolt://localhost:7687',
+    'NEO4J_USER': 'neo4j',
+    'NEO4J_PASSWORD': 'password',
+    'NEO4J_DATABASE': 'neo4j',
+    'NEO4J_POOL_SIZE': 10,
+    'NEO4J_CONNECTION_ACQUISITION_TIMEOUT': 30,
+    'NEO4J_MAX_CONNECTION_LIFETIME': 3600,
+    'NEO4J_MAX_TX_RETRY_TIME': 30,
+    'NEO4J_ENCRYPTED': True,
+    'NEO4J_KEEP_ALIVE': True,
+    'PG_POOL_SIZE': 10,
+    'PG_MAX_OVERFLOW': 20,
+    'PG_POOL_TIMEOUT': 30,
+    'PG_POOL_RECYCLE': 3600,
+    'PG_POOL_PRE_PING': True,
+    'MYSQL_POOL_SIZE': 10,
+    'MYSQL_MAX_OVERFLOW': 20,
+    'MYSQL_POOL_TIMEOUT': 30,
+    'MYSQL_POOL_RECYCLE': 3600,
+    'MYSQL_POOL_PRE_PING': True
+})()
+if 'seedcore.database' not in sys.modules:
+    sys.modules['seedcore.database'] = mock_database
 
 # Mock the logger import that xgboost_ray tries to do
 sys.modules['ray'].logger = MockLogger()

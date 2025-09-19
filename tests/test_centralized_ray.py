@@ -18,6 +18,16 @@ from seedcore.utils.ray_utils import ensure_ray_initialized, is_ray_available, g
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def teardown_module(module):
+    """Ensure Ray is properly shut down after tests to prevent state contamination."""
+    try:
+        import ray
+        if ray.is_initialized():
+            ray.shutdown()
+            logger.info("✅ Ray shut down in teardown_module")
+    except Exception as e:
+        logger.debug(f"Ray teardown skipped: {e}")
+
 def test_basic_functionality():
     """Test basic Ray initialization functionality."""
     print("🧪 Testing basic Ray initialization...")

@@ -25,6 +25,7 @@ import os
 import ray
 import time
 import asyncio
+import concurrent.futures
 from ..utils.ray_utils import ensure_ray_initialized
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
@@ -33,6 +34,8 @@ import json
 
 from ..agents.ray_actor import RayAgent
 from ..energy.optimizer import select_best_agent, score_agent
+from .specs import GraphClient, AgentSpec
+from ..registry import list_active_instances
 # Avoid importing EnergyLedger at module import time to prevent circular imports.
 # We'll import it inside functions that need it.
 
@@ -40,6 +43,16 @@ logger = logging.getLogger("seedcore.Tier0MemoryManager")
 
 # Target namespace for agent actors (prefer SEEDCORE_NS, fallback to RAY_NAMESPACE)
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+
+# Non-blocking ray.get helper (module scope)
+_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=int(os.getenv("TIER0_TP_MAX", "8"))
+)
+
+async def _aget(obj_ref, timeout: float = 2.0):
+    """Non-blocking ray.get with timeout using thread pool."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_EXECUTOR, lambda: ray.get(obj_ref, timeout=timeout))
 
 class Tier0MemoryManager:
     """
@@ -60,6 +73,8 @@ class Tier0MemoryManager:
         self.collection_interval = 5.0  # seconds
         # Track transient ping failures to avoid pruning on single hiccup
         self._ping_failures: Dict[str, int] = {}
+        # Graph client for desired-state reconciliation
+        self._graph: Optional[GraphClient] = None
         
         logger.info("✅ Tier0MemoryManager initialized")
         
@@ -114,7 +129,7 @@ class Tier0MemoryManager:
         organ_id: Optional[str] = None,
     ) -> str:
         """
-        Create a new Ray agent actor.
+        Create a new Ray agent actor (idempotent - reuses existing named actors).
         
         Args:
             agent_id: Unique identifier for the agent
@@ -125,21 +140,17 @@ class Tier0MemoryManager:
             The agent ID if successful
         """
         if agent_id in self.agents:
-            logger.warning(f"Agent {agent_id} already exists")
+            logger.warning(f"Agent {agent_id} already exists in registry")
             return agent_id
-        
+
         try:
-            # Ensure Ray is initialized before creating actors
+            # Ensure Ray first
             self._ensure_ray()
-            
-            # Create the Ray actor
+
+            # Build Ray options once
             options_kwargs: Dict[str, Any] = {}
-            # Use a stable, detached, named actor when options are provided
-            # Favor stable named, detached actors by default
-            effective_name = name or agent_id if (lifetime or True) else name
-            if effective_name:
-                options_kwargs["name"] = effective_name
-            # Default to detached lifetime if not specified
+            effective_name = name or agent_id  # stable name by default
+            options_kwargs["name"] = effective_name
             options_kwargs["lifetime"] = lifetime or "detached"
             if num_cpus is not None:
                 options_kwargs["num_cpus"] = num_cpus
@@ -147,38 +158,49 @@ class Tier0MemoryManager:
                 options_kwargs["num_gpus"] = num_gpus
             if resources:
                 options_kwargs["resources"] = resources
-            
-            # Set namespace if provided, otherwise use environment default
-            if namespace:
-                options_kwargs["namespace"] = namespace
-            else:
-                # Get namespace from environment
-                env_namespace = AGENT_NAMESPACE
-                if env_namespace:
-                    options_kwargs["namespace"] = env_namespace
 
-            if options_kwargs:
-                agent_handle = RayAgent.options(**options_kwargs).remote(
-                    agent_id=agent_id,
-                    initial_role_probs=role_probs,
-                    organ_id=organ_id,
-                )
-            else:
-                agent_handle = RayAgent.remote(agent_id, role_probs, organ_id)
+            # Namespace from arg → env → default
+            ns = (
+                namespace
+                or os.getenv("SEEDCORE_NS")
+                or os.getenv("RAY_NAMESPACE")
+                or AGENT_NAMESPACE
+            )
+            options_kwargs["namespace"] = ns
+
+            # --- Reuse existing named actor if present ---
+            try:
+                handle = ray.get_actor(effective_name, namespace=ns)
+                resolved_id = ray.get(handle.get_id.remote())
+                self.attach_existing_actor(resolved_id, handle)
+                logger.info(f"🔗 Reused existing actor '{effective_name}' in ns='{ns}'")
+                return resolved_id
+            except Exception:
+                # Not found; proceed to create fresh
+                pass
+
+            # --- Create fresh actor ---
+            agent_handle = RayAgent.options(**options_kwargs).remote(
+                agent_id=agent_id,
+                initial_role_probs=role_probs,
+                organ_id=organ_id,
+            )
             self.agents[agent_id] = agent_handle
-            
-            # Initialize heartbeat and stats
             self.heartbeats[agent_id] = {}
             self.agent_stats[agent_id] = {}
-            
-            logger.info(f"✅ Created Ray agent: {agent_id}")
+
+            logger.info(f"✅ Created Ray agent: {agent_id} (name='{effective_name}', ns='{ns}')")
             return agent_id
-            
+
         except Exception as e:
-            logger.error(f"Failed to create agent {agent_id}: {e}")
-            # Log additional debugging information
-            logger.error(f"Ray initialized: {ray.is_initialized()}")
-            if ray.is_initialized():
+            logger.error(f"Failed to create/attach agent {agent_id}: {e}")
+            try:
+                _is_init = getattr(ray, "is_initialized", None)
+                init_state = _is_init() if callable(_is_init) else True
+            except Exception:
+                init_state = True
+            logger.error(f"Ray initialized: {init_state}")
+            if init_state:
                 try:
                     runtime_context = ray.get_runtime_context()
                     logger.error(f"Ray namespace: {getattr(runtime_context, 'namespace', 'unknown')}")
@@ -242,12 +264,14 @@ class Tier0MemoryManager:
     def list_agents(self) -> List[str]:
         """Get list of all agent IDs.
         
-        If no local registrations exist, attempt to discover detached RayAgent actors
-        that are already running in the Ray cluster and attach them.
+        If no local registrations exist, attempt to discover agents from:
+        1. Runtime registry (PostgreSQL) - preferred
+        2. Ray cluster scan - fallback
         """
         # Prefer returning only alive agents and refresh if registry is empty
         try:
             if not self.agents:
+                # Fall back to Ray cluster scan (registry discovery is async)
                 self._refresh_agents_from_cluster()
         except Exception as e:
             logger.debug(f"Agent discovery failed during list: {e}")
@@ -256,9 +280,10 @@ class Tier0MemoryManager:
 
     # Health-aware listing and pruning
     def _alive(self, handle: Any) -> bool:
+        """Faster liveness check using ray.wait for early returns."""
         try:
-            ray.get(handle.ping.remote(), timeout=2.0)
-            return True
+            ready, _ = ray.wait([handle.ping.remote()], timeout=2.0)
+            return bool(ready)
         except Exception:
             return False
 
@@ -302,26 +327,56 @@ class Tier0MemoryManager:
             self.agent_stats.setdefault(agent_id, {})
 
     def _ensure_ray(self, ray_address: Optional[str] = None, ray_namespace: Optional[str] = None):
-        """Ensure Ray is initialized with the correct address and namespace."""
-        if ray.is_initialized():
-            logger.debug("Ray is already initialized, skipping connection")
-            return
-            
-        # Get namespace from environment, default to "seedcore-dev" for consistency
-        if ray_namespace is None:
-            ray_namespace = os.getenv("SEEDCORE_NS", os.getenv("SEEDCORE_NS", "seedcore-dev"))
-        
-        # Get Ray connection parameters from environment
+        """
+        Ensure Ray is initialized, with exponential backoff.
+        Prefers explicit args; falls back to env, then cluster defaults.
+        """
+        import ray
+
+        try:
+            _is_init = getattr(ray, "is_initialized", None)
+            if callable(_is_init) and _is_init():
+                # Additional sanity check: verify Ray is actually functional
+                try:
+                    ray.cluster_resources()
+                    return
+                except Exception:
+                    # Ray is initialized but not functional - reset it
+                    logger.warning("Ray is initialized but not functional, resetting...")
+                    ray.shutdown()
+        except Exception:
+            # If the mock ray lacks is_initialized, continue with init attempts
+            pass
+
+        # Namespace: SEEDCORE_NS → RAY_NAMESPACE → default
+        ray_namespace = (
+            ray_namespace
+            or os.getenv("SEEDCORE_NS")
+            or os.getenv("RAY_NAMESPACE")
+            or "seedcore-dev"
+        )
+
+        # Address: prefer explicit; otherwise build from env or sane cluster defaults
         if ray_address is None:
-            ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
-            ray_port = os.getenv("RAY_PORT", "10001")
-            ray_address = f"ray://{ray_host}:{ray_port}"
-        
-        # Use the centralized Ray initialization utility
-        logger.info(f"Attempting to connect to Ray cluster at: {ray_address}")
-        if not ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
-            raise RuntimeError(f"Failed to initialize Ray connection (address={ray_address}, namespace={ray_namespace})")
-        logger.info(f"✅ Ray connection established successfully")
+            addr_env = os.getenv("RAY_ADDRESS")
+            if addr_env:
+                ray_address = addr_env.strip()
+            else:
+                ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
+                ray_port = os.getenv("RAY_PORT", "10001")
+                ray_address = f"ray://{ray_host}:{ray_port}"
+
+        delay = 0.5
+        max_attempts = 6
+        for attempt in range(1, max_attempts + 1):
+            logger.info(f"Connecting to Ray at {ray_address} (ns={ray_namespace}), attempt {attempt}/{max_attempts}")
+            if ensure_ray_initialized(ray_address=ray_address, ray_namespace=ray_namespace):
+                logger.info("✅ Ray connection established")
+                return
+            time.sleep(delay)
+            delay *= 2
+
+        raise RuntimeError(f"Failed to initialize Ray (address={ray_address}, ns={ray_namespace})")
 
     def _refresh_agents_from_cluster(self) -> None:
         """Discover and attach existing RayAgent actors from the Ray cluster.
@@ -427,6 +482,50 @@ class Tier0MemoryManager:
 
         if newly_attached:
             logger.info(f"🔎 Attached {newly_attached} existing RayAgent(s) from cluster: {list(discovered.keys())}")
+
+    async def discover_from_registry(self):
+        """
+        Discover and attach agents from the runtime registry.
+        
+        Queries the active_instance view to find registered agents and attaches
+        their Ray actor handles. Falls back gracefully if registry is unavailable.
+        """
+        try:
+            rows = await list_active_instances()  # one per logical_id
+            attached = 0
+            for r in rows:
+                name = r.get("actor_name")
+                lid = r.get("logical_id")
+                if not name or not lid:
+                    continue
+                try:
+                    handle = ray.get_actor(name, namespace=AGENT_NAMESPACE)
+                    # Attach with logical_id so API can address by data-layer identity
+                    self.attach_existing_actor(lid, handle)
+                    attached += 1
+                except Exception:
+                    continue
+            if attached:
+                logger.info(f"🔗 Attached {attached} agent(s) from registry view")
+        except Exception as e:
+            logger.debug(f"Registry discovery skipped: {e}")
+
+    async def discover_and_refresh_agents(self):
+        """
+        Discover agents from registry and refresh from Ray cluster.
+        
+        This method can be called from async contexts to perform both
+        registry-based and Ray cluster-based discovery.
+        """
+        # Try registry discovery first
+        await self.discover_from_registry()
+        
+        # If still no agents, try Ray cluster scan as fallback
+        if not self.agents:
+            try:
+                self._refresh_agents_from_cluster()
+            except Exception as e:
+                logger.debug(f"Ray cluster discovery failed: {e}")
     
     def execute_task_on_agent(self, agent_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -540,70 +639,61 @@ class Tier0MemoryManager:
     
     async def collect_heartbeats(self) -> Dict[str, Dict[str, Any]]:
         """
-        Collect heartbeats from all agents.
+        Collect heartbeats from all agents (non-blocking with timeouts).
         
         Returns:
             Dictionary of agent_id -> heartbeat data
         """
         if not self.agents:
-            # Try discovering live agents before giving up
             try:
                 self._refresh_agents_from_cluster()
             except Exception as e:
                 logger.debug(f"Discovery failed during heartbeat collection: {e}")
-            return {}
-        
-        try:
-            # Collect heartbeats from all agents in parallel
-            heartbeat_futures = [
-                agent.get_heartbeat.remote() 
-                for agent in self.agents.values()
-            ]
-            
-            heartbeats = ray.get(heartbeat_futures)
-            
-            # Update our heartbeat cache
-            for agent_id, heartbeat in zip(self.agents.keys(), heartbeats):
-                self.heartbeats[agent_id] = heartbeat
-            
-            self.last_collection = time.time()
-            logger.debug(f"✅ Collected heartbeats from {len(heartbeats)} agents")
-            
-            return dict(zip(self.agents.keys(), heartbeats))
-            
-        except Exception as e:
-            logger.error(f"Failed to collect heartbeats: {e}")
-            return {}
+            if not self.agents:
+                return {}
+
+        timeout = float(os.getenv("TIER0_HEARTBEAT_TIMEOUT", "2.0"))
+        items = list(self.agents.items())
+        tasks = [ _aget(handle.get_heartbeat.remote(), timeout=timeout) for _, handle in items ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        successes = 0
+        for (agent_id, _), res in zip(items, results):
+            if isinstance(res, Exception):
+                logger.debug(f"Heartbeat error for {agent_id}: {res}")
+                continue
+            self.heartbeats[agent_id] = res
+            successes += 1
+
+        self.last_collection = time.time()
+        logger.debug(f"✅ Collected heartbeats: {successes}/{len(items)}")
+        return {aid: self.heartbeats[aid] for aid in self.heartbeats}
     
     async def collect_agent_stats(self) -> Dict[str, Dict[str, Any]]:
         """
-        Collect summary statistics from all agents.
+        Collect summary statistics from all agents (non-blocking with timeouts).
         
         Returns:
             Dictionary of agent_id -> summary stats
         """
         if not self.agents:
             return {}
-        
-        try:
-            # Collect stats from all agents in parallel
-            stats_futures = [
-                agent.get_summary_stats.remote() 
-                for agent in self.agents.values()
-            ]
-            
-            stats = ray.get(stats_futures)
-            
-            # Update our stats cache
-            for agent_id, stat in zip(self.agents.keys(), stats):
-                self.agent_stats[agent_id] = stat
-            
-            logger.debug(f"✅ Collected stats from {len(stats)} agents")
-            return dict(zip(self.agents.keys(), stats))
-            
-        except Exception as e:
-            logger.error(f"Failed to collect agent stats: {e}")
-            return {}
+
+        timeout = float(os.getenv("TIER0_STATS_TIMEOUT", "2.5"))
+        items = list(self.agents.items())
+        tasks = [ _aget(handle.get_summary_stats.remote(), timeout=timeout) for _, handle in items ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        successes = 0
+        for (agent_id, _), res in zip(items, results):
+            if isinstance(res, Exception):
+                logger.debug(f"Stats error for {agent_id}: {res}")
+                continue
+            self.agent_stats[agent_id] = res
+            successes += 1
+
+        logger.debug(f"✅ Collected stats: {successes}/{len(items)}")
+        return {aid: self.agent_stats[aid] for aid in self.agent_stats}
     
     def get_system_summary(self) -> Dict[str, Any]:
         """
@@ -741,6 +831,125 @@ class Tier0MemoryManager:
         self.agents.clear()
         
         logger.info("✅ All agents shut down")
+
+    # ---------------------------------------------------------------------
+    # Graph-aware reconciliation methods
+    # ---------------------------------------------------------------------
+    
+    def attach_graph(self, graph: GraphClient):
+        """Attach a graph client for desired-state reconciliation."""
+        self._graph = graph
+        logger.info("🔗 Graph client attached for reconciliation")
+
+    def reconcile_from_graph(self) -> None:
+        """Ensure Ray agents match desired state in the graph."""
+        if not self._graph:
+            logger.debug("No graph attached; skip reconcile")
+            return
+
+        desired: List[AgentSpec] = self._graph.list_agent_specs()
+        desired_ids = {s.agent_id for s in desired}
+        current_ids = set(self.agents.keys())
+
+        # Create missing agents
+        for spec in desired:
+            if spec.agent_id not in current_ids:
+                logger.info(f"Creating missing agent from graph: {spec.agent_id}")
+                self.create_agent(
+                    agent_id=spec.agent_id,
+                    role_probs=None,
+                    name=spec.name,
+                    lifetime=spec.lifetime,
+                    num_cpus=spec.resources.get("num_cpus"),
+                    num_gpus=spec.resources.get("num_gpus"),
+                    resources={k: v for k, v in spec.resources.items()
+                               if k not in ("num_cpus", "num_gpus")},
+                    namespace=spec.namespace,
+                    organ_id=spec.organ_id,
+                )
+
+        # Optionally retire extra agents (keep conservative by default)
+        extras = current_ids - desired_ids
+        if extras:
+            logger.info(f"Graph reconcile: {len(extras)} unmanaged agent(s) present: {sorted(extras)}")
+            # Provide a flag to auto-archive extras if you want strict reconciliation
+            if os.getenv("TIER0_STRICT_RECONCILE", "false").lower() == "true":
+                for aid in extras:
+                    logger.info(f"Archiving unmanaged agent {aid}")
+                    try:
+                        h = self.agents.get(aid)
+                        if h and hasattr(h, "archive"):
+                            ray.get(h.archive.remote())
+                    except Exception:
+                        logger.exception("archive() failed during reconcile")
+                    finally:
+                        self.agents.pop(aid, None)
+                        self.heartbeats.pop(aid, None)
+                        self.agent_stats.pop(aid, None)
+
+    def start_graph_reconciler(self, interval: int = 15):
+        """Start periodic graph reconciliation."""
+        async def _loop():
+            while True:
+                try:
+                    self._ensure_ray()
+                    self.reconcile_from_graph()
+                except Exception as e:
+                    logger.warning(f"Graph reconcile error: {e}")
+                await asyncio.sleep(interval)
+        asyncio.create_task(_loop())
+        logger.info(f"🔄 Started graph reconciler with {interval}s interval")
+
+    # ---------------------------------------------------------------------
+    # Graph-aware task routing methods
+    # ---------------------------------------------------------------------
+    
+    def _graph_filter_candidates(self, task_data: Dict[str, Any]) -> List[str]:
+        """Return agent_ids that satisfy required skills/models/policies based on the graph."""
+        if not self._graph:
+            return list(self.agents.keys())
+
+        required_skills = set(task_data.get("required_skills", []))
+        required_models = set(task_data.get("required_models", []))
+        organ_hint = task_data.get("organ_id")
+
+        # pull desired specs once
+        specs = {s.agent_id: s for s in self._graph.list_agent_specs()}
+
+        candidates = []
+        for aid, spec in specs.items():
+            if aid not in self.agents:
+                continue  # Skip specs for agents not currently running
+                
+            if organ_hint and spec.organ_id != organ_hint:
+                continue
+            if required_skills and not required_skills.issubset(set(spec.skills)):
+                continue
+            if required_models and not required_models.issubset(set(spec.models)):
+                continue
+            
+            # Policy gate
+            if not self._policy_allows(spec, task_data):
+                continue
+                
+            candidates.append(aid)
+        return candidates
+
+    def _policy_allows(self, agent_spec: AgentSpec, task_data: Dict[str, Any]) -> bool:
+        """Simple policy gate before executing tasks."""
+        policies = agent_spec.metadata.get("policies", "").split(",")
+        # Example rule: block external network if policy forbids
+        if "no_external_egress" in policies and task_data.get("requires_external_network"):
+            return False
+        return True
+
+    def execute_task_on_graph_best(self, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Execute task on best agent from graph-filtered candidates."""
+        ids = self._graph_filter_candidates(task_data)
+        if not ids:
+            logger.warning("No graph-qualified agents; falling back to global best")
+            return self.execute_task_on_best_agent(task_data)
+        return self.execute_task_on_best_of(ids, task_data)
 
 # Global instance for easy access - lazy initialization
 _tier0_manager_instance = None

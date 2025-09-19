@@ -17,6 +17,7 @@ Tier 0 (Ma): Per-Agent Memory Implementation
 Ray actor-based stateful agents with private memory and performance tracking.
 """
 
+import os
 import ray
 import numpy as np
 import time
@@ -190,6 +191,9 @@ class RayAgent:
             # Initialize cognitive systems
             self._initialize_cognitive_systems()
             
+            # Initialize optional registry reporting
+            self._initialize_registry_reporting()
+            
         except Exception as e:
             logger.warning(f"⚠️ RayAgent {self.agent_id} created with limited functionality: {e}")
     
@@ -227,6 +231,25 @@ class RayAgent:
         except Exception as e:
             logger.warning(f"⚠️ Failed to create CognitiveServiceClient for {self.agent_id}: {e}")
             self._cog = None
+
+    def _initialize_registry_reporting(self):
+        """Initialize optional registry reporting with graceful fallback."""
+        self._registry = None
+        if os.getenv("ENABLE_RUNTIME_REGISTRY", "true").lower() in ("1", "true", "yes"):
+            try:
+                from ..registry import RegistryClient
+                # Get actor name if available (Ray actors can have names)
+                actor_name = getattr(self, '_name', None) or self.agent_id
+                self._registry = RegistryClient(
+                    logical_id=self.agent_id,
+                    actor_name=actor_name,
+                    serve_route=None,
+                    cluster_epoch=os.getenv("CLUSTER_EPOCH")  # optional
+                )
+                logger.info(f"✅ Agent {self.agent_id} initialized with registry reporting")
+            except Exception as e:
+                logger.debug(f"Registry reporting disabled for {self.agent_id}: {e}")
+                self._registry = None
     
     def _normalize_cog_resp(self, resp: dict) -> dict:
         """Normalize cognitive service response to consistent format."""
@@ -1351,6 +1374,40 @@ class RayAgent:
             except Exception as e:
                 logger.error(f"Error in heartbeat loop for {self.agent_id}: {e}")
                 await asyncio.sleep(interval_seconds)
+
+    async def _start_registry_reporting(self):
+        """Start optional registry reporting with graceful fallback."""
+        if not self._registry:
+            return
+        try:
+            await self._registry.register()
+            await self._registry.set_status("alive")
+            logger.info(f"✅ Agent {self.agent_id} registered with runtime registry")
+        except Exception as e:
+            logger.debug(f"Registry register failed for {self.agent_id}: {e}")
+            return
+
+        async def _beat_loop():
+            """Background task for sending registry heartbeats."""
+            while True:
+                try:
+                    await self._registry.beat()
+                except Exception:
+                    # Non-fatal - registry may be temporarily unavailable
+                    pass
+                await asyncio.sleep(float(os.getenv("REGISTRY_BEAT_SEC", "5")))
+
+        # Start the heartbeat loop as a background task
+        asyncio.create_task(_beat_loop())
+        logger.info(f"✅ Agent {self.agent_id} started registry heartbeat reporting")
+
+    async def start(self):
+        """Start the agent with all background services."""
+        # Start the existing heartbeat loop
+        await self.start_heartbeat_loop()
+        
+        # Start registry reporting if enabled
+        await self._start_registry_reporting()
     
     def reset_metrics(self):
         """Reset all performance metrics (for testing/debugging)."""
