@@ -3,8 +3,16 @@ name: Run Tests
 on:
   push:
     branches: [ "main", "release/1.0.0" ]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
   pull_request:
     branches: [ "main", "release/1.0.0" ]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
 
 jobs:
   test:
