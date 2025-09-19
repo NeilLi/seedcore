@@ -26,16 +26,53 @@ helm upgrade --install mysql ./helm/mysql \
   --wait \
   --timeout 10m
 
-# Deploy Redis using Bitnami chart (more reliable than custom chart)
-echo "📦 Deploying Redis using Bitnami chart..."
-helm upgrade --install redis bitnami/redis \
-  --namespace seedcore-dev \
-  --set auth.enabled=false \
-  --set master.persistence.size=512Mi \
-  --set master.resources.requests.cpu=50m \
-  --set master.resources.requests.memory=64Mi \
-  --wait \
-  --timeout 10m
+# Deploy Redis using official Redis image (more reliable than Bitnami)
+echo "📦 Deploying Redis using official image..."
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: seedcore-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7.2-alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        command: ["redis-server", "--appendonly", "yes"]
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+      volumes:
+      - name: redis-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: seedcore-dev
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+EOF
 
 # Deploy Neo4j using official Helm chart
 echo "📦 Deploying Neo4j using official Helm chart..."
@@ -75,7 +112,7 @@ echo ""
 echo "🌐 Data store endpoints:"
 echo "  PostgreSQL: postgresql.seedcore-dev.svc.cluster.local:5432"
 echo "  MySQL: mysql.seedcore-dev.svc.cluster.local:3306"
-echo "  Redis: redis-master.seedcore-dev.svc.cluster.local:6379"
+echo "  Redis: redis.seedcore-dev.svc.cluster.local:6379"
 echo "  Neo4j: neo4j.seedcore-dev.svc.cluster.local:7687"
 echo "  RAGFlow: ragflow.seedcore-dev.svc.cluster.local:8080"
 echo ""
@@ -88,7 +125,7 @@ echo ""
 echo "📋 Connection strings for applications:"
 echo "  PG_DSN=postgresql://postgres:password@postgresql:5432/postgres"
 echo "  MYSQL_DATABASE_URL=mysql+mysqlconnector://seedcore:password@mysql:3306/seedcore"
-echo "  REDIS_HOST=redis-master REDIS_PORT=6379"
+echo "  REDIS_HOST=redis REDIS_PORT=6379"
 echo "  NEO4J_URI=bolt://neo4j:7687 NEO4J_USER=neo4j NEO4J_PASSWORD=password"
 echo "  RAGFLOW_API_URL=http://ragflow:8080"
 echo ""

@@ -14,6 +14,14 @@ Key Features:
 Note: This is the service layer that integrates with telemetry and other services.
 """
 
+# Ensure DSP logging is patched before any DSP/DSPy import via transitive imports
+import sys as _sys
+_sys.path.insert(0, '/app/docker')
+try:
+    import dsp_patch  # type: ignore
+except Exception:
+    pass
+
 import json
 import logging
 import os

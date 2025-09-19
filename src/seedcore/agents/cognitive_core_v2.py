@@ -15,6 +15,14 @@ Key Enhancements:
 - Fact sanitization and conflict detection
 """
 
+# Ensure DSP logging is patched before any DSP/DSPy import
+import sys as _sys
+_sys.path.insert(0, '/app/docker')
+try:
+    import dsp_patch  # type: ignore
+except Exception:
+    pass
+
 import dspy
 import json
 import logging

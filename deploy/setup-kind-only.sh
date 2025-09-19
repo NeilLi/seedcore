@@ -21,7 +21,7 @@ fi
 
 # Create Kind cluster
 echo "📦 Creating Kind cluster with kindest/node:v1.30.0..."
-kind create cluster --name "$CLUSTER_NAME" --image kindest/node:v1.30.0 --config kind-config.yaml
+kind create cluster --name "$CLUSTER_NAME" --image kindest/node:v1.30.0 --config "$(dirname "$0")/kind-config.yaml"
 
 # Verify cluster
 echo "🔍 Verifying cluster..."

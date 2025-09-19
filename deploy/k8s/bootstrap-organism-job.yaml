@@ -57,11 +57,4 @@ spec:
           limits:
             cpu: "200m"
             memory: "1Gi"
-        volumeMounts:
-        - name: project-source-volume
-          mountPath: /app
-      volumes:
-      - name: project-source-volume
-        hostPath:
-          path: /project
-          type: DirectoryOrCreate
+        # No volume mounts needed - code is built into the Docker image

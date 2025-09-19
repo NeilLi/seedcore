@@ -75,6 +75,8 @@ COPY --chown=ray:ray src/ ./src/
 COPY --chown=ray:ray scripts/ ./scripts/
 COPY --chown=ray:ray docker/ ./docker/
 COPY --chown=ray:ray entrypoints/ ./entrypoints/
+COPY --chown=ray:ray bootstraps/ ./bootstraps/
+COPY --chown=ray:ray config/ ./config/
 USER ray
 
 # ---- Runtime env ----
