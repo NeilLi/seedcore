@@ -33,15 +33,24 @@ INSERT INTO holons (uuid, embedding, meta) VALUES
 ON CONFLICT (uuid) DO NOTHING;
 
 -- Create the taskstatus enum with lowercase values to match existing database schema
-CREATE TYPE IF NOT EXISTS taskstatus AS ENUM (
-    'created',
-    'queued', 
-    'running',
-    'completed',
-    'failed',
-    'cancelled',
-    'retry'
-);
+-- Use DO block to make it idempotent since PostgreSQL doesn't support IF NOT EXISTS for CREATE TYPE
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'taskstatus') THEN
+        CREATE TYPE taskstatus AS ENUM (
+            'created',
+            'queued', 
+            'running',
+            'completed',
+            'failed',
+            'cancelled',
+            'retry'
+        );
+        RAISE NOTICE 'Created taskstatus enum type';
+    ELSE
+        RAISE NOTICE 'taskstatus enum type already exists, skipping creation';
+    END IF;
+END$$;
 
 -- Create tasks table for the Coordinator + Dispatcher system
 CREATE TABLE IF NOT EXISTS tasks (

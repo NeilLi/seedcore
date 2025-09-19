@@ -1,5 +1,7 @@
 # SeedCore: Dynamic Cognitive Architecture with XGBoost ML Integration
 
+[![Run Tests](https://github.com/NeilLi/seedcore/actions/workflows/tests.yml/badge.svg)](https://github.com/NeilLi/seedcore/actions/workflows/tests.yml)
+
 A stateful, interactive cognitive architecture system with persistent organs, agents, energy-based control loops, and integrated XGBoost machine learning capabilities featuring realistic agent collaboration learning, now deployed on Kubernetes with KubeRay.
 
 ## 🚀 Quick Start (Kubernetes + KubeRay)

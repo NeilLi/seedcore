@@ -15,14 +15,19 @@ import traceback
 import logging
 from typing import Dict, Any, Optional
 
+# Add the project root to Python path
+sys.path.insert(0, '/app')
+sys.path.insert(0, '/app/src')
+sys.path.insert(0, '/app/docker')
+
+# CRITICAL: Import DSP patch BEFORE any other imports that might trigger DSP
+# This prevents permission errors when DSP tries to create log files
+import dsp_patch
+
 import ray
 from ray import serve
 from fastapi import FastAPI
 from pydantic import BaseModel
-
-# Add the project root to Python path
-sys.path.insert(0, '/app')
-sys.path.insert(0, '/app/src')
 
 from seedcore.logging_setup import setup_logging
 setup_logging(app_name="seedcore.CognitiveCore")
@@ -83,7 +88,7 @@ logger = logging.getLogger(__name__)
         # "num_gpus": float(os.getenv("COG_SVC_NUM_GPUS", "0.5")),
         # Pin replicas to the head node resource set by RAY_OVERRIDE_RESOURCES
         "num_cpus": 0.5,
-        "resources": {"cognitive_node": 0.001},
+        "resources": {"head_node": 0.001},
     },
 )
 @serve.ingress(app)

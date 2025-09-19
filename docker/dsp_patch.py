@@ -20,9 +20,20 @@ def patch_dsp_before_import():
     original_file_handler = logging.FileHandler
     
     def safe_file_handler(filename, mode='a', encoding=None, delay=False):
-        """Safe file handler that redirects to stdout instead of files."""
-        print(f"⚠️  FileHandler requested for {filename}, redirecting to stdout")
-        return logging.StreamHandler(sys.stdout)
+        """Safe file handler that redirects to /tmp or configured path instead of the original location."""
+        # Use environment variable if set, otherwise default to /tmp
+        log_path = os.getenv('DSP_LOG_PATH', '/tmp')
+        if os.path.isdir(log_path):
+            safe_filename = os.path.join(log_path, os.path.basename(filename))
+        else:
+            safe_filename = f"/tmp/{os.path.basename(filename)}"
+        
+        print(f"⚠️  FileHandler requested for {filename}, redirecting to {safe_filename}")
+        try:
+            return original_file_handler(safe_filename, mode, encoding, delay)
+        except Exception as e:
+            print(f"⚠️  Failed to create file handler for {safe_filename}, falling back to stdout: {e}")
+            return logging.StreamHandler(sys.stdout)
     
     # Replace the FileHandler class
     logging.FileHandler = safe_file_handler

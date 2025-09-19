@@ -80,7 +80,7 @@ metadata:
     nginx.ingress.kubernetes.io/use-regex: "true"
 spec:
   rules:
-  - host: orchestrator.${INGRESS_HOST}
+  - host: orchestrator.localhost
     http:
       paths:
       # All organism control routes

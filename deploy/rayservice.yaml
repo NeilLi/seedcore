@@ -39,7 +39,7 @@ spec:
               num_cpus: 0.2
               num_gpus: 0
               memory: 2147483648  # 2GB
-              # resources: {"head_node": 0.001}
+              resources: {"head_node": 0.001}
       
       - name: coordinator
         import_path: entrypoints.coordinator_entrypoint:build_coordinator
@@ -147,12 +147,16 @@ spec:
               value: "false"
             - name: DSP_LOG_TO_STDOUT
               value: "true"
+            - name: DSP_LOG_PATH
+              value: "/tmp/azure_openai_usage.log"
             - name: LOG_TO_FILE
               value: "false"
             - name: LOG_TO_STDOUT
               value: "true"
             - name: LOG_LEVEL
               value: "INFO"
+            - name: LLM_PROVIDER
+              value: "mlservice"
             ports:
               - name: gcs
                 containerPort: 6379
@@ -175,8 +179,8 @@ spec:
             volumeMounts:
               - name: xgb-model-storage
                 mountPath: /app/data
-              - name: project-source-volume
-                mountPath: /app
+            #  - name: project-source-volume
+            #    mountPath: /app
             # Probes are good practice for production readiness.
             startupProbe:
               exec:
@@ -197,10 +201,10 @@ spec:
               timeoutSeconds: 2
               failureThreshold: 120
           volumes:
-            - name: project-source-volume
-              hostPath:
-                path: /project
-                type: DirectoryOrCreate
+            #- name: project-source-volume
+            #  hostPath:
+            #    path: /project
+            #    type: DirectoryOrCreate
             - name: xgb-model-storage
               persistentVolumeClaim:
                 claimName: xgb-pvc
@@ -245,12 +249,16 @@ spec:
               value: "false"
             - name: DSP_LOG_TO_STDOUT
               value: "true"
+            - name: DSP_LOG_PATH
+              value: "/tmp/azure_openai_usage.log"
             - name: LOG_TO_FILE
               value: "false"
             - name: LOG_TO_STDOUT
               value: "true"
             - name: LOG_LEVEL
               value: "INFO"
+            - name: LLM_PROVIDER
+              value: "mlservice"
             resources:
               requests:
                 cpu: "500m"
@@ -261,8 +269,8 @@ spec:
             volumeMounts:
               - name: xgb-model-storage
                 mountPath: /app/data
-              - name: project-source-volume
-                mountPath: /app
+              #- name: project-source-volume
+              #  mountPath: /app
             readinessProbe:
               exec:
                 command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
@@ -276,10 +284,10 @@ spec:
               timeoutSeconds: 2
               failureThreshold: 120
           volumes:
-            - name: project-source-volume
-              hostPath:
-                path: /project
-                type: DirectoryOrCreate
+           # - name: project-source-volume
+           #   hostPath:
+           #     path: /project
+           #     type: DirectoryOrCreate
             - name: xgb-model-storage
               persistentVolumeClaim:
                 claimName: xgb-pvc

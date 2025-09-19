@@ -2579,11 +2579,11 @@ def _organism_base_url() -> Optional[str]:
     return "http://127.0.0.1:8000"
 
 def _candidate_bases(base: str) -> List[str]:
-    """Generate candidate base URLs with and without /organism prefix."""
-    bases = [base.rstrip("/")]
-    if not base.rstrip("/").endswith("/organism"):
-        bases.append(base.rstrip("/") + "/organism")
-    return bases
+    """Generate candidate base URLs with /organism prefix (current API)."""
+    base = base.rstrip("/")
+    if not base.endswith("/organism"):
+        base = base + "/organism"
+    return [base]
 
 def check_organism_service_availability(ray) -> bool:
     """Check if organism service is available via HTTP health endpoint."""

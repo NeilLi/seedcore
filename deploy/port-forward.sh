@@ -31,8 +31,8 @@ kubectl -n "$NAMESPACE" port-forward svc/mysql 3306:3306 &
 kubectl -n "$NAMESPACE" port-forward svc/neo4j 7474:7474 7687:7687 &
 
 # ⚡ Redis
-# localhost:6379 → Redis (master)
-kubectl -n "$NAMESPACE" port-forward svc/redis-master 6379:6379 &
+# localhost:6379 → Redis
+kubectl -n "$NAMESPACE" port-forward svc/redis 6379:6379 &
 
 # Clean exit: kill all port-forwards on Ctrl+C
 trap "echo '❌ Killing port-forwards...'; kill 0" SIGINT SIGTERM EXIT
