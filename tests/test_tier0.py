@@ -64,7 +64,7 @@ def ray_get(obj):
     # Fallback for mocks: return .value if present, else the object
     return getattr(obj, 'value', obj)
 
-from src.seedcore.agents.tier0_manager import Tier0MemoryManager
+from src.seedcore.tier0.tier0_manager import Tier0MemoryManager
 from src.seedcore.agents.ray_actor import RayAgent
 from src.seedcore.energy.ledger import EnergyLedger
 

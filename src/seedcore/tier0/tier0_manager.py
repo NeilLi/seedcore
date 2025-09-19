@@ -31,7 +31,7 @@ from collections import defaultdict
 import logging
 import json
 
-from .ray_actor import RayAgent
+from ..agents.ray_actor import RayAgent
 from ..energy.optimizer import select_best_agent, score_agent
 # Avoid importing EnergyLedger at module import time to prevent circular imports.
 # We'll import it inside functions that need it.

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 def get_agents_state() -> Dict:
     """Returns the current state of all agents in the simulation with real data."""
     try:
-        from ...agents import tier0_manager
+        from ...tier0 import tier0_manager
         import ray
         
         # Ensure Ray connection (idempotent)

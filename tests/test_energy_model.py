@@ -43,7 +43,7 @@ from src.seedcore.energy.optimizer import (
     estimate_task_complexity
 )
 from src.seedcore.agents.ray_actor import RayAgent
-from src.seedcore.agents.tier0_manager import Tier0MemoryManager
+from src.seedcore.tier0.tier0_manager import Tier0MemoryManager
 
 
 def test_energy_ledger():

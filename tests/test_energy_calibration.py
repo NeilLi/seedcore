@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.seedcore.energy.calculator import EnergyLedger, calculate_energy
 from src.seedcore.agents.ray_actor import RayAgent
-from src.seedcore.agents.tier0_manager import Tier0MemoryManager
+from src.seedcore.tier0.tier0_manager import Tier0MemoryManager
 
 
 def create_synthetic_tasks(num_tasks: int = 100) -> List[Dict[str, Any]]:

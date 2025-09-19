@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from seedcore.utils.ray_utils import ensure_ray_initialized, get_ray_cluster_info
 from seedcore.config.ray_config import get_ray_config
-from seedcore.agents import RayAgent, Tier0MemoryManager, tier0_manager
+from seedcore.agents import RayAgent
+from seedcore.tier0.tier0_manager import Tier0MemoryManager, tier0_manager
 
 def setup_ray_connection():
     """Initialize Ray connection using environment variables."""

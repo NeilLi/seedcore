@@ -16,7 +16,7 @@ energy_logs = []
 def _build_energy_health_payload():
     """Internal: Build energy health payload for both legacy and new health routes."""
     from ...energy.calculator import energy_gradient_payload, EnergyLedger
-    from ...agents.tier0_manager import Tier0MemoryManager
+    from ...tier0.tier0_manager import Tier0MemoryManager
     import ray
 
     # Initialize Ray if not already done

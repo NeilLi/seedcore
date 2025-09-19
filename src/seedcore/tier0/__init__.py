@@ -13,17 +13,12 @@
 # limitations under the License.
 
 """
-Agent implementations for SeedCore.
+Tier0 management module for SeedCore.
 """
 
-from .base import Agent
-from .lifecycle import evaluate_lifecycle
-from .ray_actor import RayAgent
-from .integration import RayAgentCognitiveIntegration
+from .tier0_manager import Tier0MemoryManager, tier0_manager
 
 __all__ = [
-    'Agent',
-    'evaluate_lifecycle', 
-    'RayAgent',
-    'RayAgentCognitiveIntegration'
+    'Tier0MemoryManager',
+    'tier0_manager'
 ]

@@ -32,10 +32,9 @@ from enum import Enum
 from typing import Dict, Any, Optional, List, Protocol, Callable
 from dataclasses import dataclass
 
-from seedcore.logging_setup import setup_logging
+from seedcore.logging_setup import ensure_serve_logger
 
-setup_logging("seedcore.CognitiveService")
-logger = logging.getLogger("seedcore.CognitiveService")
+logger = ensure_serve_logger("seedcore.CognitiveService", level="DEBUG")
 
 ## Using ray_utils for MLService base URL discovery happens inline where needed
 

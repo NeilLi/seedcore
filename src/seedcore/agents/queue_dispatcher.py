@@ -21,7 +21,9 @@ try:
 except Exception:
     psutil = None
 
-log = logging.getLogger(__name__)
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.dispatchers", level="DEBUG")
 
 # --------- JSON (fast path if orjson is present) ----------
 try:
@@ -260,17 +262,17 @@ class Dispatcher:
                 #  - finite idle lifetime (reap idle connections)
                 #  - command timeout prevents stuck connections
                 self.pool = await self._create_pool(min_size=1, max_size=max(4, MAX_CONCURRENCY))
-                log.info(f"Dispatcher {self.name}: Created connection pool with max_size={max(4, MAX_CONCURRENCY)}")
+                logger.info(f"Dispatcher {self.name}: Created connection pool with max_size={max(4, MAX_CONCURRENCY)}")
                 self._last_pool_error = None
             except Exception as e:
-                log.error(f"Dispatcher {self.name}: Failed to create connection pool: {e}")
+                logger.error(f"Dispatcher {self.name}: Failed to create connection pool: {e}")
                 try:
                     self._last_pool_error = f"{e.__class__.__name__}: {e}"
                 except Exception:
                     self._last_pool_error = str(e)
                 raise
         elif self._is_pool_closed():
-            log.warning(f"Dispatcher {self.name}: Connection pool was closed, recreating...")
+            logger.warning(f"Dispatcher {self.name}: Connection pool was closed, recreating...")
             self.pool = None
             await self._ensure_pool()
 
@@ -292,21 +294,21 @@ class Dispatcher:
                     
                     # Log warning if pool is getting full
                     if free_size == 0:
-                        log.warning(f"🚨 Dispatcher {self.name}: Connection pool is full! size={pool_stats['size']}, max_size={pool_stats['max_size']}")
+                        logger.warning(f"🚨 Dispatcher {self.name}: Connection pool is full! size={pool_stats['size']}, max_size={pool_stats['max_size']}")
                     elif free_size <= 1:
-                        log.warning(f"⚠️ Dispatcher {self.name}: Connection pool nearly full! free_size={free_size}, size={pool_stats['size']}")
+                        logger.warning(f"⚠️ Dispatcher {self.name}: Connection pool nearly full! free_size={free_size}, size={pool_stats['size']}")
                 except AttributeError:
                     # free_size not available in newer asyncpg versions
                     pool_stats["free_size"] = "unavailable"
-                    log.debug(f"ℹ️ Dispatcher {self.name}: free_size not available in this asyncpg version")
+                    logger.debug(f"ℹ️ Dispatcher {self.name}: free_size not available in this asyncpg version")
                 except Exception as e:
                     pool_stats["free_size"] = f"error: {e}"
-                    log.debug(f"ℹ️ Dispatcher {self.name}: free_size check failed: {e}")
+                    logger.debug(f"ℹ️ Dispatcher {self.name}: free_size check failed: {e}")
                 
                 # Log pool stats periodically for debugging (every 5 minutes)
                 now = time.monotonic()
                 if now - self._last_pool_log > 300.0:
-                    log.info(f"📊 Dispatcher {self.name}: Pool stats - {pool_stats}")
+                    logger.info(f"📊 Dispatcher {self.name}: Pool stats - {pool_stats}")
                     self._last_pool_log = now
 
                 # Memory telemetry (RSS) if psutil is available
@@ -322,7 +324,7 @@ class Dispatcher:
                     self._last_mem_check = now
                     
             except Exception as e:
-                log.error(f"Failed to monitor pool health: {e}")
+                logger.error(f"Failed to monitor pool health: {e}")
 
     # --- NEW: explicit warmup/ready probes so bootstrap can block until DB is ready ---
     async def warmup(self) -> Dict[str, Any]:
@@ -376,7 +378,7 @@ class Dispatcher:
                         updated_at=NOW()
                     WHERE id=$1
                 """, r["id"])
-                log.info("🔄 Cancelled in-batch duplicate task %s (type=%s)", r["id"], r["type"])
+                logger.info("🔄 Cancelled in-batch duplicate task %s (type=%s)", r["id"], r["type"])
                 continue
             seen.add(key)
             batch.append({
@@ -393,8 +395,8 @@ class Dispatcher:
             self.tasks_claimed.inc(len(batch))
             # Log all claimed tasks with their IDs
             task_ids = [str(task["id"]) for task in batch]
-            log.info(f"[QueueDispatcher] 📦 Claimed batch of {len(batch)} tasks: {task_ids}")
-            log.info(f"[QueueDispatcher] 🎯 Task IDs: {', '.join(task_ids)}")
+            logger.info(f"[QueueDispatcher] 📦 Claimed batch of {len(batch)} tasks: {task_ids}")
+            logger.info(f"[QueueDispatcher] 🎯 Task IDs: {', '.join(task_ids)}")
         return batch
 
     async def _renew_task_lease(self, con, task_id: str):
@@ -409,9 +411,9 @@ class Dispatcher:
                   AND status = 'running'
                   AND owner_id = $3
             """, str(RUN_LEASE_S), task_id, self.name)
-            log.debug(f"[QueueDispatcher] Renewed lease for task {task_id}")
+            logger.debug(f"[QueueDispatcher] Renewed lease for task {task_id}")
         except Exception as e:
-            log.warning(f"[QueueDispatcher] Failed to renew lease for task {task_id}: {e}")
+            logger.warning(f"[QueueDispatcher] Failed to renew lease for task {task_id}: {e}")
 
     async def _recover_mine(self):
         """Recover any RUNNING tasks owned by this dispatcher on startup."""
@@ -429,9 +431,9 @@ class Dispatcher:
                       AND (last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '2 minutes')
                 """, self.name)
                 if result != "UPDATE 0":
-                    log.info(f"[QueueDispatcher] Recovered {result} tasks owned by {self.name} on startup")
+                    logger.info(f"[QueueDispatcher] Recovered {result} tasks owned by {self.name} on startup")
         except Exception as e:
-            log.warning(f"[QueueDispatcher] Failed to recover tasks for {self.name}: {e}")
+            logger.warning(f"[QueueDispatcher] Failed to recover tasks for {self.name}: {e}")
 
     class TaskPayload(BaseModel):
         type: str
@@ -476,10 +478,10 @@ class Dispatcher:
             tid = item["id"]
             
             # Force logging task_id early with comprehensive info
-            log.info(f"[QueueDispatcher] 🚀 Processing task {tid} (type={item['type']}, domain={item['domain']}, attempts={item.get('attempts', 0)})")
-            log.info(f"[QueueDispatcher] 📋 Task ID: {tid} | Type: {item['type']} | Domain: {item['domain']} | Attempts: {item.get('attempts', 0)}")
-            log.info(f"[QueueDispatcher] 🔍 Raw item data: {item}")
-            log.info(f"[QueueDispatcher] 🔍 Item types: params={type(item.get('params'))}, domain={type(item.get('domain'))}")
+            logger.info(f"[QueueDispatcher] 🚀 Processing task {tid} (type={item['type']}, domain={item['domain']}, attempts={item.get('attempts', 0)})")
+            logger.info(f"[QueueDispatcher] 📋 Task ID: {tid} | Type: {item['type']} | Domain: {item['domain']} | Attempts: {item.get('attempts', 0)}")
+            logger.info(f"[QueueDispatcher] 🔍 Raw item data: {item}")
+            logger.info(f"[QueueDispatcher] 🔍 Item types: params={type(item.get('params'))}, domain={type(item.get('domain'))}")
             
             payload = Dispatcher.TaskPayload(
                 type=item["type"],
@@ -489,8 +491,8 @@ class Dispatcher:
                 drift_score=item["drift_score"],
                 task_id=str(tid)
             )
-            log.info(f"[QueueDispatcher] ✅ Task payload created for {tid}: {payload.dict()}")
-            log.info(f"[QueueDispatcher] 🔧 Coord handle type: {type(coord_handle)}")
+            logger.info(f"[QueueDispatcher] ✅ Task payload created for {tid}: {payload.dict()}")
+            logger.info(f"[QueueDispatcher] 🔧 Coord handle type: {type(coord_handle)}")
             
             try:
                 # Start lease renewal task for long-running tasks
@@ -506,43 +508,43 @@ class Dispatcher:
                                 async with self.pool.acquire() as con:
                                     await self._renew_task_lease(con, tid)
                             except Exception as e:
-                                log.debug(f"Lease renewal failed for task {tid}: {e}")
+                                logger.debug(f"Lease renewal failed for task {tid}: {e}")
                                 break
                     
                     lease_renewal_task = asyncio.create_task(renew_lease_periodically())
                 except Exception as e:
-                    log.debug(f"Failed to start lease renewal for task {tid}: {e}")
+                    logger.debug(f"Failed to start lease renewal for task {tid}: {e}")
 
                 # NOTE: Ray Serve returns a DeploymentResponse; awaiting it is fine.
-                log.info(f"[QueueDispatcher] 📤 About to send task {tid} to Coordinator for routing and execution")
-                log.info(f"[QueueDispatcher] 🎯 Task ID: {tid} | Executing task type: {item['type']}")
-                log.info(f"[QueueDispatcher] 📋 Task payload: {payload.dict()}")
-                log.info(f"[QueueDispatcher] 🔧 Coord handle: {coord_handle}")
+                logger.info(f"[QueueDispatcher] 📤 About to send task {tid} to Coordinator for routing and execution")
+                logger.info(f"[QueueDispatcher] 🎯 Task ID: {tid} | Executing task type: {item['type']}")
+                logger.info(f"[QueueDispatcher] 📋 Task payload: {payload.dict()}")
+                logger.info(f"[QueueDispatcher] 🔧 Coord handle: {coord_handle}")
                 
                 try:
                     # Add timeout to prevent hanging on Serve calls
                     CALL_TIMEOUT_S = int(os.getenv("SERVE_CALL_TIMEOUT_S", "120"))
-                    log.info(f"[QueueDispatcher] 🚀 Calling coord_handle.route_and_execute.remote() for task {tid} (timeout={CALL_TIMEOUT_S}s)")
+                    logger.info(f"[QueueDispatcher] 🚀 Calling coord_handle.route_and_execute.remote() for task {tid} (timeout={CALL_TIMEOUT_S}s)")
                     
                     fut = coord_handle.route_and_execute.remote(payload)
                     result: Dict[str, Any] = await asyncio.wait_for(fut, timeout=CALL_TIMEOUT_S)
-                    log.info(f"[QueueDispatcher] ✅ Received result from Coordinator for task {tid}: {result}")
+                    logger.info(f"[QueueDispatcher] ✅ Received result from Coordinator for task {tid}: {result}")
                     
                 except asyncio.TimeoutError:
-                    log.warning(f"[QueueDispatcher] ⏰ Serve call timeout for task {tid} after {CALL_TIMEOUT_S}s")
+                    logger.warning(f"[QueueDispatcher] ⏰ Serve call timeout for task {tid} after {CALL_TIMEOUT_S}s")
                     # Mark as RETRY with backoff, exit cleanly; do NOT stall the loop
                     async with self.pool.acquire() as conw:
                         delay = min(10 * (2 ** item["attempts"]), 300)
                         await conw.execute(RETRY_SQL, "dispatcher: serve call timeout", str(delay), tid)
-                        log.info(f"[QueueDispatcher] 🔄 Task {tid} marked for retry due to timeout (delay={delay}s)")
+                        logger.info(f"[QueueDispatcher] 🔄 Task {tid} marked for retry due to timeout (delay={delay}s)")
                         self.tasks_retried.inc()
                     return
                     
                 except Exception as e:
-                    log.error(f"[QueueDispatcher] ❌ Failed to get result from Coordinator for task {tid}: {e}")
-                    log.error(f"[QueueDispatcher] 🔧 Exception type: {type(e)}")
-                    log.error(f"[QueueDispatcher] 📋 Exception details: {str(e)}")
-                    log.error(f"[QueueDispatcher] 🔧 Exception traceback:", exc_info=True)
+                    logger.error(f"[QueueDispatcher] ❌ Failed to get result from Coordinator for task {tid}: {e}")
+                    logger.error(f"[QueueDispatcher] 🔧 Exception type: {type(e)}")
+                    logger.error(f"[QueueDispatcher] 📋 Exception details: {str(e)}")
+                    logger.error(f"[QueueDispatcher] 🔧 Exception traceback:", exc_info=True)
                     raise
 
                 # Cancel lease renewal task
@@ -566,20 +568,20 @@ class Dispatcher:
                                 if 'orjson' in globals():
                                     result_bytes = orjson.dumps(result_data, option=orjson.OPT_SERIALIZE_NUMPY | orjson.OPT_NON_STR_KEYS)
                                     if len(result_bytes) > RESULT_MAX_BYTES:
-                                        log.warning(f"⚠️ Task {tid} result truncated: {len(result_bytes)} bytes > {RESULT_MAX_BYTES} bytes")
+                                        logger.warning(f"⚠️ Task {tid} result truncated: {len(result_bytes)} bytes > {RESULT_MAX_BYTES} bytes")
                                         result_data = {"_truncated": True, "original_size": len(result_bytes), "truncated_at": time.time()}
                                 else:
                                     # Fallback to json if orjson not available
                                     result_json = _dumps(result_data)
                                     if len(result_json.encode('utf-8')) > RESULT_MAX_BYTES:
-                                        log.warning(f"⚠️ Task {tid} result truncated: {len(result_json)} bytes > {RESULT_MAX_BYTES} bytes")
+                                        logger.warning(f"⚠️ Task {tid} result truncated: {len(result_json)} bytes > {RESULT_MAX_BYTES} bytes")
                                         result_data = {"_truncated": True, "original_size": len(result_json), "truncated_at": time.time()}
                             except Exception as e:
-                                log.debug(f"Task {tid} result size check failed: {e}")
+                                logger.debug(f"Task {tid} result size check failed: {e}")
                         
                         await conw.execute(COMPLETE_SQL, _dumps(result_data), tid)
-                        log.info(f"[QueueDispatcher] ✅ Task {tid} completed successfully")
-                        log.info(f"[QueueDispatcher] 🎉 Task ID: {tid} | Status: COMPLETED | Type: {item['type']}")
+                        logger.info(f"[QueueDispatcher] ✅ Task {tid} completed successfully")
+                        logger.info(f"[QueueDispatcher] 🎉 Task ID: {tid} | Status: COMPLETED | Type: {item['type']}")
                         self.tasks_completed.inc()
                     else:
                         # Task failed - check if we should retry or mark as failed
@@ -592,22 +594,22 @@ class Dispatcher:
                         if attempts >= max_attempts:
                             # Mark as failed after max attempts
                             await conw.execute(FAIL_SQL, f"Max attempts ({max_attempts}) exceeded: {error_msg}", tid)
-                            log.warning(f"[QueueDispatcher] ❌ Task {tid} failed after {attempts} attempts: {error_msg}")
-                            log.warning(f"[QueueDispatcher] 💀 Task ID: {tid} | Status: FAILED | Attempts: {attempts}/{max_attempts} | Error: {error_msg}")
+                            logger.warning(f"[QueueDispatcher] ❌ Task {tid} failed after {attempts} attempts: {error_msg}")
+                            logger.warning(f"[QueueDispatcher] 💀 Task ID: {tid} | Status: FAILED | Attempts: {attempts}/{max_attempts} | Error: {error_msg}")
                             self.tasks_failed.inc()
                         else:
                             # Retry with exponential backoff
                             delay = min(10 * (2 ** (attempts - 1)), 300)  # Exponential backoff: 10s, 20s, 40s, 80s, 160s, 300s max
                             await conw.execute(RETRY_SQL, error_msg, str(delay), tid)
-                            log.info(f"[QueueDispatcher] 🔄 Task {tid} marked for retry (attempt {attempts}/{max_attempts}) in {delay}s: {error_msg}")
-                            log.info(f"[QueueDispatcher] 🔁 Task ID: {tid} | Status: RETRY | Attempts: {attempts}/{max_attempts} | Delay: {delay}s")
+                            logger.info(f"[QueueDispatcher] 🔄 Task {tid} marked for retry (attempt {attempts}/{max_attempts}) in {delay}s: {error_msg}")
+                            logger.info(f"[QueueDispatcher] 🔁 Task ID: {tid} | Status: RETRY | Attempts: {attempts}/{max_attempts} | Delay: {delay}s")
                             self.tasks_retried.inc()
 
             except Exception as e:
-                log.error(f"[QueueDispatcher] ❌ CRITICAL: Dispatcher {self.name} task {tid} failed with exception: {e}")
-                log.error(f"[QueueDispatcher] 🔧 Exception type: {type(e)}")
-                log.error(f"[QueueDispatcher] 📋 Exception details: {str(e)}")
-                log.exception(f"[QueueDispatcher] 🔧 Full exception traceback:")
+                logger.error(f"[QueueDispatcher] ❌ CRITICAL: Dispatcher {self.name} task {tid} failed with exception: {e}")
+                logger.error(f"[QueueDispatcher] 🔧 Exception type: {type(e)}")
+                logger.error(f"[QueueDispatcher] 📋 Exception details: {str(e)}")
+                logger.exception(f"[QueueDispatcher] 🔧 Full exception traceback:")
                 attempts = item["attempts"] + 1
                 max_attempts = int(os.getenv("MAX_TASK_ATTEMPTS", "3"))
                 
@@ -615,16 +617,16 @@ class Dispatcher:
                     if attempts >= max_attempts:
                         # Mark as failed after max attempts
                         await conw.execute(FAIL_SQL, f"Dispatcher error after {max_attempts} attempts: {e}", tid)
-                        log.warning(f"[QueueDispatcher] ❌ Task {tid} failed after {attempts} attempts due to dispatcher error: {e}")
-                        log.warning(f"[QueueDispatcher] 💀 Task ID: {tid} | Status: FAILED | Dispatcher Error | Attempts: {attempts}/{max_attempts}")
+                        logger.warning(f"[QueueDispatcher] ❌ Task {tid} failed after {attempts} attempts due to dispatcher error: {e}")
+                        logger.warning(f"[QueueDispatcher] 💀 Task ID: {tid} | Status: FAILED | Dispatcher Error | Attempts: {attempts}/{max_attempts}")
                         self.tasks_failed.inc()
                     else:
                         # Retry with exponential backoff, but add jitter to avoid retry storms
                         base_delay = min(10 * (2 ** (attempts - 1)), 300)
                         delay = base_delay + random.randint(0, 5)
                         await conw.execute(RETRY_SQL, f"dispatcher error: {e}", str(delay), tid)
-                        log.info(f"[QueueDispatcher] 🔄 Task {tid} retry (attempt {attempts}/{max_attempts}) in {delay}s with jitter due to dispatcher error: {e}")
-                        log.info(f"[QueueDispatcher] 🔁 Task ID: {tid} | Status: RETRY | Dispatcher Error | Attempts: {attempts}/{max_attempts} | Delay: {delay}s")
+                        logger.info(f"[QueueDispatcher] 🔄 Task {tid} retry (attempt {attempts}/{max_attempts}) in {delay}s with jitter due to dispatcher error: {e}")
+                        logger.info(f"[QueueDispatcher] 🔁 Task ID: {tid} | Status: RETRY | Dispatcher Error | Attempts: {attempts}/{max_attempts} | Delay: {delay}s")
                         self.tasks_retried.inc()
             finally:
                 # help GC drop references quickly
@@ -650,7 +652,7 @@ class Dispatcher:
                     # Use lighter GC collection (0) for routine cleanup
                     collected = gc.collect(0)
                     if collected > 0:
-                        log.debug(f"Dispatcher {self.name}: GC collected {collected} objects after {FORCE_GC_EVERY_N} tasks")
+                        logger.debug(f"Dispatcher {self.name}: GC collected {collected} objects after {FORCE_GC_EVERY_N} tasks")
                 
                 # Check memory limits and potentially recycle
                 if MEMORY_SOFT_LIMIT_MB > 0:
@@ -658,16 +660,16 @@ class Dispatcher:
                         if self._proc is not None:
                             rss_mb = self._proc.memory_info().rss / (1024 * 1024)
                             if rss_mb > MEMORY_SOFT_LIMIT_MB:
-                                log.warning(f"🚨 Dispatcher {self.name}: Memory limit exceeded! RSS: {rss_mb:.1f}MB > {MEMORY_SOFT_LIMIT_MB}MB")
+                                logger.warning(f"🚨 Dispatcher {self.name}: Memory limit exceeded! RSS: {rss_mb:.1f}MB > {MEMORY_SOFT_LIMIT_MB}MB")
                                 # Use full GC collection (2) when memory pressure is detected
                                 gc.collect(2)
                                 if RECYCLE_AFTER_TASKS > 0 and self._tasks_total >= RECYCLE_AFTER_TASKS:
-                                    log.info(f"🔄 Dispatcher {self.name}: Recycling after {self._tasks_total} tasks due to memory pressure")
+                                    logger.info(f"🔄 Dispatcher {self.name}: Recycling after {self._tasks_total} tasks due to memory pressure")
                                     # Reset counters and force cleanup
                                     self._tasks_total = 0
                                     self._tasks_since_gc = 0
                     except Exception as e:
-                        log.debug(f"Dispatcher {self.name}: Memory check failed: {e}")
+                        logger.debug(f"Dispatcher {self.name}: Memory check failed: {e}")
 
     async def _watchdog_check(self):
         """Detect and return stuck 'running' tasks back to 'retry'."""
@@ -681,16 +683,16 @@ class Dispatcher:
                 failed = await con.fetch(REAP_FAILED_SQL, grace_period, max_attempts)
                 if failed:
                     failed_ids = [str(r["id"]) for r in failed]
-                    log.warning(f"[QueueDispatcher] 💀 Watchdog: marked {len(failed_ids)} tasks as FAILED (attempts exceeded): {failed_ids}")
+                    logger.warning(f"[QueueDispatcher] 💀 Watchdog: marked {len(failed_ids)} tasks as FAILED (attempts exceeded): {failed_ids}")
                 
                 # Then, requeue tasks that are still within attempt budget
                 stuck = await con.fetch(REAP_STUCK_SQL, grace_period, max_attempts)
                 if stuck:
                     ids = [str(r["id"]) for r in stuck]
                     owners = [r.get("locked_by") for r in stuck]
-                    log.warning(f"[QueueDispatcher] 🚨 Watchdog: returned {len(ids)} stuck tasks to RETRY: {ids} (locked_by={owners})")
+                    logger.warning(f"[QueueDispatcher] 🚨 Watchdog: returned {len(ids)} stuck tasks to RETRY: {ids} (locked_by={owners})")
         except Exception as e:
-            log.error(f"[QueueDispatcher] ❌ Watchdog check failed: {e}")
+            logger.error(f"[QueueDispatcher] ❌ Watchdog check failed: {e}")
 
     async def _listen_loop(self, con):
         """LISTEN/NOTIFY loop using a coalescing event (no unbounded growth)."""
@@ -723,17 +725,17 @@ class Dispatcher:
         await self._recover_mine()
 
         # ✅ Get a handle to the Coordinator deployment inside the 'coordinator' app.
-        log.info(f"[QueueDispatcher] 🔍 Getting Coordinator Serve deployment handle...")
+        logger.info(f"[QueueDispatcher] 🔍 Getting Coordinator Serve deployment handle...")
         try:
             coord_handle = serve.get_deployment_handle("Coordinator", app_name="coordinator")
-            log.info(f"[QueueDispatcher] ✅ Successfully got Coordinator handle: {coord_handle}")
+            logger.info(f"[QueueDispatcher] ✅ Successfully got Coordinator handle: {coord_handle}")
             
             # Test the connection with a health check (coordinator doesn't have health endpoint, so we'll skip)
-            log.info(f"[QueueDispatcher] 🏥 Coordinator handle obtained successfully")
+            logger.info(f"[QueueDispatcher] 🏥 Coordinator handle obtained successfully")
                 
         except Exception as e:
-            log.error(f"[QueueDispatcher] ❌ Failed to get Coordinator handle: {e}")
-            log.error(f"[QueueDispatcher] 🔧 Available deployments: {serve.list_deployments()}")
+            logger.error(f"[QueueDispatcher] ❌ Failed to get Coordinator handle: {e}")
+            logger.error(f"[QueueDispatcher] 🔧 Available deployments: {serve.list_deployments()}")
             raise
 
         # LISTEN/NOTIFY connection (better batching)
@@ -760,13 +762,13 @@ class Dispatcher:
                     else:
                         # Process concurrently; each worker acquires its own write connection.
                         # Use fire-and-forget tasks to prevent one bad task from blocking the entire batch
-                        log.info(f"[QueueDispatcher] Starting concurrent processing of {len(batch)} tasks")
+                        logger.info(f"[QueueDispatcher] Starting concurrent processing of {len(batch)} tasks")
                         for item in batch:
                             asyncio.create_task(self._process_one(item, coord_handle))
                         # Brief pause to let tasks start
                         await asyncio.sleep(0.01)
                 except Exception as e:
-                    log.error(f"Dispatcher {self.name}: Error in main loop: {e}")
+                    logger.error(f"Dispatcher {self.name}: Error in main loop: {e}")
                     # Brief pause before retrying to avoid tight error loops
                     await asyncio.sleep(1)
 
@@ -794,7 +796,7 @@ class Dispatcher:
         # Ensure connection pool is properly closed
         if self.pool and not self._is_pool_closed():
             await self.pool.close()
-            log.info(f"Dispatcher {self.name}: Connection pool closed")
+            logger.info(f"Dispatcher {self.name}: Connection pool closed")
 
     def ping(self) -> str:
         return "pong"
@@ -929,10 +931,10 @@ class Reaper:
                     command_timeout=60.0,
                 )
             except Exception as e:
-                log.error(f"Reaper: Failed to create connection pool: {e}")
+                logger.error(f"Reaper: Failed to create connection pool: {e}")
                 raise
         elif self._is_reaper_pool_closed():
-            log.warning("Reaper: Connection pool was closed, recreating...")
+            logger.warning("Reaper: Connection pool was closed, recreating...")
             self.pool = None
             await self._ensure_pool()
 
@@ -969,10 +971,10 @@ class Reaper:
                     # staleness criteria (works even if you don't have all columns)
                     last_ts = r.get("last_heartbeat") or r.get("lease_expires_at") or r.get("updated_at")
                     if not last_ts:
-                        log.debug(f"Task {r['id']}: No timestamp found for staleness check")
+                        logger.debug(f"Task {r['id']}: No timestamp found for staleness check")
                         continue
                     
-                    log.debug(f"Task {r['id']}: last_ts={last_ts}, tzinfo={last_ts.tzinfo}")
+                    logger.debug(f"Task {r['id']}: last_ts={last_ts}, tzinfo={last_ts.tzinfo}")
                     
                     # Handle timezone-aware vs naive datetime comparison
                     try:
@@ -983,7 +985,7 @@ class Reaper:
                         age_s = (now - last_ts).total_seconds()
                         stale = age_s >= TASK_STALE_S
                     except Exception as dt_error:
-                        log.debug(f"DateTime comparison failed for task {r['id']}: {dt_error}")
+                        logger.debug(f"DateTime comparison failed for task {r['id']}: {dt_error}")
                         # Fallback: use updated_at for staleness check
                         updated_ts = r.get("updated_at")
                         if updated_ts and updated_ts.tzinfo is None:
@@ -1036,8 +1038,8 @@ class Reaper:
 
             return {"inspected": inspected, "requeued": requeued}
         except Exception as e:
-            log.warning("reap_stale_tasks failed: %s", e)
-            log.debug("reap_stale_tasks error details: %s", traceback.format_exc())
+            logger.warning("reap_stale_tasks failed: %s", e)
+            logger.debug("reap_stale_tasks error details: %s", traceback.format_exc())
             return {"inspected": inspected, "requeued": requeued, "error": str(e)}
 
     async def run(self):
@@ -1047,9 +1049,9 @@ class Reaper:
                 async with self.pool.acquire() as con:
                     rows = await con.fetch(REAP_STUCK_SQL)
                     if rows:
-                        log.warning("Reaper returned %d stuck tasks to RETRY", len(rows))
+                        logger.warning("Reaper returned %d stuck tasks to RETRY", len(rows))
             except Exception:
-                log.exception("Reaper iteration failed")
+                logger.exception("Reaper iteration failed")
             await asyncio.sleep(max(LEASE_SECONDS // 3, 10))
 
     async def stop(self):
@@ -1057,7 +1059,7 @@ class Reaper:
         # Ensure connection pool is properly closed
         if self.pool and not self._is_reaper_pool_closed():
             await self.pool.close()
-            log.info("Reaper: Connection pool closed")
+            logger.info("Reaper: Connection pool closed")
 
     def ping(self) -> str:
         """Simple ping for basic responsiveness check."""

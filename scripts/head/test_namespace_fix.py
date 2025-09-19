@@ -82,7 +82,7 @@ def test_agent_creation():
     
     try:
         import ray
-        from seedcore.agents.tier0_manager import Tier0MemoryManager
+        from seedcore.tier0.tier0_manager import Tier0MemoryManager
         
         # Ensure Ray is initialized
         if not ray.is_initialized():

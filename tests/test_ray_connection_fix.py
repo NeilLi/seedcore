@@ -41,7 +41,7 @@ def test_agent_creation():
     print("\n🧪 Testing agent creation...")
     
     try:
-        from seedcore.agents.tier0_manager import Tier0MemoryManager
+        from seedcore.tier0.tier0_manager import Tier0MemoryManager
         
         # Create manager
         manager = Tier0MemoryManager()

@@ -25,11 +25,10 @@ import redis
 import json
 
 
-from seedcore.logging_setup import setup_logging
-import logging
 
-logger = logging.getLogger("seedcore.coordinator")
-logger.setLevel(logging.DEBUG)
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
 
 # ---------- Config ----------
 ORCH_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10"))
