@@ -17,7 +17,7 @@
 All environments now use the same connection strings:
 ```bash
 # PostgreSQL (via PgBouncer)
-PG_DSN=postgresql://postgres:password@postgresql-pgbouncer:6432/postgres
+PG_DSN=postgresql://postgres:password@postgresql-pgbouncer:6432/seedcore
 
 # MySQL
 MYSQL_DATABASE_URL=mysql+mysqlconnector://seedcore:password@mysql:3306/seedcore
