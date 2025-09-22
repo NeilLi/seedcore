@@ -2,7 +2,7 @@
 
 [![Run Tests](https://github.com/NeilLi/seedcore/actions/workflows/tests.yml/badge.svg)](https://github.com/NeilLi/seedcore/actions/workflows/tests.yml)
 
-A stateful, interactive cognitive architecture system with persistent organs, agents, energy-based control loops, and integrated XGBoost machine learning capabilities featuring realistic agent collaboration learning, now deployed on Kubernetes with KubeRay.
+A stateful, interactive cognitive architecture system with persistent organs, agents, energy-based control loops, and integrated XGBoost machine learning capabilities featuring realistic agent collaboration learning. Now deployed on Kubernetes with KubeRay, featuring advanced database schema evolution, Ray Serve microservices architecture, and comprehensive runtime registry management.
 
 ## 🚀 Quick Start (Kubernetes + KubeRay)
 
@@ -12,73 +12,96 @@ A stateful, interactive cognitive architecture system with persistent organs, ag
 - **System Requirements**: 8GB+ RAM, 4+ CPU cores recommended
 - **Operating System**: Linux/macOS/Windows with Docker support
 
-### 1. Clone and Setup
+### Option 1: Complete Automated Deployment
+```bash
+# Clone and setup
+git clone <repository-url>
+cd seedcore
+
+# Run complete deployment pipeline
+cd deploy
+./deploy-seedcore.sh
+```
+
+### Option 2: Step-by-Step Manual Deployment
+
+#### 1. Clone and Setup
 ```bash
 git clone <repository-url>
 cd seedcore
 ```
 
-### 2. Build Docker Image
+#### 2. Build Docker Image
 ```bash
 ./build.sh
 ```
 
-### 3. Start the Kubernetes Cluster
+#### 3. Start the Kubernetes Cluster
 ```bash
 cd deploy
 ./setup-kind-only.sh
 ```
 
-### 4. Deploy Core Services
+#### 4. Deploy Core Services
 ```bash
 # Deploy databases (PostgreSQL, MySQL, Redis, Neo4j)
 ./setup-cores.sh
 ```
 
-### 5. Initialize Databases
+#### 5. Initialize Databases
 ```bash
-# Initialize database schema and runtime registry
+# Initialize database schema and runtime registry (12 migrations)
 ./init-databases.sh
 ```
 
-### 6. Deploy Persistent Storage and Ingress
+#### 6. Deploy Storage and RBAC
 ```bash
 # Deploy persistent volume claims
 kubectl apply -f k8s/seedcore-data-pvc.yaml
 
-# Deploy ingress routing
-kubectl apply -f k8s/ingress-routing.yaml
-
-# Deploy ingress controller
-./deploy-k8s-ingress.sh
+# Deploy RBAC and service accounts
+kubectl apply -f k8s/seedcore-serviceaccount.yaml
+kubectl apply -f k8s/seedcore-rolebinding.yaml
+kubectl apply -f k8s/allow-api-egress.yaml
+kubectl apply -f k8s/allow-api-to-ray-serve.yaml
+kubectl apply -f k8s/xgb-pvc.yaml
 ```
 
-### 7. Deploy Ray Services
+#### 7. Deploy Ray Services
 ```bash
 # Deploy Ray cluster and Ray Serve
 ./setup-ray-serve.sh
+
+# Deploy stable Ray service for ingress routing
+kubectl apply -f ray-stable-svc.yaml
 ```
 
-### 8. Bootstrap System Components
+#### 8. Bootstrap System Components
 ```bash
 # Bootstrap organism and dispatchers
 ./bootstrap_organism.sh
 ./bootstrap_dispatchers.sh
 ```
 
-### 9. Deploy SeedCore API
+#### 9. Deploy SeedCore API
 ```bash
 # Deploy standalone API service
 ./deploy-seedcore-api.sh
 ```
 
-### 10. Setup Port Forwarding
+#### 10. Deploy Ingress
+```bash
+# Deploy ingress configuration
+./deploy-k8s-ingress.sh
+```
+
+#### 11. Setup Port Forwarding
 ```bash
 # Start port forwarding for development access
 ./port-forward.sh
 ```
 
-### 11. Verify Installation
+### 12. Verify Installation
 ```bash
 # Check Ray dashboard
 curl http://localhost:8265/api/version
@@ -91,6 +114,13 @@ curl http://localhost:8002/healthz/energy
 
 # Check runtime registry
 curl http://localhost:8002/healthz/runtime-registry
+
+# Check Ray Serve services
+curl http://localhost:8000/ml/health
+curl http://localhost:8000/organism/health
+curl http://localhost:8000/cognitive/health
+curl http://localhost:8000/state/health
+curl http://localhost:8000/energy/health
 ```
 
 ## 🏗️ Architecture Overview
@@ -98,6 +128,15 @@ curl http://localhost:8002/healthz/runtime-registry
 SeedCore implements a distributed, intelligent organism architecture using Ray Serve for service orchestration and Ray Actors for distributed computation. The system features a robust **epoch-based runtime registry** that provides comprehensive actor lifecycle management, cluster coordination, and fault tolerance.
 
 ### Key Architectural Components
+
+#### Microservices Architecture
+- **Ray Serve Services**: Independent microservices for different capabilities
+  - **ML Service** (`/ml`): XGBoost machine learning and model management
+  - **Cognitive Service** (`/cognitive`): Advanced reasoning with DSPy integration
+  - **State Service** (`/state`): Centralized state aggregation and collection
+  - **Energy Service** (`/energy`): Energy calculations and agent optimization
+  - **Coordinator Service** (`/pipeline`): Task coordination and orchestration
+  - **Organism Service** (`/organism`): Agent and organ lifecycle management
 
 #### Runtime Registry and Actor Lifecycle
 - **Epoch-Based Cluster Management**: Prevents split-brain scenarios with advisory-locked epoch updates
@@ -109,23 +148,57 @@ SeedCore implements a distributed, intelligent organism architecture using Ray S
 - **Ray Head Service**: `seedcore-svc-head-svc` (ClusterIP: None)
   - Ports: 10001 (Ray), 8265 (Dashboard), 6379, 8080, 8000
 - **Ray Serve Service**: `seedcore-svc-serve-svc` (ClusterIP)
-  - Port: 8000 (HTTP API)
+  - Port: 8000 (HTTP API) - All microservices
 - **SeedCore API**: `seedcore-api` (ClusterIP)
   - Port: 8002 (Standalone API)
 
 #### Database Integration
 - **PostgreSQL**: Primary database with pgvector extension for embeddings
+  - **Task Management**: Coordinator-dispatcher task queue with lease management
+  - **HGNN Architecture**: Two-layer heterogeneous graph neural network
+  - **Graph Embeddings**: Vector-based similarity search with ANN indexing
+  - **Facts Management**: Full-text search and semantic fact storage
+  - **Runtime Registry**: Epoch-based cluster state management
 - **MySQL**: Secondary database for specific workloads
-- **Redis**: Caching and session management
+- **Redis**: Caching and session management with performance optimization
 - **Neo4j**: Graph database for complex relationships
-- **Runtime Registry**: Epoch-based cluster state management
+
+### Advanced Database Schema (12 Migrations)
+
+The system includes a comprehensive database schema evolution with 12 migrations:
+
+#### Task Management System (Migrations 001-006)
+- **Coordinator-Dispatcher Pattern**: Complete task queue with lease management
+- **Retry Logic**: Automatic requeuing with exponential backoff
+- **Drift Scoring**: OCPS valve decision making (0.0 = fast path, ≥0.5 = escalation)
+- **Performance Indexes**: Optimized for task claiming and status updates
+
+#### HGNN Architecture (Migrations 007-008)
+- **Two-Layer Graph**: Task layer and Agent/Organ layer with cross-layer relationships
+- **Node Mapping**: Canonical node-id mapping for DGL integration
+- **Vector Embeddings**: PgVector integration with IVFFlat indexes for fast similarity search
+- **Graph Analytics**: Unified views for complex relationship analysis
+
+#### Facts Management (Migrations 009-010)
+- **Full-Text Search**: GIN indexes for efficient text search
+- **Tag-Based Categorization**: Array-based tagging system
+- **Metadata Support**: JSONB for flexible fact properties
+- **Task Integration**: Fact-task relationship mapping
+
+#### Runtime Registry (Migrations 011-012)
+- **Instance Management**: Service instance tracking and health monitoring
+- **Cluster Coordination**: Epoch-based management preventing split-brain scenarios
+- **Heartbeat Monitoring**: Automatic stale instance detection and cleanup
+- **Service Discovery**: Active instance views for load balancing
 
 ### Detailed Architecture Documentation
 
 For comprehensive architecture details, see:
-- **[Serve ↔ Actor Architecture](docs/architecture/overview/serve-actor-architecture.md)**: Complete system architecture with runtime registry integration
-- **[Runtime Registry](docs/architecture/overview/serve-actor-architecture.md#runtime-registry-and-actor-lifecycle)**: Epoch-based cluster management and actor lifecycle
-- **[Database Schema](docs/architecture/overview/serve-actor-architecture.md#data-layer-and-migrations)**: Complete database schema and migration process
+- **[Architecture Migration Summary](docs/ARCHITECTURE_MIGRATION_SUMMARY.MD)**: Complete system evolution and database schema
+- **[Ray Centralization Guide](docs/RAY_CENTRALIZATION_GUIDE.MD)**: Ray configuration and deployment patterns
+- **[Configuration Summary](docs/CONFIGURATION-SUMMARY.MD)**: Database and service configuration
+- **[Implementation Summary](docs/IMPLEMENTATION_SUMMARY.MD)**: Independent service deployment
+- **[Enhancement Summary](docs/ENHANCEMENT_SUMMARY.MD)**: Complete system enhancements
 
 ## 🧠 Core Features
 
@@ -165,44 +238,34 @@ For comprehensive architecture details, see:
 - **Feature Validation**: Automatic feature consistency checking between training and prediction
 - **Flashbulb Memory Integration**: High-impact tuning events logged to cognitive memory
 
+### 🧠 Advanced Cognitive Intelligence
+- **DSPy v2 Integration**: Enhanced cognitive reasoning with OCPS fast/deep path routing
+- **RRF Fusion & MMR Diversity**: Better retrieval and diversification algorithms
+- **Dynamic Token Budgeting**: OCPS-informed budgeting and escalation hints
+- **Enhanced Fact Schema**: Provenance, trust, and policy flags
+- **Post-condition Checks**: DSPy output validation and sanitization
+- **Cache Governance**: TTL per task type with hardened cache management
+
+### 🔄 Service Communication Architecture
+- **Circuit Breaker Pattern**: Fault tolerance with configurable failure thresholds
+- **Exponential Backoff Retry**: Jittered retry logic with configurable delays
+- **Resource Management**: Rate limiting and concurrency control
+- **Service Discovery**: Automatic endpoint discovery via centralized gateway
+- **Centralized Ray Connection**: Single source of truth for all Ray operations
+
 ## 🚀 Deployment Options
 
-### 1. Complete Setup (Recommended)
+### 1. Complete Automated Deployment (Recommended)
 ```bash
 # Build Docker image
 ./build.sh
 
+# Run complete deployment pipeline
 cd deploy
-
-# Create Kind cluster
-./setup-kind-only.sh
-
-# Deploy core services
-./setup-cores.sh
-
-# Initialize databases
-./init-databases.sh
-
-# Deploy storage and ingress
-kubectl apply -f k8s/seedcore-data-pvc.yaml
-kubectl apply -f k8s/ingress-routing.yaml
-./deploy-k8s-ingress.sh
-
-# Deploy Ray services
-./setup-ray-serve.sh
-
-# Bootstrap system components
-./bootstrap_organism.sh
-./bootstrap_dispatchers.sh
-
-# Deploy API
-./deploy-seedcore-api.sh
-
-# Setup port forwarding
-./port-forward.sh
+./deploy-seedcore.sh
 ```
 
-### 2. Step-by-Step Setup
+### 2. Step-by-Step Manual Deployment
 Follow the detailed steps in the [Quick Start](#-quick-start-kubernetes--kuberay) section above for a complete walkthrough.
 
 ### 3. Development Environment
@@ -223,7 +286,7 @@ cd deploy
 ./port-forward.sh
 ```
 
-### 3. Using Makefile
+### 4. Using Makefile
 ```bash
 # Development environment
 make dev
@@ -236,6 +299,13 @@ make prod
 
 # Helm-based deployment
 make dev-helm
+```
+
+### 5. Docker Compose (Legacy)
+For local development without Kubernetes:
+```bash
+cd docker
+./sc-cmd.sh up [num_workers]
 ```
 
 ## 🔧 Configuration
@@ -418,21 +488,45 @@ kubectl get pods -n kuberay-system
 
 ## 📚 API Reference
 
-### ML Service Endpoints
+### Ray Serve Microservices (Port 8000)
+
+#### ML Service (`/ml`)
 - **Health Check**: `GET /ml/health`
 - **Model Training**: `POST /ml/train`
 - **Model Prediction**: `POST /ml/predict`
 - **Model Management**: `GET /ml/models`, `DELETE /ml/models/{model_id}`
+- **Hyperparameter Tuning**: `POST /ml/tune`
 
-### Cognitive Service Endpoints
+#### Cognitive Service (`/cognitive`)
 - **Health Check**: `GET /cognitive/health`
 - **Agent Management**: `POST /cognitive/agents`, `GET /cognitive/agents`
 - **Task Execution**: `POST /cognitive/execute`
+- **Reasoning**: `POST /cognitive/reason`
 
-### Standalone API Endpoints
+#### State Service (`/state`)
+- **Health Check**: `GET /state/health`
+- **Unified State**: `GET /state/unified-state`
+- **State Collection**: `POST /state/collect`
+
+#### Energy Service (`/energy`)
+- **Health Check**: `GET /energy/health`
+- **Energy Computation**: `POST /energy/compute-energy`
+- **Agent Optimization**: `POST /energy/optimize-agents`
+
+#### Coordinator Service (`/pipeline`)
+- **Health Check**: `GET /pipeline/health`
+- **Task Coordination**: `POST /pipeline/coordinate`
+
+#### Organism Service (`/organism`)
+- **Health Check**: `GET /organism/health`
+- **Organ Management**: `GET /organism/organs`
+- **Agent Management**: `GET /organism/agents`
+
+### Standalone API Endpoints (Port 8002)
 - **Health Check**: `GET /health`
 - **Readiness**: `GET /readyz`
 - **Energy System**: `GET /healthz/energy`
+- **Runtime Registry**: `GET /healthz/runtime-registry`
 
 ## 🚀 Production Deployment
 
@@ -451,13 +545,24 @@ kubectl apply -f deploy/keda/scaledobject-serve.yaml -n seedcore-dev
 
 ## 📖 Additional Documentation
 
-- **Architecture Overview**: [Serve ↔ Actor Architecture](docs/architecture/overview/serve-actor-architecture.md) - Complete system architecture with runtime registry integration
-- **Runtime Registry**: [Runtime Registry and Actor Lifecycle](docs/architecture/overview/serve-actor-architecture.md#runtime-registry-and-actor-lifecycle) - Epoch-based cluster management and actor lifecycle
-- **Database Schema**: [Data Layer and Migrations](docs/architecture/overview/serve-actor-architecture.md#data-layer-and-migrations) - Complete database schema and migration process
-- **Kubernetes Setup**: [KIND_CLUSTER_REFERENCE.md](deploy/KIND_CLUSTER_REFERENCE.md)
-- **Ray Configuration**: [RAY_CONFIGURATION_PATTERN.md](docs/RAY_CONFIGURATION_PATTERN.md)
-- **API Updates**: [README_SEEDCORE_API_UPDATES.md](docs/README_SEEDCORE_API_UPDATES.md)
-- **Operation Manual**: [operation-manual.md](docs/operation-manual.md)
+### Core Architecture
+- **[Architecture Migration Summary](docs/ARCHITECTURE_MIGRATION_SUMMARY.MD)**: Complete system evolution and database schema
+- **[Ray Centralization Guide](docs/RAY_CENTRALIZATION_GUIDE.MD)**: Ray configuration and deployment patterns
+- **[Configuration Summary](docs/CONFIGURATION-SUMMARY.MD)**: Database and service configuration
+- **[Implementation Summary](docs/IMPLEMENTATION_SUMMARY.MD)**: Independent service deployment
+- **[Enhancement Summary](docs/ENHANCEMENT_SUMMARY.MD)**: Complete system enhancements
+
+### Operational Guides
+- **[Operation Manual](docs/OPERATION-MANUAL.MD)**: Complete operational procedures and troubleshooting
+- **[Kubernetes Setup](deploy/KIND_CLUSTER_REFERENCE.md)**: KIND cluster reference and setup
+- **[Database Tasks](docs/DATABASE_TASKS.MD)**: Database management and migration procedures
+- **[Dispatcher Troubleshooting](docs/DISPATCHER_TROUBLESHOOTING.MD)**: Dispatcher-specific troubleshooting
+
+### Advanced Features
+- **[Task Lease Fixes](docs/TASK_LEASE_FIXES.MD)**: Task management and lease system
+- **[Namespace Fix Summary](docs/NAMESPACE_FIX_SUMMARY.MD)**: Namespace management and fixes
+- **[Registry Integration](docs/REGISTRY_INTEGRATION_SUMMARY.MD)**: Runtime registry integration
+- **[Predicate System](docs/PREDICATE_SYSTEM_IMPROVEMENTS.MD)**: Predicate system enhancements
 
 ## 🤝 Contributing
 
@@ -481,4 +586,21 @@ For issues and questions:
 
 ---
 
-**Note**: This README reflects the current Kubernetes + KubeRay deployment setup. For the previous Docker Compose setup, see [docs/README-docker-setup.md](docs/README-docker-setup.md).
+## 🎉 Recent Updates
+
+### Latest Enhancements (2025)
+- ✅ **Complete Database Schema Evolution**: 12 comprehensive migrations for task management, HGNN architecture, facts system, and runtime registry
+- ✅ **Ray Serve Microservices Architecture**: Independent services for ML, Cognitive, State, Energy, Coordinator, and Organism management
+- ✅ **Advanced Cognitive Intelligence**: DSPy v2 integration with OCPS fast/deep path routing and enhanced fact management
+- ✅ **Service Communication Architecture**: Circuit breaker pattern, exponential backoff retry, and centralized Ray connection management
+- ✅ **Automated Deployment Pipeline**: Complete deployment orchestration with `deploy-seedcore.sh`
+- ✅ **Performance Optimizations**: Redis caching system with 16.8x to 1000x performance improvements
+- ✅ **Production-Ready Features**: Comprehensive health monitoring, fault tolerance, and resource management
+
+### Key Benefits
+- **Scalable Architecture**: Microservices with independent scaling and resource allocation
+- **Advanced AI/ML**: Graph neural networks, vector search, and intelligent task management
+- **Fault Tolerance**: Circuit breakers, retry logic, and graceful degradation
+- **Production Ready**: Comprehensive monitoring, health checks, and operational procedures
+
+**Note**: This README reflects the current Kubernetes + KubeRay deployment setup. For the previous Docker Compose setup, see [docs/LEGACY/README-DOCKER-SETUP.MD](docs/LEGACY/README-DOCKER-SETUP.MD).
