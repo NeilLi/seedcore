@@ -273,18 +273,70 @@ class RayAgent:
             logger.warning(f"Error during cognitive client shutdown: {e}")
         logger.info(f"Agent {self.agent_id} shutdown complete")
 
-    def _mw_put_json(self, key: str, obj: Dict[str, Any], ttl_s: int = 600) -> bool:
-        """Put JSON object to Mw with TTL."""
+    def _mw_put_json_local(self, key: str, obj: Dict[str, Any]) -> bool:
+        """L0 only (organ-local)."""
         if not self.mw_manager:
             return False
         try:
-            self.mw_manager.set_item(key, json.dumps(obj), ttl=ttl_s)  # supports ttl if your MwManager does
+            self.mw_manager.set_item(key, json.dumps(obj))
             self.memory_writes += 1
             self._mw_puts = getattr(self, "_mw_puts", 0) + 1
             return True
         except Exception as e:
-            logger.debug(f"[{self.agent_id}] Mw put failed for {key}: {e}")
+            logger.debug(f"[{self.agent_id}] Mw L0 put failed for {key}: {e}")
             return False
+
+    def _mw_put_json_global(self, kind: str, scope: str, item_id: str, obj: Dict[str, Any], ttl_s: int = 600) -> bool:
+        """Write-through L0/L1/L2 using normalized global key; compressed when large."""
+        if not self.mw_manager:
+            return False
+        try:
+            # Ensure payload is JSON-serializable
+            payload = obj if isinstance(obj, (dict, list, str, int, float, bool, type(None))) else str(obj)
+            # Use typed API to avoid double-prefixing
+            self.mw_manager.set_global_item_typed(kind, scope, item_id, payload, ttl_s=ttl_s)
+            self.memory_writes += 1
+            self._mw_puts = getattr(self, "_mw_puts", 0) + 1
+            return True
+        except Exception as e:
+            logger.debug(f"[{self.agent_id}] Mw global put failed for {kind}:{scope}:{item_id}: {e}")
+            return False
+
+    def cache_task_row(self, task_row: Dict[str, Any]) -> None:
+        """Lifecycle-aware Mw caching for a task row via MwManager.cache_task."""
+        if not self.mw_manager:
+            return
+        try:
+            self.mw_manager.cache_task(task_row)   # derives TTL from status/lease/run_after
+        except Exception as e:
+            logger.debug(f"[{self.agent_id}] cache_task failed: {e}")
+
+    def invalidate_task_cache(self, task_id: str) -> None:
+        """Evict all Mw tiers for a task when status/lease changes."""
+        if not self.mw_manager:
+            return
+        try:
+            # Clear the global (L2/L1) copy using exact key that cache_task sets
+            gk = f"global:item:task:by_id:{task_id}"
+            self.mw_manager.del_global_key_sync(gk)
+        except Exception as e:
+            logger.debug(f"[{self.agent_id}] Failed to delete global task cache: {e}")
+        try:
+            # Clear L0 copy
+            self.mw_manager.delete_organ_item(f"task:by_id:{task_id}")
+        except Exception as e:
+            logger.debug(f"[{self.agent_id}] Failed to delete L0 task cache: {e}")
+
+    async def get_task_cached(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Read a task via typed global key, respecting your double-prefix guard."""
+        if not self.mw_manager:
+            return None
+        try:
+            # Use the new get_task_async method with negative cache support
+            return await self.mw_manager.get_task_async(task_id)
+        except Exception as e:
+            logger.debug(f"[{self.agent_id}] get_task_cached failed: {e}")
+            return None
 
     def _promote_to_mlt(self, key: str, obj: Dict[str, Any], compression: bool = True) -> bool:
         """Promote object to Mlt with optional compression."""
@@ -549,7 +601,10 @@ class RayAgent:
             "success": result.get("success", False),
             "quality": result.get("quality", 0.5),
         }
-        self._mw_put_json(artifact_key, artifact, ttl_s=600)
+        # Use new normalized helpers
+        self._mw_put_json_local(artifact_key, artifact)  # L0 for immediate local use
+        # Also cache globally for cross-agent reuse
+        self._mw_put_json_global("task_artifact", "global", artifact_key, artifact, ttl_s=600)
 
         # simple policy: promote successes with quality>=0.8, or failures with salience >= 0.7 (if present)
         should_promote = artifact["success"] and artifact["quality"] >= 0.8
@@ -817,6 +872,13 @@ class RayAgent:
                 self.mlt_manager.store_agent_summary(self.agent_id, summary)  # type: ignore[attr-defined]
             if self.mw_manager and hasattr(self.mw_manager, "evict_agent"):
                 self.mw_manager.evict_agent(self.agent_id)  # type: ignore[attr-defined]
+            # Clear L0 cache on archive lifecycle
+            if self.mw_manager and hasattr(self.mw_manager, "clear"):
+                try:
+                    self.mw_manager.clear()
+                    logger.debug(f"[{self.agent_id}] Cleared L0 cache on archive")
+                except Exception as e:
+                    logger.debug(f"[{self.agent_id}] Failed to clear L0 cache: {e}")
             if self.mfb_client and hasattr(self.mfb_client, "log_incident"):
                 try:
                     self.mfb_client.log_incident({"archive": True, "summary": summary}, salience=0.3)
@@ -916,12 +978,52 @@ class RayAgent:
                 "idle_ticks": self.idle_ticks,
                 "archived": self._archived,
             },
-            "energy_state": self.energy_state  # Add energy state to heartbeat
+            "energy_state": self.energy_state,  # Add energy state to heartbeat
+            "memory_metrics": {
+                "memory_writes": self.memory_writes,
+                "memory_hits_on_writes": self.memory_hits_on_writes,
+                "salient_events_logged": self.salient_events_logged,
+            }
         }
+        
+        # Add Mw telemetry if available
+        if self.mw_manager:
+            try:
+                tele = self.mw_manager.get_telemetry()
+                heartbeat["memory_metrics"].update({
+                    "mw_hit_ratio": tele.get("hit_ratio", 0),
+                    "mw_l0_hits": tele.get("l0_hits", 0),
+                    "mw_l1_hits": tele.get("l1_hits", 0),
+                    "mw_l2_hits": tele.get("l2_hits", 0),
+                    "mw_task_cache_hits": tele.get("task_cache_hits", 0),
+                    "mw_task_cache_misses": tele.get("task_cache_misses", 0),
+                    "mw_task_evictions": tele.get("task_evictions", 0),
+                    "mw_negative_cache_hits": tele.get("negative_cache_hits", 0),
+                })
+                
+                # Add hot items every 10th heartbeat (low rate)
+                if self.tasks_processed % 10 == 0 and random.random() < 0.05:
+                    try:
+                        hot = self.mw_manager.get_hot_items(top_n=5)
+                        heartbeat["memory_metrics"]["mw_hot_items"] = hot
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"[{self.agent_id}] Failed to get Mw telemetry: {e}")
         
         self.last_heartbeat = time.time()
         return heartbeat_data
     
+    def on_task_row_loaded(self, task_row: Dict[str, Any]) -> None:
+        """Hook called when a task row is loaded from database."""
+        self.cache_task_row(task_row)
+
+    def on_task_status_changed(self, task_id: str, new_status: str) -> None:
+        """Hook called when task status changes."""
+        if new_status in ("completed", "failed", "cancelled"):
+            self.invalidate_task_cache(task_id)
+        # For other status changes, the caller should re-cache with updated row
+
     def get_summary_stats(self) -> Dict[str, Any]:
         """
         Get a summary of agent statistics for monitoring.
@@ -1111,7 +1213,9 @@ class RayAgent:
             "success": success,
             "quality": quality,
         }
-        self._mw_put_json(artifact_key, artifact, ttl_s=900)
+        # Use new normalized helpers
+        self._mw_put_json_local(artifact_key, artifact)  # L0 for immediate local use
+        self._mw_put_json_global("collab_task", "global", artifact_key, artifact, ttl_s=900)
         if success and quality >= 0.8:
             self._promote_to_mlt(artifact_key, artifact, compression=True)
         

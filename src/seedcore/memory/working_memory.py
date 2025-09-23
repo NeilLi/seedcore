@@ -37,6 +37,7 @@ import base64
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from datetime import datetime, timezone
 
 # Lazy import for Ray - only imported when functions are called
 # This prevents Ray initialization when the module is imported
@@ -439,6 +440,12 @@ class MwManager:
         self._l0_hits = 0
         self._l1_hits = 0
         self._l2_hits = 0
+        
+        # Task-specific metrics
+        self._task_cache_hits = 0
+        self._task_cache_misses = 0
+        self._task_evictions = 0
+        self._negative_cache_hits = 0
 
         logger.info(
             "✅ MwManager ready: %s",
@@ -460,11 +467,38 @@ class MwManager:
         """Build a consistent organ cache key: organ:{organ_id}:item:{kind}:{id}"""
         return f"organ:{self.organ_id}:item:{kind}:{item_id}"
 
+    # -------------------- task caching constants --------------------
+    # TTL defaults for different task statuses (in seconds) - configurable via env
+    TASK_TTL_CREATED = int(os.getenv("MW_TASK_TTL_CREATED_S", "10"))
+    TASK_TTL_QUEUED = int(os.getenv("MW_TASK_TTL_QUEUED_S", "10"))
+    TASK_TTL_RUNNING = int(os.getenv("MW_TASK_TTL_RUNNING_S", "10"))
+    TASK_TTL_RETRY = int(os.getenv("MW_TASK_TTL_RETRY_S", "20"))
+    TASK_TTL_COMPLETED = int(os.getenv("MW_TASK_TTL_COMPLETED_S", "600"))  # 10 minutes
+    TASK_TTL_FAILED = int(os.getenv("MW_TASK_TTL_FAILED_S", "300"))        # 5 minutes
+    TASK_TTL_CANCELLED = int(os.getenv("MW_TASK_TTL_CANCELLED_S", "300"))  # 5 minutes
+    TASK_TTL_DEFAULT = int(os.getenv("MW_TASK_TTL_DEFAULT_S", "30"))
+    TASK_TTL_NEGATIVE = int(os.getenv("MW_TASK_TTL_NEGATIVE_S", "30"))
+
     # ---- async APIs ----
-    async def get_item_async(self, item_id: str) -> Optional[Any]:
-        """Check L0 (organ-local) -> L1 (node) -> L2 (sharded global) cache hierarchy."""
-        okey = self._organ_key(item_id)
-        gkey = self._global_key(item_id)
+    async def get_item_async(self, item_id: str, is_global: bool = False) -> Optional[Any]:
+        """Check L0 (organ-local) -> L1 (node) -> L2 (sharded global) cache hierarchy.
+
+        - If item_id already starts with "global:item:" or is_global is True, treat it as a fully-qualified global key.
+        - If item_id starts with "organ:", treat it as a fully-qualified organ-local key (L0-only).
+        - Otherwise, treat item_id as an unqualified id and derive a global key for L1/L2.
+        """
+        is_global_key = is_global or item_id.startswith("global:item:")
+        is_organ_key = item_id.startswith("organ:")
+
+        if is_global_key:
+            gkey = item_id
+            okey = self._organ_key(item_id)
+        elif is_organ_key:
+            gkey = None  # organ-local only
+            okey = self._organ_key(item_id)
+        else:
+            gkey = self._global_key(item_id)
+            okey = self._organ_key(item_id)
         
         # L0: Check organ-local cache first (fastest)
         if okey in self._cache:
@@ -476,53 +510,55 @@ class MwManager:
             )
             return self._cache[okey]
 
-        # L1: Check node cache
-        try:
-            node_cache = get_node_cache()
-            val = await _await_ref(node_cache.get.remote(gkey))
-            if val is not None:
-                self._hit_count += 1
-                self._l1_hits += 1
-                logger.info(
-                    "HIT(L1)",
-                    extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
-                )
-                # Populate L0 cache
-                self._cache[okey] = val
-                return val
-        except Exception as e:
-            logger.error(
-                "NodeCache.get failed",
-                extra={"organ": self.organ_id, "namespace": self.namespace, "key": gkey, "error": str(e)},
-            )
-
-        # L2: Check sharded global cache
-        try:
-            shard = _shard_for(item_id)
-            val = await _await_ref(shard.get.remote(gkey))
-            if val is not None:
-                self._hit_count += 1
-                self._l2_hits += 1
-                logger.info(
-                    "HIT(L2)",
-                    extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
-                )
-                # Populate L1 and L0 caches
-                try:
-                    node_cache = get_node_cache()
-                    node_cache.set.remote(gkey, val, ttl_s=CONFIG.l1_ttl_s)
-                except Exception as e:
-                    logger.warning(
-                        "Failed to populate L1 cache",
-                        extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id, "error": str(e)},
+        # L1: Check node cache (only if we have a global key)
+        if gkey is not None:
+            try:
+                node_cache = get_node_cache()
+                val = await _await_ref(node_cache.get.remote(gkey))
+                if val is not None:
+                    self._hit_count += 1
+                    self._l1_hits += 1
+                    logger.info(
+                        "HIT(L1)",
+                        extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
                     )
-                self._cache[okey] = val
-                return val
-        except Exception as e:
-            logger.error(
-                "ShardCache.get failed",
-                extra={"organ": self.organ_id, "namespace": self.namespace, "key": gkey, "error": str(e)},
-            )
+                    # Populate L0 cache
+                    self._cache[okey] = val
+                    return val
+            except Exception as e:
+                logger.error(
+                    "NodeCache.get failed",
+                    extra={"organ": self.organ_id, "namespace": self.namespace, "key": gkey, "error": str(e)},
+                )
+
+        # L2: Check sharded global cache (only if we have a global key)
+        if gkey is not None:
+            try:
+                shard = _shard_for(gkey)
+                val = await _await_ref(shard.get.remote(gkey))
+                if val is not None:
+                    self._hit_count += 1
+                    self._l2_hits += 1
+                    logger.info(
+                        "HIT(L2)",
+                        extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
+                    )
+                    # Populate L1 and L0 caches
+                    try:
+                        node_cache = get_node_cache()
+                        node_cache.set.remote(gkey, val, ttl_s=CONFIG.l1_ttl_s)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to populate L1 cache",
+                            extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id, "error": str(e)},
+                        )
+                    self._cache[okey] = val
+                    return val
+            except Exception as e:
+                logger.error(
+                    "ShardCache.get failed",
+                    extra={"organ": self.organ_id, "namespace": self.namespace, "key": gkey, "error": str(e)},
+                )
 
         # Miss: record in MwStore
         self._miss_count += 1
@@ -565,10 +601,19 @@ class MwManager:
         """Set an organ-local cached value (not visible to other organs)."""
         self._cache[self._organ_key(item_id)] = value
 
+    def clear(self) -> None:
+        """Clear all L0 entries for this organ."""
+        self._cache.clear()
+
+    def delete_organ_item(self, item_id: str) -> None:
+        """Delete a single organ-local entry (by raw or organ-qualified id)."""
+        self._cache.pop(self._organ_key(item_id), None)
+
     def set_global_item(self, item_id: str, value: Any, ttl_s: Optional[int] = None) -> None:
         """Write-through to all cache levels (L0, L1, L2)."""
+        # Normalize global key to avoid double-prefixing
+        gkey = item_id if item_id.startswith("global:item:") else self._global_key(item_id)
         okey = self._organ_key(item_id)
-        gkey = self._global_key(item_id)
         
         # L0: Update organ-local cache
         self._cache[okey] = value
@@ -585,7 +630,7 @@ class MwManager:
         
         # L2: Update sharded global cache
         try:
-            shard = _shard_for(item_id)
+            shard = _shard_for(gkey)
             shard.set.remote(gkey, value, ttl_s=ttl_s)
         except Exception as e:
             logger.error(
@@ -607,7 +652,7 @@ class MwManager:
         """Get an item using typed key format, checking global first then organ-local"""
         # Try global key first
         global_key = self._build_global_key(kind, scope, item_id)
-        result = await self.get_item_async(global_key)
+        result = await self.get_item_async(global_key, is_global=True)
         if result is not None:
             return result
         
@@ -751,6 +796,9 @@ class MwManager:
         total_requests = self._hit_count + self._miss_count
         hit_ratio = self._hit_count / total_requests if total_requests > 0 else 0.0
         
+        total_task_requests = self._task_cache_hits + self._task_cache_misses
+        task_hit_ratio = self._task_cache_hits / total_task_requests if total_task_requests > 0 else 0.0
+        
         return {
             "organ_id": self.organ_id,
             "total_requests": total_requests,
@@ -763,6 +811,12 @@ class MwManager:
             "l0_hit_ratio": self._l0_hits / total_requests if total_requests > 0 else 0.0,
             "l1_hit_ratio": self._l1_hits / total_requests if total_requests > 0 else 0.0,
             "l2_hit_ratio": self._l2_hits / total_requests if total_requests > 0 else 0.0,
+            # Task-specific metrics
+            "task_cache_hits": self._task_cache_hits,
+            "task_cache_misses": self._task_cache_misses,
+            "task_hit_ratio": task_hit_ratio,
+            "task_evictions": self._task_evictions,
+            "negative_cache_hits": self._negative_cache_hits,
         }
 
     def reset_telemetry(self) -> None:
@@ -772,6 +826,10 @@ class MwManager:
         self._l0_hits = 0
         self._l1_hits = 0
         self._l2_hits = 0
+        self._task_cache_hits = 0
+        self._task_cache_misses = 0
+        self._task_evictions = 0
+        self._negative_cache_hits = 0
 
     # ---- sync/async parity ----
     def get_item(self, item_id: str) -> Optional[Any]:
@@ -790,7 +848,13 @@ class MwManager:
 
     def _get_item_sync(self, item_id: str) -> Optional[Any]:
         """Simple sync fallback that only checks L0 cache."""
-        okey = self._organ_key(item_id)
+        # Mirror the L0 key selection from get_item_async
+        if item_id.startswith("global:item:"):
+            okey = self._organ_key(item_id)
+        elif item_id.startswith("organ:"):
+            okey = self._organ_key(item_id)
+        else:
+            okey = self._organ_key(item_id)
         if okey in self._cache:
             self._hit_count += 1
             self._l0_hits += 1
@@ -848,6 +912,139 @@ class MwManager:
         # Delete from L0 (organ cache)
         okey = self._organ_key(key)
         self._cache.pop(okey, None)
+
+    # ---- task-aware helper ----
+    def cache_task(self, task: Dict[str, Any]) -> None:
+        """Cache a task row snapshot into Mw with TTL derived from lifecycle fields.
+
+        Expected keys in task dict: id (UUID/str), status (str), lease_expires_at, run_after, updated_at.
+        Timestamps may be datetime or ISO strings.
+        """
+        def _to_epoch_seconds(v: Any) -> Optional[float]:
+            if v is None:
+                return None
+            if isinstance(v, (int, float)):
+                return float(v)
+            if isinstance(v, datetime):
+                dt = v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
+            if isinstance(v, str):
+                try:
+                    s = v.replace("Z", "+00:00")
+                    dt = datetime.fromisoformat(s)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt.timestamp()
+                except Exception:
+                    return None
+            return None
+
+        try:
+            now = time.time()
+            task_id = str(task.get("id"))
+            if not task_id or task_id == "None":
+                logger.warning("cache_task: invalid task_id, skipping cache")
+                return
+                
+            status = str(task.get("status", "")).lower()
+            lease_ts = _to_epoch_seconds(task.get("lease_expires_at"))
+            run_after_ts = _to_epoch_seconds(task.get("run_after"))
+
+            # Base TTLs by status using constants
+            base_ttl_map = {
+                "created": self.TASK_TTL_CREATED,
+                "queued": self.TASK_TTL_QUEUED,
+                "running": self.TASK_TTL_RUNNING,
+                "retry": self.TASK_TTL_RETRY,
+                "completed": self.TASK_TTL_COMPLETED,
+                "failed": self.TASK_TTL_FAILED,
+                "cancelled": self.TASK_TTL_CANCELLED,
+            }
+            ttl = base_ttl_map.get(status, self.TASK_TTL_DEFAULT)
+
+            # Lease bound
+            if lease_ts is not None:
+                lease_remaining = max(0.0, lease_ts - now)
+                ttl = min(ttl, int(lease_remaining)) if lease_remaining > 0 else min(ttl, 1)
+
+            # Scheduled future run
+            if run_after_ts is not None and run_after_ts > now:
+                until_run = max(1.0, run_after_ts - now)
+                # Bound by base ttl to avoid very long caches
+                ttl = min(ttl, int(until_run))
+
+            ttl = max(1, int(ttl))
+
+            # Canonical key without double prefixing
+            item_id = f"task:by_id:{task_id}"
+            
+            # Use compression-aware setter for larger rows
+            self.set_global_item_compressed(item_id, task, ttl_s=ttl)
+            
+            logger.debug(
+                "Cached task %s with TTL %ds (status=%s)",
+                task_id, ttl, status,
+                extra={"organ": self.organ_id, "task_id": task_id, "status": status, "ttl": ttl}
+            )
+            
+        except Exception as e:
+            logger.warning(
+                "Failed to cache task %s: %s",
+                task.get("id", "unknown"), e,
+                extra={"organ": self.organ_id, "task_id": str(task.get("id", "unknown")), "error": str(e)}
+            )
+
+    async def get_task_async(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Get a task from cache, with negative cache support to prevent DB stampedes."""
+        task_id = str(task_id)
+        
+        # Check negative cache first
+        if await self.check_negative_cache("task", "by_id", task_id):
+            self._negative_cache_hits += 1
+            logger.debug("Negative cache hit for task %s", task_id)
+            return None
+            
+        # Try to get from cache
+        item_id = f"task:by_id:{task_id}"
+        result = await self.get_item_async(item_id, is_global=True)
+        
+        if result is not None:
+            self._task_cache_hits += 1
+            return result
+            
+        # Cache miss - set negative cache to prevent stampede
+        self._task_cache_misses += 1
+        self.set_negative_cache("task", "by_id", task_id, ttl_s=self.TASK_TTL_NEGATIVE)
+        logger.debug("Task cache miss for %s, set negative cache", task_id)
+        return None
+
+    def invalidate_task(self, task_id: str) -> None:
+        """Invalidate a task from all cache levels and clear negative cache."""
+        task_id = str(task_id)
+        item_id = f"task:by_id:{task_id}"
+        
+        # Delete from all levels
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Can't use asyncio.run in running loop, just delete L0
+                self.delete_organ_item(item_id)
+            else:
+                asyncio.run(self.del_global_key(item_id))
+        except Exception:
+            # Fallback to L0 only
+            self.delete_organ_item(item_id)
+            
+        # Clear negative cache
+        try:
+            neg_key = f"_neg:task:by_id:{task_id}"
+            self.set_global_item(neg_key, None, ttl_s=1)  # Delete semantics
+        except Exception:
+            pass
+            
+        self._task_evictions += 1
+        logger.debug("Invalidated task %s from all cache levels", task_id)
 
     def del_global_key_sync(self, key: str) -> None:
         """Sync version of del_global_key."""
