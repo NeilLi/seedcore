@@ -21,7 +21,7 @@ from ..schemas.eventizer_models import (
     PKGDeploymentStatus, PKGHelper, PKGEnv, PKGEngine, PKGConditionType,
     PKGOperator, PKGRelation, PKGArtifactType
 )
-from ....database import get_async_pg_session_factory
+from ...database import get_async_pg_session_factory
 
 logger = logging.getLogger(__name__)
 

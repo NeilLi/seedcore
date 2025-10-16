@@ -76,6 +76,11 @@ EOF
 
 # Deploy Neo4j using official Helm chart
 echo "📦 Deploying Neo4j using official Helm chart..."
+if ! helm repo list | grep -q neo4j; then
+  echo "📦 Adding Neo4j Helm repository..."
+  helm repo add neo4j https://helm.neo4j.com/neo4j
+  helm repo update
+fi
 helm upgrade --install neo4j neo4j/neo4j \
   --namespace seedcore-dev \
   --wait \

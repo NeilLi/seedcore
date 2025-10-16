@@ -36,19 +36,19 @@ class Fact(Base):
     )
     
     # PKG integration fields
-    snapshot_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, description="PKG snapshot reference")
-    namespace: Mapped[str] = mapped_column(String, nullable=False, default="default", description="Fact namespace")
-    subject: Mapped[Optional[str]] = mapped_column(String, nullable=True, description="Fact subject (e.g., 'guest:Ben')")
-    predicate: Mapped[Optional[str]] = mapped_column(String, nullable=True, description="Fact predicate (e.g., 'hasTemporaryAccess')")
-    object_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, description="Fact object data")
-    valid_from: Mapped[Optional[DateTime]] = mapped_column(DateTime(timezone=True), nullable=True, description="Fact validity start time")
-    valid_to: Mapped[Optional[DateTime]] = mapped_column(DateTime(timezone=True), nullable=True, description="Fact validity end time (NULL = indefinite)")
-    created_by: Mapped[str] = mapped_column(String, nullable=False, default="system", description="Creator identifier")
+    snapshot_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="PKG snapshot reference")
+    namespace: Mapped[str] = mapped_column(String, nullable=False, default="default", comment="Fact namespace")
+    subject: Mapped[Optional[str]] = mapped_column(String, nullable=True, comment="Fact subject (e.g., 'guest:Ben')")
+    predicate: Mapped[Optional[str]] = mapped_column(String, nullable=True, comment="Fact predicate (e.g., 'hasTemporaryAccess')")
+    object_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, comment="Fact object data")
+    valid_from: Mapped[Optional[DateTime]] = mapped_column(DateTime(timezone=True), nullable=True, comment="Fact validity start time")
+    valid_to: Mapped[Optional[DateTime]] = mapped_column(DateTime(timezone=True), nullable=True, comment="Fact validity end time (NULL = indefinite)")
+    created_by: Mapped[str] = mapped_column(String, nullable=False, default="system", comment="Creator identifier")
     
     # PKG governance fields
-    pkg_rule_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, description="PKG rule that created this fact")
-    pkg_provenance: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, description="PKG rule provenance data")
-    validation_status: Mapped[Optional[str]] = mapped_column(String, nullable=True, description="PKG validation status")
+    pkg_rule_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, comment="PKG rule that created this fact")
+    pkg_provenance: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, comment="PKG rule provenance data")
+    validation_status: Mapped[Optional[str]] = mapped_column(String, nullable=True, comment="PKG validation status")
 
     def to_dict(self):
         """Convert the fact to a dictionary representation."""

@@ -13,15 +13,14 @@ Eventizer Pydantic Models (product-grade)
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field, ConfigDict, computed_field, model_validator, field_validator, HttpUrl
 from datetime import datetime, timezone
 
-# Import utilities for enhanced models
-from ..utils.text_normalizer import SpanMap as TextSpanMap
-from ..utils.pattern_compiler import CompiledRegex
+# Note: We use TYPE_CHECKING to avoid circular imports with utils modules
+# The actual SpanMap class is imported lazily when needed
 
 
 # =========================
@@ -475,7 +474,7 @@ class TextNormalizationResult(BaseModel):
     """Result of text normalization with bidirectional span mapping."""
     original_text: str = Field(..., description="Original input text")
     normalized_text: str = Field(..., description="Normalized text")
-    span_map: Optional[TextSpanMap] = Field(None, description="Bidirectional span mapping")
+    span_map: Optional[Any] = Field(None, description="Bidirectional span mapping (SpanMap from text_normalizer)")
     normalization_applied: List[str] = Field(default_factory=list, description="Types of normalization applied")
     processing_time_ms: float = Field(0.0, description="Normalization processing time")
     

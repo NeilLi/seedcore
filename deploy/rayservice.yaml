@@ -8,16 +8,12 @@ spec:
   #  Serve Configuration
   # ===================================================================  
   serveConfigV2: |
-    # This ensures the HTTP proxy only runs on the head node.
-    # proxy_location: HeadOnly
     http_options:
       host: 0.0.0.0
-      # ✅ FIX: Port is now set to 8000 as requested.
-      # WARNING: This will likely conflict with the other service on the head pod.
       port: 8000
       location: HeadOnly
+
     applications:
-      # ✅ FIX: Replaced the single 'seedcore' app with two distinct applications.
       - name: ml_service
         import_path: entrypoints.ml_entrypoint:build_ml_service
         route_prefix: /ml
@@ -25,7 +21,7 @@ spec:
           - name: MLService
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.2
+              num_cpus: 0.1
               num_gpus: 0
               resources: {"head_node": 0.001}
 
@@ -34,13 +30,13 @@ spec:
         route_prefix: /cognitive
         deployments:
           - name: CognitiveService
-            num_replicas: 2
+            num_replicas: 1
             ray_actor_options:
               num_cpus: 0.2
               num_gpus: 0
               memory: 2147483648  # 2GB
               resources: {"head_node": 0.001}
-      
+
       - name: coordinator
         import_path: entrypoints.coordinator_entrypoint:build_coordinator
         route_prefix: /pipeline
@@ -51,48 +47,42 @@ spec:
               num_cpus: 0.2
               num_gpus: 0
               resources: {"head_node": 0.001}
-      
-    # ✅ NEW: merged ops app for facts + eventizer + state + energy
-    - name: ops
-      import_path: entrypoints.ops_entrypoint:build_ops_app
-      route_prefix: /ops
-      deployments:
-        # HTTP ingress that routes /ops/* to the internal services via handles
-        - name: OpsGateway
-          num_replicas: 1
-          ray_actor_options:
-            num_cpus: 0.1
-            resources: {"head_node": 0.001}
 
-         - name: EventizerService
-           num_replicas: 3
-           max_concurrent_queries: 100
-           ray_actor_options:
-             num_cpus: 0.6
-             memory: 2147483648    # 2GB
-             resources: {"head_node": 0.001}
+      - name: ops
+        import_path: entrypoints.ops_entrypoint:build_ops_app
+        route_prefix: /ops
+        deployments:
+          - name: OpsGateway
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 0.05
+              resources: {"head_node": 0.001}
 
-        - name: FactManager
-          num_replicas: 1
-          ray_actor_options:
-            num_cpus: 0.3
-            memory: 1073741824    # 1GB
-            resources: {"head_node": 0.001}
+          - name: EventizerService
+            num_replicas: 2
+            max_concurrent_queries: 100
+            ray_actor_options:
+              num_cpus: 0.4
+              memory: 2147483648    # 2GB
 
-        - name: StateService
-          num_replicas: 1
-          ray_actor_options:
-            num_cpus: 0.2
-            memory: 1073741824    # 1GB
-            resources: {"head_node": 0.001}
+          - name: FactManager
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 0.2
+              memory: 1073741824    # 1GB
 
-        - name: EnergyService
-          num_replicas: 1
-          ray_actor_options:
-            num_cpus: 0.2
-            memory: 1073741824    # 1GB
-            resources: {"head_node": 0.001}
-      
+          - name: StateService
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 0.15
+              memory: 1073741824    # 1GB
+
+          - name: EnergyService
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 0.15
+              memory: 1073741824    # 1GB
+
       - name: organism
         import_path: entrypoints.organism_entrypoint:build_organism_app
         route_prefix: /organism
@@ -100,15 +90,10 @@ spec:
           - name: OrganismManager
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.5
+              num_cpus: 0.3
               num_gpus: 0
               memory: 2147483648  # 2GB
               resources: {"head_node": 0.001}
-      
-      # comment out the lightweight wrapper endpoints
-      # - name: ml_serve
-      #  import_path: src.seedcore.ml.serve_app:create_serve_app
-      #  route_prefix: /ml_serve
 
   # ===================================================================
   #  Ray Cluster Configuration

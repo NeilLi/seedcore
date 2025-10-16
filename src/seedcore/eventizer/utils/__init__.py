@@ -3,56 +3,17 @@
 Eventizer Utils
 
 Shared utilities for text processing, pattern compilation, and normalization.
+
+Note: To avoid circular imports, modules should import directly from submodules:
+- from ..eventizer.utils.text_normalizer import TextNormalizer, SpanMap
+- from ..eventizer.utils.pattern_compiler import PatternCompiler, CompiledRegex
+- from ..eventizer.utils.aho_corasick import create_keyword_matcher
+- from ..eventizer.utils.json_schema_validator import validate_patterns_file
+
+Do NOT import from this __init__.py as it can cause circular dependency issues.
 """
 
-from .text_normalizer import (
-    TextNormalizer,
-    SpanMap
-)
+# This __init__.py intentionally left minimal to avoid circular imports.
+# Import directly from submodules instead.
 
-from .pattern_compiler import (
-    PatternCompiler,
-    CompiledRegex
-)
-
-from .aho_corasick import (
-    AhoCorasickTrie,
-    AhoCorasickMatcher,
-    OptimizedAhoCorasickMatcher,
-    create_keyword_matcher,
-    Match
-)
-
-from .json_schema_validator import (
-    EventizerPatternsValidator,
-    validate_patterns_file,
-    validate_patterns_data,
-    validate_enhanced_features,
-    ValidationResult,
-    ValidationError
-)
-
-__all__ = [
-    # Text normalization
-    "TextNormalizer",
-    "SpanMap",
-    
-    # Pattern compilation
-    "PatternCompiler", 
-    "CompiledRegex",
-    
-    # Aho-Corasick keyword matching
-    "AhoCorasickTrie",
-    "AhoCorasickMatcher", 
-    "OptimizedAhoCorasickMatcher",
-    "create_keyword_matcher",
-    "Match",
-    
-    # JSON Schema validation
-    "EventizerPatternsValidator",
-    "validate_patterns_file",
-    "validate_patterns_data",
-    "validate_enhanced_features",
-    "ValidationResult",
-    "ValidationError"
-]
+__all__ = []

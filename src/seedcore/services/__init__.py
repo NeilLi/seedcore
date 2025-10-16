@@ -10,5 +10,9 @@ Services:
 - eventizer_service: Deterministic text processing for task classification and routing
 """
 
+from .eventizer_service import EventizerService
 
+__all__ = [
+    "EventizerService",
+]
 

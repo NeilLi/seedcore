@@ -17,14 +17,14 @@ from sqlalchemy import select, delete, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.fact import Fact
-from ..services.eventizer_service import EventizerService
-from ..services.eventizer.schemas.eventizer_models import (
+from .eventizer_service import EventizerService
+from ..eventizer.schemas.eventizer_models import (
     EventizerRequest,
     EventizerResponse,
     EventizerConfig,
     PKGEnv
 )
-from ..services.eventizer.clients.pkg_client import PKGClient
+from ..eventizer.clients.pkg_client import PKGClient
 
 logger = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SeedCore Eventizer Service
+SeedCore Eventizer Package
 
 Deterministic text processing pipeline for task classification and routing.
 Provides structured tags, attributes, and confidence scores to influence
@@ -11,9 +11,10 @@ Architecture:
 - schemas/: Pydantic models for inputs/outputs
 - clients/: External service integrations (Presidio, etc.)
 - utils/: Shared helpers for pattern compilation and text normalization
+
+Note: EventizerService is exported from seedcore.services, not from this package.
 """
 
-from ..eventizer_service import EventizerService
 from .schemas.eventizer_models import (
     EventizerRequest,
     EventizerResponse,
@@ -23,7 +24,6 @@ from .schemas.eventizer_models import (
 )
 
 __all__ = [
-    "EventizerService",
     "EventizerRequest", 
     "EventizerResponse",
     "EventTags",

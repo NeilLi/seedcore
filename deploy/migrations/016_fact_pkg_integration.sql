@@ -17,8 +17,19 @@ ALTER TABLE facts ADD COLUMN IF NOT EXISTS pkg_provenance JSONB;
 ALTER TABLE facts ADD COLUMN IF NOT EXISTS validation_status TEXT;
 
 -- Add foreign key constraint to PKG snapshots
-ALTER TABLE facts ADD CONSTRAINT IF NOT EXISTS fk_facts_snapshot_id 
-    FOREIGN KEY (snapshot_id) REFERENCES pkg_snapshots(id) ON DELETE SET NULL;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        WHERE c.conname = 'fk_facts_snapshot_id'
+          AND c.conrelid = 'facts'::regclass
+    ) THEN
+        ALTER TABLE facts ADD CONSTRAINT fk_facts_snapshot_id
+            FOREIGN KEY (snapshot_id) REFERENCES pkg_snapshots(id) ON DELETE SET NULL;
+    END IF;
+END
+$$;
 
 -- Add indexes for performance
 CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject);
@@ -36,14 +47,47 @@ CREATE INDEX IF NOT EXISTS idx_facts_temporal_namespace ON facts(valid_from, val
 CREATE INDEX IF NOT EXISTS idx_facts_created_at_namespace ON facts(created_at, namespace);
 
 -- Add constraints
-ALTER TABLE facts ADD CONSTRAINT IF NOT EXISTS chk_facts_temporal 
-    CHECK (valid_from IS NULL OR valid_to IS NULL OR valid_from <= valid_to);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        WHERE c.conname = 'chk_facts_temporal'
+          AND c.conrelid = 'facts'::regclass
+    ) THEN
+        ALTER TABLE facts ADD CONSTRAINT chk_facts_temporal
+            CHECK (valid_from IS NULL OR valid_to IS NULL OR valid_from <= valid_to);
+    END IF;
+END
+$$;
 
-ALTER TABLE facts ADD CONSTRAINT IF NOT EXISTS chk_facts_namespace_not_empty
-    CHECK (namespace IS NOT NULL AND length(trim(namespace)) > 0);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        WHERE c.conname = 'chk_facts_namespace_not_empty'
+          AND c.conrelid = 'facts'::regclass
+    ) THEN
+        ALTER TABLE facts ADD CONSTRAINT chk_facts_namespace_not_empty
+            CHECK (namespace IS NOT NULL AND length(trim(namespace)) > 0);
+    END IF;
+END
+$$;
 
-ALTER TABLE facts ADD CONSTRAINT IF NOT EXISTS chk_facts_created_by_not_empty
-    CHECK (created_by IS NOT NULL AND length(trim(created_by)) > 0);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        WHERE c.conname = 'chk_facts_created_by_not_empty'
+          AND c.conrelid = 'facts'::regclass
+    ) THEN
+        ALTER TABLE facts ADD CONSTRAINT chk_facts_created_by_not_empty
+            CHECK (created_by IS NOT NULL AND length(trim(created_by)) > 0);
+    END IF;
+END
+$$;
 
 -- Update existing facts to have default namespace
 UPDATE facts SET namespace = 'default' WHERE namespace IS NULL;
