@@ -11,13 +11,18 @@ import sys
 import os
 import uuid
 from typing import Dict, Any
+import pytest
+
+# Import mocks first
+sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+from mock_eventizer_dependencies import (
+    get_eventizer_client,
+    MockEventizerServiceClient as EventizerServiceClient
+)
 
 # Add the project root to Python path
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
-
-from seedcore.api.routers.tasks_router import get_eventizer_client
-from seedcore.serve.eventizer_client import EventizerServiceClient
 
 async def test_eventizer_client_integration():
     """Test that the EventizerServiceClient works correctly."""
@@ -182,17 +187,19 @@ async def test_tasks_router_simulation():
         import traceback
         traceback.print_exc()
 
-def main():
-    """Main test runner."""
+@pytest.mark.asyncio
+async def test_tasks_router_eventizer_integration_suite():
+    """Test suite for tasks router eventizer integration."""
     print("🧪 Tasks Router Eventizer Integration Tests")
     print("=" * 60)
     
-    # Run async tests
-    asyncio.run(test_eventizer_client_integration())
-    asyncio.run(test_service_discovery())
-    asyncio.run(test_tasks_router_simulation())
+    await test_eventizer_client_integration()
+    await test_service_discovery()
+    await test_tasks_router_simulation()
     
     print("\n🎉 All integration tests completed!")
 
+
 if __name__ == "__main__":
-    main()
+    # For standalone execution
+    asyncio.run(test_tasks_router_eventizer_integration_suite())

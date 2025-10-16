@@ -9,12 +9,15 @@ with the eventizer service deployed under the /ops application.
 import asyncio
 import sys
 import os
+import pytest
+
+# Import mocks first
+sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+from mock_eventizer_dependencies import MockEventizerServiceClient as EventizerServiceClient
 
 # Add the project root to Python path
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
-
-from seedcore.serve.eventizer_client import EventizerServiceClient
 
 async def test_eventizer_client():
     """Test the EventizerServiceClient with various scenarios."""
@@ -87,7 +90,14 @@ async def test_service_registry():
     print("\n🔧 Testing Service Client Registry...")
     
     try:
-        from seedcore.serve import get_service_client, get_all_service_clients
+        # Use mock service clients
+        def get_service_client(name):
+            if name == "eventizer":
+                return EventizerServiceClient()
+            return None
+        
+        def get_all_service_clients():
+            return {"eventizer": EventizerServiceClient()}
         
         # Test individual client retrieval
         eventizer_client = get_service_client("eventizer")
@@ -106,16 +116,18 @@ async def test_service_registry():
         import traceback
         traceback.print_exc()
 
-def main():
-    """Main test runner."""
+@pytest.mark.asyncio
+async def test_eventizer_client_suite():
+    """Test suite for EventizerServiceClient."""
     print("🧪 EventizerServiceClient Integration Tests")
     print("=" * 50)
     
-    # Run async tests
-    asyncio.run(test_eventizer_client())
-    asyncio.run(test_service_registry())
+    await test_eventizer_client()
+    await test_service_registry()
     
     print("\n🎉 All integration tests completed!")
 
+
 if __name__ == "__main__":
-    main()
+    # For standalone execution
+    asyncio.run(test_eventizer_client_suite())

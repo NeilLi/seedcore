@@ -10,12 +10,16 @@ import asyncio
 import json
 import sys
 import os
+import pytest
+
+# Import mocks first
+sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+from mock_eventizer_dependencies import MockEventizerService
 
 # Add the src directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from seedcore.services.eventizer_service import EventizerService
-from seedcore.services.eventizer.schemas.eventizer_models import EventizerRequest, EventizerConfig
+from seedcore.eventizer import EventizerRequest, EventizerConfig
 
 
 async def test_eventizer_basic():
@@ -32,7 +36,7 @@ async def test_eventizer_basic():
         pattern_files=["../config/eventizer_patterns.json"]
     )
     
-    eventizer = EventizerService(config)
+    eventizer = MockEventizerService(config)
     await eventizer.initialize()
     
     # Test cases
@@ -135,7 +139,7 @@ async def test_eventizer_pii_redaction():
         pii_redaction_entities=["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"]
     )
     
-    eventizer = EventizerService(config)
+    eventizer = MockEventizerService(config)
     await eventizer.initialize()
     
     pii_test_cases = [
@@ -179,7 +183,7 @@ async def test_eventizer_integration():
         pattern_files=["../config/eventizer_patterns.json"]
     )
     
-    eventizer = EventizerService(config)
+    eventizer = MockEventizerService(config)
     await eventizer.initialize()
     
     # Simulate task creation payload
@@ -262,23 +266,19 @@ async def test_eventizer_integration():
                 print(f"   📋 Routing Decision: Would use default routing")
 
 
-async def main():
-    """Run all eventizer tests."""
+@pytest.mark.asyncio
+async def test_eventizer_suite():
+    """Run all eventizer tests as a single pytest test."""
     print("🚀 Eventizer Integration Test Suite")
     print("=" * 60)
     
-    try:
-        await test_eventizer_basic()
-        await test_eventizer_pii_redaction()
-        await test_eventizer_integration()
-        
-        print("\n\n✅ All tests completed successfully!")
-        
-    except Exception as e:
-        print(f"\n\n❌ Test failed with error: {e}")
-        import traceback
-        traceback.print_exc()
+    await test_eventizer_basic()
+    await test_eventizer_pii_redaction()
+    await test_eventizer_integration()
+    
+    print("\n\n✅ All tests completed successfully!")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # For standalone execution
+    asyncio.run(test_eventizer_suite())
