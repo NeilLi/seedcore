@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """
-SeedCore CLI — beginning surface for tasks + HGNN graph.
+SeedCore CLI — management interface for tasks, services, and HGNN graph.
 
-Backends
-- HTTP API  : SEEDCORE_API (default http://127.0.0.1:8002)
-- Postgres  : PG_DSN or SEEDCORE_PG_DSN (optional; enables HGNN ops)
+Architecture:
+- SeedCore API: SEEDCORE_API (default http://127.0.0.1:8002) - Main API server
+- Ray Serve Services: http://127.0.0.1:8000 - Coordinator, Ops, ML, Cognitive services
+- Postgres: PG_DSN or SEEDCORE_PG_DSN (optional; enables HGNN ops)
 
-Covers (per SeedCore graph model):
-- Task Graph: tasks list/search/status; create; graph_embed/graph_rag via API
+Features:
+- Task Management: create, list, search, status via SeedCore API
+- Service Health: check SeedCore API health and readiness
+- Eventizer Testing: test text processing via /ops endpoint
 - Agent Graph: ensure nodes (agent/organ/model/service/skill/policy)
-               link relations (member_of, collab, provides, uses, governed_by)
-- Cross-Layer: create_graph_*_task_v2 + task↔organ/agent wiring
 - HGNN edges: query 1-hop edges from unified hgnn_edges view
 
-Docs: dual-graph model (Task + Agent) and hgnn_edges design.  # see project whitepaper
+Service Integration:
+- Uses SeedCore API endpoints (/api/v1/*) for task operations
+- Uses Ray Serve endpoints (/ops/*, /pipeline/*) for service operations
+- All communication goes through proper HTTP clients, not direct Ray handles
 """
 
 import os
@@ -114,6 +118,55 @@ def api_readyz():
             print(f"  • {k}: {v}")
     except Exception as e:
         print(f"❌ Readiness failed: {e}")
+
+def api_eventizer_test(text: str, task_type: str = "", domain: str = "", preserve_original: bool = False):
+    """Test the eventizer service via /ops endpoint or task creation fallback."""
+    try:
+        # Try the new /ops/eventizer/process endpoint first
+        ops_base = API_BASE.replace(":8002", ":8000")  # Ray Serve typically runs on 8000
+        payload = {
+            "text": text,
+            "task_type": task_type,
+            "domain": domain,
+            "preserve_pii": preserve_original,
+            "include_metadata": True
+        }
+        
+        try:
+            j = _http_post(f"{ops_base}/ops/eventizer/process", payload)
+            print(f"🎯 Eventizer Result (via /ops):")
+            print(f"  • Confidence: {j.get('confidence', {}).get('overall_confidence', 'N/A')}")
+            print(f"  • Event Tags: {j.get('event_tags', {})}")
+            print(f"  • Attributes: {j.get('attributes', {})}")
+            print(f"  • Processing Time: {j.get('processing_time_ms', 'N/A')}ms")
+            print(f"  • PII Redacted: {j.get('pii_redacted', False)}")
+            if j.get('pii_redacted') and preserve_original:
+                print(f"  • Original Text: {j.get('original_text', 'N/A')}")
+                print(f"  • Processed Text: {j.get('processed_text', 'N/A')}")
+        except Exception as ops_error:
+            print(f"⚠️ /ops endpoint failed ({ops_error}), trying fallback...")
+            # Fallback: create a task and check the enriched params
+            task_payload = {
+                "type": task_type or "test",
+                "description": text,
+                "domain": domain,
+                "preserve_original_text": preserve_original,
+                "params": {}
+            }
+            t = _http_post(f"{API_V1_BASE}/tasks", task_payload)
+            enriched_params = t.get('params', {})
+            if 'event_tags' in enriched_params:
+                print(f"🎯 Eventizer Result (via task creation):")
+                event_tags = enriched_params.get('event_tags', {})
+                print(f"  • Confidence: {event_tags.get('confidence', 'N/A')}")
+                print(f"  • Event Types: {event_tags.get('event_types', [])}")
+                print(f"  • Needs ML Fallback: {event_tags.get('needs_ml_fallback', False)}")
+                print(f"  • Processing Time: {enriched_params.get('eventizer_metadata', {}).get('processing_time_ms', 'N/A')}ms")
+            else:
+                print("❌ No eventizer results found in task params")
+                
+    except Exception as e:
+        print(f"❌ Eventizer test failed: {e}")
 
 def api_list_tasks(status=None, typ=None, since=None, limit=None):
     try:
@@ -484,6 +537,13 @@ def build_parser():
     # ─── Health / Readiness ───
     sub.add_parser("health", help="Check API health (status, service, version)")
     sub.add_parser("readyz", help="Check API readiness (DB + deps)")
+    
+    # Eventizer testing
+    et = sub.add_parser("eventizer", help="Test eventizer service with sample text")
+    et.add_argument("text", help="Text to process through eventizer")
+    et.add_argument("--type", help="Task type (default: 'test')")
+    et.add_argument("--domain", help="Domain context")
+    et.add_argument("--preserve-original", action="store_true", help="Preserve original text (for PII testing)")
 
     # ─── Tasks / Facts ───
     tp = sub.add_parser("tasks", help="List tasks with optional filters")
@@ -548,7 +608,9 @@ def build_parser():
     # Extended epilog with examples
     p.epilog = """\
 Examples:
-  ./seedcore_cli.py health
+  ./seedcore_cli.py health                    # Check SeedCore API health
+  ./seedcore_cli.py readyz                    # Check SeedCore API readiness
+  ./seedcore_cli.py eventizer "Emergency in building A" --type security --domain physical
   ./seedcore_cli.py tasks --status running --limit 5
   ./seedcore_cli.py search tea --status completed
   ./seedcore_cli.py ask analyze the incident 12345
@@ -572,6 +634,8 @@ def main():
         api_health(); return
     if args.cmd == "readyz":
         api_readyz(); return
+    if args.cmd == "eventizer":
+        api_eventizer_test(args.text, args.type, args.domain, args.preserve_original); return
 
     if args.cmd == "tasks":
         api_list_tasks(args.status, args.type, args.since, args.limit); return

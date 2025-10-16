@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-State Service Entrypoint for SeedCore
+DEPRECATED: State Service Entrypoint for SeedCore
 entrypoints/state_entrypoint.py
 
-This service runs the state aggregator as a standalone Ray Serve deployment,
-providing centralized state collection for the entire SeedCore system.
+⚠️  WARNING: This file is DEPRECATED and should not be used.
+The StateService has been merged into the unified ops application.
+
+Use the unified ops application instead:
+- Import path: entrypoints.ops_entrypoint:build_ops_app
+- Route prefix: /ops
+- State endpoints: /ops/state/*
+
+This standalone entrypoint is kept for backward compatibility only.
 """
 
 from seedcore.logging_setup import setup_logging
@@ -46,7 +53,10 @@ state_app = StateService.bind()
 
 def build_state_app(args: dict = None):
     """
-    Builder function for the state service application.
+    DEPRECATED: Builder function for the state service application.
+    
+    ⚠️  WARNING: This function is DEPRECATED.
+    Use the unified ops application instead: entrypoints.ops_entrypoint:build_ops_app
     
     This function returns a bound Serve application that can be deployed
     via Ray Serve YAML configuration.
@@ -57,10 +67,20 @@ def build_state_app(args: dict = None):
     Returns:
         Bound Serve application
     """
+    import warnings
+    warnings.warn(
+        "build_state_app is deprecated. Use entrypoints.ops_entrypoint:build_ops_app instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     return StateService.bind()
 
 def main():
-    logger.info("🚀 Starting deployment driver for State Service...")
+    logger.warning("⚠️  DEPRECATED: State service standalone deployment is deprecated.")
+    logger.warning("⚠️  Use the unified ops application instead: entrypoints.ops_entrypoint:build_ops_app")
+    logger.warning("⚠️  State endpoints are now available at /ops/state/*")
+    
+    logger.info("🚀 Starting DEPRECATED deployment driver for State Service...")
     try:
         if not ensure_ray_initialized(ray_address=RAY_ADDR, ray_namespace=RAY_NS):
             logger.error("❌ Failed to initialize Ray connection")
@@ -68,10 +88,11 @@ def main():
 
         serve.run(
             state_app,
-            name="state-service",
-            route_prefix="/state"
+            name="state-service-deprecated",
+            route_prefix="/state-deprecated"
         )
-        logger.info("✅ State service is running.")
+        logger.warning("✅ DEPRECATED State service is running at /state-deprecated")
+        logger.warning("⚠️  Please migrate to the unified ops application!")
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:

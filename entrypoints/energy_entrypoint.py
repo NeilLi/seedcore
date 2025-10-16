@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-Energy Service Entrypoint for SeedCore
+DEPRECATED: Energy Service Entrypoint for SeedCore
 entrypoints/energy_entrypoint.py
 
-This service runs the energy calculator as a standalone Ray Serve deployment,
-providing energy calculations and optimization for the SeedCore system.
+⚠️  WARNING: This file is DEPRECATED and should not be used.
+The EnergyService has been merged into the unified ops application.
+
+Use the unified ops application instead:
+- Import path: entrypoints.ops_entrypoint:build_ops_app
+- Route prefix: /ops
+- Energy endpoints: /ops/energy/*
+
+This standalone entrypoint is kept for backward compatibility only.
 """
 
 import os
@@ -46,7 +53,10 @@ energy_app = EnergyService.bind()
 
 def build_energy_app(args: dict = None):
     """
-    Builder function for the energy service application.
+    DEPRECATED: Builder function for the energy service application.
+    
+    ⚠️  WARNING: This function is DEPRECATED.
+    Use the unified ops application instead: entrypoints.ops_entrypoint:build_ops_app
     
     This function returns a bound Serve application that can be deployed
     via Ray Serve YAML configuration.
@@ -57,10 +67,20 @@ def build_energy_app(args: dict = None):
     Returns:
         Bound Serve application
     """
+    import warnings
+    warnings.warn(
+        "build_energy_app is deprecated. Use entrypoints.ops_entrypoint:build_ops_app instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     return EnergyService.bind()
 
 def main():
-    logger.info("🚀 Starting deployment driver for Energy Service...")
+    logger.warning("⚠️  DEPRECATED: Energy service standalone deployment is deprecated.")
+    logger.warning("⚠️  Use the unified ops application instead: entrypoints.ops_entrypoint:build_ops_app")
+    logger.warning("⚠️  Energy endpoints are now available at /ops/energy/*")
+    
+    logger.info("🚀 Starting DEPRECATED deployment driver for Energy Service...")
     try:
         if not ensure_ray_initialized(ray_address=RAY_ADDR, ray_namespace=RAY_NS):
             logger.error("❌ Failed to initialize Ray connection")
@@ -68,10 +88,11 @@ def main():
 
         serve.run(
             energy_app,
-            name="energy-service",
-            route_prefix="/energy"
+            name="energy-service-deprecated",
+            route_prefix="/energy-deprecated"
         )
-        logger.info("✅ Energy service is running.")
+        logger.warning("✅ DEPRECATED Energy service is running at /energy-deprecated")
+        logger.warning("⚠️  Please migrate to the unified ops application!")
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:

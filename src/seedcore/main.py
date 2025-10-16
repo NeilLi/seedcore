@@ -3,20 +3,25 @@ Main SeedCore FastAPI application with database-backed task management.
 
 This demonstrates how to integrate the refactored task router with proper
 database initialization and background worker management using FastAPI's lifespan.
+The background worker processes tasks from the queue and submits them to the
+OrganismManager Serve deployment.
 """
 
 import os
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy import text
 
+logger = logging.getLogger(__name__)
+
 from .database import get_async_pg_engine  # must return postgresql+asyncpg engine
 from .models.task import Base as TaskBase
 from .models.fact import Base as FactBase
-from .api.routers.tasks_router import router as tasks_router
+from .api.routers.tasks_router import router as tasks_router, _task_worker
 from .api.routers.control_router import router as control_router
 
 ENABLE_ENV_ENDPOINT = os.getenv("ENABLE_DEBUG_ENV", "false").lower() in ("1","true","yes")
@@ -33,13 +38,41 @@ async def init_db(engine: AsyncEngine):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    logger.info("Starting SeedCore API application...")
+    
     engine = get_async_pg_engine()  # must be asyncpg-based
     app.state.db_engine = engine
     await init_db(engine)
+    logger.info("Database initialized successfully")
+    
+    # Initialize task queue and start background worker
+    if not hasattr(app.state, "task_queue"):
+        app.state.task_queue = asyncio.Queue()
+    app.state.worker_task = asyncio.create_task(_task_worker(app.state))
+    logger.info("Background task worker started")
+    
+    logger.info("SeedCore API application startup complete")
     yield
+    
     # Shutdown
+    logger.info("Shutting down SeedCore API application...")
+    
+    # Cancel background worker
+    if hasattr(app.state, "worker_task"):
+        logger.info("Stopping background task worker...")
+        app.state.worker_task.cancel()
+        try:
+            await app.state.worker_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Background task worker stopped")
+    
+    # Dispose database engine
     eng: AsyncEngine = app.state.db_engine
     await eng.dispose()
+    logger.info("Database engine disposed")
+    
+    logger.info("SeedCore API application shutdown complete")
 
 app = FastAPI(
     title="SeedCore API",

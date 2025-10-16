@@ -41,9 +41,9 @@ The application stack is managed by Docker Compose and is composed of several ke
 - **Time-windowed Caching**: Intelligent cache key generation with configurable expiration
 
 ### Performance Results
-- **`/energy/gradient`**: 16.8x improvement (16.8s → 0.05s for cache hits)
-- **`/energy/monitor`**: 350x improvement (7s → 0.02s for cache hits)
-- **`/energy/calibrate`**: 1000x improvement (15s → 0.015s for cache hits)
+- **`/ops/energy/gradient`**: 16.8x improvement (16.8s → 0.05s for cache hits)
+- **`/ops/energy/monitor`**: 350x improvement (7s → 0.02s for cache hits)
+- **`/ops/energy/calibrate`**: 1000x improvement (15s → 0.015s for cache hits)
 
 -----
 
@@ -148,29 +148,29 @@ The SeedCore energy system provides real-time monitoring through dedicated endpo
 
 | Endpoint | URL | Description |
 | :--- | :--- | :--- |
-| **Energy Gradient** | `http://localhost:8002/energy/gradient` | Real-time energy telemetry with slopes and trends |
-| **Energy Monitor** | `http://localhost:8002/energy/monitor` | Comprehensive energy monitoring with agent metrics |
-| **Energy Calibrate** | `http://localhost:8002/energy/calibrate` | Energy system calibration and validation |
-| **Energy Logs** | `http://localhost:8002/energy/logs` | Energy system logs and history |
-| **Energy Log** | `http://localhost:8002/energy/log` | POST endpoint for logging energy events |
+| **Energy Gradient** | `http://localhost:8000/ops/energy/gradient` | Real-time energy telemetry with slopes and trends |
+| **Energy Monitor** | `http://localhost:8000/ops/energy/monitor` | Comprehensive energy monitoring with agent metrics |
+| **Energy Calibrate** | `http://localhost:8000/ops/energy/calibrate` | Energy system calibration and validation |
+| **Energy Logs** | `http://localhost:8000/ops/energy/logs` | Energy system logs and history |
+| **Energy Log** | `http://localhost:8000/ops/energy/log` | POST endpoint for logging energy events |
 
 ### Energy System Commands
 
 ```bash
 # Get real-time energy gradient
-curl http://localhost:8002/energy/gradient
+curl http://localhost:8000/ops/energy/gradient
 
 # Get comprehensive energy monitoring
-curl http://localhost:8002/energy/monitor
+curl http://localhost:8000/ops/energy/monitor
 
 # Run energy system calibration
-curl http://localhost:8002/energy/calibrate
+curl http://localhost:8000/ops/energy/calibrate
 
 # Get energy system logs
-curl http://localhost:8002/energy/logs
+curl http://localhost:8000/ops/energy/logs
 
 # Log energy event (POST with body)
-curl -X POST http://localhost:8002/energy/log -H "Content-Type: application/json" -d '{"event": "test"}'
+curl -X POST http://localhost:8000/ops/energy/log -H "Content-Type: application/json" -d '{"event": "test"}'
 ```
 
 -----
@@ -239,9 +239,9 @@ The Redis caching system provides significant performance improvements for compu
 
 | Endpoint | Before | After | Improvement |
 |----------|--------|-------|-------------|
-| `/energy/gradient` | ~16.8s | ~0.05s | 16.8x |
-| `/energy/monitor` | ~7s | ~0.02s | 350x |
-| `/energy/calibrate` | ~15s | ~0.015s | 1000x |
+| `/ops/energy/gradient` | ~16.8s | ~0.05s | 16.8x |
+| `/ops/energy/monitor` | ~7s | ~0.02s | 350x |
+| `/ops/energy/calibrate` | ~15s | ~0.015s | 1000x |
 
 ### Cache Management
 
@@ -260,8 +260,8 @@ docker exec seedcore-api python3 -c "from src.seedcore.caching.redis_cache impor
 #### Monitor Cache Performance
 ```bash
 # Test cache performance
-time curl -s http://localhost:8002/energy/gradient > /dev/null
-time curl -s http://localhost:8002/energy/gradient > /dev/null  # Should be much faster
+time curl -s http://localhost:8000/ops/energy/gradient > /dev/null
+time curl -s http://localhost:8000/ops/energy/gradient > /dev/null  # Should be much faster
 
 # Check cache hit rates
 docker exec seedcore-redis redis-cli info memory
@@ -309,7 +309,7 @@ REDIS_DB=0
    docker exec seedcore-redis redis-cli keys "energy:*"
    
    # Monitor cache performance
-   time curl -s http://localhost:8002/energy/gradient > /dev/null
+   time curl -s http://localhost:8000/ops/energy/gradient > /dev/null
    ```
 
 3. **Memory Issues**
@@ -421,7 +421,7 @@ docker exec -it [container_name] /bin/bash
 5. **Test Energy System**
    ```bash
    # Test energy endpoints
-   curl http://localhost:8002/energy/gradient
+   curl http://localhost:8000/ops/energy/gradient
    
    # Run validation experiments
    python -c "import asyncio; from seedcore.experiments.harness import EnergyValidationHarness; asyncio.run(EnergyValidationHarness().experiment_A_pair())"
@@ -469,16 +469,16 @@ docker exec -it [container_name] /bin/bash
 | API | `http://localhost:8002` | Main application interface |
 | Ray Dashboard | `http://localhost:8265` | Cluster monitoring |
 | Grafana | `http://localhost:3000` | Metrics visualization |
-| Energy Gradient | `http://localhost:8002/energy/gradient` | Real-time energy telemetry |
+| Energy Gradient | `http://localhost:8000/ops/energy/gradient` | Real-time energy telemetry |
 
 ### Energy System Endpoints
 
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
-| `/energy/gradient` | GET | Real-time energy telemetry |
-| `/energy/monitor` | GET | Comprehensive energy monitoring |
-| `/energy/calibrate` | GET | Energy system calibration |
-| `/energy/logs` | GET | Energy system logs |
-| `/energy/log` | POST | Log energy events |
+| `/ops/energy/gradient` | GET | Real-time energy telemetry |
+| `/ops/energy/monitor` | GET | Comprehensive energy monitoring |
+| `/ops/energy/calibrate` | GET | Energy system calibration |
+| `/ops/energy/logs` | GET | Energy system logs |
+| `/ops/energy/log` | POST | Log energy events |
 
 This operation manual provides comprehensive guidance for managing the SeedCore application stack, including the energy system monitoring and experimental validation capabilities. 

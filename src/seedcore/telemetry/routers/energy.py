@@ -104,7 +104,7 @@ def _build_energy_health_payload():
 
 @router.get("/healthz/energy", include_in_schema=False)
 def healthz_energy():
-    """Legacy health path; use /energy/health. Returns same payload."""
+    """Legacy health path; use /ops/energy/health. Returns same payload."""
     try:
         return _build_energy_health_payload()
     except Exception as e:
@@ -123,7 +123,7 @@ def healthz_energy():
 
 @router.get("/health")
 def energy_health():
-    """Energy health endpoint aligned with /energy/* namespace."""
+    """Energy health endpoint aligned with /ops/energy/* namespace."""
     try:
         # Simple test first
         from ...energy.calculator import EnergyLedger

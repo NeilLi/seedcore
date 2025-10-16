@@ -289,9 +289,9 @@ CREATE VIEW hgnn_edges AS
 - `GET /energy-from-state` - Get energy from current state
 
 #### Telemetry Integration
-- `GET /energy/unified_state` - Delegates to state service
-- `POST /energy/compute-energy` - Delegates to energy service
-- `POST /energy/optimize-agents` - Delegates to energy service
+- `GET /ops/state/unified_state` - Delegates to state service (migrated to /ops)
+- `POST /ops/energy/compute-energy` - Delegates to energy service (migrated to /ops)
+- `POST /ops/energy/optimize-agents` - Delegates to energy service (migrated to /ops)
 
 ## 🚀 Benefits Achieved
 

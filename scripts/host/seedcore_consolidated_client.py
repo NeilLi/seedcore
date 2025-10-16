@@ -153,12 +153,12 @@ class SeedcoreAPI:
     def salience_score(self, features: List[dict]) -> dict:
         return self.http.post("/salience/score", json=features)
 
-    # energy
-    def energy_meta(self) -> dict:     return self.http.get("/energy/meta")
-    def energy_gradient(self) -> dict: return self.http.get("/energy/gradient")
-    def energy_monitor(self) -> dict:  return self.http.get("/energy/monitor")
+    # energy (now under /ops)
+    def energy_meta(self) -> dict:     return self.http.get("/ops/energy/meta")
+    def energy_gradient(self) -> dict: return self.http.get("/ops/energy/gradient")
+    def energy_monitor(self) -> dict:  return self.http.get("/ops/energy/monitor")
     def energy_logs(self, limit: int = 100) -> dict:
-        return self.http.get("/energy/logs", params={"limit": limit})
+        return self.http.get("/ops/energy/logs", params={"limit": limit})
 
     # tier0
     def agents_state(self) -> dict:    return self.http.get("/tier0/agents/state")

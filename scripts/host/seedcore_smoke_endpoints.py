@@ -11,9 +11,9 @@ ROUTES = {
     "cognitive":  {"path": "/cognitive/docs", "optional": False},
     "pipeline":   {"path": "/pipeline/docs",  "optional": False},
     "organism":   {"path": "/organism/docs",  "optional": False},
-    # state/energy may not expose docs; try a ping/health then fallback to / if needed
-    "state":      {"path": "/state/health",   "optional": True, "fallbacks": ["/state", "/state/metrics"]},
-    "energy":     {"path": "/energy/health",  "optional": True, "fallbacks": ["/energy", "/energy/metrics"]},
+    # state/energy now under /ops (migrated from separate apps)
+    "state":      {"path": "/ops/state/health",   "optional": True, "fallbacks": ["/ops/state", "/ops/state/metrics"]},
+    "energy":     {"path": "/ops/energy/health",  "optional": True, "fallbacks": ["/ops/energy", "/ops/energy/metrics"]},
 }
 
 def try_get(url: str, timeout=3.0):

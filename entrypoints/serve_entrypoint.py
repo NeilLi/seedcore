@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """
-Ray Serve Entrypoint with XGBoost Service Deployment
+DEPRECATED: Ray Serve Entrypoint with XGBoost Service Deployment
 
-This script creates a proper Ray Serve deployment wrapper around the XGBoost service.
-It registers the service with Ray Serve so it can handle requests.
+⚠️  WARNING: This file is DEPRECATED and should not be used.
+The XGBoost functionality has been fully integrated into the ML service.
+
+Use the ML service instead:
+- Import path: entrypoints.ml_entrypoint:build_ml_service
+- Route prefix: /ml
+- XGBoost endpoints: /ml/xgboost/*
+
+This legacy entrypoint is kept for reference only.
 """
 
 import os
@@ -146,13 +153,11 @@ app = FastAPIWrapper.bind()
 # Main
 # -------------------------------
 def main():
-    # Preflight TCP only if using ray://
-    host, port = parse_ray_addr(RAY_ADDR)
-    if host and port:
-        log(f"Preflight: waiting for Ray Client {host}:{port} ...")
-        if not wait_tcp(host, port, tries=90):
-            err(f"Ray Client {host}:{port} not reachable.")
-            sys.exit(1)
+    err("⚠️  DEPRECATED: This XGBoost service entrypoint is deprecated.")
+    err("⚠️  Use the ML service instead: entrypoints.ml_entrypoint:build_ml_service")
+    err("⚠️  XGBoost endpoints are now available at /ml/xgboost/*")
+    err("⚠️  This service will not start. Please use the ML service.")
+    sys.exit(1)
 
     # Build runtime_env
     runtime_env = {

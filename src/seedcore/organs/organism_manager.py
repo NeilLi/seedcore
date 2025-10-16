@@ -905,6 +905,35 @@ class OrganismManager:
         if not self.organs:
             raise RuntimeError("No organs available")
         
+        # Eventizer-based routing (deterministic layer first)
+        event_tags = (task.get("params") or {}).get("event_tags", {})
+        attributes = (task.get("params") or {}).get("attributes", {})
+        
+        if event_tags and attributes:
+            # Check for specialized organ suggestions from eventizer
+            target_organ = attributes.get("target_organ")
+            if target_organ and target_organ in self.organs:
+                logger.info(f"🎯 Routing task to organ '{target_organ}' based on eventizer analysis")
+                return await self.execute_task_on_organ(target_organ, task)
+            
+            # Check for event type-based routing
+            event_types = event_tags.get("event_types", [])
+            if event_types:
+                # Route HVAC events to specialized organ if available
+                if "hvac" in [et.lower() for et in event_types] and "hvac_organ" in self.organs:
+                    logger.info(f"🌡️ Routing HVAC task to specialized organ based on eventizer")
+                    return await self.execute_task_on_organ("hvac_organ", task)
+                
+                # Route security events to specialized organ if available
+                if "security" in [et.lower() for et in event_types] and "security_organ" in self.organs:
+                    logger.info(f"🔒 Routing security task to specialized organ based on eventizer")
+                    return await self.execute_task_on_organ("security_organ", task)
+                
+                # Route emergency events to specialized organ if available
+                if "emergency" in [et.lower() for et in event_types] and "emergency_organ" in self.organs:
+                    logger.info(f"🚨 Routing emergency task to specialized organ based on eventizer")
+                    return await self.execute_task_on_organ("emergency_organ", task)
+        
         # Graph-based routing (skill/service-aware)
         required_skill = (task.get("params") or {}).get("required_skill")
         required_service = (task.get("params") or {}).get("required_service")

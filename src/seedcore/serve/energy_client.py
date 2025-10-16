@@ -24,13 +24,13 @@ class EnergyServiceClient(BaseServiceClient):
     def __init__(self, 
                  base_url: str = None, 
                  timeout: float = 8.0):
-        # Use centralized gateway discovery
+        # Use centralized gateway discovery (energy service now under /ops)
         if base_url is None:
             try:
                 from seedcore.utils.ray_utils import SERVE_GATEWAY
-                base_url = f"{SERVE_GATEWAY}/energy"
+                base_url = f"{SERVE_GATEWAY}/ops"
             except Exception:
-                base_url = "http://127.0.0.1:8000/energy"
+                base_url = "http://127.0.0.1:8000/ops"
         
         # Configure circuit breaker for energy service
         circuit_breaker = CircuitBreaker(
@@ -66,9 +66,9 @@ class EnergyServiceClient(BaseServiceClient):
             Energy state data
         """
         if agent_id:
-            return await self.get(f"/state/{agent_id}")
+            return await self.get(f"/ops/state/{agent_id}")
         else:
-            return await self.get("/state")
+            return await self.get("/ops/state")
     
     async def update_energy_state(self, agent_id: str, energy_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -81,7 +81,7 @@ class EnergyServiceClient(BaseServiceClient):
         Returns:
             Update result
         """
-        return await self.post(f"/state/{agent_id}", json=energy_data)
+        return await self.post(f"/ops/state/{agent_id}", json=energy_data)
     
     async def get_energy_history(self, agent_id: str, time_range: str = "1h") -> Dict[str, Any]:
         """

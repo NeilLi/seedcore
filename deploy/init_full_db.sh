@@ -24,12 +24,17 @@ MIGRATION_009="${SCRIPT_DIR}/migrations/009_create_facts_table.sql"
 MIGRATION_010="${SCRIPT_DIR}/migrations/010_task_fact_integration.sql"
 MIGRATION_011="${SCRIPT_DIR}/migrations/011_add_runtime_registry.sql"
 MIGRATION_012="${SCRIPT_DIR}/migrations/012_runtime_registry_functions.sql"
+MIGRATION_013="${SCRIPT_DIR}/migrations/013_pkg_core.sql"
+MIGRATION_014="${SCRIPT_DIR}/migrations/014_pkg_ops.sql"
+MIGRATION_015="${SCRIPT_DIR}/migrations/015_pkg_views_functions.sql"
+MIGRATION_016="${SCRIPT_DIR}/migrations/016_fact_pkg_integration.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" \
   "$MIGRATION_005" "$MIGRATION_006" "$MIGRATION_007" "$MIGRATION_008" \
-  "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" "$MIGRATION_012"
+  "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" "$MIGRATION_012" \
+  "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" "$MIGRATION_016"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -52,6 +57,10 @@ echo "   - 009: $MIGRATION_009 (Create facts table)"
 echo "   - 010: $MIGRATION_010 (NEW: Task-Fact integration + view update)"
 echo "   - 011: $MIGRATION_011 (NEW: Runtime registry tables & views)"
 echo "   - 012: $MIGRATION_012 (NEW: Runtime registry functions)"
+echo "   - 013: $MIGRATION_013 (NEW: PKG core catalog - snapshots, rules, conditions, emissions, artifacts)"
+echo "   - 014: $MIGRATION_014 (NEW: PKG operations - deployments, temporal facts, validation, promotions, device coverage)"
+echo "   - 015: $MIGRATION_015 (NEW: PKG views and helper functions)"
+echo "   - 016: $MIGRATION_016 (NEW: Fact model PKG integration - temporal facts, policy governance, eventizer support)"
 
 find_pg_pod() {
   local sel pod
@@ -180,6 +189,26 @@ echo "⚙️  Running migration 012: Runtime registry functions..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_012" "$POSTGRES_POD:/tmp/012_runtime_registry_functions.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/012_runtime_registry_functions.sql"
 
+# Migration 013 (NEW - PKG Core)
+echo "⚙️  Running migration 013: PKG core catalog (snapshots, rules, conditions, emissions, artifacts)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_013" "$POSTGRES_POD:/tmp/013_pkg_core.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/013_pkg_core.sql"
+
+# Migration 014 (NEW - PKG Operations)
+echo "⚙️  Running migration 014: PKG operations (deployments, temporal facts, validation, promotions, device coverage)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_014" "$POSTGRES_POD:/tmp/014_pkg_ops.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/014_pkg_ops.sql"
+
+# Migration 015 (NEW - PKG Views and Functions)
+echo "⚙️  Running migration 015: PKG views and helper functions..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_015" "$POSTGRES_POD:/tmp/015_pkg_views_functions.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/015_pkg_views_functions.sql"
+
+# Migration 016 (NEW - Fact PKG Integration)
+echo "⚙️  Running migration 016: Fact model PKG integration (temporal facts, policy governance, eventizer support)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_016" "$POSTGRES_POD:/tmp/016_fact_pkg_integration.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/016_fact_pkg_integration.sql"
+
 # 6) Verify schema
 echo "✅ Verifying schema..."
 
@@ -201,7 +230,7 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 echo "📊 Graph tasks view:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ graph_tasks"
 
-echo "📊 Facts table structure:"
+echo "📊 Facts table structure (enhanced with PKG integration):"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ facts"
 
 # NEW: HGNN verification (key tables + views + helper functions)
@@ -247,6 +276,76 @@ do
     psql -U "$DB_USER" -d "$DB_NAME" -c "\df+ $fn" || true
 done
 
+echo "📊 PKG core tables:"
+for tbl in pkg_snapshots pkg_subtask_types pkg_policy_rules pkg_rule_conditions pkg_rule_emissions pkg_snapshot_artifacts
+do
+  kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+    psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ $tbl" || true
+done
+
+echo "📊 PKG operations tables:"
+for tbl in pkg_deployments pkg_facts pkg_validation_fixtures pkg_validation_runs pkg_promotions pkg_device_versions
+do
+  kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+    psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ $tbl" || true
+done
+
+echo "📊 PKG views:"
+for view in pkg_active_artifact pkg_rules_expanded pkg_deployment_coverage
+do
+  kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+    psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ $view" || true
+done
+
+echo "📊 PKG functions:"
+for fn in pkg_check_integrity pkg_active_snapshot_id pkg_promote_snapshot
+do
+  kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+    psql -U "$DB_USER" -d "$DB_NAME" -c "\df+ $fn" || true
+done
+
+echo "📊 PKG enum types:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+  psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT typname FROM pg_type WHERE typname LIKE 'pkg_%' ORDER BY typname;"
+
+echo "📊 Enhanced facts table views and functions:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+  psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ active_temporal_facts"
+
+echo "📊 Facts helper functions:"
+for fn in get_facts_by_subject cleanup_expired_facts get_fact_statistics
+do
+  kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+    psql -U "$DB_USER" -d "$DB_NAME" -c "\df+ $fn" || true
+done
+
+echo "📊 PKG sanity checks:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+  psql -U "$DB_USER" -d "$DB_NAME" -c "
+    -- 1) Exactly one active snapshot per env
+    SELECT 'Active snapshots per env:' as check_name, env, COUNT(*) as count 
+    FROM pkg_snapshots WHERE is_active = TRUE GROUP BY env;
+    
+    -- 2) PKG integrity check
+    SELECT 'PKG integrity:' as check_name, * FROM pkg_check_integrity();
+    
+    -- 3) Check all PKG enum types were created
+    SELECT 'PKG enum types:' as check_name, COUNT(*) as count 
+    FROM pg_type WHERE typname LIKE 'pkg_%';
+    
+    -- 4) Check all PKG tables were created
+    SELECT 'PKG tables:' as check_name, COUNT(*) as count 
+    FROM information_schema.tables WHERE table_name LIKE 'pkg_%';
+    
+    -- 5) Check all PKG views were created
+    SELECT 'PKG views:' as check_name, COUNT(*) as count 
+    FROM information_schema.views WHERE table_name LIKE 'pkg_%';
+    
+    -- 6) Check all PKG functions were created
+    SELECT 'PKG functions:' as check_name, COUNT(*) as count 
+    FROM information_schema.routines WHERE routine_name LIKE 'pkg_%';
+"
+
 echo "📊 Taskstatus enum values:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT unnest(enum_range(NULL::taskstatus)) as enum_value;"
@@ -260,6 +359,14 @@ echo "✅ Helper functions: create_graph_embed_task, create_graph_rag_task, *_v2
 echo "   ensure_*_node, backfill_task_nodes"
 echo "✅ Fixed taskstatus enum to use consistent lowercase values"
 echo "✅ Consolidated task schema + added task lease columns"
+echo "✅ Created PKG schema: pkg_snapshots, pkg_policy_rules, pkg_rule_conditions, pkg_rule_emissions,"
+echo "   pkg_snapshot_artifacts, pkg_deployments, pkg_facts, pkg_validation_*, pkg_promotions, pkg_device_versions"
+echo "✅ Created PKG views: pkg_active_artifact, pkg_rules_expanded, pkg_deployment_coverage"
+echo "✅ Created PKG functions: pkg_check_integrity, pkg_active_snapshot_id, pkg_promote_snapshot"
+echo "✅ Created PKG enums: pkg_env, pkg_engine, pkg_condition_type, pkg_operator, pkg_relation, pkg_artifact_type"
+echo "✅ Enhanced facts table with PKG integration: temporal facts, policy governance, eventizer support"
+echo "✅ Created fact helper functions: get_facts_by_subject, cleanup_expired_facts, get_fact_statistics"
+echo "✅ Created active_temporal_facts view for efficient temporal fact queries"
 echo "✅ Enabled extensions: pgcrypto, vector"
 echo "👉 DSN: postgresql://${DB_USER}:${DB_PASS}@postgresql:5432/${DB_NAME}"
 echo ""
@@ -284,3 +391,32 @@ echo "   SELECT * FROM graph_tasks ORDER BY updated_at DESC LIMIT 10;"
 echo ""
 echo "   -- Test facts table:"
 echo "   SELECT * FROM facts LIMIT 5;"
+echo ""
+echo "📋 PKG Quick start examples:"
+echo "   -- Check PKG integrity:"
+echo "   SELECT * FROM pkg_check_integrity();"
+echo ""
+echo "   -- View active PKG snapshot:"
+echo "   SELECT * FROM pkg_active_artifact;"
+echo ""
+echo "   -- View PKG rules with emissions:"
+echo "   SELECT * FROM pkg_rules_expanded LIMIT 10;"
+echo ""
+echo "   -- Check deployment coverage:"
+echo "   SELECT * FROM pkg_deployment_coverage;"
+echo ""
+echo "   -- View PKG enum types:"
+echo "   SELECT typname FROM pg_type WHERE typname LIKE 'pkg_%' ORDER BY typname;"
+echo ""
+echo "📋 Enhanced Facts Quick start examples:"
+echo "   -- Get facts by subject:"
+echo "   SELECT * FROM get_facts_by_subject('guest:john_doe', 'hotel_ops');"
+echo ""
+echo "   -- View active temporal facts:"
+echo "   SELECT * FROM active_temporal_facts LIMIT 10;"
+echo ""
+echo "   -- Get fact statistics:"
+echo "   SELECT * FROM get_fact_statistics('hotel_ops');"
+echo ""
+echo "   -- Cleanup expired facts (dry run):"
+echo "   SELECT cleanup_expired_facts('hotel_ops', true);"

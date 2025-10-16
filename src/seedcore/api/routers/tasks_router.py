@@ -1,6 +1,7 @@
 from __future__ import annotations
 import uuid
 import asyncio
+import logging
 from typing import Dict, Any, List
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Depends
@@ -12,11 +13,109 @@ from sqlalchemy import select, String
 from ...database import get_async_pg_session, get_async_pg_session_factory
 from ...models.task import Task, TaskStatus
 from ...models.result_schema import (
-    TaskResult, ResultKind, create_fast_path_result, create_escalated_result,
+    TaskResult, ResultKind, TaskStep, create_fast_path_result, create_escalated_result,
     create_cognitive_result, create_error_result, from_legacy_result
 )
+from ...serve.eventizer_client import EventizerServiceClient
+from ...serve.coordinator_client import CoordinatorServiceClient
+from ...eventizer.fast_eventizer import process_text_fast
 
 router = APIRouter()
+
+# Global service client instances (singletons)
+_eventizer_client: EventizerServiceClient | None = None
+_coordinator_client: CoordinatorServiceClient | None = None
+logger = logging.getLogger(__name__)
+
+
+def _is_result_success(r: dict) -> bool:
+    """Helper function to determine if a result indicates success."""
+    if isinstance(r, dict):
+        # Prefer explicit "success" at top-level
+        if "success" in r and isinstance(r["success"], bool):
+            return r["success"]
+        
+        # Check nested payload for success
+        if isinstance(r.get("payload"), dict) and isinstance(r["payload"].get("success"), bool):
+            return r["payload"]["success"]
+        
+        # Check for error field (presence indicates failure)
+        if "error" in r and r["error"]:
+            return False
+        
+        # Check for result kind
+        if "kind" in r:
+            return r["kind"] in ["fast_path", "escalated", "cognitive"]
+    
+    return False
+
+async def get_coordinator_client() -> CoordinatorServiceClient:
+    """Get or create the global coordinator service client instance."""
+    global _coordinator_client
+    if _coordinator_client is None:
+        _coordinator_client = CoordinatorServiceClient()
+        logger.info("Coordinator service client initialized")
+    return _coordinator_client
+
+async def get_eventizer_client() -> EventizerServiceClient:
+    """Get or create the global eventizer service client instance."""
+    global _eventizer_client
+    if _eventizer_client is None:
+        _eventizer_client = EventizerServiceClient()
+        logger.info("Eventizer service client initialized")
+    return _eventizer_client
+
+async def _enrich_with_remote_eventizer(
+    task_id: uuid.UUID,
+    text: str,
+    task_type: str,
+    domain: str,
+    fast_result_data: Dict[str, Any]
+):
+    """
+    Async enrichment with remote eventizer service.
+    
+    This runs in the background and updates task params or creates facts
+    with enhanced results from the full eventizer service.
+    """
+    try:
+        eventizer_client = await get_eventizer_client()
+        
+        # Create eventizer request payload for HTTP call
+        eventizer_payload = {
+            "text": text,
+            "task_type": task_type,
+            "domain": domain,
+            "preserve_pii": False,
+            "include_metadata": True
+        }
+        
+        # Process through remote eventizer
+        remote_result = await eventizer_client.process_eventizer_request(eventizer_payload)
+        
+        # Compare with fast-path results
+        fast_confidence = fast_result_data["confidence"]["overall_confidence"]
+        remote_confidence = remote_result.get("confidence", {}).get("overall_confidence", 0.0)
+        
+        # If remote result is significantly better, log the improvement
+        if remote_confidence > fast_confidence + 0.2:
+            logger.info(
+                "Remote eventizer enrichment improved confidence from %.3f to %.3f for task %s",
+                fast_confidence, remote_confidence, task_id
+            )
+        
+        # Store enriched results (could update task params or create facts)
+        # For now, just log the enrichment completion
+        logger.debug(
+            "Remote enrichment completed for task %s: remote_confidence=%.3f, patterns=%d",
+            task_id,
+            remote_confidence,
+            remote_result.get("patterns_applied", 0)
+        )
+        
+    except Exception as e:
+        logger.warning(f"Remote eventizer enrichment failed for task {task_id}: {e}")
+        # Non-blocking - task creation already succeeded with fast-path results
 
 # --- NEW: Pydantic model for API responses ---
 class TaskRead(BaseModel):
@@ -55,7 +154,7 @@ class TaskRead(BaseModel):
         try:
             if hasattr(v, '__dict__'):
                 return v.__dict__
-            elif hasattr(v, 'dict'):
+            elif hasattr(v, 'model_dump'):
                 return v.model_dump()
             else:
                 # Create structured wrapper instead of raw_result
@@ -84,7 +183,7 @@ def _task_to_task_read(task: Task) -> TaskRead:
                 result = result[0]
             else:
                 # If we can't extract a dict, set to None and log the issue
-                print(f"Warning: Task {task.id} has non-dict result: {type(result)} - {result}")
+                logger.warning(f"Task {task.id} has non-dict result: {type(result)} - {result}")
                 result = None
         else:
             # For other types, try to convert to dict or set to None
@@ -177,20 +276,19 @@ async def _task_worker(app_state: Any):
                     "drift_score": task.drift_score,
                 }
                 
-                # ✅ FIX: Submit task to OrganismManager Serve deployment instead of raw Ray actor
+                # ✅ FIX: Submit task to Coordinator service via client
                 try:
-                    from ray import serve
-                    # Get the Serve deployment handle for OrganismManager
-                    coord = serve.get_deployment_handle("OrganismManager", app_name="organism")
-                    result = await coord.handle_incoming_task.remote(payload)
+                    # Use coordinator service client
+                    coord_client = await get_coordinator_client()
+                    result = await coord_client.process_task(payload)
                     
                     # Log the result type for debugging
-                    print(f"Task {task.id} result type: {type(result)}, value: {result}")
+                    logger.debug(f"Task {task.id} result type: {type(result)}, value: {result}")
                     
                 except Exception as e:
-                    # If OrganismManager Serve deployment is not available, mark task as failed
-                    result = {"success": False, "error": f"OrganismManager not available: {str(e)}"}
-                    print(f"Task {task.id} failed with error: {str(e)}")
+                    # If Coordinator service is not available, mark task as failed
+                    result = {"success": False, "error": f"Coordinator service not available: {str(e)}"}
+                    logger.error(f"Task {task.id} failed with error: {str(e)}")
 
                 # Use the new unified result schema
                 try:
@@ -247,8 +345,8 @@ async def _task_worker(app_state: Any):
                             organ_id="unknown",
                             result=result.__dict__
                         )
-                        task.result = fast_path_result.dict()
-                    elif hasattr(result, 'dict'):
+                        task.result = fast_path_result.model_dump()
+                    elif hasattr(result, 'model_dump'):
                         # Handle Pydantic models
                         fast_path_result = create_fast_path_result(
                             routed_to="unknown",
@@ -279,6 +377,7 @@ async def _task_worker(app_state: Any):
                 await session.commit()
 
         except Exception as e:
+            logger.error(f"Task worker error for task {task_id}: {e}")
             if task_id:
                 async with async_session_factory() as error_session:
                     task_to_fail = await error_session.get(Task, task_id)
@@ -286,6 +385,8 @@ async def _task_worker(app_state: Any):
                         task_to_fail.status = TaskStatus.FAILED
                         task_to_fail.error = str(e)
                         await error_session.commit()
+            # Add small backoff to avoid tight error loops
+            await asyncio.sleep(0.05)
         finally:
             task_queue.task_done()
 
@@ -297,11 +398,80 @@ async def create_task(
 ) -> TaskRead:
     task_queue = _get_task_queue(request)
 
+    # Extract text for eventizer processing
+    task_description = payload.get("description") or ""
+    task_type = payload.get("type", "")
+    domain = payload.get("domain")
+    
+    # Initialize enriched params with original params
+    enriched_params = dict(payload.get("params") or {})
+    
+    # Process text through eventizer if description is provided
+    should_enrich = False
+    fast_result_data = None
+    
+    if task_description.strip():
+        try:
+            # HYBRID APPROACH: Fast-path for hot path, remote for enrichment
+            
+            # Always use fast-path first for PKG policy inputs (<1ms)
+            # Use the enhanced process_text_fast with proper to_dict() methods
+            fast_result_data = process_text_fast(
+                text=task_description,
+                task_type=task_type,
+                domain=domain,
+                include_original_text=payload.get("preserve_original_text", False)
+            )
+            
+            # Use fast-path results for immediate task creation
+            enriched_params.update({
+                "event_tags": fast_result_data["event_tags"],
+                "attributes": fast_result_data["attributes"],
+                "confidence": fast_result_data["confidence"],
+                "needs_ml_fallback": fast_result_data["confidence"]["needs_ml_fallback"],
+                "eventizer_metadata": {
+                    "processing_time_ms": fast_result_data["processing_time_ms"],
+                    "patterns_applied": fast_result_data["patterns_applied"],
+                    "pii_redacted": fast_result_data["pii_redacted"],
+                    "processing_log": [f"Fast-path: {fast_result_data['patterns_applied']} patterns applied"],
+                    "fast_path": True
+                }
+            })
+            
+            # Store PII handling (safer approach - don't persist original text by default)
+            if fast_result_data["pii_redacted"]:
+                enriched_params["pii"] = {
+                    "redacted": fast_result_data["processed_text"],
+                    "was_redacted": True
+                }
+                # Only store original if explicitly requested for debugging
+                if payload.get("preserve_original_text", False) and "original_text" in fast_result_data:
+                    enriched_params["original_text"] = fast_result_data["original_text"]
+            
+            # Store enrichment trigger condition (serializable)
+            should_enrich = fast_result_data["confidence"]["needs_ml_fallback"] or len(task_description) > 200
+            enriched_params["_async_enrichment_needed"] = should_enrich
+            
+            logger.info(
+                "Task %s processed by fast eventizer: confidence=%.3f, needs_ml_fallback=%s, patterns=%d, time=%.3fms",
+                task_type, 
+                fast_result_data["confidence"]["overall_confidence"],
+                fast_result_data["confidence"]["needs_ml_fallback"],
+                fast_result_data["patterns_applied"],
+                fast_result_data["processing_time_ms"]
+            )
+            
+        except Exception as e:
+            logger.error("Eventizer processing failed for task %s: %s", task_type, e)
+            # Continue with original params if eventizer fails
+            enriched_params["eventizer_error"] = str(e)
+            enriched_params["needs_ml_fallback"] = True
+
     new_task = Task(
-        type=payload.get("type"),
-        params=payload.get("params") or {},
-        description=payload.get("description") or "",
-        domain=payload.get("domain"),
+        type=task_type,
+        params=enriched_params,
+        description=task_description,
+        domain=domain,
         drift_score=payload.get("drift_score", 0.0),
         # status defaults to TaskStatus.CREATED
     )
@@ -316,11 +486,22 @@ async def create_task(
         await session.refresh(new_task)  # <-- add this refresh after second commit
         await task_queue.put(new_task.id)
 
+    # Trigger async enrichment if needed (using locals, not DB params)
+    if should_enrich:
+        asyncio.create_task(_enrich_with_remote_eventizer(
+            task_id=new_task.id,
+            text=task_description,
+            task_type=task_type,
+            domain=domain or "",
+            fast_result_data=fast_result_data
+        ))
+        logger.debug(f"Triggered async enrichment for task {new_task.id}")
+
     # Convert to TaskRead with proper datetime formatting
     try:
         return _task_to_task_read(new_task)
     except Exception as e:
-        print(f"Error converting new task to TaskRead: {e}")
+        logger.error(f"Error converting new task to TaskRead: {e}")
         # Return a basic TaskRead with safe values
         return TaskRead(
             id=new_task.id,
@@ -348,8 +529,8 @@ async def list_tasks(session: AsyncSession = Depends(get_async_pg_session)) -> T
             task_read = _task_to_task_read(task)
             task_reads.append(task_read)
         except Exception as e:
-            print(f"Error converting task {task.id} to TaskRead: {e}")
-            print(f"Task result type: {type(task.result)}, value: {task.result}")
+            logger.error(f"Error converting task {task.id} to TaskRead: {e}")
+            logger.error(f"Task result type: {type(task.result)}, value: {task.result}")
             # Create a fallback TaskRead with safe values
             try:
                 task_read = TaskRead(
@@ -367,7 +548,7 @@ async def list_tasks(session: AsyncSession = Depends(get_async_pg_session)) -> T
                 )
                 task_reads.append(task_read)
             except Exception as fallback_error:
-                print(f"Fallback conversion also failed for task {task.id}: {fallback_error}")
+                logger.error(f"Fallback conversion also failed for task {task.id}: {fallback_error}")
                 continue
     
     return TaskListResponse(total=len(tasks), items=task_reads)
@@ -384,7 +565,7 @@ async def get_task(task_id: str, session: AsyncSession = Depends(get_async_pg_se
     try:
         return _task_to_task_read(task)
     except Exception as e:
-        print(f"Error converting task {task.id} to TaskRead: {e}")
+        logger.error(f"Error converting task {task.id} to TaskRead: {e}")
         # Return a basic TaskRead with safe values
         return TaskRead(
             id=task.id,
@@ -419,7 +600,7 @@ async def run_task_now(
         try:
             return _task_to_task_read(task)
         except Exception as e:
-            print(f"Error converting task {task.id} to TaskRead: {e}")
+            logger.error(f"Error converting task {task.id} to TaskRead: {e}")
             # Return a basic TaskRead with safe values
             return TaskRead(
                 id=task.id,
@@ -444,7 +625,7 @@ async def run_task_now(
     try:
         return _task_to_task_read(task)
     except Exception as e:
-        print(f"Error converting task {task.id} to TaskRead: {e}")
+        logger.error(f"Error converting task {task.id} to TaskRead: {e}")
         # Return a basic TaskRead with safe values
         return TaskRead(
             id=task.id,
@@ -476,7 +657,7 @@ async def cancel_task(
         try:
             return _task_to_task_read(task)
         except Exception as e:
-            print(f"Error converting task {task.id} to TaskRead: {e}")
+            logger.error(f"Error converting task {task.id} to TaskRead: {e}")
             # Return a basic TaskRead with safe values
             return TaskRead(
                 id=task.id,
@@ -500,7 +681,7 @@ async def cancel_task(
     try:
         return _task_to_task_read(task)
     except Exception as e:
-        print(f"Error converting task {task.id} to TaskRead: {e}")
+        logger.error(f"Error converting task {task.id} to TaskRead: {e}")
         # Return a basic TaskRead with safe values
         return TaskRead(
             id=task.id,
@@ -535,34 +716,33 @@ async def task_status(
         "error": task.error
     }
 
-# --- NEW: OrganismManager Serve Deployment Health Check Endpoint ---
+# --- NEW: Coordinator Service Health Check Endpoint ---
 @router.get("/coordinator/health")
 async def coordinator_health():
-    """Check the health of the OrganismManager Serve deployment."""
+    """Check the health of the Coordinator service."""
     try:
-        from ray import serve
-        # Get the Serve deployment handle for OrganismManager
-        coord = serve.get_deployment_handle("OrganismManager", app_name="organism")
+        # Use coordinator service client
+        coord_client = await get_coordinator_client()
         
-        # Use the health endpoint of the Serve deployment
-        health_result = await coord.health.remote()
+        # Use the health endpoint of the coordinator service
+        health_result = await coord_client.get_health_status()
         
         if health_result.get("status") == "healthy":
             return {
                 "status": "healthy",
                 "coordinator": "available",
-                "message": "OrganismManager Serve deployment is healthy",
+                "message": "Coordinator service is healthy",
                 "organism_initialized": health_result.get("organism_initialized", False)
             }
         else:
             return {
                 "status": "degraded",
                 "coordinator": "unresponsive",
-                "message": f"OrganismManager health check failed: {health_result}"
+                "message": f"Coordinator health check failed: {health_result}"
             }
     except Exception as e:
         return {
             "status": "unhealthy",
             "coordinator": "unavailable",
-            "message": f"OrganismManager Serve deployment not available: {str(e)}"
+            "message": f"Coordinator service not available: {str(e)}"
         }

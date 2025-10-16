@@ -124,7 +124,7 @@ class CoordinatorServiceClient(BaseServiceClient):
         Returns:
             Energy state information
         """
-        return await self.get(f"/energy/{agent_id}")
+        return await self.get(f"/ops/energy/{agent_id}")
     
     async def update_energy_state(self, agent_id: str, energy_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -137,7 +137,7 @@ class CoordinatorServiceClient(BaseServiceClient):
         Returns:
             Update result
         """
-        return await self.post(f"/energy/{agent_id}", json=energy_data)
+        return await self.post(f"/ops/energy/{agent_id}", json=energy_data)
     
     # ML Tuning Coordination
     async def submit_ml_tuning_job(self, 

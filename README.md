@@ -119,8 +119,8 @@ curl http://localhost:8002/healthz/runtime-registry
 curl http://localhost:8000/ml/health
 curl http://localhost:8000/organism/health
 curl http://localhost:8000/cognitive/health
-curl http://localhost:8000/state/health
-curl http://localhost:8000/energy/health
+curl http://localhost:8000/ops/state/health
+curl http://localhost:8000/ops/energy/health
 ```
 
 ## 🏗️ Architecture Overview
@@ -503,15 +503,15 @@ kubectl get pods -n kuberay-system
 - **Task Execution**: `POST /cognitive/execute`
 - **Reasoning**: `POST /cognitive/reason`
 
-#### State Service (`/state`)
-- **Health Check**: `GET /state/health`
-- **Unified State**: `GET /state/unified-state`
-- **State Collection**: `POST /state/collect`
+#### State Service (`/ops/state`)
+- **Health Check**: `GET /ops/state/health`
+- **Unified State**: `GET /ops/state/unified-state`
+- **State Collection**: `POST /ops/state/collect`
 
-#### Energy Service (`/energy`)
-- **Health Check**: `GET /energy/health`
-- **Energy Computation**: `POST /energy/compute-energy`
-- **Agent Optimization**: `POST /energy/optimize-agents`
+#### Energy Service (`/ops/energy`)
+- **Health Check**: `GET /ops/energy/health`
+- **Energy Computation**: `POST /ops/energy/compute-energy`
+- **Agent Optimization**: `POST /ops/energy/optimize-agents`
 
 #### Coordinator Service (`/pipeline`)
 - **Health Check**: `GET /pipeline/health`

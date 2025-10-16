@@ -13,6 +13,7 @@ from .state_client import StateServiceClient
 from .energy_client import EnergyServiceClient
 from .cognitive_client import CognitiveServiceClient
 from .organism_client import OrganismServiceClient
+from .eventizer_client import EventizerServiceClient
 
 __all__ = [
     "BaseServiceClient",
@@ -24,6 +25,7 @@ __all__ = [
     "EnergyServiceClient",
     "CognitiveServiceClient",
     "OrganismServiceClient",
+    "EventizerServiceClient",
     "get_service_client",
     "get_all_service_clients"
 ]
@@ -36,6 +38,7 @@ SERVICE_CLIENTS = {
     "energy": EnergyServiceClient,
     "cognitive": CognitiveServiceClient,
     "organism": OrganismServiceClient,
+    "eventizer": EventizerServiceClient,
 }
 
 def get_service_client(service_name: str, **kwargs):
@@ -43,7 +46,7 @@ def get_service_client(service_name: str, **kwargs):
     Get a service client by name.
     
     Args:
-        service_name: Name of the service (ml_service, coordinator, state, energy, cognitive, organism)
+        service_name: Name of the service (ml_service, coordinator, state, energy, cognitive, organism, eventizer)
         **kwargs: Additional arguments to pass to the client constructor
         
     Returns:

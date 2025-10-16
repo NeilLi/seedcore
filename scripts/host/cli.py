@@ -150,6 +150,7 @@ def check_readiness():
     except requests.RequestException as e:
         print(f"❌ Readiness check failed: {e}")
 
+
 # ------------------- FACTS -------------------
 def list_facts():
     try:
@@ -416,7 +417,7 @@ def show_help():
 
 # ------------------- SHELL LOOP -------------------
 def main():
-    print("🎯 SeedCore Interactive Shell (v1.5 — new API endpoints & health checks)")
+    print("🎯 SeedCore Interactive Shell (v1.6 — enhanced API integration)")
     print("Connected to", API_BASE)
     print("Commands: ask, facts, genfact, delfact, tasks, taskstatus, search, status, health, readyz, help, exit")
     print("=" * 70)
