@@ -18,7 +18,7 @@ from ...models.result_schema import (
 )
 from ...serve.eventizer_client import EventizerServiceClient
 from ...serve.coordinator_client import CoordinatorServiceClient
-from ...eventizer.fast_eventizer import process_text_fast
+from ...ops.eventizer.fast_eventizer import process_text_fast
 
 router = APIRouter()
 
@@ -425,8 +425,18 @@ async def create_task(
             )
             
             # Use fast-path results for immediate task creation
+            # IMPORTANT: Extract event_types as flat list for coordinator compatibility
+            # Coordinator expects event_tags to be List[str], not a nested dict
+            event_tags_list = fast_result_data["event_tags"].get("event_types", [])
+            
+            # Add domain as a tag if available (helps fallback planner)
+            domain_value = fast_result_data["event_tags"].get("domain")
+            if domain_value and domain_value not in event_tags_list:
+                event_tags_list = event_tags_list + [domain_value]
+            
             enriched_params.update({
-                "event_tags": fast_result_data["event_tags"],
+                "event_tags": event_tags_list,  # Flat list of event type strings
+                "event_tags_full": fast_result_data["event_tags"],  # Keep full structure for reference
                 "attributes": fast_result_data["attributes"],
                 "confidence": fast_result_data["confidence"],
                 "needs_ml_fallback": fast_result_data["confidence"]["needs_ml_fallback"],
@@ -435,7 +445,8 @@ async def create_task(
                     "patterns_applied": fast_result_data["patterns_applied"],
                     "pii_redacted": fast_result_data["pii_redacted"],
                     "processing_log": [f"Fast-path: {fast_result_data['patterns_applied']} patterns applied"],
-                    "fast_path": True
+                    "fast_path": True,
+                    "event_tags_extracted": len(event_tags_list)
                 }
             })
             

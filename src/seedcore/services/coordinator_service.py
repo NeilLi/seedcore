@@ -812,7 +812,9 @@ app = FastAPI(
 async def health():
     return {"status": "healthy", "coordinator": True}
 
-router_prefix = "/pipeline"
+# Note: route_prefix is already set in rayservice.yaml as /pipeline
+# So we use empty string here to avoid double prefixing
+router_prefix = ""
 
 @serve.deployment(
     name="Coordinator",

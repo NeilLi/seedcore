@@ -50,6 +50,10 @@ spec:
         - name: ORGANISM_URL
           value: "http://seedcore-svc-stable-svc.seedcore-dev.svc.cluster.local:8000/organism"
 
+        volumeMounts:
+        - name: project-source-volume
+          mountPath: /app
+        
         resources:
           requests:
             cpu: "100m"
@@ -57,4 +61,9 @@ spec:
           limits:
             cpu: "200m"
             memory: "1Gi"
-        # No volume mounts needed - code is built into the Docker image
+      
+      volumes:
+      - name: project-source-volume
+        hostPath:
+          path: /project
+          type: DirectoryOrCreate

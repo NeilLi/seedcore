@@ -18,13 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.fact import Fact
 from .eventizer_service import EventizerService
-from ..eventizer.schemas.eventizer_models import (
+from ..ops.eventizer.schemas.eventizer_models import (
     EventizerRequest,
     EventizerResponse,
     EventizerConfig,
     PKGEnv
 )
-from ..eventizer.clients.pkg_client import PKGClient
+from ..ops.eventizer.clients.pkg_client import PKGClient
 
 logger = logging.getLogger(__name__)
 
