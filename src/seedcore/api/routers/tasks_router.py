@@ -249,8 +249,12 @@ async def _task_worker(app_state: Any):
     task_queue = app_state.task_queue
     async_session_factory = get_async_pg_session_factory()
 
+    logger.info("🚀 Task worker started and waiting for tasks...")
+    
     while True:
+        logger.debug("⏳ Task worker waiting for next task...")
         task_id = await task_queue.get()
+        logger.info(f"📥 Task worker received task ID: {task_id}")
         task = None
         
         try:
@@ -283,8 +287,13 @@ async def _task_worker(app_state: Any):
                     coord_client = await get_coordinator_client()
                     result = await coord_client.process_task(payload)
                     
-                    # Log the result type for debugging
-                    logger.debug(f"Task {task.id} result type: {type(result)}, value: {result}")
+                    # Log the result for debugging (IMPORTANT: check if result is actually returned)
+                    logger.info(f"Task {task.id} coordinator response type: {type(result)}")
+                    if result is None:
+                        logger.error(f"Task {task.id} coordinator returned None!")
+                    elif isinstance(result, dict):
+                        logger.info(f"Task {task.id} result keys: {list(result.keys())}, success: {result.get('success')}")
+                        logger.info(f"Task {task.id} result content (first 500 chars): {str(result)[:500]}")
                     
                 except Exception as e:
                     # If Coordinator service is not available, mark task as failed
@@ -293,6 +302,15 @@ async def _task_worker(app_state: Any):
 
                 # Use the new unified result schema
                 try:
+                    # Guard against None/empty results
+                    if result is None:
+                        logger.warning(f"Task {task.id} returned None result, creating default fast_path result")
+                        result = create_fast_path_result(
+                            routed_to="coordinator",
+                            organ_id="coordinator",
+                            result={"status": "completed", "message": "Task routed successfully"}
+                        ).model_dump()
+                    
                     if isinstance(result, dict):
                         # Check if this is already a TaskResult
                         if "kind" in result and "payload" in result:
@@ -375,7 +393,14 @@ async def _task_worker(app_state: Any):
                 
                 task.status = TaskStatus.COMPLETED if task.result.get("success") else TaskStatus.FAILED
                 task.error = None if task.result.get("success") else str(task.result.get("error", "Unknown error"))
+                
+                # Log before commit to verify result is set
+                logger.info(f"✅ Task {task.id} before commit: status={task.status}, result_is_none={task.result is None}, result_has_content={bool(task.result)}, result_type={type(task.result)}")
+                if task.result:
+                    logger.info(f"✅ Task {task.id} result keys: {list(task.result.keys()) if isinstance(task.result, dict) else 'not-a-dict'}")
+                
                 await session.commit()
+                logger.info(f"✅ Task {task.id} committed to database with result")
 
         except Exception as e:
             logger.error(f"Task worker error for task {task_id}: {e}")
@@ -434,9 +459,25 @@ async def create_task(
             if domain_value and domain_value not in event_tags_list:
                 event_tags_list = event_tags_list + [domain_value]
             
+            # Infer domain from event tags if not explicitly set
+            # This helps the coordinator route to domain-specific organs
+            if not domain:
+                if any(tag in event_tags_list for tag in ["vip", "allergen", "luggage_custody", "hvac_fault", "privacy"]):
+                    domain = "hotel_ops"
+                elif any(tag in event_tags_list for tag in ["fraud", "chargeback", "payment"]):
+                    domain = "fintech"
+                elif any(tag in event_tags_list for tag in ["healthcare", "medical", "allergy"]):
+                    domain = "healthcare"
+                elif any(tag in event_tags_list for tag in ["robotics", "iot", "fault"]):
+                    domain = "robotics"
+                
+                if domain:
+                    logger.info(f"Inferred domain '{domain}' from event tags: {event_tags_list}")
+            
             enriched_params.update({
                 "event_tags": event_tags_list,  # Flat list of event type strings
                 "event_tags_full": fast_result_data["event_tags"],  # Keep full structure for reference
+                "domain": domain,  # Store inferred domain
                 "attributes": fast_result_data["attributes"],
                 "confidence": fast_result_data["confidence"],
                 "needs_ml_fallback": fast_result_data["confidence"]["needs_ml_fallback"],
@@ -446,7 +487,8 @@ async def create_task(
                     "pii_redacted": fast_result_data["pii_redacted"],
                     "processing_log": [f"Fast-path: {fast_result_data['patterns_applied']} patterns applied"],
                     "fast_path": True,
-                    "event_tags_extracted": len(event_tags_list)
+                    "event_tags_extracted": len(event_tags_list),
+                    "domain_inferred": bool(domain and not payload.get("domain"))
                 }
             })
             

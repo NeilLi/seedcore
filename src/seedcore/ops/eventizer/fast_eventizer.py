@@ -50,6 +50,12 @@ class EventType(Enum):
     MAINTENANCE = "maintenance"
     WARNING = "warning"
     NORMAL = "normal"
+    # Domain-specific types for fallback planner
+    VIP = "vip"
+    PRIVACY = "privacy"
+    ALLERGEN = "allergen"
+    HVAC_FAULT = "hvac_fault"
+    LUGGAGE_CUSTODY = "luggage_custody"
 
 @dataclass(slots=True)
 class FastEventTags:
@@ -115,6 +121,11 @@ class FastEventizer:
         "_sec_re",
         "_warn_re",
         "_maint_re",
+        "_vip_re",
+        "_privacy_re",
+        "_allergen_re",
+        "_hvac_re",
+        "_luggage_re",
         "_loc_res",
         "_ts_res",
     )
@@ -152,6 +163,30 @@ class FastEventizer:
         )
         self._maint_re = re.compile(
             r'\b(maintenance|update|upgrade|patch|fix|schedule|planned|routine|preventive|backup|restore|recovery|cleanup)\b',
+            re.IGNORECASE,
+        )
+        
+        # --- Domain-specific patterns (for fallback planner) ---
+        self._vip_re = re.compile(
+            r'\b(vip|executive|presidential\s*suite|ceo|director|cxo|concierge|priority\s*guest)\b',
+            re.IGNORECASE,
+        )
+        self._privacy_re = re.compile(
+            r'\b(privacy|confidential|private|sensitive|restricted|classified)\b',
+            re.IGNORECASE,
+        )
+        self._allergen_re = re.compile(
+            r'\b(allergen|allergy|peanut|nuts|dairy|gluten|shellfish|sesame|food\s*safety)\b',
+            re.IGNORECASE,
+        )
+        # HVAC pattern: Look for HVAC keywords anywhere in text that also has fault indicators
+        # More flexible to catch "HVAC system malfunction" or "temperature too high"
+        self._hvac_re = re.compile(
+            r'(?=.*\b(hvac|temperature|thermostat|heating|cooling|air\s*conditioning|ventilation)\b)(?=.*\b(fault|issue|problem|malfunction|broken|not\s*working|too\s*(?:hot|cold|high|low))\b)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        self._luggage_re = re.compile(
+            r'\b(luggage|baggage|bag).*\b(lost|mishandled|wrong\s*room|misdeliver|custody|chain)\b',
             re.IGNORECASE,
         )
 
@@ -223,17 +258,42 @@ class FastEventizer:
                 patterns_applied += 1
             return ets, patterns_applied
 
-        if self._sec_re.search(text):
-            ets.append(EventType.SECURITY)
+        # Domain-specific patterns BEFORE generic ones (higher priority for fallback planner)
+        # These patterns are more specific and should override generic classifications
+        if self._vip_re.search(text):
+            ets.append(EventType.VIP)
+            patterns_applied += 1
+        
+        if self._privacy_re.search(text):
+            ets.append(EventType.PRIVACY)
+            patterns_applied += 1
+        
+        if self._allergen_re.search(text):
+            ets.append(EventType.ALLERGEN)
+            patterns_applied += 1
+        
+        if self._hvac_re.search(text):
+            ets.append(EventType.HVAC_FAULT)
+            patterns_applied += 1
+        
+        if self._luggage_re.search(text):
+            ets.append(EventType.LUGGAGE_CUSTODY)
             patterns_applied += 1
 
-        if self._warn_re.search(text):
-            ets.append(EventType.WARNING)
-            patterns_applied += 1
+        # Generic patterns (lower priority - these are less specific)
+        # Skip these if we already found domain-specific tags
+        if not ets:
+            if self._sec_re.search(text):
+                ets.append(EventType.SECURITY)
+                patterns_applied += 1
 
-        if self._maint_re.search(text):
-            ets.append(EventType.MAINTENANCE)
-            patterns_applied += 1
+            if self._warn_re.search(text):
+                ets.append(EventType.WARNING)
+                patterns_applied += 1
+
+            if self._maint_re.search(text):
+                ets.append(EventType.MAINTENANCE)
+                patterns_applied += 1
 
         if not ets:
             ets.append(EventType.NORMAL)
@@ -245,8 +305,17 @@ class FastEventizer:
             return 10
         if EventType.SECURITY in ets:
             return 8
+        # Domain-specific types get elevated priority
+        if EventType.ALLERGEN in ets:
+            return 9  # Food safety is critical
+        if EventType.VIP in ets or EventType.PRIVACY in ets:
+            return 7  # VIP/Privacy needs elevated priority
+        if EventType.HVAC_FAULT in ets:
+            return 6  # HVAC issues need prompt attention
+        if EventType.LUGGAGE_CUSTODY in ets:
+            return 6  # Lost luggage needs quick resolution
         if EventType.WARNING in ets:
-            return 6
+            return 5
         if EventType.MAINTENANCE in ets:
             return 4
         return 2

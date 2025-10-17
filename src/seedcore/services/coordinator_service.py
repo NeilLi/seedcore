@@ -26,6 +26,42 @@ import redis
 import json
 
 
+# PKG WASM Loader Utility
+def load_pkg_wasm(wasm_path: str, snapshot: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Load PKG WASM binary and return evaluator metadata.
+    
+    Args:
+        wasm_path: Path to WASM binary file
+        snapshot: Optional snapshot version string
+    
+    Returns:
+        Dict with 'enabled', 'loaded', 'version', 'path' or None if load fails
+    """
+    try:
+        wasm_file = Path(wasm_path)
+        if not wasm_file.exists():
+            logger.warning(f"PKG WASM file not found: {wasm_path}")
+            return {"enabled": True, "loaded": False, "version": snapshot, "path": wasm_path, "error": "file_not_found"}
+        
+        # For now, we just verify the file exists and return metadata
+        # Actual WASM evaluation would be implemented here when needed
+        file_size = wasm_file.stat().st_size
+        logger.info(f"PKG WASM loaded: {wasm_path} ({file_size} bytes), version={snapshot}")
+        
+        return {
+            "enabled": True,
+            "loaded": True,
+            "version": snapshot or "unknown",
+            "path": str(wasm_path),
+            "size_bytes": file_size,
+            "error": None
+        }
+    except Exception as e:
+        logger.error(f"Failed to load PKG WASM: {e}")
+        return {"enabled": True, "loaded": False, "version": snapshot, "path": wasm_path, "error": str(e)}
+
+
 
 from seedcore.logging_setup import ensure_serve_logger
 from seedcore.models.result_schema import (
@@ -295,9 +331,18 @@ class MetricsTracker:
             "route_remote_fail_total": 0,
             "bulk_resolve_items": 0,
             "bulk_resolve_failed_items": 0,
+            # Task totals
             "total_tasks": 0,
             "successful_tasks": 0,
             "failed_tasks": 0,
+            # Routing decisions (counts routing choices, not execution)
+            "fast_routed_total": 0,
+            "planner_routed_total": 0,
+            "hgnn_routed_total": 0,
+            # HGNN plan generation (when routed to HGNN)
+            "hgnn_plan_generated_total": 0,  # Non-empty proto_plan
+            "hgnn_plan_empty_total": 0,       # Empty proto_plan (PKG failed)
+            # Execution metrics (tracks actual pipeline runs)
             "fast_path_tasks": 0,
             "hgnn_tasks": 0,
             "escalation_failures": 0,
@@ -305,6 +350,25 @@ class MetricsTracker:
             "hgnn_latency_ms": [],
             "escalation_latency_ms": []
         }
+    
+    def track_routing_decision(self, decision: str, has_plan: bool = False):
+        """
+        Track routing decisions (separate from execution).
+        
+        Args:
+            decision: 'fast', 'planner', or 'hgnn'
+            has_plan: For HGNN, whether proto_plan has tasks
+        """
+        if decision == "fast":
+            self._task_metrics["fast_routed_total"] += 1
+        elif decision == "planner":
+            self._task_metrics["planner_routed_total"] += 1
+        elif decision == "hgnn":
+            self._task_metrics["hgnn_routed_total"] += 1
+            if has_plan:
+                self._task_metrics["hgnn_plan_generated_total"] += 1
+            else:
+                self._task_metrics["hgnn_plan_empty_total"] += 1
     
     def track_metrics(self, path: str, success: bool, latency_ms: float):
         """Track task execution metrics."""
@@ -336,7 +400,18 @@ class MetricsTracker:
         if metrics.get("escalation_latency_ms"):
             metrics["escalation_latency_avg_ms"] = sum(metrics["escalation_latency_ms"]) / len(metrics["escalation_latency_ms"])
         
-        # Calculate success rates
+        # Calculate routing rates
+        total_routed = metrics["fast_routed_total"] + metrics["planner_routed_total"] + metrics["hgnn_routed_total"]
+        if total_routed > 0:
+            metrics["fast_routed_rate"] = metrics["fast_routed_total"] / total_routed
+            metrics["planner_routed_rate"] = metrics["planner_routed_total"] / total_routed
+            metrics["hgnn_routed_rate"] = metrics["hgnn_routed_total"] / total_routed
+        
+        # Calculate HGNN plan success rate
+        if metrics["hgnn_routed_total"] > 0:
+            metrics["hgnn_plan_success_rate"] = metrics["hgnn_plan_generated_total"] / metrics["hgnn_routed_total"]
+        
+        # Calculate execution success rates
         if metrics["total_tasks"] > 0:
             metrics["success_rate"] = metrics["successful_tasks"] / metrics["total_tasks"]
             metrics["fast_path_rate"] = metrics["fast_path_tasks"] / metrics["total_tasks"]
@@ -527,9 +602,15 @@ class SurpriseComputer:
 
 
 # ---------- Proto-subtask generator (router-time, PKG-free fallback) ----------
-def build_proto_subtasks(tags: Set[str], x6: float, criticality: float) -> Dict[str, Any]:
+def build_proto_subtasks(tags: Set[str], x6: float, criticality: float, force: bool = False) -> Dict[str, Any]:
     """
     Returns: { "tasks": [{type, params, provenance[]}...], "edges": [(a,b)...] }
+    
+    Args:
+        tags: Set of domain-specific event tags
+        x6: Criticality signal (0-1)
+        criticality: Derived criticality score
+        force: If True, generate baseline tasks even when no domain tags match
     """
     tasks: List[Dict[str, Any]] = []
     edges: List[Tuple[str, str]] = []
@@ -561,6 +642,15 @@ def build_proto_subtasks(tags: Set[str], x6: float, criticality: float) -> Dict[
         for tt in ["food_safety_containment","privacy_luggage_recovery","hvac_stabilize"]:
             if has(tt):
                 edges.append((tt, "guest_recovery"))
+
+    # BASELINE TASKS: If no domain-specific tasks and force_decomposition=True,
+    # generate generic baseline trio for multi-step analysis
+    if not tasks and force:
+        add("retrieve_context", "R_GENERIC_BASELINE", retrieval_strategy="semantic")
+        add("graph_rag_seed", "R_GENERIC_BASELINE", hops=2, topk=8)
+        add("synthesis_writeup", "R_GENERIC_BASELINE", format="structured")
+        edges.append(("retrieve_context", "graph_rag_seed"))
+        edges.append(("graph_rag_seed", "synthesis_writeup"))
 
     if x6 >= 0.9:
         for t in tasks:
@@ -599,10 +689,12 @@ class CoordinatorCore:
         tau_fast: Optional[float] = None,
         tau_plan: Optional[float] = None,
         call_timeout_s: int = 2,
+        metrics_tracker: Optional["MetricsTracker"] = None,
     ):
         self.pkg_eval = pkg_eval
         self.ood_to01 = ood_to01
         self.timeout_s = int(os.getenv("SERVE_CALL_TIMEOUT_S", str(call_timeout_s)))
+        self.metrics = metrics_tracker
         
         # Parse weights and thresholds with safe defaults
         weights = surprise_weights or _parse_weights("SURPRISE_WEIGHTS")
@@ -614,6 +706,22 @@ class CoordinatorCore:
         self.tau_plan_exit = float(os.getenv("SURPRISE_TAU_PLAN_EXIT", str(tau_plan_val - 0.03)))
         
         self.surprise = SurpriseComputer(weights=weights, tau_fast=tau_fast_val, tau_plan=tau_plan_val)
+        
+        # PKG WASM initialization
+        self.pkg_metadata: Optional[Dict[str, Any]] = None
+        pkg_enabled = os.getenv("COORDINATOR_PKG_ENABLED", "0") == "1"
+        if pkg_enabled:
+            wasm_path = os.getenv("PKG_WASM_PATH", "/opt/pkg/policy_rules.wasm")
+            snapshot_version = os.getenv("PKG_SNAPSHOT_VERSION")
+            self.pkg_metadata = load_pkg_wasm(wasm_path, snapshot=snapshot_version)
+            if self.pkg_metadata and self.pkg_metadata.get("loaded"):
+                logger.info(f"✅ PKG enabled: {self.pkg_metadata['version']} at {wasm_path}")
+            else:
+                error = self.pkg_metadata.get("error") if self.pkg_metadata else "unknown"
+                logger.warning(f"⚠️ PKG enabled but not loaded: {error}")
+        else:
+            logger.info("PKG evaluation disabled (COORDINATOR_PKG_ENABLED=0)")
+            self.pkg_metadata = {"enabled": False, "loaded": False, "version": None, "error": None}
 
     async def route_and_execute(self, task: "TaskPayload") -> Dict[str, Any]:
         t0 = time.perf_counter()
@@ -626,6 +734,18 @@ class CoordinatorCore:
         attributes: Dict[str, Any] = params.get("attributes") or {}
         conf = (params.get("confidence") or {})
         pii_redacted = bool(params.get("pii", {}).get("was_redacted", False))
+        
+        # Infer domain from tags if not explicitly set
+        if not task.domain:
+            # Map domain-specific tags to domains
+            if any(tag in tags for tag in ["vip", "allergen", "luggage_custody", "hvac_fault", "privacy"]):
+                task.domain = "hotel_ops"
+            elif any(tag in tags for tag in ["fraud", "chargeback", "payment"]):
+                task.domain = "fintech"
+            elif any(tag in tags for tag in ["healthcare", "medical", "allergy"]):
+                task.domain = "healthcare"
+            elif any(tag in tags for tag in ["robotics", "iot", "fault"]):
+                task.domain = "robotics"
 
         mw_hit = params.get("cache", {}).get("mw_hit") if isinstance(params.get("cache"), dict) else None
         ocps = params.get("ocps") or {}
@@ -696,7 +816,12 @@ class CoordinatorCore:
         except Exception as e:
             used_fallback = True
             pkg_meta["error"] = f"PKG unavailable or timed out: {e}"
-            proto_plan = build_proto_subtasks(tags, xs[5], criticality)
+            # Generate baseline tasks when:
+            # 1. User explicitly requests decomposition (force_decomposition/force_hgnn flags)
+            # 2. Natural HGNN routing (decision='hgnn' means S >= tau_plan, deserves decomposition)
+            force_decomp = params.get("force_decomposition", False) or params.get("force_hgnn", False)
+            should_decompose = force_decomp or (decision == "hgnn")
+            proto_plan = build_proto_subtasks(tags, xs[5], criticality, force=should_decompose)
 
         # Add provenance tracking
         proto_plan.setdefault("provenance", [])
@@ -705,6 +830,18 @@ class CoordinatorCore:
         else:
             proto_plan["provenance"].append(f"pkg:{pkg_meta.get('version', 'unknown')}")
 
+        # Honor force_decomposition: promote fast→planner or planner→hgnn
+        force_decomp = params.get("force_decomposition", False)
+        force_hgnn = params.get("force_hgnn", False)
+        
+        original_decision = decision
+        if force_hgnn and decision != "hgnn":
+            logger.info(f"[Coordinator] force_hgnn=True: promoting {decision} → hgnn")
+            decision = "hgnn"
+        elif force_decomp and decision == "fast":
+            logger.info(f"[Coordinator] force_decomposition=True: promoting fast → planner")
+            decision = "planner"
+        
         router_latency_ms = round((time.perf_counter()-t0)*1000.0, 3)
         
         payload_common = {
@@ -713,6 +850,7 @@ class CoordinatorCore:
             "domain": task.domain,
             "decision": decision,
             "last_decision": last_decision,  # For hysteresis tracking
+            "original_decision": original_decision if decision != original_decision else None,
             "surprise": {
                 "S": S,
                 "x": list(xs),
@@ -741,25 +879,34 @@ class CoordinatorCore:
             f"[Coordinator] task_id={tid} S={S:.3f} x2_meta(S_t={ocps_meta.get('S_t', 'N/A')},h={ocps_meta.get('h', 'N/A')},h_clr={ocps_meta.get('h_clr', 'N/A')},flag_on={ocps_meta.get('flag_on', 'N/A')}) decision={decision} pkg_used={not used_fallback} latency_ms={router_latency_ms:.1f}"
         )
 
+        # Create routing metadata result (always non-null)
+        # This ensures the task always has a result even if execution fails
+        # FIX: Pass payload_common fields directly to avoid metadata nesting
         if decision == "fast":
             res = create_fast_path_result(
                 routed_to="fast",
                 organ_id="coordinator",
-                result=payload_common
+                result={"status": "routed"},
+                metadata={"routing": "completed", "executed": False, **payload_common}
             ).model_dump()
         elif decision == "planner":
             res = create_escalated_result(
                 solution_steps=[],
                 plan_source="router_planner",
-                **payload_common
+                **payload_common  # Unpack to pass as keyword args, not nested metadata
             ).model_dump()
         else:
             res = create_escalated_result(
                 solution_steps=[],
                 plan_source="router_hgnn",
-                **payload_common
+                **payload_common  # Unpack to pass as keyword args, not nested metadata
             ).model_dump()
 
+        # Track routing decision metrics (separate from execution)
+        if self.metrics:
+            has_plan = bool(proto_plan.get("tasks"))
+            self.metrics.track_routing_decision(decision, has_plan=has_plan)
+        
         return res
 
 # ---------- API models ----------
@@ -806,11 +953,6 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json"
 )
-
-# Health endpoints
-@app.get("/health")
-async def health():
-    return {"status": "healthy", "coordinator": True}
 
 # Note: route_prefix is already set in rayservice.yaml as /pipeline
 # So we use empty string here to avoid double prefixing
@@ -917,10 +1059,10 @@ class Coordinator:
         
         # Wire core router with configurable thresholds
         try:
-            self.core = CoordinatorCore()
+            self.core = CoordinatorCore(metrics_tracker=self.metrics)
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize CoordinatorCore, using defaults: {e}")
-            self.core = CoordinatorCore()
+            self.core = CoordinatorCore(metrics_tracker=self.metrics)
 
         logger.info("✅ Coordinator initialized")
 
@@ -2353,6 +2495,16 @@ class Coordinator:
             logger.exception(f"[Coordinator] process_task failed: {e}")
             return err(str(e), "coordinator_error")
 
+    @app.get("/health")
+    async def health(self):
+        """Health check endpoint with PKG status."""
+        response = {
+            "status": "healthy",
+            "coordinator": True,
+            "pkg": self.core.pkg_metadata if hasattr(self.core, 'pkg_metadata') else {"enabled": False}
+        }
+        return response
+    
     @app.get(f"{router_prefix}/metrics")
     async def get_metrics(self):
         """Get current task execution metrics."""

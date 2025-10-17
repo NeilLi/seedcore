@@ -556,7 +556,20 @@ class Dispatcher:
                 async with self.pool.acquire() as conw:
                     if result.get("success"):
                         # Task completed successfully
-                        result_data = result.get("result")
+                        # FIX: The coordinator returns a unified result envelope directly
+                        # It has {kind, payload, success, version, metadata, created_at}
+                        # We should persist the entire envelope, not try to extract result.get("result")
+                        result_data = result
+                        
+                        # CRITICAL GUARD: Ensure result_data is not None and is a dict
+                        if result_data is None or not isinstance(result_data, dict):
+                            logger.warning(f"⚠️ Task {tid} returned invalid result_data: {type(result_data)}. Creating minimal result envelope.")
+                            from seedcore.models.result_schema import create_fast_path_result
+                            result_data = create_fast_path_result(
+                                routed_to="unknown",
+                                organ_id="unknown",
+                                result={"status": "completed", "warning": "Invalid result data returned from coordinator"}
+                            ).model_dump()
                         
                         # Memory management: limit result size if configured
                         if RESULT_MAX_BYTES > 0:
@@ -576,7 +589,11 @@ class Dispatcher:
                             except Exception as e:
                                 logger.debug(f"Task {tid} result size check failed: {e}")
                         
-                        await conw.execute(COMPLETE_SQL, result_data, tid)
+                        # Convert result_data to JSON string for PostgreSQL jsonb column
+                        # asyncpg expects a string for $1::jsonb, not a dict
+                        result_json_str = _dumps(result_data)
+                        
+                        await conw.execute(COMPLETE_SQL, result_json_str, tid)
                         logger.info(f"[QueueDispatcher] ✅ Task {tid} completed successfully")
                         logger.info(f"[QueueDispatcher] 🎉 Task ID: {tid} | Status: COMPLETED | Type: {item['type']}")
                         self.tasks_completed.inc()

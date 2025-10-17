@@ -101,6 +101,15 @@ else
   print_status "WARN" "${ENV_FILE_PATH} not found. Skipping secret creation."
 fi
 
+# ---------- PKG WASM Path Fix ----------
+print_status "INFO" "Configuring PKG WASM path in secret..."
+# Update PKG_WASM_PATH to point to accessible location in Ray pods
+kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o json 2>/dev/null | \
+  jq --arg val "$(echo -n '/app/opt/pkg/policy_rules.wasm' | base64)" \
+     '.data.PKG_WASM_PATH = $val' | \
+  kubectl apply -f - >/dev/null 2>&1 || print_status "WARN" "Could not update PKG_WASM_PATH (secret may not exist yet)"
+print_status "OK" "PKG WASM path configured"
+
 # ---------- Deploy RayService (manages its own RayCluster) ----------
 if [ ! -f "${RAYSERVICE_FILE}" ]; then
   print_status "ERROR" "RayService file '${RAYSERVICE_FILE}' not found. Set RAYSERVICE_FILE or pass as 4th arg."
@@ -139,6 +148,31 @@ if [ -n "${CLUSTER_NAME_FROM_POD}" ]; then
 else
   print_status "ERROR" "Could not determine cluster name from pods"
   exit 1
+fi
+
+# ---------- Setup PKG WASM File ----------
+print_status "INFO" "Setting up PKG WASM file in Ray head pod..."
+HEAD_POD=$(kubectl -n "${NAMESPACE}" get pods -l "ray.io/node-type=head" --no-headers | head -n1 | awk '{print $1}')
+if [ -n "${HEAD_POD}" ]; then
+  kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- bash -c '
+    mkdir -p /app/opt/pkg
+    cat > /app/opt/pkg/policy_rules.wasm << "WASM_EOF"
+# Dummy PKG WASM for testing
+# Version: rules@1.3.0+ontology@0.9.1
+# This is a placeholder - replace with real WASM binary in production
+# To replace: kubectl cp policy_rules.wasm <namespace>/<head-pod>:/app/opt/pkg/policy_rules.wasm
+WASM_EOF
+    chmod 644 /app/opt/pkg/policy_rules.wasm
+    echo "PKG WASM placeholder created at /app/opt/pkg/policy_rules.wasm"
+  ' 2>/dev/null || print_status "WARN" "Could not create PKG WASM file (pod may not be fully ready)"
+  
+  if kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- test -f /app/opt/pkg/policy_rules.wasm 2>/dev/null; then
+    print_status "OK" "PKG WASM placeholder created (replace with real WASM for production)"
+  else
+    print_status "WARN" "PKG WASM file not created - coordinator will report PKG as not loaded"
+  fi
+else
+  print_status "WARN" "Could not find Ray head pod to setup PKG WASM"
 fi
 
 # Optional: wait for at least one worker if replicas > 0
@@ -218,3 +252,10 @@ echo "   - List pods:        kubectl get pods -n ${NAMESPACE} -w"
 echo "   - RayService YAML:  kubectl -n ${NAMESPACE} get rayservice ${RS_NAME} -o yaml"
 echo "   - Stable Serve SVC: kubectl -n ${NAMESPACE} describe svc ${USER_STABLE_SERVE_SVC}"
 echo "   - Delete cluster:   kind delete cluster --name ${CLUSTER_NAME}"
+echo
+echo "📦 PKG Configuration:"
+echo "   - Check PKG status: kubectl -n ${NAMESPACE} port-forward svc/${USER_STABLE_SERVE_SVC} 8000:8000"
+echo "                       curl http://localhost:8000/pipeline/health | jq .pkg"
+echo "   - Replace dummy WASM with real binary:"
+echo "                       kubectl cp policy_rules.wasm ${NAMESPACE}/${HEAD_POD}:/app/opt/pkg/policy_rules.wasm"
+echo "                       kubectl delete pod -n ${NAMESPACE} -l ray.io/node-type=head  # Restart to reload"
