@@ -14,7 +14,7 @@ The Energy Model Foundation adds **intelligent energy-aware agent selection** to
 - `docs/ENERGY_MODEL_FOUNDATION.md` - Detailed documentation
 
 ### Modified Files
-- `src/seedcore/agents/ray_actor.py` - Added energy state tracking
+- `src/seedcore/agents/ray_agent.py` - Added energy state tracking
 - `src/seedcore/agents/tier0_manager.py` - Added energy-aware task execution
 - `README.md` - Updated with Energy Model Foundation overview
 

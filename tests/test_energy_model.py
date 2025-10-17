@@ -42,7 +42,7 @@ from src.seedcore.ops.energy.optimizer import (
     get_ideal_role_for_task,
     estimate_task_complexity
 )
-from src.seedcore.agents.ray_actor import RayAgent
+from src.seedcore.agents.ray_agent import RayAgent
 from src.seedcore.organs.tier0.tier0_manager import Tier0MemoryManager
 
 

@@ -14,7 +14,7 @@ from ...models.state import UnifiedState  # lightweight import; no heavy deps
 
 # Avoid runtime circular import: only import RayAgent for typing
 if TYPE_CHECKING:
-    from seedcore.agents.ray_actor import RayAgent  # pragma: no cover
+    from seedcore.agents.ray_agent import RayAgent  # pragma: no cover
 else:
     RayAgent = Any  # type: ignore
 

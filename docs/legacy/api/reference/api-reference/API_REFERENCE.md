@@ -503,7 +503,7 @@ print('Memory managers OK')
 
 # Test Ray agent initialization
 docker-compose exec ray-head python -c "
-from src.seedcore.agents.ray_actor import RayAgent
+from src.seedcore.agents.ray_agent import RayAgent
 print('RayAgent OK')
 "
 ```

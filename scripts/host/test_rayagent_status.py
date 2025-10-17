@@ -14,7 +14,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import ray
-from seedcore.agents.ray_actor import RayAgent
+from seedcore.agents.ray_agent import RayAgent
 
 def test_rayagent_status():
     """Test that RayAgent has get_status() method and returns proper data."""

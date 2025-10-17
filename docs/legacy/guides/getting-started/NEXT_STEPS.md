@@ -63,7 +63,7 @@ src/seedcore/energy/
 ├── optimizer.py           # Energy optimization algorithms
 └── monitor.py            # Energy monitoring and alerts
 
-src/seedcore/agents/ray_actor.py  # Add energy tracking
+src/seedcore/agents/ray_agent.py  # Add energy tracking
 src/seedcore/agents/tier0_manager.py  # Energy-aware selection
 ```
 

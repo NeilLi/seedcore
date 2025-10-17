@@ -45,7 +45,7 @@ The DSPy integration provides **three complementary modes** that merge the stren
 
 | Mode | Use Case | Advantage | Integration Point |
 |------|----------|-----------|-------------------|
-| **Embedded in RayAgent** | Deep agent intelligence, full state coupling | Tight integration with memory, energy, lifecycle | `ray_actor.py` |
+| **Embedded in RayAgent** | Deep agent intelligence, full state coupling | Tight integration with memory, energy, lifecycle | `ray_agent.py` |
 | **Ray Serve Deployment** | Scalable, shared inference, heavy workloads | Parallel processing, resource sharing | `cognitive_serve.py` |
 | **FastAPI Endpoints** | Fast prototyping, direct API calls | Quick experimentation, no infra changes | `telemetry/server.py` |
 
@@ -104,7 +104,7 @@ print(f"Analysis: {result['thought']}")
 
 ```python
 import ray
-from seedcore.agents.ray_actor import RayAgent
+from seedcore.agents.ray_agent import RayAgent
 
 # Create agent with cognitive capabilities
 agent = RayAgent.remote("cognitive_agent", {'E': 0.7, 'S': 0.2, 'O': 0.1})

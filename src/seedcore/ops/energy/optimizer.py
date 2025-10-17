@@ -8,7 +8,7 @@ based on the Cognitive Organism Architecture (COA) specifications.
 import ray
 from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:  # Avoid circular imports at runtime
-    from seedcore.agents.ray_actor import RayAgent  # pragma: no cover
+    from seedcore.agents.ray_agent import RayAgent  # pragma: no cover
 else:
     RayAgent = Any  # type: ignore
 import numpy as np

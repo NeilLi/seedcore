@@ -32,7 +32,7 @@ import ray
 from typing import List, Any, TYPE_CHECKING, Dict, Optional
 
 if TYPE_CHECKING:
-    from ..agents.ray_actor import RayAgent
+    from ..agents.ray_agent import RayAgent
 
 logger = logging.getLogger(__name__)
 

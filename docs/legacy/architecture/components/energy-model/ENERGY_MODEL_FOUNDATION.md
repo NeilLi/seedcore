@@ -35,7 +35,7 @@ The Energy Model Foundation implements the core energy-aware agent selection and
    - **NEW**: Enhanced scoring with memory utilization and state complexity penalties
    - **NEW**: Cached optimization results for improved response times
 
-3. **Agent Energy Tracking** (`src/seedcore/agents/ray_actor.py`)
+3. **Agent Energy Tracking** (`src/seedcore/agents/ray_agent.py`)
    - Tracks energy state and role probabilities for each agent
    - Provides methods for energy state updates and retrieval
    - **NEW**: AgentState dataclass with capability and memory utility tracking

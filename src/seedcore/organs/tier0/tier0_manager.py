@@ -32,7 +32,7 @@ from collections import defaultdict
 import logging
 import json
 
-from ...agents.ray_actor import RayAgent
+from ...agents.ray_agent import RayAgent
 from ...ops.energy.optimizer import select_best_agent, score_agent
 from .specs import GraphClient, AgentSpec
 from ...registry import list_active_instances

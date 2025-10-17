@@ -285,7 +285,7 @@ def test_agent_integration():
     
     try:
         # Import agent class
-        from src.seedcore.agents.ray_actor import RayAgent
+        from src.seedcore.agents.ray_agent import RayAgent
         
         # Create a mock agent (without Ray)
         class MockAgent:

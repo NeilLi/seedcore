@@ -3,7 +3,7 @@ import time
 import os
 import asyncio
 import json
-from src.seedcore.agents.ray_actor import RayAgent
+from src.seedcore.agents.ray_agent import RayAgent
 from src.seedcore.agents.observer_agent import ObserverAgent
 from src.seedcore.utils.ray_utils import ensure_ray_initialized
 

@@ -152,7 +152,7 @@ seedcore/
 │   └── requirements-minimal.txt    # Python dependencies
 ├── src/seedcore/
 │   ├── agents/
-│   │   ├── ray_actor.py           # Tier 0 Ray agents
+│   │   ├── ray_agent.py           # Tier 0 Ray agents
 │   │   └── tier0_manager.py       # Agent management
 │   ├── memory/
 │   │   ├── flashbulb_memory.py    # Tier 3 implementation

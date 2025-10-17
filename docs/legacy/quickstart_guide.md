@@ -181,7 +181,7 @@ Create a Ray agent with cognitive capabilities:
 # advanced_agent.py
 import ray
 import asyncio
-from seedcore.agents.ray_actor import RayAgent
+from seedcore.agents.ray_agent import RayAgent
 
 # Initialize Ray
 ray.init(ignore_reinit_error=True)

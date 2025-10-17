@@ -18,7 +18,7 @@ Agent implementations for SeedCore.
 
 # Core agent classes
 from .base import Agent
-from .ray_actor import RayAgent
+from .ray_agent import RayAgent
 from .observer_agent import ObserverAgent
 
 # Lifecycle management

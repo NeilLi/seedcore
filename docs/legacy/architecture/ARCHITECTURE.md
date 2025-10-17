@@ -66,7 +66,7 @@ SeedCore implements a multi-tier memory system based on the Collective Organic A
 ### 2. Ray Agent System (Tier 0: Ma)
 
 **Files**: 
-- `src/seedcore/agents/ray_actor.py`
+- `src/seedcore/agents/ray_agent.py`
 - `src/seedcore/agents/tier0_manager.py`
 
 **Architecture**:

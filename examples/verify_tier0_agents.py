@@ -49,7 +49,7 @@ def connect_ray():
 
 def create_detached_agent_if_missing(ray, agent_name: str = "discovery_test_agent") -> None:
     """Create a detached, named RayAgent directly to test discovery."""
-    from seedcore.agents.ray_actor import RayAgent
+    from seedcore.agents.ray_agent import RayAgent
 
     # Try to fetch existing
     try:

@@ -262,7 +262,7 @@ def ray_get(obj):
         return obj
 
 from src.seedcore.organs.tier0.tier0_manager import Tier0MemoryManager
-from src.seedcore.agents.ray_actor import RayAgent
+from src.seedcore.agents.ray_agent import RayAgent
 from src.seedcore.ops.energy.ledger import EnergyLedger
 
 class TestTier0MemoryManager:

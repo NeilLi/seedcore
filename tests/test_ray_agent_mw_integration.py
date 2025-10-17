@@ -17,7 +17,7 @@ import os
 from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, patch, AsyncMock
 
-from src.seedcore.agents.ray_actor import RayAgent
+from src.seedcore.agents.ray_agent import RayAgent
 from src.seedcore.memory.working_memory import MwManager
 
 
@@ -27,7 +27,7 @@ class TestRayAgentMwIntegration:
     @pytest.fixture
     def mock_mw_manager(self):
         """Create a mock MwManager for testing."""
-        with patch('src.seedcore.agents.ray_actor.MwManager') as mock_class:
+        with patch('src.seedcore.agents.ray_agent.MwManager') as mock_class:
             mock_instance = Mock(spec=MwManager)
             mock_instance.get_telemetry.return_value = {
                 "hit_ratio": 0.8,
@@ -54,9 +54,9 @@ class TestRayAgentMwIntegration:
     @pytest.fixture
     def ray_agent(self, mock_mw_manager):
         """Create a RayAgent instance with mocked dependencies."""
-        with patch('src.seedcore.agents.ray_actor.MltManager'):
-            with patch('src.seedcore.agents.ray_actor.FlashbulbClient'):
-                with patch('src.seedcore.agents.ray_actor.CognitiveServiceClient'):
+        with patch('src.seedcore.agents.ray_agent.MltManager'):
+            with patch('src.seedcore.agents.ray_agent.FlashbulbClient'):
+                with patch('src.seedcore.agents.ray_agent.CognitiveServiceClient'):
                     agent = RayAgent.remote("test_agent_1")
                     # Set the mock mw_manager
                     agent.mw_manager = mock_mw_manager

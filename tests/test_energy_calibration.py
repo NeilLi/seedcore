@@ -22,7 +22,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.seedcore.ops.energy.calculator import EnergyLedger, calculate_energy
-from src.seedcore.agents.ray_actor import RayAgent
+from src.seedcore.agents.ray_agent import RayAgent
 from src.seedcore.organs.tier0.tier0_manager import Tier0MemoryManager
 
 

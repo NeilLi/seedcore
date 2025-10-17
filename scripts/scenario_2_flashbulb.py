@@ -1,7 +1,7 @@
 import ray
 import time
 import os
-from src.seedcore.agents.ray_actor import RayAgent
+from src.seedcore.agents.ray_agent import RayAgent
 from src.seedcore.utils.ray_utils import ensure_ray_initialized
 
 def run_scenario():
