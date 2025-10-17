@@ -169,7 +169,7 @@ print(f"Total Energy: {energy_data['total']}")
 
 ### Energy-Aware Task Execution
 ```python
-from src.seedcore.agents.tier0_manager import Tier0MemoryManager
+from src.seedcore.organs.tier0.tier0_manager import Tier0MemoryManager
 
 # Create manager and execute task with energy optimization
 tier0_manager = Tier0MemoryManager()

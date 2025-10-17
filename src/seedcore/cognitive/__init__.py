@@ -18,6 +18,22 @@ Cognitive core implementations for SeedCore.
 
 from .dspy_client import DSpyCognitiveClient
 
+# Import the moved modules
+from .cognitive_core import (
+    CognitiveCore, 
+    CognitiveContext, 
+    CognitiveTaskType,
+    initialize_cognitive_core,
+    get_cognitive_core,
+    reset_cognitive_core
+)
+from .cognitive_registry import (
+    cognitive_signature,
+    cognitive_handler,
+    cognitive_validator,
+    CognitiveRegistry
+)
+
 # Create a standalone function for easier importing
 def for_env() -> DSpyCognitiveClient:
     """Factory function that applies env-based namespacing automatically."""
@@ -25,5 +41,17 @@ def for_env() -> DSpyCognitiveClient:
 
 __all__ = [
     'DSpyCognitiveClient',
-    'for_env'
+    'for_env',
+    # Cognitive core exports
+    'CognitiveCore',
+    'CognitiveContext', 
+    'CognitiveTaskType',
+    'initialize_cognitive_core',
+    'get_cognitive_core',
+    'reset_cognitive_core',
+    # Cognitive registry exports
+    'cognitive_signature',
+    'cognitive_handler',
+    'cognitive_validator',
+    'CognitiveRegistry'
 ]

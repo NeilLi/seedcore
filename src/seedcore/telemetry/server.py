@@ -39,7 +39,7 @@ from ..control.fast_loop import fast_loop_select_agent
 from ..control.slow_loop import slow_loop_update_roles, slow_loop_update_roles_simple, get_role_performance_metrics
 from ..control.mem_loop import adaptive_mem_update, estimate_memory_gradient, get_memory_metrics
 from ..organs.base import Organ
-from ..organs.registry import OrganRegistry
+from ..registry import OrganRegistry
 # REMOVED: Safe import to avoid shadowing issues in organs.__init__.py
 # from importlib import import_module
 
@@ -54,7 +54,7 @@ from ..agents.base import Agent
 from ..agents import RayAgent
 # Conditional import to prevent eager Ray connections
 if os.getenv("SEEDCORE_SKIP_EAGER_RAY", "0") != "1":
-    from ..tier0.tier0_manager import Tier0MemoryManager, tier0_manager
+    from ..organs.tier0.tier0_manager import Tier0MemoryManager, tier0_manager
 else:
     Tier0MemoryManager = None
     tier0_manager = None
@@ -75,7 +75,7 @@ from ..memory.consolidation_logic import consolidate_batch
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST  # type: ignore
 from fastapi import Response  # type: ignore
 from ..telemetry.services.metrics import COSTVQ, ENERGY_SLOPE, MEM_WRITES
-from ..control.memory.meta_controller import adjust
+from ..control.meta_controller import adjust
 import asyncio
 from ..api.routers.mfb_router import mfb_router
 from ..api.routers.salience_router import router as salience_router
@@ -92,7 +92,7 @@ from ..utils.ray_connector import (
 )
 
 # NEW: Import DSPy cognitive core
-from ..agents.cognitive_core import (
+from ..cognitive.cognitive_core import (
     CognitiveCore, 
     CognitiveContext, 
     CognitiveTaskType,
@@ -256,7 +256,7 @@ async def lifespan(app: FastAPI):
         logging.info("   - Step 7: Initializing Energy Weights...")
         try:
             global ENERGY_WEIGHTS
-            from ..tier0.tier0_manager import Tier0MemoryManager
+            from ..organs.tier0.tier0_manager import Tier0MemoryManager
             tier0_mgr = Tier0MemoryManager()
             agent_ids = tier0_mgr.list_agents()
             if agent_ids and ENERGY_WEIGHTS is None:
@@ -460,7 +460,7 @@ def _get_tier0_manager():
     
     # Import it now if it wasn't imported earlier
     try:
-        from ..tier0 import tier0_manager as tm
+        from ..organs.tier0 import tier0_manager as tm
         return tm
     except Exception:
         return None
@@ -773,7 +773,7 @@ async def energy_gradient():
     try:
         from ..energy.calculator import energy_gradient_payload, calculate_energy
         from ..energy.ledger import EnergyLedger
-        from ..tier0.tier0_manager import Tier0MemoryManager
+        from ..organs.tier0.tier0_manager import Tier0MemoryManager
         from ..caching.redis_cache import get_redis_cache, energy_gradient_cache_key
         import ray  # type: ignore
 
@@ -1031,7 +1031,7 @@ def energy_calibrate():
     try:
         from ..energy.calculator import calculate_energy
         from ..energy.ledger import EnergyLedger
-        from ..tier0.tier0_manager import Tier0MemoryManager
+        from ..organs.tier0.tier0_manager import Tier0MemoryManager
         from ..caching.redis_cache import get_redis_cache, energy_calibrate_cache_key
         import ray  # type: ignore
         import numpy as np  # type: ignore
@@ -1181,7 +1181,7 @@ def _build_energy_health_payload():
     """Internal: Build energy health payload for both legacy and new health routes."""
     from ..energy.calculator import energy_gradient_payload
     from ..energy.ledger import EnergyLedger
-    from ..tier0.tier0_manager import Tier0MemoryManager
+    from ..organs.tier0.tier0_manager import Tier0MemoryManager
     import ray
 
     # Initialize Ray if not already done
@@ -1314,7 +1314,7 @@ def energy_monitor():
     try:
         from ..energy.calculator import energy_gradient_payload, calculate_energy
         from ..energy.ledger import EnergyLedger
-        from ..tier0.tier0_manager import Tier0MemoryManager
+        from ..organs.tier0.tier0_manager import Tier0MemoryManager
         from ..caching.redis_cache import get_redis_cache, energy_monitor_cache_key
         import ray
         
@@ -1468,7 +1468,7 @@ def energy_monitor():
 def get_agents_state() -> Dict:
     """Returns the current state of all agents in the simulation with real data."""
     try:
-        from ..tier0 import tier0_manager
+        from ..organs.tier0 import tier0_manager
         import ray
         
         # Ensure Ray connection (idempotent)
@@ -1551,7 +1551,7 @@ def system_status():
     try:
         from ..energy.calculator import energy_gradient_payload
         from ..energy.ledger import EnergyLedger
-        from ..tier0.tier0_manager import Tier0MemoryManager
+        from ..organs.tier0.tier0_manager import Tier0MemoryManager
         import ray
         
         # Initialize Ray if not already done

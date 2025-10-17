@@ -131,8 +131,8 @@ Simple policy enforcement before task execution:
 #### Basic Setup
 
 ```python
-from seedcore.tier0.tier0_manager import get_tier0_manager
-from seedcore.tier0.specs import AgentSpec, MockGraphClient
+from seedcore.organs.tier0.tier0_manager import get_tier0_manager
+from seedcore.organs.tier0.specs import AgentSpec, MockGraphClient
 
 # Get manager instance
 manager = get_tier0_manager()

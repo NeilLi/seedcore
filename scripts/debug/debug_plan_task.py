@@ -6,7 +6,7 @@ sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
 
 # Import the same components
-from seedcore.agents.cognitive_core import (
+from seedcore.cognitive.cognitive_core import (
     CognitiveContext,
     CognitiveTaskType,
     initialize_cognitive_core,

@@ -10,7 +10,7 @@ import time
 from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING, Union
 from dataclasses import dataclass, field, asdict
 from .weights import EnergyWeights
-from ..models.state import UnifiedState  # lightweight import; no heavy deps
+from ...models.state import UnifiedState  # lightweight import; no heavy deps
 
 # Avoid runtime circular import: only import RayAgent for typing
 if TYPE_CHECKING:
@@ -59,7 +59,7 @@ def on_pair_success(event: Dict[str, Any], ledger: EnergyLedger):
     agent_states = event.get('agent_states', {})
     if len(agent_states) >= 2:
         # Calculate dynamic pair weight based on min(ci, cj)
-        from ..agents.lifecycle import calculate_pair_weight
+        from ...agents.lifecycle import calculate_pair_weight
         agent_ids = list(agent_states.keys())
         agent_i_state = agent_states[agent_ids[0]]
         agent_j_state = agent_states[agent_ids[1]]

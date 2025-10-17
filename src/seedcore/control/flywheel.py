@@ -24,7 +24,7 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
-from ..energy.api import _ledger
+from ..ops.energy.api import _ledger
 # SOLUTION: Remove module-level import to avoid accessing organism_manager before initialization
 # from ..organs.organism_manager import organism_manager
 

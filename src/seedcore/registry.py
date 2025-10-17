@@ -13,11 +13,11 @@
 # limitations under the License.
 
 """
-Runtime registry client for PostgreSQL-based instance management.
+Unified registry module providing both organ registry and runtime registry functionality.
 
-This module provides a client for interacting with the runtime registry
-data layer defined by SQL migrations, including cluster metadata, instance
-registration, and heartbeat management.
+This module provides:
+1. OrganRegistry: Simple in-memory registry for organ management and routing decisions
+2. RegistryClient: PostgreSQL-based runtime registry for instance management
 """
 
 import os
@@ -25,7 +25,10 @@ import uuid
 import socket
 import asyncio
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .organs.base import Organ
 
 from sqlalchemy import text
 from .database import get_async_pg_session_factory
@@ -33,9 +36,34 @@ from .database import get_async_pg_session_factory
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "RegistryClient",
+    "OrganRegistry",
+    "RegistryClient", 
     "list_active_instances",
 ]
+
+
+class OrganRegistry:
+    """
+    Simple in-memory registry for organ management.
+    
+    Used by the router for fast vs escalate routing decisions.
+    Provides basic CRUD operations for Organ objects.
+    """
+    
+    def __init__(self):
+        self._organs: Dict[str, 'Organ'] = {}
+
+    def add(self, organ: 'Organ'):
+        """Add an organ to the registry."""
+        self._organs[organ.organ_id] = organ
+
+    def get(self, organ_id: str) -> 'Organ':
+        """Get an organ by ID."""
+        return self._organs[organ_id]
+
+    def all(self) -> List['Organ']:
+        """Get all organs in the registry."""
+        return list(self._organs.values())
 
 
 class RegistryClient:

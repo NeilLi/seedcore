@@ -300,7 +300,7 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 
 # Test cognitive core
-from seedcore.agents.cognitive_core import initialize_cognitive_core
+from seedcore.cognitive.cognitive_core import initialize_cognitive_core
 core = initialize_cognitive_core()
 print(f"Cognitive core: {core}")
 ```
@@ -347,7 +347,7 @@ print(f"Cognitive core: {core}")
 1. **Create Custom Signatures**:
    ```python
    import dspy
-   from seedcore.agents.cognitive_registry import cognitive_signature
+   from seedcore.cognitive.cognitive_registry import cognitive_signature
 
    @cognitive_signature("custom_analysis")
    class CustomAnalysisSignature(dspy.Signature):
@@ -357,7 +357,7 @@ print(f"Cognitive core: {core}")
 
 2. **Add Custom Handlers**:
    ```python
-   from seedcore.agents.cognitive_registry import cognitive_handler
+   from seedcore.cognitive.cognitive_registry import cognitive_handler
 
    @cognitive_handler("custom_analysis")
    def custom_analysis_handler(context):

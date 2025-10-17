@@ -83,7 +83,7 @@ docker exec -it seedcore-api python examples/simple_dspy_example.py
 ### 3. Basic Usage
 
 ```python
-from seedcore.agents.cognitive_core import initialize_cognitive_core, CognitiveContext, CognitiveTaskType
+from seedcore.cognitive.cognitive_core import initialize_cognitive_core, CognitiveContext, CognitiveTaskType
 
 # Initialize cognitive core
 cognitive_core = initialize_cognitive_core()
@@ -214,7 +214,7 @@ docker exec -it seedcore-api python examples/debug_dspy.py
 
 # Initialize cognitive core manually
 docker exec -it seedcore-api python -c "
-from seedcore.agents.cognitive_core import initialize_cognitive_core
+from seedcore.cognitive.cognitive_core import initialize_cognitive_core
 core = initialize_cognitive_core()
 print('Cognitive core initialized:', core is not None)
 "
@@ -542,7 +542,7 @@ Comprehensive logging is enabled by default:
 
 ```python
 import logging
-logging.getLogger("seedcore.agents.cognitive_core").setLevel(logging.DEBUG)
+logging.getLogger("seedcore.cognitive.cognitive_core").setLevel(logging.DEBUG)
 ```
 
 ### Metrics Collection
@@ -637,7 +637,7 @@ print(f"Cognitive core: {cognitive_core}")
 Validate cognitive core configuration:
 
 ```python
-from seedcore.agents.cognitive_core import get_cognitive_core
+from seedcore.cognitive.cognitive_core import get_cognitive_core
 
 core = get_cognitive_core()
 if core:

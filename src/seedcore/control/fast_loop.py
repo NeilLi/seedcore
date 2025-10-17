@@ -18,8 +18,8 @@ Fast Loop (~200ms): energy-aware agent selection (Section 6, 3.x.4).
 """
 
 from ..organs.base import Organ
-from ..energy.api import _ledger
-from ..energy.grad_adapter import get_global_gradient_bus
+from ..ops.energy.api import _ledger
+from ..ops.energy.grad_adapter import get_global_gradient_bus
 
 def fast_loop_select_agent(organ: Organ, task):
     """Fast cadence selection using gradient cache (fallback to legacy)."""

@@ -18,7 +18,7 @@ def test_tier0_import():
         print("🔍 Testing tier0_manager import...")
         
         # Test basic import
-        from seedcore.tier0.tier0_manager import Tier0MemoryManager
+        from seedcore.organs.tier0.tier0_manager import Tier0MemoryManager
         print("✅ Basic import successful")
         
         # Test instantiation

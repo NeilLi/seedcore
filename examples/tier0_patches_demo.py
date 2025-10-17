@@ -18,8 +18,8 @@ from typing import Dict, Any
 # Add the src directory to the path so we can import seedcore modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from seedcore.tier0.tier0_manager import get_tier0_manager
-from seedcore.tier0.specs import AgentSpec, MockGraphClient
+from seedcore.organs.tier0.tier0_manager import get_tier0_manager
+from seedcore.organs.tier0.specs import AgentSpec, MockGraphClient
 
 
 async def demo_idempotent_creation():

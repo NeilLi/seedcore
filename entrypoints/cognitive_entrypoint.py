@@ -40,7 +40,7 @@ from seedcore.services.cognitive_service import (
     CognitiveService,
     initialize_cognitive_service,
 )
-from seedcore.agents.cognitive_core import (
+from seedcore.cognitive.cognitive_core import (
     CognitiveContext,
     CognitiveTaskType,
 )

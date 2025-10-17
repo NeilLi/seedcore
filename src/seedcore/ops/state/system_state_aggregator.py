@@ -29,8 +29,8 @@ import time
 from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 
-from ..models.state import SystemState
-from ..hgnn.pattern_shim import HGNNPatternShim
+from ...models.state import SystemState
+from ...hgnn.pattern_shim import HGNNPatternShim
 
 logger = logging.getLogger(__name__)
 

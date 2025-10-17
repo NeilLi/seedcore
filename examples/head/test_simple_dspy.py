@@ -18,7 +18,7 @@ def test_imports():
     print("🔍 Testing imports...")
     
     try:
-        from seedcore.agents.cognitive_core import (
+        from seedcore.cognitive.cognitive_core import (
             CognitiveCore, 
             CognitiveContext, 
             CognitiveTaskType,
@@ -40,7 +40,7 @@ def test_cognitive_task_types():
     print("\n🔍 Testing cognitive task types...")
     
     try:
-        from seedcore.agents.cognitive_core import CognitiveTaskType
+        from seedcore.cognitive.cognitive_core import CognitiveTaskType
         
         expected_types = [
             "failure_analysis",
@@ -73,7 +73,7 @@ def test_cognitive_context():
     print("\n🔍 Testing cognitive context creation...")
     
     try:
-        from seedcore.agents.cognitive_core import CognitiveContext, CognitiveTaskType
+        from seedcore.cognitive.cognitive_core import CognitiveContext, CognitiveTaskType
         
         context = CognitiveContext(
             agent_id="test_agent",
@@ -96,7 +96,7 @@ def test_cognitive_core_structure():
     print("\n🔍 Testing cognitive core structure...")
     
     try:
-        from seedcore.agents.cognitive_core import CognitiveCore
+        from seedcore.cognitive.cognitive_core import CognitiveCore
         
         # Create a cognitive core instance (this won't initialize DSPy)
         core = CognitiveCore.__new__(CognitiveCore)

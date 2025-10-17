@@ -37,7 +37,7 @@ The Energy Model Foundation adds **intelligent energy-aware agent selection** to
 
 ### Basic Energy-Aware Task Execution
 ```python
-from src.seedcore.agents.tier0_manager import Tier0MemoryManager
+from src.seedcore.organs.tier0.tier0_manager import Tier0MemoryManager
 
 tier0_manager = Tier0MemoryManager()
 result = tier0_manager.execute_task_on_best_agent(task_data)

@@ -599,7 +599,7 @@ mock_specs = type('MockSpecs', (), {
         'list_organ_specs': lambda self: []
     })
 })()
-sys.modules['seedcore.tier0.specs'] = mock_specs
+sys.modules['seedcore.organs.tier0.specs'] = mock_specs
 
 # Mock database module (only if not already provided by mock_database_dependencies)
 mock_database = type('MockDatabase', (), {

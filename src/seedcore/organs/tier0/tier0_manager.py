@@ -26,16 +26,16 @@ import ray
 import time
 import asyncio
 import concurrent.futures
-from ..utils.ray_utils import ensure_ray_initialized
+from ...utils.ray_utils import ensure_ray_initialized
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
 import logging
 import json
 
-from ..agents.ray_actor import RayAgent
-from ..energy.optimizer import select_best_agent, score_agent
+from ...agents.ray_actor import RayAgent
+from ...ops.energy.optimizer import select_best_agent, score_agent
 from .specs import GraphClient, AgentSpec
-from ..registry import list_active_instances
+from ...registry import list_active_instances
 # Avoid importing EnergyLedger at module import time to prevent circular imports.
 # We'll import it inside functions that need it.
 

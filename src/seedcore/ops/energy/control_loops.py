@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from .ledger import EnergyLedger
 from .calculator import energy_and_grad, compute_energy_unified, SystemParameters
 from .weights import EnergyWeights
-from ..models.state import UnifiedState, SystemState, MemoryVector, AgentSnapshot, OrganState
+from ...models.state import UnifiedState, SystemState, MemoryVector, AgentSnapshot, OrganState
 from .grad_adapter import get_global_gradient_bus, Gradients
 # SOLUTION: Remove module-level import to avoid accessing organism_manager before initialization
 # from ..organs.organism_manager import organism_manager

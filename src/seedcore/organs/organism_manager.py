@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, NamedTuple, Tuple
 
 from .base import Organ
-from ..tier0 import tier0_manager
+from .tier0 import tier0_manager
 
 logger = logging.getLogger(__name__)
 

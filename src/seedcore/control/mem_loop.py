@@ -19,8 +19,8 @@ Adaptive Memory Loop: compression control via dE/dCostVQ (Section 6, 3.x.4 & 7).
 
 from typing import List
 from ..organs.base import Organ
-from ..energy.api import _ledger
-from ..energy.grad_adapter import get_global_gradient_bus
+from ..ops.energy.api import _ledger
+from ..ops.energy.grad_adapter import get_global_gradient_bus
 
 def adaptive_mem_update(organs: List[Organ], compression_knob: float = 0.5):
     """

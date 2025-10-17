@@ -11,7 +11,7 @@ def system_status():
     """Returns the current status of the persistent system with real data."""
     try:
         from ...energy.calculator import energy_gradient_payload, EnergyLedger
-        from ...tier0.tier0_manager import Tier0MemoryManager
+        from ...organs.tier0.tier0_manager import Tier0MemoryManager
         import ray
         
         # Initialize Ray if not already done

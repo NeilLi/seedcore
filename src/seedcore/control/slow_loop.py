@@ -21,10 +21,10 @@ import random
 from typing import List, Union
 from ..organs.base import Organ
 from ..agents.base import Agent
-from ..energy.api import _ledger
-from ..energy.grad_adapter import get_global_gradient_bus
-from ..energy.calculator import role_entropy_grad
-from ..state.state_aggregator import StateAggregator  # if available during runtime
+from ..ops.energy.api import _ledger
+from ..ops.energy.grad_adapter import get_global_gradient_bus
+from ..ops.energy.calculator import role_entropy_grad
+from ..ops.state.state_aggregator import StateAggregator  # if available during runtime
 
 def slow_loop_update_roles(organs_or_agents: Union[List[Organ], List[Agent]], learning_rate: float = 0.05):
     """

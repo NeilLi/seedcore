@@ -186,7 +186,7 @@ class CircuitBreaker:
             raise e
 
 # Import core types and logic
-from ..agents.cognitive_core import (
+from ..cognitive.cognitive_core import (
     CognitiveCore, ContextBroker, Fact, RetrievalSufficiency, 
     CognitiveTaskType, CognitiveContext, initialize_cognitive_core, get_cognitive_core
 )
@@ -335,7 +335,7 @@ class CognitiveService:
         dspy.settings.configure(lm=lm)
         
         # Build a fresh core (no singleton) - import CognitiveCore directly
-        from ..agents.cognitive_core import CognitiveCore
+        from ..cognitive.cognitive_core import CognitiveCore
         return CognitiveCore(
             llm_provider=provider, 
             model=model, 
@@ -510,7 +510,7 @@ class CognitiveService:
     def reset_cognitive_core(self):
         """Reset the cognitive core instance."""
         if self.cognitive_core:
-            from ..agents.cognitive_core import reset_cognitive_core
+            from ..cognitive.cognitive_core import reset_cognitive_core
             reset_cognitive_core()
             self.cognitive_core = None
             logger.info("Cognitive core reset")

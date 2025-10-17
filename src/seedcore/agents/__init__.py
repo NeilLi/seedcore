@@ -16,14 +16,73 @@
 Agent implementations for SeedCore.
 """
 
+# Core agent classes
 from .base import Agent
-from .lifecycle import evaluate_lifecycle
 from .ray_actor import RayAgent
-from .integration import RayAgentCognitiveIntegration
+from .observer_agent import ObserverAgent
+
+# Lifecycle management
+from .lifecycle import evaluate_lifecycle, LifecycleDecision
+
+# Dispatchers
+from .queue_dispatcher import Dispatcher, Reaper
+from .graph_dispatcher import GraphDispatcher
+
+# Memory and storage
+from .private_memory import AgentPrivateMemory
+from .checkpoint_store import CheckpointStore, CheckpointStoreFactory
+
+# Capability management
+from .capability_feedback import (
+    CapabilityFeedback, 
+    CapabilityAssessment, 
+    CapabilityManager,
+    get_capability_manager,
+    evaluate_cognitive_task,
+    get_agent_assessment,
+    get_promotion_recommendations,
+    get_improvement_plan
+)
+
+# Utility inference
+from .utility_inference_actor import (
+    UtilityPredictor,
+    get_utility_predictor,
+    reset_utility_predictor
+)
 
 __all__ = [
+    # Core agent classes
     'Agent',
-    'evaluate_lifecycle', 
-    'RayAgent',
-    'RayAgentCognitiveIntegration'
+    'RayAgent', 
+    'ObserverAgent',
+    
+    # Lifecycle management
+    'evaluate_lifecycle',
+    'LifecycleDecision',
+    
+    # Dispatchers
+    'Dispatcher',
+    'Reaper', 
+    'GraphDispatcher',
+    
+    # Memory and storage
+    'AgentPrivateMemory',
+    'CheckpointStore',
+    'CheckpointStoreFactory',
+    
+    # Capability management
+    'CapabilityFeedback',
+    'CapabilityAssessment', 
+    'CapabilityManager',
+    'get_capability_manager',
+    'evaluate_cognitive_task',
+    'get_agent_assessment',
+    'get_promotion_recommendations',
+    'get_improvement_plan',
+    
+    # Utility inference
+    'UtilityPredictor',
+    'get_utility_predictor',
+    'reset_utility_predictor'
 ]

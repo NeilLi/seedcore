@@ -5,7 +5,7 @@ import ray
 from fastapi import APIRouter
 from seedcore.utils.ray_utils import ensure_ray_initialized
 
-from ...tier0.tier0_manager import Tier0MemoryManager, tier0_manager
+from ...organs.tier0.tier0_manager import Tier0MemoryManager, tier0_manager
 
 
 router = APIRouter()

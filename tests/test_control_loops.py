@@ -18,7 +18,7 @@ Tests for control loop functionality including slow loop and memory loop.
 
 from seedcore.control.slow_loop import slow_loop_update_roles_simple, get_role_performance_metrics
 from seedcore.control.mem_loop import adaptive_mem_update, estimate_memory_gradient, get_memory_metrics
-from seedcore.organs.registry import OrganRegistry
+from seedcore.registry import OrganRegistry
 from seedcore.agents.base import Agent
 from seedcore.ops.energy.ledger import EnergyLedger
 

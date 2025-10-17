@@ -422,7 +422,7 @@ def cognitive_processor(task_type: str, **kwargs):
 Example plugin module (plugins/custom_analysis.py):
 
 import dspy
-from seedcore.agents.cognitive_registry import (
+from seedcore.cognitive.cognitive_registry import (
     cognitive_signature, cognitive_handler, cognitive_validator
 )
 
