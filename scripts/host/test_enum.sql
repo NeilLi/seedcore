@@ -30,5 +30,33 @@ WHERE status IN ('queued','retry')
 ORDER BY created_at
 LIMIT 5;
 
+-- Verify new indexes exist
+SELECT 'Verifying new indexes exist:' as info;
+SELECT 
+    indexname,
+    CASE 
+        WHEN indexname LIKE 'ix_tasks_%' THEN '✅ NEW NAMING'
+        WHEN indexname LIKE 'idx_tasks_%' THEN '⚠️  OLD NAMING'
+        ELSE 'ℹ️  OTHER'
+    END as naming_status
+FROM pg_indexes 
+WHERE tablename = 'tasks'
+ORDER BY indexname;
+
+-- Verify JSONB conversion
+SELECT 'Verifying JSONB conversion:' as info;
+SELECT 
+    column_name,
+    data_type,
+    CASE 
+        WHEN column_name IN ('params', 'result') AND data_type = 'jsonb' THEN '✅ JSONB'
+        WHEN column_name IN ('params', 'result') AND data_type = 'json' THEN '⚠️  JSON (should be JSONB)'
+        ELSE 'ℹ️  ' || data_type
+    END as jsonb_status
+FROM information_schema.columns 
+WHERE table_name = 'tasks' 
+AND column_name IN ('params', 'result')
+ORDER BY column_name;
+
 -- Clean up test data
 DELETE FROM tasks WHERE type = 'test';

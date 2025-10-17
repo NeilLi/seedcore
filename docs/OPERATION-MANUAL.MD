@@ -183,7 +183,7 @@ The SeedCore system includes an experimental harness for validating energy desce
 # Run energy validation experiments
 from seedcore.experiments.harness import EnergyValidationHarness
 from seedcore.organs.organism_manager import organism_manager
-from seedcore.energy.api import _ledger
+from seedcore.ops.energy.api import _ledger
 
 # Create harness and run experiments
 harness = EnergyValidationHarness(organism_manager, _ledger)

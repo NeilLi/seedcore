@@ -27,7 +27,7 @@ from seedcore.models.state import (
     UnifiedState, AgentSnapshot, OrganState, 
     SystemState, MemoryVector
 )
-from seedcore.energy.calculator import compute_energy, EnergyWeights
+from seedcore.ops.energy.calculator import compute_energy, EnergyWeights
 from seedcore.agents.lifecycle import evaluate_lifecycle, LifecycleDecision
 
 

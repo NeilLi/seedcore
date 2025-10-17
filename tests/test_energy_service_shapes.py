@@ -1,8 +1,8 @@
 import numpy as np
 import asyncio
 from unittest.mock import Mock, patch
-from seedcore.energy.weights import EnergyWeights
-from seedcore.energy.calculator import compute_energy
+from seedcore.ops.energy.weights import EnergyWeights
+from seedcore.ops.energy.calculator import compute_energy
 from seedcore.models.state import UnifiedState, AgentSnapshot, SystemState, MemoryVector
 
 

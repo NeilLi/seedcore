@@ -25,7 +25,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any, Tuple, Callable
 
-from ..eventizer.schemas.eventizer_models import (
+from ..ops.eventizer.schemas.eventizer_models import (
     EventizerRequest,
     EventizerResponse,
     EventTags,
@@ -45,10 +45,10 @@ from ..eventizer.schemas.eventizer_models import (
     PKGSnapshot,
     PKGHelper
 )
-from ..eventizer.utils.text_normalizer import TextNormalizer, SpanMap
-from ..eventizer.utils.pattern_compiler import PatternCompiler, CompiledRegex
-from ..eventizer.clients.pii_client import PIIClient, PIIConfig, RedactMode as PIIClientRedactMode
-from ..eventizer.clients.pkg_client import PKGClient, get_active_snapshot
+from ..ops.eventizer.utils.text_normalizer import TextNormalizer, SpanMap
+from ..ops.eventizer.utils.pattern_compiler import PatternCompiler, CompiledRegex
+from ..ops.eventizer.clients.pii_client import PIIClient, PIIConfig, RedactMode as PIIClientRedactMode
+from ..ops.eventizer.clients.pkg_client import PKGClient, get_active_snapshot
 
 logger = logging.getLogger(__name__)
 

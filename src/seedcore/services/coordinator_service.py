@@ -1,11 +1,12 @@
 # coordinator_service.py
 import os, time, uuid, httpx, asyncio, random
+import math
 from fastapi import FastAPI, HTTPException
-from typing import Dict, Any, List, Optional, Iterable, Set, Tuple, NamedTuple
+from typing import Dict, Any, List, Optional, Iterable, Set, Tuple, NamedTuple, Sequence, Callable
 from urllib.parse import urlparse
 from pathlib import Path
 from ray import serve
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import logging
 
 try:  # Optional dependency - repository may not exist in all deployments
@@ -27,14 +28,88 @@ import json
 
 
 from seedcore.logging_setup import ensure_serve_logger
+from seedcore.models.result_schema import (
+    create_fast_path_result, create_escalated_result, create_error_result
+)
 
 logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
+
+# ---------- TaskPayload Model (matches dispatcher) ----------
+class TaskPayload(BaseModel):
+    type: str
+    params: Dict[str, Any] = {}
+    description: str = ""
+    domain: Optional[str] = None
+    drift_score: float = 0.0
+    task_id: str
+
+    @field_validator("params", mode="before")
+    @classmethod
+    def parse_params(cls, v):
+        """Parse params from JSON string if needed."""
+        if isinstance(v, str):
+            try:
+                import json
+                return json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return v or {}
+
+    @field_validator("domain", mode="before")
+    @classmethod
+    def parse_domain(cls, v):
+        """Convert None domain to empty string."""
+        return v or ""
+
+# ---------- Result Helpers ----------
+def ok_fast(payload: dict) -> dict:
+    """Create a fast path result."""
+    return create_fast_path_result(
+        routed_to=payload.get("routed_to", "coordinator"),
+        organ_id=payload.get("organ_id", "coordinator"),
+        result=payload
+    ).model_dump()
+
+def err(msg: str, error_type: str = "coordinator_error") -> dict:
+    """Create an error result."""
+    return create_error_result(error=msg, error_type=error_type).model_dump()
+
+def _normalize_result(res: Any) -> dict:
+    """Normalize downstream results to unified schema."""
+    try:
+        # already unified?
+        if isinstance(res, dict) and "success" in res and ("payload" in res or "error" in res):
+            return res
+        # pydantic
+        if hasattr(res, "model_dump"):
+            return ok_fast(res.model_dump())
+        # generic object
+        if hasattr(res, "__dict__"):
+            return ok_fast(res.__dict__)
+        # list-of-steps → escalated
+        if isinstance(res, list):
+            from seedcore.models.result_schema import TaskStep
+            steps = []
+            for step in res:
+                steps.append(TaskStep(
+                    organ_id="coordinator",
+                    success=True,
+                    metadata=step if isinstance(step, dict) else {"raw": str(step)}
+                ))
+            return create_escalated_result(solution_steps=steps, plan_source="coordinator_list").model_dump()
+        # fallback
+        return ok_fast({"result": res})
+    except Exception as e:
+        return err(f"normalize failed: {e}", "normalize_error")
 
 # ---------- Config ----------
 ORCH_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10"))
 ML_TIMEOUT = float(os.getenv("ML_SERVICE_TIMEOUT", "8"))
 COG_TIMEOUT = float(os.getenv("COGNITIVE_SERVICE_TIMEOUT", "15"))
 ORG_TIMEOUT = float(os.getenv("ORGANISM_SERVICE_TIMEOUT", "5"))
+
+# Serve call timeout for cross-deployment calls
+CALL_TIMEOUT_S = int(os.getenv("SERVE_CALL_TIMEOUT_S", "120"))
 
 SEEDCORE_API_URL = os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002")
 SEEDCORE_API_TIMEOUT = float(os.getenv("SEEDCORE_API_TIMEOUT", "5.0"))
@@ -269,6 +344,424 @@ class MetricsTracker:
         
         return metrics
 
+# ---------- Surprise Score utilities (OCPS-aware) ----------
+EPS = 1e-12
+
+def _clip01(x: float) -> float:
+    return max(0.0, min(1.0, float(x)))
+
+def _normalize_weights(w: Sequence[float]) -> Tuple[float, ...]:
+    w_pos = [max(0.0, wi) for wi in w]
+    s = sum(w_pos)
+    return tuple((wi / (s + EPS)) for wi in w_pos)
+
+def _normalized_entropy(probs: Sequence[float]) -> float:
+    if not probs:
+        return 0.5
+    probs = [max(EPS, p) for p in probs]
+    Z = sum(probs)
+    if Z <= 0:
+        return 0.5
+    probs = [p / Z for p in probs]
+    H = -sum(p * math.log(p, 2) for p in probs if p > 0)
+    Hmax = math.log(max(2, len(probs)), 2)
+    return _clip01(H / (Hmax + EPS))
+
+def _parse_weights(env_var: str, default: Tuple[float, ...] = (0.25, 0.20, 0.15, 0.20, 0.10, 0.10)) -> Tuple[float, ...]:
+    """Safely parse weights from environment variable with validation and normalization."""
+    raw = os.getenv(env_var)
+    if not raw:
+        return default
+    try:
+        ws = [max(0.0, float(x.strip())) for x in raw.split(",")]
+        if not ws or len(ws) != 6:
+            logger.warning(f"Invalid weights format in {env_var}: {raw}, using defaults")
+            return default
+        s = sum(ws) or 1.0
+        normalized = tuple(w/s for w in ws)
+        logger.info(f"Parsed weights from {env_var}: {normalized}")
+        return normalized
+    except Exception as e:
+        logger.warning(f"Failed to parse weights from {env_var}: {e}, using defaults")
+        return default
+
+def _decide_route_with_hysteresis(S: float, last_decision: Optional[str] = None,
+                                 fast_enter: float = 0.35, fast_exit: float = 0.38,
+                                 plan_enter: float = 0.60, plan_exit: float = 0.57) -> str:
+    """
+    Route decision with hysteresis to prevent flapping around thresholds.
+    
+    Args:
+        S: Surprise score
+        last_decision: Previous decision (for hysteresis)
+        fast_enter: Threshold to enter fast path
+        fast_exit: Threshold to exit fast path (higher for hysteresis)
+        plan_enter: Threshold to enter planner path
+        plan_exit: Threshold to exit planner path (lower for hysteresis)
+    
+    Returns:
+        Decision: 'fast', 'planner', or 'hgnn'
+    """
+    if last_decision == "fast":
+        if S >= fast_exit:
+            # Allow re-evaluation if we've crossed the exit threshold
+            pass
+        else:
+            return "fast"
+    
+    if last_decision == "hgnn":
+        if S <= plan_exit:
+            # Allow re-evaluation if we've crossed the exit threshold
+            pass
+        else:
+            return "hgnn"
+    
+    # Fresh decision based on current score
+    if S < fast_enter:
+        return "fast"
+    elif S < plan_enter:
+        return "planner"
+    else:
+        return "hgnn"
+
+class SurpriseComputer:
+    """
+    Computes S(T) and returns a dict with keys:
+      - S ∈ [0,1]
+      - x: tuple(x1..x6)
+      - weights: normalized weights
+      - decision: 'fast' | 'planner' | 'hgnn'
+      - ocps: meta for x2 mapping
+    """
+    def __init__(
+        self,
+        weights: Sequence[float] = (0.25, 0.20, 0.15, 0.20, 0.10, 0.10),
+        tau_fast: float = 0.35,
+        tau_plan: float = 0.60,
+    ):
+        self.w_hat = _normalize_weights(weights)
+        self.tau_fast = float(tau_fast)
+        self.tau_plan = float(tau_plan)
+
+    def _x1_cache_novelty(self, mw_hit: Optional[float]) -> float:
+        if mw_hit is None:
+            return 0.5
+        try:
+            return _clip01(1.0 - float(mw_hit))
+        except Exception:
+            return 0.5
+
+    def _x2_ocps(self, ocps: Dict[str, Any], drift_minmax: Optional[Tuple[float, float]]) -> Tuple[float, Dict[str, Any]]:
+        meta: Dict[str, Any] = {}
+        try:
+            St   = float(ocps.get("S_t"))
+            h    = float(ocps.get("h"))
+            hclr = float(ocps.get("h_clr", h/2.0))
+            flag = bool(ocps.get("flag_on", ocps.get("drift_flag", False)))
+            meta.update({"S_t": St, "h": h, "h_clr": hclr, "flag_on": flag, "mapping": "ocps"})
+            if h <= 0.0 or (flag and h <= hclr):
+                raise ValueError("invalid thresholds")
+            if not flag:
+                return _clip01(St / h), meta
+            return _clip01((St - hclr) / (h - hclr)), meta
+        except Exception:
+            meta["mapping"] = "minmax_fallback"
+            if not drift_minmax:
+                return 0.5, meta
+            drift = ocps.get("drift")
+            if drift is None:
+                return 0.5, meta
+            p10, p90 = drift_minmax
+            if p90 <= p10:
+                return 0.5, meta
+            try:
+                return _clip01((float(drift) - p10) / (p90 - p10)), meta
+            except Exception:
+                return 0.5, meta
+
+    def _x3_ood(self, ood_dist: Optional[float], ood_to01: Optional[Callable[[float], float]]) -> float:
+        if ood_dist is None:
+            return 0.5
+        if ood_to01 is None:
+            return _clip01(float(ood_dist) / 10.0)
+        try:
+            return _clip01(float(ood_to01(float(ood_dist))))
+        except Exception:
+            return 0.5
+
+    def _x4_graph_novelty(self, graph_delta: Optional[float], mu_delta: Optional[float]) -> float:
+        if graph_delta is None or mu_delta is None or mu_delta <= 0:
+            return 0.5
+        try:
+            return _clip01(float(graph_delta) / float(mu_delta))
+        except Exception:
+            return 0.5
+
+    def _x5_dep_uncertainty(self, dep_probs: Optional[Sequence[float]]) -> float:
+        try:
+            return _normalized_entropy(dep_probs or [])
+        except Exception:
+            return 0.5
+
+    def _x6_cost_risk(self, est_runtime: Optional[float], SLO: Optional[float], kappa: Optional[float], criticality: Optional[float]) -> float:
+        c = _clip01(criticality if criticality is not None else 0.5)
+        if est_runtime is None or SLO is None:
+            r = 0.5
+        else:
+            k = float(kappa) if (kappa and kappa > 0) else 0.8
+            r = _clip01(float(est_runtime) / (max(EPS, float(SLO) * k)))
+        return 0.5 * (r + c)
+
+    def compute(self, signals: Dict[str, Any]) -> Dict[str, Any]:
+        x1 = self._x1_cache_novelty(signals.get("mw_hit"))
+        x2, x2meta = self._x2_ocps(signals.get("ocps", {}), signals.get("drift_minmax"))
+        x3 = self._x3_ood(signals.get("ood_dist"), signals.get("ood_to01"))
+        x4 = self._x4_graph_novelty(signals.get("graph_delta"), signals.get("mu_delta"))
+        x5 = self._x5_dep_uncertainty(signals.get("dep_probs"))
+        x6 = self._x6_cost_risk(signals.get("est_runtime"), signals.get("SLO"), signals.get("kappa"), signals.get("criticality"))
+
+        xs = (x1, x2, x3, x4, x5, x6)
+        S = _clip01(sum(w * x for w, x in zip(self.w_hat, xs)))
+        decision = ("fast" if S < self.tau_fast else "planner" if S < self.tau_plan else "hgnn")
+        return {"S": S, "x": xs, "weights": self.w_hat, "decision": decision, "ocps": x2meta}
+
+
+# ---------- Proto-subtask generator (router-time, PKG-free fallback) ----------
+def build_proto_subtasks(tags: Set[str], x6: float, criticality: float) -> Dict[str, Any]:
+    """
+    Returns: { "tasks": [{type, params, provenance[]}...], "edges": [(a,b)...] }
+    """
+    tasks: List[Dict[str, Any]] = []
+    edges: List[Tuple[str, str]] = []
+
+    def add(t: str, provenance: str, **params):
+        tasks.append({"type": t, "params": params or {}, "provenance": [provenance]})
+
+    privacy_needed = ("vip" in tags) or ("privacy" in tags) or (criticality >= 0.8)
+    if privacy_needed:
+        add("private_comms", "R_PRIVACY_BASELINE", privacy_mode="STRICT", single_poc=True)
+        add("incident_log_restricted", "R_PRIVACY_BASELINE", visibility="restricted")
+
+    if "allergen" in tags:
+        add("food_safety_containment", "R_ALLERGEN", sla_min=10)
+    if "luggage_custody" in tags:
+        add("privacy_luggage_recovery", "R_LUGGAGE", chain="dual_custody")
+    if "hvac_fault" in tags:
+        add("hvac_stabilize", "R_HVAC", temp_target_c=22)
+
+    if any(t["type"] in {"food_safety_containment","privacy_luggage_recovery","hvac_stabilize"} for t in tasks):
+        add("guest_recovery", "R_GUEST_RECOVERY", comp_policy="VIP_TIER1")
+
+    def has(tt): return any(t["type"] == tt for t in tasks)
+    if has("private_comms"):
+        for tt in ["food_safety_containment","privacy_luggage_recovery","hvac_stabilize","incident_log_restricted"]:
+            if has(tt):
+                edges.append(("private_comms", tt))
+    if has("guest_recovery"):
+        for tt in ["food_safety_containment","privacy_luggage_recovery","hvac_stabilize"]:
+            if has(tt):
+                edges.append((tt, "guest_recovery"))
+
+    if x6 >= 0.9:
+        for t in tasks:
+            t["params"]["priority"] = "critical"
+            if "sla_min" in t["params"]:
+                t["params"]["sla_min"] = max(1, int(0.8 * t["params"]["sla_min"]))
+
+    return {"tasks": tasks, "edges": edges}
+
+
+# ---------- CoordinatorCore: unified route_and_execute ----------
+class CoordinatorCore:
+    """
+    Hot-path router logic with Surprise Score S(T), PKG evaluation with timeouts,
+    and unified result schema suitable for persistence into tasks.result.
+    
+    Routing Contract:
+    - Computes 6-signal Surprise Score S(T) with OCPS-correct x₂ mapping
+    - Evaluates PKG with strict timeout; falls back to deterministic rules
+    - Returns unified result schema: {success, kind, payload}
+    - Supports hysteresis to prevent decision flapping
+    
+    Environment Variables:
+    - SURPRISE_WEIGHTS: Comma-separated weights for x1..x6 (default: 0.25,0.20,0.15,0.20,0.10,0.10)
+    - SURPRISE_TAU_FAST: Fast path threshold (default: 0.35)
+    - SURPRISE_TAU_PLAN: Planner threshold (default: 0.60)
+    - SURPRISE_TAU_FAST_EXIT: Fast path exit threshold for hysteresis (default: 0.38)
+    - SURPRISE_TAU_PLAN_EXIT: Planner exit threshold for hysteresis (default: 0.57)
+    - SERVE_CALL_TIMEOUT_S: PKG evaluation timeout (default: 2)
+    """
+    def __init__(
+        self,
+        pkg_eval: Optional[Callable[..., Any]] = None,
+        ood_to01: Optional[Callable[[float], float]] = None,
+        surprise_weights: Optional[Sequence[float]] = None,
+        tau_fast: Optional[float] = None,
+        tau_plan: Optional[float] = None,
+        call_timeout_s: int = 2,
+    ):
+        self.pkg_eval = pkg_eval
+        self.ood_to01 = ood_to01
+        self.timeout_s = int(os.getenv("SERVE_CALL_TIMEOUT_S", str(call_timeout_s)))
+        
+        # Parse weights and thresholds with safe defaults
+        weights = surprise_weights or _parse_weights("SURPRISE_WEIGHTS")
+        tau_fast_val = tau_fast or float(os.getenv("SURPRISE_TAU_FAST", "0.35"))
+        tau_plan_val = tau_plan or float(os.getenv("SURPRISE_TAU_PLAN", "0.60"))
+        
+        # Parse hysteresis thresholds
+        self.tau_fast_exit = float(os.getenv("SURPRISE_TAU_FAST_EXIT", str(tau_fast_val + 0.03)))
+        self.tau_plan_exit = float(os.getenv("SURPRISE_TAU_PLAN_EXIT", str(tau_plan_val - 0.03)))
+        
+        self.surprise = SurpriseComputer(weights=weights, tau_fast=tau_fast_val, tau_plan=tau_plan_val)
+
+    async def route_and_execute(self, task: "TaskPayload") -> Dict[str, Any]:
+        t0 = time.perf_counter()
+        if not isinstance(task, TaskPayload):
+            task = TaskPayload.model_validate(task)
+
+        tid = task.task_id
+        params = task.params or {}
+        tags: Set[str] = set((params.get("event_tags") or []))
+        attributes: Dict[str, Any] = params.get("attributes") or {}
+        conf = (params.get("confidence") or {})
+        pii_redacted = bool(params.get("pii", {}).get("was_redacted", False))
+
+        mw_hit = params.get("cache", {}).get("mw_hit") if isinstance(params.get("cache"), dict) else None
+        ocps = params.get("ocps") or {}
+        drift_minmax: Optional[Tuple[float, float]] = None
+        if "drift_p10" in params and "drift_p90" in params:
+            try:
+                drift_minmax = (float(params["drift_p10"]), float(params["drift_p90"]))
+            except Exception:
+                drift_minmax = None
+
+        ood_dist = params.get("ood_dist")
+        graph_delta = params.get("graph_delta")
+        mu_delta = params.get("mu_delta")
+        dep_probs = params.get("dependency_probs")
+        est_runtime = params.get("est_runtime")
+        SLO = params.get("slo")
+        kappa = params.get("kappa", 0.8)
+        criticality = params.get("criticality", 0.5)
+
+        signals = {
+            "mw_hit": mw_hit,
+            "ocps": ocps,
+            "drift_minmax": drift_minmax,
+            "ood_dist": ood_dist,
+            "ood_to01": self.ood_to01,
+            "graph_delta": graph_delta,
+            "mu_delta": mu_delta,
+            "dep_probs": dep_probs,
+            "est_runtime": est_runtime,
+            "SLO": SLO,
+            "kappa": kappa,
+            "criticality": criticality,
+        }
+
+        s_out = self.surprise.compute(signals)
+        S = s_out["S"]
+        xs = s_out["x"]
+        
+        # Get last decision for hysteresis (from task params if available)
+        last_decision = params.get("last_decision")
+        decision = _decide_route_with_hysteresis(
+            S, last_decision, 
+            self.surprise.tau_fast, self.tau_fast_exit,
+            self.surprise.tau_plan, self.tau_plan_exit
+        )
+
+        proto_plan: Dict[str, Any] = {"tasks": [], "edges": []}
+        pkg_meta = {"evaluated": False, "version": None, "error": None}
+
+        async def _eval_pkg():
+            context = {"domain": task.domain, "type": task.type, "task_id": tid, "pii_redacted": pii_redacted}
+            return await self.pkg_eval(tags=tags, signals={
+                "S": S, "x1": xs[0], "x2": xs[1], "x3": xs[2], "x4": xs[3], "x5": xs[4], "x6": xs[5],
+                "ocps": s_out["ocps"],
+            }, context=context)
+
+        used_fallback = False
+        try:
+            if self.pkg_eval is not None:
+                pkg_res = await asyncio.wait_for(_eval_pkg(), timeout=self.timeout_s)
+                if isinstance(pkg_res, dict) and "tasks" in pkg_res and "edges" in pkg_res:
+                    proto_plan = {"tasks": pkg_res["tasks"], "edges": pkg_res["edges"]}
+                    pkg_meta.update({"evaluated": True, "version": pkg_res.get("version")})
+                else:
+                    raise ValueError("PKG returned unexpected shape")
+            else:
+                raise RuntimeError("PKG evaluator not configured")
+        except Exception as e:
+            used_fallback = True
+            pkg_meta["error"] = f"PKG unavailable or timed out: {e}"
+            proto_plan = build_proto_subtasks(tags, xs[5], criticality)
+
+        # Add provenance tracking
+        proto_plan.setdefault("provenance", [])
+        if used_fallback:
+            proto_plan["provenance"].append("fallback:router_rules@1.0")
+        else:
+            proto_plan["provenance"].append(f"pkg:{pkg_meta.get('version', 'unknown')}")
+
+        router_latency_ms = round((time.perf_counter()-t0)*1000.0, 3)
+        
+        payload_common = {
+            "task_id": tid,
+            "type": task.type,
+            "domain": task.domain,
+            "decision": decision,
+            "last_decision": last_decision,  # For hysteresis tracking
+            "surprise": {
+                "S": S,
+                "x": list(xs),
+                "weights": list(self.surprise.w_hat),
+                "tau_fast": self.surprise.tau_fast,
+                "tau_plan": self.surprise.tau_plan,
+                "tau_fast_exit": self.tau_fast_exit,
+                "tau_plan_exit": self.tau_plan_exit,
+                "ocps": s_out["ocps"],
+                "version": "surprise/1.2.0",
+            },
+            "signals_present": sorted([k for k,v in signals.items() if v is not None]),
+            "pkg": {"used": not used_fallback, "version": pkg_meta["version"], "error": pkg_meta["error"]},
+            "proto_plan": proto_plan,
+            "event_tags": sorted(list(tags)),
+            "attributes": attributes,
+            "confidence": conf,
+            "pii_redacted": pii_redacted,
+            "router_latency_ms": router_latency_ms,
+            "payload_version": "router/1.2.0",
+        }
+
+        # Structured logging for observability
+        ocps_meta = s_out["ocps"]
+        logger.info(
+            f"[Coordinator] task_id={tid} S={S:.3f} x2_meta(S_t={ocps_meta.get('S_t', 'N/A')},h={ocps_meta.get('h', 'N/A')},h_clr={ocps_meta.get('h_clr', 'N/A')},flag_on={ocps_meta.get('flag_on', 'N/A')}) decision={decision} pkg_used={not used_fallback} latency_ms={router_latency_ms:.1f}"
+        )
+
+        if decision == "fast":
+            res = create_fast_path_result(
+                routed_to="fast",
+                organ_id="coordinator",
+                result=payload_common
+            ).model_dump()
+        elif decision == "planner":
+            res = create_escalated_result(
+                solution_steps=[],
+                plan_source="router_planner",
+                **payload_common
+            ).model_dump()
+        else:
+            res = create_escalated_result(
+                solution_steps=[],
+                plan_source="router_hgnn",
+                **payload_common
+            ).model_dump()
+
+        return res
+
 # ---------- API models ----------
 class Task(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
@@ -306,7 +799,19 @@ class TuneCallbackRequest(BaseModel):
     error: Optional[str] = None
 
 # ---------- FastAPI/Serve ----------
-app = FastAPI(title="SeedCore Coordinator")
+app = FastAPI(
+    title="SeedCore Coordinator",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
+)
+
+# Health endpoints
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "coordinator": True}
+
 router_prefix = "/pipeline"
 
 @serve.deployment(
@@ -403,14 +908,36 @@ class Coordinator:
             self.predicate_config = create_default_config()
             self.predicate_router = PredicateRouter(self.predicate_config)
         
-        # Start background tasks (will be called after initialization)
+        # Background task state
+        self._bg_started = False
         self._background_tasks_started = False
         self._warmup_started = False
         
+        # Wire core router with configurable thresholds
+        try:
+            self.core = CoordinatorCore()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize CoordinatorCore, using defaults: {e}")
+            self.core = CoordinatorCore()
+
         logger.info("✅ Coordinator initialized")
 
     async def _ensure_background_tasks_started(self):
         """Ensure background tasks are started (called on first request)."""
+        if self._bg_started:
+            return
+            
+        # Resolve Serve handles once and keep them
+        try:
+            self.ops = serve.get_deployment_handle("OpsGateway", app_name="ops")
+            self.ml = serve.get_deployment_handle("MLService", app_name="ml_service")
+            self.cog = serve.get_deployment_handle("CognitiveService", app_name="cognitive")
+            self._bg_started = True
+            logger.info("Coordinator wired → ops/ml/cognitive handles ready")
+        except Exception as e:
+            logger.warning(f"Failed to get some Serve handles: {e}")
+            # Continue with partial handles - some services might not be available
+            
         if not self._background_tasks_started:
             asyncio.create_task(self._start_background_tasks())
             self._background_tasks_started = True
@@ -1770,142 +2297,59 @@ class Coordinator:
             logger.error(f"[Coordinator] HGNN execution failed: {e}")
             return {"success": False, "error": str(e), "path": "hgnn"}
 
-    @app.post(f"{router_prefix}/route-and-execute")
-    async def route_and_execute(self, task):
+    async def route_and_execute(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Global entrypoint (paper §6): Predicate-based routing + HGNN escalation.
+        Serve deployment method for Ray remote calls.
+        Delegates to core router with unified result schema.
         """
-        # Ensure background tasks are started
         await self._ensure_background_tasks_started()
-        
-        cid = uuid.uuid4().hex
-        start_time = time.time()
-        
+        start_time = time.perf_counter()
         try:
-            # Log received task for debugging
-            logger.info(f"[Coordinator] Received task request: {task}")
-            logger.info(f"[Coordinator] Task object type: {type(task)}")
+            # Convert dict to TaskPayload if needed
+            if not isinstance(payload, TaskPayload):
+                payload = TaskPayload.model_validate(payload)
+            res = await self.core.route_and_execute(payload)
             
-            # Validate task object
-            if task is None:
-                logger.error(f"[Coordinator] Task object is None")
-                raise HTTPException(status_code=400, detail="Task object is required")
+            # Track metrics
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            decision = res.get("payload", {}).get("decision", "unknown")
+            self.metrics.track_metrics(decision, res.get("success", False), latency_ms)
             
-            # Handle both Task and TaskPayload objects
-            if hasattr(task, 'type'):
-                # Task or TaskPayload object
-                if task.type is None:
-                    logger.error(f"[Coordinator] Task type is None. Task: {task}")
-                    raise HTTPException(status_code=400, detail="Task type is required")
-                task_type = (task.type or "").strip().lower()
-            elif isinstance(task, dict) and 'type' in task:
-                # Dictionary with type field
-                task_type = (task.get('type') or "").strip().lower()
-            else:
-                logger.error(f"[Coordinator] Task type is missing. Task: {task}")
-                raise HTTPException(status_code=400, detail="Task type is required")
-            
-            # Normalize task type
-            if hasattr(task, 'type'):
-                task.type = task_type
-            elif isinstance(task, dict):
-                task['type'] = task_type
-                
-        except AttributeError as e:
-            logger.error(f"[Coordinator] AttributeError in route_and_execute: {e}")
-            logger.error(f"[Coordinator] Task object type: {type(task)}")
-            logger.error(f"[Coordinator] Task object attributes: {dir(task) if hasattr(task, '__dict__') else 'No __dict__'}")
-            raise HTTPException(status_code=400, detail=f"Invalid task object: {str(e)}")
+            return res
         except Exception as e:
-            logger.error(f"[Coordinator] Unexpected error in route_and_execute: {e}")
-            raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            self.metrics.track_metrics("error", False, latency_ms)
+            logger.exception(f"[Coordinator] route_and_execute failed: {e}")
+            return err(str(e), "coordinator_error")
 
-        # Prefetch context if available
-        if hasattr(task, 'model_dump'):
-            self.prefetch_context(task.model_dump())
-        elif hasattr(task, 'dict'):
-            self.prefetch_context(task.dict())
-        elif isinstance(task, dict):
-            self.prefetch_context(task)
-        else:
-            logger.warning(f"[Coordinator] Cannot convert task to dict for prefetch_context: {type(task)}")
+    @app.post(f"{router_prefix}/route-and-execute")
+    async def route_and_execute_http(self, task: TaskPayload):
+        """
+        HTTP endpoint for route-and-execute.
+        """
+        return await self.route_and_execute(task.model_dump())
 
-        # Compute drift score using ML service
-        task_dict = self._convert_task_to_dict(task)
-        drift_score = await self._compute_drift_score(task_dict)
-        escalate = self.ocps.update(drift_score)
-        
-        # Update predicate signals
-        task_params = getattr(task, 'params', {}) if hasattr(task, 'params') else task.get('params', {}) if isinstance(task, dict) else {}
-        
-        # Convert string priority to integer
-        priority = task_params.get("priority", 5)
-        if isinstance(priority, str):
-            priority_map = {"low": 2, "medium": 5, "high": 8, "critical": 10}
-            priority = priority_map.get(priority.lower(), 5)
-        elif not isinstance(priority, int):
-            priority = 5  # Default fallback
-        
-        # Add missing signals for predicate evaluation
-        self.predicate_router.update_signals(
-            p_fast=self.ocps.p_fast,
-            s_drift=drift_score,
-            task_priority=priority,
-            task_complexity=task_params.get("complexity", 0.5),
-            memory_utilization=0.5,  # TODO: Get from system metrics
-            cpu_utilization=0.3,     # TODO: Get from system metrics
-            fast_path_latency_ms=50.0,  # TODO: Get from actual metrics
-            hgnn_latency_ms=200.0,      # TODO: Get from actual metrics
-            success_rate=0.95,          # TODO: Get from actual metrics
-        )
-
-        # Use predicate-based routing
-        routing_decision = self.predicate_router.route_task(task_dict)
-        
-        # Execute based on routing decision
-        if routing_decision.action == "fast_path":
-            try:
-                resp = await self._execute_fast(task, cid)  # Remove organ_id parameter
-                latency_ms = (time.time() - start_time) * 1000
-                self.metrics.track_metrics("fast", resp.get("success", False), latency_ms)
-                record_request("fast", resp.get("success", False))
-                record_latency("e2e", latency_ms)
-                return {
-                    "success": resp.get("success", False), "result": resp,
-                    "path": "fast", "p_fast": self.ocps.p_fast, "organ_id": resp.get("organ_id"), 
-                    "correlation_id": cid, "routing_reason": routing_decision.reason
-                }
-            except Exception as e:
-                logger.warning(f"Fast path failed; escalating. err={e}")
-
-        # Escalation with concurrency control
-        if self._inflight_escalations >= self.escalation_max_inflight:
-            latency_ms = (time.time() - start_time) * 1000
-            self.metrics.track_metrics("escalation_failure", False, latency_ms)
-            record_request("escalation_failure", False)
-            record_latency("e2e", latency_ms)
-            return {"success": False, "error": "Too many concurrent escalations", "path": "escalation_failure", "p_fast": self.ocps.p_fast, "correlation_id": cid}
-
-        async with self.escalation_semaphore:
-            self._inflight_escalations += 1
-            try:
-                resp = await self._execute_hgnn(task, cid)
-                resp.update({
-                    "p_fast": self.ocps.p_fast, 
-                    "correlation_id": cid,
-                    "routing_reason": routing_decision.reason
-                })
-                record_request("hgnn", resp.get("success", False))
-                record_latency("e2e", (time.time() - start_time) * 1000)
-                return resp
-            except Exception as e:
-                latency_ms = (time.time() - start_time) * 1000
-                self.metrics.track_metrics("escalation_failure", False, latency_ms)
-                record_request("escalation_failure", False)
-                record_latency("e2e", latency_ms)
-                return {"success": False, "error": str(e), "path": "hgnn", "p_fast": self.ocps.p_fast, "correlation_id": cid}
-            finally:
-                self._inflight_escalations -= 1
+    @app.post(f"{router_prefix}/process-task")
+    async def process_task(self, payload: Dict[str, Any]):
+        """
+        HTTP client entry to match CoordinatorServiceClient; wraps route_and_execute.
+        Accepts flexible dict and ensures TaskPayload has a task_id.
+        """
+        await self._ensure_background_tasks_started()
+        try:
+            # Ensure task_id exists for correlation
+            if isinstance(payload, dict) and "task_id" not in payload:
+                # Allow using 'id' if provided by callers
+                if "id" in payload:
+                    payload["task_id"] = str(payload["id"])
+                else:
+                    payload["task_id"] = uuid.uuid4().hex
+            task_obj = TaskPayload.model_validate(payload)
+            res = await self.core.route_and_execute(task_obj)
+            return res
+        except Exception as e:
+            logger.exception(f"[Coordinator] process_task failed: {e}")
+            return err(str(e), "coordinator_error")
 
     @app.get(f"{router_prefix}/metrics")
     async def get_metrics(self):
@@ -1913,6 +2357,11 @@ class Coordinator:
         # Ensure background tasks are started
         await self._ensure_background_tasks_started()
         return self.metrics.get_metrics()
+    
+    @app.get("/readyz")
+    async def ready(self):
+        """Readiness probe for k8s."""
+        return {"ready": bool(getattr(self, "_bg_started", False))}
     
     @app.get(f"{router_prefix}/predicates/status")
     async def get_predicate_status(self):

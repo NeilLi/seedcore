@@ -160,7 +160,7 @@ async def energy_gradient():
 
 ### Basic Energy Calculation
 ```python
-from src.seedcore.energy.calculator import calculate_total_energy
+from src.seedcore.ops.energy.calculator import calculate_total_energy
 
 # Calculate total system energy
 energy_data = calculate_total_energy(agents, memory_system, weights)

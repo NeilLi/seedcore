@@ -34,8 +34,8 @@ sys.modules["ray.serve"] = ray_serve_stub
 sys.modules["ray.exceptions"] = ray_exceptions_stub
 
 from seedcore.models.state import UnifiedState, AgentSnapshot, OrganState, SystemState, MemoryVector
-from seedcore.energy.calculator import compute_energy_unified, SystemParameters
-from seedcore.energy.weights import EnergyWeights
+from seedcore.ops.energy.calculator import compute_energy_unified, SystemParameters
+from seedcore.ops.energy.weights import EnergyWeights
 
 
 def _simple_unified_state(n: int = 3, d: int = 4) -> UnifiedState:

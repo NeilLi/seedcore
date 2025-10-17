@@ -47,8 +47,8 @@ result = tier0_manager.execute_task_on_best_agent(task_data)
 Prefer the explicit unified-state API:
 ```python
 import numpy as np
-from src.seedcore.energy.weights import EnergyWeights
-from src.seedcore.energy.calculator import compute_energy
+from src.seedcore.ops.energy.weights import EnergyWeights
+from src.seedcore.ops.energy.calculator import compute_energy
 from seedcore.hgnn.pattern_shim import SHIM
 
 H = unified_state.H_matrix()
@@ -60,7 +60,7 @@ total, breakdown = compute_energy(H, P, w, memory_stats, E_sel=E_sel, s_norm=flo
 
 ### Gradients API (for controllers)
 ```python
-from src.seedcore.energy.calculator import energy_and_grad, role_entropy_grad
+from src.seedcore.ops.energy.calculator import energy_and_grad, role_entropy_grad
 
 breakdown, grad = energy_and_grad(
     state={
@@ -76,7 +76,7 @@ breakdown, grad = energy_and_grad(
 
 ### Agent Scoring
 ```python
-from src.seedcore.energy.optimizer import calculate_agent_suitability_score
+from src.seedcore.ops.energy.optimizer import calculate_agent_suitability_score
 
 score = calculate_agent_suitability_score(agent, task_data, weights)
 ```

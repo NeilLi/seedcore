@@ -1,7 +1,7 @@
 import time
 import numpy as np
 
-from seedcore.energy.grad_adapter import InProcEnergySource, GradientBus
+from seedcore.ops.energy.grad_adapter import InProcEnergySource, GradientBus
 
 
 def make_unified_state_dict(n_agents: int = 3, d: int = 4, e_len: int = 2):

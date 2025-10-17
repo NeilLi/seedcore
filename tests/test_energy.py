@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from seedcore.energy.ledger import EnergyLedger
+from seedcore.ops.energy.ledger import EnergyLedger
 
 def test_ledger_total():
     e = EnergyLedger(pair=1, hyper=2, entropy=-1, reg=0, mem=0.5)

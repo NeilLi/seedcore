@@ -19,7 +19,7 @@ from mock_eventizer_dependencies import MockEventizerService
 # Add the src directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from seedcore.eventizer import EventizerRequest, EventizerConfig
+from seedcore.ops.eventizer import EventizerRequest, EventizerConfig
 
 
 async def test_eventizer_basic():

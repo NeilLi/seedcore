@@ -263,7 +263,7 @@ def ray_get(obj):
 
 from src.seedcore.tier0.tier0_manager import Tier0MemoryManager
 from src.seedcore.agents.ray_actor import RayAgent
-from src.seedcore.energy.ledger import EnergyLedger
+from src.seedcore.ops.energy.ledger import EnergyLedger
 
 class TestTier0MemoryManager:
     """Test the Tier0MemoryManager class directly."""

@@ -39,8 +39,9 @@ This document summarizes the implementation of **Option C** from the architectur
    - `entrypoints/state_entrypoint.py` - State service deployment
    - `entrypoints/energy_entrypoint.py` - Energy service deployment
 
-7. **Database Schema Evolution** (12 migrations)
+7. **Database Schema Evolution** (13 migrations)
    - **Task Management System**: Complete coordinator-dispatcher task queue with lease management
+   - **Task Schema Enhancements**: JSONB conversion, check constraints, and optimized indexing
    - **HGNN Architecture**: Two-layer heterogeneous graph with task and agent/organ layers
    - **Graph Embeddings**: Vector-based graph embeddings with ANN indexing
    - **Facts Management**: Text-based fact storage with full-text search capabilities
@@ -85,20 +86,21 @@ OrganismManager
 
 ### Migration Overview
 
-The database schema has evolved through 12 comprehensive migrations, establishing a robust foundation for distributed task management, graph-based AI, and runtime coordination:
+The database schema has evolved through 13 comprehensive migrations, establishing a robust foundation for distributed task management, graph-based AI, and runtime coordination:
 
 | Migration | Purpose | Key Components |
 |-----------|---------|----------------|
 | 001-006 | **Task Management** | Task queue, status tracking, lease management |
-| 007-008 | **HGNN Architecture** | Two-layer graph schema, node mapping, edge relationships |
-| 009-010 | **Facts System** | Text-based fact storage, task-fact integration |
-| 011-012 | **Runtime Registry** | Instance management, cluster coordination |
+| 007 | **Task Schema Enhancements** | JSONB conversion, check constraints, optimized indexing |
+| 008-009 | **HGNN Architecture** | Two-layer graph schema, node mapping, edge relationships |
+| 010-011 | **Facts System** | Text-based fact storage, task-fact integration |
+| 012-013 | **Runtime Registry** | Instance management, cluster coordination |
 
 ### 1. Task Management System (Migrations 001-006)
 
 #### Core Task Schema
 ```sql
--- Tasks table with comprehensive status tracking
+-- Tasks table with comprehensive status tracking and enhanced schema
 CREATE TABLE tasks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     status taskstatus NOT NULL DEFAULT 'created',
@@ -117,8 +119,18 @@ CREATE TABLE tasks (
     lease_expires_at TIMESTAMP WITH TIME ZONE NULL,
     last_heartbeat TIMESTAMP WITH TIME ZONE NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    
+    -- Enhanced constraints and indexes
+    CONSTRAINT ck_tasks_attempts_nonneg CHECK (attempts >= 0)
 );
+
+-- Enhanced indexing strategy for optimal performance
+CREATE INDEX ix_tasks_status_runafter ON tasks (status, run_after);
+CREATE INDEX ix_tasks_created_at_desc ON tasks (created_at);
+CREATE INDEX ix_tasks_type ON tasks (type);
+CREATE INDEX ix_tasks_domain ON tasks (domain);
+CREATE INDEX ix_tasks_params_gin ON tasks USING gin (params);
 ```
 
 #### Task Status Enum
@@ -133,9 +145,53 @@ CREATE TYPE taskstatus AS ENUM (
 - **Lease Management**: Prevents task conflicts with `owner_id`, `lease_expires_at`, `last_heartbeat`
 - **Retry Logic**: Automatic requeuing with exponential backoff
 - **Drift Scoring**: OCPS valve decision making (0.0 = fast path, ≥0.5 = escalation)
-- **Performance Indexes**: Optimized for coordinator-dispatcher queries
+- **Enhanced Schema**: JSONB conversion, check constraints, and optimized indexing
+- **Performance Indexes**: 
+  - `ix_tasks_status_runafter`: Composite index for task claiming queries
+  - `ix_tasks_created_at_desc`: Optimized for chronological ordering
+  - `ix_tasks_type`: Fast task type filtering
+  - `ix_tasks_domain`: Domain-based task routing
+  - `ix_tasks_params_gin`: GIN index for JSONB parameter queries
+- **Data Integrity**: Check constraint ensures `attempts >= 0`
+- **JSONB Support**: Native JSONB for `params` and `result` with efficient querying
 
-### 2. HGNN Architecture (Migrations 007-008)
+### 2. Task Schema Enhancements (Migration 007)
+
+#### JSONB Conversion
+```sql
+-- Convert JSON to JSONB for better performance and querying
+ALTER TABLE tasks
+  ALTER COLUMN params TYPE JSONB USING params::jsonb,
+  ALTER COLUMN result TYPE JSONB USING result::jsonb;
+```
+
+#### Enhanced Indexing Strategy
+```sql
+-- New index naming convention for consistency
+CREATE INDEX ix_tasks_status_runafter ON tasks (status, run_after);
+CREATE INDEX ix_tasks_created_at_desc ON tasks (created_at);
+CREATE INDEX ix_tasks_type ON tasks (type);
+CREATE INDEX ix_tasks_domain ON tasks (domain);
+
+-- GIN index for efficient JSONB parameter queries
+CREATE INDEX ix_tasks_params_gin ON tasks USING gin (params);
+```
+
+#### Data Integrity Constraints
+```sql
+-- Ensure attempts is always non-negative
+ALTER TABLE tasks
+ADD CONSTRAINT ck_tasks_attempts_nonneg CHECK (attempts >= 0);
+```
+
+#### Key Benefits
+- **Performance**: JSONB provides better query performance than JSON
+- **Querying**: GIN indexes enable efficient parameter filtering
+- **Consistency**: Standardized index naming convention
+- **Integrity**: Check constraints prevent invalid data
+- **Maintainability**: Clear schema structure for future enhancements
+
+### 3. HGNN Architecture (Migrations 008-009)
 
 #### Two-Layer Graph Structure
 
@@ -183,7 +239,7 @@ CREATE INDEX idx_graph_embeddings_emb ON graph_embeddings
 USING ivfflat (emb vector_l2_ops) WITH (lists = 100);
 ```
 
-### 3. Facts Management System (Migrations 009-010)
+### 4. Facts Management System (Migrations 010-011)
 
 #### Facts Schema
 ```sql
@@ -203,7 +259,7 @@ CREATE TABLE facts (
 - **Metadata Support**: JSONB for flexible fact properties
 - **Task Integration**: `task__reads__fact`, `task__produces__fact` relationships
 
-### 4. Runtime Registry System (Migrations 011-012)
+### 5. Runtime Registry System (Migrations 012-013)
 
 #### Instance Management
 ```sql
@@ -238,7 +294,7 @@ CREATE TABLE cluster_metadata (
 - **Status Tracking**: `starting`, `alive`, `draining`, `dead`
 - **Advisory Locks**: Safe epoch rotation with `pg_try_advisory_lock()`
 
-### 5. Unified Graph View
+### 6. Unified Graph View
 
 The `hgnn_edges` view provides a flattened representation of all graph relationships for DGL export:
 
@@ -343,7 +399,12 @@ CREATE VIEW hgnn_edges AS
 ## 🗄️ Database Performance & Monitoring
 
 ### Index Strategy
-- **Task Queries**: Composite indexes on `(status, run_after, created_at)` for efficient task claiming
+- **Task Queries**: 
+  - `ix_tasks_status_runafter`: Composite index for efficient task claiming
+  - `ix_tasks_created_at_desc`: Optimized chronological ordering
+  - `ix_tasks_type`: Fast task type filtering
+  - `ix_tasks_domain`: Domain-based task routing
+  - `ix_tasks_params_gin`: GIN index for JSONB parameter queries
 - **Graph Operations**: GIN indexes on JSONB fields and array columns for fast lookups
 - **Vector Search**: IVFFlat indexes on embeddings for sub-linear similarity search
 - **Full-Text Search**: GIN indexes on text vectors for semantic fact retrieval
@@ -451,12 +512,13 @@ The implementation successfully achieves the recommended architecture:
 
 ### Database Schema
 - ✅ **Task Management**: Complete coordinator-dispatcher system with lease management
+- ✅ **Task Schema Enhancements**: JSONB conversion, check constraints, and optimized indexing
 - ✅ **HGNN Architecture**: Two-layer graph schema with cross-layer relationships
 - ✅ **Graph Embeddings**: Vector-based similarity search with ANN indexing
 - ✅ **Facts System**: Full-text search and semantic fact storage
 - ✅ **Runtime Registry**: Epoch-based cluster coordination and instance management
 - ✅ **Performance Optimization**: Comprehensive indexing strategy for all query patterns
-- ✅ **Data Integrity**: Foreign key constraints and referential integrity maintained
+- ✅ **Data Integrity**: Foreign key constraints, check constraints, and referential integrity maintained
 
 ### Integration Points
 - ✅ **Graph-Task Integration**: Seamless task-to-graph node mapping

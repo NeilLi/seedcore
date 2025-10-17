@@ -274,6 +274,7 @@ async def _task_worker(app_state: Any):
                     "description": task.description or "",
                     "domain": task.domain,
                     "drift_score": task.drift_score,
+                    "task_id": str(task.id),
                 }
                 
                 # ✅ FIX: Submit task to Coordinator service via client

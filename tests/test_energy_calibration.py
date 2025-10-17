@@ -21,7 +21,7 @@ from unittest.mock import patch
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.seedcore.energy.calculator import EnergyLedger, calculate_energy
+from src.seedcore.ops.energy.calculator import EnergyLedger, calculate_energy
 from src.seedcore.agents.ray_actor import RayAgent
 from src.seedcore.tier0.tier0_manager import Tier0MemoryManager
 
@@ -116,7 +116,7 @@ def run_energy_calibration(num_tasks: int = 100, num_agents: int = 5):
             }
             
             # Import and call the event handler
-            from src.seedcore.energy.calculator import on_pair_success
+            from src.seedcore.ops.energy.calculator import on_pair_success
             on_pair_success(pair_event, ledger)
         
         # Record energy every 10 tasks

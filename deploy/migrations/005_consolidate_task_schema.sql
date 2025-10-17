@@ -112,29 +112,45 @@ BEGIN
     END IF;
 END$$;
 
--- Step 4: Create or recreate all necessary indexes
+-- Step 4: Create or recreate all necessary indexes with correct naming
+-- Drop old indexes with different naming convention
 DROP INDEX IF EXISTS idx_tasks_status;
-CREATE INDEX idx_tasks_status ON tasks(status);
-
 DROP INDEX IF EXISTS idx_tasks_created_at;
-CREATE INDEX idx_tasks_created_at ON tasks(created_at);
-
 DROP INDEX IF EXISTS idx_tasks_run_after;
-CREATE INDEX idx_tasks_run_after ON tasks(run_after);
-
 DROP INDEX IF EXISTS idx_tasks_locked_at;
-CREATE INDEX idx_tasks_locked_at ON tasks(locked_at);
-
 DROP INDEX IF EXISTS idx_tasks_type;
-CREATE INDEX idx_tasks_type ON tasks(type);
-
 DROP INDEX IF EXISTS idx_tasks_domain;
-CREATE INDEX idx_tasks_domain ON tasks(domain);
-
--- Create composite index for the claim query (include retry status)
 DROP INDEX IF EXISTS idx_tasks_claim;
-CREATE INDEX idx_tasks_claim ON tasks(status, run_after, created_at) 
-WHERE status IN ('queued', 'failed', 'retry');
+
+-- Create indexes to match the model specification
+CREATE INDEX IF NOT EXISTS ix_tasks_status_runafter ON tasks (status, run_after);
+CREATE INDEX IF NOT EXISTS ix_tasks_created_at_desc ON tasks (created_at);
+CREATE INDEX IF NOT EXISTS ix_tasks_type ON tasks (type);
+CREATE INDEX IF NOT EXISTS ix_tasks_domain ON tasks (domain);
+
+-- Create GIN index for params JSONB column (enables filtering into params)
+CREATE INDEX IF NOT EXISTS ix_tasks_params_gin ON tasks USING gin (params);
+
+-- Add check constraint for attempts >= 0
+DO $$
+BEGIN
+    -- Drop existing constraint if it exists with different name
+    IF EXISTS (
+        SELECT 1 FROM information_schema.check_constraints 
+        WHERE constraint_name = 'ck_tasks_attempts_nonneg'
+    ) THEN
+        ALTER TABLE tasks DROP CONSTRAINT ck_tasks_attempts_nonneg;
+        RAISE NOTICE 'Dropped existing ck_tasks_attempts_nonneg constraint';
+    END IF;
+    
+    -- Add the constraint
+    ALTER TABLE tasks
+    ADD CONSTRAINT ck_tasks_attempts_nonneg CHECK (attempts >= 0);
+    RAISE NOTICE 'Added ck_tasks_attempts_nonneg constraint';
+EXCEPTION
+    WHEN duplicate_object THEN
+        RAISE NOTICE 'Constraint ck_tasks_attempts_nonneg already exists';
+END$$;
 
 -- Step 5: Ensure the updated_at trigger function exists
 CREATE OR REPLACE FUNCTION update_tasks_updated_at()

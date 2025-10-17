@@ -17,7 +17,7 @@ Tests for pair statistics tracking functionality.
 """
 
 import numpy as np
-from seedcore.energy.pair_stats import PairStats, PairStatsTracker
+from seedcore.ops.energy.pair_stats import PairStats, PairStatsTracker
 from seedcore.agents.base import Agent
 
 def test_pair_stats_initialization():

@@ -22,7 +22,7 @@ class MockEventizerService:
     def _get_default_config(self):
         """Get default mock config."""
         try:
-            from seedcore.eventizer import EventizerConfig
+            from seedcore.ops.eventizer import EventizerConfig
             return EventizerConfig()
         except:
             return MagicMock()
@@ -298,7 +298,7 @@ sys.modules['seedcore.serve.eventizer_client'] = type('MockEventizerClientModule
     'get_all_service_clients': lambda: {"eventizer": MockEventizerServiceClient()}
 })()
 
-sys.modules['seedcore.eventizer.fast_eventizer'] = type('MockFastEventizerModule', (), {
+sys.modules['seedcore.ops.eventizer.fast_eventizer'] = type('MockFastEventizerModule', (), {
     'get_fast_eventizer': get_fast_eventizer,
     'process_text_fast': process_text_fast
 })()

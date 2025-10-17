@@ -225,7 +225,7 @@ class EventizerServiceClient:
     async def _fallback_to_fast_path(self, text: str, task_type: str = "", domain: str = "") -> Dict[str, Any]:
         """Fallback to fast-path processing."""
         try:
-            from ..eventizer.fast_eventizer import process_text_fast
+            from ..ops.eventizer.fast_eventizer import process_text_fast
             self._fallback_count += 1
             logger.debug("Using fast-path fallback for eventizer processing")
             return process_text_fast(text, task_type, domain)

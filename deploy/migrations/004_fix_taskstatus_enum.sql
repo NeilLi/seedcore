@@ -79,17 +79,14 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
--- Create indexes for performance
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
-CREATE INDEX IF NOT EXISTS idx_tasks_run_after ON tasks(run_after);
-CREATE INDEX IF NOT EXISTS idx_tasks_locked_at ON tasks(locked_at);
-CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type);
-CREATE INDEX IF NOT EXISTS idx_tasks_domain ON tasks(domain);
+-- Create indexes for performance (matching model specification)
+CREATE INDEX IF NOT EXISTS ix_tasks_status_runafter ON tasks (status, run_after);
+CREATE INDEX IF NOT EXISTS ix_tasks_created_at_desc ON tasks (created_at);
+CREATE INDEX IF NOT EXISTS ix_tasks_type ON tasks (type);
+CREATE INDEX IF NOT EXISTS ix_tasks_domain ON tasks (domain);
 
--- Create composite index for the claim query
-CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks(status, run_after, created_at) 
-WHERE status IN ('queued', 'failed', 'retry');
+-- Create GIN index for params JSONB column (enables filtering into params)
+CREATE INDEX IF NOT EXISTS ix_tasks_params_gin ON tasks USING gin (params);
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_tasks_updated_at()

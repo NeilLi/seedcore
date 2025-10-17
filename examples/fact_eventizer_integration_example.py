@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List
 
 from src.seedcore.services.fact_manager import FactManager, create_fact_manager
-from src.seedcore.eventizer.schemas.eventizer_models import PKGEnv
+from src.seedcore.ops.eventizer.schemas.eventizer_models import PKGEnv
 from src.seedcore.database import get_async_pg_session_factory
 
 # Configure logging

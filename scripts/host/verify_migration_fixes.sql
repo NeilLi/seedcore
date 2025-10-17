@@ -76,20 +76,31 @@ FROM information_schema.columns
 WHERE table_name = 'tasks' 
 ORDER BY ordinal_position;
 
--- Verify critical columns exist
-SELECT 'Verifying critical columns exist:' as info;
+-- Verify critical columns exist and have correct types
+SELECT 'Verifying critical columns exist and have correct types:' as info;
 WITH required_columns AS (
-    SELECT unnest(ARRAY['id', 'status', 'type', 'attempts', 'locked_by', 'locked_at', 'run_after', 'created_at', 'updated_at']) as required_column
+    SELECT unnest(ARRAY[
+        'id', 'status', 'type', 'attempts', 'locked_by', 'locked_at', 
+        'run_after', 'created_at', 'updated_at', 'description', 'domain',
+        'drift_score', 'params', 'result', 'error'
+    ]) as required_column
 ),
 existing_columns AS (
-    SELECT column_name as existing_column
+    SELECT column_name as existing_column, data_type
     FROM information_schema.columns 
     WHERE table_name = 'tasks'
 )
 SELECT 
     r.required_column,
     CASE 
-        WHEN e.existing_column IS NOT NULL THEN '✅ EXISTS'
+        WHEN e.existing_column IS NOT NULL THEN 
+            CASE 
+                WHEN r.required_column IN ('params', 'result') AND e.data_type = 'jsonb' THEN '✅ EXISTS (JSONB)'
+                WHEN r.required_column IN ('params', 'result') AND e.data_type = 'json' THEN '⚠️  EXISTS (JSON - should be JSONB)'
+                WHEN r.required_column = 'description' AND e.data_type = 'text' THEN '✅ EXISTS (TEXT)'
+                WHEN r.required_column = 'attempts' AND e.data_type = 'integer' THEN '✅ EXISTS (INTEGER)'
+                ELSE '✅ EXISTS (' || e.data_type || ')'
+            END
         ELSE '❌ MISSING'
     END as status
 FROM required_columns r
@@ -283,10 +294,77 @@ SELECT
     'retry'::taskstatus as test_retry;
 
 -- ============================================================================
--- SECTION 7: VERIFY INDEXES
+-- SECTION 7: VERIFY JSONB CONVERSION AND CHECK CONSTRAINTS
 -- ============================================================================
 
-SELECT '🔍 SECTION 7: Verifying critical indexes' as section;
+SELECT '🔍 SECTION 7: Verifying JSONB conversion and check constraints' as section;
+
+-- Verify JSONB conversion
+SELECT 'Verifying JSONB conversion:' as info;
+SELECT 
+    column_name,
+    data_type,
+    CASE 
+        WHEN column_name IN ('params', 'result') AND data_type = 'jsonb' THEN '✅ JSONB'
+        WHEN column_name IN ('params', 'result') AND data_type = 'json' THEN '⚠️  JSON (should be JSONB)'
+        ELSE 'ℹ️  ' || data_type
+    END as jsonb_status
+FROM information_schema.columns 
+WHERE table_name = 'tasks' 
+AND column_name IN ('params', 'result')
+ORDER BY column_name;
+
+-- Verify check constraint for attempts >= 0
+SELECT 'Verifying check constraint for attempts >= 0:' as info;
+SELECT 
+    CASE 
+        WHEN EXISTS (
+            SELECT 1 FROM information_schema.check_constraints 
+            WHERE constraint_name = 'ck_tasks_attempts_nonneg'
+        ) THEN '✅ ck_tasks_attempts_nonneg constraint exists'
+        ELSE '❌ ck_tasks_attempts_nonneg constraint missing'
+    END as constraint_status;
+
+-- Test JSONB operations
+SELECT 'Testing JSONB operations:' as info;
+INSERT INTO tasks (type, status, description, params) 
+VALUES (
+    'verification_test', 
+    'created', 
+    'Test JSONB operations',
+    '{"test_key": "test_value", "confidence": 0.95}'::jsonb
+) ON CONFLICT DO NOTHING;
+
+-- Test JSONB querying
+SELECT 
+    id,
+    params->>'test_key' as test_key_value,
+    (params->>'confidence')::float as confidence_value
+FROM tasks 
+WHERE type = 'verification_test' 
+AND params ? 'test_key'
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- Test check constraint (should fail for negative attempts)
+SELECT 'Testing check constraint (should fail for negative attempts):' as info;
+DO $$
+BEGIN
+    INSERT INTO tasks (type, status, attempts) 
+    VALUES ('verification_test', 'created', -1);
+    RAISE NOTICE '❌ ERROR: Negative attempts value was allowed (constraint not working)';
+EXCEPTION
+    WHEN check_violation THEN
+        RAISE NOTICE '✅ SUCCESS: Check constraint correctly rejected negative attempts value';
+    WHEN OTHERS THEN
+        RAISE NOTICE '⚠️  UNEXPECTED ERROR: %', SQLERRM;
+END$$;
+
+-- ============================================================================
+-- SECTION 8: VERIFY INDEXES
+-- ============================================================================
+
+SELECT '🔍 SECTION 8: Verifying critical indexes' as section;
 
 -- List indexes on tasks table
 SELECT 'Indexes on tasks table:' as info;
@@ -297,10 +375,16 @@ FROM pg_indexes
 WHERE tablename = 'tasks'
 ORDER BY indexname;
 
--- Verify critical indexes exist
+-- Verify critical indexes exist (updated for new naming convention)
 SELECT 'Verifying critical indexes exist:' as info;
 WITH required_indexes AS (
-    SELECT unnest(ARRAY['idx_tasks_status', 'idx_tasks_created_at', 'idx_tasks_claim']) as required_index
+    SELECT unnest(ARRAY[
+        'ix_tasks_status_runafter', 
+        'ix_tasks_created_at_desc', 
+        'ix_tasks_type', 
+        'ix_tasks_domain',
+        'ix_tasks_params_gin'
+    ]) as required_index
 ),
 existing_indexes AS (
     SELECT indexname as existing_index
@@ -316,6 +400,19 @@ SELECT
 FROM required_indexes r
 LEFT JOIN existing_indexes e ON r.required_index = e.existing_index
 ORDER BY r.required_index;
+
+-- Check for old index naming that should be cleaned up
+SELECT 'Checking for old index naming to clean up:' as info;
+SELECT 
+    indexname,
+    CASE 
+        WHEN indexname LIKE 'idx_tasks_%' THEN '⚠️  OLD NAMING - should be cleaned up'
+        ELSE '✅ OK'
+    END as cleanup_status
+FROM pg_indexes 
+WHERE tablename = 'tasks' 
+AND indexname LIKE 'idx_tasks_%'
+ORDER BY indexname;
 
 -- ============================================================================
 -- SECTION 8: CLEANUP AND FINAL SUMMARY
@@ -348,4 +445,8 @@ ORDER BY status;
 -- Final success message
 SELECT '🎉 MIGRATION VERIFICATION COMPLETE!' as result;
 SELECT '✅ All migration fixes have been verified successfully.' as status;
-SELECT '💡 The database is ready for application use with lowercase enum values.' as next_steps;
+SELECT '✅ JSONB conversion for params and result columns verified.' as enhancement;
+SELECT '✅ New index naming convention (ix_tasks_*) verified.' as enhancement;
+SELECT '✅ Check constraint for attempts >= 0 verified.' as enhancement;
+SELECT '✅ GIN index for params JSONB column verified.' as enhancement;
+SELECT '💡 The database is ready for application use with enhanced task schema.' as next_steps;

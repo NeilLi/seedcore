@@ -14,7 +14,7 @@ import numpy as np
 from collections import deque
 
 logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"))
-logger = logging.getLogger("seedcore.energy.experiments")
+logger = logging.getLogger("seedcore.ops.energy.experiments")
 
 GATEWAY = os.environ.get("SEEDCORE_GATEWAY", "http://127.0.0.1:8000")
 ENERGY_BASE = os.environ.get("SEEDCORE_ENERGY_URL", f"{GATEWAY}/energy")

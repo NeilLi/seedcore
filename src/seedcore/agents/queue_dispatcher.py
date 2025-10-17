@@ -92,7 +92,7 @@ RETURNING t.id, t.type, t.description, t.params, t.domain, t.drift_score, t.atte
 
 COMPLETE_SQL = """
 UPDATE tasks
-SET status='completed', result=$1, error=NULL, updated_at=NOW()
+SET status='completed', result=$1::jsonb, error=NULL, updated_at=NOW()
 WHERE id=$2
 """
 
@@ -368,7 +368,12 @@ class Dispatcher:
         seen = set()
 
         for r in rows:
-            key = (r["type"], r["description"], json.dumps(r["params"], sort_keys=True), r["domain"])
+            key = (
+                r["type"] or "",
+                r["description"] or "",
+                json.dumps(r["params"] or {}, sort_keys=True, separators=(",", ":")),
+                r["domain"] or "",
+            )
             if key in seen:
                 # Cancel duplicate only within the same claim batch (not across retries)
                 await con.execute("""
@@ -526,7 +531,7 @@ class Dispatcher:
                     CALL_TIMEOUT_S = int(os.getenv("SERVE_CALL_TIMEOUT_S", "120"))
                     logger.info(f"[QueueDispatcher] 🚀 Calling coord_handle.route_and_execute.remote() for task {tid} (timeout={CALL_TIMEOUT_S}s)")
                     
-                    fut = coord_handle.route_and_execute.remote(payload)
+                    fut = coord_handle.route_and_execute.remote(payload.model_dump())
                     result: Dict[str, Any] = await asyncio.wait_for(fut, timeout=CALL_TIMEOUT_S)
                     logger.info(f"[QueueDispatcher] ✅ Received result from Coordinator for task {tid}: {result}")
                     
@@ -546,14 +551,6 @@ class Dispatcher:
                     logger.error(f"[QueueDispatcher] 📋 Exception details: {str(e)}")
                     logger.error(f"[QueueDispatcher] 🔧 Exception traceback:", exc_info=True)
                     raise
-
-                # Cancel lease renewal task
-                if lease_renewal_task:
-                    lease_renewal_task.cancel()
-                    try:
-                        await lease_renewal_task
-                    except asyncio.CancelledError:
-                        pass
 
                 # Persist results via pooled connection
                 async with self.pool.acquire() as conw:
@@ -579,7 +576,7 @@ class Dispatcher:
                             except Exception as e:
                                 logger.debug(f"Task {tid} result size check failed: {e}")
                         
-                        await conw.execute(COMPLETE_SQL, _dumps(result_data), tid)
+                        await conw.execute(COMPLETE_SQL, result_data, tid)
                         logger.info(f"[QueueDispatcher] ✅ Task {tid} completed successfully")
                         logger.info(f"[QueueDispatcher] 🎉 Task ID: {tid} | Status: COMPLETED | Type: {item['type']}")
                         self.tasks_completed.inc()
@@ -629,6 +626,12 @@ class Dispatcher:
                         logger.info(f"[QueueDispatcher] 🔁 Task ID: {tid} | Status: RETRY | Dispatcher Error | Attempts: {attempts}/{max_attempts} | Delay: {delay}s")
                         self.tasks_retried.inc()
             finally:
+                # Cancel lease renewal task
+                if lease_renewal_task:
+                    lease_renewal_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await lease_renewal_task
+                
                 # help GC drop references quickly
                 try:
                     del payload
@@ -735,7 +738,6 @@ class Dispatcher:
                 
         except Exception as e:
             logger.error(f"[QueueDispatcher] ❌ Failed to get Coordinator handle: {e}")
-            logger.error(f"[QueueDispatcher] 🔧 Available deployments: {serve.list_deployments()}")
             raise
 
         # LISTEN/NOTIFY connection (better batching)
@@ -1047,7 +1049,9 @@ class Reaper:
         while not self._stop.is_set():
             try:
                 async with self.pool.acquire() as con:
-                    rows = await con.fetch(REAP_STUCK_SQL)
+                    grace_period = str(TASK_STALE_S)          # seconds as string (matches Dispatcher watchdog)
+                    max_attempts = int(os.getenv("MAX_TASK_ATTEMPTS", "3"))
+                    rows = await con.fetch(REAP_STUCK_SQL, grace_period, max_attempts)
                     if rows:
                         logger.warning("Reaper returned %d stuck tasks to RETRY", len(rows))
             except Exception:

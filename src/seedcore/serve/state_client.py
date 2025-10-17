@@ -24,13 +24,13 @@ class StateServiceClient(BaseServiceClient):
     def __init__(self, 
                  base_url: str = None, 
                  timeout: float = 8.0):
-        # Use centralized gateway discovery
+        # Use centralized gateway discovery (state service now under /ops)
         if base_url is None:
             try:
                 from seedcore.utils.ray_utils import SERVE_GATEWAY
-                base_url = f"{SERVE_GATEWAY}/state"
+                base_url = f"{SERVE_GATEWAY}/ops"
             except Exception:
-                base_url = "http://127.0.0.1:8000/state"
+                base_url = "http://127.0.0.1:8000/ops"
         
         # Configure circuit breaker for state service
         circuit_breaker = CircuitBreaker(

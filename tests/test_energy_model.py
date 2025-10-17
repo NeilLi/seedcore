@@ -26,7 +26,7 @@ if not hasattr(ray, 'get') or not hasattr(ray, 'remote'):
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.seedcore.energy.calculator import (
+from src.seedcore.ops.energy.calculator import (
     EnergyLedger,
     EnergyTerms,
     calculate_energy,
@@ -36,7 +36,7 @@ from src.seedcore.energy.calculator import (
     on_state_update,
     on_mem_event
 )
-from src.seedcore.energy.optimizer import (
+from src.seedcore.ops.energy.optimizer import (
     score_agent,
     select_best_agent,
     get_ideal_role_for_task,

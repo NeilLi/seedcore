@@ -38,7 +38,7 @@ from ..models.state import (
     SystemState, 
     MemoryVector
 )
-from ..state import (
+from ..ops.state import (
     AgentStateAggregator,
     MemoryManagerAggregator,
     SystemStateAggregator

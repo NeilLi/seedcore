@@ -64,7 +64,7 @@ curl http://localhost:8002/energy/gradient
 The enhanced `EnergyLedger` class now includes history tracking. Test it:
 
 ```python
-from seedcore.energy.ledger import EnergyLedger
+from seedcore.ops.energy.ledger import EnergyLedger
 
 # Create a ledger instance
 ledger = EnergyLedger()
@@ -151,7 +151,7 @@ The enhanced experimental harness is now available. Test it:
 ```python
 from seedcore.experiments.harness import EnergyValidationHarness
 from seedcore.organs.organism_manager import organism_manager
-from seedcore.energy.api import _ledger
+from seedcore.ops.energy.api import _ledger
 
 # Create harness instance
 harness = EnergyValidationHarness(organism_manager, _ledger)
@@ -218,7 +218,7 @@ curl -s http://localhost:8002/energy/gradient | jq '.E_terms | keys'
 
 ```python
 # Test that energy updates are tracked in history
-from seedcore.energy.api import _ledger
+from seedcore.ops.energy.api import _ledger
 
 # Reset ledger
 _ledger.reset()

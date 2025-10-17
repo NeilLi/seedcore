@@ -28,7 +28,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from ..models.state import UnifiedState, AgentSnapshot, OrganState, SystemState, MemoryVector
-from ..energy.calculator import (
+from ..ops.energy.calculator import (
     compute_energy,
     energy_and_grad,
     entropy_of_roles,
@@ -38,9 +38,9 @@ from ..energy.calculator import (
     SystemParameters,
     EnergyResult,
 )
-from ..energy.weights import EnergyWeights, adapt_energy_weights
-from ..energy.ledger import EnergyLedger, EnergyTerms
-from ..energy.optimizer import (
+from ..ops.energy.weights import EnergyWeights, adapt_energy_weights
+from ..ops.energy.ledger import EnergyLedger, EnergyTerms
+from ..ops.energy.optimizer import (
     calculate_agent_suitability_score,
     select_best_agent,
     rank_agents_by_suitability,
