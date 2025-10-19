@@ -104,6 +104,43 @@ class AsyncGraphRepo:
 
 
 @pytest.mark.asyncio
+async def test_process_task_persists_before_routing():
+    """Coordinator.process_task must persist tasks before routing."""
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    coordinator._ensure_background_tasks_started = AsyncMock()
+
+    repo = SimpleNamespace()
+    repo.create_task = AsyncMock(return_value=uuid.uuid4())
+
+    coordinator.graph_task_repo = None
+    coordinator._get_graph_repository = MagicMock(return_value=repo)
+
+    async def fake_route(task_payload):
+        # Repository insert must have completed before routing
+        assert repo.create_task.await_count == 1
+        return {"success": True, "payload": {"task_id": task_payload.task_id}}
+
+    coordinator.core = SimpleNamespace(
+        route_and_execute=AsyncMock(side_effect=fake_route)
+    )
+
+    payload = {
+        "type": "test_task",
+        "params": {"agent_id": "agent-42"},
+        "description": "ensure persistence",
+        "task_id": "task-123",
+    }
+
+    result = await coordinator.process_task(payload)
+
+    assert repo.create_task.await_count == 1
+    assert coordinator.core.route_and_execute.await_count == 1
+    assert result["success"] is True
+
+
+@pytest.mark.asyncio
 async def test_drift_fallback_heuristic_when_ml_unavailable(monkeypatch):
     """Test the fallback drift score calculation when ML service is unavailable."""
     # Create a mock coordinator that bypasses the Ray Serve decorator

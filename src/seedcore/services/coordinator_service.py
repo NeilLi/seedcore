@@ -2488,9 +2488,40 @@ class Coordinator:
                     payload["task_id"] = str(payload["id"])
                 else:
                     payload["task_id"] = uuid.uuid4().hex
+
             task_obj = TaskPayload.model_validate(payload)
+            task_dict = task_obj.model_dump()
+            task_dict.setdefault("id", task_obj.task_id)
+
+            repo = self.graph_task_repo or self._get_graph_repository()
+            self.graph_task_repo = repo
+
+            if repo is None or not hasattr(repo, "create_task"):
+                message = (
+                    f"[Coordinator] Task repository unavailable; cannot persist task {task_obj.task_id}"
+                )
+                logger.warning(message)
+                raise HTTPException(status_code=503, detail="Task metadata repository unavailable")
+
+            agent_id: Optional[str] = None
+            params = task_dict.get("params")
+            if isinstance(params, dict):
+                agent_id = params.get("agent_id")
+
+            try:
+                await repo.create_task(task_dict, agent_id=agent_id)
+            except Exception as persist_exc:
+                logger.warning(
+                    "[Coordinator] Failed to persist incoming task %s: %s",
+                    task_obj.task_id,
+                    persist_exc,
+                )
+                raise HTTPException(status_code=503, detail="Failed to persist task metadata") from persist_exc
+
             res = await self.core.route_and_execute(task_obj)
             return res
+        except HTTPException:
+            raise
         except Exception as e:
             logger.exception(f"[Coordinator] process_task failed: {e}")
             return err(str(e), "coordinator_error")
