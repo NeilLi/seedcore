@@ -22,6 +22,10 @@ from .database import get_async_pg_engine  # must return postgresql+asyncpg engi
 from .models.task import Base as TaskBase
 from .models.fact import Base as FactBase
 from .api.routers.tasks_router import router as tasks_router, _task_worker
+from .graph.task_embedding_worker import (
+    task_embedding_backfill_loop,
+    task_embedding_worker,
+)
 from .api.routers.control_router import router as control_router
 
 ENABLE_ENV_ENDPOINT = os.getenv("ENABLE_DEBUG_ENV", "false").lower() in ("1","true","yes")
@@ -61,11 +65,19 @@ async def lifespan(app: FastAPI):
     await _verify_graph_node_support(engine)
     logger.info("Database initialized successfully")
     
-    # Initialize task queue and start background worker
+    # Initialize task queue and start background workers
     if not hasattr(app.state, "task_queue"):
         app.state.task_queue = asyncio.Queue()
     app.state.worker_task = asyncio.create_task(_task_worker(app.state))
     logger.info("Background task worker started")
+
+    if not hasattr(app.state, "task_embedding_queue"):
+        app.state.task_embedding_queue = asyncio.Queue()
+        app.state.task_embedding_pending = set()
+        app.state.task_embedding_pending_lock = asyncio.Lock()
+    app.state.task_embedding_worker = asyncio.create_task(task_embedding_worker(app.state))
+    app.state.task_embedding_backfill = asyncio.create_task(task_embedding_backfill_loop(app.state))
+    logger.info("Task embedding workers started")
     
     logger.info("SeedCore API application startup complete")
     yield
@@ -73,7 +85,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down SeedCore API application...")
     
-    # Cancel background worker
+    # Cancel background workers
     if hasattr(app.state, "worker_task"):
         logger.info("Stopping background task worker...")
         app.state.worker_task.cancel()
@@ -82,6 +94,23 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         logger.info("Background task worker stopped")
+
+    if hasattr(app.state, "task_embedding_backfill"):
+        logger.info("Stopping task embedding backfill...")
+        app.state.task_embedding_backfill.cancel()
+        try:
+            await app.state.task_embedding_backfill
+        except asyncio.CancelledError:
+            pass
+
+    if hasattr(app.state, "task_embedding_worker"):
+        logger.info("Stopping task embedding worker...")
+        app.state.task_embedding_worker.cancel()
+        try:
+            await app.state.task_embedding_worker
+        except asyncio.CancelledError:
+            pass
+        logger.info("Task embedding worker stopped")
     
     # Dispose database engine
     eng: AsyncEngine = app.state.db_engine

@@ -21,6 +21,7 @@ from ...models.result_schema import (
 from ...serve.eventizer_client import EventizerServiceClient
 from ...serve.coordinator_client import CoordinatorServiceClient
 from ...ops.eventizer.fast_eventizer import process_text_fast
+from ...graph.task_embedding_worker import enqueue_task_embedding_job
 
 router = APIRouter()
 
@@ -635,6 +636,8 @@ async def create_task(
     await session.commit()
     # --- OPTIMIZED: Use refresh to get DB-generated fields like created_at/id ---
     await session.refresh(new_task)
+
+    await enqueue_task_embedding_job(request.app.state, new_task.id, reason="create")
 
     if run_immediately:
         await task_queue.put(new_task.id)
