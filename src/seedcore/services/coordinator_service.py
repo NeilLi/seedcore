@@ -2,7 +2,7 @@
 import os, time, uuid, httpx, asyncio, random, inspect
 import math
 from fastapi import FastAPI, HTTPException
-from typing import Dict, Any, List, Optional, Iterable, Set, Tuple, NamedTuple, Sequence, Callable, Awaitable, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, Iterable, Set, Tuple, NamedTuple, Sequence, Callable, Awaitable, Mapping, TYPE_CHECKING
 from urllib.parse import urlparse
 from pathlib import Path
 from ray import serve
@@ -31,6 +31,8 @@ from seedcore.ops.eventizer.fact_dao import FactDAO
 from seedcore.ops.eventizer.eventizer_features import (
     features_from_payload as default_features_from_payload,
 )
+
+from collections.abc import Mapping as _MappingABC
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -110,11 +112,13 @@ class TaskRouterTelemetryDAO:
         )
 
 
+MAX_PROTO_PLAN_BYTES = 256 * 1024
+
+
 class TaskOutboxDAO:
     """DAO for writing coordinator outbox events."""
 
-    def __init__(self, table_name: str = "task_outbox") -> None:
-        self._table_name = table_name
+    _TABLE_NAME = "task_outbox"
 
     async def enqueue_embed_task(
         self,
@@ -123,30 +127,101 @@ class TaskOutboxDAO:
         task_id: str,
         reason: str = "coordinator",
         dedupe_key: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
         payload = {"reason": reason, "task_id": task_id}
+        encoded_payload = json.dumps(payload, sort_keys=True)
+        if len(encoded_payload.encode("utf-8")) > MAX_PROTO_PLAN_BYTES:
+            logger.warning(
+                "[Coordinator] Outbox payload for %s exceeded %s bytes; truncating",
+                task_id,
+                MAX_PROTO_PLAN_BYTES,
+            )
+            encoded_payload = json.dumps(
+                {
+                    "reason": reason,
+                    "task_id": task_id,
+                    "_truncated": True,
+                },
+                sort_keys=True,
+            )
         stmt = text(
-            f"""
-            INSERT INTO {self._table_name} (task_id, event_type, payload, dedupe_key)
+            """
+            INSERT INTO task_outbox (task_id, event_type, payload, dedupe_key)
             VALUES (:task_id::uuid, :event_type, :payload::jsonb, :dedupe_key)
             ON CONFLICT (dedupe_key) DO NOTHING
+            """
+        )
+        result = await session.execute(
+            stmt,
+            {
+                "task_id": task_id,
+                "event_type": "embed_task",
+                "payload": encoded_payload,
+                "dedupe_key": dedupe_key,
+            },
+        )
+        return bool(getattr(result, "rowcount", 0))
+
+
+class TaskProtoPlanDAO:
+    """DAO for persisting proto-plan payloads for downstream workers."""
+
+    _TABLE_NAME = "task_proto_plan"
+
+    async def upsert(
+        self,
+        session,
+        *,
+        task_id: str,
+        route: str,
+        proto_plan: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        serialized = json.dumps(proto_plan, sort_keys=True)
+        encoded = serialized.encode("utf-8")
+        truncated = False
+        if len(encoded) > MAX_PROTO_PLAN_BYTES:
+            truncated = True
+            logger.warning(
+                "[Coordinator] Proto-plan for %s exceeded %s bytes (got %s); truncating",
+                task_id,
+                MAX_PROTO_PLAN_BYTES,
+                len(encoded),
+            )
+            preview = encoded[: MAX_PROTO_PLAN_BYTES - 128].decode("utf-8", "ignore")
+            proto_plan = {
+                "_truncated": True,
+                "size_bytes": len(encoded),
+                "preview": preview,
+            }
+            serialized = json.dumps(proto_plan, sort_keys=True)
+
+        stmt = text(
+            """
+            INSERT INTO task_proto_plan (task_id, route, proto_plan)
+            VALUES (:task_id::uuid, :route, :proto_plan::jsonb)
+            ON CONFLICT (task_id) DO UPDATE
+            SET route = EXCLUDED.route,
+                proto_plan = EXCLUDED.proto_plan
             """
         )
         await session.execute(
             stmt,
             {
                 "task_id": task_id,
-                "event_type": "embed_task",
-                "payload": json.dumps(payload, sort_keys=True),
-                "dedupe_key": dedupe_key,
+                "route": route,
+                "proto_plan": serialized,
             },
         )
+        if truncated:
+            return {"truncated": True}
+        return {"truncated": False}
 
 
 from seedcore.logging_setup import ensure_serve_logger
 from seedcore.models.result_schema import (
     create_fast_path_result, create_escalated_result, create_error_result
 )
+from seedcore.graph.task_repository import GraphTaskSqlRepository
 
 logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
 
@@ -428,7 +503,19 @@ class MetricsTracker:
             "escalation_failures": 0,
             "fast_path_latency_ms": [],
             "hgnn_latency_ms": [],
-            "escalation_latency_ms": []
+            "escalation_latency_ms": [],
+            # Persistence / dispatch metrics
+            "proto_plan_upsert_ok_total": 0,
+            "proto_plan_upsert_err_total": 0,
+            "proto_plan_upsert_truncated_total": 0,
+            "outbox_embed_enqueue_ok_total": 0,
+            "outbox_embed_enqueue_dup_total": 0,
+            "outbox_embed_enqueue_err_total": 0,
+            "dispatch_planner_ok_total": 0,
+            "dispatch_planner_err_total": 0,
+            "dispatch_hgnn_ok_total": 0,
+            "dispatch_hgnn_err_total": 0,
+            "route_and_execute_latency_ms": [],
         }
     
     def track_routing_decision(self, decision: str, has_plan: bool = False):
@@ -467,7 +554,28 @@ class MetricsTracker:
         elif path == "escalation_failure":
             self._task_metrics["escalation_failures"] += 1
             self._task_metrics["escalation_latency_ms"].append(latency_ms)
-    
+
+    def record_proto_plan_upsert(self, status: str):
+        key = f"proto_plan_upsert_{status}_total"
+        if key not in self._task_metrics:
+            return
+        self._task_metrics[key] += 1
+
+    def record_outbox_enqueue(self, status: str):
+        key = f"outbox_embed_enqueue_{status}_total"
+        if key not in self._task_metrics:
+            return
+        self._task_metrics[key] += 1
+
+    def record_dispatch(self, route: str, status: str):
+        key = f"dispatch_{route}_{status}_total"
+        if key not in self._task_metrics:
+            return
+        self._task_metrics[key] += 1
+
+    def record_route_latency(self, latency_ms: float):
+        self._task_metrics["route_and_execute_latency_ms"].append(latency_ms)
+
     def get_metrics(self) -> Dict[str, Any]:
         """Get current task execution metrics."""
         metrics = self._task_metrics.copy()
@@ -1174,6 +1282,7 @@ class Coordinator:
             self._session_factory = None
         self.telemetry_dao = TaskRouterTelemetryDAO()
         self.outbox_dao = TaskOutboxDAO()
+        self.proto_plan_dao = TaskProtoPlanDAO()
 
         # Tiny TTL route cache with single-flight
         self.route_cache = RouteCache(
@@ -1196,6 +1305,8 @@ class Coordinator:
         self.graph_repository = None  # Lazily instantiated GraphTaskRepository
         self._graph_repo_checked = False
         self.graph_task_repo = self._get_graph_repository()  # Consistent attribute name
+        self._graph_sql_repo = None
+        self._graph_sql_repo_checked = False
 
         
         # Initialize safe storage (Redis with in-memory fallback)
@@ -1222,6 +1333,9 @@ class Coordinator:
         # Configuration
         self.fast_path_latency_slo_ms = FAST_PATH_LATENCY_SLO_MS
         self.max_plan_steps = MAX_PLAN_STEPS
+
+        # Downstream clients (optional; may be injected by environment/tests)
+        self.planner_client = None
         
         # Initialize predicate system synchronously first
         try:
@@ -2652,17 +2766,280 @@ class Coordinator:
                             eventizer_helper=default_features_from_payload,
                         )
 
+            decision = self._extract_decision(res)
+            proto_plan = self._extract_proto_plan(res)
+
+            if proto_plan:
+                try:
+                    await self._persist_proto_plan(
+                        self.graph_task_repo,
+                        payload.task_id,
+                        decision,
+                        proto_plan,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[Coordinator] Failed to persist proto-plan for %s: %s",
+                        payload.task_id,
+                        exc,
+                    )
+
+            followup_metadata: Optional[Dict[str, Any]] = None
+            if decision in {"planner", "hgnn"}:
+                try:
+                    followup_metadata = await self._dispatch_route_followup(
+                        decision,
+                        payload,
+                        proto_plan,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[Coordinator] Post-route dispatch failed for %s (%s): %s",
+                        payload.task_id,
+                        decision,
+                        exc,
+                    )
+
+            if followup_metadata:
+                res.setdefault("payload", {}).setdefault("metadata", {}).update(followup_metadata)
+
             # Track metrics
             latency_ms = (time.perf_counter() - start_time) * 1000
-            decision = res.get("payload", {}).get("decision", "unknown")
+            decision = self._extract_decision(res) or "unknown"
+            self.metrics.record_route_latency(latency_ms)
             self.metrics.track_metrics(decision, res.get("success", False), latency_ms)
-            
+
             return res
         except Exception as e:
             latency_ms = (time.perf_counter() - start_time) * 1000
+            self.metrics.record_route_latency(latency_ms)
             self.metrics.track_metrics("error", False, latency_ms)
             logger.exception(f"[Coordinator] route_and_execute failed: {e}")
             return err(str(e), "coordinator_error")
+
+    def _extract_proto_plan(self, route_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(route_result, dict):
+            return None
+        payload = route_result.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        proto_plan = metadata.get("proto_plan")
+        return proto_plan if isinstance(proto_plan, dict) else None
+
+    def _extract_decision(self, route_result: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(route_result, dict):
+            return None
+        payload = route_result.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            decision = metadata.get("decision")
+            if isinstance(decision, str):
+                return decision
+        decision = payload.get("decision")
+        if isinstance(decision, str):
+            return decision
+        return None
+
+    async def _persist_proto_plan(
+        self,
+        repo: Optional[Any],
+        task_id: str,
+        decision: Optional[str],
+        proto_plan: Optional[Dict[str, Any]],
+    ) -> None:
+        if proto_plan is None:
+            return
+        dao = getattr(self, "proto_plan_dao", None)
+        if dao is None:
+            return
+        session_factory = self._resolve_session_factory(repo)
+        if session_factory is None:
+            return
+        metrics = getattr(self, "metrics", None)
+        try:
+            async with session_factory() as session:
+                async with session.begin():
+                    result = await dao.upsert(
+                        session,
+                        task_id=str(task_id),
+                        route=decision or "unknown",
+                        proto_plan=proto_plan,
+                    )
+            if metrics is not None:
+                status = "truncated" if result.get("truncated") else "ok"
+                metrics.record_proto_plan_upsert(status)
+        except Exception as exc:
+            logger.debug(
+                "[Coordinator] Skipping proto-plan persistence for %s: %s",
+                task_id,
+                exc,
+            )
+            if metrics is not None:
+                metrics.record_proto_plan_upsert("err")
+
+    async def _dispatch_route_followup(
+        self,
+        decision: str,
+        task: "TaskPayload",
+        proto_plan: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if decision == "planner":
+            return await self._dispatch_planner(task, proto_plan)
+        if decision == "hgnn":
+            return await self._dispatch_hgnn(task, proto_plan)
+        return None
+
+    async def _dispatch_planner(
+        self,
+        task: "TaskPayload",
+        proto_plan: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        planner = getattr(self, "planner_client", None)
+        if planner is None or not hasattr(planner, "execute_plan"):
+            logger.debug("[Coordinator] Planner client unavailable; skipping planner dispatch")
+            return None
+        try:
+            planner_result = await _maybe_call(
+                planner.execute_plan,
+                task=task.model_dump(),
+                proto_plan=proto_plan,
+            )
+            metrics = getattr(self, "metrics", None)
+            if metrics is not None:
+                metrics.record_dispatch("planner", "ok")
+        except Exception as exc:
+            logger.warning(
+                "[Coordinator] Planner dispatch failed for %s: %s",
+                task.task_id,
+                exc,
+            )
+            metrics = getattr(self, "metrics", None)
+            if metrics is not None:
+                metrics.record_dispatch("planner", "err")
+            return {"planner_error": str(exc)}
+        return {"planner_response": planner_result}
+
+    async def _dispatch_hgnn(
+        self,
+        task: "TaskPayload",
+        proto_plan: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if proto_plan is None:
+            return None
+        repo = self._get_graph_sql_repository()
+        if repo is None or not hasattr(repo, "create_task_async"):
+            logger.debug("[Coordinator] Graph SQL repository unavailable; skipping HGNN dispatch")
+            return None
+
+        tasks = proto_plan.get("tasks") if isinstance(proto_plan, dict) else None
+        if not isinstance(tasks, Iterable):
+            return None
+
+        agent_id = None
+        try:
+            agent_id = task.params.get("agent_id") if isinstance(task.params, dict) else None
+        except Exception:
+            agent_id = None
+
+        created: List[Dict[str, Any]] = []
+        had_error = False
+        allowed_types = {
+            "graph_embed": "graph_embed",
+            "graph_rag_query": "graph_rag_query",
+            "graph_rag_seed": "graph_rag_query",
+        }
+        for entry in tasks:
+            if not isinstance(entry, dict):
+                continue
+            task_type = (entry.get("type") or "").strip().lower()
+            if task_type not in allowed_types:
+                logger.debug(
+                    "[Coordinator] Skipping unsupported HGNN task type '%s' for %s",
+                    task_type,
+                    task.task_id,
+                )
+                continue
+
+            raw_params = entry.get("params")
+            if isinstance(raw_params, _MappingABC):
+                params = dict(raw_params)
+            elif isinstance(raw_params, Mapping):
+                params = dict(raw_params)  # type: ignore[arg-type]
+            else:
+                params = {}
+            description = entry.get("description")
+            if not isinstance(description, str):
+                description = None
+
+            target_type = allowed_types[task_type]
+
+            if task_type == "graph_embed":
+                try:
+                    graph_task_id = await repo.create_task_async(
+                        target_type,
+                        params,
+                        description,
+                        agent_id=agent_id,
+                        organ_id=params.get("organ_id"),
+                    )
+                    created.append({
+                        "type": target_type,
+                        "task_id": str(graph_task_id),
+                    })
+                except Exception as exc:
+                    logger.warning(
+                        "[Coordinator] Failed to create graph_embed task for %s: %s",
+                        task.task_id,
+                        exc,
+                    )
+                    had_error = True
+            elif task_type in {"graph_rag_query", "graph_rag_seed"}:
+                try:
+                    graph_task_id = await repo.create_task_async(
+                        target_type,
+                        params,
+                        description,
+                        agent_id=agent_id,
+                        organ_id=params.get("organ_id"),
+                    )
+                    created.append({
+                        "type": target_type,
+                        "task_id": str(graph_task_id),
+                    })
+                except Exception as exc:
+                    logger.warning(
+                        "[Coordinator] Failed to create graph_rag task for %s: %s",
+                        task.task_id,
+                        exc,
+                    )
+                    had_error = True
+
+        metrics = getattr(self, "metrics", None)
+        if not created:
+            if metrics is not None:
+                metrics.record_dispatch("hgnn", "err" if had_error else "ok")
+            return None
+        if metrics is not None:
+            metrics.record_dispatch("hgnn", "ok" if not had_error else "err")
+        return {"graph_dispatch": {"graph_tasks": created}}
+
+    def _get_graph_sql_repository(self) -> Optional[GraphTaskSqlRepository]:
+        if getattr(self, "_graph_sql_repo", None) is not None:
+            return self._graph_sql_repo
+        if getattr(self, "_graph_sql_repo_checked", False):
+            return None
+        self._graph_sql_repo_checked = True
+        try:
+            self._graph_sql_repo = GraphTaskSqlRepository()
+        except Exception as exc:
+            logger.debug(f"[Coordinator] GraphTaskSqlRepository unavailable: {exc}")
+            self._graph_sql_repo = None
+        return self._graph_sql_repo
 
     @app.post(f"{router_prefix}/route-and-execute")
     async def route_and_execute_http(self, task: TaskPayload):
@@ -2739,6 +3116,7 @@ class Coordinator:
             return
 
         dedupe_key = f"{task_id}:task.primary"
+        metrics = getattr(self, "metrics", None)
         try:
             async with session_factory() as session:
                 async with session.begin():
@@ -2755,18 +3133,22 @@ class Coordinator:
                         ocps_metadata=ocps_metadata,
                         chosen_route=str(decision),
                     )
-                    await outbox_dao.enqueue_embed_task(
+                    inserted = await outbox_dao.enqueue_embed_task(
                         session,
                         task_id=str(task_id),
                         reason="router",
                         dedupe_key=dedupe_key,
                     )
+                    if metrics is not None:
+                        metrics.record_outbox_enqueue("ok" if inserted else "dup")
         except Exception as exc:
             logger.warning(
                 "[Coordinator] Failed to persist router telemetry/outbox for %s: %s",
                 task_id,
                 exc,
             )
+            if metrics is not None:
+                metrics.record_outbox_enqueue("err")
             raise
 
         await self._enqueue_task_embedding_now(task_id)
@@ -2782,23 +3164,37 @@ class Coordinator:
             )
             return False
 
-        try:
-            return await asyncio.wait_for(
-                enqueue_task_embedding_job(app.state, task_id, reason=reason),
-                timeout=5.0,
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "[Coordinator] Embedding worker timed out while enqueuing task %s", task_id
-            )
-            return False
-        except Exception as exc:
-            logger.warning(
-                "[Coordinator] Failed to hand task %s to embedding worker: %s",
+        last_exc: Optional[BaseException] = None
+        for attempt in range(2):
+            try:
+                return await asyncio.wait_for(
+                    enqueue_task_embedding_job(app.state, task_id, reason=reason),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError as exc:
+                last_exc = exc
+                logger.warning(
+                    "[Coordinator] Embedding worker timed out (attempt %s) while enqueuing task %s",
+                    attempt + 1,
+                    task_id,
+                )
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "[Coordinator] Failed to hand task %s to embedding worker on attempt %s: %s",
+                    task_id,
+                    attempt + 1,
+                    exc,
+                )
+            await asyncio.sleep(0)
+
+        if last_exc is not None:
+            logger.debug(
+                "[Coordinator] Falling back to outbox for task %s after enqueue failures: %s",
                 task_id,
-                exc,
+                last_exc,
             )
-            return False
+        return False
 
     @app.post(f"{router_prefix}/process-task")
     async def process_task(self, payload: Dict[str, Any]):
