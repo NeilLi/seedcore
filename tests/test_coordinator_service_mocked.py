@@ -1,13 +1,68 @@
 # tests/test_coordinator_service.py
 import asyncio
+import sys
 import uuid
-from types import SimpleNamespace
+from types import SimpleNamespace, ModuleType
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
 # Adjust this import path if your repository structure differs:
 import seedcore.services.coordinator_service as cs
+
+
+class StubAsyncTransaction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class StubAsyncSession:
+    def __init__(self):
+        self._execute_side_effect = None
+        self._execute_calls = []
+        async def _run(stmt, params=None):
+            self._execute_calls.append((stmt, params))
+            if self._execute_side_effect:
+                if isinstance(self._execute_side_effect, Exception):
+                    raise self._execute_side_effect
+                if callable(self._execute_side_effect):
+                    return await self._execute_side_effect(stmt, params)
+            return None
+
+        self.execute = AsyncMock(side_effect=_run)
+        self.begin_calls = 0
+
+    def begin(self):
+        self.begin_calls += 1
+        return StubAsyncTransaction()
+
+    @property
+    def execute_calls(self):
+        return list(self._execute_calls)
+
+    def set_execute_side_effect(self, exc):
+        self._execute_side_effect = exc
+
+
+class StubSessionContext:
+    def __init__(self, session):
+        self._session = session
+
+    async def __aenter__(self):
+        return self._session
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+def make_session_factory(session):
+    def factory():
+        return StubSessionContext(session)
+
+    return factory
 
 
 @pytest.fixture
@@ -114,13 +169,33 @@ async def test_process_task_persists_before_routing():
     repo = SimpleNamespace()
     repo.create_task = AsyncMock(return_value=uuid.uuid4())
 
+    session = StubAsyncSession()
+    session_factory = make_session_factory(session)
+    repo._session_factory = session_factory
+
     coordinator.graph_task_repo = None
     coordinator._get_graph_repository = MagicMock(return_value=repo)
+    coordinator.telemetry_dao = SimpleNamespace(insert=AsyncMock())
+    coordinator.outbox_dao = SimpleNamespace(enqueue_embed_task=AsyncMock())
+    coordinator._enqueue_task_embedding_now = AsyncMock(return_value=True)
+    coordinator._session_factory = session_factory
 
     async def fake_route(task_payload):
         # Repository insert must have completed before routing
         assert repo.create_task.await_count == 1
-        return {"success": True, "payload": {"task_id": task_payload.task_id}}
+        return {
+            "success": True,
+            "payload": {
+                "task_id": task_payload.task_id,
+                "decision": "fast",
+                "surprise": {
+                    "S": 0.42,
+                    "x": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+                    "weights": [0.1, 0.1, 0.2, 0.2, 0.2, 0.2],
+                    "ocps": {"S_t": 1.0},
+                },
+            },
+        }
 
     coordinator.core = SimpleNamespace(
         route_and_execute=AsyncMock(side_effect=fake_route)
@@ -138,8 +213,183 @@ async def test_process_task_persists_before_routing():
     assert repo.create_task.await_count == 1
     assert coordinator.core.route_and_execute.await_count == 1
     assert result["success"] is True
+    assert coordinator.telemetry_dao.insert.await_count == 1
+    assert coordinator.outbox_dao.enqueue_embed_task.await_count == 1
+    outbox_call = coordinator.outbox_dao.enqueue_embed_task.await_args
+    assert outbox_call.kwargs["dedupe_key"] == f"{payload['task_id']}:task.primary"
+    assert coordinator._enqueue_task_embedding_now.await_count == 1
+    assert any(
+        "ensure_task_node" in str(call[0]) for call in session.execute_calls
+    )
+    assert session.begin_calls == 1
 
 
+@pytest.mark.asyncio
+async def test_process_task_records_router_telemetry_payload():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    coordinator._ensure_background_tasks_started = AsyncMock()
+
+    repo = SimpleNamespace()
+    repo.create_task = AsyncMock(return_value=uuid.uuid4())
+
+    session = StubAsyncSession()
+    session_factory = make_session_factory(session)
+    repo._session_factory = session_factory
+
+    coordinator.graph_task_repo = None
+    coordinator._get_graph_repository = MagicMock(return_value=repo)
+
+    telemetry_mock = AsyncMock()
+    outbox_mock = AsyncMock()
+
+    coordinator.telemetry_dao = SimpleNamespace(insert=telemetry_mock)
+    coordinator.outbox_dao = SimpleNamespace(enqueue_embed_task=outbox_mock)
+    coordinator._enqueue_task_embedding_now = AsyncMock(return_value=True)
+    coordinator._session_factory = session_factory
+
+    surprise_score = 0.37
+    x_values = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+    weights = [0.2, 0.1, 0.2, 0.15, 0.15, 0.2]
+    ocps_meta = {"flag_on": True, "S_t": 1.2}
+
+    async def fake_route(task_payload):
+        return {
+            "success": True,
+            "payload": {
+                "task_id": task_payload.task_id,
+                "decision": "fast",
+                "surprise": {
+                    "S": surprise_score,
+                    "x": x_values,
+                    "weights": weights,
+                    "ocps": ocps_meta,
+                },
+            },
+        }
+
+    coordinator.core = SimpleNamespace(
+        route_and_execute=AsyncMock(side_effect=fake_route)
+    )
+
+    task_id = "task-telemetry"
+    payload = {
+        "type": "test_task",
+        "params": {"agent_id": "agent-telemetry"},
+        "description": "ensure telemetry payload",
+        "task_id": task_id,
+    }
+
+    await coordinator.process_task(payload)
+
+    telemetry_call = telemetry_mock.await_args
+    assert telemetry_call.kwargs["task_id"] == task_id
+    assert telemetry_call.kwargs["surprise_score"] == pytest.approx(surprise_score)
+    assert telemetry_call.kwargs["x_vector"] == x_values
+    assert telemetry_call.kwargs["weights"] == weights
+    assert telemetry_call.kwargs["ocps_metadata"] == ocps_meta
+    assert telemetry_call.kwargs["chosen_route"] == "fast"
+
+    outbox_call = outbox_mock.await_args
+    assert outbox_call.kwargs["task_id"] == task_id
+    assert outbox_call.kwargs["reason"] == "router"
+    assert outbox_call.kwargs["dedupe_key"] == f"{task_id}:task.primary"
+
+
+@pytest.mark.asyncio
+async def test_router_telemetry_outbox_failure_rolls_back(monkeypatch):
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    coordinator._ensure_background_tasks_started = AsyncMock()
+
+    repo = SimpleNamespace()
+    repo.create_task = AsyncMock(return_value=uuid.uuid4())
+
+    session = StubAsyncSession()
+    session_factory = make_session_factory(session)
+    repo._session_factory = session_factory
+
+    coordinator.graph_task_repo = None
+    coordinator._get_graph_repository = MagicMock(return_value=repo)
+
+    telemetry_mock = AsyncMock()
+    outbox_mock = AsyncMock(side_effect=RuntimeError("fail outbox"))
+
+    coordinator.telemetry_dao = SimpleNamespace(insert=telemetry_mock)
+    coordinator.outbox_dao = SimpleNamespace(enqueue_embed_task=outbox_mock)
+    coordinator._enqueue_task_embedding_now = AsyncMock(return_value=True)
+    coordinator._session_factory = session_factory
+
+    async def fake_route(task_payload):
+        return {
+            "success": True,
+            "payload": {
+                "task_id": task_payload.task_id,
+                "decision": "fast",
+                "surprise": {
+                    "S": 0.9,
+                    "x": [0.1] * 6,
+                    "weights": [0.2] * 5 + [0.0],
+                    "ocps": {},
+                },
+            },
+        }
+
+    coordinator.core = SimpleNamespace(
+        route_and_execute=AsyncMock(side_effect=fake_route)
+    )
+
+    payload = {
+        "type": "test_task",
+        "description": "rollback",
+        "task_id": "task-rollback",
+    }
+
+    result = await coordinator.process_task(payload)
+
+    assert result["success"] is True
+    assert telemetry_mock.await_count == 1
+    assert outbox_mock.await_count == 1
+    assert coordinator._enqueue_task_embedding_now.await_count == 0
+    assert session.begin_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_enqueue_task_embedding_now_handles_missing_worker(monkeypatch):
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    stub_module = ModuleType("seedcore.graph.task_embedding_worker")
+    monkeypatch.setitem(sys.modules, "seedcore.graph.task_embedding_worker", stub_module)
+
+    result = await coordinator._enqueue_task_embedding_now("task-missing")
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_enqueue_task_embedding_now_times_out(monkeypatch):
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    module = ModuleType("seedcore.graph.task_embedding_worker")
+
+    async def fake_enqueue(app_state, task_id, reason="router"):
+        return True
+
+    module.enqueue_task_embedding_job = AsyncMock(side_effect=fake_enqueue)
+    monkeypatch.setitem(sys.modules, "seedcore.graph.task_embedding_worker", module)
+
+    wait_for_mock = AsyncMock(side_effect=asyncio.TimeoutError)
+    monkeypatch.setattr(cs.asyncio, "wait_for", wait_for_mock)
+
+    result = await coordinator._enqueue_task_embedding_now("task-timeout")
+
+    assert result is False
+    assert wait_for_mock.await_count == 1
+    assert wait_for_mock.await_args.kwargs["timeout"] == 5.0
 @pytest.mark.asyncio
 async def test_drift_fallback_heuristic_when_ml_unavailable(monkeypatch):
     """Test the fallback drift score calculation when ML service is unavailable."""

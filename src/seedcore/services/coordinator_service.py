@@ -24,6 +24,9 @@ from ..serve.organism_client import OrganismServiceClient
 from ..predicates.safe_storage import SafeStorage
 import redis
 import json
+from sqlalchemy import text
+
+from seedcore.database import get_async_pg_session_factory
 
 
 # PKG WASM Loader Utility
@@ -61,6 +64,76 @@ def load_pkg_wasm(wasm_path: str, snapshot: Optional[str] = None) -> Optional[Di
         logger.error(f"Failed to load PKG WASM: {e}")
         return {"enabled": True, "loaded": False, "version": snapshot, "path": wasm_path, "error": str(e)}
 
+
+
+class TaskRouterTelemetryDAO:
+    """Lightweight helper for persisting router telemetry snapshots."""
+
+    def __init__(self, table_name: str = "task_router_telemetry") -> None:
+        self._table_name = table_name
+
+    async def insert(
+        self,
+        session,
+        *,
+        task_id: str,
+        surprise_score: float,
+        x_vector: Sequence[float],
+        weights: Sequence[float],
+        ocps_metadata: Dict[str, Any],
+        chosen_route: str,
+    ) -> None:
+        stmt = text(
+            f"""
+            INSERT INTO {self._table_name}
+            (task_id, surprise_score, x_vector, weights, ocps_metadata, chosen_route)
+            VALUES (:task_id::uuid, :surprise_score, :x_vector::jsonb, :weights::jsonb, :ocps_metadata::jsonb, :chosen_route)
+            """
+        )
+        await session.execute(
+            stmt,
+            {
+                "task_id": task_id,
+                "surprise_score": surprise_score,
+                "x_vector": json.dumps(list(x_vector), sort_keys=True),
+                "weights": json.dumps(list(weights), sort_keys=True),
+                "ocps_metadata": json.dumps(dict(ocps_metadata or {}), sort_keys=True),
+                "chosen_route": chosen_route,
+            },
+        )
+
+
+class TaskOutboxDAO:
+    """DAO for writing coordinator outbox events."""
+
+    def __init__(self, table_name: str = "task_outbox") -> None:
+        self._table_name = table_name
+
+    async def enqueue_embed_task(
+        self,
+        session,
+        *,
+        task_id: str,
+        reason: str = "coordinator",
+        dedupe_key: Optional[str] = None,
+    ) -> None:
+        payload = {"reason": reason, "task_id": task_id}
+        stmt = text(
+            f"""
+            INSERT INTO {self._table_name} (task_id, event_type, payload, dedupe_key)
+            VALUES (:task_id::uuid, :event_type, :payload::jsonb, :dedupe_key)
+            ON CONFLICT (dedupe_key) DO NOTHING
+            """
+        )
+        await session.execute(
+            stmt,
+            {
+                "task_id": task_id,
+                "event_type": "embed_task",
+                "payload": json.dumps(payload, sort_keys=True),
+                "dedupe_key": dedupe_key,
+            },
+        )
 
 
 from seedcore.logging_setup import ensure_serve_logger
@@ -991,7 +1064,15 @@ class Coordinator:
         )
         self.ocps = OCPSValve()
         self.metrics = MetricsTracker()
-        
+
+        try:
+            self._session_factory = get_async_pg_session_factory()
+        except Exception as exc:  # pragma: no cover - defensive log for misconfigured env
+            logger.warning(f"Failed to initialize async session factory: {exc}")
+            self._session_factory = None
+        self.telemetry_dao = TaskRouterTelemetryDAO()
+        self.outbox_dao = TaskOutboxDAO()
+
         # Tiny TTL route cache with single-flight
         self.route_cache = RouteCache(
             ttl_s=float(os.getenv("ROUTE_CACHE_TTL_S", "3.0")),
@@ -2473,6 +2554,135 @@ class Coordinator:
         """
         return await self.route_and_execute(task.model_dump())
 
+    def _resolve_session_factory(self, repo: Optional[Any] = None):
+        session_factory = getattr(self, "_session_factory", None)
+        if session_factory is not None:
+            return session_factory
+
+        if repo is not None:
+            session_factory = getattr(repo, "_session_factory", None)
+            if session_factory is not None:
+                self._session_factory = session_factory
+                return session_factory
+
+        try:
+            session_factory = get_async_pg_session_factory()
+            self._session_factory = session_factory
+            return session_factory
+        except Exception as exc:  # pragma: no cover - log and continue without telemetry persistence
+            logger.warning(f"[Coordinator] Failed to obtain session factory for telemetry persistence: {exc}")
+            return None
+
+    async def _record_router_telemetry(
+        self,
+        repo: Optional[Any],
+        task_id: str,
+        route_result: Dict[str, Any],
+    ) -> None:
+        telemetry_dao = getattr(self, "telemetry_dao", None)
+        outbox_dao = getattr(self, "outbox_dao", None)
+        if telemetry_dao is None or outbox_dao is None:
+            return
+
+        if not isinstance(route_result, dict):
+            return
+
+        payload = route_result.get("payload") if isinstance(route_result.get("payload"), dict) else None
+        if not payload:
+            return
+
+        surprise = payload.get("surprise") if isinstance(payload.get("surprise"), dict) else None
+        decision = payload.get("decision")
+        if surprise is None or decision is None:
+            return
+
+        try:
+            surprise_score = float(surprise.get("S"))
+        except (TypeError, ValueError):
+            logger.debug("[Coordinator] Surprise score missing or invalid; skipping telemetry persistence")
+            return
+
+        x_vector = surprise.get("x")
+        weights = surprise.get("weights")
+        if x_vector is None or weights is None:
+            logger.debug("[Coordinator] Surprise components missing; skipping telemetry persistence")
+            return
+
+        try:
+            x_list = list(x_vector)
+            weights_list = list(weights)
+        except TypeError:
+            logger.debug("[Coordinator] Surprise vectors not iterable; skipping telemetry persistence")
+            return
+
+        ocps_metadata = surprise.get("ocps") if isinstance(surprise.get("ocps"), dict) else {}
+
+        session_factory = self._resolve_session_factory(repo)
+        if session_factory is None:
+            return
+
+        dedupe_key = f"{task_id}:task.primary"
+        try:
+            async with session_factory() as session:
+                async with session.begin():
+                    await session.execute(
+                        text("SELECT ensure_task_node(:tid::uuid)"),
+                        {"tid": str(task_id)},
+                    )
+                    await telemetry_dao.insert(
+                        session,
+                        task_id=str(task_id),
+                        surprise_score=surprise_score,
+                        x_vector=x_list,
+                        weights=weights_list,
+                        ocps_metadata=ocps_metadata,
+                        chosen_route=str(decision),
+                    )
+                    await outbox_dao.enqueue_embed_task(
+                        session,
+                        task_id=str(task_id),
+                        reason="router",
+                        dedupe_key=dedupe_key,
+                    )
+        except Exception as exc:
+            logger.warning(
+                "[Coordinator] Failed to persist router telemetry/outbox for %s: %s",
+                task_id,
+                exc,
+            )
+            raise
+
+        await self._enqueue_task_embedding_now(task_id)
+
+    async def _enqueue_task_embedding_now(self, task_id: str, reason: str = "router") -> bool:
+        try:
+            from seedcore.graph.task_embedding_worker import enqueue_task_embedding_job
+        except Exception as exc:  # pragma: no cover - optional dependency missing
+            logger.info(
+                "[Coordinator] Embedding worker unavailable; task %s will remain in outbox: %s",
+                task_id,
+                exc,
+            )
+            return False
+
+        try:
+            return await asyncio.wait_for(
+                enqueue_task_embedding_job(app.state, task_id, reason=reason),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[Coordinator] Embedding worker timed out while enqueuing task %s", task_id
+            )
+            return False
+        except Exception as exc:
+            logger.warning(
+                "[Coordinator] Failed to hand task %s to embedding worker: %s",
+                task_id,
+                exc,
+            )
+            return False
+
     @app.post(f"{router_prefix}/process-task")
     async def process_task(self, payload: Dict[str, Any]):
         """
@@ -2519,6 +2729,14 @@ class Coordinator:
                 raise HTTPException(status_code=503, detail="Failed to persist task metadata") from persist_exc
 
             res = await self.core.route_and_execute(task_obj)
+            try:
+                await self._record_router_telemetry(repo, task_obj.task_id, res)
+            except Exception as exc:  # pragma: no cover - defensive logging, main result already returned
+                logger.warning(
+                    "[Coordinator] Unexpected error while recording router telemetry for %s: %s",
+                    task_obj.task_id,
+                    exc,
+                )
             return res
         except HTTPException:
             raise
