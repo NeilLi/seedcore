@@ -113,12 +113,17 @@ class GraphEmbedder:
 
 
 # ====== Upsert task (separate Ray task to allow parallel DB writes) ======
+DEFAULT_LABEL = os.getenv("GRAPH_EMBEDDING_DEFAULT_LABEL", "default")
+
+
 @ray.remote(num_cpus=0.2)
 def upsert_embeddings(
     emb_map: Dict[int, List[float]],
     label_map: Optional[Dict[int, Optional[str]]] = None,
     props_map: Optional[Dict[int, Optional[dict]]] = None,
     expected_dim: Optional[int] = GRAPH_H_FEATS,
+    model_map: Optional[Dict[int, Optional[str]]] = None,
+    content_hash_map: Optional[Dict[int, Optional[str]]] = None,
 ) -> int:
     """
     Upsert node embeddings into pgvector-backed table graph_embeddings(node_id BIGINT PRIMARY KEY, emb VECTOR(128), ...)
@@ -139,27 +144,36 @@ def upsert_embeddings(
     # Build param rows once; we’ll executemany in chunks
     rows = []
     for nid, vec in emb_map.items():
-        # Handle props: if we have props_map and the node is in it, use it; otherwise use empty jsonb
-        props_value = '{}'  # Default to empty JSONB
+        props_value: Optional[str] = None
         if props_map and nid in props_map:
             props_value = json.dumps(props_map[nid])
-        
+
         rows.append({
             "nid": int(nid),
             "vec": json.dumps(vec),  # will cast via ::jsonb::vector in SQL
-            "label": (label_map or {}).get(nid),
+            "label": (label_map or {}).get(nid) or DEFAULT_LABEL,
             "props": props_value,
+            "model": (model_map or {}).get(nid),
+            "content_sha256": (content_hash_map or {}).get(nid),
         })
 
     # SQL with optional label/props; if None, keep existing (COALESCE logic on update)
     # NOTE: we do not set created_at/updated_at here explicitly; trigger updates updated_at.
     sql = text("""
-        INSERT INTO graph_embeddings (node_id, emb, label, props)
-        VALUES (:nid, (:vec)::jsonb::vector, :label, (:props)::jsonb)
-        ON CONFLICT (node_id) DO UPDATE
+        INSERT INTO graph_embeddings (node_id, label, emb, props, model, content_sha256)
+        VALUES (
+            :nid,
+            :label,
+            (:vec)::jsonb::vector,
+            CASE WHEN :props IS NULL THEN NULL ELSE (:props)::jsonb END,
+            :model,
+            :content_sha256
+        )
+        ON CONFLICT (node_id, label) DO UPDATE
             SET emb = EXCLUDED.emb,
-                label = COALESCE(EXCLUDED.label, graph_embeddings.label),
                 props = COALESCE(EXCLUDED.props, graph_embeddings.props),
+                model = COALESCE(EXCLUDED.model, graph_embeddings.model),
+                content_sha256 = COALESCE(EXCLUDED.content_sha256, graph_embeddings.content_sha256),
                 updated_at = NOW()
     """)
 

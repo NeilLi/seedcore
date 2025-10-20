@@ -134,7 +134,16 @@ class LTMEmbedder:
         return {inv_maps["memory_cell"][i]: M[i].tolist() for i in range(M.shape[0])}
 
     # ---------- public: upsert helpers ----------
-    def upsert_task_embeddings(self, start_task_ids: List[int], k: int = 2) -> Dict[str, int | float]:
+    def upsert_task_embeddings(
+        self,
+        start_task_ids: List[int],
+        k: int = 2,
+        *,
+        label: Optional[str] = None,
+        props_map: Optional[Dict[int, Dict[str, object]]] = None,
+        model_map: Optional[Dict[int, Optional[str]]] = None,
+        content_hash_map: Optional[Dict[int, Optional[str]]] = None,
+    ) -> Dict[str, int | float]:
         """
         Compute and upsert memory-fused TASK embeddings into graph_embeddings.
         """
@@ -143,7 +152,19 @@ class LTMEmbedder:
             return {"upserted": 0, "t_ms": 0.0}
 
         t0 = time.time()
-        n = ray.get(upsert_embeddings.remote(mapping))
+        label_map = None
+        if label:
+            label_map = {nid: label for nid in mapping.keys()}
+
+        n = ray.get(
+            upsert_embeddings.remote(
+                mapping,
+                label_map=label_map,
+                props_map=props_map,
+                model_map=model_map,
+                content_hash_map=content_hash_map,
+            )
+        )
         return {"upserted": int(n), "t_ms": round((time.time() - t0) * 1000.0, 2)}
 
     def upsert_memory_embeddings(self, memory_cell_ids: List[int], k: int = 1) -> Dict[str, int | float]:
