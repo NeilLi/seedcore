@@ -20,13 +20,17 @@ from .schemas.eventizer_models import (
     EventizerResponse,
     EventTags,
     EventAttributes,
-    EventizerConfig
+    EventizerConfig,
 )
+from .fact_dao import FactDAO
+from .eventizer_features import features_from_payload
 
 __all__ = [
     "EventizerRequest", 
     "EventizerResponse",
     "EventTags",
     "EventAttributes",
-    "EventizerConfig"
+    "EventizerConfig",
+    "FactDAO",
+    "features_from_payload",
 ]
