@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from seedcore.database import get_async_pg_session_factory
 from seedcore.utils.ray_utils import ensure_ray_initialized
+from prometheus_client import Counter
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +61,12 @@ async def enqueue_task_embedding_job(app_state: Any, task_id: UUID | str, *, rea
     async with lock:
         if task_id_str in pending:
             logger.debug("Task %s already pending embedding (reason=%s)", task_id_str, reason)
+            LTM_EMBED_ENQUEUE_DEDUPE.labels(reason).inc()
             return False
         pending.add(task_id_str)
         await queue.put(TaskEmbeddingJob(task_id=task_id_str, reason=reason))
         logger.debug("Enqueued task %s for embedding (reason=%s)", task_id_str, reason)
+        LTM_EMBED_ENQUEUE_OK.labels(reason).inc()
         return True
 
 
@@ -169,6 +172,7 @@ async def task_embedding_worker(app_state: Any) -> None:
                         "Task %s embedding up-to-date (hash=%s); skipping", task_id, content_hash
                     )
                     await session.rollback()
+                    LTM_EMBED_JOB_SKIPPED.labels(job.reason, "up_to_date").inc()
                     continue
 
                 embedder = _get_embedder()
@@ -212,12 +216,14 @@ async def task_embedding_worker(app_state: Any) -> None:
                     await queue.put(job)
                     await asyncio.sleep(1)
                     await session.rollback()
+                    LTM_EMBED_JOB_REQUEUED.labels(job.reason, "actor_error").inc()
                     continue
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("Embedding failed for task %s: %s", task_id, exc)
                     await queue.put(job)
                     await asyncio.sleep(1)
                     await session.rollback()
+                    LTM_EMBED_JOB_REQUEUED.labels(job.reason, "exception").inc()
                     continue
                 logger.debug(
                     "Task %s embedding updated via LTM (node_id=%s, upserted=%s)",
@@ -226,6 +232,7 @@ async def task_embedding_worker(app_state: Any) -> None:
                     result.get("upserted"),
                 )
                 await session.commit()
+                LTM_EMBED_JOB_PROCESSED.labels(job.reason).inc()
         except SQLAlchemyError as exc:
             logger.exception("Database error while processing embedding for %s: %s", job.task_id, exc)
         except Exception as exc:  # noqa: BLE001
@@ -235,6 +242,34 @@ async def task_embedding_worker(app_state: Any) -> None:
                 async with lock:
                     pending.discard(job.task_id)
             queue.task_done()
+
+
+# Prometheus metrics
+LTM_EMBED_ENQUEUE_OK = Counter(
+    "ltm_embed_enqueue_ok_total",
+    "Number of LTM embedding jobs enqueued",
+    ["reason"],
+)
+LTM_EMBED_ENQUEUE_DEDUPE = Counter(
+    "ltm_embed_enqueue_dedupe_total",
+    "Number of LTM embedding enqueues deduped/skipped",
+    ["reason"],
+)
+LTM_EMBED_JOB_PROCESSED = Counter(
+    "ltm_embed_jobs_processed_total",
+    "Number of LTM embedding jobs processed successfully",
+    ["reason"],
+)
+LTM_EMBED_JOB_SKIPPED = Counter(
+    "ltm_embed_jobs_skipped_total",
+    "Number of LTM embedding jobs skipped",
+    ["reason", "why"],
+)
+LTM_EMBED_JOB_REQUEUED = Counter(
+    "ltm_embed_jobs_requeued_total",
+    "Number of LTM embedding jobs requeued after transient failures",
+    ["reason", "why"],
+)
 
 
 async def task_embedding_backfill_loop(app_state: Any) -> None:

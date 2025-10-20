@@ -28,13 +28,16 @@ MIGRATION_013="${SCRIPT_DIR}/migrations/013_pkg_core.sql"
 MIGRATION_014="${SCRIPT_DIR}/migrations/014_pkg_ops.sql"
 MIGRATION_015="${SCRIPT_DIR}/migrations/015_pkg_views_functions.sql"
 MIGRATION_016="${SCRIPT_DIR}/migrations/016_fact_pkg_integration.sql"
+MIGRATION_017="${SCRIPT_DIR}/migrations/017_task_embedding_support.sql"
+MIGRATION_018="${SCRIPT_DIR}/migrations/018_task_outbox_hardening.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" \
   "$MIGRATION_005" "$MIGRATION_006" "$MIGRATION_007" "$MIGRATION_008" \
   "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" "$MIGRATION_012" \
-  "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" "$MIGRATION_016"
+  "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" "$MIGRATION_016" \
+  "$MIGRATION_017" "$MIGRATION_018"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -61,6 +64,8 @@ echo "   - 013: $MIGRATION_013 (NEW: PKG core catalog - snapshots, rules, condit
 echo "   - 014: $MIGRATION_014 (NEW: PKG operations - deployments, temporal facts, validation, promotions, device coverage)"
 echo "   - 015: $MIGRATION_015 (NEW: PKG views and helper functions)"
 echo "   - 016: $MIGRATION_016 (NEW: Fact model PKG integration - temporal facts, policy governance, eventizer support)"
+echo "   - 017: $MIGRATION_017 (NEW: Task embedding support: views/functions/backfill)"
+echo "   - 018: $MIGRATION_018 (NEW: Task outbox hardening: available_at, attempts, index)"
 
 find_pg_pod() {
   local sel pod
@@ -208,6 +213,16 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 echo "⚙️  Running migration 016: Fact model PKG integration (temporal facts, policy governance, eventizer support)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_016" "$POSTGRES_POD:/tmp/016_fact_pkg_integration.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/016_fact_pkg_integration.sql"
+
+# Migration 017 (NEW - Task Embedding Support)
+echo "⚙️  Running migration 017: Task embedding support (views/functions/backfill)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_017" "$POSTGRES_POD:/tmp/017_task_embedding_support.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/017_task_embedding_support.sql"
+
+# Migration 018 (NEW - Task Outbox Hardening)
+echo "⚙️  Running migration 018: Task outbox hardening (available_at, attempts, index)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_018" "$POSTGRES_POD:/tmp/018_task_outbox_hardening.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/018_task_outbox_hardening.sql"
 
 # 6) Verify schema
 echo "✅ Verifying schema..."

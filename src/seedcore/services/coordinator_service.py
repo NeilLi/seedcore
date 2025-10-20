@@ -1398,6 +1398,8 @@ class Coordinator:
                 logger.info("🚀 Started Coordinator background tasks")
             else:
                 logger.warning("⚠️ Predicate router not initialized, skipping background tasks")
+            # Start task outbox flusher loop
+            asyncio.create_task(self._task_outbox_flusher_loop())
         except Exception as e:
             logger.error(f"❌ Failed to start background tasks: {e}")
     
@@ -1483,6 +1485,93 @@ class Coordinator:
         except Exception as e:
             logger.warning(f"Failed to get energy state for agent {agent_id}: {e}")
             return None
+
+    async def _task_outbox_flusher_loop(self) -> None:
+        """Periodically flush task_outbox embed_task events to the LTM worker with backoff."""
+        try:
+            session_factory = getattr(self, "_session_factory", None) or get_async_pg_session_factory()
+            self._session_factory = session_factory
+        except Exception as exc:
+            logger.warning(f"[Coordinator] No session factory for outbox flusher: {exc}")
+            return
+
+        interval_s = float(os.getenv("TASK_OUTBOX_FLUSH_INTERVAL_S", "5"))
+        batch_size = int(os.getenv("TASK_OUTBOX_FLUSH_BATCH", "100"))
+
+        from sqlalchemy import text as sa_text
+
+        while True:
+            try:
+                async with session_factory() as s:
+                    async with s.begin():
+                        rows = (
+                            await s.execute(
+                                sa_text(
+                                    """
+                                    WITH cte AS (
+                                      SELECT id, payload
+                                        FROM task_outbox
+                                       WHERE event_type='embed_task'
+                                    ORDER BY id
+                                       FOR UPDATE SKIP LOCKED
+                                       LIMIT :n
+                                    )
+                                    SELECT id, payload FROM cte
+                                    """
+                                ),
+                                {"n": batch_size},
+                            )
+                        ).mappings().all()
+
+                        if not rows:
+                            await s.rollback()
+                        for r in rows:
+                            try:
+                                data = json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"]
+                                task_id = data.get("task_id")
+                                ok = await self._enqueue_task_embedding_now(task_id, reason="outbox")
+                                if ok:
+                                    await s.execute(sa_text("DELETE FROM task_outbox WHERE id=:id"), {"id": r["id"]})
+                                    try:
+                                        COORD_OUTBOX_FLUSH_OK.labels("embed_task").inc()
+                                    except Exception:
+                                        pass
+                                else:
+                                    await s.execute(
+                                        sa_text(
+                                            """
+                                            UPDATE task_outbox
+                                               SET attempts = COALESCE(attempts,0)+1,
+                                                   available_at = NOW() + (LEAST(COALESCE(attempts,0)+1,5) * INTERVAL '30 seconds')
+                                             WHERE id = :id
+                                            """
+                                        ),
+                                        {"id": r["id"]},
+                                    )
+                                    try:
+                                        COORD_OUTBOX_FLUSH_RETRY.labels("embed_task").inc()
+                                    except Exception:
+                                        pass
+                            except Exception as exc:
+                                logger.warning(f"[Coordinator] Outbox item {r.get('id')} failed: {exc}")
+                                await s.execute(
+                                    sa_text(
+                                        """
+                                        UPDATE task_outbox
+                                           SET attempts = COALESCE(attempts,0)+1,
+                                               available_at = NOW() + INTERVAL '60 seconds'
+                                         WHERE id = :id
+                                        """
+                                    ),
+                                    {"id": r["id"]},
+                                )
+                                try:
+                                    COORD_OUTBOX_FLUSH_RETRY.labels("embed_task").inc()
+                                except Exception:
+                                    pass
+            except Exception as exc:
+                logger.debug(f"[Coordinator] Outbox flusher tick failed: {exc}")
+            await asyncio.sleep(max(1.0, interval_s))
     
     async def _compute_drift_score(self, task: Dict[str, Any]) -> float:
         """
@@ -3141,6 +3230,10 @@ class Coordinator:
                     )
                     if metrics is not None:
                         metrics.record_outbox_enqueue("ok" if inserted else "dup")
+                    try:
+                        (COORD_OUTBOX_INSERT_OK if inserted else COORD_OUTBOX_INSERT_DUP).labels("embed_task").inc()
+                    except Exception:
+                        pass
         except Exception as exc:
             logger.warning(
                 "[Coordinator] Failed to persist router telemetry/outbox for %s: %s",
@@ -3149,6 +3242,10 @@ class Coordinator:
             )
             if metrics is not None:
                 metrics.record_outbox_enqueue("err")
+            try:
+                COORD_OUTBOX_INSERT_ERR.labels("embed_task").inc()
+            except Exception:
+                pass
             raise
 
         await self._enqueue_task_embedding_now(task_id)

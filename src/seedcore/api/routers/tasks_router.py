@@ -6,6 +6,7 @@ from time import perf_counter
 from typing import Dict, Any, List
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Depends
+import os
 from pydantic import BaseModel, ConfigDict, field_validator
 from prometheus_client import Counter, Histogram
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,11 @@ from ...ops.eventizer.fast_eventizer import process_text_fast
 from ...graph.task_embedding_worker import enqueue_task_embedding_job
 
 router = APIRouter()
+
+# Kill switch: coordinator should be the single enqueuer for LTM embeddings.
+# Default false to avoid duplicate enqueue from the router.
+ENQUEUE_LTM_FROM_ROUTER = os.getenv("ENQUEUE_LTM_FROM_ROUTER", "false").lower() in ("1","true","yes")
+RUN_NOW_ENSURE_NODE = os.getenv("RUN_NOW_ENSURE_NODE", "false").lower() in ("1","true","yes")
 
 # Global service client instances (singletons)
 _eventizer_client: EventizerServiceClient | None = None
@@ -637,7 +643,8 @@ async def create_task(
     # --- OPTIMIZED: Use refresh to get DB-generated fields like created_at/id ---
     await session.refresh(new_task)
 
-    await enqueue_task_embedding_job(request.app.state, new_task.id, reason="create")
+    if ENQUEUE_LTM_FROM_ROUTER:
+        await enqueue_task_embedding_job(request.app.state, new_task.id, reason="create")
 
     if run_immediately:
         await task_queue.put(new_task.id)
@@ -781,22 +788,23 @@ async def run_task_now(
     graph_node_id: int | None = None
     try:
         task.status = TaskStatus.QUEUED
-        graph_node_id = await _ensure_task_node_mapping(
-            session, task.id, "tasks_router.run_task_now"
-        )
+        if RUN_NOW_ENSURE_NODE:
+            graph_node_id = await _ensure_task_node_mapping(
+                session, task.id, "tasks_router.run_task_now"
+            )
         await session.commit()
     except Exception as exc:
         await session.rollback()
         logger.error(
-            "Failed to ensure graph node for task %s while queuing: %s",
+            "Failed to queue task %s (ensure_node=%s): %s",
             task.id,
+            RUN_NOW_ENSURE_NODE,
             exc,
         )
         raise HTTPException(
             status_code=500,
             detail=(
-                "Unable to queue task because graph node mapping failed. "
-                "Verify ensure_task_node(uuid) exists and retry."
+                "Unable to queue task. If ensure-node is enabled, verify ensure_task_node(uuid) exists and retry."
             ),
         ) from exc
 
