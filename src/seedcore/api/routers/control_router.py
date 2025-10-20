@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func, String
+from sqlalchemy import select, or_, func, String, text
 
 # --- ADDED: Import DB session and the new Fact model ---
 from ...database import get_async_pg_session
@@ -53,6 +53,10 @@ class FactCreate(BaseModel):
     text: str = Field(..., description="Human or system supplied fact text")
     tags: List[str] = Field(default_factory=list)
     meta_data: Dict[str, Any] = Field(default_factory=dict)
+    produced_by_task_id: Optional[uuid.UUID] = Field(
+        default=None,
+        description="Optional task UUID responsible for creating this fact",
+    )
 
 class FactPatch(BaseModel):
     text: Optional[str] = None
@@ -161,8 +165,31 @@ async def create_fact(payload: FactCreate, session: AsyncSession = Depends(get_a
             meta_data=payload.meta_data
         )
         session.add(new_fact)
+        await session.flush()
+
+        # Ensure the fact has a graph node entry
+        await session.execute(
+            text("SELECT ensure_fact_node(:fact_id::uuid)"),
+            {"fact_id": str(new_fact.id)},
+        )
+
+        if payload.produced_by_task_id:
+            task_id_str = str(payload.produced_by_task_id)
+            await session.execute(
+                text("SELECT ensure_task_node(:task_id::uuid)"),
+                {"task_id": task_id_str},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO task_produces_fact(task_id, fact_id) "
+                    "VALUES (:task_id::uuid, :fact_id::uuid) "
+                    "ON CONFLICT (task_id, fact_id) DO NOTHING"
+                ),
+                {"task_id": task_id_str, "fact_id": str(new_fact.id)},
+            )
+
         await session.commit()
-        
+
         # Get the fact with fresh data from database to avoid lazy loading issues
         # Use a new query to get the complete fact data
         result = await session.execute(select(Fact).where(Fact.id == new_fact.id))

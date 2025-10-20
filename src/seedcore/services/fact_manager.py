@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional, Sequence, Tuple, Union
 
-from sqlalchemy import select, delete, and_, or_
+from sqlalchemy import select, delete, and_, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.fact import Fact
@@ -60,7 +61,103 @@ class FactManager:
         self.eventizer_config = eventizer_config or EventizerConfig()
         self._eventizer: Optional[EventizerService] = None
         self._initialized = False
-    
+
+    # -----------------
+    # Internal helpers
+    # -----------------
+
+    @staticmethod
+    def _normalize_uuid(value: Optional[Union[str, uuid.UUID]]) -> Optional[uuid.UUID]:
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return value
+        try:
+            return uuid.UUID(str(value))
+        except (TypeError, ValueError):
+            logger.warning("Invalid UUID provided for task/fact relationship: %s", value)
+            return None
+
+    async def _ensure_task_node(self, task_id: uuid.UUID) -> None:
+        await self.db.execute(
+            text("SELECT ensure_task_node(:task_id::uuid)"),
+            {"task_id": str(task_id)},
+        )
+
+    async def _ensure_fact_nodes(self, fact_ids: Sequence[uuid.UUID]) -> None:
+        if not fact_ids:
+            return
+        await self.db.execute(
+            text(
+                "SELECT ensure_fact_node(fact_id) "
+                "FROM unnest(:fact_ids::uuid[]) AS fact_id"
+            ),
+            {"fact_ids": [str(fid) for fid in fact_ids]},
+        )
+
+    async def _record_task_produces_fact(
+        self,
+        task_id: Union[str, uuid.UUID],
+        fact_id: Union[str, uuid.UUID],
+    ) -> None:
+        normalized_task_id = self._normalize_uuid(task_id)
+        normalized_fact_id = self._normalize_uuid(fact_id)
+
+        if not normalized_task_id or not normalized_fact_id:
+            return
+
+        await self._ensure_task_node(normalized_task_id)
+        await self._ensure_fact_nodes([normalized_fact_id])
+
+        await self.db.execute(
+            text(
+                "INSERT INTO task_produces_fact(task_id, fact_id) "
+                "VALUES (:task_id::uuid, :fact_id::uuid) "
+                "ON CONFLICT (task_id, fact_id) DO NOTHING"
+            ),
+            {
+                "task_id": str(normalized_task_id),
+                "fact_id": str(normalized_fact_id),
+            },
+        )
+
+    async def _record_task_reads_fact(
+        self,
+        task_id: Union[str, uuid.UUID],
+        fact_ids: Sequence[Union[str, uuid.UUID]],
+    ) -> None:
+        normalized_task_id = self._normalize_uuid(task_id)
+        normalized_fact_ids = [
+            normalized for normalized in (
+                self._normalize_uuid(fid) for fid in fact_ids
+            )
+            if normalized is not None
+        ]
+
+        if not normalized_task_id or not normalized_fact_ids:
+            return
+
+        # Deduplicate to avoid unnecessary work and conflicts
+        unique_fact_ids = list(dict.fromkeys(normalized_fact_ids))
+
+        await self._ensure_task_node(normalized_task_id)
+        await self._ensure_fact_nodes(unique_fact_ids)
+
+        await self.db.execute(
+            text(
+                "WITH payload AS ("
+                "    SELECT :task_id::uuid AS task_id, unnest(:fact_ids::uuid[]) AS fact_id"
+                ")"
+                "INSERT INTO task_reads_fact(task_id, fact_id) "
+                "SELECT task_id, fact_id FROM payload "
+                "ON CONFLICT (task_id, fact_id) DO NOTHING"
+            ),
+            {
+                "task_id": str(normalized_task_id),
+                "fact_ids": [str(fid) for fid in unique_fact_ids],
+            },
+        )
+
     async def initialize(self) -> None:
         """Initialize the eventizer service."""
         if self._initialized:
@@ -88,7 +185,8 @@ class FactManager:
         tags: Optional[List[str]] = None,
         meta_data: Optional[Dict[str, Any]] = None,
         namespace: str = "default",
-        created_by: str = "fact_manager"
+        created_by: str = "fact_manager",
+        produced_by_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> Fact:
         """
         Create a basic fact.
@@ -112,13 +210,22 @@ class FactManager:
         )
         
         self.db.add(fact)
+        await self.db.flush()
+
+        if produced_by_task_id:
+            await self._record_task_produces_fact(produced_by_task_id, fact.id)
+
         await self.db.commit()
         await self.db.refresh(fact)
         
         logger.info(f"Created fact {fact.id} in namespace {namespace}")
         return fact
     
-    async def get_fact(self, fact_id: str) -> Optional[Fact]:
+    async def get_fact(
+        self,
+        fact_id: str,
+        reading_task_id: Optional[Union[str, uuid.UUID]] = None,
+    ) -> Optional[Fact]:
         """
         Get a fact by ID.
         
@@ -130,13 +237,19 @@ class FactManager:
         """
         query = select(Fact).where(Fact.id == fact_id)
         result = await self.db.execute(query)
-        return result.scalar_one_or_none()
+        fact = result.scalar_one_or_none()
+
+        if fact and reading_task_id:
+            await self._record_task_reads_fact(reading_task_id, [fact.id])
+
+        return fact
     
     async def get_facts_by_namespace(
-        self, 
-        namespace: str, 
+        self,
+        namespace: str,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        reading_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> List[Fact]:
         """
         Get facts by namespace.
@@ -158,7 +271,12 @@ class FactManager:
         )
         
         result = await self.db.execute(query)
-        return result.scalars().all()
+        facts = result.scalars().all()
+
+        if facts and reading_task_id:
+            await self._record_task_reads_fact(reading_task_id, [fact.id for fact in facts])
+
+        return facts
     
     async def search_facts(
         self,
@@ -167,7 +285,8 @@ class FactManager:
         namespace: Optional[str] = None,
         subject: Optional[str] = None,
         predicate: Optional[str] = None,
-        limit: int = 100
+        limit: int = 100,
+        reading_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> List[Fact]:
         """
         Search facts with various criteria.
@@ -208,18 +327,24 @@ class FactManager:
         query = query.order_by(Fact.created_at.desc()).limit(limit)
         
         result = await self.db.execute(query)
-        return result.scalars().all()
+        facts = result.scalars().all()
+
+        if facts and reading_task_id:
+            await self._record_task_reads_fact(reading_task_id, [fact.id for fact in facts])
+
+        return facts
     
     # -----------------
     # Eventizer Integration
     # -----------------
     
     async def create_from_text(
-        self, 
-        text: str, 
+        self,
+        text: str,
         domain: str = "default",
         process_with_pkg: bool = True,
-        preserve_pii: bool = False
+        preserve_pii: bool = False,
+        produced_by_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> Tuple[Fact, EventizerResponse]:
         """
         Create fact from text with eventizer processing.
@@ -267,6 +392,11 @@ class FactManager:
         
         # Store in database
         self.db.add(fact)
+        await self.db.flush()
+
+        if produced_by_task_id:
+            await self._record_task_produces_fact(produced_by_task_id, fact.id)
+
         await self.db.commit()
         await self.db.refresh(fact)
         
@@ -277,7 +407,8 @@ class FactManager:
         self,
         texts: List[str],
         domain: str = "default",
-        process_with_pkg: bool = True
+        process_with_pkg: bool = True,
+        produced_by_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> List[Tuple[Fact, EventizerResponse]]:
         """
         Process multiple texts and create facts.
@@ -297,7 +428,8 @@ class FactManager:
                 fact, response = await self.create_from_text(
                     text=text,
                     domain=domain,
-                    process_with_pkg=process_with_pkg
+                    process_with_pkg=process_with_pkg,
+                    produced_by_task_id=produced_by_task_id,
                 )
                 results.append((fact, response))
             except Exception as e:
@@ -319,7 +451,8 @@ class FactManager:
         valid_from: Optional[datetime] = None,
         valid_to: Optional[datetime] = None,
         namespace: str = "default",
-        created_by: str = "fact_manager"
+        created_by: str = "fact_manager",
+        produced_by_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> Fact:
         """
         Create a temporal fact with explicit validity window.
@@ -359,6 +492,11 @@ class FactManager:
                 fact.validation_status = "pkg_validation_failed"
         
         self.db.add(fact)
+        await self.db.flush()
+
+        if produced_by_task_id:
+            await self._record_task_produces_fact(produced_by_task_id, fact.id)
+
         await self.db.commit()
         await self.db.refresh(fact)
         
@@ -366,9 +504,10 @@ class FactManager:
         return fact
     
     async def get_active_facts(
-        self, 
-        subject: str, 
-        namespace: str = "default"
+        self,
+        subject: str,
+        namespace: str = "default",
+        reading_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> List[Fact]:
         """
         Get non-expired temporal facts for a subject.
@@ -394,12 +533,18 @@ class FactManager:
         ).order_by(Fact.created_at.desc())
         
         result = await self.db.execute(query)
-        return result.scalars().all()
+        facts = result.scalars().all()
+
+        if facts and reading_task_id:
+            await self._record_task_reads_fact(reading_task_id, [fact.id for fact in facts])
+
+        return facts
     
     async def get_expired_facts(
         self,
         namespace: Optional[str] = None,
-        limit: int = 1000
+        limit: int = 1000,
+        reading_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> List[Fact]:
         """
         Get expired temporal facts.
@@ -426,7 +571,12 @@ class FactManager:
         query = query.order_by(Fact.valid_to.desc()).limit(limit)
         
         result = await self.db.execute(query)
-        return result.scalars().all()
+        facts = result.scalars().all()
+
+        if facts and reading_task_id:
+            await self._record_task_reads_fact(reading_task_id, [fact.id for fact in facts])
+
+        return facts
     
     async def cleanup_expired_facts(
         self,
@@ -618,7 +768,8 @@ class FactManager:
         self,
         hours: int = 24,
         namespace: Optional[str] = None,
-        limit: int = 100
+        limit: int = 100,
+        reading_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> List[Fact]:
         """
         Get recent fact creation activity.
@@ -643,7 +794,12 @@ class FactManager:
         query = query.order_by(Fact.created_at.desc()).limit(limit)
         
         result = await self.db.execute(query)
-        return result.scalars().all()
+        facts = result.scalars().all()
+
+        if facts and reading_task_id:
+            await self._record_task_reads_fact(reading_task_id, [fact.id for fact in facts])
+
+        return facts
 
 
 # -----------------
