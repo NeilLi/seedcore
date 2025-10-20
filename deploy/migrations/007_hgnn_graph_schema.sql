@@ -39,15 +39,11 @@ RETURNS BIGINT AS $$
 DECLARE
   nid BIGINT;
 BEGIN
-  SELECT node_id INTO nid
-  FROM graph_node_map
-  WHERE node_type='task' AND ext_table='tasks' AND ext_uuid=p_task_id;
-
-  IF nid IS NULL THEN
-    INSERT INTO graph_node_map (node_type, ext_table, ext_uuid)
-    VALUES ('task','tasks',p_task_id)
-    RETURNING node_id INTO nid;
-  END IF;
+  INSERT INTO graph_node_map (node_type, ext_table, ext_uuid)
+  VALUES ('task','tasks',p_task_id)
+  ON CONFLICT (node_type, ext_table, ext_uuid)
+  DO UPDATE SET updated_at = NOW()
+  RETURNING node_id INTO nid;
   RETURN nid;
 END; $$ LANGUAGE plpgsql;
 

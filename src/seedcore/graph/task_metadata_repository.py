@@ -149,7 +149,7 @@ class TaskMetadataRepository:
                         )
 
                     await session.execute(
-                        text("SELECT ensure_task_node(:task_id)"),
+                        text("SELECT ensure_task_node(:task_id::uuid)"),
                         {"task_id": task_id},
                     )
 
@@ -216,8 +216,14 @@ class TaskMetadataRepository:
                         ),
                         {"src": parent_id, "dst": child_id},
                     )
-                    await session.execute(text("SELECT ensure_task_node(:task_id)"), {"task_id": parent_id})
-                    await session.execute(text("SELECT ensure_task_node(:task_id)"), {"task_id": child_id})
+                    await session.execute(
+                        text("SELECT ensure_task_node(:task_id::uuid)"),
+                        {"task_id": parent_id},
+                    )
+                    await session.execute(
+                        text("SELECT ensure_task_node(:task_id::uuid)"),
+                        {"task_id": child_id},
+                    )
             except IntegrityError as e:
                 logger.error(
                     "Integrity constraint violation while adding dependency %s -> %s: %s. "

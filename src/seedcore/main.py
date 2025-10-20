@@ -35,6 +35,21 @@ async def init_db(engine: AsyncEngine):
         await conn.run_sync(TaskBase.metadata.create_all)
         await conn.run_sync(FactBase.metadata.create_all)
 
+
+async def _verify_graph_node_support(engine: AsyncEngine) -> None:
+    """Ensure ensure_task_node(uuid) exists before serving traffic."""
+
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT to_regprocedure('ensure_task_node(uuid)')")
+        )
+        if result.scalar_one_or_none() is None:
+            raise RuntimeError(
+                "Database is missing ensure_task_node(uuid). Apply migration "
+                "007_hgnn_graph_schema.sql or later before starting SeedCore API."
+            )
+    logger.info("Verified ensure_task_node(uuid) exists in the database")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -43,6 +58,7 @@ async def lifespan(app: FastAPI):
     engine = get_async_pg_engine()  # must be asyncpg-based
     app.state.db_engine = engine
     await init_db(engine)
+    await _verify_graph_node_support(engine)
     logger.info("Database initialized successfully")
     
     # Initialize task queue and start background worker
