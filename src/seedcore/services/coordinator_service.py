@@ -1,8 +1,8 @@
 # coordinator_service.py
-import os, time, uuid, httpx, asyncio, random
+import os, time, uuid, httpx, asyncio, random, inspect
 import math
 from fastapi import FastAPI, HTTPException
-from typing import Dict, Any, List, Optional, Iterable, Set, Tuple, NamedTuple, Sequence, Callable
+from typing import Dict, Any, List, Optional, Iterable, Set, Tuple, NamedTuple, Sequence, Callable, Awaitable, TYPE_CHECKING
 from urllib.parse import urlparse
 from pathlib import Path
 from ray import serve
@@ -27,6 +27,13 @@ import json
 from sqlalchemy import text
 
 from seedcore.database import get_async_pg_session_factory
+from seedcore.ops.eventizer.fact_dao import FactDAO
+from seedcore.ops.eventizer.eventizer_features import (
+    features_from_payload as default_features_from_payload,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 # PKG WASM Loader Utility
@@ -796,18 +803,92 @@ class CoordinatorCore:
             logger.info("PKG evaluation disabled (COORDINATOR_PKG_ENABLED=0)")
             self.pkg_metadata = {"enabled": False, "loaded": False, "version": None, "error": None}
 
-    async def route_and_execute(self, task: "TaskPayload") -> Dict[str, Any]:
+    async def route_and_execute(
+        self,
+        task: "TaskPayload",
+        *,
+        fact_dao: Optional[FactDAO] = None,
+        eventizer_helper: Optional[Callable[[Any], Any]] = None,
+    ) -> Dict[str, Any]:
         t0 = time.perf_counter()
         if not isinstance(task, TaskPayload):
             task = TaskPayload.model_validate(task)
 
         tid = task.task_id
+        helper = eventizer_helper or default_features_from_payload
+        eventizer_data: Dict[str, Any] = {}
+        if helper is not None:
+            maybe_features = helper(task)
+            if inspect.isawaitable(maybe_features):
+                maybe_features = await maybe_features
+            if isinstance(maybe_features, dict):
+                eventizer_data = maybe_features
+
         params = task.params or {}
-        tags: Set[str] = set((params.get("event_tags") or []))
-        attributes: Dict[str, Any] = params.get("attributes") or {}
-        conf = (params.get("confidence") or {})
+
+        def _coerce_uuid_list(values: Any) -> List[uuid.UUID]:
+            if isinstance(values, (str, bytes)) or values is None:
+                return []
+            if not isinstance(values, Iterable):
+                values = [values]
+            normalized: List[uuid.UUID] = []
+            seen = set()
+            for value in values:
+                try:
+                    item = uuid.UUID(str(value))
+                except (TypeError, ValueError):
+                    continue
+                if item in seen:
+                    continue
+                seen.add(item)
+                normalized.append(item)
+            return normalized
+
+        tags: Set[str] = set()
+        param_tags = params.get("event_tags") or []
+        if isinstance(param_tags, Iterable) and not isinstance(param_tags, (str, bytes)):
+            tags.update(str(tag) for tag in param_tags)
+        eventizer_tags: Dict[str, Any] = {}
+        if isinstance(eventizer_data.get("event_tags"), dict):
+            eventizer_tags = eventizer_data["event_tags"]
+            eventizer_types = eventizer_tags.get("event_types")
+            if isinstance(eventizer_types, Iterable) and not isinstance(eventizer_types, (str, bytes)):
+                tags.update(str(tag) for tag in eventizer_types)
+            evt_domain = eventizer_tags.get("domain")
+            if evt_domain and not task.domain:
+                task.domain = str(evt_domain)
+
+        attributes: Dict[str, Any] = {}
+        if isinstance(eventizer_data.get("attributes"), dict):
+            attributes.update(eventizer_data["attributes"])
+        if isinstance(params.get("attributes"), dict):
+            attributes.update(params["attributes"])
+
+        conf: Dict[str, Any] = {}
+        if isinstance(eventizer_data.get("confidence"), dict):
+            conf.update(eventizer_data["confidence"])
+        if isinstance(params.get("confidence"), dict):
+            conf.update(params["confidence"])
+
         pii_redacted = bool(params.get("pii", {}).get("was_redacted", False))
-        
+        if "pii_redacted" in eventizer_data:
+            pii_redacted = bool(eventizer_data.get("pii_redacted"))
+
+        fact_reads: List[str] = []
+        fact_produced: List[str] = []
+        if fact_dao is not None:
+            start_ids = _coerce_uuid_list(params.get("start_fact_ids") or [])
+            if start_ids:
+                facts = await fact_dao.get_for_task(start_ids, tid)
+                fact_reads = [str(fact.id) for fact in facts]
+            produced_candidates: List[uuid.UUID] = []
+            for key in ("produced_fact_ids", "produce_fact_ids", "fact_output_ids"):
+                produced_candidates.extend(_coerce_uuid_list(params.get(key) or []))
+            if produced_candidates:
+                for fact_id in produced_candidates:
+                    await fact_dao.record_produced_fact(fact_id, tid)
+                fact_produced = [str(fid) for fid in produced_candidates]
+
         # Infer domain from tags if not explicitly set
         if not task.domain:
             # Map domain-specific tags to domains
@@ -866,6 +947,15 @@ class CoordinatorCore:
         )
 
         proto_plan: Dict[str, Any] = {"tasks": [], "edges": []}
+        proto_plan_hints = proto_plan.setdefault("hints", {})
+        if fact_reads:
+            proto_plan_hints["facts_read"] = fact_reads
+        if fact_produced:
+            proto_plan_hints["facts_produced"] = fact_produced
+        if eventizer_data:
+            proto_plan_hints.setdefault("event_tags", sorted(tags))
+            if isinstance(eventizer_data.get("confidence"), dict):
+                proto_plan_hints.setdefault("eventizer_confidence", eventizer_data["confidence"])
         pkg_meta = {"evaluated": False, "version": None, "error": None}
 
         async def _eval_pkg():
@@ -916,7 +1006,17 @@ class CoordinatorCore:
             decision = "planner"
         
         router_latency_ms = round((time.perf_counter()-t0)*1000.0, 3)
-        
+
+        eventizer_summary = None
+        if eventizer_data:
+            eventizer_summary = {
+                "event_tags": eventizer_tags.get("event_types") if eventizer_tags else None,
+                "attributes": eventizer_data.get("attributes"),
+                "confidence": eventizer_data.get("confidence"),
+                "patterns_applied": eventizer_data.get("patterns_applied"),
+                "pii_redacted": eventizer_data.get("pii_redacted"),
+            }
+
         payload_common = {
             "task_id": tid,
             "type": task.type,
@@ -945,6 +1045,8 @@ class CoordinatorCore:
             "router_latency_ms": router_latency_ms,
             "payload_version": "router/1.2.0",
         }
+        if eventizer_summary is not None:
+            payload_common["eventizer"] = eventizer_summary
 
         # Structured logging for observability
         ocps_meta = s_out["ocps"]
@@ -2533,8 +2635,23 @@ class Coordinator:
             # Convert dict to TaskPayload if needed
             if not isinstance(payload, TaskPayload):
                 payload = TaskPayload.model_validate(payload)
-            res = await self.core.route_and_execute(payload)
-            
+
+            session_factory = self._resolve_session_factory(self.graph_task_repo)
+            if session_factory is None:
+                res = await self.core.route_and_execute(
+                    payload,
+                    eventizer_helper=default_features_from_payload,
+                )
+            else:
+                async with session_factory() as session:
+                    async with session.begin():
+                        dao = FactDAO(session)
+                        res = await self.core.route_and_execute(
+                            payload,
+                            fact_dao=dao,
+                            eventizer_helper=default_features_from_payload,
+                        )
+
             # Track metrics
             latency_ms = (time.perf_counter() - start_time) * 1000
             decision = res.get("payload", {}).get("decision", "unknown")
