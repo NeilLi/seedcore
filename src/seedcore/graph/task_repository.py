@@ -314,7 +314,7 @@ class GraphTaskSqlRepository:
             stmt = text(
                 """
                 INSERT INTO tasks (type, status, description, params)
-                VALUES (:task_type, :status, :description, :params::jsonb)
+                VALUES (:task_type, :status, :description, CAST(:params AS jsonb))
                 RETURNING id
                 """
             )

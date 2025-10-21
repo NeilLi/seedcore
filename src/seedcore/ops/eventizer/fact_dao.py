@@ -57,7 +57,7 @@ class FactDAO:
 
     async def _ensure_task_node(self, task_id: uuid.UUID) -> None:
         await self._session.execute(
-            text("SELECT ensure_task_node(:task_id::uuid)"),
+            text("SELECT ensure_task_node(CAST(:task_id AS uuid))"),
             {"task_id": str(task_id)},
         )
 
@@ -67,7 +67,7 @@ class FactDAO:
         await self._session.execute(
             text(
                 "SELECT ensure_fact_node(fact_id) "
-                "FROM unnest(:fact_ids::uuid[]) AS fact_id"
+                "FROM unnest(CAST(:fact_ids AS uuid[])) AS fact_id"
             ),
             {"fact_ids": [str(fid) for fid in fact_ids]},
         )
@@ -91,7 +91,7 @@ class FactDAO:
             await self._session.execute(
                 text(
                     "WITH payload AS ("
-                    "    SELECT :task_id::uuid AS task_id, unnest(:fact_ids::uuid[]) AS fact_id"
+                    "    SELECT CAST(:task_id AS uuid) AS task_id, unnest(CAST(:fact_ids AS uuid[])) AS fact_id"
                     ")"
                     "INSERT INTO task_reads_fact(task_id, fact_id) "
                     "SELECT task_id, fact_id FROM payload "
@@ -127,7 +127,7 @@ class FactDAO:
             await self._session.execute(
                 text(
                     "INSERT INTO task_produces_fact(task_id, fact_id) "
-                    "VALUES (:task_id::uuid, :fact_id::uuid) "
+                    "VALUES (CAST(:task_id AS uuid), CAST(:fact_id AS uuid)) "
                     "ON CONFLICT (task_id, fact_id) DO NOTHING"
                 ),
                 {

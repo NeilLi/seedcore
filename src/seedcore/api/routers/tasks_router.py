@@ -62,7 +62,7 @@ async def _ensure_task_node_mapping(
     started = perf_counter()
     try:
         result = await session.execute(
-            text("SELECT ensure_task_node(:task_id::uuid) AS node_id"),
+            text("SELECT ensure_task_node(CAST(:task_id AS uuid)) AS node_id"),
             {"task_id": task_id},
         )
         node_id = result.scalar_one()

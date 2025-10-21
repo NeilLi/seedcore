@@ -149,7 +149,7 @@ class TaskMetadataRepository:
                         )
 
                     await session.execute(
-                        text("SELECT ensure_task_node(:task_id::uuid)"),
+                        text("SELECT ensure_task_node(CAST(:task_id AS uuid))"),
                         {"task_id": task_id},
                     )
 
@@ -217,11 +217,11 @@ class TaskMetadataRepository:
                         {"src": parent_id, "dst": child_id},
                     )
                     await session.execute(
-                        text("SELECT ensure_task_node(:task_id::uuid)"),
+                        text("SELECT ensure_task_node(CAST(:task_id AS uuid))"),
                         {"task_id": parent_id},
                     )
                     await session.execute(
-                        text("SELECT ensure_task_node(:task_id::uuid)"),
+                        text("SELECT ensure_task_node(CAST(:task_id AS uuid))"),
                         {"task_id": child_id},
                     )
             except IntegrityError as e:

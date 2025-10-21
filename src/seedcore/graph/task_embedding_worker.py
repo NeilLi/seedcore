@@ -113,7 +113,7 @@ async def task_embedding_worker(app_state: Any) -> None:
 
                 # Ensure the task node exists and fetch the numeric node id.
                 ensure_result = await session.execute(
-                    text("SELECT ensure_task_node(:tid::uuid) AS node_id"),
+                    text("SELECT ensure_task_node(CAST(:tid AS uuid)) AS node_id"),
                     {"tid": task_id},
                 )
                 node_id = ensure_result.scalar_one_or_none()
@@ -133,7 +133,7 @@ async def task_embedding_worker(app_state: Any) -> None:
                           t.description,
                           jsonb_pretty(t.params) AS params_pretty
                         FROM tasks t
-                        WHERE t.id = :tid::uuid
+                        WHERE t.id = CAST(:tid AS uuid)
                         """
                     ),
                     {"tid": task_id},

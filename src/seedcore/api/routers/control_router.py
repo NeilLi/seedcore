@@ -169,20 +169,20 @@ async def create_fact(payload: FactCreate, session: AsyncSession = Depends(get_a
 
         # Ensure the fact has a graph node entry
         await session.execute(
-            text("SELECT ensure_fact_node(:fact_id::uuid)"),
+            text("SELECT ensure_fact_node(CAST(:fact_id AS uuid))"),
             {"fact_id": str(new_fact.id)},
         )
 
         if payload.produced_by_task_id:
             task_id_str = str(payload.produced_by_task_id)
             await session.execute(
-                text("SELECT ensure_task_node(:task_id::uuid)"),
+                text("SELECT ensure_task_node(CAST(:task_id AS uuid))"),
                 {"task_id": task_id_str},
             )
             await session.execute(
                 text(
                     "INSERT INTO task_produces_fact(task_id, fact_id) "
-                    "VALUES (:task_id::uuid, :fact_id::uuid) "
+                    "VALUES (CAST(:task_id AS uuid), CAST(:fact_id AS uuid)) "
                     "ON CONFLICT (task_id, fact_id) DO NOTHING"
                 ),
                 {"task_id": task_id_str, "fact_id": str(new_fact.id)},

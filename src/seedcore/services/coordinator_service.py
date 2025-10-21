@@ -96,7 +96,7 @@ class TaskRouterTelemetryDAO:
             f"""
             INSERT INTO {self._table_name}
             (task_id, surprise_score, x_vector, weights, ocps_metadata, chosen_route)
-            VALUES (:task_id::uuid, :surprise_score, :x_vector::jsonb, :weights::jsonb, :ocps_metadata::jsonb, :chosen_route)
+            VALUES (CAST(:task_id AS uuid), :surprise_score, CAST(:x_vector AS jsonb), CAST(:weights AS jsonb), CAST(:ocps_metadata AS jsonb), :chosen_route)
             """
         )
         await session.execute(
@@ -147,7 +147,7 @@ class TaskOutboxDAO:
         stmt = text(
             """
             INSERT INTO task_outbox (task_id, event_type, payload, dedupe_key)
-            VALUES (:task_id::uuid, :event_type, :payload::jsonb, :dedupe_key)
+            VALUES (CAST(:task_id AS uuid), :event_type, CAST(:payload AS jsonb), :dedupe_key)
             ON CONFLICT (dedupe_key) DO NOTHING
             """
         )
@@ -198,7 +198,7 @@ class TaskProtoPlanDAO:
         stmt = text(
             """
             INSERT INTO task_proto_plan (task_id, route, proto_plan)
-            VALUES (:task_id::uuid, :route, :proto_plan::jsonb)
+            VALUES (CAST(:task_id AS uuid), :route, CAST(:proto_plan AS jsonb))
             ON CONFLICT (task_id) DO UPDATE
             SET route = EXCLUDED.route,
                 proto_plan = EXCLUDED.proto_plan
@@ -3210,7 +3210,7 @@ class Coordinator:
             async with session_factory() as session:
                 async with session.begin():
                     await session.execute(
-                        text("SELECT ensure_task_node(:tid::uuid)"),
+                        text("SELECT ensure_task_node(CAST(:tid AS uuid))"),
                         {"tid": str(task_id)},
                     )
                     await telemetry_dao.insert(

@@ -649,9 +649,9 @@ class GraphDispatcher:
                         with self.engine.begin() as conn:
                             rows = conn.execute(
                                 text("""
-                                  SELECT node_id, emb <-> (:c::jsonb::vector) AS dist
+                                  SELECT node_id, emb <-> (CAST(:c AS jsonb)::vector) AS dist
                                     FROM graph_embeddings
-                                ORDER BY emb <-> (:c::jsonb::vector)
+                                ORDER BY emb <-> (CAST(:c AS jsonb)::vector)
                                    LIMIT :k
                                 """),
                                 {"c": centroid_json, "k": topk},
@@ -739,9 +739,9 @@ class GraphDispatcher:
                             with self.engine.begin() as conn:
                                 rows = conn.execute(
                                     text("""
-                                      SELECT node_id, emb <-> (:c::jsonb::vector) AS dist
+                                      SELECT node_id, emb <-> (CAST(:c AS jsonb)::vector) AS dist
                                         FROM graph_embeddings
-                                    ORDER BY emb <-> (:c::jsonb::vector)
+                                    ORDER BY emb <-> (CAST(:c AS jsonb)::vector)
                                        LIMIT :k
                                     """),
                                     {"c": centroid_json, "k": int(params.get("topk", 10))},
