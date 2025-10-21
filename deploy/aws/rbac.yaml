@@ -1,0 +1,260 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: seedcore-service-account
+  namespace: ${NAMESPACE}
+  labels:
+    app: seedcore
+    component: rbac
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/seedcore-eks-role
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: seedcore-cluster-role
+  labels:
+    app: seedcore
+    component: rbac
+rules:
+  # Pod management
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Service management
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # ConfigMap and Secret management
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # PersistentVolume management
+  - apiGroups: [""]
+    resources: ["persistentvolumes", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Event management
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  
+  # Node management (for resource monitoring)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  
+  # Namespace management
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  
+  # Ray-specific resources
+  - apiGroups: ["ray.io"]
+    resources: ["rayclusters", "rayservices", "rayjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Custom Resource Definitions
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  
+  # Horizontal Pod Autoscaler
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Pod Disruption Budget
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: seedcore-cluster-role-binding
+  labels:
+    app: seedcore
+    component: rbac
+subjects:
+  - kind: ServiceAccount
+    name: seedcore-service-account
+    namespace: ${NAMESPACE}
+roleRef:
+  kind: ClusterRole
+  name: seedcore-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: seedcore-role
+  namespace: ${NAMESPACE}
+  labels:
+    app: seedcore
+    component: rbac
+rules:
+  # Namespace-specific resources
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: seedcore-role-binding
+  namespace: ${NAMESPACE}
+  labels:
+    app: seedcore
+    component: rbac
+subjects:
+  - kind: ServiceAccount
+    name: seedcore-service-account
+    namespace: ${NAMESPACE}
+roleRef:
+  kind: Role
+  name: seedcore-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Network Policy for security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seedcore-network-policy
+  namespace: ${NAMESPACE}
+  labels:
+    app: seedcore
+    component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: seedcore
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+        - namespaceSelector:
+            matchLabels:
+              name: aws-load-balancer-controller
+      ports:
+        - protocol: TCP
+          port: 8002
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8265
+        - protocol: TCP
+          port: 10001
+    
+    # Allow ingress from same namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ${NAMESPACE}
+      ports:
+        - protocol: TCP
+          port: 8002
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8265
+        - protocol: TCP
+          port: 10001
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 3306
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 7474
+        - protocol: TCP
+          port: 7687
+  
+  egress:
+    # Allow egress to same namespace
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: ${NAMESPACE}
+      ports:
+        - protocol: TCP
+          port: 8002
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8265
+        - protocol: TCP
+          port: 10001
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 3306
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 7474
+        - protocol: TCP
+          port: 7687
+    
+    # Allow egress to AWS services
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+    
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+

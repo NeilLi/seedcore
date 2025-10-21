@@ -1,0 +1,226 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nim-retrieval
+  namespace: ${NAMESPACE}
+  labels:
+    app: nim-retrieval
+    component: nim
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nim-retrieval
+  template:
+    metadata:
+      labels:
+        app: nim-retrieval
+        component: nim
+        version: v1
+    spec:
+      serviceAccountName: seedcore-service-account
+      containers:
+        - name: nim-retrieval
+          image: ${ECR_NIM_REPO}:${NIM_RETRIEVAL_TAG}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            # NIM Configuration
+            - name: NIM_MODEL_NAME
+              value: "retrieval-model"
+            - name: NIM_PORT
+              value: "8000"
+            - name: NIM_HOST
+              value: "0.0.0.0"
+            
+            # AWS Configuration
+            - name: AWS_REGION
+              value: "${AWS_REGION}"
+            - name: AWS_DEFAULT_REGION
+              value: "${AWS_REGION}"
+            
+            # Logging Configuration
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: LOG_FORMAT
+              value: "json"
+            
+            # Performance Configuration
+            - name: WORKERS
+              value: "2"
+            - name: MAX_CONCURRENT_REQUESTS
+              value: "100"
+            
+            # Model Configuration
+            - name: MODEL_CACHE_DIR
+              value: "/app/models"
+            - name: EMBEDDING_DIMENSION
+              value: "768"
+            - name: MAX_SEQUENCE_LENGTH
+              value: "512"
+          
+          envFrom:
+            - configMapRef:
+                name: nim-retrieval-config
+                optional: true
+            - secretRef:
+                name: nim-retrieval-secret
+                optional: true
+          
+          volumeMounts:
+            - name: model-storage
+              mountPath: /app/models
+            - name: cache-storage
+              mountPath: /app/cache
+            - name: logs-volume
+              mountPath: /app/logs
+            - name: config-volume
+              mountPath: /app/config
+              readOnly: true
+          
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "2000m"
+            limits:
+              memory: "8Gi"
+              cpu: "4000m"
+          
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            failureThreshold: 60
+            periodSeconds: 5
+          
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          
+          # Security context
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+      
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: nim-model-pvc
+        - name: cache-storage
+          emptyDir: {}
+        - name: logs-volume
+          emptyDir: {}
+        - name: config-volume
+          configMap:
+            name: nim-retrieval-config
+            optional: true
+      
+      # Node selection for optimal performance
+      nodeSelector:
+        node-type: general
+      
+      # Pod disruption budget
+      terminationGracePeriodSeconds: 30
+      
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nim-retrieval
+  namespace: ${NAMESPACE}
+  labels:
+    app: nim-retrieval
+    component: nim
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app: nim-retrieval
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+  sessionAffinity: None
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nim-retrieval-pdb
+  namespace: ${NAMESPACE}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: nim-retrieval
+
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nim-retrieval-config
+  namespace: ${NAMESPACE}
+  labels:
+    app: nim-retrieval
+data:
+  config.yaml: |
+    model:
+      name: "retrieval-model"
+      version: "latest"
+      cache_dir: "/app/models"
+    
+    server:
+      host: "0.0.0.0"
+      port: 8000
+      workers: 2
+      max_concurrent_requests: 100
+    
+    embedding:
+      dimension: 768
+      max_sequence_length: 512
+    
+    performance:
+      batch_size: 32
+      timeout: 30
+      retry_attempts: 3

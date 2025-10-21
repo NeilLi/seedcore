@@ -1,0 +1,202 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${SERVICE_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${SERVICE_NAME}
+    version: v1
+spec:
+  replicas: ${REPLICAS}
+  selector:
+    matchLabels:
+      app: ${SERVICE_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${SERVICE_NAME}
+        version: v1
+    spec:
+      serviceAccountName: seedcore-service-account
+      containers:
+        - name: ${SERVICE_NAME}
+          image: ${ECR_REPO}:${SEEDCORE_IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8002
+              protocol: TCP
+          env:
+            # Core Configuration
+            - name: DSP_LOG_TO_FILE
+              value: "false"
+            - name: DSP_LOG_TO_STDOUT
+              value: "true"
+            - name: TMPDIR
+              value: "/tmp"
+            - name: TEMP
+              value: "/tmp"
+            
+            # Ray Integration
+            - name: RAY_ADDRESS
+              value: "${RAY_ADDRESS}"
+            - name: SEEDCORE_NS
+              value: "${SEEDCORE_NS}"
+            - name: SEEDCORE_API_ADDRESS
+              value: "${SEEDCORE_API_ADDRESS}"
+            - name: SEEDCORE_SKIP_EAGER_RAY
+              value: "1"
+            - name: SEEDCORE_BOOTSTRAP_OPTIONAL
+              value: "0"
+            
+            # Database Configuration
+            - name: POSTGRES_URL
+              value: "postgresql://postgres:${POSTGRES_PASSWORD}@postgresql:5432/seedcore"
+            - name: MYSQL_URL
+              value: "mysql+mysqlconnector://seedcore:${MYSQL_ROOT_PASSWORD}@mysql:3306/seedcore"
+            - name: NEO4J_URL
+              value: "bolt://neo4j:7687"
+            - name: NEO4J_USER
+              value: "neo4j"
+            - name: NEO4J_PASSWORD
+              value: "${NEO4J_PASSWORD}"
+            - name: REDIS_URL
+              value: "redis://redis:6379"
+            
+            # AWS Specific Configuration
+            - name: AWS_REGION
+              value: "${AWS_REGION}"
+            - name: AWS_DEFAULT_REGION
+              value: "${AWS_REGION}"
+            
+            # Logging Configuration
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: LOG_FORMAT
+              value: "json"
+          
+          envFrom:
+            - configMapRef:
+                name: seedcore-env
+                optional: true
+            - configMapRef:
+                name: seedcore-client-env
+                optional: true
+            - configMapRef:
+                name: ${SERVICE_NAME}-config
+                optional: true
+            - secretRef:
+                name: seedcore-env-secret
+                optional: true
+          
+          volumeMounts:
+            - name: logs-volume
+              mountPath: /tmp/seedcore-logs
+            - name: data-volume
+              mountPath: /app/data
+            - name: config-volume
+              mountPath: /app/config
+              readOnly: true
+          
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8002
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            failureThreshold: 60
+            periodSeconds: 5
+          
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          
+          command: ["/bin/bash", "-c"]
+          args:
+            - >
+              uvicorn src.seedcore.main:app
+              --host 0.0.0.0
+              --port 8002
+              --proxy-headers
+              --forwarded-allow-ips "*"
+      
+      volumes:
+        - name: logs-volume
+          emptyDir: {}
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: seedcore-data-pvc
+        - name: config-volume
+          configMap:
+            name: seedcore-config
+            optional: true
+      
+      # Node selection for optimal performance
+      nodeSelector:
+        node-type: general
+      
+      # Pod disruption budget
+      terminationGracePeriodSeconds: 30
+      
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${SERVICE_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${SERVICE_NAME}
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+spec:
+  type: LoadBalancer
+  selector:
+    app: ${SERVICE_NAME}
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8002
+      protocol: TCP
+  sessionAffinity: None
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ${SERVICE_NAME}-pdb
+  namespace: ${NAMESPACE}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ${SERVICE_NAME}
+
+

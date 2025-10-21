@@ -1,0 +1,381 @@
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: seedcore-svc
+  namespace: ${NAMESPACE}
+  labels:
+    app: seedcore-ray
+    version: v1
+spec:
+  # ===================================================================
+  #  Serve Configuration
+  # ===================================================================  
+  serveConfigV2: |
+    http_options:
+      host: 0.0.0.0
+      port: 8000
+      location: HeadOnly
+
+    applications:
+      - name: ml_service
+        import_path: entrypoints.ml_entrypoint:build_ml_service
+        route_prefix: /ml
+        deployments:
+          - name: MLService
+            num_replicas: 2
+            ray_actor_options:
+              num_cpus: 0.5
+              num_gpus: 0
+              resources: {"head_node": 0.001}
+
+      - name: cognitive
+        import_path: entrypoints.cognitive_entrypoint:build_cognitive_app
+        route_prefix: /cognitive
+        deployments:
+          - name: CognitiveService
+            num_replicas: 2
+            ray_actor_options:
+              num_cpus: 1.0
+              num_gpus: 0
+              memory: 4294967296  # 4GB
+              resources: {"head_node": 0.001}
+
+      - name: coordinator
+        import_path: entrypoints.coordinator_entrypoint:build_coordinator
+        route_prefix: /pipeline
+        deployments:
+          - name: Coordinator
+            num_replicas: 2
+            ray_actor_options:
+              num_cpus: 1.0
+              num_gpus: 0
+              resources: {"head_node": 0.001}
+
+      - name: ops
+        import_path: entrypoints.ops_entrypoint:build_ops_app
+        route_prefix: /ops
+        deployments:
+          - name: OpsGateway
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 0.1
+              resources: {"head_node": 0.001}
+
+          - name: EventizerService
+            num_replicas: 3
+            max_concurrent_queries: 200
+            ray_actor_options:
+              num_cpus: 0.8
+              memory: 4294967296    # 4GB
+
+          - name: FactManager
+            num_replicas: 2
+            ray_actor_options:
+              num_cpus: 0.5
+              memory: 2147483648    # 2GB
+
+          - name: StateService
+            num_replicas: 2
+            ray_actor_options:
+              num_cpus: 0.3
+              memory: 2147483648    # 2GB
+
+          - name: EnergyService
+            num_replicas: 2
+            ray_actor_options:
+              num_cpus: 0.3
+              memory: 2147483648    # 2GB
+
+      - name: organism
+        import_path: entrypoints.organism_entrypoint:build_organism_app
+        route_prefix: /organism
+        deployments:
+          - name: OrganismManager
+            num_replicas: 2
+            ray_actor_options:
+              num_cpus: 1.0
+              num_gpus: 0
+              memory: 4294967296  # 4GB
+              resources: {"head_node": 0.001}
+
+  # ===================================================================
+  #  Ray Cluster Configuration
+  # ===================================================================
+  rayClusterConfig:
+    rayVersion: "2.33.0"
+    
+    # -------------------------------------------------------------------
+    #  Head Node Specification
+    # -------------------------------------------------------------------
+    headGroupSpec:
+      serviceType: LoadBalancer
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        dashboard-port: "8265"
+        ray-client-server-port: "10001"
+        num-cpus: "4"
+
+      template:
+        spec:
+          serviceAccountName: seedcore-service-account
+          containers:
+          - name: ray-head
+            image: ${ECR_REPO}:${SEEDCORE_IMAGE_TAG}
+            imagePullPolicy: Always
+            envFrom:
+            - secretRef: { name: seedcore-env-secret }
+            env:
+            - name: DGL_GRAPHBOLT_SKIP
+              value: "0"
+            - name: RAY_OVERRIDE_RESOURCES
+              value: '{"head_node": 1}'
+            - name: RAY_NAMESPACE
+              value: "${SEEDCORE_NS}"
+            - name: SEEDCORE_NS
+              value: "${SEEDCORE_NS}"
+            - name: XGB_STORAGE_PATH
+              value: "/app/data/models"
+            - name: AWS_REGION
+              value: "${AWS_REGION}"
+            - name: AWS_DEFAULT_REGION
+              value: "${AWS_REGION}"
+            # Routing environment variables
+            - name: OCPS_DRIFT_THRESHOLD
+              value: "0.5"
+            - name: COGNITIVE_TIMEOUT_S
+              value: "8.0"
+            - name: COGNITIVE_MAX_INFLIGHT
+              value: "128"
+            - name: FAST_PATH_LATENCY_SLO_MS
+              value: "1000"
+            - name: MAX_PLAN_STEPS
+              value: "16"
+            - name: DSP_LOG_TO_FILE
+              value: "false"
+            - name: DSP_LOG_TO_STDOUT
+              value: "true"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: LLM_PROVIDER
+              value: "mlservice"
+            ports:
+              - name: gcs
+                containerPort: 6379
+              - name: dashboard
+                containerPort: 8265
+              - name: client
+                containerPort: 10001
+              - name: serve
+                containerPort: 8000
+              - name: metrics
+                containerPort: 8080
+            resources:
+              requests:
+                cpu: "2000m"
+                memory: "8Gi"
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+            volumeMounts:
+              - name: xgb-model-storage
+                mountPath: /app/data
+              - name: config-volume
+                mountPath: /app/config
+                readOnly: true
+            startupProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 60
+            readinessProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 3
+            livenessProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 30
+              timeoutSeconds: 10
+              failureThreshold: 3
+          volumes:
+            - name: xgb-model-storage
+              persistentVolumeClaim:
+                claimName: xgb-pvc
+            - name: config-volume
+              configMap:
+                name: seedcore-config
+                optional: true
+          nodeSelector:
+            node-type: general
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+
+    # -------------------------------------------------------------------
+    #  Worker Node Specification
+    # -------------------------------------------------------------------
+    workerGroupSpecs:
+    - groupName: general-workers
+      replicas: 3
+      rayStartParams:
+        num-cpus: "4"
+      template:
+        spec:
+          serviceAccountName: seedcore-service-account
+          containers:
+          - name: ray-worker
+            image: ${ECR_REPO}:${SEEDCORE_IMAGE_TAG}
+            imagePullPolicy: Always
+            envFrom:
+            - secretRef: { name: seedcore-env-secret }
+            env:
+            - name: DGL_GRAPHBOLT_SKIP
+              value: "0"
+            - name: RAY_NAMESPACE
+              value: "${SEEDCORE_NS}"
+            - name: SEEDCORE_NS
+              value: "${SEEDCORE_NS}"
+            - name: XGB_STORAGE_PATH
+              value: "/app/data/models"
+            - name: AWS_REGION
+              value: "${AWS_REGION}"
+            - name: AWS_DEFAULT_REGION
+              value: "${AWS_REGION}"
+            - name: OCPS_DRIFT_THRESHOLD
+              value: "0.5"
+            - name: COGNITIVE_TIMEOUT_S
+              value: "8.0"
+            - name: COGNITIVE_MAX_INFLIGHT
+              value: "128"
+            - name: FAST_PATH_LATENCY_SLO_MS
+              value: "1000"
+            - name: MAX_PLAN_STEPS
+              value: "16"
+            - name: DSP_LOG_TO_FILE
+              value: "false"
+            - name: DSP_LOG_TO_STDOUT
+              value: "true"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: LLM_PROVIDER
+              value: "mlservice"
+            resources:
+              requests:
+                cpu: "2000m"
+                memory: "8Gi"
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+            volumeMounts:
+              - name: xgb-model-storage
+                mountPath: /app/data
+              - name: config-volume
+                mountPath: /app/config
+                readOnly: true
+            readinessProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 3
+            livenessProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 30
+              timeoutSeconds: 10
+              failureThreshold: 3
+          volumes:
+            - name: xgb-model-storage
+              persistentVolumeClaim:
+                claimName: xgb-pvc
+            - name: config-volume
+              configMap:
+                name: seedcore-config
+                optional: true
+          nodeSelector:
+            node-type: general
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+
+    - groupName: gpu-workers
+      replicas: 1
+      rayStartParams:
+        num-cpus: "4"
+        num-gpus: "1"
+      template:
+        spec:
+          serviceAccountName: seedcore-service-account
+          containers:
+          - name: ray-worker
+            image: ${ECR_REPO}:${SEEDCORE_IMAGE_TAG}
+            imagePullPolicy: Always
+            envFrom:
+            - secretRef: { name: seedcore-env-secret }
+            env:
+            - name: DGL_GRAPHBOLT_SKIP
+              value: "0"
+            - name: RAY_NAMESPACE
+              value: "${SEEDCORE_NS}"
+            - name: SEEDCORE_NS
+              value: "${SEEDCORE_NS}"
+            - name: XGB_STORAGE_PATH
+              value: "/app/data/models"
+            - name: AWS_REGION
+              value: "${AWS_REGION}"
+            - name: AWS_DEFAULT_REGION
+              value: "${AWS_REGION}"
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+            resources:
+              requests:
+                cpu: "2000m"
+                memory: "8Gi"
+                nvidia.com/gpu: 1
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+                nvidia.com/gpu: 1
+            volumeMounts:
+              - name: xgb-model-storage
+                mountPath: /app/data
+              - name: config-volume
+                mountPath: /app/config
+                readOnly: true
+            readinessProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 3
+            livenessProbe:
+              exec:
+                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
+              periodSeconds: 30
+              timeoutSeconds: 10
+              failureThreshold: 3
+          volumes:
+            - name: xgb-model-storage
+              persistentVolumeClaim:
+                claimName: xgb-pvc
+            - name: config-volume
+              configMap:
+                name: seedcore-config
+                optional: true
+          nodeSelector:
+            node-type: gpu
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+
+

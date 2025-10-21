@@ -1,0 +1,69 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ${CLUSTER_NAME}
+  region: ${AWS_REGION}
+
+# GPU-enabled node group for ML workloads
+nodeGroups:
+  - name: gpu-nodes
+    instanceType: g4dn.xlarge
+    desiredCapacity: 1
+    minSize: 0
+    maxSize: 5
+    volumeSize: 100
+    volumeType: gp3
+    ssh:
+      allow: true
+      publicKeyName: seedcore-eks-key
+    iam:
+      withAddonPolicies:
+        imageBuilder: true
+        autoScaler: true
+        cloudWatch: true
+    labels:
+      node-type: gpu
+      environment: production
+      accelerator: nvidia-tesla-t4
+    taints:
+      - key: nvidia.com/gpu
+        value: "true"
+        effect: NoSchedule
+    tags:
+      Environment: production
+      Application: seedcore
+      NodeType: gpu
+      ManagedBy: eksctl
+
+# Spot instances for cost optimization
+  - name: spot-nodes
+    instanceType: mixed
+    instancesDistribution:
+      instanceTypes: ["t3.medium", "t3.large", "t3.xlarge"]
+      onDemandBaseCapacity: 0
+      onDemandPercentageAboveBaseCapacity: 0
+      spotInstancePools: 3
+    desiredCapacity: 2
+    minSize: 0
+    maxSize: 10
+    volumeSize: 50
+    volumeType: gp3
+    ssh:
+      allow: true
+      publicKeyName: seedcore-eks-key
+    iam:
+      withAddonPolicies:
+        imageBuilder: true
+        autoScaler: true
+        cloudWatch: true
+    labels:
+      node-type: spot
+      environment: production
+    tags:
+      Environment: production
+      Application: seedcore
+      NodeType: spot
+      ManagedBy: eksctl
+
+

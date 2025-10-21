@@ -1,0 +1,387 @@
+# ===============================
+# Persistent Volume Claims (EBS)
+# ===============================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: ${NAMESPACE}
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  storageClassName: ${STORAGE_CLASS}
+  resources:
+    requests:
+      storage: ${STORAGE_SIZE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+  namespace: ${NAMESPACE}
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  storageClassName: ${STORAGE_CLASS}
+  resources:
+    requests:
+      storage: ${STORAGE_SIZE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: neo4j-pvc
+  namespace: ${NAMESPACE}
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  storageClassName: ${STORAGE_CLASS}
+  resources:
+    requests:
+      storage: ${STORAGE_SIZE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+  namespace: ${NAMESPACE}
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  storageClassName: ${STORAGE_CLASS}
+  resources:
+    requests:
+      storage: 10Gi
+
+# ===============================
+# PostgreSQL
+# ===============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgresql
+  namespace: ${NAMESPACE}
+  labels: 
+    app: postgresql
+    component: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels: 
+      app: postgresql
+  template:
+    metadata: 
+      labels: 
+        app: postgresql
+    spec:
+      containers:
+        - name: postgresql
+          image: postgres:16
+          env:
+            - name: POSTGRES_PASSWORD
+              value: "${POSTGRES_PASSWORD}"
+            - name: POSTGRES_DB
+              value: "seedcore"
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          ports: 
+            - containerPort: 5432
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - "pg_isready -U postgres -d seedcore"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - "pg_isready -U postgres -d seedcore"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim: 
+            claimName: postgres-pvc
+      nodeSelector:
+        node-type: general
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+  namespace: ${NAMESPACE}
+  labels:
+    app: postgresql
+spec:
+  selector: 
+    app: postgresql
+  ports: 
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+  type: ClusterIP
+
+# ===============================
+# MySQL
+# ===============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: ${NAMESPACE}
+  labels: 
+    app: mysql
+    component: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels: 
+      app: mysql
+  template:
+    metadata: 
+      labels: 
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "${MYSQL_ROOT_PASSWORD}"
+            - name: MYSQL_DATABASE
+              value: "seedcore"
+            - name: MYSQL_USER
+              value: "seedcore"
+            - name: MYSQL_PASSWORD
+              value: "${MYSQL_ROOT_PASSWORD}"
+          ports: 
+            - containerPort: 3306
+          volumeMounts:
+            - name: mysql-storage
+              mountPath: /var/lib/mysql
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - "mysqladmin ping -h localhost -u root -p${MYSQL_ROOT_PASSWORD}"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - "mysqladmin ping -h localhost -u root -p${MYSQL_ROOT_PASSWORD}"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      volumes:
+        - name: mysql-storage
+          persistentVolumeClaim: 
+            claimName: mysql-pvc
+      nodeSelector:
+        node-type: general
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: ${NAMESPACE}
+  labels:
+    app: mysql
+spec:
+  selector: 
+    app: mysql
+  ports: 
+    - port: 3306
+      targetPort: 3306
+      protocol: TCP
+  type: ClusterIP
+
+# ===============================
+# Neo4j
+# ===============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: neo4j
+  namespace: ${NAMESPACE}
+  labels: 
+    app: neo4j
+    component: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels: 
+      app: neo4j
+  template:
+    metadata: 
+      labels: 
+        app: neo4j
+    spec:
+      containers:
+        - name: neo4j
+          image: neo4j:5
+          env:
+            - name: NEO4J_AUTH
+              value: "neo4j/${NEO4J_PASSWORD}"
+            - name: NEO4J_dbms_memory_heap_initial__size
+              value: "512m"
+            - name: NEO4J_dbms_memory_heap_max__size
+              value: "1G"
+            - name: NEO4J_dbms_memory_pagecache_size
+              value: "512m"
+          ports:
+            - containerPort: 7474
+              name: http
+            - containerPort: 7687
+              name: bolt
+          volumeMounts:
+            - name: neo4j-storage
+              mountPath: /data
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "1000m"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 7474
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 7474
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      volumes:
+        - name: neo4j-storage
+          persistentVolumeClaim: 
+            claimName: neo4j-pvc
+      nodeSelector:
+        node-type: general
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: neo4j
+  namespace: ${NAMESPACE}
+  labels:
+    app: neo4j
+spec:
+  selector: 
+    app: neo4j
+  ports:
+    - name: http
+      port: 7474
+      targetPort: 7474
+      protocol: TCP
+    - name: bolt
+      port: 7687
+      targetPort: 7687
+      protocol: TCP
+  type: ClusterIP
+
+# ===============================
+# Redis
+# ===============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: ${NAMESPACE}
+  labels: 
+    app: redis
+    component: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels: 
+      app: redis
+  template:
+    metadata: 
+      labels: 
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7
+          command: 
+            - redis-server
+            - --appendonly
+            - "yes"
+            - --requirepass
+            - "${REDIS_PASSWORD}"
+          ports: 
+            - containerPort: 6379
+          volumeMounts:
+            - name: redis-storage
+              mountPath: /data
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - "redis-cli -a ${REDIS_PASSWORD} ping"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - "redis-cli -a ${REDIS_PASSWORD} ping"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: redis-storage
+          persistentVolumeClaim: 
+            claimName: redis-pvc
+      nodeSelector:
+        node-type: general
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: ${NAMESPACE}
+  labels:
+    app: redis
+spec:
+  selector: 
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+  type: ClusterIP

@@ -1,0 +1,90 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ${CLUSTER_NAME}
+  region: ${AWS_REGION}
+  version: "1.30"
+
+# Enable IAM OIDC provider for service accounts
+iam:
+  withOIDC: true
+  serviceAccounts:
+    - metadata:
+        name: seedcore-service-account
+        namespace: ${NAMESPACE}
+      attachPolicyARNs:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AmazonRDSFullAccess
+        - arn:aws:iam::aws:policy/AmazonElastiCacheFullAccess
+
+# VPC Configuration
+vpc:
+  cidr: "10.0.0.0/16"
+  subnets:
+    public:
+      us-east-1a: { cidr: "10.0.1.0/24" }
+      us-east-1b: { cidr: "10.0.2.0/24" }
+      us-east-1c: { cidr: "10.0.3.0/24" }
+    private:
+      us-east-1a: { cidr: "10.0.10.0/24" }
+      us-east-1b: { cidr: "10.0.11.0/24" }
+      us-east-1c: { cidr: "10.0.12.0/24" }
+
+# Node Groups
+nodeGroups:
+  - name: ${NODE_GROUP_NAME}
+    instanceType: ${NODE_INSTANCE_TYPE}
+    desiredCapacity: ${DESIRED_NODES}
+    minSize: ${MIN_NODES}
+    maxSize: ${MAX_NODES}
+    volumeSize: 50
+    volumeType: gp3
+    ssh:
+      allow: true
+      publicKeyName: seedcore-eks-key
+    iam:
+      withAddonPolicies:
+        imageBuilder: true
+        autoScaler: true
+        externalDNS: true
+        certManager: true
+        appMesh: true
+        ebs: true
+        fsx: true
+        cloudWatch: true
+    labels:
+      node-type: general
+      environment: production
+    tags:
+      Environment: production
+      Application: seedcore
+      ManagedBy: eksctl
+
+# Add-ons
+addons:
+  - name: vpc-cni
+    version: latest
+  - name: coredns
+    version: latest
+  - name: kube-proxy
+    version: latest
+  - name: aws-ebs-csi-driver
+    version: latest
+  - name: aws-efs-csi-driver
+    version: latest
+
+# CloudWatch logging
+cloudWatch:
+  clusterLogging:
+    enableTypes: ["*"]
+    logRetentionInDays: 7
+
+# Kubernetes API server configuration
+kubernetesNetworkConfig:
+  serviceIPv4CIDR: "172.20.0.0/16"
+
+
