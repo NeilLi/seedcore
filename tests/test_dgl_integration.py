@@ -45,7 +45,7 @@ def test_graph_loader():
 def test_sage_model():
     """Test that SAGE model can be imported and instantiated."""
     try:
-        from seedcore.graph.models import SAGE
+        from seedcore.graph.gnn_models import SAGE
         print("✅ SAGE model import successful")
         
         # Test instantiation
@@ -70,7 +70,7 @@ def test_embeddings_module():
 def test_graph_dispatcher():
     """Test that GraphDispatcher can be imported."""
     try:
-        from seedcore.agents.graph_dispatcher import GraphDispatcher
+        from seedcore.dispatcher import GraphDispatcher
         print("✅ GraphDispatcher import successful")
         return True
     except Exception as e:

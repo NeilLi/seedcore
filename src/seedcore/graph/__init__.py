@@ -16,7 +16,7 @@ from .agent_repository import AgentGraphRepository
 try:
     # Import DGL-dependent modules
     from .loader import GraphLoader
-    from .models import SAGE
+    from .gnn_models import SAGE
     from .embeddings import GraphEmbedder, upsert_embeddings
     
     __all__ = [

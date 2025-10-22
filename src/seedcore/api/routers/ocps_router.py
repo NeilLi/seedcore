@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
-from ...hgnn.pattern_shim import SHIM
+from ...graph.pattern_shim import SHIM
 
 
 router = APIRouter(prefix="/ocps", tags=["ocps"])

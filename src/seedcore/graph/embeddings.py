@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy import text
 
 from .loader import GraphLoader
-from .models import SAGE
+from .gnn_models import SAGE
 
 logger = logging.getLogger(__name__)
 PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))

@@ -110,7 +110,7 @@ from ..models.result_schema import (
 from ..energy.weights import EnergyWeights
 from ..energy.calculator import energy_and_grad
 # State classes moved to organism_manager.py and StateAggregator class
-from ..hgnn.pattern_shim import SHIM
+from ..graph.pattern_shim import SHIM
 from ..energy.energy_persistence import EnergyLedgerStore
 
 # --- Persistent State ---

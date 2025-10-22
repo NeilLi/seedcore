@@ -25,8 +25,7 @@ from .observer_agent import ObserverAgent
 from .lifecycle import evaluate_lifecycle, LifecycleDecision
 
 # Dispatchers
-from .queue_dispatcher import Dispatcher, Reaper
-from .graph_dispatcher import GraphDispatcher
+from ..dispatcher import Dispatcher, Reaper, GraphDispatcher
 
 # Memory and storage
 from .private_memory import AgentPrivateMemory

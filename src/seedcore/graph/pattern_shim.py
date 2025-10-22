@@ -87,5 +87,3 @@ class HGNNPatternShim:
 
 # module-level singleton
 SHIM = HGNNPatternShim()
-
-

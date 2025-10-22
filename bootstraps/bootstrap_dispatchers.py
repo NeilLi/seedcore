@@ -162,7 +162,7 @@ def _ensure_reaper(env_vars: dict):
         except Exception as e:
             log.warning(f"Initial stale task sweep failed: {e}")
     except Exception:
-        from seedcore.agents.queue_dispatcher import Reaper
+        from seedcore.dispatcher import Reaper
         opts = dict(name="seedcore_reaper", lifetime="detached", namespace=RAY_NAMESPACE, num_cpus=0.05, runtime_env={"env_vars": env_vars})
         res = _optional_resources()
         if res:
@@ -181,7 +181,7 @@ def _ensure_graph_dispatchers(env_vars: dict):
     if not _env_bool("ENABLE_GRAPH_DISPATCHERS", "true"):
         log.info("ℹ️ GraphDispatchers disabled")
         return
-    from seedcore.agents.graph_dispatcher import GraphDispatcher
+    from seedcore.dispatcher import GraphDispatcher
 
     graph_dispatchers_all = []
     graph_dispatchers_created = []
@@ -265,7 +265,7 @@ def _ensure_graph_dispatchers(env_vars: dict):
         raise RuntimeError(f"Only {ok}/{EXPECT_GRAPH} GraphDispatchers responsive with STRICT_GRAPH_DISPATCHERS=true")
 
 def _ensure_dispatchers(env_vars: dict):
-    from seedcore.agents.queue_dispatcher import Dispatcher
+    from seedcore.dispatcher import Dispatcher
 
     dispatchers = []
     created = []

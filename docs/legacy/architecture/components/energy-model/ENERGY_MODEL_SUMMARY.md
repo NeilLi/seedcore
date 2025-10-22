@@ -49,7 +49,7 @@ Prefer the explicit unified-state API:
 import numpy as np
 from src.seedcore.ops.energy.weights import EnergyWeights
 from src.seedcore.ops.energy.calculator import compute_energy
-from seedcore.hgnn.pattern_shim import SHIM
+from seedcore.graph.pattern_shim import SHIM
 
 H = unified_state.H_matrix()
 P = unified_state.P_matrix()

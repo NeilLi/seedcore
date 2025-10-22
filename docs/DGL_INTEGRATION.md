@@ -45,7 +45,7 @@ g, idx_map, X = loader.load_k_hop(
 loader.close()
 ```
 
-### 2. SAGE Model (`src/seedcore/graph/models.py`)
+### 2. SAGE Model (`src/seedcore/graph/gnn_models.py`)
 
 A GraphSAGE implementation for inductive node representation learning:
 
@@ -56,7 +56,7 @@ A GraphSAGE implementation for inductive node representation learning:
 
 **Usage:**
 ```python
-from seedcore.graph.models import SAGE
+from seedcore.graph.gnn_models import SAGE
 
 model = SAGE(in_feats=10, h_feats=128, layers=2)
 model.eval()
@@ -73,7 +73,7 @@ Ray-based parallel processing for graph embeddings:
 - **Batch processing**: Handles multiple nodes efficiently
 - **Error handling**: Graceful fallbacks and retries
 
-### 4. GraphDispatcher (`src/seedcore/agents/graph_dispatcher.py`)
+### 4. GraphDispatcher (`src/seedcore/dispatcher/graph_dispatcher.py`)
 
 Task dispatcher for graph operations:
 
@@ -137,7 +137,7 @@ pgvector            # PostgreSQL vector extension
 
 ```python
 import ray
-from seedcore.agents.graph_dispatcher import GraphDispatcher
+from seedcore.dispatcher import GraphDispatcher
 
 # Get GraphDispatcher reference
 dispatcher = ray.get_actor("seedcore_graph_dispatcher_0")
@@ -250,7 +250,7 @@ print(f"Status: {status}")  # Should return "pong"
 
 The modular design allows easy extension:
 
-- Add new GNN models in `models.py`
+- Add new GNN models in `gnn_models.py`
 - Implement custom feature extractors in `loader.py`
 - Create specialized dispatchers for different graph operations
 - Integrate with other vector databases (Pinecone, Weaviate, etc.)

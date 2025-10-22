@@ -13,7 +13,7 @@ import time
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from seedcore.hgnn.pattern_shim import HGNNPatternShim, SHIM, _key
+from seedcore.graph.pattern_shim import HGNNPatternShim, SHIM, _key
 
 
 def test_basic_functionality():

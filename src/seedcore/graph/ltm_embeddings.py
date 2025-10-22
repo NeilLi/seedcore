@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy import text
 
 from .loader import GraphLoader
-from .models import HeteroSAGE, MemoryFusion
+from .gnn_models import HeteroSAGE, MemoryFusion
 # reuse your existing upsert helper (pgvector)
 from .embeddings import upsert_embeddings  # ray.remote fn that writes into graph_embeddings
 

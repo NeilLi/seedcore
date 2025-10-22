@@ -1,4 +1,4 @@
-# seedcore/src/seedcore/graph/models.py
+# seedcore/src/seedcore/graph/gnn_models.py
 from __future__ import annotations
 import torch
 import torch.nn as nn
