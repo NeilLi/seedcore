@@ -21,7 +21,7 @@ spec:
           - name: MLService
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.1
+              num_cpus: 0.2
               num_gpus: 0
               resources: {"head_node": 0.001}
 
@@ -59,16 +59,16 @@ spec:
               resources: {"head_node": 0.001}
 
           - name: EventizerService
-            num_replicas: 2
+            num_replicas: 1
             max_concurrent_queries: 100
             ray_actor_options:
-              num_cpus: 0.4
+              num_cpus: 0.05
               memory: 2147483648    # 2GB
 
           - name: FactManager
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.2
+              num_cpus: 0.1
               memory: 1073741824    # 1GB
 
           - name: StateService

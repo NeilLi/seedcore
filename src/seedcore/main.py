@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 from .database import get_async_pg_engine  # must return postgresql+asyncpg engine
 from .models import TaskBase
 from .models.fact import Base as FactBase
-from .api.routers.tasks_router import router as tasks_router, _task_worker
+from .api.routers.tasks_router import router as tasks_router
 from .graph.task_embedding_worker import (
     task_embedding_backfill_loop,
     task_embedding_worker,
@@ -65,11 +65,10 @@ async def lifespan(app: FastAPI):
     await _verify_graph_node_support(engine)
     logger.info("Database initialized successfully")
     
-    # Initialize task queue and start background workers
+    # Initialize task queue (task processing is handled by queue_dispatcher.py)
     if not hasattr(app.state, "task_queue"):
         app.state.task_queue = asyncio.Queue()
-    app.state.worker_task = asyncio.create_task(_task_worker(app.state))
-    logger.info("Background task worker started")
+    logger.info("Task queue initialized (processing handled by queue_dispatcher)")
 
     if not hasattr(app.state, "task_embedding_queue"):
         app.state.task_embedding_queue = asyncio.Queue()
@@ -86,15 +85,6 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down SeedCore API application...")
     
     # Cancel background workers
-    if hasattr(app.state, "worker_task"):
-        logger.info("Stopping background task worker...")
-        app.state.worker_task.cancel()
-        try:
-            await app.state.worker_task
-        except asyncio.CancelledError:
-            pass
-        logger.info("Background task worker stopped")
-
     if hasattr(app.state, "task_embedding_backfill"):
         logger.info("Stopping task embedding backfill...")
         app.state.task_embedding_backfill.cancel()

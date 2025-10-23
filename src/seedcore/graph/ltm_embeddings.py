@@ -89,7 +89,7 @@ class LTMEmbedder:
         hg, idx_maps, x_dict, ew = self.loader.load_k_hop_hetero(
             start_ids=start_task_ids, k=k, decay_half_life_s=DECAY_HALF_LIFE_S
         )
-        if hg.num_nodes() == 0:
+        if hg is None or hg.num_nodes() == 0:
             return {}
 
         in_dims = {nt: x.shape[1] for nt, x in x_dict.items()}

@@ -209,9 +209,9 @@ class GraphLoader:
                 ).data()
 
             if not nodes:
-                # empty
-                empty = dgl.heterograph({})
-                return empty, {}, {}, {}
+                # empty - return None to indicate no graph data available
+                # The calling code should handle this case
+                return None, {}, {}, {}
 
             # 2) partition nodes by canonical ntype
             by_type: Dict[str, List[Dict[str, Any]]] = {}
