@@ -22,6 +22,8 @@ except Exception:
     psutil = None
 
 from seedcore.logging_setup import ensure_serve_logger
+from seedcore.models import TaskPayload
+from seedcore.dispatcher.router import RouterFactory, Router
 
 logger = ensure_serve_logger("seedcore.dispatchers", level="DEBUG")
 
@@ -58,6 +60,9 @@ RECYCLE_AFTER_TASKS  = int(os.getenv("DISPATCHER_RECYCLE_AFTER_TASKS", "0"))  # 
 RESULT_MAX_BYTES     = int(os.getenv("DISPATCHER_RESULT_MAX_BYTES", "0"))     # 0 disables truncation
 ASYNC_PG_STMT_CACHE  = int(os.getenv("ASYNC_PG_STATEMENT_CACHE", "128"))
 ASYNC_PG_IDLE_LIFETIME = float(os.getenv("ASYNC_PG_IDLE_LIFETIME_S", "300"))
+
+# Router configuration
+DISPATCHER_ROUTER_TYPE = os.getenv("DISPATCHER_ROUTER_TYPE", "coordinator_http")
 
 # Task lease and stale recovery configuration
 TASK_STALE_S   = int(os.getenv("TASK_STALE_S", "900"))   # 15m default
@@ -182,6 +187,8 @@ class Dispatcher:
         self._last_mem_check = 0.0
         # Track inflight tasks manually for safer metrics (avoid accessing private semaphore attributes)
         self._inflight_count = 0
+        # Router for task execution (replaces direct Serve handle)
+        self.router: Optional[Router] = None
         
         # --- Prometheus per-actor registry to prevent default REGISTRY growth ---
         self._metrics_registry = CollectorRegistry(auto_describe=True)
@@ -276,6 +283,16 @@ class Dispatcher:
             self.pool = None
             await self._ensure_pool()
 
+    async def _ensure_router(self):
+        """Initialize router if not already created."""
+        if self.router is None:
+            try:
+                self.router = RouterFactory.create_router(DISPATCHER_ROUTER_TYPE)
+                logger.info(f"Dispatcher {self.name}: Created router of type {DISPATCHER_ROUTER_TYPE}")
+            except Exception as e:
+                logger.error(f"Dispatcher {self.name}: Failed to create router: {e}")
+                raise
+
     async def _monitor_pool_health(self):
         """Monitor connection pool health to detect potential leaks."""
         if self.pool:
@@ -329,11 +346,12 @@ class Dispatcher:
     # --- NEW: explicit warmup/ready probes so bootstrap can block until DB is ready ---
     async def warmup(self) -> Dict[str, Any]:
         """
-        Ensure the DB pool exists; return status dict (never raises to caller).
+        Ensure the DB pool and router exist; return status dict (never raises to caller).
         Useful for synchronous readiness gating before starting run().
         """
         try:
             await self._ensure_pool()
+            await self._ensure_router()
         except Exception:
             # _last_pool_error already set in _ensure_pool
             pass
@@ -341,12 +359,13 @@ class Dispatcher:
 
     async def ready(self, timeout_s: float = 20.0, interval_s: float = 0.5) -> bool:
         """
-        Poll until pool is created or timeout. Returns True if ready, False otherwise.
+        Poll until pool and router are created or timeout. Returns True if ready, False otherwise.
         """
         deadline = time.monotonic() + max(0.1, timeout_s)
         while time.monotonic() < deadline:
             try:
                 await self._ensure_pool()
+                await self._ensure_router()
                 return True
             except Exception:
                 await asyncio.sleep(interval_s)
@@ -440,33 +459,9 @@ class Dispatcher:
         except Exception as e:
             logger.warning(f"[QueueDispatcher] Failed to recover tasks for {self.name}: {e}")
 
-    class TaskPayload(BaseModel):
-        type: str
-        params: Dict[str, Any] = {}
-        description: str = ""
-        domain: Optional[str] = None
-        drift_score: float = 0.0
-        task_id: str
-        
-        @field_validator('params', mode='before')
-        @classmethod
-        def parse_params(cls, v):
-            """Parse params from JSON string if needed."""
-            if isinstance(v, str):
-                try:
-                    import json
-                    return json.loads(v)
-                except (json.JSONDecodeError, TypeError):
-                    return {}
-            return v or {}
-        
-        @field_validator('domain', mode='before')
-        @classmethod
-        def parse_domain(cls, v):
-            """Convert None domain to empty string."""
-            return v or ""
+    # TaskPayload is now imported from centralized models
 
-    async def _process_one(self, item: Dict[str, Any], coord_handle):
+    async def _process_one(self, item: Dict[str, Any]):
         """Bounded-concurrency task runner for a single task."""
         async with self.sema:
             # Track inflight tasks manually
@@ -488,7 +483,7 @@ class Dispatcher:
             logger.info(f"[QueueDispatcher] 🔍 Raw item data: {item}")
             logger.info(f"[QueueDispatcher] 🔍 Item types: params={type(item.get('params'))}, domain={type(item.get('domain'))}")
             
-            payload = Dispatcher.TaskPayload(
+            payload = TaskPayload(
                 type=item["type"],
                 params=item["params"],
                 description=item.get("description") or "",
@@ -497,7 +492,7 @@ class Dispatcher:
                 task_id=str(tid)
             )
             logger.info(f"[QueueDispatcher] ✅ Task payload created for {tid}: {payload.dict()}")
-            logger.info(f"[QueueDispatcher] 🔧 Coord handle type: {type(coord_handle)}")
+            logger.info(f"[QueueDispatcher] 🔧 Router type: {type(self.router)}")
             
             try:
                 # Start lease renewal task for long-running tasks
@@ -520,33 +515,38 @@ class Dispatcher:
                 except Exception as e:
                     logger.debug(f"Failed to start lease renewal for task {tid}: {e}")
 
-                # NOTE: Ray Serve returns a DeploymentResponse; awaiting it is fine.
-                logger.info(f"[QueueDispatcher] 📤 About to send task {tid} to Coordinator for routing and execution")
+                # Ensure router is available
+                await self._ensure_router()
+                
+                # Route and execute task using router interface
+                logger.info(f"[QueueDispatcher] 📤 About to route task {tid} via router")
                 logger.info(f"[QueueDispatcher] 🎯 Task ID: {tid} | Executing task type: {item['type']}")
                 logger.info(f"[QueueDispatcher] 📋 Task payload: {payload.dict()}")
-                logger.info(f"[QueueDispatcher] 🔧 Coord handle: {coord_handle}")
+                logger.info(f"[QueueDispatcher] 🔧 Router: {self.router}")
                 
                 try:
-                    # Add timeout to prevent hanging on Serve calls
+                    # Add timeout to prevent hanging on router calls
                     CALL_TIMEOUT_S = int(os.getenv("SERVE_CALL_TIMEOUT_S", "120"))
-                    logger.info(f"[QueueDispatcher] 🚀 Calling coord_handle.route_and_execute.remote() for task {tid} (timeout={CALL_TIMEOUT_S}s)")
+                    logger.info(f"[QueueDispatcher] 🚀 Calling router.route_and_execute() for task {tid} (timeout={CALL_TIMEOUT_S}s)")
                     
-                    fut = coord_handle.route_and_execute.remote(payload.model_dump())
-                    result: Dict[str, Any] = await asyncio.wait_for(fut, timeout=CALL_TIMEOUT_S)
-                    logger.info(f"[QueueDispatcher] ✅ Received result from Coordinator for task {tid}: {result}")
+                    result: Dict[str, Any] = await asyncio.wait_for(
+                        self.router.route_and_execute(payload, correlation_id=str(tid)), 
+                        timeout=CALL_TIMEOUT_S
+                    )
+                    logger.info(f"[QueueDispatcher] ✅ Received result from router for task {tid}: {result}")
                     
                 except asyncio.TimeoutError:
-                    logger.warning(f"[QueueDispatcher] ⏰ Serve call timeout for task {tid} after {CALL_TIMEOUT_S}s")
+                    logger.warning(f"[QueueDispatcher] ⏰ Router call timeout for task {tid} after {CALL_TIMEOUT_S}s")
                     # Mark as RETRY with backoff, exit cleanly; do NOT stall the loop
                     async with self.pool.acquire() as conw:
                         delay = min(10 * (2 ** item["attempts"]), 300)
-                        await conw.execute(RETRY_SQL, "dispatcher: serve call timeout", str(delay), tid)
+                        await conw.execute(RETRY_SQL, "dispatcher: router call timeout", str(delay), tid)
                         logger.info(f"[QueueDispatcher] 🔄 Task {tid} marked for retry due to timeout (delay={delay}s)")
                         self.tasks_retried.inc()
                     return
                     
                 except Exception as e:
-                    logger.error(f"[QueueDispatcher] ❌ Failed to get result from Coordinator for task {tid}: {e}")
+                    logger.error(f"[QueueDispatcher] ❌ Failed to get result from router for task {tid}: {e}")
                     logger.error(f"[QueueDispatcher] 🔧 Exception type: {type(e)}")
                     logger.error(f"[QueueDispatcher] 📋 Exception details: {str(e)}")
                     logger.error(f"[QueueDispatcher] 🔧 Exception traceback:", exc_info=True)
@@ -740,22 +740,14 @@ class Dispatcher:
 
     async def run(self):
         await self._ensure_pool()
+        await self._ensure_router()
 
         # Recover any tasks owned by this dispatcher on startup
         await self._recover_mine()
 
-        # ✅ Get a handle to the Coordinator deployment inside the 'coordinator' app.
-        logger.info(f"[QueueDispatcher] 🔍 Getting Coordinator Serve deployment handle...")
-        try:
-            coord_handle = serve.get_deployment_handle("Coordinator", app_name="coordinator")
-            logger.info(f"[QueueDispatcher] ✅ Successfully got Coordinator handle: {coord_handle}")
-            
-            # Test the connection with a health check (coordinator doesn't have health endpoint, so we'll skip)
-            logger.info(f"[QueueDispatcher] 🏥 Coordinator handle obtained successfully")
-                
-        except Exception as e:
-            logger.error(f"[QueueDispatcher] ❌ Failed to get Coordinator handle: {e}")
-            raise
+        # ✅ Router is now initialized and ready for task processing
+        logger.info(f"[QueueDispatcher] 🔍 Router initialized successfully: {type(self.router)}")
+        logger.info(f"[QueueDispatcher] 🏥 Router is ready for task processing")
 
         # LISTEN/NOTIFY connection (better batching)
         listen_task = None
@@ -783,7 +775,7 @@ class Dispatcher:
                         # Use fire-and-forget tasks to prevent one bad task from blocking the entire batch
                         logger.info(f"[QueueDispatcher] Starting concurrent processing of {len(batch)} tasks")
                         for item in batch:
-                            asyncio.create_task(self._process_one(item, coord_handle))
+                            asyncio.create_task(self._process_one(item))
                         # Brief pause to let tasks start
                         await asyncio.sleep(0.01)
                 except Exception as e:
@@ -816,6 +808,10 @@ class Dispatcher:
         if self.pool and not self._is_pool_closed():
             await self.pool.close()
             logger.info(f"Dispatcher {self.name}: Connection pool closed")
+        # Close router if it exists
+        if self.router:
+            await self.router.close()
+            logger.info(f"Dispatcher {self.name}: Router closed")
 
     def ping(self) -> str:
         return "pong"
@@ -875,6 +871,8 @@ class Dispatcher:
             "semaphore_count": getattr(self.sema, "_value", "unknown"),
             "inflight_tasks": self._inflight_count,
             "last_heartbeat": time.time(),
+            "router_type": type(self.router).__name__ if self.router else None,
+            "router_initialized": self.router is not None,
         }
 
     def heartbeat(self) -> Dict[str, Any]:
@@ -883,6 +881,7 @@ class Dispatcher:
             # Basic health check
             pool_ok = self.pool is not None and not self._is_pool_closed()
             semaphore_ok = self.sema._value >= 0  # Check if semaphore is in valid state
+            router_ok = self.router is not None
             
             health_status = "healthy"
             if self._stop.is_set():
@@ -891,6 +890,8 @@ class Dispatcher:
                 health_status = "pool_issue"
             elif not semaphore_ok:
                 health_status = "semaphore_issue"
+            elif not router_ok:
+                health_status = "router_issue"
             elif self._last_pool_error:
                 health_status = "pool_error"
             
@@ -899,6 +900,7 @@ class Dispatcher:
                 "timestamp": time.time(),
                 "pool_ok": pool_ok,
                 "semaphore_ok": semaphore_ok,
+                "router_ok": router_ok,
                 "inflight_tasks": self._inflight_count,
                 "last_pool_error": self._last_pool_error,
             }

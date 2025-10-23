@@ -14,7 +14,7 @@ from sqlalchemy import select, String, text
 
 # --- IMPORTS FROM YOUR OTHER MODULES ---
 from ...database import get_async_pg_session, get_async_pg_session_factory
-from ...models.task import Task, TaskStatus
+from ...models import DatabaseTask as Task, TaskStatus
 # Note: Result schema imports removed - task processing is now handled by queue_dispatcher.py
 from ...serve.eventizer_client import EventizerServiceClient
 from ...ops.eventizer.fast_eventizer import process_text_fast

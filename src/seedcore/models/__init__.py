@@ -5,7 +5,9 @@ This module provides SQLAlchemy models for tasks and facts.
 All imports are safe and don't trigger runtime dependencies.
 """
 
-from .task import Task, TaskStatus, Base as TaskBase
+from .task import Task as DatabaseTask, TaskStatus, Base as TaskBase
 from .fact import Fact, Base as FactBase
+from .task_payload import TaskPayload
+from .task_api import Task
 
-__all__ = ["Task", "TaskStatus", "TaskBase", "Fact", "FactBase"]
+__all__ = ["DatabaseTask", "Task", "TaskStatus", "TaskBase", "Fact", "FactBase", "TaskPayload"]

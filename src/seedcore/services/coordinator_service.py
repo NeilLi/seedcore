@@ -31,6 +31,7 @@ from seedcore.ops.eventizer.fact_dao import FactDAO
 from seedcore.ops.eventizer.eventizer_features import (
     features_from_payload as default_features_from_payload,
 )
+from seedcore.models import TaskPayload, Task
 
 from collections.abc import Mapping as _MappingABC
 
@@ -226,31 +227,7 @@ from seedcore.graph.task_repository import GraphTaskSqlRepository
 logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
 
 # ---------- TaskPayload Model (matches dispatcher) ----------
-class TaskPayload(BaseModel):
-    type: str
-    params: Dict[str, Any] = {}
-    description: str = ""
-    domain: Optional[str] = None
-    drift_score: float = 0.0
-    task_id: str
-
-    @field_validator("params", mode="before")
-    @classmethod
-    def parse_params(cls, v):
-        """Parse params from JSON string if needed."""
-        if isinstance(v, str):
-            try:
-                import json
-                return json.loads(v)
-            except (json.JSONDecodeError, TypeError):
-                return {}
-        return v or {}
-
-    @field_validator("domain", mode="before")
-    @classmethod
-    def parse_domain(cls, v):
-        """Convert None domain to empty string."""
-        return v or ""
+# TaskPayload is now imported from centralized models
 
 # ---------- Result Helpers ----------
 def ok_fast(payload: dict) -> dict:
@@ -1193,16 +1170,7 @@ class CoordinatorCore:
         return res
 
 # ---------- API models ----------
-class Task(BaseModel):
-    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
-    type: str
-    description: Optional[str] = ""
-    params: Dict[str, Any] = {}
-    domain: Optional[str] = None
-    features: Dict[str, Any] = {}
-    history_ids: List[str] = []
-    # Note: drift_score is now computed dynamically via ML service
-    # … add fields as needed
+# Task model is now imported from centralized models
 
 class AnomalyTriageRequest(BaseModel):
     agent_id: str

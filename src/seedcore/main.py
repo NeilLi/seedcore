@@ -19,7 +19,7 @@ from sqlalchemy import text
 logger = logging.getLogger(__name__)
 
 from .database import get_async_pg_engine  # must return postgresql+asyncpg engine
-from .models.task import Base as TaskBase
+from .models import TaskBase
 from .models.fact import Base as FactBase
 from .api.routers.tasks_router import router as tasks_router, _task_worker
 from .graph.task_embedding_worker import (

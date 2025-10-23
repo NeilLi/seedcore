@@ -1,53 +1,60 @@
 """Database-backed helpers for graph tasks.
 
 This repository centralizes CRUD helpers around the ``tasks`` table
-for graph-related workloads.  It intentionally uses the synchronous
-SQLAlchemy engine returned by :func:`seedcore.database.get_sync_pg_engine`
-so it can be called from existing worker code, while also exposing
-async wrappers for integration with asyncio-based coordinators.
+for graph-related workloads. It uses a native asyncio approach and expects
+an async session to be injected, making it suitable for modern async
+coordinators and services.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
+import logging
 from typing import Any, Mapping, Optional
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError, DataError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from seedcore.database import get_sync_pg_engine
+# Get a logger instance
+logger = logging.getLogger(__name__)
 
 
 class GraphTaskSqlRepository:
-    """Lightweight repository for creating graph tasks and wiring dependencies."""
-
-    def __init__(self, engine: Optional[Engine] = None) -> None:
-        self._engine: Engine = engine or get_sync_pg_engine()
+    """
+    Lightweight, stateless repository for creating graph tasks
+    and wiring dependencies. Requires an AsyncSession to be injected.
+    """
 
     # ------------------------------------------------------------------
     # Task creation
     # ------------------------------------------------------------------
-    def create_task(
+    async def create_task(
         self,
+        session: AsyncSession,
         task_type: str,
         params: Optional[Mapping[str, Any]],
         description: Optional[str],
         agent_id: Optional[str] = None,
         organ_id: Optional[str] = None,
     ) -> UUID:
-        """Insert a new task record and return its UUID."""
+        """Insert a new task record asynchronously and return its UUID."""
         try:
             params_dict = dict(params or {})
 
             if task_type == "graph_embed":
-                return self._create_graph_embed_task(params_dict, description, agent_id, organ_id)
+                return await self._create_graph_embed_task(
+                    session, params_dict, description, agent_id, organ_id
+                )
             if task_type == "graph_rag_query":
-                return self._create_graph_rag_task(params_dict, description, agent_id, organ_id)
+                return await self._create_graph_rag_task(
+                    session, params_dict, description, agent_id, organ_id
+                )
 
-            return self._create_generic_task(task_type, params_dict, description, agent_id, organ_id)
+            return await self._create_generic_task(
+                session, task_type, params_dict, description, agent_id, organ_id
+            )
         except IntegrityError as e:
             logger.error(
                 "Integrity constraint violation while creating task type '%s': %s. "
@@ -87,30 +94,13 @@ class GraphTaskSqlRepository:
             )
             raise
 
-    async def create_task_async(
-        self,
-        task_type: str,
-        params: Optional[Mapping[str, Any]],
-        description: Optional[str],
-        agent_id: Optional[str] = None,
-        organ_id: Optional[str] = None,
-    ) -> UUID:
-        """Async wrapper around :meth:`create_task`."""
-
-        return await asyncio.to_thread(
-            self.create_task,
-            task_type,
-            params,
-            description,
-            agent_id,
-            organ_id,
-        )
-
     # ------------------------------------------------------------------
     # Task dependencies
     # ------------------------------------------------------------------
-    def add_dependency(self, parent_id: UUID, child_id: UUID) -> None:
-        """Register a dependency edge between two tasks."""
+    async def add_dependency(
+        self, session: AsyncSession, parent_id: UUID, child_id: UUID
+    ) -> None:
+        """Register a dependency edge between two tasks asynchronously."""
         try:
             stmt = text(
                 """
@@ -119,8 +109,7 @@ class GraphTaskSqlRepository:
                 ON CONFLICT DO NOTHING
                 """
             )
-            with self._engine.begin() as conn:
-                conn.execute(stmt, {"parent_id": parent_id, "child_id": child_id})
+            await session.execute(stmt, {"parent_id": parent_id, "child_id": child_id})
         except IntegrityError as e:
             logger.error(
                 "Integrity constraint violation while adding dependency %s -> %s: %s. "
@@ -155,16 +144,12 @@ class GraphTaskSqlRepository:
             )
             raise
 
-    async def add_dependency_async(self, parent_id: UUID, child_id: UUID) -> None:
-        """Async wrapper around :meth:`add_dependency`."""
-
-        await asyncio.to_thread(self.add_dependency, parent_id, child_id)
-
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _create_graph_embed_task(
+    async def _create_graph_embed_task(
         self,
+        session: AsyncSession,
         params: Mapping[str, Any],
         description: Optional[str],
         agent_id: Optional[str],
@@ -181,18 +166,17 @@ class GraphTaskSqlRepository:
                 SELECT create_graph_embed_task_v2(:start_ids, :k_hops, :description, :agent_id, :organ_id) AS id
                 """
             )
-            with self._engine.begin() as conn:
-                result = conn.execute(
-                    stmt,
-                    {
-                        "start_ids": start_ids,
-                        "k_hops": k_hops,
-                        "description": description,
-                        "agent_id": agent_id,
-                        "organ_id": organ_id,
-                    },
-                )
-                task_id = result.scalar_one()
+            result = await session.execute(
+                stmt,
+                {
+                    "start_ids": start_ids,
+                    "k_hops": k_hops,
+                    "description": description,
+                    "agent_id": agent_id,
+                    "organ_id": organ_id,
+                },
+            )
+            task_id = result.scalar_one()
             return self._coerce_uuid(task_id)
         except ValueError as e:
             logger.error(
@@ -229,8 +213,9 @@ class GraphTaskSqlRepository:
             )
             raise
 
-    def _create_graph_rag_task(
+    async def _create_graph_rag_task(
         self,
+        session: AsyncSession,
         params: Mapping[str, Any],
         description: Optional[str],
         agent_id: Optional[str],
@@ -253,19 +238,18 @@ class GraphTaskSqlRepository:
                 SELECT create_graph_rag_task_v2(:start_ids, :k_hops, :top_k, :description, :agent_id, :organ_id) AS id
                 """
             )
-            with self._engine.begin() as conn:
-                result = conn.execute(
-                    stmt,
-                    {
-                        "start_ids": start_ids,
-                        "k_hops": k_hops,
-                        "top_k": top_k,
-                        "description": description,
-                        "agent_id": agent_id,
-                        "organ_id": organ_id,
-                    },
-                )
-                task_id = result.scalar_one()
+            result = await session.execute(
+                stmt,
+                {
+                    "start_ids": start_ids,
+                    "k_hops": k_hops,
+                    "top_k": top_k,
+                    "description": description,
+                    "agent_id": agent_id,
+                    "organ_id": organ_id,
+                },
+            )
+            task_id = result.scalar_one()
             return self._coerce_uuid(task_id)
         except ValueError as e:
             logger.error(
@@ -302,8 +286,9 @@ class GraphTaskSqlRepository:
             )
             raise
 
-    def _create_generic_task(
+    async def _create_generic_task(
         self,
+        session: AsyncSession,
         task_type: str,
         params: Mapping[str, Any],
         description: Optional[str],
@@ -320,43 +305,42 @@ class GraphTaskSqlRepository:
             )
             json_params = json.dumps(params or {})
 
-            with self._engine.begin() as conn:
-                result = conn.execute(
-                    stmt,
-                    {
-                        "task_type": task_type,
-                        "status": "queued",
-                        "description": description,
-                        "params": json_params,
-                    },
+            result = await session.execute(
+                stmt,
+                {
+                    "task_type": task_type,
+                    "status": "queued",
+                    "description": description,
+                    "params": json_params,
+                },
+            )
+            task_id = result.scalar_one()
+
+            if agent_id:
+                await self._ensure_agent(session, agent_id)
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO task_owned_by_agent (task_id, agent_id)
+                        VALUES (:task_id, :agent_id)
+                        ON CONFLICT DO NOTHING
+                        """
+                    ),
+                    {"task_id": task_id, "agent_id": agent_id},
                 )
-                task_id = result.scalar_one()
 
-                if agent_id:
-                    self._ensure_agent(conn, agent_id)
-                    conn.execute(
-                        text(
-                            """
-                            INSERT INTO task_owned_by_agent (task_id, agent_id)
-                            VALUES (:task_id, :agent_id)
-                            ON CONFLICT DO NOTHING
-                            """
-                        ),
-                        {"task_id": task_id, "agent_id": agent_id},
-                    )
-
-                if organ_id:
-                    self._ensure_organ(conn, organ_id, agent_id)
-                    conn.execute(
-                        text(
-                            """
-                            INSERT INTO task_executed_by_organ (task_id, organ_id)
-                            VALUES (:task_id, :organ_id)
-                            ON CONFLICT DO NOTHING
-                            """
-                        ),
-                        {"task_id": task_id, "organ_id": organ_id},
-                    )
+            if organ_id:
+                await self._ensure_organ(session, organ_id, agent_id)
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO task_executed_by_organ (task_id, organ_id)
+                        VALUES (:task_id, :organ_id)
+                        ON CONFLICT DO NOTHING
+                        """
+                    ),
+                    {"task_id": task_id, "organ_id": organ_id},
+                )
 
             return self._coerce_uuid(task_id)
         except (TypeError, ValueError) as e:
@@ -439,9 +423,9 @@ class GraphTaskSqlRepository:
         return []
 
     @staticmethod
-    def _ensure_agent(conn, agent_id: str) -> None:
+    async def _ensure_agent(session: AsyncSession, agent_id: str) -> None:
         try:
-            conn.execute(
+            await session.execute(
                 text(
                     """
                     INSERT INTO agent_registry (agent_id)
@@ -471,9 +455,11 @@ class GraphTaskSqlRepository:
             raise
 
     @staticmethod
-    def _ensure_organ(conn, organ_id: str, agent_id: Optional[str]) -> None:
+    async def _ensure_organ(
+        session: AsyncSession, organ_id: str, agent_id: Optional[str]
+    ) -> None:
         try:
-            conn.execute(
+            await session.execute(
                 text(
                     """
                     INSERT INTO organ_registry (organ_id, agent_id)
@@ -501,4 +487,3 @@ class GraphTaskSqlRepository:
                 organ_id, agent_id, str(e)
             )
             raise
-
