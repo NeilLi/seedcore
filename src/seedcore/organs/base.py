@@ -62,6 +62,14 @@ class Organ:
         self._hb_task: Optional[asyncio.Task] = None
         self._started = False
         self._closing = asyncio.Event()
+        
+        # Database session factory
+        try:
+            from seedcore.database import get_async_pg_session_factory
+            self._session_factory = get_async_pg_session_factory()
+        except Exception as exc:
+            logger.warning(f"Failed to initialize database session factory: {exc}")
+            self._session_factory = None
 
     # ------------------------------------------------------------------
     # Runtime registry helpers
@@ -78,25 +86,36 @@ class Organ:
             return {"status": "alive", "instance_id": self.instance_id, "logical_id": self.organ_id}
         
         repo = await self._repo_lazy()
+        
+        if not self._session_factory:
+            logger.warning("No database session factory available, skipping registry registration")
+            self._started = True
+            return {"status": "alive", "instance_id": self.instance_id, "logical_id": self.organ_id}
 
         # Register in 'starting' status
-        await repo.register_instance(
-            instance_id=self.instance_id,
-            logical_id=self.organ_id,
-            cluster_epoch=await repo.get_current_cluster_epoch(),
-            actor_name=self.organ_id,
-            serve_route=self.serve_route,
-            node_id=os.getenv("RAY_NODE_ID") or "",
-            ip_address=socket.gethostbyname(socket.gethostname()),
-            pid=os.getpid(),
-        )
-        logger.info(f"✅ Organ instance {self.instance_id} (logical: {self.organ_id}) registered for epoch {await repo.get_current_cluster_epoch()}")
+        async with self._session_factory() as session:
+            async with session.begin():
+                cluster_epoch = await repo.get_current_cluster_epoch(session)
+                await repo.register_instance(
+                    session=session,
+                    instance_id=self.instance_id,
+                    logical_id=self.organ_id,
+                    cluster_epoch=cluster_epoch,
+                    actor_name=self.organ_id,
+                    serve_route=self.serve_route,
+                    node_id=os.getenv("RAY_NODE_ID") or "",
+                    ip_address=socket.gethostbyname(socket.gethostname()),
+                    pid=os.getpid(),
+                )
+                logger.info(f"✅ Organ instance {self.instance_id} (logical: {self.organ_id}) registered for epoch {cluster_epoch}")
 
         # Probe dependencies / Serve readiness here if applicable
         # await self._probe_ready()
 
         # Mark alive after readiness
-        await repo.set_instance_status(self.instance_id, "alive")
+        async with self._session_factory() as session:
+            async with session.begin():
+                await repo.set_instance_status(session, self.instance_id, "alive")
         logger.info(f"✅ Organ instance {self.instance_id} (logical: {self.organ_id}) marked alive")
 
         # Heartbeat with jitter+backoff
@@ -117,7 +136,10 @@ class Organ:
         backoff = 0.5
         while not self._closing.is_set():
             try:
-                await repo.beat(self.instance_id)
+                if self._session_factory:
+                    async with self._session_factory() as session:
+                        async with session.begin():
+                            await repo.beat(session, self.instance_id)
                 backoff = 0.5  # reset on success
             except Exception as e:
                 # transient DB hiccup—bounded backoff
@@ -146,7 +168,10 @@ class Organ:
         
         repo = await self._repo_lazy()
         with contextlib.suppress(Exception):
-            await repo.set_instance_status(self.instance_id, "dead")
+            if self._session_factory:
+                async with self._session_factory() as session:
+                    async with session.begin():
+                        await repo.set_instance_status(session, self.instance_id, "dead")
         
         logger.info(f"✅ Organ instance {self.instance_id} (logical: {self.organ_id}) marked dead.")
         return {"status": "dead", "instance_id": self.instance_id}

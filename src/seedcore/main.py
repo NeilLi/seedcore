@@ -65,10 +65,9 @@ async def lifespan(app: FastAPI):
     await _verify_graph_node_support(engine)
     logger.info("Database initialized successfully")
     
-    # Initialize task queue (task processing is handled by queue_dispatcher.py)
-    if not hasattr(app.state, "task_queue"):
-        app.state.task_queue = asyncio.Queue()
-    logger.info("Task queue initialized (processing handled by queue_dispatcher)")
+    # Task processing is handled by Dispatcher Ray actors (started by bootstrap scripts)
+    # No local task worker needed
+    logger.info("Task processing handled by Dispatcher Ray actors")
 
     if not hasattr(app.state, "task_embedding_queue"):
         app.state.task_embedding_queue = asyncio.Queue()
@@ -85,6 +84,8 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down SeedCore API application...")
     
     # Cancel background workers
+    # Note: Dispatcher Ray actors are managed by bootstrap scripts, not by this FastAPI app
+
     if hasattr(app.state, "task_embedding_backfill"):
         logger.info("Stopping task embedding backfill...")
         app.state.task_embedding_backfill.cancel()

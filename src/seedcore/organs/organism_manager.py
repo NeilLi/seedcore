@@ -309,6 +309,14 @@ class OrganismManager:
         self._agent_graph_repo = None
         self._agent_graph_repo_checked = False
         
+        # Database session factory
+        try:
+            from seedcore.database import get_async_pg_session_factory
+            self._session_factory = get_async_pg_session_factory()
+        except Exception as exc:
+            logger.warning(f"Failed to initialize database session factory: {exc}")
+            self._session_factory = None
+        
         # Runtime registry configuration
         self.rolling = _env_bool("SEEDCORE_ROLLING_INIT", False)
         self._recon_task: Optional[asyncio.Task] = None
@@ -607,13 +615,16 @@ class OrganismManager:
 
                         # Persist organ to registry (best-effort)
                         repo = self._get_agent_graph_repository()
-                        if repo:
+                        if repo and self._session_factory:
                             try:
-                                await repo.ensure_organ(
-                                    organ_id=organ_id, 
-                                    kind=organ_type, 
-                                    props=json.dumps({"ray_namespace": organ_namespace})
-                                )
+                                async with self._session_factory() as session:
+                                    async with session.begin():
+                                        await repo.ensure_organ(
+                                            session=session,
+                                            organ_id=organ_id, 
+                                            kind=organ_type, 
+                                            props=json.dumps({"ray_namespace": organ_namespace})
+                                        )
                                 logger.info(f"✅ Persisted existing organ '{organ_id}' to registry")
                             except Exception as e:
                                 logger.error(f"❌ Persist existing organ '{organ_id}' failed: {e}")
@@ -649,13 +660,16 @@ class OrganismManager:
                         
                         # Persist new organ to registry (best-effort)
                         repo = self._get_agent_graph_repository()
-                        if repo:
+                        if repo and self._session_factory:
                             try:
-                                await repo.ensure_organ(
-                                    organ_id=organ_id, 
-                                    kind=organ_type, 
-                                    props=json.dumps({"ray_namespace": ray_namespace})
-                                )
+                                async with self._session_factory() as session:
+                                    async with session.begin():
+                                        await repo.ensure_organ(
+                                            session=session,
+                                            organ_id=organ_id, 
+                                            kind=organ_type, 
+                                            props=json.dumps({"ray_namespace": ray_namespace})
+                                        )
                                 logger.info(f"✅ Persisted new organ '{organ_id}' to registry")
                             except Exception as e:
                                 logger.error(f"❌ Persist new organ '{organ_id}' failed: {e}")
@@ -725,14 +739,17 @@ class OrganismManager:
                         
                         # Persist existing agent and ensure link to organ (best-effort)
                         repo = self._get_agent_graph_repository()
-                        if repo:
+                        if repo and self._session_factory:
                             try:
-                                await repo.ensure_agent(
-                                    agent_id=agent_id, 
-                                    display_name=agent_id, 
-                                    props=json.dumps({"ray_namespace": AGENT_NAMESPACE})
-                                )
-                                await repo.link_agent_to_organ(agent_id=agent_id, organ_id=organ_id)
+                                async with self._session_factory() as session:
+                                    async with session.begin():
+                                        await repo.ensure_agent(
+                                            session=session,
+                                            agent_id=agent_id, 
+                                            display_name=agent_id, 
+                                            props=json.dumps({"ray_namespace": AGENT_NAMESPACE})
+                                        )
+                                        await repo.link_agent_to_organ(session=session, agent_id=agent_id, organ_id=organ_id)
                                 logger.info(f"✅ Ensured existing agent '{agent_id}' linked to organ '{organ_id}' in DB")
                             except Exception as e:
                                 logger.error(f"❌ Persist/link existing agent '{agent_id}'→'{organ_id}' failed: {e}")
@@ -771,14 +788,17 @@ class OrganismManager:
 
                         # Persist agent and link to organ (best-effort)
                         repo = self._get_agent_graph_repository()
-                        if repo:
+                        if repo and self._session_factory:
                             try:
-                                await repo.ensure_agent(
-                                    agent_id=agent_id, 
-                                    display_name=agent_id, 
-                                    props=json.dumps({"ray_namespace": AGENT_NAMESPACE})
-                                )
-                                await repo.link_agent_to_organ(agent_id=agent_id, organ_id=organ_id)
+                                async with self._session_factory() as session:
+                                    async with session.begin():
+                                        await repo.ensure_agent(
+                                            session=session,
+                                            agent_id=agent_id, 
+                                            display_name=agent_id, 
+                                            props=json.dumps({"ray_namespace": AGENT_NAMESPACE})
+                                        )
+                                        await repo.link_agent_to_organ(session=session, agent_id=agent_id, organ_id=organ_id)
                                 logger.info(f"✅ Linked agent '{agent_id}' to organ '{organ_id}' in DB")
                             except Exception as e:
                                 logger.error(f"❌ Persist/link agent '{agent_id}'→'{organ_id}' failed: {e}")

@@ -3290,6 +3290,8 @@ class Coordinator:
                 )
                 logger.warning(message)
                 raise HTTPException(status_code=503, detail="Task metadata repository unavailable")
+            
+            logger.info(f"[Coordinator] Using repository: {type(repo)} for task {task_obj.task_id}")
 
             agent_id: Optional[str] = None
             params = task_dict.get("params")
@@ -3297,7 +3299,12 @@ class Coordinator:
                 agent_id = params.get("agent_id")
 
             try:
-                await repo.create_task(task_dict, agent_id=agent_id)
+                # Get a database session for the repository
+                from seedcore.database import get_async_pg_session_factory
+                session_factory = get_async_pg_session_factory()
+                async with session_factory() as session:
+                    async with session.begin():
+                        await repo.create_task(session, task_dict, agent_id=agent_id)
             except Exception as persist_exc:
                 logger.warning(
                     "[Coordinator] Failed to persist incoming task %s: %s",

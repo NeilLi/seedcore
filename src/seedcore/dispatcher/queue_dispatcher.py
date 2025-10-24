@@ -189,6 +189,8 @@ class Dispatcher:
         self._inflight_count = 0
         # Router for task execution (replaces direct Serve handle)
         self.router: Optional[Router] = None
+        # Flag to only log free_size unavailability once
+        self._free_size_warning_logged = False
         
         # --- Prometheus per-actor registry to prevent default REGISTRY growth ---
         self._metrics_registry = CollectorRegistry(auto_describe=True)
@@ -287,10 +289,21 @@ class Dispatcher:
         """Initialize router if not already created."""
         if self.router is None:
             try:
+                logger.info(f"Dispatcher {self.name}: Creating router of type {DISPATCHER_ROUTER_TYPE}")
                 self.router = RouterFactory.create_router(DISPATCHER_ROUTER_TYPE)
                 logger.info(f"Dispatcher {self.name}: Created router of type {DISPATCHER_ROUTER_TYPE}")
+                
+                # Log router details for debugging
+                if hasattr(self.router, 'client') and hasattr(self.router.client, 'base_url'):
+                    logger.info(f"Dispatcher {self.name}: Router base_url: {self.router.client.base_url}")
+                if hasattr(self.router, 'config'):
+                    logger.info(f"Dispatcher {self.name}: Router config: {self.router.config}")
+                    
             except Exception as e:
                 logger.error(f"Dispatcher {self.name}: Failed to create router: {e}")
+                logger.error(f"Dispatcher {self.name}: Router type: {DISPATCHER_ROUTER_TYPE}")
+                logger.error(f"Dispatcher {self.name}: Exception type: {type(e)}")
+                logger.error(f"Dispatcher {self.name}: Exception traceback:", exc_info=True)
                 raise
 
     async def _monitor_pool_health(self):
@@ -317,7 +330,9 @@ class Dispatcher:
                 except AttributeError:
                     # free_size not available in newer asyncpg versions
                     pool_stats["free_size"] = "unavailable"
-                    logger.debug(f"ℹ️ Dispatcher {self.name}: free_size not available in this asyncpg version")
+                    if not self._free_size_warning_logged:
+                        logger.debug(f"ℹ️ Dispatcher {self.name}: free_size not available in this asyncpg version")
+                        self._free_size_warning_logged = True
                 except Exception as e:
                     pool_stats["free_size"] = f"error: {e}"
                     logger.debug(f"ℹ️ Dispatcher {self.name}: free_size check failed: {e}")
@@ -549,6 +564,9 @@ class Dispatcher:
                     logger.error(f"[QueueDispatcher] ❌ Failed to get result from router for task {tid}: {e}")
                     logger.error(f"[QueueDispatcher] 🔧 Exception type: {type(e)}")
                     logger.error(f"[QueueDispatcher] 📋 Exception details: {str(e)}")
+                    logger.error(f"[QueueDispatcher] 🔧 Router type: {type(self.router)}")
+                    logger.error(f"[QueueDispatcher] 🔧 Router config: {getattr(self.router, 'config', 'No config')}")
+                    logger.error(f"[QueueDispatcher] 🔧 Router base_url: {getattr(self.router, 'client', {}).get('base_url', 'No base_url') if hasattr(self.router, 'client') else 'No client'}")
                     logger.error(f"[QueueDispatcher] 🔧 Exception traceback:", exc_info=True)
                     raise
 
