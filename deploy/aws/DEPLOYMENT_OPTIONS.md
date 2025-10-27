@@ -95,10 +95,13 @@ Once Option 1 is working, you can:
 # Navigate to project
 cd /Users/ningli/project/seedcore
 
-# Export AWS credentials
-export AWS_ACCESS_KEY_ID=ASIAYJXTNHY6XMYVH47G
-export AWS_SECRET_ACCESS_KEY=sgQv5gtd5N83OfoxfXlW21ZFYd6fnKrXakqW+dq8
-export AWS_SESSION_TOKEN="IQoJb3JpZ2luX2VjEOL..."
+# Load AWS credentials from .env.aws (create this file from env.aws.example)
+source deploy/aws/.env.aws
+
+# OR export AWS credentials directly:
+# export AWS_ACCESS_KEY_ID=<your-key>
+# export AWS_SECRET_ACCESS_KEY=<your-secret>
+# export AWS_SESSION_TOKEN=<your-token>  # Only for temporary credentials
 export AWS_REGION=us-east-1
 export CLUSTER_NAME=agentic-ai-cluster
 

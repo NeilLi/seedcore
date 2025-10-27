@@ -11,10 +11,19 @@ fi
 
 echo "🔧 Installing KubeRay Operator..."
 
-# Set AWS credentials (override with environment variables)
-export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-ASIAYJXTNHY6XMYVH47G}
-export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-sgQv5gtd5N83OfoxfXlW21ZFYd6fnKrXakqW+dq8}
-export AWS_SESSION_TOKEN="IQoJb3JpZ2luX2VjEOL//////////wEaCXVzLXdlc3QtMiJHMEUCIAws4Ubae1GaoZhN0eYk/XdjnFvCoLHMPa73aVCVdh98AiEAleV6XCTW+F0vZ08WV9XPbD8Q5Rou6Vs/O8J4DcyC6B0qqgIIm///////////ARADGgw1NzA2NjczODQzODEiDC8kTWRMWcF2q4Enhir+ATPnOSWfVkQyEAw9yyohAYtPqQ32+Zto8GhYsG7gwZgA5Y5Lu10TZ9hX+W4g0O+fKWzA5/Hd4FeXRklg5gMfKprTRAnTWReGwXLKfil6x+tzlocx81ki5Q8BHsHONtECY3bt7Y14OTj8tLKMTOfw1yDa5CcoXaF5MHlTgemNLFA+8b94arxRK4edZ5nIkdSBZL9cY6df5NERwkffC56ECG6zq9Y+UNV0DhtdTyvExAe4h6tSX5ZzwRD4GJ1AUy19bcFjJZO63E9puKnkf5D/xZvRtWJsgokaUeR0H7aS0hf5oCX9syEAjyC6ReEBHyvtZBOEsMtZw/Yo8qhbXXf3MKic+8cGOp0Bvib0FE1Xtmu78FiYtcgD+AyVAnGq6cwgELVYnxxv4YJnDiS8zxFwQ6/gMDhPDtaEZ9taqZcMssyR12rBWEYYb67tTUoL8UJHKSlORyxZhfmoeFOdYDbzXSEg7ai370KHqkeZV5kFYuQCkCO0NbgE4oCJ0nXD/XDJMCJ6P51uZNLI9X9fieS8Zbq7rFpPG45TMqu0iOSV1y4sLM4FCQ=="
+# Set AWS credentials from environment variables
+# IMPORTANT: Do not hardcode credentials. Set them via environment or .env.aws file
+if [ -z "${AWS_ACCESS_KEY_ID:-}" ]; then
+    echo "ERROR: AWS_ACCESS_KEY_ID not set. Please export it or create .env.aws file"
+    exit 1
+fi
+if [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+    echo "ERROR: AWS_SECRET_ACCESS_KEY not set. Please export it or create .env.aws file"
+    exit 1
+fi
+export AWS_ACCESS_KEY_ID
+export AWS_SECRET_ACCESS_KEY
+export AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
 export AWS_REGION=${AWS_REGION:-us-east-1}
 export CLUSTER_NAME=${CLUSTER_NAME:-agentic-ai-cluster}
 

@@ -12,6 +12,7 @@ build/
 # Virtual env
 .venv/
 .env
+.env.*
 venv/
 env/
 
