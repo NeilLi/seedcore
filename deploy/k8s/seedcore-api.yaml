@@ -57,8 +57,6 @@ spec:
           volumeMounts:
             - name: logs-volume
               mountPath: /tmp/seedcore-logs
-            - name: project-source-volume
-              mountPath: /app
             - name: data-volume
               mountPath: /app/data
           readinessProbe:
@@ -95,11 +93,6 @@ spec:
       volumes:
         - name: logs-volume
           emptyDir: {}
-        # (dev on kind) this path must exist on kind node (see your kind config)
-        - name: project-source-volume
-          hostPath:
-            path: /project
-            type: DirectoryOrCreate
         - name: data-volume
           persistentVolumeClaim:
             claimName: seedcore-data-pvc

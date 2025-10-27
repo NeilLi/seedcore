@@ -181,8 +181,6 @@ spec:
             volumeMounts:
               - name: xgb-model-storage
                 mountPath: /app/data
-              - name: project-source-volume
-                mountPath: /app
             # Probes are good practice for production readiness.
             startupProbe:
               exec:
@@ -203,10 +201,6 @@ spec:
               timeoutSeconds: 2
               failureThreshold: 120
           volumes:
-            - name: project-source-volume
-              hostPath:
-                path: /project
-                type: DirectoryOrCreate
             - name: xgb-model-storage
               persistentVolumeClaim:
                 claimName: xgb-pvc
@@ -271,8 +265,6 @@ spec:
             volumeMounts:
               - name: xgb-model-storage
                 mountPath: /app/data
-              - name: project-source-volume
-                mountPath: /app
             readinessProbe:
               exec:
                 command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
@@ -286,10 +278,6 @@ spec:
               timeoutSeconds: 2
               failureThreshold: 120
           volumes:
-            - name: project-source-volume
-              hostPath:
-                path: /project
-                type: DirectoryOrCreate
             - name: xgb-model-storage
               persistentVolumeClaim:
                 claimName: xgb-pvc
