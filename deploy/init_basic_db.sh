@@ -116,6 +116,10 @@ init_postgresql() {
   local pod; pod="$(first_pod_name "$PG_SELECTOR")"
   [[ -n "$pod" ]] || die "PostgreSQL pod not found."
 
+  # Create the database if it doesn't exist
+  log "🔧 Creating database: $POSTGRES_DB"
+  kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE $POSTGRES_DB;" 2>/dev/null || log "Database $POSTGRES_DB may already exist"
+
   log "📝 Copying SQL to pod: $pod"
   kubectl cp "$PG_SQL" "$NAMESPACE/$pod:/tmp/init_pgvector.sql" || die "Failed to copy SQL file"
 
