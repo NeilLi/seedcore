@@ -60,8 +60,8 @@ build_seedcore() {
     
     cd "$PROJECT_ROOT"
     
-    # Build the image
-    docker build -t "$ECR_REPO:$SEEDCORE_IMAGE_TAG" .
+    # Build the image for linux/amd64 platform to run on AWS
+    docker build --platform linux/amd64 -t "$ECR_REPO:$SEEDCORE_IMAGE_TAG" .
     
     # Tag for ECR
     docker tag "$ECR_REPO:$SEEDCORE_IMAGE_TAG" "$ECR_REPO:latest"
@@ -155,8 +155,8 @@ EOF
     
     cd "$nim_dir"
     
-    # Build the image
-    docker build -t "$ECR_NIM_REPO:$NIM_RETRIEVAL_TAG" .
+    # Build the image for linux/amd64 platform
+    docker build --platform linux/amd64 -t "$ECR_NIM_REPO:$NIM_RETRIEVAL_TAG" .
     
     # Tag for ECR
     docker tag "$ECR_NIM_REPO:$NIM_RETRIEVAL_TAG" "$ECR_NIM_REPO:latest"
@@ -250,8 +250,8 @@ EOF
     
     cd "$nim_dir"
     
-    # Build the image
-    docker build -t "$ECR_LLAMA_REPO:$NIM_LLAMA_TAG" .
+    # Build the image for linux/amd64 platform
+    docker build --platform linux/amd64 -t "$ECR_LLAMA_REPO:$NIM_LLAMA_TAG" .
     
     # Tag for ECR
     docker tag "$ECR_LLAMA_REPO:$NIM_LLAMA_TAG" "$ECR_LLAMA_REPO:latest"

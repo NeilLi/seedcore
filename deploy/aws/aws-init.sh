@@ -199,11 +199,55 @@ create_namespace() {
 install_kuberay() {
     log "Installing KubeRay operator..."
     
-    if kubectl get namespace kuberay-system &> /dev/null; then
+    # Check if KubeRay CRDs exist
+    if kubectl get crd rayclusters.ray.io &> /dev/null; then
         log "KubeRay operator already installed"
+        success "KubeRay operator is ready"
+        return 0
+    fi
+    
+    # Check if helm is available
+    if ! command -v helm &> /dev/null; then
+        warn "Helm is not installed. Installing with kubectl..."
+        
+        # Create namespace first
+        kubectl create namespace kuberay-system --dry-run=client -o yaml | kubectl apply -f -
+        
+        # Install using kubectl with the official all-in-one YAML
+        kubectl apply -f https://github.com/ray-project/kuberay/releases/download/v1.4.2/kuberay-operator-v1.4.2-allinone.yaml
+        
+        # Wait for operator to be ready
+        log "Waiting for KubeRay operator to be ready..."
+        kubectl wait --for=condition=available --timeout=300s deployment/kuberay-operator -n kuberay-system || true
+        
     else
-        kubectl apply -f https://raw.githubusercontent.com/ray-project/kuberay/master/ray-operator/config/default/bases/kuberay-operator.yaml
-        kubectl wait --for=condition=available --timeout=300s deployment/kuberay-operator -n kuberay-system
+        log "Installing KubeRay operator using Helm..."
+        
+        # Add KubeRay Helm repo
+        helm repo add kuberay https://ray-project.github.io/kuberay-helm/ &> /dev/null || true
+        helm repo update &> /dev/null
+        
+        # Create namespace if needed
+        kubectl create namespace kuberay-system --dry-run=client -o yaml | kubectl apply -f - &> /dev/null
+        
+        # Check if Helm release exists
+        if ! helm list -n kuberay-system | grep -q kuberay-operator; then
+            log "Installing KubeRay operator..."
+            helm install kuberay-operator kuberay/kuberay-operator \
+                --namespace kuberay-system --wait
+            log "KubeRay operator installed"
+        else
+            # Check if operator pods are running
+            if ! kubectl get pods -n kuberay-system -l app.kubernetes.io/name=kuberay-operator --no-headers 2>/dev/null | grep -q Running; then
+                log "Upgrading KubeRay operator..."
+                helm upgrade kuberay-operator kuberay/kuberay-operator --namespace kuberay-system --wait
+            fi
+            log "KubeRay operator is running"
+        fi
+        
+        # Wait for KubeRay operator to be ready
+        log "Waiting for KubeRay operator to be ready..."
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kuberay-operator -n kuberay-system --timeout=300s || true
     fi
     
     success "KubeRay operator installed successfully"
@@ -215,48 +259,63 @@ install_alb_controller() {
     
     if kubectl get deployment aws-load-balancer-controller -n kube-system &> /dev/null; then
         log "AWS Load Balancer Controller already installed"
-    else
-        # Download IAM policy
-        curl -o iam_policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.7.2/docs/install/iam_policy.json
-        
-        # Create IAM role
-        aws iam create-role \
-            --role-name AmazonEKSLoadBalancerControllerRole \
-            --assume-role-policy-document file://trust-policy.json || true
-        
-        aws iam attach-role-policy \
-            --role-name AmazonEKSLoadBalancerControllerRole \
-            --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/AWSLoadBalancerControllerIAMPolicy || true
-        
-        # Install controller
-        eksctl create iamserviceaccount \
-            --cluster="$CLUSTER_NAME" \
-            --namespace=kube-system \
-            --name=aws-load-balancer-controller \
-            --role-name=AmazonEKSLoadBalancerControllerRole \
-            --attach-policy-arn=arn:aws:iam::${AWS_ACCOUNT_ID}:policy/AWSLoadBalancerControllerIAMPolicy \
-            --approve
-        
-        kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.7.2/docs/install/v2_7_2_full.yaml
-        
-        kubectl wait --for=condition=available --timeout=300s deployment/aws-load-balancer-controller -n kube-system
+        success "AWS Load Balancer Controller is ready"
+        return 0
     fi
     
-    success "AWS Load Balancer Controller installed successfully"
+    # Associate IAM OIDC provider with cluster first
+    log "Checking if IAM OIDC provider is associated..."
+    if ! eksctl utils describe-stacks --region="$AWS_REGION" --cluster="$CLUSTER_NAME" | grep -q oidc; then
+        log "Associating IAM OIDC provider with cluster..."
+        eksctl utils associate-iam-oidc-provider --region="$AWS_REGION" --cluster="$CLUSTER_NAME" --approve || {
+            warn "Failed to associate IAM OIDC provider. Skipping AWS Load Balancer Controller installation."
+            warn "You can install it later with: eksctl utils associate-iam-oidc-provider --cluster=$CLUSTER_NAME --approve"
+            return 0
+        }
+    fi
+    
+    # Install using Helm (cleaner approach)
+    if command -v helm &> /dev/null; then
+        log "Installing AWS Load Balancer Controller using Helm..."
+        helm repo add eks https://aws.github.io/eks-charts &> /dev/null || true
+        helm repo update &> /dev/null
+        
+        helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+            --namespace kube-system \
+            --set clusterName="$CLUSTER_NAME" \
+            --set region="$AWS_REGION" \
+            --set vpcId=$(aws eks describe-cluster --name "$CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.resourcesVpcConfig.vpcId' --output text) \
+            --set serviceAccount.create=true \
+            --set serviceAccount.name=aws-load-balancer-controller \
+            --wait
+        
+        success "AWS Load Balancer Controller installed successfully"
+    else
+        warn "Helm is not installed. Skipping AWS Load Balancer Controller installation."
+        warn "You can install it later manually."
+        return 0
+    fi
 }
 
-# Install cert-manager
+# Install cert-manager (optional)
 install_cert_manager() {
-    log "Installing cert-manager..."
+    log "Installing cert-manager (optional)..."
     
     if kubectl get namespace cert-manager &> /dev/null; then
         log "cert-manager already installed"
-    else
-        kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.2/cert-manager.yaml
-        kubectl wait --for=condition=available --timeout=300s deployment/cert-manager -n cert-manager
+        success "cert-manager is ready"
+        return 0
     fi
     
-    success "cert-manager installed successfully"
+    # Install cert-manager
+    if kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.2/cert-manager.yaml 2>/dev/null; then
+        kubectl wait --for=condition=available --timeout=300s deployment/cert-manager -n cert-manager 2>/dev/null || true
+        success "cert-manager installed successfully"
+    else
+        warn "Failed to install cert-manager. This is optional."
+        warn "cert-manager is only needed for TLS certificates."
+        return 0
+    fi
 }
 
 # Main function
@@ -272,8 +331,12 @@ main() {
     update_kubeconfig
     create_namespace
     install_kuberay
-    install_alb_controller
-    install_cert_manager
+    
+    # ALB Controller is optional
+    install_alb_controller || warn "AWS Load Balancer Controller installation failed (optional)"
+    
+    # cert-manager is optional
+    install_cert_manager || warn "cert-manager installation failed (optional)"
     
     success "AWS EKS initialization completed successfully!"
     
@@ -282,6 +345,9 @@ main() {
     echo "1. Build and push Docker images: ./build-and-push.sh"
     echo "2. Deploy SeedCore: ./deploy-all.sh"
     echo "3. Check deployment status: kubectl get pods -n $NAMESPACE"
+    echo
+    echo "📝 Note: AWS Load Balancer Controller and cert-manager are optional."
+    echo "   They are only needed for LoadBalancer services and TLS certificates."
 }
 
 # Run main function

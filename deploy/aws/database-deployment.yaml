@@ -47,7 +47,7 @@ spec:
   storageClassName: ${STORAGE_CLASS}
   resources:
     requests:
-      storage: 10Gi
+      storage: ${STORAGE_SIZE}
 
 # ===============================
 # PostgreSQL
@@ -59,20 +59,25 @@ metadata:
   namespace: ${NAMESPACE}
   labels: 
     app: postgresql
+    app.kubernetes.io/name: postgresql
     component: database
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels: 
       app: postgresql
+      app.kubernetes.io/name: postgresql
   template:
     metadata: 
       labels: 
         app: postgresql
+        app.kubernetes.io/name: postgresql
     spec:
       containers:
         - name: postgresql
-          image: postgres:16
+          image: pgvector/pgvector:pg16
           env:
             - name: POSTGRES_PASSWORD
               value: "${POSTGRES_PASSWORD}"
@@ -114,8 +119,6 @@ spec:
         - name: postgres-storage
           persistentVolumeClaim: 
             claimName: postgres-pvc
-      nodeSelector:
-        node-type: general
 ---
 apiVersion: v1
 kind: Service
@@ -143,16 +146,21 @@ metadata:
   namespace: ${NAMESPACE}
   labels: 
     app: mysql
+    app.kubernetes.io/name: mysql
     component: database
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels: 
       app: mysql
+      app.kubernetes.io/name: mysql
   template:
     metadata: 
       labels: 
         app: mysql
+        app.kubernetes.io/name: mysql
     spec:
       containers:
         - name: mysql
@@ -198,8 +206,6 @@ spec:
         - name: mysql-storage
           persistentVolumeClaim: 
             claimName: mysql-pvc
-      nodeSelector:
-        node-type: general
 ---
 apiVersion: v1
 kind: Service
@@ -227,16 +233,21 @@ metadata:
   namespace: ${NAMESPACE}
   labels: 
     app: neo4j
+    app.kubernetes.io/name: neo4j
     component: database
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels: 
       app: neo4j
+      app.kubernetes.io/name: neo4j
   template:
     metadata: 
       labels: 
         app: neo4j
+        app.kubernetes.io/name: neo4j
     spec:
       containers:
         - name: neo4j
@@ -281,8 +292,6 @@ spec:
         - name: neo4j-storage
           persistentVolumeClaim: 
             claimName: neo4j-pvc
-      nodeSelector:
-        node-type: general
 ---
 apiVersion: v1
 kind: Service
@@ -315,16 +324,21 @@ metadata:
   namespace: ${NAMESPACE}
   labels: 
     app: redis
+    app.kubernetes.io/name: redis
     component: database
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels: 
       app: redis
+      app.kubernetes.io/name: redis
   template:
     metadata: 
       labels: 
         app: redis
+        app.kubernetes.io/name: redis
     spec:
       containers:
         - name: redis
@@ -367,8 +381,6 @@ spec:
         - name: redis-storage
           persistentVolumeClaim: 
             claimName: redis-pvc
-      nodeSelector:
-        node-type: general
 ---
 apiVersion: v1
 kind: Service

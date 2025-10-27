@@ -41,7 +41,10 @@ load_env() {
     fi
     
     log "Loading environment variables from $env_file"
+    # Ensure variables are exported so envsubst can see them
+    set -a
     source "$env_file"
+    set +a
 }
 
 # Check if kubectl is configured
@@ -175,6 +178,24 @@ create_env_resources() {
 deploy_databases() {
     log "Deploying database services..."
     
+    # Check if deployments exist with old selectors (immutable field issue)
+    local need_selector_update=false
+    if kubectl get deployment postgresql -n "$NAMESPACE" &>/dev/null; then
+        local existing_label=$(kubectl get deployment postgresql -n "$NAMESPACE" -o jsonpath='{.spec.selector.matchLabels.app\.kubernetes\.io/name}' 2>/dev/null || echo "")
+        if [ -z "$existing_label" ]; then
+            need_selector_update=true
+        fi
+    fi
+    
+    if [ "$need_selector_update" = true ]; then
+        log "Deployments have old selectors without app.kubernetes.io/name labels."
+        log "Deleting existing database deployments to allow selector updates (PVCs preserved)..."
+        kubectl delete deployment postgresql mysql neo4j redis -n "$NAMESPACE" 2>/dev/null || log "No existing deployments to delete"
+        log "Waiting for deletions to complete..."
+        sleep 5
+    fi
+    
+    log "Applying database deployments..."
     envsubst < "${SCRIPT_DIR}/database-deployment.yaml" | kubectl apply -f -
     
     # Wait for databases to be ready
@@ -217,16 +238,57 @@ deploy_seedcore_api() {
 deploy_nim_services() {
     log "Deploying NIM services..."
     
+    # Create NIM secrets if they don't exist (optional, placeholder)
+    log "Creating NIM secrets..."
+    
+    # NIM Retrieval Secret (placeholder - update with actual values)
+    if ! kubectl get secret nim-retrieval-secret -n "$NAMESPACE" &> /dev/null; then
+        kubectl create secret generic nim-retrieval-secret \
+            --from-literal=model_api_key="placeholder" \
+            --from-literal=encryption_key="placeholder" \
+            --dry-run=client -o yaml | kubectl apply -f - &> /dev/null || true
+        log "Created nim-retrieval-secret"
+    fi
+    
+    # NIM Llama Secret (placeholder - update with actual values)
+    if ! kubectl get secret nim-llama-secret -n "$NAMESPACE" &> /dev/null; then
+        kubectl create secret generic nim-llama-secret \
+            --from-literal=model_api_key="placeholder" \
+            --from-literal=encryption_key="placeholder" \
+            --dry-run=client -o yaml | kubectl apply -f - &> /dev/null || true
+        log "Created nim-llama-secret"
+    fi
+    
     # Deploy NIM Retrieval
+    log "Deploying NIM Retrieval service..."
     envsubst < "${SCRIPT_DIR}/nim-retrieval-deployment.yaml" | kubectl apply -f -
     
     # Deploy NIM Llama
+    log "Deploying NIM Llama service..."
     envsubst < "${SCRIPT_DIR}/nim-llama-deployment.yaml" | kubectl apply -f -
     
     # Wait for NIM services to be ready
     log "Waiting for NIM services to be ready..."
-    kubectl wait --for=condition=available --timeout=300s deployment/nim-retrieval -n "$NAMESPACE" || true
-    kubectl wait --for=condition=available --timeout=300s deployment/nim-llama -n "$NAMESPACE" || true
+    kubectl wait --for=condition=available --timeout=300s deployment/nim-retrieval -n "$NAMESPACE" || {
+        warn "NIM Retrieval deployment did not become available. Check logs:"
+        kubectl logs -n "$NAMESPACE" -l app=nim-retrieval --tail=50 || true
+    }
+    
+    # NIM Llama has GPU requirements, skip if not available
+    if kubectl get nodes -l node-type=gpu &> /dev/null; then
+        kubectl wait --for=condition=available --timeout=300s deployment/nim-llama -n "$NAMESPACE" || {
+            warn "NIM Llama deployment did not become available (may need GPU nodes). Check logs:"
+            kubectl logs -n "$NAMESPACE" -l app=nim-llama --tail=50 || true
+        }
+    else
+        warn "No GPU nodes found. NIM Llama will not be deployed."
+        kubectl delete deployment nim-llama -n "$NAMESPACE" 2>/dev/null || true
+    fi
+    
+    # Show NIM service status
+    log "NIM Services Status:"
+    kubectl get deployment,pod,svc -n "$NAMESPACE" -l app=nim-retrieval || true
+    kubectl get deployment,pod,svc -n "$NAMESPACE" -l app=nim-llama 2>/dev/null || true
     
     success "NIM services deployed successfully"
 }
@@ -252,16 +314,63 @@ init_databases() {
     kubectl wait --for=condition=ready pod -l app=redis -n "$NAMESPACE" --timeout=300s || true
     
     # Additional wait for database services to be stable
+    log "Waiting for database services to stabilize..."
     sleep 30
     
-    # Run database initialization scripts
-    if [ -f "${SCRIPT_DIR}/../init-databases.sh" ]; then
-        log "Running database initialization script..."
-        # Set namespace for the initialization scripts
+    # Check if initialization scripts exist
+    local init_script="${SCRIPT_DIR}/../init-databases.sh"
+    local basic_init="${SCRIPT_DIR}/../init_basic_db.sh"
+    
+    if [ -f "$init_script" ]; then
+        log "Running database initialization script: $init_script"
+        
+        # Export required environment variables for the init scripts
         export NAMESPACE="$NAMESPACE"
-        "${SCRIPT_DIR}/../init-databases.sh"
+        export POSTGRES_USER="${POSTGRES_USER:-postgres}"
+        export POSTGRES_DB="${POSTGRES_DB:-postgres}"
+        export MYSQL_ROOT_USER="${MYSQL_ROOT_USER:-root}"
+        export MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-password}"
+        export NEO4J_USER="${NEO4J_USER:-neo4j}"
+        export NEO4J_PASSWORD="${NEO4J_PASSWORD:-password}"
+        export NEO4J_DB="${NEO4J_DB:-neo4j}"
+        export PG_SELECTOR="app.kubernetes.io/name=postgresql"
+        export MYSQL_SELECTOR="app.kubernetes.io/name=mysql"
+        export NEO4J_SELECTOR="app=neo4j"
+        export TIMEOUT="300s"
+        
+        # Run the initialization script
+        bash "$init_script"
+        
+        # Alternative: Run basic initialization directly
+    elif [ -f "$basic_init" ]; then
+        log "Running basic database initialization script: $basic_init"
+        
+        # Export environment variables
+        export NAMESPACE="$NAMESPACE"
+        export POSTGRES_USER="${POSTGRES_USER:-postgres}"
+        export POSTGRES_DB="${POSTGRES_DB:-postgres}"
+        export MYSQL_ROOT_USER="${MYSQL_ROOT_USER:-root}"
+        export MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-password}"
+        export NEO4J_USER="${NEO4J_USER:-neo4j}"
+        export NEO4J_PASSWORD="${NEO4J_PASSWORD:-password}"
+        export NEO4J_DB="${NEO4J_DB:-neo4j}"
+        export PG_SELECTOR="app.kubernetes.io/name=postgresql"
+        export MYSQL_SELECTOR="app.kubernetes.io/name=mysql"
+        export NEO4J_SELECTOR="app=neo4j"
+        export TIMEOUT="300s"
+        
+        # Run basic initialization
+        bash "$basic_init" "$NAMESPACE"
+        
+        # Also run full database initialization if available
+        local full_init="${SCRIPT_DIR}/../init_full_db.sh"
+        if [ -f "$full_init" ]; then
+            log "Running comprehensive database initialization script: $full_init"
+            bash "$full_init"
+        fi
     else
-        warn "Database initialization script not found. Skipping..."
+        warn "Database initialization scripts not found. Skipping..."
+        warn "Expected scripts at: $init_script or $basic_init"
     fi
     
     success "Database initialization completed"
@@ -604,7 +713,14 @@ main() {
             deploy_ray_service
             bootstrap_components
             deploy_seedcore_api
-            deploy_nim_services
+            
+            # Deploy NIM services (optional, can be skipped with SKIP_NIM=true)
+            if [ "${SKIP_NIM:-false}" != "true" ]; then
+                deploy_nim_services
+            else
+                log "Skipping NIM services deployment (SKIP_NIM=true)"
+            fi
+            
             deploy_ingress
             show_status
             get_service_urls
@@ -628,6 +744,15 @@ main() {
             echo "  status   - Show deployment status"
             echo "  cleanup  - Remove all deployed resources"
             echo "  help     - Show this help message"
+            echo
+            echo "Environment Variables:"
+            echo "  SKIP_NIM - Skip NIM services deployment (set to 'true' to skip)"
+            echo
+            echo "Examples:"
+            echo "  ./deploy-all.sh deploy              # Deploy all services"
+            echo "  SKIP_NIM=true ./deploy-all.sh deploy  # Skip NIM services"
+            echo "  ./deploy-all.sh status             # Check deployment status"
+            echo "  ./deploy-all.sh cleanup            # Remove all resources"
             ;;
         *)
             error "Unknown action: $action"

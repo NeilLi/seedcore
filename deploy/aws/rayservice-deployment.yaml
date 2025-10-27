@@ -33,7 +33,7 @@ spec:
         route_prefix: /cognitive
         deployments:
           - name: CognitiveService
-            num_replicas: 2
+            num_replicas: 1
             ray_actor_options:
               num_cpus: 1.0
               num_gpus: 0
@@ -208,8 +208,7 @@ spec:
               configMap:
                 name: seedcore-config
                 optional: true
-          nodeSelector:
-            node-type: general
+          # nodeSelector removed to allow scheduling on any node type
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
@@ -220,7 +219,7 @@ spec:
     # -------------------------------------------------------------------
     workerGroupSpecs:
     - groupName: general-workers
-      replicas: 3
+      replicas: 2
       rayStartParams:
         num-cpus: "4"
       template:
@@ -296,8 +295,7 @@ spec:
               configMap:
                 name: seedcore-config
                 optional: true
-          nodeSelector:
-            node-type: general
+          # nodeSelector removed to allow scheduling on any node type
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000

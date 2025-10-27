@@ -1,1 +1,1 @@
-docker build -f docker/Dockerfile -t seedcore:latest .
+docker build --platform linux/amd64 -f docker/Dockerfile -t seedcore:latest .

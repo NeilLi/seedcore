@@ -11,7 +11,7 @@ NAMESPACE="${1:-seedcore-dev}"
 
 # Allow overriding credentials via environment variables
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
-POSTGRES_DB="${POSTGRES_DB:-postgres}"
+POSTGRES_DB="${POSTGRES_DB:-seedcore}"
 
 MYSQL_ROOT_USER="${MYSQL_ROOT_USER:-root}"
 MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-password}"
@@ -117,10 +117,14 @@ init_postgresql() {
   [[ -n "$pod" ]] || die "PostgreSQL pod not found."
 
   log "📝 Copying SQL to pod: $pod"
-  kubectl cp "$PG_SQL" "$NAMESPACE/$pod:/tmp/init_pgvector.sql"
+  kubectl cp "$PG_SQL" "$NAMESPACE/$pod:/tmp/init_pgvector.sql" || die "Failed to copy SQL file"
 
-  log "🚀 Running SQL..."
-  kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /tmp/init_pgvector.sql
+  log "🚀 Running SQL in database: $POSTGRES_DB"
+  if ! kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /tmp/init_pgvector.sql; then
+    log "❌ PostgreSQL initialization failed. Checking database connection..."
+    kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -l || true
+    die "PostgreSQL initialization failed"
+  fi
 
   log "✅ PostgreSQL initialized successfully."
 }
@@ -155,25 +159,8 @@ neo4j_detect() {
   done
   [[ -z "$NEO4J_CONTAINER" ]] && NEO4J_CONTAINER="$(echo "$containers" | awk '{print $1}')"  # fallback to first
 
-  # find cypher-shell inside the container
-  local candidates=(
-    "cypher-shell"
-    "/var/lib/neo4j/bin/cypher-shell"
-    "/usr/bin/cypher-shell"
-    "/bin/cypher-shell"
-    "/opt/neo4j/bin/cypher-shell"
-  )
-  NEO4J_CYPHER_SHELL=""
-  for p in "${candidates[@]}"; do
-    if kubectl exec -n "$NAMESPACE" -c "$NEO4J_CONTAINER" "$pod" -- sh -lc "[ -x \"$p\" ] || command -v \"$p\" >/dev/null 2>&1"; then
-      NEO4J_CYPHER_SHELL="$p"
-      break
-    fi
-  done
-
-  if [[ -z "$NEO4J_CYPHER_SHELL" ]]; then
-    die "Could not find cypher-shell in pod $pod (containers: $containers). Install it or expose HTTP API to init."
-  fi
+  # Use standard Neo4j 5 path for cypher-shell
+  NEO4J_CYPHER_SHELL="/var/lib/neo4j/bin/cypher-shell"
 }
 
 init_neo4j() {
@@ -192,8 +179,8 @@ init_neo4j() {
 
   log "🚀 Running CQL..."
   # Explicitly target bolt on localhost and run non-interactively
-  kubectl exec -n "$NAMESPACE" -c "$NEO4J_CONTAINER" "$pod" -- sh -lc \
-    "\"$NEO4J_CYPHER_SHELL\" -a bolt://localhost:7687 -u \"$NEO4J_USER\" -p \"$NEO4J_PASSWORD\" -d \"$NEO4J_DB\" -f /tmp/init_neo4j.cypher --non-interactive"
+  kubectl exec -n "$NAMESPACE" -c "$NEO4J_CONTAINER" "$pod" -- \
+    "$NEO4J_CYPHER_SHELL" -a bolt://localhost:7687 -u "$NEO4J_USER" -p "$NEO4J_PASSWORD" -d "$NEO4J_DB" -f /tmp/init_neo4j.cypher --non-interactive
 
   log "✅ Neo4j initialized successfully."
 }
@@ -208,10 +195,17 @@ verify_databases() {
   log "🐘 Checking PostgreSQL..."
   local pg_pod; pg_pod="$(first_pod_name "$PG_SELECTOR")"
   if [[ -n "$pg_pod" ]]; then
-    if kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT COUNT(*) FROM holons;" >/dev/null 2>&1; then
-      log "✅ PostgreSQL: holons table exists"
+    local result
+    result=$(kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT COUNT(*) FROM holons;" 2>&1)
+    if [[ $? -eq 0 ]] && [[ -n "$result" ]]; then
+      local count=$(echo "$result" | tr -d ' ')
+      log "✅ PostgreSQL: holons table exists (count: $count)"
     else
       log "❌ PostgreSQL: holons table missing or query failed"
+      log "Debug: Checking if database exists..."
+      kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -l 2>&1 || true
+      log "Debug: Checking if holons table exists..."
+      kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt" 2>&1 || true
     fi
   fi
 

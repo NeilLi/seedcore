@@ -152,8 +152,7 @@ spec:
             optional: true
       
       # Node selection for optimal performance
-      nodeSelector:
-        node-type: general
+      # nodeSelector removed to allow scheduling on any node type
       
       # Pod disruption budget
       terminationGracePeriodSeconds: 30
