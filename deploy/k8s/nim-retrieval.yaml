@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nim-retrieval
+  namespace: nim
+  labels:
+    app: nim-retrieval
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nim-retrieval
+  template:
+    metadata:
+      labels:
+        app: nim-retrieval
+    spec:
+      imagePullSecrets:
+        - name: nvcr-secret               # ✅ Uses your NGC registry auth
+      nodeSelector:
+        role: seedcore                    # ✅ Ensures it runs only on GPU node
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"            # ✅ Allow scheduling on GPU node
+      containers:
+        - name: retrieval
+          image: nvcr.io/nim/nvidia/retrieval-embedding:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: "compute,utility"
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+              nvidia.com/gpu: 1
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /v1/models
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nim-retrieval
+  namespace: nim
+  labels:
+    app: nim-retrieval
+spec:
+  type: LoadBalancer
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+  selector:
+    app: nim-retrieval
+

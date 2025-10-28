@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nim-llama
+  namespace: default
+  labels: { app: nim-llama }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: nim-llama }
+  template:
+    metadata:
+      labels: { app: nim-llama }
+    spec:
+      restartPolicy: Always
+      initContainers:
+        - name: fix-perms
+          image: busybox:1.36
+          command: ["/bin/sh","-c"]
+          # Make the mounted dirs writable regardless of uid inside runtime
+          args: ["chmod -R 0777 /opt/nim/llm/.cache /opt/nim/llm/workspace || true"]
+          volumeMounts:
+            - { name: nim-cache,     mountPath: /opt/nim/llm/.cache }
+            - { name: nim-workspace, mountPath: /opt/nim/llm/workspace }
+      containers:
+        - name: nim-llama
+          image: nvcr.io/nim/meta/llama-3.1-8b-base:1.1.2
+          command: ["/opt/nim/llm/.venv/bin/python3"]
+          args:
+            - "-m"
+            - "vllm_nvext.entrypoints.openai.api_server"
+            - "--served-model-name"
+            - "meta/llama-3.1-8b-base"
+            - "--max-model-len"
+            - "8192"
+            - "--gpu-memory-utilization"
+            - "0.9"
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+              nvidia.com/gpu: 1
+              ephemeral-storage: "20Gi"
+            limits:
+              cpu: "4"
+              memory: "14Gi"
+              nvidia.com/gpu: 1
+              ephemeral-storage: "40Gi"
+          env:
+            - { name: NIM_MODEL, value: "llama-3.1" }
+            - name: NGC_API_KEY
+              valueFrom:
+                secretKeyRef: { name: nvcr-secret, key: NGC_API_KEY }
+            - { name: NVIDIA_VISIBLE_DEVICES, value: "all" }
+            - { name: NVIDIA_DRIVER_CAPABILITIES, value: "compute,utility" }
+            # Writable caches to fix HF/Numba errors
+            - { name: TRANSFORMERS_CACHE, value: "/cache/hf" }
+            - { name: HF_HOME, value: "/cache/hf" }
+            - { name: HUGGINGFACE_HUB_CACHE, value: "/cache/hf/hub" }
+            - { name: XDG_CACHE_HOME, value: "/cache" }
+            - { name: NUMBA_CACHE_DIR, value: "/cache/numba" }
+            - { name: NUMBA_DISABLE_CACHE, value: "1" }
+            - { name: UCX_WARN_UNUSED_ENV_VARS, value: "n" }
+          readinessProbe:
+            httpGet: { path: /v1/models, port: 8000 }
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 12
+          volumeMounts:
+            - { name: dshm,          mountPath: /dev/shm }
+            - { name: model-cache,   mountPath: /cache }
+            - { name: nim-cache,     mountPath: /opt/nim/llm/.cache }
+            - { name: nim-workspace, mountPath: /opt/nim/llm/workspace }
+      volumes:
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 4Gi }
+        - name: model-cache
+          emptyDir: {}
+        - name: nim-cache
+          emptyDir: {}                # writable cache for NIM hub
+        - name: nim-workspace
+          emptyDir: {}                # writable model workspace
+      nodeSelector: { role: seedcore }
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      imagePullSecrets:
+        - name: nvcr-secret
