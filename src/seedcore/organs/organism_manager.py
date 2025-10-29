@@ -1372,8 +1372,18 @@ class OrganismManager:
                 await asyncio.sleep(15)
                 repo = self._get_agent_graph_repository()
                 if repo:
-                    stale = await repo.expire_stale_instances(timeout_seconds=15)
-                    old = await repo.expire_old_epoch_instances()
+                    if not self._session_factory:
+                        logger.warning("[reconcile] Database session factory unavailable; skipping registry maintenance")
+                        continue
+
+                    async with self._session_factory() as session:
+                        async with session.begin():
+                            stale = await repo.expire_stale_instances(
+                                session=session,
+                                timeout_seconds=15,
+                            )
+                            old = await repo.expire_old_epoch_instances(session=session)
+
                     if stale or old:
                         logger.info(f"[reconcile] stale={stale}, old_epoch={old}")
                 else:
