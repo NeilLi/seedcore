@@ -49,6 +49,7 @@ print(f"Using {config.provider.value} with model {config.model}")
 ### Provider Settings
 
 - **LLM_PROVIDER**: The LLM provider to use (`openai`, `anthropic`, `google`, `azure`, `local`)
+- **LLM_PROVIDER_DEEP**: (Cognitive Service) Deep profile is pinned to `openai`; other values are ignored with a warning.
 - **OPENAI_API_KEY**: Your OpenAI API key
 - **ANTHROPIC_API_KEY**: Your Anthropic API key (for Claude models)
 - **LLM_API_KEY**: Generic API key (used if provider-specific key not set)
