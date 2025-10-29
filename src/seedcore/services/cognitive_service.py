@@ -228,12 +228,11 @@ def _normalize_list(val: Optional[str]) -> List[str]:
     return [x.strip().lower() for x in (val or "").split(",") if x.strip()]
 
 def _default_provider_deep() -> str:
-    # Deep defaults: explicit > global > openai
-    return (_first_non_empty(
-        os.getenv("LLM_PROVIDER_DEEP"),
-        os.getenv("LLM_PROVIDER"),
-        "openai"
-    ) or "openai").lower()
+    """Resolve the default provider for the DEEP profile."""
+    explicit = os.getenv("LLM_PROVIDER_DEEP")
+    if explicit and explicit.strip():
+        return explicit.strip().lower()
+    return "openai"
 
 def _default_provider_fast() -> str:
     # Fast uses explicit > first in LLM_PROVIDERS > global > openai
@@ -337,7 +336,13 @@ class CognitiveService:
         self._executor = ThreadPoolExecutor(max_workers=4)
 
         # Resolve providers for both profiles
-        deep_provider = (_first_non_empty(os.getenv("LLM_PROVIDER_DEEP"), os.getenv("LLM_PROVIDER"), "openai") or "openai").lower()
+        deep_provider_resolved = _default_provider_deep()
+        if deep_provider_resolved != "openai":
+            logger.warning(
+                "DEEP profile provider '%s' is not supported; forcing 'openai'",
+                deep_provider_resolved,
+            )
+        deep_provider = "openai"
         fast_provider = (_first_non_empty(os.getenv("LLM_PROVIDER_FAST"), None) or _default_provider_fast()).lower()
 
         # Build default profile configs if not supplied
