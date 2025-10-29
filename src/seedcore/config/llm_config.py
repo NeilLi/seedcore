@@ -253,9 +253,20 @@ def configure_llm_openai(
     model: str = "gpt-4o",
     max_tokens: int = 1024,
     temperature: float = 0.7,
+    enable_token_logging: bool = True,
     **kwargs
 ) -> None:
-    """Configure LLM for OpenAI."""
+    """
+    Configure LLM for OpenAI.
+    
+    Args:
+        api_key: OpenAI API key
+        model: Model name (default: "gpt-4o")
+        max_tokens: Maximum tokens to generate (default: 1024)
+        temperature: Sampling temperature (default: 0.7)
+        enable_token_logging: If True, enable automatic token usage logging (default: True)
+        **kwargs: Additional configuration options
+    """
     config = LLMConfig.openai(
         model=model,
         api_key=api_key,
@@ -264,6 +275,16 @@ def configure_llm_openai(
         **kwargs
     )
     set_llm_config(config)
+    
+    # Enable token usage logging if requested
+    if enable_token_logging:
+        try:
+            from ..utils.token_logger import enable_token_logging as enable_logging
+            enable_logging()
+        except Exception as e:
+            # Don't fail if token logging can't be enabled
+            import logging
+            logging.getLogger(__name__).debug(f"Could not enable token logging: {e}")
 
 
 def configure_llm_anthropic(

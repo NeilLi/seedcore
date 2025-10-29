@@ -40,7 +40,7 @@ class AgentGraphRepository:
         )
         epoch = result.scalar_one_or_none()
         if epoch:
-            return epoch
+            return str(epoch)
 
         # If missing, create one implicitly
         new_epoch = str(uuid.uuid4())
@@ -71,21 +71,24 @@ class AgentGraphRepository:
         pid: Optional[int] = None,
     ) -> None:
         """Register or update a runtime instance record (sets status=starting)."""
+        # Convert string UUIDs to UUID objects for PostgreSQL
+        # and convert IP address string for INET type
+        import uuid as uuid_module
         q = """
         SELECT register_instance(
-            :instance_id::uuid, :logical_id, :cluster_epoch::uuid,
+            :instance_id, :logical_id, :cluster_epoch,
             :actor_name, :serve_route, :node_id,
-            :ip_address::inet, :pid::int
+            :ip_address, :pid
         )
         """
         params = {
-            "instance_id": instance_id,
+            "instance_id": uuid_module.UUID(instance_id),
             "logical_id": logical_id,
-            "cluster_epoch": cluster_epoch,
+            "cluster_epoch": uuid_module.UUID(cluster_epoch),
             "actor_name": actor_name,
             "serve_route": serve_route,
             "node_id": node_id,
-            "ip_address": ip_address,
+            "ip_address": ip_address,  # PostgreSQL will accept string for INET type
             "pid": pid,
         }
         await session.execute(text(q), params)
@@ -94,16 +97,18 @@ class AgentGraphRepository:
         self, session: AsyncSession, instance_id: str, status: str
     ) -> None:
         """Set the status for a runtime instance (starting/alive/draining/dead)."""
+        import uuid as uuid_module
         await session.execute(
-            text("SELECT set_instance_status(:instance_id::uuid, :status::InstanceStatus)"),
-            {"instance_id": instance_id, "status": status}
+            text("SELECT set_instance_status(:instance_id, :status)"),
+            {"instance_id": uuid_module.UUID(instance_id), "status": status}
         )
 
     async def beat(self, session: AsyncSession, instance_id: str) -> None:
         """Update last_heartbeat for the given instance."""
+        import uuid as uuid_module
         await session.execute(
-            text("SELECT beat(:instance_id::uuid)"),
-            {"instance_id": instance_id}
+            text("SELECT beat(:instance_id)"),
+            {"instance_id": uuid_module.UUID(instance_id)}
         )
 
     async def expire_stale_instances(

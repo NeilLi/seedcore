@@ -1374,6 +1374,13 @@ def initialize_cognitive_core(llm_provider: str = "openai", model: str = "gpt-4o
             # Configure DSPy with the LLM
             if llm_provider == "openai":
                 llm = dspy.OpenAI(model=model, max_tokens=1024)
+                
+                # Enable token usage logging for OpenAI
+                try:
+                    from ..utils.token_logger import enable_token_logging
+                    enable_token_logging()
+                except Exception as e:
+                    logger.debug(f"Could not enable token logging: {e}")
             else:
                 # Add support for other providers as needed
                 raise ValueError(f"Unsupported LLM provider: {llm_provider}")

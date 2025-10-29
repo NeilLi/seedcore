@@ -777,6 +777,74 @@ class RayAgent:
             
             # Default response for unrecognized queries
             else:
+                # Check if this is a complex query that needs cognitive service (DEEP profile)
+                params = task_data.get("params", {})
+                needs_ml_fallback = params.get("needs_ml_fallback", False)
+                confidence = params.get("confidence", {}).get("overall_confidence", 1.0) if isinstance(params.get("confidence"), dict) else 1.0
+                criticality = params.get("criticality", 0.5)
+                drift_score = task_data.get("drift_score", 0.0)
+                
+                # Determine if query is complex enough to use cognitive service
+                is_complex = (
+                    needs_ml_fallback or
+                    confidence < 0.5 or
+                    criticality > 0.6 or
+                    drift_score > 0.6 or
+                    len(description.split()) > 15 or
+                    any(word in description_lower for word in ['complex', 'analysis', 'decompose', 'plan', 'strategy', 'reasoning'])
+                )
+                
+                # Use cognitive service for complex queries (DEEP profile = OpenAI)
+                if is_complex and self._cog:
+                    try:
+                        logger.info(f"🧠 Agent {self.agent_id} detected complex query, using cognitive service (DEEP/OpenAI)")
+                        
+                        # ✅ Call the sync wrapper method - it safely handles async-to-sync conversion
+                        # DO NOT use asyncio.run() directly inside a running event loop (Ray/Serve/FastAPI)
+                        # The plan_sync() wrapper handles this safely
+                        cog_response = self._cog.plan_sync(
+                            agent_id=self.agent_id,
+                            task_description=description,
+                            current_capabilities=self._get_agent_capabilities(),
+                            available_tools=task_data.get("params", {}),
+                            depth="deep"  # Force DEEP profile to trigger OpenAI
+                        )
+                        
+                        norm = self._normalize_cog_resp(cog_response)
+                        if norm.get("success") and norm.get("payload"):
+                            payload = norm["payload"]
+                            result = {
+                                "query_type": "complex_cognitive_query",
+                                "query": description,
+                                "thought_process": payload.get("thought_process", ""),
+                                "plan": payload.get("step_by_step_plan", ""),
+                                "formatted": payload.get("formatted_response") or f"Cognitive analysis: {description}",
+                                "description": description,
+                                "meta": norm.get("meta", {}),
+                                "profile_used": norm.get("meta", {}).get("profile_used", "deep")
+                            }
+                            
+                            logger.info(f"✅ Agent {self.agent_id} completed complex query via cognitive service")
+                            return {
+                                "agent_id": self.agent_id,
+                                "task_processed": True,
+                                "success": True,
+                                "quality": 0.9,
+                                "capability_score": self.capability_score,
+                                "mem_util": self.mem_util,
+                                "result": result,
+                                "mem_hits": 1,
+                                "used_cognitive_service": True,
+                                "cognitive_profile": "deep"
+                            }
+                        else:
+                            logger.warning(f"⚠️ Cognitive service returned unsuccessful response, falling back to simple response")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Agent {self.agent_id} cognitive service call failed: {e}, falling back to simple response")
+                        import traceback
+                        logger.debug(f"Traceback: {traceback.format_exc()}")
+                
+                # Fallback for simple queries or if cognitive service unavailable
                 result = {
                     "query_type": "general_query",
                     "message": "I received your query but don't have a specific handler for it yet.",

@@ -277,8 +277,8 @@ def _model_for(provider: str, profile: LLMProfile) -> str:
         )
     if pr == "nim":
         return _first_non_empty(
-            os.getenv("SEEDCORE_NIM_MODEL_DEEP" if pf=="deep" else "SEEDCORE_NIM_MODEL_FAST"),
-            "meta/llama-3.1-70b-instruct" if pf=="deep" else "meta/llama-3.1-8b-instruct"
+            os.getenv("NIM_LLM_MODEL" if pf=="deep" else "NIM_LLM_MODEL"),
+            "meta/llama-3.1-8b-base" if pf=="deep" else "meta/llama-3.1-8b-base"
         )
     if pr == "mlservice":
         return _first_non_empty(
@@ -361,6 +361,16 @@ class CognitiveService:
             },
         }
 
+        # CRITICAL: Enable token logging BEFORE creating any cores
+        # This ensures OpenAI client patching happens before DSPy creates clients
+        if deep_provider == "openai" or fast_provider == "openai":
+            try:
+                from ..utils.token_logger import enable_token_logging
+                enable_token_logging()
+                logger.debug("Token logging enabled early in CognitiveService.__init__")
+            except Exception as e:
+                logger.debug(f"Could not enable token logging early: {e}")
+
         # Initialize cores & circuit breakers
         self.cores: Dict[LLMProfile, CognitiveCore] = {}
         self.circuit_breakers: Dict[LLMProfile, CircuitBreaker] = {}
@@ -397,6 +407,14 @@ class CognitiveService:
         provider = provider.lower()
         model = config["model"]
         max_tokens = config.get("max_tokens", 1024)
+
+        # Enable token usage logging BEFORE creating OpenAI instances
+        if provider in ("openai", "azure"):
+            try:
+                from ..utils.token_logger import enable_token_logging
+                enable_token_logging()
+            except Exception as e:
+                logger.debug(f"Could not enable token logging: {e}")
 
         if provider == "openai":
             lm = dspy.OpenAI(model=model, max_tokens=max_tokens)
@@ -511,7 +529,31 @@ class CognitiveService:
             logger.error(f"Error processing cognitive task: {e}")
             return create_error_result(f"Processing error: {str(e)}", "PROCESSING_ERROR").model_dump()
 
-    def forward_cognitive_task(self, context: 'CognitiveContext') -> Dict[str, Any]:
+    def forward_cognitive_task(self, context: 'CognitiveContext', use_deep: bool = False) -> Dict[str, Any]:
+        """
+        Forward cognitive task to appropriate core.
+        
+        Args:
+            context: Cognitive context for the task
+            use_deep: If True, use DEEP profile (OpenAI), otherwise use FAST profile (default: False)
+        """
+        # Use new multi-profile system if available
+        if self.cores:
+            profile = LLMProfile.DEEP if use_deep else LLMProfile.FAST
+            core = self.cores.get(profile)
+            if core:
+                try:
+                    result = core.forward(context)
+                    if isinstance(result, dict):
+                        result.setdefault("result", {}).setdefault("meta", {})
+                        result["result"]["meta"]["profile_used"] = profile.value
+                    return result
+                except Exception as e:
+                    logger.error(f"Error forwarding cognitive task with {profile.value} profile: {e}")
+                    # Fallback to legacy core
+                    pass
+        
+        # Fallback to legacy single core
         if self.cognitive_core is None:
             return {
                 "success": False,

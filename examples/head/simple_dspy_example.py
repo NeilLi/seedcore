@@ -21,6 +21,7 @@ from seedcore.cognitive.cognitive_core import (
     initialize_cognitive_core,
 )
 from seedcore.config.llm_config import configure_llm_openai
+from seedcore.utils.token_logger import enable_token_logging
 
 
 def main():
@@ -36,6 +37,10 @@ def main():
 
     configure_llm_openai(api_key)
     print("✅ LLM configuration loaded")
+    
+    # Enable automatic token usage logging for all OpenAI calls
+    enable_token_logging()
+    print("✅ Token usage logging enabled - all OpenAI calls will log token usage")
 
     # Initialize cognitive core
     print("\n🚀 Initializing cognitive core...")

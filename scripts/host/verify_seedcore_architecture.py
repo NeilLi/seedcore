@@ -1557,6 +1557,57 @@ def verify_environment_configuration():
     fast_path_latency = env('FAST_PATH_LATENCY_SLO_MS', 'NOT_SET')
     log.info(f"📋 FAST_PATH_LATENCY_SLO_MS: {fast_path_latency}")
     
+    # Check LLM provider configuration
+    log.info("=" * 50)
+    log.info("🔍 LLM PROVIDER CONFIGURATION")
+    log.info("=" * 50)
+    
+    llm_providers = env('LLM_PROVIDERS', 'NOT_SET')
+    llm_provider = env('LLM_PROVIDER', 'NOT_SET')
+    llm_provider_fast = env('LLM_PROVIDER_FAST', 'NOT_SET')
+    llm_provider_deep = env('LLM_PROVIDER_DEEP', 'NOT_SET')
+    openai_api_key = env('OPENAI_API_KEY', 'NOT_SET')
+    
+    log.info(f"📋 LLM_PROVIDERS: {llm_providers}")
+    log.info(f"📋 LLM_PROVIDER (back-compat): {llm_provider}")
+    log.info(f"📋 LLM_PROVIDER_FAST: {llm_provider_fast}")
+    log.info(f"📋 LLM_PROVIDER_DEEP: {llm_provider_deep}")
+    
+    # Show what provider will actually be used
+    try:
+        from seedcore.utils.llm_registry import get_active_providers
+        active_providers = get_active_providers()
+        log.info(f"📋 Active providers (from get_active_providers()): {active_providers}")
+        
+        # Determine what will be used for FAST profile
+        if llm_provider_fast != 'NOT_SET':
+            log.info(f"✅ FAST profile will use: {llm_provider_fast} (explicit LLM_PROVIDER_FAST)")
+        elif active_providers:
+            log.info(f"✅ FAST profile will use: {active_providers[0]} (first from LLM_PROVIDERS)")
+            if llm_providers == 'nim' and openai_api_key != 'NOT_SET':
+                log.warning("⚠️  WARNING: LLM_PROVIDERS=nim is set, so NIM will be used for FAST profile")
+                log.warning("   Even though OPENAI_API_KEY is set, OpenAI won't be used unless:")
+                log.warning("   - Set LLM_PROVIDERS=openai (or LLM_PROVIDERS=openai,nim)")
+                log.warning("   - OR set LLM_PROVIDER_FAST=openai")
+        else:
+            fallback = llm_provider if llm_provider != 'NOT_SET' else 'openai'
+            log.info(f"✅ FAST profile will use: {fallback} (fallback from LLM_PROVIDER or default)")
+        
+        # DEEP profile always uses OpenAI (forced in CognitiveService)
+        log.info(f"✅ DEEP profile will use: openai (always, regardless of config)")
+        
+    except ImportError as e:
+        log.warning(f"⚠️  Could not import llm_registry to check active providers: {e}")
+        log.info(f"   Will rely on CognitiveService's internal provider resolution")
+    
+    if openai_api_key != 'NOT_SET':
+        masked_key = openai_api_key[:10] + "..." if len(openai_api_key) > 10 else "***"
+        log.info(f"📋 OPENAI_API_KEY: {masked_key} (set)")
+    else:
+        log.warning("⚠️  OPENAI_API_KEY: NOT_SET - OpenAI won't work even if selected!")
+    
+    log.info("=" * 50)
+    
     # Check Ray configuration
     ray_address = env('RAY_ADDRESS', 'NOT_SET')
     ray_namespace = env('RAY_NAMESPACE', 'NOT_SET')

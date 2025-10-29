@@ -375,3 +375,56 @@ class CognitiveServiceClient(BaseServiceClient):
             return str(health.get("status", "")).lower() == "healthy"
         except Exception:
             return False
+
+    # ---------------------------
+    # Sync wrappers for sync callers
+    # ---------------------------
+
+    def plan_sync(
+        self,
+        agent_id: str,
+        task_description: str,
+        *,
+        depth: str = "fast",
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        current_capabilities: Optional[Dict[str, Any]] = None,
+        available_tools: Optional[Dict[str, Any]] = None,
+        extra_meta: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Sync wrapper for plan() – safe in or out of a running event loop.
+        Enforces timeout inside the event loop to avoid hanging threads.
+        """
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Resolve an effective timeout (use your attribute name here)
+        base_timeout = getattr(self, "timeout", 8.0)
+        eff_timeout = float(base_timeout) * (4.0 if str(depth).lower() == "deep" else 1.0)
+
+        async def _call_plan():
+            return await self.plan(
+                agent_id=agent_id,
+                task_description=task_description,
+                depth=depth,
+                provider=provider,
+                model=model,
+                current_capabilities=current_capabilities,
+                available_tools=available_tools,
+                extra_meta=extra_meta,
+            )
+
+        async def _runner():
+            # Enforce timeout INSIDE the event loop
+            return await asyncio.wait_for(_call_plan(), timeout=eff_timeout)
+
+        try:
+            # Are we already inside an event loop? (Ray/Serve/FastAPI/Notebook)
+            asyncio.get_running_loop()
+            # Run in a worker thread with its own fresh loop
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                return ex.submit(lambda: asyncio.run(_runner())).result()
+        except RuntimeError:
+            # No running loop -> safe to run directly
+            return asyncio.run(_runner())
