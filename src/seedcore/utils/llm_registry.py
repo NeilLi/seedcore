@@ -86,11 +86,11 @@ def _nim_client_factory() -> object:
 
     endpoint = (
         os.getenv("NIM_ENDPOINT")
-        or os.getenv("SEEDCORE_NIM_BASE_URL")
+        or os.getenv("NIM_LLM_BASE_URL")
         or "http://seedcore-nim-svc:8080/v1"
     )
     api_key = (
-        os.getenv("SEEDCORE_NIM_API_KEY")
+        os.getenv("NIM_LLM_API_KE")
         or os.getenv("NIM_API_KEY")
         or os.getenv("LLM_API_KEY")
         or ""

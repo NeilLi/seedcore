@@ -1,164 +1,194 @@
-from __future__ import annotations
+#!/usr/bin/env python3
+"""
+Ray-based NIM Retrieval Embedder.
+
+Uses NVIDIA's NIM Retrieval model (e.g., nv-embedqa-e5-v5) deployed remotely on EKS
+to compute embeddings for graph nodes, and upserts them into pgvector (graph_embeddings).
+
+Env Vars:
+  NIM_RETRIEVAL_MODEL=nvidia/nv-embedqa-e5-v5
+  NIM_RETRIEVAL_PROVIDER=nim
+  NIM_RETRIEVAL_BASE_URL=@http://af3a6a34f659a409584db07209d82853-1298671438.us-east-1.elb.amazonaws.com/v1
+  NIM_RETRIEVAL_API_KEY=none
+  SEEDCORE_PG_DSN=postgresql://postgres:postgres@postgresql:5432/seedcore
+"""
+
 import os
 import json
+import time
 import logging
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 
-import torch
 import ray
+import requests
 import sqlalchemy as sa
 from sqlalchemy import text
-
 from .loader import GraphLoader
 from .gnn_models import SAGE
 
 logger = logging.getLogger(__name__)
-PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))
 
-# ====== Tunables ======
-GRAPH_IN_FEATS        = int(os.getenv("GRAPH_IN_FEATS", "128"))     # match your feature dim
-GRAPH_H_FEATS         = int(os.getenv("GRAPH_H_FEATS", "128"))      # output/embedding dim; matches VECTOR(128)
-GRAPH_LAYERS          = int(os.getenv("GRAPH_LAYERS", "2"))
-EMBED_BATCH_SIZE      = int(os.getenv("GRAPH_EMBED_BATCH_SIZE", "0"))  # 0 = no micro-batching inside the model
-UPSERT_CHUNK_SIZE     = int(os.getenv("GRAPH_UPSERT_CHUNK_SIZE", "200"))  # executemany batch
-DB_ECHO               = os.getenv("GRAPH_DB_ECHO", "false").lower() in ("1", "true", "yes")
+# ---------- Environment ----------
+PG_DSN = os.getenv("SEEDCORE_PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore")
+NIM_BASE_URL = os.getenv("NIM_RETRIEVAL_BASE_URL", "").lstrip("@")
+NIM_API_KEY = os.getenv("NIM_RETRIEVAL_API_KEY", "none")
+NIM_MODEL = os.getenv("NIM_RETRIEVAL_MODEL", "nvidia/nv-embedqa-e5-v5")
 
-# ====== Ray Actor: GraphEmbedder ======
+UPSERT_CHUNK_SIZE = int(os.getenv("GRAPH_UPSERT_CHUNK_SIZE", "200"))
+DB_ECHO = os.getenv("GRAPH_DB_ECHO", "false").lower() in ("1", "true", "yes")
+
+HEADERS = {"Content-Type": "application/json"}
+if NIM_API_KEY and NIM_API_KEY.lower() != "none":
+    HEADERS["Authorization"] = f"Bearer {NIM_API_KEY}"
+
+EMBED_URL = f"{NIM_BASE_URL}/embeddings"
+DEFAULT_LABEL = os.getenv("GRAPH_EMBEDDING_DEFAULT_LABEL", "default")
+
+
+# ---------- Ray Actor: GraphEmbedder (legacy SAGE over homogeneous graph) ----------
 @ray.remote(num_cpus=0.5)
 class GraphEmbedder:
     """
-    Stateful Ray actor that holds a cached GraphSAGE model in memory.
-    Backward compatible: compute_embeddings(start_ids, k) -> {node_id: embedding}.
+    Computes node embeddings using a simple GraphSAGE model over a k-hop
+    homogeneous DGL graph loaded from Neo4j. Returns L2-normalized vectors.
     """
 
-    def __init__(self, checkpoint_path: Optional[str] = None):
-        self.loader = GraphLoader()  # should already read from graph_edges/graph_node_map
-        self.model: Optional[SAGE] = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self._emb_dim = GRAPH_H_FEATS
-        self._init_model(checkpoint_path)
+    def __init__(self):
+        self.loader = GraphLoader()
+        self.model = None
+        self.in_feats = None
 
-    def _init_model(self, checkpoint_path: Optional[str]):
-        self.model = SAGE(in_feats=GRAPH_IN_FEATS, h_feats=GRAPH_H_FEATS, layers=GRAPH_LAYERS).to(self.device)
-        if checkpoint_path and os.path.exists(checkpoint_path):
-            state = torch.load(checkpoint_path, map_location=self.device)
-            self.model.load_state_dict(state, strict=False)
-        self.model.eval()
-        print(f"[GraphEmbedder] Model initialized on {self.device} "
-              f"(in={GRAPH_IN_FEATS}, h={GRAPH_H_FEATS}, layers={GRAPH_LAYERS})")
-
-    def warmup(self) -> Dict[str, int]:
-        """
-        Optional: touch a tiny synthetic graph to ensure kernels are JITed and memory’s primed.
-        """
-        try:
-            # Let the loader give us a trivial 0-hop if it supports it; otherwise no-op
-            g, idx_map, X = self.loader.load_k_hop(start_ids=[], k=0)
-            if g is not None and g.num_nodes() > 0:
-                with torch.no_grad():
-                    _ = self.model(g, X.to(self.device))
-            return {"status": 1}
-        except Exception:
-            return {"status": 0}
-
-    def embedding_dim(self) -> int:
-        """Expose current embedding dimension (helps the upserter validate)."""
-        return int(self._emb_dim)
-
-    def compute_embeddings(self, start_ids: List[int], k: int = 2) -> Dict[int, List[float]]:
-        """
-        Compute embeddings for the k-hop neighborhood around the given node_ids.
-        Return: {node_id: [float, ..., len=GRAPH_H_FEATS]}
-        """
-        try:
-            result = self.loader.load_k_hop(start_ids=start_ids, k=k)
-            if result is None:
-                logger.warning(f"load_k_hop returned None for start_ids={start_ids}, k={k}")
-                return {}
-            
-            g, idx_map, X = result
-            if g is None or g.num_nodes() == 0:
-                return {}
-
-            with torch.no_grad():
-                Z = self.model(g, X.to(self.device))  # shape: [num_nodes, GRAPH_H_FEATS]
-                Z = Z.to("cpu")
-
-            inv = {v: k for k, v in idx_map.items()}
-            # NOTE: keep Python lists for portability / JSON-ability
-            return {inv[i]: Z[i].tolist() for i in range(Z.shape[0])}
-            
-        except Exception as e:
-            logger.error(f"Error computing embeddings for start_ids={start_ids}, k={k}: {e}")
-            return {}
+    def _ensure_model(self, in_feats: int):
+        if self.model is None or self.in_feats != in_feats:
+            self.model = SAGE(in_feats=in_feats, h_feats=128, layers=2)
+            self.in_feats = in_feats
 
     def ping(self) -> str:
         return "pong"
 
+    def compute_embeddings(self, node_ids: List[int], k: int = 2) -> Dict[int, List[float]]:
+        if not node_ids:
+            return {}
+
+        try:
+            g, idx_map, X = self.loader.load_k_hop(node_ids, k=k)
+        except ImportError as e:
+            logger.error("DGL not available for GraphEmbedder: %s", e)
+            return {}
+        except Exception as e:
+            logger.error("Failed to load k-hop graph: %s", e)
+            return {}
+
+        if g is None or getattr(g, 'num_nodes', lambda: 0)() == 0 or X is None or X.numel() == 0:
+            return {}
+
+        self._ensure_model(X.shape[1])
+
+        try:
+            import torch
+            with torch.no_grad():
+                H = self.model(g, X)
+        except Exception as e:
+            logger.error("SAGE forward failed: %s", e)
+            return {}
+
+        # invert idx_map to original node ids
+        inv_map = {v: k for k, v in idx_map.items()}
+        return {int(inv_map[i]): H[i].tolist() for i in range(H.shape[0])}
+
     def close(self):
-        """Cleanup any held resources."""
         try:
             self.loader.close()
         except Exception:
             pass
+
+
+# ---------- Ray Actor: NimRetrievalEmbedder ----------
+@ray.remote(num_cpus=0.5)
+class NimRetrievalEmbedder:
+    """
+    Ray actor that queries NIM Retrieval service to produce embeddings for text nodes.
+    """
+
+    def __init__(self):
+        self.model = NIM_MODEL
+        self.url = EMBED_URL
+        self.headers = HEADERS
+        self.session = requests.Session()
+        logger.info(f"[NIM Retrieval] Using model={self.model}, url={self.url}")
+
+    def ping(self) -> str:
         try:
-            del self.model
+            r = self.session.get(self.url.replace("/embeddings", "/health"), timeout=5)
+            return "ok" if r.status_code == 200 else f"fail:{r.status_code}"
+        except Exception as e:
+            return f"error:{e}"
+
+    def embed_texts(self, items: Dict[int, str]) -> Dict[int, List[float]]:
+        """
+        Send text batches to NIM Retrieval model for embedding.
+        Input: {node_id: text}
+        Output: {node_id: [float vector]}
+        """
+        if not items:
+            return {}
+
+        payload = {
+            "model": self.model,
+            "input": list(items.values())
+        }
+
+        try:
+            resp = self.session.post(self.url, headers=self.headers, json=payload, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if "data" not in data:
+                logger.error(f"Invalid response from NIM: {data}")
+                return {}
+
+            vectors = [d["embedding"] for d in data["data"]]
+            return {nid: vec for nid, vec in zip(items.keys(), vectors)}
+
+        except Exception as e:
+            logger.error(f"NIM embedding request failed: {e}")
+            return {}
+
+    def close(self):
+        try:
+            self.session.close()
         except Exception:
             pass
-        if torch.cuda.is_available():
-            try:
-                torch.cuda.empty_cache()
-            except Exception:
-                pass
 
 
-# ====== Upsert task (separate Ray task to allow parallel DB writes) ======
-DEFAULT_LABEL = os.getenv("GRAPH_EMBEDDING_DEFAULT_LABEL", "default")
-
-
+# ---------- Ray Task: Upsert Embeddings ----------
 @ray.remote(num_cpus=0.2)
 def upsert_embeddings(
     emb_map: Dict[int, List[float]],
     label_map: Optional[Dict[int, Optional[str]]] = None,
     props_map: Optional[Dict[int, Optional[dict]]] = None,
-    expected_dim: Optional[int] = GRAPH_H_FEATS,
     model_map: Optional[Dict[int, Optional[str]]] = None,
     content_hash_map: Optional[Dict[int, Optional[str]]] = None,
 ) -> int:
     """
-    Upsert node embeddings into pgvector-backed table graph_embeddings(node_id BIGINT PRIMARY KEY, emb VECTOR(128), ...)
-    Uses jsonb::vector cast for safety; executemany in chunks.
-    Accepts optional label/props if you later want to backfill metadata.
+    Upsert embeddings into pgvector table `graph_embeddings`.
     """
     if not emb_map:
         return 0
 
-    # quick dimension sanity
-    if expected_dim:
-        for nid, v in emb_map.items():
-            if len(v) != expected_dim:
-                raise ValueError(f"Embedding for node {nid} has dim={len(v)} != expected_dim={expected_dim}")
-
     engine = sa.create_engine(PG_DSN, future=True, echo=DB_ECHO)
-
-    # Build param rows once; we’ll executemany in chunks
     rows = []
     for nid, vec in emb_map.items():
-        props_value: Optional[str] = None
-        if props_map and nid in props_map:
-            props_value = json.dumps(props_map[nid])
-
+        props_value = json.dumps(props_map[nid]) if props_map and nid in props_map else None
         rows.append({
             "nid": int(nid),
-            "vec": json.dumps(vec),  # will cast via ::jsonb::vector in SQL
+            "vec": json.dumps(vec),
             "label": (label_map or {}).get(nid) or DEFAULT_LABEL,
             "props": props_value,
-            "model": (model_map or {}).get(nid),
+            "model": (model_map or {}).get(nid) or NIM_MODEL,
             "content_sha256": (content_hash_map or {}).get(nid),
         })
 
-    # SQL with optional label/props; if None, keep existing (COALESCE logic on update)
-    # NOTE: we do not set created_at/updated_at here explicitly; trigger updates updated_at.
     sql = text("""
         INSERT INTO graph_embeddings (node_id, label, emb, props, model, content_sha256)
         VALUES (
@@ -183,12 +213,36 @@ def upsert_embeddings(
             if UPSERT_CHUNK_SIZE and UPSERT_CHUNK_SIZE > 0:
                 for i in range(0, len(rows), UPSERT_CHUNK_SIZE):
                     chunk = rows[i:i + UPSERT_CHUNK_SIZE]
-                    conn.execute(sql, chunk)  # executemany
+                    conn.execute(sql, chunk)
                     total += len(chunk)
             else:
-                conn.execute(sql, rows)  # executemany in one go
+                conn.execute(sql, rows)
                 total = len(rows)
     finally:
         engine.dispose()
 
     return total
+
+
+# ---------- Standalone Smoke Test ----------
+if __name__ == "__main__":
+    ray.init(ignore_reinit_error=True)
+    print("Connecting to NIM Retrieval:", EMBED_URL)
+
+    actor = NimRetrievalEmbedder.remote()
+    ping_result = ray.get(actor.ping.remote())
+    print("Ping result:", ping_result)
+
+    sample_items = {
+        1: "Agentic cognitive orchestration enables dynamic tool-use in complex environments.",
+        2: "Ray Serve allows distributed inference at scale for graph-based AI workloads."
+    }
+
+    embeddings = ray.get(actor.embed_texts.remote(sample_items))
+    print(json.dumps(embeddings, indent=2)[:400], "...")
+
+    if embeddings:
+        total = ray.get(upsert_embeddings.remote(embeddings))
+        print(f"Upserted {total} rows into graph_embeddings.")
+    else:
+        print("No embeddings returned.")

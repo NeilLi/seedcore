@@ -263,29 +263,27 @@ def get_dispatcher_heartbeat_summary() -> dict[str, dict[str, Any]]:
     
     return summary
 
-# === IMPORT PATH FIX FOR DIRECT EXECUTION ===
+# === IMPORT PATH FIX FOR DIRECT EXECUTION AND MODULE IMPORT ===
 # This allows the script to work both ways:
 # 1. python scripts/verify_seedcore_architecture.py (direct execution)
 # 2. python -m scripts.verify_seedcore_architecture (module execution)
-if __name__ == "__main__":
-    import sys
-    import os
-    from pathlib import Path
-    
-    # Get the project root (parent of scripts/ directory)
-    # Since script is now in scripts/host/, we need to go up two levels
-    script_dir = Path(__file__).parent
-    project_root = script_dir.parent.parent
-    
-    # Add project root to sys.path if not already there
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-        # Optional notice (set SHOW_IMPORT_FIX=1 to display)
-        if os.getenv("SHOW_IMPORT_FIX") == "1":
-            print(f"🔧 Fixed import path: added {project_root} to sys.path")
-            print(f"   This allows imports like 'src.seedcore.models.result_schema' to work")
-            print(f"   when running the script directly with 'python {__file__}'")
-            print()
+# 3. Imported as a module by other scripts (e.g., hotel_os_simulator.py)
+from pathlib import Path
+
+# Get the project root (parent of scripts/ directory)
+# Since script is now in scripts/host/, we need to go up two levels
+_script_dir = Path(__file__).parent
+_project_root = _script_dir.parent.parent
+
+# Add project root to sys.path if not already there
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+    # Optional notice (set SHOW_IMPORT_FIX=1 to display)
+    if os.getenv("SHOW_IMPORT_FIX") == "1":
+        print(f"🔧 Fixed import path: added {_project_root} to sys.path")
+        print(f"   This allows imports like 'src.seedcore.models.result_schema' to work")
+        print(f"   when running the script directly with 'python {__file__}' or importing as module")
+        print()
 
 # === USAGE EXAMPLES ===
 # This script now works both ways thanks to the import path fix above:

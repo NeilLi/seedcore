@@ -128,7 +128,7 @@ class GraphDispatcher:
                 name=self._embedder_name,
                 lifetime="detached",
                 namespace=AGENT_NAMESPACE,
-            ).remote(checkpoint_path)
+            ).remote()
             logger.info("✅ Created GraphEmbedder: %s", self._embedder_name)
 
         # quick ping (best-effort)

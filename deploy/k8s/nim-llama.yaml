@@ -51,7 +51,7 @@ spec:
               nvidia.com/gpu: 1
               ephemeral-storage: "40Gi"
           env:
-            - { name: NIM_MODEL, value: "llama-3.1" }
+            - { name: NIM_LLM_MODEL, value: "llama-3.1" }
             - name: NGC_API_KEY
               valueFrom:
                 secretKeyRef: { name: nvcr-secret, key: NGC_API_KEY }

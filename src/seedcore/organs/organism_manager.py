@@ -1305,10 +1305,12 @@ class OrganismManager:
                 # 0) Rotate epoch unless rolling mode (env-controlled)
                 try:
                     repo = self._get_agent_graph_repository()
-                    if repo and not self.rolling:
+                    if repo and not self.rolling and self._session_factory:
                         import uuid as _uuid
                         new_epoch = str(_uuid.uuid4())
-                        await repo.set_current_cluster_epoch(new_epoch)
+                        async with self._session_factory() as session:
+                            async with session.begin():
+                                await repo.set_current_cluster_epoch(session=session, epoch=new_epoch)
                         logger.info(f"[organism] hard init: rotated epoch={new_epoch}")
                     else:
                         logger.info("[organism] rolling init: keeping current epoch")

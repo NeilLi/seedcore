@@ -28,11 +28,11 @@ from seedcore.ml.driver import (
 # Test configuration
 # ---------------------------------------------------------------------
 BASE_URL = os.getenv(
-    "SEEDCORE_NIM_BASE_URL",
+    "NIM_LLM_BASE_URL",
     "http://af3a6a34f659a409584db07209d82853-1298671438.us-east-1.elb.amazonaws.com/v1",
 )
 MODEL = os.getenv("SEEDCORE_NIM_MODEL", "nvidia/nv-embedqa-e5-v5")
-API_KEY = os.getenv("SEEDCORE_NIM_API_KEY", "none")
+API_KEY = os.getenv("NIM_LLM_API_KE", "none")
 
 # Test data
 TEST_QUERY = "What is machine learning?"

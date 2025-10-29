@@ -23,8 +23,8 @@ Usage (typical on Ray head pod):
   export LLM_PROVIDER=openai
   export LLM_PROVIDERS=openai,anthropic,nim
   # Optional NIM defaults for local/on-prem
-  export SEEDCORE_NIM_BASE_URL=http://seedcore-nim-svc.seedcore-dev.svc.cluster.local:8080/v1
-  export SEEDCORE_NIM_API_KEY=none
+  export NIM_LLM_BASE_URL=http://seedcore-nim-svc.seedcore-dev.svc.cluster.local:8080/v1
+  export NIM_LLM_API_KE=none
   python /app/tools/smoke_cognitive.py
 """
 
@@ -41,9 +41,9 @@ import anyio
 # ---------- Defaults (safe for local and cluster) ----------
 os.environ.setdefault("LLM_PROVIDER", "openai")              # deep default
 os.environ.setdefault("LLM_PROVIDERS", "openai")             # fast pool default
-os.environ.setdefault("SEEDCORE_NIM_API_KEY", "none")
+os.environ.setdefault("NIM_LLM_API_KE", "none")
 # If you want to default NIM to localhost in dev:
-os.environ.setdefault("SEEDCORE_NIM_BASE_URL", "http://127.0.0.1:8000/v1")
+os.environ.setdefault("NIM_LLM_BASE_URL", "http://127.0.0.1:8000/v1")
 
 # ---------- Helpers ----------
 def _active_providers() -> List[str]:

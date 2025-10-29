@@ -137,9 +137,9 @@ class NimEngine:
         self.model = model
         self.max_tokens = max_tokens
         base_url = (base_url or
-                    os.getenv("SEEDCORE_NIM_BASE_URL") or
+                    os.getenv("NIM_LLM_BASE_URL") or
                     "http://127.0.0.1:8000/v1")
-        api_key = api_key or os.getenv("SEEDCORE_NIM_API_KEY", "none")
+        api_key = api_key or os.getenv("NIM_LLM_API_KE", "none")
         self.driver = _get_nim_driver(
             use_sdk=use_sdk, base_url=base_url, api_key=api_key,
             model=model, timeout=timeout, auto_fallback=True,
@@ -306,8 +306,8 @@ def _make_engine(provider: str, profile: LLMProfile, model: str):
         return NimEngine(
             model=model,
             max_tokens=max_tokens,
-            base_url=os.getenv("SEEDCORE_NIM_BASE_URL"),
-            api_key=os.getenv("SEEDCORE_NIM_API_KEY", "none"),
+            base_url=os.getenv("NIM_LLM_BASE_URL"),
+            api_key=os.getenv("NIM_LLM_API_KE", "none"),
             use_sdk=None,
             timeout=_timeout(profile, provider),
         )

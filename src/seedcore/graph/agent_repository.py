@@ -45,16 +45,16 @@ class AgentGraphRepository:
         # If missing, create one implicitly
         new_epoch = str(uuid.uuid4())
         await session.execute(
-            text("SELECT set_current_epoch(:epoch::uuid)"),
-            {"epoch": new_epoch}
+            text("SELECT set_current_epoch(:epoch)"),
+            {"epoch": uuid.UUID(new_epoch)}
         )
         return new_epoch
 
     async def set_current_cluster_epoch(self, session: AsyncSession, epoch: str) -> None:
         """Rotate/set the current epoch."""
         await session.execute(
-            text("SELECT set_current_cluster_epoch(:epoch::uuid)"),
-            {"epoch": str(epoch)}
+            text("SELECT set_current_epoch(:epoch)"),
+            {"epoch": uuid.UUID(str(epoch))}
         )
 
     async def register_instance(

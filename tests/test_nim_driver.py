@@ -27,11 +27,11 @@ from seedcore.ml.driver import (
 # Test configuration
 # ---------------------------------------------------------------------
 BASE_URL = os.getenv(
-    "SEEDCORE_NIM_BASE_URL",
+    "NIM_LLM_BASE_URL",
     "http://a3055aa0ec20d4fefab34716edbe28ad-419314233.us-east-1.elb.amazonaws.com:8000/v1",
 )
 MODEL = os.getenv("SEEDCORE_NIM_MODEL", "meta/llama-3.1-8b-base")
-API_KEY = os.getenv("SEEDCORE_NIM_API_KEY", "none")
+API_KEY = os.getenv("NIM_LLM_API_KE", "none")
 
 TEST_MESSAGE = [{"role": "user", "content": "Hello from SeedCore NIM test!"}]
 
