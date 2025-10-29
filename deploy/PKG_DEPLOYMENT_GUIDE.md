@@ -61,7 +61,7 @@ Ensure your `/home/ubuntu/project/seedcore/docker/.env` includes:
 ```bash
 # PKG Configuration
 COORDINATOR_PKG_ENABLED=1
-PKG_WASM_PATH=/app/opt/pkg/policy_rules.wasm
+PKG_WASM_PATH=/app/data/opt/pkg/policy_rules.wasm
 PKG_SNAPSHOT_VERSION=rules@1.3.0+ontology@0.9.1
 PKG_EVAL_TIMEOUT_MS=10
 
@@ -78,7 +78,7 @@ cd /home/ubuntu/project/seedcore/deploy
 ```
 
 The script will automatically:
-- Update secret with correct `PKG_WASM_PATH=/app/opt/pkg/policy_rules.wasm`
+- Update secret with correct `PKG_WASM_PATH=/app/data/opt/pkg/policy_rules.wasm`
 - Create dummy PKG WASM file at `/app/opt/pkg/policy_rules.wasm` in Ray head pod
 - Verify WASM file exists
 
@@ -276,7 +276,7 @@ kubectl exec -n seedcore-dev ${HEAD_POD} -- ls -lh /app/opt/pkg/policy_rules.was
 2. **Check environment variable:**
 ```bash
 kubectl exec -n seedcore-dev ${HEAD_POD} -- env | grep PKG_WASM_PATH
-# Should output: PKG_WASM_PATH=/app/opt/pkg/policy_rules.wasm
+# Should output: PKG_WASM_PATH=/app/data/opt/pkg/policy_rules.wasm
 ```
 
 3. **Update and restart:**

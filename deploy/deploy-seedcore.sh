@@ -129,6 +129,8 @@ main() {
   deploy_storage
   deploy_rbac
   deploy_ray_services
+  echo "⏳ Waiting for 30 seconds for Ray services to stabilize..."
+  sleep 30
   bootstrap_components
   deploy_seedcore_api
   deploy_ingress

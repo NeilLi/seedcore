@@ -220,6 +220,23 @@ class CognitiveServeService:
         except Exception as e:
             return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
 
+    @app.post("/plan-with-escalation", response_model=CognitiveResponse)
+    async def plan_with_escalation(self, request: CognitiveRequest):
+        try:
+            context = CognitiveContext(
+                agent_id=request.agent_id,
+                task_type=CognitiveTaskType.TASK_PLANNING,
+                input_data={
+                    "task_description": request.task_description,
+                    "agent_capabilities": request.current_capabilities or {},
+                    "available_resources": request.available_tools or {}
+                }
+            )
+            result = self.cognitive_service.plan_with_escalation(context)
+            return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)
+        except Exception as e:
+            return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
+
     @app.post("/make-decision", response_model=CognitiveResponse)
     async def make_decision(self, request: CognitiveRequest):
         logger.info(f"Received make-decision request for agent {request.agent_id}")

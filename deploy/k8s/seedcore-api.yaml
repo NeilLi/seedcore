@@ -23,6 +23,12 @@ spec:
             - name: http
               containerPort: 8002
           env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVE_SERVICE
+              value: "stable"
             - name: DSP_LOG_TO_FILE
               value: "false"
             - name: DSP_LOG_TO_STDOUT

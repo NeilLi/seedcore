@@ -124,6 +124,12 @@ spec:
             envFrom:
             - secretRef: { name: seedcore-env-secret }
             env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVE_SERVICE
+              value: "stable"
             - name: DGL_GRAPHBOLT_SKIP
               value: "0"
             - name: RAY_OVERRIDE_RESOURCES
@@ -222,6 +228,12 @@ spec:
             envFrom:
             - secretRef: { name: seedcore-env-secret }
             env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVE_SERVICE
+              value: "stable"
             - name: DGL_GRAPHBOLT_SKIP
               value: "0"
             - name: RAY_NAMESPACE

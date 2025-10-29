@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nim-retrieval
-  namespace: nim
+  namespace: default
   labels:
     app: nim-retrieval
 spec:
@@ -25,13 +25,18 @@ spec:
           effect: "NoSchedule"            # ✅ Allow scheduling on GPU node
       containers:
         - name: retrieval
-          image: nvcr.io/nim/nvidia/retrieval-embedding:latest
+          image: nvcr.io/nim/nvidia/nv-embedqa-e5-v5:1
           imagePullPolicy: IfNotPresent
           env:
             - name: NVIDIA_VISIBLE_DEVICES
               value: "all"
             - name: NVIDIA_DRIVER_CAPABILITIES
               value: "compute,utility"
+            - name: NGC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nvcr-secret
+                  key: NGC_API_KEY
           resources:
             requests:
               cpu: "2"
@@ -54,7 +59,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: nim-retrieval
-  namespace: nim
+  namespace: default
   labels:
     app: nim-retrieval
 spec:

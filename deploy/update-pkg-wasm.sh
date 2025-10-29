@@ -60,11 +60,11 @@ print_status "OK" "Found Ray head pod: ${HEAD_POD}"
 # ---------- Update PKG_WASM_PATH in secret ----------
 print_status "INFO" "Updating PKG_WASM_PATH in secret ${SECRET_NAME}..."
 kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o json 2>/dev/null | \
-  jq --arg val "$(echo -n '/app/opt/pkg/policy_rules.wasm' | base64)" \
+  jq --arg val "$(echo -n '/app/data/opt/pkg/policy_rules.wasm' | base64)" \
      '.data.PKG_WASM_PATH = $val' | \
   kubectl apply -f - >/dev/null
 
-print_status "OK" "Secret updated with PKG_WASM_PATH=/app/opt/pkg/policy_rules.wasm"
+print_status "OK" "Secret updated with PKG_WASM_PATH=/app/data/opt/pkg/policy_rules.wasm"
 
 # ---------- Upload or create WASM file ----------
 if [ -n "${WASM_FILE}" ]; then
@@ -75,23 +75,23 @@ if [ -n "${WASM_FILE}" ]; then
   fi
   
   print_status "INFO" "Uploading WASM file ${WASM_FILE} to ${HEAD_POD}..."
-  kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- mkdir -p /app/opt/pkg
-  kubectl cp "${WASM_FILE}" "${NAMESPACE}/${HEAD_POD}:/app/opt/pkg/policy_rules.wasm"
+  kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- mkdir -p /app/data/opt/pkg
+  kubectl cp "${WASM_FILE}" "${NAMESPACE}/${HEAD_POD}:/app/data/opt/pkg/policy_rules.wasm"
   
-  WASM_SIZE=$(kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- stat -c%s /app/opt/pkg/policy_rules.wasm 2>/dev/null || echo "unknown")
+  WASM_SIZE=$(kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- stat -c%s /app/data/opt/pkg/policy_rules.wasm 2>/dev/null || echo "unknown")
   print_status "OK" "WASM file uploaded (${WASM_SIZE} bytes)"
 else
   # Create dummy WASM
   print_status "INFO" "Creating dummy WASM placeholder in ${HEAD_POD}..."
   kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- bash -c '
-    mkdir -p /app/opt/pkg
-    cat > /app/opt/pkg/policy_rules.wasm << "WASM_EOF"
+    mkdir -p /app/data/opt/pkg
+    cat > /app/data/opt/pkg/policy_rules.wasm << "WASM_EOF"
 # Dummy PKG WASM for testing
 # Version: rules@1.3.0+ontology@0.9.1
 # This is a placeholder - replace with real WASM binary in production
-# To replace: kubectl cp policy_rules.wasm seedcore-dev/<head-pod>:/app/opt/pkg/policy_rules.wasm
+# To replace: kubectl cp policy_rules.wasm seedcore-dev/<head-pod>:/app/data/opt/pkg/policy_rules.wasm
 WASM_EOF
-    chmod 644 /app/opt/pkg/policy_rules.wasm
+    chmod 644 /app/data/opt/pkg/policy_rules.wasm
   '
   print_status "OK" "Dummy WASM placeholder created"
   print_status "WARN" "Using dummy WASM - replace with real binary for production"
@@ -99,9 +99,9 @@ fi
 
 # ---------- Verify WASM file ----------
 print_status "INFO" "Verifying WASM file..."
-if kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- test -f /app/opt/pkg/policy_rules.wasm 2>/dev/null; then
-  WASM_SIZE=$(kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- stat -c%s /app/opt/pkg/policy_rules.wasm 2>/dev/null)
-  print_status "OK" "WASM file exists: /app/opt/pkg/policy_rules.wasm (${WASM_SIZE} bytes)"
+if kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- test -f /app/data/opt/pkg/policy_rules.wasm 2>/dev/null; then
+  WASM_SIZE=$(kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- stat -c%s /app/data/opt/pkg/policy_rules.wasm 2>/dev/null)
+  print_status "OK" "WASM file exists: /app/data/opt/pkg/policy_rules.wasm (${WASM_SIZE} bytes)"
 else
   print_status "ERROR" "WASM file not found in pod"
   exit 1
@@ -137,7 +137,7 @@ elif [ "${PKG_STATUS}" = "false" ]; then
   echo
   echo "Troubleshooting:"
   echo "  1. Check coordinator logs: kubectl logs -n ${NAMESPACE} ${NEW_HEAD_POD} | grep -i pkg"
-  echo "  2. Verify WASM path: kubectl exec -n ${NAMESPACE} ${NEW_HEAD_POD} -- ls -lh /app/opt/pkg/policy_rules.wasm"
+  echo "  2. Verify WASM path: kubectl exec -n ${NAMESPACE} ${NEW_HEAD_POD} -- ls -lh /app/data/opt/pkg/policy_rules.wasm"
   echo "  3. Check env var: kubectl exec -n ${NAMESPACE} ${NEW_HEAD_POD} -- env | grep PKG_WASM_PATH"
   exit 1
 else

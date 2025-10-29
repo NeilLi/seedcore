@@ -825,7 +825,7 @@ class CognitiveCore(dspy.Module):
             
         except Exception as e:
             logger.error(f"Error processing {context.task_type.value} task: {e}")
-            return create_error_result(f"Processing error: {str(e)}", "PROCESSING_ERROR").to_dict()
+            return create_error_result(f"Processing error: {str(e)}", "PROCESSING_ERROR").model_dump()
 
     def forward(self, context: CognitiveContext) -> Dict[str, Any]:
         """
@@ -843,7 +843,7 @@ class CognitiveCore(dspy.Module):
         # Convert TaskResult to dict format for backward compatibility
         # Case 1: real TaskResult object
         if isinstance(result, TaskResult):
-            return result.to_dict()
+            return result.model_dump()
 
         # Case 2: dict already (shim from process)
         if isinstance(result, dict):
