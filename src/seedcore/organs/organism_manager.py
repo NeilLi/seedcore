@@ -361,18 +361,35 @@ class OrganismManager:
 
     async def _async_ray_actor(self, name: str, namespace: Optional[str] = None):
         """Async wrapper for ray.get_actor calls."""
+        loop = asyncio.get_event_loop()
+        if namespace is None:
+            namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+            logger.debug(f"🔍 Using default namespace '{namespace}' for actor '{name}'")
+
         try:
-            loop = asyncio.get_event_loop()
-            if namespace is None:
-                namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
-                logger.debug(f"🔍 Using default namespace '{namespace}' for actor '{name}'")
             actor = await loop.run_in_executor(
                 None,
                 lambda: ray.get_actor(name, namespace=namespace)
             )
             return actor
+        except ValueError as exc:
+            # Ray raises ValueError when the actor doesn't exist in the namespace.
+            # This is an expected outcome during lazy organ creation, so we avoid
+            # emitting a noisy error log at this level.
+            logger.debug(
+                "ray.get_actor could not find '%s' in namespace '%s': %s",
+                name,
+                namespace,
+                exc,
+            )
+            raise
         except Exception as e:
-            logger.error(f"Async ray.get_actor failed for '{name}' in namespace '{namespace}': {e}")
+            logger.error(
+                "Async ray.get_actor failed for '%s' in namespace '%s': %s",
+                name,
+                namespace,
+                e,
+            )
             raise
 
     async def get_agent_handle(self, agent_name: str) -> Optional[ray.actor.ActorHandle]:
