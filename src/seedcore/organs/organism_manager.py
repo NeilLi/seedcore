@@ -320,6 +320,9 @@ class OrganismManager:
         # Runtime registry configuration
         self.rolling = _env_bool("SEEDCORE_ROLLING_INIT", False)
         self._recon_task: Optional[asyncio.Task] = None
+        # Reconcile tuning
+        self._reconcile_grace_s = int(os.getenv("RECONCILE_GRACE_S", "15"))
+        self._maintenance_interval_s = int(os.getenv("MAINTENANCE_INTERVAL_S", "15"))
         
         # Routing directory with runtime registry integration
         self.routing = RoutingDirectory()
@@ -1386,7 +1389,7 @@ class OrganismManager:
         """Background loop to expire stale/old-epoch instances in registry."""
         while True:
             try:
-                await asyncio.sleep(15)
+                await asyncio.sleep(self._maintenance_interval_s)
                 repo = self._get_agent_graph_repository()
                 if repo:
                     if not self._session_factory:
@@ -1397,7 +1400,7 @@ class OrganismManager:
                         async with session.begin():
                             stale = await repo.expire_stale_instances(
                                 session=session,
-                                timeout_seconds=15,
+                                timeout_seconds=self._reconcile_grace_s,
                             )
                             old = await repo.expire_old_epoch_instances(session=session)
 
@@ -1408,7 +1411,7 @@ class OrganismManager:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning(f"[reconcile] error: {e}")
+                logger.warning("[reconcile] error during maintenance loop: %s", e)
 
     # -------------------------------------------------------------------------
     # Task execution helpers / status updates

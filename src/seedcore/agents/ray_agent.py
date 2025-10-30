@@ -546,7 +546,7 @@ class RayAgent:
         
         logger.info(f"📈 Agent {self.agent_id} performance updated: Capability={self.capability_score:.3f}, MemUtil={self.mem_util:.3f}")
     
-    def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a task and update performance metrics with energy tracking.
         
@@ -567,7 +567,7 @@ class RayAgent:
         
         # Handle specific task types with real implementations
         if task_type == 'general_query':
-            result = self._handle_general_query(task_description, task_data)
+            result = await self._handle_general_query(task_description, task_data)
         else:
             # Fallback to simulation for other task types
             result = self._simulate_task_execution(task_data)
@@ -616,7 +616,7 @@ class RayAgent:
         
         return result
 
-    def _handle_general_query(self, description: str, task_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_general_query(self, description: str, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle general_query tasks with real implementations.
         
@@ -799,15 +799,13 @@ class RayAgent:
                     try:
                         logger.info(f"🧠 Agent {self.agent_id} detected complex query, using cognitive service (DEEP/OpenAI)")
                         
-                        # ✅ Call the sync wrapper method - it safely handles async-to-sync conversion
-                        # DO NOT use asyncio.run() directly inside a running event loop (Ray/Serve/FastAPI)
-                        # The plan_sync() wrapper handles this safely
-                        cog_response = self._cog.plan_sync(
+                        # Use the real async plan() method
+                        cog_response = await self._cog.plan(
                             agent_id=self.agent_id,
                             task_description=description,
                             current_capabilities=self._get_agent_capabilities(),
                             available_tools=task_data.get("params", {}),
-                            depth="deep"  # Force DEEP profile to trigger OpenAI
+                            depth="deep"
                         )
                         
                         norm = self._normalize_cog_resp(cog_response)
@@ -1058,7 +1056,7 @@ class RayAgent:
         if self.mw_manager:
             try:
                 tele = self.mw_manager.get_telemetry()
-                heartbeat["memory_metrics"].update({
+                heartbeat_data["memory_metrics"].update({
                     "mw_hit_ratio": tele.get("hit_ratio", 0),
                     "mw_l0_hits": tele.get("l0_hits", 0),
                     "mw_l1_hits": tele.get("l1_hits", 0),
@@ -1073,7 +1071,7 @@ class RayAgent:
                 if self.tasks_processed % 10 == 0 and random.random() < 0.05:
                     try:
                         hot = self.mw_manager.get_hot_items(top_n=5)
-                        heartbeat["memory_metrics"]["mw_hot_items"] = hot
+                        heartbeat_data["memory_metrics"]["mw_hot_items"] = hot
                     except Exception:
                         pass
             except Exception as e:
