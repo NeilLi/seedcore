@@ -2624,6 +2624,52 @@ def scenario_escalation(conn) -> uuid.UUID:
     assert tid, "Failed to create escalation task via seedcore-api or coordinator pipeline"
     return tid
 
+def scenario_cognitive_fast(conn) -> uuid.UUID:
+    """Trigger cognitive service (FAST profile) with a non-builtin query."""
+    payload = {
+        "type": "general_query",
+        "description": "Summarize implications of Moore's Law on energy usage trends in datacenters.",
+        "params": {"force_decomposition": True, "cognitive_profile": "fast"},
+        "drift_score": max(env_float("OCPS_DRIFT_THRESHOLD", 0.5) + 0.2, 0.8),
+        "run_immediately": True,
+    }
+
+    tid = submit_via_seedcore_api(payload)
+    if tid:
+        log.info(f"✅ Cognitive (FAST) task created via seedcore-api: {tid}")
+        return tid
+
+    tid = submit_via_coordinator(payload)
+    if tid:
+        log.info(f"✅ Cognitive (FAST) task created via coordinator pipeline: {tid}")
+        return tid
+
+    assert tid, "Failed to create cognitive (FAST) task via seedcore-api or coordinator pipeline"
+    return tid
+
+def scenario_cognitive_deep(conn) -> uuid.UUID:
+    """Trigger cognitive service (DEEP profile) with a multi-step analysis query."""
+    payload = {
+        "type": "general_query",
+        "description": "Design a multi-step plan integrating graph retrieval with LLM reasoning for anomaly triage.",
+        "params": {"force_decomposition": True, "cognitive_profile": "deep"},
+        "drift_score": max(env_float("OCPS_DRIFT_THRESHOLD", 0.5) + 0.25, 0.9),
+        "run_immediately": True,
+    }
+
+    tid = submit_via_seedcore_api(payload)
+    if tid:
+        log.info(f"✅ Cognitive (DEEP) task created via seedcore-api: {tid}")
+        return tid
+
+    tid = submit_via_coordinator(payload)
+    if tid:
+        log.info(f"✅ Cognitive (DEEP) task created via coordinator pipeline: {tid}")
+        return tid
+
+    assert tid, "Failed to create cognitive (DEEP) task via seedcore-api or coordinator pipeline"
+    return tid
+
 def scenario_hgnn_forced(conn) -> uuid.UUID:
     """
     Force HGNN routing by providing OCPS data with S > 0.6.
@@ -3404,6 +3450,24 @@ def main():
                 log.info(f"📋 Fast path metadata: {fast_metadata}")
     else:
         log.warning("No DB connection; cannot verify fast-path completion in DB.")
+
+    # Cognitive queries (FAST/DEEP) to explicitly exercise cognitive calling
+    if env_bool("VERIFY_COGNITIVE_QUERIES", True):
+        try:
+            cog_fast_tid = scenario_cognitive_fast(conn)
+            log.info(f"Cognitive FAST task_id = {cog_fast_tid}")
+            if conn:
+                wait_for_completion(conn, cog_fast_tid, "COGNITIVE-FAST", timeout_s=120.0)
+        except Exception as e:
+            log.warning(f"⚠️ Cognitive FAST verification skipped/failed: {e}")
+
+        try:
+            cog_deep_tid = scenario_cognitive_deep(conn)
+            log.info(f"Cognitive DEEP task_id = {cog_deep_tid}")
+            if conn:
+                wait_for_completion(conn, cog_deep_tid, "COGNITIVE-DEEP", timeout_s=150.0)
+        except Exception as e:
+            log.warning(f"⚠️ Cognitive DEEP verification skipped/failed: {e}")
 
     # Optional: Graph task (moved before escalation to ensure it runs)
     if env_bool("VERIFY_GRAPH_TASK", False):

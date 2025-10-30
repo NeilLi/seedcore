@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from seedcore.models import TaskPayload
 from seedcore.serve.base_client import BaseServiceClient, CircuitBreaker, RetryConfig
+from seedcore.utils.ray_utils import ensure_ray_initialized
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class CoordinatorHttpRouter(Router):
         if base_url is None:
             try:
                 from seedcore.utils.ray_utils import SERVE_GATEWAY
+                # Ray Serve application name is "coordinator" per serve status
                 base_url = f"{SERVE_GATEWAY}/pipeline"
             except Exception:
                 base_url = "http://127.0.0.1:8000/pipeline"
@@ -88,7 +90,7 @@ class CoordinatorHttpRouter(Router):
         )
         
         self.client = BaseServiceClient(
-            service_name="coordinator_router",
+            service_name="coordinator",
             base_url=base_url,
             timeout=self.config.timeout,
             circuit_breaker=circuit_breaker,
@@ -112,13 +114,22 @@ class CoordinatorHttpRouter(Router):
             if correlation_id:
                 task_data["correlation_id"] = correlation_id
             
-            logger.debug(f"Routing task via Coordinator HTTP: {task_data.get('task_id', 'unknown')}")
+            logger.info(f"Routing task via Coordinator HTTP: {task_data.get('task_id', 'unknown')}")
             
             # Call Coordinator's process-task endpoint
             result = await self.client.post("/process-task", json=task_data)
             
-            logger.debug(f"Received result from Coordinator: {result}")
-            return result
+            logger.info(f"Received result from Coordinator: {result}")
+            # If router escalated with a proto_plan, execute via RayAgent and return that final result
+            try:
+                org_router = OrganismRouter(config=self.config)
+                org_res = await org_router.route_and_execute(task_data, correlation_id=correlation_id)
+                await org_router.close()
+                return org_res
+            except Exception as handoff_err:
+                logger.warning(f"Agent handoff failed, returning original router result: {handoff_err}")
+                # Fall through to return original result
+                return result
             
         except Exception as e:
             logger.error(f"CoordinatorHttpRouter failed to route task: {e}")
@@ -144,6 +155,7 @@ class CoordinatorHttpRouter(Router):
         """Close HTTP client."""
         await self.client.close()
 
+
 class OrganismRouter(Router):
     """Fast-path router that calls Organism service directly for routing."""
     
@@ -156,6 +168,7 @@ class OrganismRouter(Router):
         if base_url is None:
             try:
                 from seedcore.utils.ray_utils import SERVE_GATEWAY
+                # Ray Serve application name is "organism" per serve status
                 base_url = f"{SERVE_GATEWAY}/organism"
             except Exception:
                 base_url = "http://127.0.0.1:8000/organism"
@@ -175,8 +188,23 @@ class OrganismRouter(Router):
         )
         
         self.client = BaseServiceClient(
-            service_name="organism_router",
+            service_name="organism",
             base_url=base_url,
+            timeout=self.config.timeout,
+            circuit_breaker=circuit_breaker,
+            retry_config=retry_config
+        )
+
+        # Cognitive client for escalation planning
+        try:
+            from seedcore.utils.ray_utils import SERVE_GATEWAY
+            cognitive_base = f"{SERVE_GATEWAY}/cognitive"
+        except Exception:
+            cognitive_base = "http://127.0.0.1:8000/cognitive"
+
+        self.cognitive_client = BaseServiceClient(
+            service_name="cognitive",
+            base_url=cognitive_base,
             timeout=self.config.timeout,
             circuit_breaker=circuit_breaker,
             retry_config=retry_config
@@ -203,16 +231,18 @@ class OrganismRouter(Router):
             
             # First resolve the route
             route_result = await self.client.post("/resolve-route", json={"task": task_data})
-            
-            if not route_result.get("success", False):
+
+            # The Organism service does not return a boolean success flag here.
+            # Treat presence of an error as failure; otherwise proceed if we have an organ id.
+            if isinstance(route_result, dict) and route_result.get("error"):
                 return {
                     "success": False,
-                    "error": f"Route resolution failed: {route_result.get('error', 'Unknown error')}",
+                    "error": f"Route resolution failed: {route_result.get('error')}",
                     "path": "organism_route_error"
                 }
             
-            # Get the target organ ID
-            organ_id = route_result.get("organ_id")
+            # Get the target organ ID (logical_id in new API)
+            organ_id = route_result.get("organ_id") or route_result.get("logical_id")
             if not organ_id:
                 return {
                     "success": False,
@@ -220,10 +250,41 @@ class OrganismRouter(Router):
                     "path": "organism_no_organ"
                 }
             
-            # Execute the task on the target organ
-            execute_result = await self.client.post(f"/organs/{organ_id}/execute", json=task_data)
+            # Execute the task on the target organ via new endpoint
+            execute_payload = {
+                "organ_id": organ_id,
+                "task": task_data
+            }
+            execute_result = await self.client.post("/execute-on-organ", json=execute_payload)
             
             logger.debug(f"Received result from Organism: {execute_result}")
+
+            # If organism escalated, plan with cognitive service and return that result
+            try:
+                if execute_result.get("kind") == "escalated":
+                    # Ensure current_capabilities is a STRING for the /plan endpoint
+                    raw_caps = task_data.get("current_capabilities") or task_data.get("capabilities")
+                    if isinstance(raw_caps, dict):
+                        lines = ["Agent capabilities:"]
+                        for k, v in raw_caps.items():
+                            lines.append(f"- {k}: {v}")
+                        caps_str = "\n".join(lines)
+                    else:
+                        caps_str = str(raw_caps or "")
+
+                    cog_request = {
+                        "agent_id": task_data.get("agent_id", "router"),
+                        "task_description": task_data.get("description", ""),
+                        "current_capabilities": caps_str,
+                        "available_tools": task_data.get("available_tools") or task_data.get("tools", {}),
+                        # Prefer deep profile when escalated unless caller specified
+                        "profile": task_data.get("profile", "deep")
+                    }
+                    plan_result = await self.cognitive_client.post("/plan", json=cog_request)
+                    return plan_result
+            except Exception as _:
+                # Fall through to return original execute_result if escalation planning fails
+                pass
             return execute_result
             
         except Exception as e:

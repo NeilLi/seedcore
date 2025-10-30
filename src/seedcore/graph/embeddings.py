@@ -37,6 +37,10 @@ NIM_MODEL = os.getenv("NIM_RETRIEVAL_MODEL", "nvidia/nv-embedqa-e5-v5")
 UPSERT_CHUNK_SIZE = int(os.getenv("GRAPH_UPSERT_CHUNK_SIZE", "200"))
 DB_ECHO = os.getenv("GRAPH_DB_ECHO", "false").lower() in ("1", "true", "yes")
 
+# Memory budget for Ray actors/tasks (default ~0.5 GiB)
+# Use GiB to be explicit and avoid rounding surprises.
+GRAPH_ACTOR_MEMORY_BYTES = int(os.getenv("GRAPH_ACTOR_MEMORY_BYTES", str(512 * 1024 * 1024)))
+
 HEADERS = {"Content-Type": "application/json"}
 if NIM_API_KEY and NIM_API_KEY.lower() != "none":
     HEADERS["Authorization"] = f"Bearer {NIM_API_KEY}"
@@ -46,7 +50,7 @@ DEFAULT_LABEL = os.getenv("GRAPH_EMBEDDING_DEFAULT_LABEL", "default")
 
 
 # ---------- Ray Actor: GraphEmbedder (legacy SAGE over homogeneous graph) ----------
-@ray.remote(num_cpus=0.5)
+@ray.remote(num_cpus=0.1, memory=GRAPH_ACTOR_MEMORY_BYTES)
 class GraphEmbedder:
     """
     Computes node embeddings using a simple GraphSAGE model over a k-hop
@@ -104,7 +108,7 @@ class GraphEmbedder:
 
 
 # ---------- Ray Actor: NimRetrievalEmbedder ----------
-@ray.remote(num_cpus=0.5)
+@ray.remote(num_cpus=0.1, memory=GRAPH_ACTOR_MEMORY_BYTES)
 class NimRetrievalEmbedder:
     """
     Ray actor that queries NIM Retrieval service to produce embeddings for text nodes.
@@ -162,7 +166,7 @@ class NimRetrievalEmbedder:
 
 
 # ---------- Ray Task: Upsert Embeddings ----------
-@ray.remote(num_cpus=0.2)
+@ray.remote(num_cpus=0.1, memory=GRAPH_ACTOR_MEMORY_BYTES)
 def upsert_embeddings(
     emb_map: Dict[int, List[float]],
     label_map: Optional[Dict[int, Optional[str]]] = None,

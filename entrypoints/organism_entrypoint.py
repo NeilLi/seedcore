@@ -351,6 +351,26 @@ class OrganismService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    @app.post("/janitor/ensure")
+    async def ensure_janitor(self):
+        """Ensure the Janitor actor exists in the configured namespace."""
+        try:
+            await self.organism_manager._ensure_janitor_actor()
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @app.get("/janitor/ping")
+    async def janitor_ping(self):
+        """Ping the Janitor actor if available."""
+        try:
+            ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+            handle = ray.get_actor("seedcore_janitor", namespace=ns)
+            pong = await self.organism_manager._async_ray_get(handle.ping.remote(), timeout=5.0)
+            return {"success": True, "ping": pong, "namespace": ns}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     @app.post("/shutdown")
     async def shutdown(self):
         """Manually trigger organism shutdown (convenience endpoint)."""
@@ -373,6 +393,8 @@ class OrganismService:
     async def execute_on_organ(self, request: Dict[str, Any]):
         """Execute a task on a specific organ."""
         try:
+            start_time = time.time()
+            logger.info(f"[execute-on-organ] ▶️ request keys={list(request.keys())}")
             if not self._initialized:
                 return {"success": False, "error": "Organism not initialized"}
             
@@ -387,7 +409,14 @@ class OrganismService:
             if organ_timeout_s:
                 task["organ_timeout_s"] = organ_timeout_s
             
+            logger.info(
+                f"[execute-on-organ] ⏩ organ_id={organ_id} task.type={task.get('type')} domain={task.get('domain')} timeout={organ_timeout_s}s"
+            )
             result = await self.organism_manager.execute_task_on_organ(organ_id, task)
+            duration = time.time() - start_time
+            logger.info(
+                f"[execute-on-organ] ✅ completed organ_id={organ_id} success={result.get('success', True)} in {duration:.2f}s"
+            )
             return {"success": True, **result}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -417,6 +446,7 @@ class OrganismService:
     async def resolve_route(self, request: ResolveRouteRequest):
         """Resolve a single task to its target organ."""
         try:
+            start_time = time.time()
             if not self._initialized:
                 return {"logical_id": "utility_organ_1", "resolved_from": "fallback", 
                        "epoch": "unknown", "error": "Organism not initialized"}
@@ -425,6 +455,9 @@ class OrganismService:
             task_type = task.get("type")
             domain = task.get("domain")
             preferred_logical_id = request.preferred_logical_id
+            logger.info(
+                f"[resolve-route] ▶️ task.type={task_type} domain={domain} preferred={preferred_logical_id}"
+            )
             
             # Get current epoch (mock for now)
             current_epoch = "epoch-" + str(int(time.time()))
@@ -445,6 +478,10 @@ class OrganismService:
                 if instance:
                     instance_id = instance.get("instance_id")
             
+            duration = time.time() - start_time
+            logger.info(
+                f"[resolve-route] ✅ logical_id={logical_id} from={resolved_from} epoch={current_epoch} instance_id={instance_id} in {duration:.2f}s"
+            )
             return {
                 "logical_id": logical_id,
                 "resolved_from": resolved_from,

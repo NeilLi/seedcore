@@ -119,7 +119,7 @@ class CognitiveServiceClient(BaseServiceClient):
         depth: str = "fast",                 # "fast" | "deep"
         provider: Optional[str] = None,      # optional override (e.g., "anthropic")
         model: Optional[str] = None,         # optional override (e.g., "claude-3-5-sonnet")
-        current_capabilities: Optional[Dict[str, Any]] = None,
+        current_capabilities: Optional[str] = None,
         available_tools: Optional[Dict[str, Any]] = None,
         extra_meta: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -130,7 +130,7 @@ class CognitiveServiceClient(BaseServiceClient):
         body = {
             "agent_id": agent_id,
             "task_description": task_description,
-            "current_capabilities": current_capabilities or {},
+            "current_capabilities": current_capabilities or "",
             "available_tools": available_tools or {},
             # Hints for the service:
             "profile": depth.lower(),                     # "fast" | "deep"
@@ -388,7 +388,7 @@ class CognitiveServiceClient(BaseServiceClient):
         depth: str = "fast",
         provider: Optional[str] = None,
         model: Optional[str] = None,
-        current_capabilities: Optional[Dict[str, Any]] = None,
+        current_capabilities: Optional[str] = None,
         available_tools: Optional[Dict[str, Any]] = None,
         extra_meta: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:

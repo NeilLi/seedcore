@@ -550,9 +550,22 @@ class OrganismManager:
                 logger.debug("Janitor actor not available; skipping cluster cleanup")
                 jan = None
 
+            if not jan:
+                try:
+                    logger.info("Attempting to bootstrap Janitor actor on-demand during cleanup")
+                    await self._ensure_janitor_actor()
+                    # retry get
+                    namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                    jan = await self._async_ray_actor("seedcore_janitor", namespace=namespace)
+                except Exception:
+                    logger.debug("Janitor bootstrap on-demand failed or unavailable; continuing without cleanup")
+                    jan = None
+
             if jan:
                 try:
-                    res = await self._async_ray_get(jan.reap.remote(prefix=None))
+                    # Pass namespace for strict scoping
+                    ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+                    res = await self._async_ray_get(jan.reap.remote(prefix=None, namespace=ns))
                     if res.get("count"):
                         logger.info("Cluster cleanup removed %d dead actors: %s", res["count"], res["reaped"])
                     else:
@@ -561,6 +574,42 @@ class OrganismManager:
                     logger.debug("Cluster cleanup failed: %s", e)
         except Exception as e:
             logger.debug("Cluster cleanup skipped: %s", e)
+
+    async def _ensure_janitor_actor(self):
+        """Ensure the detached Janitor actor exists in the expected namespace."""
+        try:
+            if not ray.is_initialized():
+                return
+            namespace = getattr(self, "namespace", os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev")))
+            loop = asyncio.get_event_loop()
+            try:
+                # Fast path: already exists
+                await loop.run_in_executor(None, lambda: ray.get_actor("seedcore_janitor", namespace=namespace))
+                logger.debug("Janitor actor already running in %s", namespace)
+                return
+            except Exception:
+                logger.info("Launching janitor in namespace %s", namespace)
+
+            # Create or reuse
+            from seedcore.maintenance.janitor import Janitor
+            try:
+                Janitor.options(
+                    name="seedcore_janitor",
+                    namespace=namespace,
+                    lifetime="detached",
+                    num_cpus=0,
+                ).remote(namespace)
+                # Verify it is reachable
+                jan = await loop.run_in_executor(None, lambda: ray.get_actor("seedcore_janitor", namespace=namespace))
+                try:
+                    pong = await self._async_ray_get(jan.ping.remote(), timeout=5.0)
+                    logger.info("✅ Janitor actor launched in %s (ping=%s)", namespace, pong)
+                except Exception:
+                    logger.info("✅ Janitor actor launched in %s (ping skipped)", namespace)
+            except Exception as e:
+                logger.warning("⚠️ Failed to launch janitor actor: %s", e)
+        except Exception as e:
+            logger.debug("Ensure janitor skipped: %s", e)
 
     # -------------------------------------------------------------------------
     # Organ / Agent lifecycle
@@ -1338,6 +1387,7 @@ class OrganismManager:
                     logger.warning(f"⚠️ Failed to manage cluster epoch: {e}")
 
                 await self._check_ray_cluster_health()
+                await self._ensure_janitor_actor()
                 await self._cleanup_dead_actors()
                 await self._recover_stale_tasks()
 

@@ -14,17 +14,16 @@ from .gnn_models import HeteroSAGE, MemoryFusion
 from .embeddings import upsert_embeddings  # ray.remote fn that writes into graph_embeddings
 
 PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))
+LTM_ACTOR_MEMORY_BYTES = int(os.getenv("LTM_ACTOR_MEMORY_BYTES", str(512 * 1024 * 1024)))
 
 # controls
 HIDDEN_DIM         = int(os.getenv("LTM_HIDDEN_DIM", "128"))
 LTM_LAYERS         = int(os.getenv("LTM_LAYERS", "2"))
 DECAY_HALF_LIFE_S  = float(os.getenv("LTM_DECAY_HALF_LIFE_S", "86400"))  # 1 day
-DEVICE             = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DB_POOL_SIZE       = int(os.getenv("LTM_DB_POOL_SIZE", "4"))
-DB_MAX_OVERFLOW    = int(os.getenv("LTM_DB_MAX_OVERFLOW", "4"))
-DB_POOL_RECYCLE_S  = int(os.getenv("LTM_DB_POOL_RECYCLE_S", "600"))
+# Default to CPU to keep memory footprint small; can override via LTM_DEVICE
+DEVICE             = torch.device(os.getenv("LTM_DEVICE", "cpu"))
 
-@ray.remote(num_cpus=0.5)
+@ray.remote(num_cpus=0.1, memory=LTM_ACTOR_MEMORY_BYTES)
 class LTMEmbedder:
     """
     Long-Term Memory (LTM) embedder.
@@ -44,9 +43,7 @@ class LTMEmbedder:
             PG_DSN,
             future=True,
             pool_pre_ping=True,
-            pool_size=DB_POOL_SIZE,
-            max_overflow=DB_MAX_OVERFLOW,
-            pool_recycle=DB_POOL_RECYCLE_S,
+            poolclass=sa.pool.NullPool,
         )
         self.loader = GraphLoader()
         self.hetero: Optional[HeteroSAGE] = None

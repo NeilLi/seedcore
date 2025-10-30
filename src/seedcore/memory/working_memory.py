@@ -285,16 +285,27 @@ def get_node_cache() -> Any:
         return ray.get_actor(name, namespace=CONFIG.namespace)
     except Exception:
         if CONFIG.auto_create:
-            return _remoteify(NodeCache).options(
-                name=name,
-                lifetime="detached",
-                namespace=CONFIG.namespace,
-                num_cpus=0,
-                max_concurrency=1000,
-                scheduling_strategy=NodeAffinitySchedulingStrategy(node_id=node_id, soft=False)
-            ).remote(CONFIG.l1_ttl_s)
+            # Create the actor handle (not the instance)
+            try:
+                ray_NodeCache = _remoteify(NodeCache)
+                handle = ray_NodeCache.options(
+                    name=name,
+                    lifetime="detached",
+                    namespace=CONFIG.namespace,
+                    num_cpus=0,
+                    max_concurrency=1000,
+                    get_if_exists=True,  # Race-safe: get existing if another process created it
+                    scheduling_strategy=NodeAffinitySchedulingStrategy(node_id=node_id, soft=False)
+                ).remote(CONFIG.l1_ttl_s)
+                # Verify the handle is valid by checking if the actor can be retrieved
+                ray.get_actor(name, namespace=CONFIG.namespace)
+                return handle
+            except Exception as e:
+                logger.warning(f"Failed to create/get NodeCache actor: {e}")
+                return None
         else:
-            raise
+            logger.debug(f"NodeCache not found and AUTO_CREATE=0, returning None")
+            return None
 
 
 # -------------------------
@@ -610,31 +621,41 @@ class MwManager:
         self._cache.pop(self._organ_key(item_id), None)
 
     def set_global_item(self, item_id: str, value: Any, ttl_s: Optional[int] = None) -> None:
-        """Write-through to all cache levels (L0, L1, L2)."""
+        """Write-through to all cache levels (L0, L1, L2).
+        
+        Note: L1 and L2 updates are fire-and-forget to avoid blocking.
+        Callers should use async variants if they need to await completion.
+        """
         # Normalize global key to avoid double-prefixing
         gkey = item_id if item_id.startswith("global:item:") else self._global_key(item_id)
         okey = self._organ_key(item_id)
         
-        # L0: Update organ-local cache
+        # L0: Update organ-local cache (synchronous, always succeeds)
         self._cache[okey] = value
         
-        # L1: Update node cache
+        # L1: Update node cache (fire-and-forget, non-blocking)
         try:
             node_cache = get_node_cache()
-            node_cache.set.remote(gkey, value, ttl_s=CONFIG.l1_ttl_s)
+            if node_cache is not None:
+                # Fire-and-forget: call .remote() but don't await
+                # The async method will handle the remote call internally
+                node_cache.set.remote(gkey, value, ttl_s=CONFIG.l1_ttl_s)
         except Exception as e:
-            logger.error(
-                "Failed to update L1 cache",
+            # Log but don't fail - L0 cache is already updated
+            logger.debug(
+                "L1 cache update skipped (NodeCache not available)",
                 extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id, "error": str(e)},
             )
         
-        # L2: Update sharded global cache
+        # L2: Update sharded global cache (fire-and-forget, non-blocking)
         try:
             shard = _shard_for(gkey)
-            shard.set.remote(gkey, value, ttl_s=ttl_s)
+            if shard is not None:
+                shard.set.remote(gkey, value, ttl_s=ttl_s)
         except Exception as e:
-            logger.error(
-                "Failed to update L2 cache",
+            # Log but don't fail - L0 cache is already updated
+            logger.debug(
+                "L2 cache update skipped (SharedCacheShard not available)",
                 extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id, "error": str(e)},
             )
 

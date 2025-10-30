@@ -109,11 +109,15 @@ class RayAgent:
     
     def __init__(self, agent_id: str, initial_role_probs: Optional[Dict[str, float]] = None,
                  organ_id: Optional[str] = None,
-                 checkpoint_cfg: Optional[Dict[str, Any]] = None):
+                 checkpoint_cfg: Optional[Dict[str, Any]] = None,
+                 cognitive_base_url: Optional[str] = None):
         # 1. Agent Identity and State
         self.agent_id = agent_id
         self.instance_id = uuid.uuid4().hex  # Use UUID for instance_id
         self.organ_id = organ_id or "_"  # Set organ_id properly
+
+        # Dispatcher-facing identity branding
+        self.agent_role = "cognitive_runtime"
         
         # 2. Initialize AgentState with COA specifications
         self.state = AgentState(
@@ -171,6 +175,8 @@ class RayAgent:
         
         # --- Initialize cognitive service client ---
         self._cog = None
+        self._cog_available = False
+        self._cog_base_url = cognitive_base_url
 
         # --- Initialize private memory (lifetime-only persistence) ---
         self._privmem = AgentPrivateMemory(agent_id=self.agent_id, alpha=0.1)
@@ -196,6 +202,10 @@ class RayAgent:
             
         except Exception as e:
             logger.warning(f"⚠️ RayAgent {self.agent_id} created with limited functionality: {e}")
+
+        logger.info(
+            f"✅ RayAgent {self.agent_id} ({self.agent_role}) is online. Cognitive available={self._cog_available}"
+        )
     
     def _initialize_memory_managers(self):
         """Initialize memory managers with proper error handling."""
@@ -223,14 +233,24 @@ class RayAgent:
             self.mfb_client = None
     
     def _initialize_cognitive_systems(self):
-        """Initialize cognitive reasoning systems."""
+        """
+        Wire this agent to the centralized CognitiveService.
+        Do not silently swallow failures — expose degraded mode via _cog_available.
+        """
         try:
-            # Initialize the cognitive service client
-            self._cog = CognitiveServiceClient()  # base_url auto-discovers via COG or uses localhost
-            logger.info(f"✅ Agent {self.agent_id} initialized with CognitiveServiceClient")
+            # Allow explicit base URL injection; otherwise default discovery
+            if self._cog_base_url:
+                self._cog = CognitiveServiceClient(base_url=self._cog_base_url)
+            else:
+                self._cog = CognitiveServiceClient()
+            self._cog_available = True
+            logger.info(f"🧠 {self.agent_id}: bound to central CognitiveServiceClient")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to create CognitiveServiceClient for {self.agent_id}: {e}")
             self._cog = None
+            self._cog_available = False
+            logger.error(
+                f"❌ {self.agent_id}: failed to bind CognitiveServiceClient: {e}. Agent will run in DEGRADED mode."
+            )
 
     def _initialize_registry_reporting(self):
         """Initialize optional registry reporting with graceful fallback."""
@@ -414,6 +434,7 @@ class RayAgent:
         
         return {
             "agent_id": self.agent_id,
+            "agent_role": getattr(self, "agent_role", "unknown"),
             "organ_id": self.organ_id,
             "instance_id": self.instance_id,
             "uptime_s": round(uptime, 3),
@@ -433,6 +454,9 @@ class RayAgent:
             "archived": self._archived,
             "last_heartbeat": self.last_heartbeat,
             "created_at": self.created_at,
+            # Cognitive binding surface
+            "cognitive_available": self._cog_available,
+            "cognitive_bound_url": getattr(self._cog, "base_url", None) if self._cog else None,
         }
     
     def update_role_probs(self, new_role_probs: Dict[str, float]):
@@ -556,7 +580,10 @@ class RayAgent:
         Returns:
             Task execution result with performance metrics
         """
-        logger.info(f"🤖 Agent {self.agent_id} executing task: {task_data.get('task_id', 'unknown')}")
+        logger.info(
+            f"🤖 {self.agent_id} execute_task({task_data.get('task_id','?')}) type={task_data.get('type')} "
+            f"agent_role={getattr(self, 'agent_role', 'unknown')} cog={self._cog_available}"
+        )
         
         # Capture energy before task execution
         E_before = self._energy_slice()
@@ -619,32 +646,33 @@ class RayAgent:
     async def _handle_general_query(self, description: str, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle general_query tasks with real implementations.
-        
-        Args:
-            description: Task description
-            task_data: Full task data
-            
-        Returns:
-            Task execution result
+
+        1. Fast-path local handlers (time/date/status/math).
+        2. Otherwise call cognitive service:
+           - "fast" profile for normal queries
+           - "deep" profile for high-complexity queries
+        3. Fall back to stub ONLY if cognitive fails.
+
+        Returns a dict shaped for upstream callers.
         """
         try:
             description_lower = description.lower()
-            
-            # Handle time-related queries
+
+            # --- 1. Time-related queries ---------------------------------------
             if any(word in description_lower for word in ['time', 'what time', 'current time', 'utc', 'gmt']):
                 import datetime
                 utc_time = datetime.datetime.utcnow()
                 local_time = datetime.datetime.now()
-                
+
                 result = {
                     "query_type": "time_query",
                     "utc_time": utc_time.isoformat(),
                     "local_time": local_time.isoformat(),
                     "timezone": "UTC",
                     "formatted": f"Current UTC time: {utc_time.strftime('%Y-%m-%d %H:%M:%S')} UTC",
-                    "description": description
+                    "description": description,
                 }
-                
+
                 logger.info(f"✅ Agent {self.agent_id} handled time query: {result['formatted']}")
                 return {
                     "agent_id": self.agent_id,
@@ -654,22 +682,24 @@ class RayAgent:
                     "capability_score": self.capability_score,
                     "mem_util": self.mem_util,
                     "result": result,
-                    "mem_hits": 1
+                    "mem_hits": 1,
+                    "used_cognitive_service": False,
+                    "cognitive_profile": "builtin/time",
                 }
-            
-            # Handle date-related queries
-            elif any(word in description_lower for word in ['date', 'today', 'what date', 'current date']):
+
+            # --- 2. Date-related queries ---------------------------------------
+            if any(word in description_lower for word in ['date', 'today', 'what date', 'current date']):
                 import datetime
                 today = datetime.datetime.now()
-                
+
                 result = {
                     "query_type": "date_query",
                     "current_date": today.strftime('%Y-%m-%d'),
                     "day_of_week": today.strftime('%A'),
                     "formatted": f"Today is {today.strftime('%A, %B %d, %Y')}",
-                    "description": description
+                    "description": description,
                 }
-                
+
                 logger.info(f"✅ Agent {self.agent_id} handled date query: {result['formatted']}")
                 return {
                     "agent_id": self.agent_id,
@@ -679,21 +709,28 @@ class RayAgent:
                     "capability_score": self.capability_score,
                     "mem_util": self.mem_util,
                     "result": result,
-                    "mem_hits": 1
+                    "mem_hits": 1,
+                    "used_cognitive_service": False,
+                    "cognitive_profile": "builtin/date",
                 }
-            
-            # Handle system status queries
-            elif any(word in description_lower for word in ['status', 'health', 'system', 'how are you', 'are you working']):
+
+            # --- 3. System status / health queries -----------------------------
+            if any(word in description_lower for word in ['status', 'health', 'system', 'how are you', 'are you working']):
                 result = {
                     "query_type": "system_status",
-                    "agent_status": "healthy",
+                    "agent_status": "healthy" if self._cog_available else "degraded",
                     "agent_id": self.agent_id,
+                    "agent_role": getattr(self, "agent_role", "unknown"),
+                    "cognitive_available": self._cog_available,
                     "capability_score": self.capability_score,
                     "memory_utilization": self.mem_util,
-                    "formatted": f"Agent {self.agent_id} is healthy and operational. Capability: {self.capability_score:.3f}, Memory: {self.mem_util:.3f}",
-                    "description": description
+                    "formatted": (
+                        f"Agent {self.agent_id} ({getattr(self, 'agent_role', 'unknown')}) is "
+                        f"{'healthy' if self._cog_available else 'degraded'}."
+                    ),
+                    "description": description,
                 }
-                
+
                 logger.info(f"✅ Agent {self.agent_id} handled system status query")
                 return {
                     "agent_id": self.agent_id,
@@ -703,23 +740,21 @@ class RayAgent:
                     "capability_score": self.capability_score,
                     "mem_util": self.mem_util,
                     "result": result,
-                    "mem_hits": 1
+                    "mem_hits": 1,
+                    "used_cognitive_service": False,
+                    "cognitive_profile": "builtin/status",
                 }
-            
-            # Handle mathematical queries
-            elif any(word in description_lower for word in ['calculate', 'math', 'compute', 'what is', 'solve']):
+
+            # --- 4. Math queries -----------------------------------------------
+            if any(word in description_lower for word in ['calculate', 'math', 'compute', 'what is', 'solve']):
                 try:
-                    # Simple mathematical expression evaluation
                     import re
-                    import ast
-                    
-                    # Extract mathematical expressions (basic pattern)
+
                     math_pattern = r'(\d+\s*[\+\-\*\/]\s*\d+)'
                     matches = re.findall(math_pattern, description)
-                    
+
                     if matches:
                         expression = matches[0]
-                        # Safe evaluation using our custom arithmetic evaluator
                         try:
                             value = _safe_eval_arith(expression)
                             result = {
@@ -727,23 +762,27 @@ class RayAgent:
                                 "expression": expression,
                                 "result": value,
                                 "formatted": f"The result of {expression} is {value}",
-                                "description": description
+                                "description": description,
                             }
                         except Exception as e:
                             result = {
                                 "query_type": "math_query",
                                 "error": f"Failed to evaluate expression: {str(e)}",
-                                "formatted": f"I couldn't evaluate the expression '{expression}': {str(e)}",
-                                "description": description
+                                "formatted": (
+                                    f"I couldn't evaluate the expression '{expression}': {str(e)}"
+                                ),
+                                "description": description,
                             }
                     else:
                         result = {
                             "query_type": "math_query",
                             "error": "No mathematical expression found in query",
-                            "formatted": "I couldn't find a mathematical expression to evaluate in your query.",
-                            "description": description
+                            "formatted": (
+                                "I couldn't find a mathematical expression to evaluate in your query."
+                            ),
+                            "description": description,
                         }
-                    
+
                     logger.info(f"✅ Agent {self.agent_id} handled math query: {result.get('formatted', '')}")
                     return {
                         "agent_id": self.agent_id,
@@ -753,16 +792,21 @@ class RayAgent:
                         "capability_score": self.capability_score,
                         "mem_util": self.mem_util,
                         "result": result,
-                        "mem_hits": 1
+                        "mem_hits": 1,
+                        "used_cognitive_service": False,
+                        "cognitive_profile": "builtin/math",
                     }
+
                 except Exception as e:
                     result = {
                         "query_type": "math_query",
                         "error": f"Failed to evaluate mathematical expression: {str(e)}",
-                        "formatted": "I encountered an error while trying to evaluate the mathematical expression.",
-                        "description": description
+                        "formatted": (
+                            "I encountered an error while trying to evaluate the mathematical expression."
+                        ),
+                        "description": description,
                     }
-                    
+
                     logger.warning(f"⚠️ Agent {self.agent_id} failed math query: {e}")
                     return {
                         "agent_id": self.agent_id,
@@ -772,97 +816,214 @@ class RayAgent:
                         "capability_score": self.capability_score,
                         "mem_util": self.mem_util,
                         "result": result,
-                        "mem_hits": 1
+                        "mem_hits": 1,
+                        "used_cognitive_service": False,
+                        "cognitive_profile": "builtin/math",
                     }
-            
-            # Default response for unrecognized queries
+
+            # --- 5. Everything else: LLM path ----------------------------------
+            # At this point: it's not simple time/date/status/math.
+            # We are going to invoke cognitive service.
+
+            params = task_data.get("params", {}) or {}
+            router_decision = task_data.get("router_decision")
+            router_surprise = task_data.get("router_surprise")
+            proto_plan = task_data.get("proto_plan")
+            needs_ml_fallback = params.get("needs_ml_fallback", False)
+
+            # Optional confidence struct
+            if isinstance(params.get("confidence"), dict):
+                confidence = params["confidence"].get("overall_confidence", 1.0)
             else:
-                # Check if this is a complex query that needs cognitive service (DEEP profile)
-                params = task_data.get("params", {})
-                needs_ml_fallback = params.get("needs_ml_fallback", False)
-                confidence = params.get("confidence", {}).get("overall_confidence", 1.0) if isinstance(params.get("confidence"), dict) else 1.0
-                criticality = params.get("criticality", 0.5)
-                drift_score = task_data.get("drift_score", 0.0)
-                
-                # Determine if query is complex enough to use cognitive service
-                is_complex = (
-                    needs_ml_fallback or
-                    confidence < 0.5 or
-                    criticality > 0.6 or
-                    drift_score > 0.6 or
-                    len(description.split()) > 15 or
-                    any(word in description_lower for word in ['complex', 'analysis', 'decompose', 'plan', 'strategy', 'reasoning'])
+                confidence = 1.0
+
+            criticality = params.get("criticality", task_data.get("criticality", 0.5))
+            drift_score = task_data.get("drift_score", 0.0)
+
+            # Heuristic "is this high complexity / high stakes?"
+            is_complex = (
+                needs_ml_fallback
+                or confidence < 0.5
+                or criticality > 0.6
+                or drift_score > 0.6
+                or len(description.split()) > 15
+                or any(
+                    word in description_lower
+                    for word in [
+                        'complex', 'analysis', 'decompose', 'plan',
+                        'strategy', 'reasoning', 'root cause', 'diagnose',
+                        'mitigation', 'architecture', 'design a plan'
+                    ]
                 )
-                
-                # Use cognitive service for complex queries (DEEP profile = OpenAI)
-                if is_complex and self._cog:
-                    try:
-                        logger.info(f"🧠 Agent {self.agent_id} detected complex query, using cognitive service (DEEP/OpenAI)")
-                        
-                        # Use the real async plan() method
-                        cog_response = await self._cog.plan(
-                            agent_id=self.agent_id,
-                            task_description=description,
-                            current_capabilities=self._get_agent_capabilities(),
-                            available_tools=task_data.get("params", {}),
-                            depth="deep"
-                        )
-                        
-                        norm = self._normalize_cog_resp(cog_response)
-                        if norm.get("success") and norm.get("payload"):
-                            payload = norm["payload"]
-                            result = {
-                                "query_type": "complex_cognitive_query",
-                                "query": description,
-                                "thought_process": payload.get("thought_process", ""),
-                                "plan": payload.get("step_by_step_plan", ""),
-                                "formatted": payload.get("formatted_response") or f"Cognitive analysis: {description}",
-                                "description": description,
-                                "meta": norm.get("meta", {}),
-                                "profile_used": norm.get("meta", {}).get("profile_used", "deep")
-                            }
-                            
-                            logger.info(f"✅ Agent {self.agent_id} completed complex query via cognitive service")
-                            return {
-                                "agent_id": self.agent_id,
-                                "task_processed": True,
-                                "success": True,
-                                "quality": 0.9,
-                                "capability_score": self.capability_score,
-                                "mem_util": self.mem_util,
-                                "result": result,
-                                "mem_hits": 1,
-                                "used_cognitive_service": True,
-                                "cognitive_profile": "deep"
-                            }
-                        else:
-                            logger.warning(f"⚠️ Cognitive service returned unsuccessful response, falling back to simple response")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Agent {self.agent_id} cognitive service call failed: {e}, falling back to simple response")
-                        import traceback
-                        logger.debug(f"Traceback: {traceback.format_exc()}")
-                
-                # Fallback for simple queries or if cognitive service unavailable
-                result = {
-                    "query_type": "general_query",
-                    "message": "I received your query but don't have a specific handler for it yet.",
-                    "query": description,
-                    "formatted": f"Query: '{description}'. This is a general query that I'm still learning to handle.",
-                    "description": description
+                or router_decision in ("planner", "hgnn")
+                or task_data.get("force_decomposition")
+            )
+
+            # Decide which cognitive profile to use:
+            #  - "deep" (OpenAI/high-depth) for complex/high-stakes
+            #  - "fast" (default provider) for normal Q&A / explanation
+            llm_depth = "deep" if is_complex else "fast"
+
+            # If cognition is not available, do NOT pretend success.
+            if not self._cog_available or not self._cog:
+                degraded_blob = {
+                    "query_type": "cognitive_query_unserved",
+                    "degraded_mode": True,
+                    "reason": "central cognitive service unavailable",
+                    "description": description,
+                    "router_decision": router_decision,
+                    "router_surprise": router_surprise,
+                    "proto_plan": proto_plan,
+                    "intended_profile": llm_depth,
                 }
-                
-                logger.info(f"ℹ️ Agent {self.agent_id} handled general query (no specific handler)")
+                logger.error(
+                    f"🚫 {self.agent_id}: cognitive service unavailable. Can't run {llm_depth} reasoning for query='{description[:80]}'"
+                )
                 return {
                     "agent_id": self.agent_id,
                     "task_processed": True,
-                    "success": True,
-                    "quality": 0.7,
+                    "success": False,
+                    "quality": 0.0,
                     "capability_score": self.capability_score,
                     "mem_util": self.mem_util,
-                    "result": result,
-                    "mem_hits": 1
+                    "result": degraded_blob,
+                    "mem_hits": 0,
+                    "used_cognitive_service": False,
+                    "cognitive_profile": None,
                 }
-                
+
+            # We have cognition; attempt call.
+            if self._cog:
+                try:
+                    logger.info(
+                        f"🧠 Agent {self.agent_id} using cognitive service (profile={llm_depth}, complex={is_complex})"
+                    )
+
+                    # NOTE: plan() is async. We stay async here.
+                    # Debug outgoing payload to diagnose any 4xx validation issues on the cognitive service
+                    try:
+                        dbg_payload = {
+                            "agent_id": self.agent_id,
+                            "task_description": str(description or ""),
+                            "current_capabilities": self._summarize_agent_capabilities(),
+                            "available_tools": {},
+                            "depth": llm_depth,
+                            "extra_meta": {
+                                "decision": router_decision,
+                                "surprise": router_surprise,
+                                "proto_plan": proto_plan,
+                            },
+                        }
+                        # Log the full payload being sent
+                        logger.info("[CognitivePayload_Outgoing] %s", json.dumps(dbg_payload, default=str))
+                    except Exception:
+                        # Do not block execution on debug logging failures
+                        pass
+
+                    cog_response = await self._cog.plan(
+                        agent_id=self.agent_id,
+                        task_description=str(description or ""),
+                        current_capabilities=self._summarize_agent_capabilities(),
+                        available_tools=None,
+                        depth=llm_depth,  # <-- fast or deep
+                        extra_meta=json.loads(
+                            json.dumps(
+                                {
+                                    "decision": router_decision,
+                                    "surprise": router_surprise,
+                                    "proto_plan": proto_plan,
+                                },
+                                default=str,
+                            )
+                        ),
+                    )
+
+                    norm = self._normalize_cog_resp(cog_response)
+
+                    # norm structure expected:
+                    # {
+                    #   "success": bool,
+                    #   "payload": {...},
+                    #   "meta": {...}
+                    # }
+                    if norm.get("success") and norm.get("payload"):
+                        payload = norm["payload"]
+
+                        result = {
+                            "query_type": (
+                                "complex_cognitive_query" if is_complex else "fast_cognitive_query"
+                            ),
+                            "query": description,
+                            "thought_process": payload.get("thought_process", ""),
+                            "plan": payload.get("step_by_step_plan", ""),
+                            "formatted": (
+                                payload.get("formatted_response")
+                                or payload.get("answer")
+                                or f"Cognitive analysis: {description}"
+                            ),
+                            "description": description,
+                            "meta": norm.get("meta", {}),
+                            "profile_used": llm_depth,
+                            "router_decision": router_decision,
+                            "router_surprise": router_surprise,
+                            "proto_plan": proto_plan,
+                        }
+
+                        logger.info(
+                            f"✅ Agent {self.agent_id} cognitive service "
+                            f"completed with profile={llm_depth}"
+                        )
+
+                        return {
+                            "agent_id": self.agent_id,
+                            "task_processed": True,
+                            "success": True,
+                            "quality": 0.9 if is_complex else 0.8,
+                            "capability_score": self.capability_score,
+                            "mem_util": self.mem_util,
+                            "result": result,
+                            "mem_hits": 1,
+                            "used_cognitive_service": True,
+                            "cognitive_profile": llm_depth,
+                        }
+
+                    else:
+                        logger.warning(
+                            "⚠️ Agent %s cognitive service returned unusable response "
+                            "(profile=%s), falling back",
+                            self.agent_id,
+                            llm_depth,
+                        )
+
+                except Exception as e:
+                    import traceback
+                    logger.warning(
+                        f"⚠️ Agent {self.agent_id} cognitive service call failed (profile={llm_depth}): {e}"
+                    )
+                    logger.debug("Traceback:\n%s", traceback.format_exc())
+            # On cognitive failure or unusable response, do not pretend success; return explicit failure
+            err_blob = {
+                "query_type": "cognitive_query_failed",
+                "description": description,
+                "router_decision": router_decision,
+                "router_surprise": router_surprise,
+                "proto_plan": proto_plan,
+                "intended_profile": llm_depth,
+                "error": "cognitive service failure or unusable response",
+            }
+            return {
+                "agent_id": self.agent_id,
+                "task_processed": True,
+                "success": False,
+                "quality": 0.0,
+                "capability_score": self.capability_score,
+                "mem_util": self.mem_util,
+                "result": err_blob,
+                "mem_hits": 0,
+                "used_cognitive_service": True,
+                "cognitive_profile": llm_depth,
+            }
+
         except Exception as e:
             logger.error(f"❌ Agent {self.agent_id} failed to handle general query: {e}")
             return {
@@ -877,9 +1038,11 @@ class RayAgent:
                     "query_type": "general_query",
                     "error": f"Task execution failed: {str(e)}",
                     "formatted": "I encountered an error while processing your query.",
-                    "description": description
+                    "description": description,
                 },
-                "mem_hits": 0
+                "mem_hits": 0,
+                "used_cognitive_service": False,
+                "cognitive_profile": None,
             }
 
     def _simulate_task_execution(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1874,6 +2037,20 @@ class RayAgent:
                 "avg_quality": sum(self.quality_scores) / len(self.quality_scores) if self.quality_scores else 0.0
             }
         }
+
+    def _summarize_agent_capabilities(self) -> str:
+        """
+        Convert internal agent capabilities dict into a stable, human-readable string
+        so CognitiveService can inject it directly into prompts.
+        """
+        caps = self._get_agent_capabilities()
+        if not isinstance(caps, dict):
+            return str(caps)
+
+        lines: List[str] = ["Agent capabilities:"]
+        for key, value in caps.items():
+            lines.append(f"- {key}: {value}")
+        return "\n".join(lines)
     
     def _get_performance_data(self) -> Dict[str, Any]:
         """Get performance data for capability assessment."""

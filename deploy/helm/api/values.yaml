@@ -16,8 +16,8 @@ env:
   NEO4J_USER: neo4j
   NEO4J_PASSWORD: password
 resources:
-  requests: { cpu: 200m, memory: 256Mi }
-  limits:   { cpu: 500m, memory: 512Mi }
+  requests: { cpu: 200m, memory: 512Mi }
+  limits:   { cpu: 400m, memory: 1Gi }
 
 
 
