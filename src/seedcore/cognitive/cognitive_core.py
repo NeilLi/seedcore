@@ -754,6 +754,9 @@ class CognitiveCore(dspy.Module):
             enhanced_input = dict(context.input_data)
             enhanced_input["knowledge_context"] = json.dumps(knowledge_context)
             
+            # Convert dict fields to JSON strings for DSPy signatures that expect JSON strings
+            enhanced_input = self._format_input_for_signature(enhanced_input, context.task_type)
+            
             # Execute with post-condition checks
             raw = handler(**enhanced_input)
             # Normalize handler output into a dict
@@ -1116,6 +1119,52 @@ class CognitiveCore(dspy.Module):
             query_parts.append(context.task_type.value)
         
         return " ".join(query_parts)
+
+    def _format_input_for_signature(self, input_data: Dict[str, Any], task_type: CognitiveTaskType) -> Dict[str, Any]:
+        """
+        Convert dict fields to JSON strings for DSPy signatures that expect JSON strings.
+        This handles the mismatch between dict inputs and signature field expectations.
+        """
+        formatted = dict(input_data)
+        
+        # Map task types to fields that need JSON string conversion
+        if task_type == CognitiveTaskType.FAILURE_ANALYSIS:
+            # AnalyzeFailureSignature expects JSON strings
+            if "incident_context" in formatted and isinstance(formatted["incident_context"], dict):
+                formatted["incident_context"] = json.dumps(formatted["incident_context"])
+        elif task_type == CognitiveTaskType.TASK_PLANNING:
+            # TaskPlanningSignature expects JSON strings
+            if "agent_capabilities" in formatted and isinstance(formatted["agent_capabilities"], dict):
+                formatted["agent_capabilities"] = json.dumps(formatted["agent_capabilities"])
+            if "available_resources" in formatted and isinstance(formatted["available_resources"], dict):
+                formatted["available_resources"] = json.dumps(formatted["available_resources"])
+        elif task_type == CognitiveTaskType.DECISION_MAKING:
+            # DecisionMakingSignature expects JSON strings
+            if "decision_context" in formatted and isinstance(formatted["decision_context"], dict):
+                formatted["decision_context"] = json.dumps(formatted["decision_context"])
+            if "historical_data" in formatted and isinstance(formatted["historical_data"], dict):
+                formatted["historical_data"] = json.dumps(formatted["historical_data"])
+        elif task_type == CognitiveTaskType.PROBLEM_SOLVING:
+            # ProblemSolvingSignature expects JSON strings
+            if "constraints" in formatted and isinstance(formatted["constraints"], dict):
+                formatted["constraints"] = json.dumps(formatted["constraints"])
+            if "available_tools" in formatted and isinstance(formatted["available_tools"], dict):
+                formatted["available_tools"] = json.dumps(formatted["available_tools"])
+        elif task_type == CognitiveTaskType.MEMORY_SYNTHESIS:
+            # MemorySynthesisSignature expects JSON strings
+            if "memory_fragments" in formatted:
+                if isinstance(formatted["memory_fragments"], (list, dict)):
+                    formatted["memory_fragments"] = json.dumps(formatted["memory_fragments"])
+        elif task_type == CognitiveTaskType.CAPABILITY_ASSESSMENT:
+            # CapabilityAssessmentSignature expects JSON strings
+            if "performance_data" in formatted and isinstance(formatted["performance_data"], dict):
+                formatted["agent_performance_data"] = json.dumps(formatted.pop("performance_data"))
+            if "current_capabilities" in formatted and isinstance(formatted["current_capabilities"], dict):
+                formatted["current_capabilities"] = json.dumps(formatted["current_capabilities"])
+            if "target_capabilities" in formatted and isinstance(formatted["target_capabilities"], dict):
+                formatted["target_capabilities"] = json.dumps(formatted["target_capabilities"])
+        
+        return formatted
 
     def _build_knowledge_context(self, facts: List[Fact], summary: str, sufficiency: RetrievalSufficiency) -> Dict[str, Any]:
         """Build knowledge context for DSPy signatures."""

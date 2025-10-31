@@ -319,7 +319,7 @@ class CognitiveServeService:
                 if request.llm_model_override:
                     logger.info(f"   Model override: {request.llm_model_override}")
             else:
-                logger.debug(f"/plan endpoint: Using FAST profile (profile={request.profile})")
+                logger.info(f"/plan endpoint: Using FAST profile (profile={request.profile})")
             
             result = self.cognitive_service.forward_cognitive_task(context, use_deep=use_deep)
             return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)

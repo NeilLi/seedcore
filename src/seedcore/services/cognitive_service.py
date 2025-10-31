@@ -555,6 +555,8 @@ class CognitiveService:
         if model_override:
             target_model = model_override.strip()
             logger.debug(f"Model override requested: {target_model}")
+
+        logger.info(f"Creating temporary core with provider={target_provider}, model={target_model} (override requested)")
         
         # If overrides are provided, try to use/create a core with those settings
         if target_provider or target_model:
