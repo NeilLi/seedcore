@@ -410,6 +410,42 @@ def detect_plan(res: dict) -> tuple[bool, list]:
     
     return False, []
 
+def extract_metadata(hgnn_res: dict) -> dict:
+    """
+    Extract metadata from HGNN result, trying both top-level and nested result.
+    
+    Returns:
+        dict: Metadata dictionary, empty if not found
+    """
+    # Try payload.metadata first
+    payload = hgnn_res.get("payload", {})
+    meta = payload.get("metadata", {})
+    
+    if not meta:
+        # Retry with nested result
+        inner = hgnn_res.get("result")
+        if isinstance(inner, dict):
+            payload = inner.get("payload", {})
+            meta = payload.get("metadata", {})
+    
+    if not meta and isinstance(hgnn_res.get("metadata"), dict):
+        # Some routes might place metadata at top-level
+        meta = hgnn_res.get("metadata", {})
+    
+    return meta
+
+def unwrap_result_envelope(obj: dict, max_depth: int = 3) -> dict:
+    """
+    Safely unwrap nested {"result": {...}} envelopes up to max_depth.
+    Returns the deepest dict that is not a simple 'result' wrapper.
+    """
+    out = obj
+    depth = 0
+    while depth < max_depth and isinstance(out, dict) and isinstance(out.get("result"), dict):
+        out = out.get("result")
+        depth += 1
+    return out
+
 # ---- safe env readers
 def sanitize_url(url: str) -> Optional[str]:
     """
@@ -3642,9 +3678,17 @@ def main():
                 if hgnn_row:
                     hgnn_res = normalize_result(hgnn_row.get("result"))
                     if hgnn_res:
-                        # Check decision and surprise score
-                        if "payload" in hgnn_res and "metadata" in hgnn_res["payload"]:
-                            metadata = hgnn_res["payload"]["metadata"]
+                        # Unwrap any nested result envelopes (API/seedcore-api may wrap coordinator output)
+                        hgnn_res = unwrap_result_envelope(hgnn_res)
+                        
+                        # Debug logging for structure inspection
+                        log.debug(f"HGNN result keys: {list(hgnn_res.keys())}")
+                        if "result" in hgnn_res and isinstance(hgnn_res["result"], dict):
+                            log.debug(f"Nested result keys: {list(hgnn_res['result'].keys())}")
+                        
+                        # Check decision and surprise score using helper function
+                        metadata = extract_metadata(hgnn_res)
+                        if metadata:
                             decision = metadata.get("decision", "unknown")
                             surprise = metadata.get("surprise", {})
                             S = surprise.get("S", 0)
@@ -3677,8 +3721,9 @@ def main():
                         
                         # Also check for proto_plan in metadata (coordinator routing result)
                         proto_plan = None
-                        if "payload" in hgnn_res and "metadata" in hgnn_res["payload"]:
-                            proto_plan = hgnn_res["payload"]["metadata"].get("proto_plan")
+                        metadata = extract_metadata(hgnn_res)
+                        if metadata:
+                            proto_plan = metadata.get("proto_plan")
                         
                         if has_plan and plan:
                             log.info(f"✅ HGNN forced test returned executed plan with {len(plan)} solution_steps")

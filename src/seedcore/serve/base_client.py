@@ -199,6 +199,20 @@ class BaseServiceClient:
         """Make a POST request with circuit breaker and retry."""
         url = f"{self.base_url}{endpoint}"
         
+        # Extract timeout from kwargs if provided (for per-request timeout override)
+        request_timeout = kwargs.pop('timeout', None)
+        if request_timeout is not None:
+            # Create httpx.Timeout object from float or use as-is if already a Timeout
+            if isinstance(request_timeout, (int, float)):
+                request_timeout = httpx.Timeout(
+                    connect=min(request_timeout, 5.0),
+                    read=float(request_timeout),
+                    write=min(request_timeout, 5.0),
+                    pool=min(request_timeout, 5.0)
+                )
+            # httpx will use this timeout object for this request
+            kwargs['timeout'] = request_timeout
+        
         async def _make_request():
             try:
                 response = await self.http.post(url, json=json, **kwargs)

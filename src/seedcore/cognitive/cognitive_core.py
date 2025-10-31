@@ -652,11 +652,16 @@ class CognitiveCore(dspy.Module):
     def process(self, context: CognitiveContext) -> Dict[str, Any]:
         """Enhanced process method with OCPS integration and cache governance."""
         try:
+            # Extract a best-effort task id for logging/traceability
+            task_id = self._extract_task_id(context.input_data)
+            logger.debug(
+                f"Processing task_type={context.task_type.value} agent_id={context.agent_id} task_id={task_id or 'n/a'}"
+            )
             # Check cache first
             cache_key = self._generate_cache_key(context.task_type, context.agent_id, context.input_data)
-            cached_result = self._get_cached_result(cache_key, context.task_type, agent_id=context.agent_id)
+            cached_result = self._get_cached_result(cache_key, context.task_type, agent_id=context.agent_id, task_id=task_id)
             if cached_result:
-                logger.info(f"Cache hit for {context.task_type.value} task")
+                logger.info(f"Cache hit for {context.task_type.value} task task_id={task_id or 'n/a'}")
                 return cached_result
             
             # Retrieve and budget facts
@@ -758,9 +763,13 @@ class CognitiveCore(dspy.Module):
             enhanced_input = self._format_input_for_signature(enhanced_input, context.task_type)
             
             # Execute with post-condition checks
+            logger.debug(f"Invoking handler for {context.task_type.value} task_id={task_id or 'n/a'}")
             raw = handler(**enhanced_input)
             # Normalize handler output into a dict
             payload = self._to_payload(raw)
+            logger.debug(
+                f"Handler completed for {context.task_type.value} task_id={task_id or 'n/a'} payload_keys={list(payload.keys())}"
+            )
             
             # Normalize task-specific fields
             if context.task_type == CognitiveTaskType.FAILURE_ANALYSIS:
@@ -821,7 +830,7 @@ class CognitiveCore(dspy.Module):
             }
             
             # Cache the final standardized dict
-            self._cache_result(cache_key, out_dict, context.task_type, agent_id=context.agent_id)
+            self._cache_result(cache_key, out_dict, context.task_type, agent_id=context.agent_id, task_id=task_id)
             
             # Guardrail: Ensure Cognitive doesn't select organs
             self._assert_no_routing_awareness(out_dict)
@@ -900,7 +909,7 @@ class CognitiveCore(dspy.Module):
         content = f"{task_type.value}:{agent_id}:{json.dumps(sanitized, sort_keys=True)}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
-    def _get_cached_result(self, cache_key: str, task_type: CognitiveTaskType, *, agent_id: str) -> Optional[Dict[str, Any]]:
+    def _get_cached_result(self, cache_key: str, task_type: CognitiveTaskType, *, agent_id: str, task_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get cached result with TTL check."""
         if not self._mw_enabled:
             return None
@@ -927,14 +936,14 @@ class CognitiveCore(dspy.Module):
                     mw.set(cache_key, {"expired": True}, ttl_s=1)
                 return None
             
-            logger.info(f"Cache hit: {cache_key} (age: {cache_age:.1f}s)")
+            logger.info(f"Cache hit: {cache_key} (age: {cache_age:.1f}s) task_id={task_id or 'n/a'}")
             return cached_data["result"]  # Return the final dict directly
             
         except Exception as e:
             logger.warning(f"Cache retrieval error: {e}")
             return None
 
-    def _cache_result(self, cache_key: str, result: Dict[str, Any], task_type: CognitiveTaskType, *, agent_id: str):
+    def _cache_result(self, cache_key: str, result: Dict[str, Any], task_type: CognitiveTaskType, *, agent_id: str, task_id: Optional[str] = None):
         """Cache result with metadata."""
         if not self._mw_enabled:
             return
@@ -952,7 +961,7 @@ class CognitiveCore(dspy.Module):
             }
             
             mw.set(cache_key, cache_data)
-            logger.info(f"Cached result: {cache_key}")
+            logger.info(f"Cached result: {cache_key} task_id={task_id or 'n/a'}")
             
         except Exception as e:
             logger.warning(f"Cache storage error: {e}")
@@ -997,6 +1006,17 @@ class CognitiveCore(dspy.Module):
         # fallback
         return {"value": raw}
 
+    def _extract_task_id(self, input_data: Dict[str, Any]) -> Optional[str]:
+        """Best-effort extraction of a task id from input data for logging.
+
+        Tries common keys without enforcing schema changes.
+        """
+        for key in ("task_id", "id", "request_id", "job_id", "run_id"):
+            value = input_data.get(key)
+            if isinstance(value, (str, int)) and value is not None:
+                return str(value)
+        return None
+
     def _normalize_failure_analysis(self, payload: dict) -> dict:
         """Normalize failure analysis specific fields."""
         if "confidence_score" in payload:
@@ -1008,6 +1028,11 @@ class CognitiveCore(dspy.Module):
 
     def _normalize_task_planning(self, payload: dict) -> dict:
         """Normalize task planning fields, especially estimated_complexity."""
+        # Back-compat: Some downstream consumers expect 'step_by_step_plan'.
+        # If we produced a uniform plan in 'solution_steps', mirror it.
+        if "step_by_step_plan" not in payload and "solution_steps" in payload:
+            payload["step_by_step_plan"] = payload.get("solution_steps")
+
         val = payload.get("estimated_complexity")
         if val is None:
             return payload

@@ -177,6 +177,10 @@ class RayAgent:
         self._cog = None
         self._cog_available = False
         self._cog_base_url = cognitive_base_url
+        
+        # --- Track in-flight cognitive requests to prevent duplicates ---
+        self._cog_inflight: Dict[str, asyncio.Task] = {}  # key: request_key (task_id or desc+profile), value: task
+        self._cog_inflight_lock = asyncio.Lock()  # Lock for accessing _cog_inflight dict
 
         # --- Initialize private memory (lifetime-only persistence) ---
         self._privmem = AgentPrivateMemory(agent_id=self.agent_id, alpha=0.1)
@@ -923,6 +927,69 @@ class RayAgent:
 
             # We have cognition; attempt call.
             if self._cog:
+                # Best-effort task_id extraction for deduplication key
+                task_id = task_data.get("task_id") or task_data.get("id")
+                # Create request key for deduplication (prefer task_id, fallback to description+profile)
+                request_key = task_id if task_id else f"{description[:100]}:{llm_depth}"
+                
+                # Check if there's already an in-flight request for this key
+                async with self._cog_inflight_lock:
+                    if request_key in self._cog_inflight:
+                        existing_task = self._cog_inflight[request_key]
+                        if not existing_task.done():
+                            logger.info(
+                                f"🔄 Agent {self.agent_id} deduplicating cognitive request for {request_key[:50]}... "
+                                f"(waiting for existing call to complete)"
+                            )
+                            try:
+                                # Wait for the existing request to complete
+                                existing_cog_response = await existing_task
+                                # Normalize the response like we would for a fresh call
+                                existing_norm = self._normalize_cog_resp(existing_cog_response)
+                                if existing_norm.get("success") and existing_norm.get("payload"):
+                                    # Build the same result structure as a fresh call would
+                                    existing_payload = existing_norm["payload"]
+                                    existing_result = {
+                                        "query_type": (
+                                            "complex_cognitive_query" if is_complex else "fast_cognitive_query"
+                                        ),
+                                        "query": description,
+                                        "thought_process": existing_payload.get("thought_process", ""),
+                                        "plan": existing_payload.get("step_by_step_plan", ""),
+                                        "formatted": (
+                                            existing_payload.get("formatted_response")
+                                            or existing_payload.get("answer")
+                                            or f"Cognitive analysis: {description}"
+                                        ),
+                                        "description": description,
+                                        "meta": existing_norm.get("meta", {}),
+                                        "profile_used": llm_depth,
+                                        "router_decision": router_decision,
+                                        "router_surprise": router_surprise,
+                                        "proto_plan": proto_plan,
+                                    }
+                                    logger.info(
+                                        f"✅ Agent {self.agent_id} reused result from in-flight cognitive request (deduplicated)"
+                                    )
+                                    return {
+                                        "agent_id": self.agent_id,
+                                        "task_processed": True,
+                                        "success": True,
+                                        "quality": 0.9 if is_complex else 0.8,
+                                        "capability_score": self.capability_score,
+                                        "mem_util": self.mem_util,
+                                        "result": existing_result,
+                                        "mem_hits": 1,
+                                        "used_cognitive_service": True,
+                                        "cognitive_profile": llm_depth,
+                                    }
+                                # If existing failed, fall through to make a new call
+                                logger.debug(f"Previous in-flight request failed, making new call")
+                            except Exception as e:
+                                logger.debug(f"Error waiting for in-flight request: {e}, making new call")
+                            # Clean up the failed task
+                            self._cog_inflight.pop(request_key, None)
+                
                 try:
                     logger.info(
                         f"🧠 Agent {self.agent_id} using cognitive service (profile={llm_depth}, complex={is_complex})"
@@ -949,23 +1016,37 @@ class RayAgent:
                         # Do not block execution on debug logging failures
                         pass
 
-                    cog_response = await self._cog.plan(
-                        agent_id=self.agent_id,
-                        task_description=str(description or ""),
-                        current_capabilities=self._summarize_agent_capabilities(),
-                        available_tools=None,
-                        depth=llm_depth,  # <-- fast or deep
-                        extra_meta=json.loads(
-                            json.dumps(
-                                {
-                                    "decision": router_decision,
-                                    "surprise": router_surprise,
-                                    "proto_plan": proto_plan,
-                                },
-                                default=str,
-                            )
-                        ),
-                    )
+                    # Create the cognitive request as a task so we can track it
+                    async def _cog_call():
+                        return await self._cog.plan(
+                            agent_id=self.agent_id,
+                            task_description=str(description or ""),
+                            current_capabilities=self._summarize_agent_capabilities(),
+                            available_tools=None,
+                            depth=llm_depth,  # <-- fast or deep
+                            extra_meta=json.loads(
+                                json.dumps(
+                                    {
+                                        "decision": router_decision,
+                                        "surprise": router_surprise,
+                                        "proto_plan": proto_plan,
+                                    },
+                                    default=str,
+                                )
+                            ),
+                        )
+                    
+                    # Register the task as in-flight
+                    cog_task = asyncio.create_task(_cog_call())
+                    async with self._cog_inflight_lock:
+                        self._cog_inflight[request_key] = cog_task
+                    
+                    try:
+                        cog_response = await cog_task
+                    finally:
+                        # Clean up the in-flight tracking
+                        async with self._cog_inflight_lock:
+                            self._cog_inflight.pop(request_key, None)
 
                     norm = self._normalize_cog_resp(cog_response)
 

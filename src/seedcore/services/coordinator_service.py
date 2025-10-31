@@ -1141,7 +1141,7 @@ class CoordinatorCore:
 
         # Create routing metadata result (always non-null)
         # This ensures the task always has a result even if execution fails
-        # FIX: Pass payload_common fields directly to avoid metadata nesting
+        # Keep existing top-level payload fields, but also provide a nested payload.metadata
         if decision == "fast":
             res = create_fast_path_result(
                 routed_to="fast",
@@ -1153,14 +1153,44 @@ class CoordinatorCore:
             res = create_escalated_result(
                 solution_steps=[],
                 plan_source="router_planner",
-                **payload_common  # Unpack to pass as keyword args, not nested metadata
+                **payload_common
             ).model_dump()
         else:
             res = create_escalated_result(
                 solution_steps=[],
                 plan_source="router_hgnn",
-                **payload_common  # Unpack to pass as keyword args, not nested metadata
+                **payload_common
             ).model_dump()
+
+        # Ensure payload.metadata exists with decision/surprise/proto_plan for downstream consumers
+        try:
+            if isinstance(res, dict):
+                payload_dict = res.setdefault("payload", {}) if isinstance(res.get("payload"), dict) else res.get("payload")
+                if not isinstance(payload_dict, dict):
+                    res["payload"] = payload_dict = {}
+                meta = payload_dict.setdefault("metadata", {}) if isinstance(payload_dict.get("metadata"), dict) else payload_dict.get("metadata")
+                if not isinstance(meta, dict):
+                    payload_dict["metadata"] = meta = {}
+
+                # Populate commonly-read fields for verifiers/consumers
+                if "decision" in payload_common:
+                    meta.setdefault("decision", payload_common.get("decision"))
+                if "original_decision" in payload_common and payload_common.get("original_decision") is not None:
+                    meta.setdefault("original_decision", payload_common.get("original_decision"))
+                if "surprise" in payload_common and isinstance(payload_common.get("surprise"), dict):
+                    meta.setdefault("surprise", payload_common.get("surprise"))
+                if "proto_plan" in payload_common and isinstance(payload_common.get("proto_plan"), dict):
+                    meta.setdefault("proto_plan", payload_common.get("proto_plan"))
+                # Optional pass-throughs
+                if "event_tags" in payload_common:
+                    meta.setdefault("event_tags", payload_common.get("event_tags"))
+                if "attributes" in payload_common and isinstance(payload_common.get("attributes"), dict):
+                    meta.setdefault("attributes", payload_common.get("attributes"))
+                if "confidence" in payload_common and isinstance(payload_common.get("confidence"), dict):
+                    meta.setdefault("confidence", payload_common.get("confidence"))
+        except Exception:
+            # Best-effort; do not fail routing on formatting issues
+            pass
 
         # Track routing decision metrics (separate from execution)
         if self.metrics:

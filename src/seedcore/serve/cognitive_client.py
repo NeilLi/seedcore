@@ -32,7 +32,7 @@ class CognitiveServiceClient(BaseServiceClient):
     def __init__(
         self,
         base_url: Optional[str] = None,
-        timeout: float = 8.0,
+        timeout: float = None,
     ):
         # Centralized gateway discovery (env -> ray_utils -> localhost)
         if base_url is None:
@@ -44,6 +44,19 @@ class CognitiveServiceClient(BaseServiceClient):
             except Exception:
                 base_url = "http://127.0.0.1:8000/cognitive"
 
+        # Resolve effective timeout (fallback to env or sensible default)
+        if timeout is None:
+            try:
+                timeout = float(os.getenv("COG_CLIENT_TIMEOUT", "75"))
+            except Exception:
+                timeout = 75.0
+
+        # Retry tuning (env override)
+        try:
+            retries = int(os.getenv("COG_CLIENT_RETRIES", "1"))
+        except Exception:
+            retries = 1
+
         # Circuit breaker tuned for service calls
         circuit_breaker = CircuitBreaker(
             failure_threshold=5,
@@ -53,7 +66,7 @@ class CognitiveServiceClient(BaseServiceClient):
 
         # Lightweight retries (idempotent reads / safe posts)
         retry_config = RetryConfig(
-            max_attempts=2,
+            max_attempts=max(1, retries),
             base_delay=1.0,
             max_delay=5.0,
         )
@@ -65,6 +78,24 @@ class CognitiveServiceClient(BaseServiceClient):
             circuit_breaker=circuit_breaker,
             retry_config=retry_config,
         )
+
+        # Cache per-profile timeout hints (env overrideable)
+        # Defaults chosen to stay below common dispatcher windows (e.g., 120s)
+        try:
+            self.fast_timeout_s = float(os.getenv("COG_CLIENT_TIMEOUT_FAST", str(min(timeout, 35.0))))
+        except Exception:
+            self.fast_timeout_s = min(timeout, 35.0)
+        try:
+            self.deep_timeout_s = float(os.getenv("COG_CLIENT_TIMEOUT_DEEP", str(min(90.0, max(timeout, 60.0)))))
+        except Exception:
+            self.deep_timeout_s = min(90.0, max(timeout, 60.0))
+
+    def _timeout_for_depth(self, depth: Optional[str]) -> float:
+        d = (depth or "").lower()
+        if d == "deep":
+            return float(self.deep_timeout_s)
+        # default fast
+        return float(self.fast_timeout_s)
 
     # ---------------------------
     # Helpers
@@ -143,9 +174,11 @@ class CognitiveServiceClient(BaseServiceClient):
         body = {k: v for k, v in body.items() if v is not None}
 
         # New route -> legacy route compatibility
+        eff_timeout = self._timeout_for_depth(depth)
         return await self._post_first_available(
             candidate_paths=("/plan", "/plan-task"),
             json=body,
+            timeout=eff_timeout,
         )
 
     async def plan_with_escalation(
@@ -204,7 +237,8 @@ class CognitiveServiceClient(BaseServiceClient):
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        return await self.post("/solve-problem", json=body)
+        eff_timeout = self._timeout_for_depth(depth)
+        return await self.post("/solve-problem", json=body, timeout=eff_timeout)
 
     # ---------------------------
     # Decision Making
@@ -234,7 +268,8 @@ class CognitiveServiceClient(BaseServiceClient):
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        return await self.post("/make-decision", json=body)
+        eff_timeout = self._timeout_for_depth(depth)
+        return await self.post("/make-decision", json=body, timeout=eff_timeout)
 
     # ---------------------------
     # Memory Synthesis
@@ -262,7 +297,8 @@ class CognitiveServiceClient(BaseServiceClient):
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        return await self.post("/synthesize-memory", json=body)
+        eff_timeout = self._timeout_for_depth(depth)
+        return await self.post("/synthesize-memory", json=body, timeout=eff_timeout)
 
     # ---------------------------
     # Capability Assessment
@@ -292,7 +328,8 @@ class CognitiveServiceClient(BaseServiceClient):
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        return await self.post("/assess-capabilities", json=body)
+        eff_timeout = self._timeout_for_depth(depth)
+        return await self.post("/assess-capabilities", json=body, timeout=eff_timeout)
 
     # ---------------------------
     # Failure Analysis
@@ -320,7 +357,8 @@ class CognitiveServiceClient(BaseServiceClient):
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        return await self.post("/reason-about-failure", json=body)
+        eff_timeout = self._timeout_for_depth(depth)
+        return await self.post("/reason-about-failure", json=body, timeout=eff_timeout)
 
     # ---------------------------
     # Generic forward
@@ -357,7 +395,8 @@ class CognitiveServiceClient(BaseServiceClient):
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        return await self.post("/forward", json=body)
+        eff_timeout = self._timeout_for_depth(depth)
+        return await self.post("/forward", json=body, timeout=eff_timeout)
 
     # ---------------------------
     # Service info / health
