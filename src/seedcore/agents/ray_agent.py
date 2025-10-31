@@ -1841,12 +1841,14 @@ class RayAgent:
             return {"success": False, "reason": "Cognitive service not available."}
 
         try:
-            # Call cognitive service via HTTP client
-            resp = await self._cog.plan_task(
+            # Call cognitive service via HTTP client using plan() method
+            # Note: plan() expects current_capabilities as a string (summarized format)
+            resp = await self._cog.plan(
                 agent_id=self.agent_id,
                 task_description=task_description,
-                current_capabilities=self._get_agent_capabilities(),
-                available_tools=available_resources or {}
+                current_capabilities=self._summarize_agent_capabilities(),  # Convert dict to string format
+                available_tools=available_resources or {},
+                depth="deep"  # Use deep profile for complex tasks
             )
             norm = self._normalize_cog_resp(resp)
             payload = norm["payload"]

@@ -62,10 +62,14 @@ class CognitiveRequest(BaseModel):
     memory_fragments: list = None
     synthesis_goal: str = None
     performance_data: Dict[str, Any] = None
-    current_capabilities: Dict[str, Any] = None
+    current_capabilities: Optional[Any] = None  # Can be str or Dict[str, Any] - flexible for cognitive client
     target_capabilities: Dict[str, Any] = None
     knowledge_context: Optional[Dict[str, Any]] = None
     profile: Optional[str] = None  # "fast" | "deep" - profile hint from cognitive client
+    llm_provider_override: Optional[str] = None  # Optional provider override (e.g., "anthropic")
+    llm_model_override: Optional[str] = None  # Optional model override (e.g., "claude-3-5-sonnet")
+    providers: Optional[list] = None  # Multi-provider pool hint
+    meta: Optional[Dict[str, Any]] = None  # Extra metadata from cognitive client
 
 class CognitiveResponse(BaseModel):
     success: bool
@@ -206,22 +210,49 @@ class CognitiveServeService:
 
     @app.post("/plan-task", response_model=CognitiveResponse)
     async def plan_task(self, request: CognitiveRequest):
+        """
+        Legacy plan-task endpoint (backward compatibility).
+        Supports same parameters as /plan endpoint for consistency.
+        """
         try:
+            # Handle current_capabilities - can be str or dict from client
+            agent_capabilities = {}
+            if request.current_capabilities:
+                if isinstance(request.current_capabilities, str):
+                    if request.current_capabilities.strip():
+                        agent_capabilities = {"description": request.current_capabilities}
+                elif isinstance(request.current_capabilities, dict):
+                    agent_capabilities = request.current_capabilities
+            
+            # Prepare input data with all supported parameters
+            input_data = {
+                "task_description": request.task_description,
+                "agent_capabilities": agent_capabilities,
+                "available_resources": request.available_tools or {}
+            }
+            
+            # Include provider/model overrides if provided
+            if request.llm_provider_override:
+                input_data["llm_provider_override"] = request.llm_provider_override
+            if request.llm_model_override:
+                input_data["llm_model_override"] = request.llm_model_override
+            if request.providers:
+                input_data["providers"] = request.providers
+            if request.meta:
+                input_data["meta"] = request.meta
+            
             context = CognitiveContext(
                 agent_id=request.agent_id,
                 task_type=CognitiveTaskType.TASK_PLANNING,
-                input_data={
-                    "task_description": request.task_description,
-                    "agent_capabilities": request.current_capabilities or {},
-                    "available_resources": request.available_tools or {}
-                }
+                input_data=input_data
             )
+            
             # Check if request has profile/depth hint for DEEP profile
             use_deep = False
             # First check explicit profile parameter from cognitive client
             if request.profile and request.profile.lower() == "deep":
                 use_deep = True
-                logger.info(f"🧠 Using DEEP profile (OpenAI) per request.profile='deep'")
+                logger.info(f"🧠 /plan-task: Using DEEP profile per request.profile='deep'")
             # Also infer from task description complexity
             elif request.task_description:
                 complex_keywords = ['complex', 'analysis', 'decompose', 'plan', 'strategy', 'reasoning', 'hgnn', 'hypergraph']
@@ -233,35 +264,67 @@ class CognitiveServeService:
             result = self.cognitive_service.forward_cognitive_task(context, use_deep=use_deep)
             return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)
         except Exception as e:
+            logger.exception(f"Error in /plan-task endpoint for agent {request.agent_id}: {e}")
             return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
 
     @app.post("/plan", response_model=CognitiveResponse)
     async def plan(self, request: CognitiveRequest):
         """
-        Plan endpoint that supports profile parameter (FAST/DEEP).
+        Plan endpoint that supports profile parameter (FAST/DEEP) and optional provider/model overrides.
         This is the preferred endpoint for cognitive client with explicit profile selection.
+        Supports all parameters from cognitive_client.plan() method.
         """
         try:
+            # Handle current_capabilities - can be str or dict from client
+            agent_capabilities = {}
+            if request.current_capabilities:
+                if isinstance(request.current_capabilities, str):
+                    # If it's a string, try to parse or use as-is
+                    if request.current_capabilities.strip():
+                        # Could be JSON string, but for now treat as description
+                        agent_capabilities = {"description": request.current_capabilities}
+                elif isinstance(request.current_capabilities, dict):
+                    agent_capabilities = request.current_capabilities
+            
+            # Prepare input data with all supported parameters
+            input_data = {
+                "task_description": request.task_description,
+                "agent_capabilities": agent_capabilities,
+                "available_resources": request.available_tools or {}
+            }
+            
+            # Include provider/model overrides if provided
+            if request.llm_provider_override:
+                input_data["llm_provider_override"] = request.llm_provider_override
+            if request.llm_model_override:
+                input_data["llm_model_override"] = request.llm_model_override
+            if request.providers:
+                input_data["providers"] = request.providers
+            if request.meta:
+                input_data["meta"] = request.meta
+            
             context = CognitiveContext(
                 agent_id=request.agent_id,
                 task_type=CognitiveTaskType.TASK_PLANNING,
-                input_data={
-                    "task_description": request.task_description,
-                    "agent_capabilities": request.current_capabilities or {},
-                    "available_resources": request.available_tools or {}
-                }
+                input_data=input_data
             )
+            
             # Use profile parameter directly from request (sent by cognitive client)
             use_deep = False
             if request.profile and request.profile.lower() == "deep":
                 use_deep = True
-                logger.info(f"🧠 /plan endpoint: Using DEEP profile (OpenAI) per profile='deep'")
+                logger.info(f"🧠 /plan endpoint: Using DEEP profile per profile='deep'")
+                if request.llm_provider_override:
+                    logger.info(f"   Provider override: {request.llm_provider_override}")
+                if request.llm_model_override:
+                    logger.info(f"   Model override: {request.llm_model_override}")
             else:
                 logger.debug(f"/plan endpoint: Using FAST profile (profile={request.profile})")
             
             result = self.cognitive_service.forward_cognitive_task(context, use_deep=use_deep)
             return CognitiveResponse(success=True, agent_id=request.agent_id, result=result)
         except Exception as e:
+            logger.exception(f"Error in /plan endpoint for agent {request.agent_id}: {e}")
             return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
 
     @app.post("/plan-with-escalation", response_model=CognitiveResponse)

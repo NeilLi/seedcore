@@ -537,7 +537,64 @@ class CognitiveService:
             context: Cognitive context for the task
             use_deep: If True, use DEEP profile (OpenAI), otherwise use FAST profile (default: False)
         """
-        # Use new multi-profile system if available
+        # Check for provider/model overrides in input_data
+        input_data = context.input_data or {}
+        provider_override = input_data.get("llm_provider_override")
+        model_override = input_data.get("llm_model_override")
+        providers_hint = input_data.get("providers")  # Multi-provider pool hint
+        meta_extra = input_data.get("meta", {})
+        
+        # Determine which provider/model to use
+        target_provider = None
+        target_model = None
+        
+        if provider_override:
+            target_provider = provider_override.lower().strip()
+            logger.debug(f"Provider override requested: {target_provider}")
+        
+        if model_override:
+            target_model = model_override.strip()
+            logger.debug(f"Model override requested: {target_model}")
+        
+        # If overrides are provided, try to use/create a core with those settings
+        if target_provider or target_model:
+            # Resolve full provider/model
+            if not target_provider:
+                # Use default provider for the profile
+                profile = LLMProfile.DEEP if use_deep else LLMProfile.FAST
+                target_provider = self.profiles.get(profile, {}).get("provider", "openai")
+            if not target_model:
+                # Use default model for the provider/profile
+                profile = LLMProfile.DEEP if use_deep else LLMProfile.FAST
+                target_model = _model_for(target_provider, profile)
+            
+            # Check if we have a matching core (exact match on provider/model)
+            # For now, create a temporary core with the override settings
+            # TODO: Consider caching temporary cores by provider+model key
+            try:
+                logger.info(f"Creating temporary core with provider={target_provider}, model={target_model} (override requested)")
+                temp_engine = _make_engine(target_provider, LLMProfile.DEEP if use_deep else LLMProfile.FAST, target_model)
+                temp_config = {
+                    "provider": target_provider,
+                    "model": target_model,
+                    "max_tokens": 2048 if use_deep else 1024,
+                }
+                temp_core = self._create_core_with_engine(target_provider, temp_engine, temp_config)
+                
+                result = temp_core.forward(context)
+                if isinstance(result, dict):
+                    result.setdefault("result", {}).setdefault("meta", {})
+                    result["result"]["meta"]["profile_used"] = ("deep" if use_deep else "fast")
+                    result["result"]["meta"]["provider_override"] = target_provider
+                    result["result"]["meta"]["model_override"] = target_model
+                    if meta_extra:
+                        result["result"]["meta"].update(meta_extra)
+                return result
+            except Exception as e:
+                logger.warning(f"Failed to create temporary core with overrides (provider={target_provider}, model={target_model}): {e}. Falling back to default core.")
+                # Fall through to default core selection
+        
+        # Use new multi-profile system if available (no overrides or override creation failed)
         if self.cores:
             profile = LLMProfile.DEEP if use_deep else LLMProfile.FAST
             core = self.cores.get(profile)
@@ -547,6 +604,8 @@ class CognitiveService:
                     if isinstance(result, dict):
                         result.setdefault("result", {}).setdefault("meta", {})
                         result["result"]["meta"]["profile_used"] = profile.value
+                        if meta_extra:
+                            result["result"]["meta"].update(meta_extra)
                     return result
                 except Exception as e:
                     logger.error(f"Error forwarding cognitive task with {profile.value} profile: {e}")
@@ -564,7 +623,11 @@ class CognitiveService:
                 "error": "CognitiveCore not initialized",
             }
         try:
-            return self.cognitive_core.forward(context)
+            result = self.cognitive_core.forward(context)
+            if isinstance(result, dict) and meta_extra:
+                result.setdefault("result", {}).setdefault("meta", {})
+                result["result"]["meta"].update(meta_extra)
+            return result
         except Exception as e:
             logger.error(f"Error forwarding cognitive task: {e}")
             return {
