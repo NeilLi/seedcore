@@ -1,5 +1,9 @@
 from openai import OpenAI
 
+import time
+
+start_time = time.time()
+
 client = OpenAI(
     base_url="http://a3055aa0ec20d4fefab34716edbe28ad-419314233.us-east-1.elb.amazonaws.com:8000/v1",
     api_key="none"
@@ -21,6 +25,9 @@ clean_text = assistant_text.replace("<|im_start|>", "").replace("<|im_end|>", ""
 
 # Remove LaTeX-like formatting
 clean_text = clean_text.replace("\\end{code}", "").replace("\\begin{code}", "").strip()
+
+end_time = time.time()
+print(f"\nTotal conversation time: {end_time - start_time:.3f} seconds")
 
 # Format the conversation nicely
 print("=== NIM LLaMA Conversation ===")

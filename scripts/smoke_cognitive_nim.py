@@ -39,11 +39,11 @@ from typing import Dict, Any, List, Optional
 import anyio
 
 # ---------- Defaults (safe for local and cluster) ----------
-os.environ.setdefault("LLM_PROVIDER", "openai")              # deep default
-os.environ.setdefault("LLM_PROVIDERS", "openai")             # fast pool default
+os.environ.setdefault("LLM_PROVIDER", "nim")              # deep default
+os.environ.setdefault("LLM_PROVIDERS", "nim")             # fast pool default
 os.environ.setdefault("NIM_LLM_API_KE", "none")
 # If you want to default NIM to localhost in dev:
-os.environ.setdefault("NIM_LLM_BASE_URL", "http://127.0.0.1:8000/v1")
+os.environ.setdefault("NIM_LLM_BASE_URL", "http://a3055aa0ec20d4fefab34716edbe28ad-419314233.us-east-1.elb.amazonaws.com:8000/v1")
 
 # ---------- Helpers ----------
 def _active_providers() -> List[str]:

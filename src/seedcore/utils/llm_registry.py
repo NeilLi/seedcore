@@ -90,7 +90,7 @@ def _nim_client_factory() -> object:
         or "http://seedcore-nim-svc:8080/v1"
     )
     api_key = (
-        os.getenv("NIM_LLM_API_KE")
+        os.getenv("NIM_LLM_API_KEY")
         or os.getenv("NIM_API_KEY")
         or os.getenv("LLM_API_KEY")
         or ""

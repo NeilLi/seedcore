@@ -765,6 +765,8 @@ class CognitiveCore(dspy.Module):
             # Normalize task-specific fields
             if context.task_type == CognitiveTaskType.FAILURE_ANALYSIS:
                 payload = self._normalize_failure_analysis(payload)
+            elif context.task_type == CognitiveTaskType.TASK_PLANNING:
+                payload = self._normalize_task_planning(payload)
             
             # Check if this is a planning-style task that should return a plan
             escalate_hint = knowledge_context.get("escalate_hint", False)
@@ -1002,6 +1004,42 @@ class CognitiveCore(dspy.Module):
                 payload["confidence_score"] = float(payload["confidence_score"])
             except Exception:
                 pass
+        return payload
+
+    def _normalize_task_planning(self, payload: dict) -> dict:
+        """Normalize task planning fields, especially estimated_complexity."""
+        val = payload.get("estimated_complexity")
+        if val is None:
+            return payload
+
+        if isinstance(val, (int, float)):
+            # Clamp to valid range [1.0, 10.0]
+            num = float(val)
+            payload["estimated_complexity"] = max(1.0, min(num, 10.0))
+            return payload
+
+        if isinstance(val, str):
+            # Normalize commas and strip text
+            text = val.replace(",", ".").strip()
+
+            # Broader numeric extraction: find any number in the string
+            match = re.search(r'([0-9]+(?:\.[0-9]+)?)', text)
+            if match:
+                try:
+                    num = float(match.group(1))
+                    # Clamp to valid range [1.0, 10.0]
+                    payload["estimated_complexity"] = max(1.0, min(num, 10.0))
+                    logger.debug(f"Extracted numeric complexity from '{val}': {payload['estimated_complexity']}")
+                    return payload
+                except ValueError:
+                    logger.warning(f"Could not convert extracted complexity: {match.group(1)}")
+            else:
+                logger.warning(f"Could not extract numeric value from estimated_complexity: '{val}'")
+        else:
+            logger.warning(f"Unexpected type for estimated_complexity: {type(val)}")
+
+        # Fallback: set to default middle value to avoid post-condition violations
+        payload["estimated_complexity"] = 5.0
         return payload
 
     def _check_post_conditions(self, result: Dict[str, Any], task_type: CognitiveTaskType) -> Tuple[bool, List[str]]:
@@ -1420,23 +1458,75 @@ def initialize_cognitive_core(llm_provider: str = "openai", model: str = "gpt-4o
     
     if COGNITIVE_CORE_INSTANCE is None:
         try:
-            # Configure DSPy with the LLM
-            if llm_provider == "openai":
-                llm = dspy.OpenAI(model=model, max_tokens=1024)
-                
+            # Resolve provider & model from env/configs if present
+            resolved_provider = (
+                os.getenv("COGNITIVE_LLM_PROVIDER")
+                or os.getenv("LLM_PROVIDER_DEEP")
+                or os.getenv("LLM_PROVIDER")
+                or llm_provider
+            ).strip().lower()
+
+            # Prefer provider-specific model envs, then generic cognitive override, then passed arg
+            if resolved_provider == "openai":
+                resolved_model = (
+                    os.getenv("COGNITIVE_LLM_MODEL")
+                    or os.getenv("OPENAI_MODEL")
+                    or model
+                )
+            elif resolved_provider == "nim":
+                resolved_model = (
+                    os.getenv("COGNITIVE_LLM_MODEL")
+                    or os.getenv("NIM_LLM_MODEL")
+                    or model
+                )
+            else:
+                resolved_model = os.getenv("COGNITIVE_LLM_MODEL") or model
+
+            # Optional tuning via env
+            max_tokens_env = os.getenv("COGNITIVE_MAX_TOKENS")
+            temperature_env = os.getenv("COGNITIVE_TEMPERATURE")
+            try:
+                resolved_max_tokens = int(max_tokens_env) if max_tokens_env else 1024
+            except Exception:
+                resolved_max_tokens = 1024
+            try:
+                resolved_temperature = float(temperature_env) if temperature_env else 0.7
+            except Exception:
+                resolved_temperature = 0.7
+
+            # Configure DSPy with the selected LLM
+            if resolved_provider == "openai":
+                llm = dspy.OpenAI(model=resolved_model, max_tokens=resolved_max_tokens)
+
                 # Enable token usage logging for OpenAI
                 try:
                     from ..utils.token_logger import enable_token_logging
                     enable_token_logging()
                 except Exception as e:
                     logger.debug(f"Could not enable token logging: {e}")
+
+            elif resolved_provider == "nim":
+                # Use the same shim approach as CognitiveService
+                from ..services.cognitive_service import NimEngine, _DSPyEngineShim
+
+                nim_engine = NimEngine(
+                    model=resolved_model,
+                    max_tokens=resolved_max_tokens,
+                    temperature=resolved_temperature,
+                    base_url=os.getenv("NIM_LLM_BASE_URL"),
+                    api_key=os.getenv("NIM_LLM_API_KEY", "none"),
+                    use_sdk=None,
+                    timeout=20,
+                )
+                llm = _DSPyEngineShim(nim_engine)
+
             else:
                 # Add support for other providers as needed
-                raise ValueError(f"Unsupported LLM provider: {llm_provider}")
-            
+                raise ValueError(f"Unsupported LLM provider: {resolved_provider}")
+
             dspy.settings.configure(lm=llm)
-            COGNITIVE_CORE_INSTANCE = CognitiveCore(llm_provider, model, context_broker, ocps_client=ocps_client)
-            logger.info(f"Initialized global cognitive core with {llm_provider} and {model}")
+            COGNITIVE_CORE_INSTANCE = CognitiveCore(resolved_provider, resolved_model, context_broker, ocps_client=ocps_client)
+            logger.info(f"Initialized global cognitive core with {resolved_provider} and {resolved_model}")
             
         except Exception as e:
             logger.error(f"Failed to initialize cognitive core: {e}")

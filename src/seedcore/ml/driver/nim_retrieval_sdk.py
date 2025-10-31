@@ -23,7 +23,7 @@ class NimRetrievalSDK:
     ):
         self.client = OpenAI(
             base_url=base_url.rstrip("/"),
-            api_key=api_key or os.getenv("NIM_LLM_API_KE", "none"),
+            api_key=api_key or os.getenv("NIM_LLM_API_KEY", "none"),
             timeout=timeout,
         )
         self.model = model

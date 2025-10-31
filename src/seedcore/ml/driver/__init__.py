@@ -135,7 +135,7 @@ def get_driver(
         
     # Default api_key if not provided
     if api_key is None:
-        api_key = os.getenv("NIM_LLM_API_KE", "none")
+        api_key = os.getenv("NIM_LLM_API_KEY", "none")
     
     driver_cls = NimDriverSDK if use_sdk else NimClient
     driver_name = driver_cls.__name__
@@ -209,13 +209,13 @@ def get_retriever(
 ):
     """
     Factory for NIM retrieval (embeddings) drivers.
-    Respects env SEEDCORE_USE_SDK and NIM_LLM_BASE_URL/API_KE.
+    Respects env SEEDCORE_USE_SDK and NIM_LLM_BASE_URL/API_KEY.
     """
     if use_sdk is None:
         use_sdk = os.getenv("SEEDCORE_USE_SDK", "true").lower() in ("1", "true", "yes")
 
     base_url = base_url or os.getenv("NIM_LLM_BASE_URL", "http://127.0.0.1:8000/v1")
-    api_key = api_key or os.getenv("NIM_LLM_API_KE", "none")
+    api_key = api_key or os.getenv("NIM_LLM_API_KEY", "none")
 
     if use_sdk:
         return NimRetrievalSDK(base_url=base_url, api_key=api_key, model=model, timeout=timeout)

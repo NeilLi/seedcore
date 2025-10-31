@@ -2,7 +2,7 @@
 Cognitive Service: Integration layer for cognitive operations.
 
 Multi-provider enhancements:
-- Deep profile defaults to OpenAI (LLM_PROVIDER=openai).
+- Deep profile set via LLM_PROVIDER_DEEP (defaults to OpenAI if not set).
 - Fast profile can be selected from a multi-provider pool (LLM_PROVIDERS=openai,anthropic,nim,...).
 - Per-profile provider & model overrides via env.
 - Backward compatible with SeedCore core & telemetry.
@@ -47,16 +47,42 @@ class _DSPyEngineShim:
     """
     Minimal DSPy LM shim that adapts any engine exposing .generate(prompt, **kwargs) -> str.
     Used for NimEngine and MLServiceEngine.
+    
+    This shim implements the DSPy LM interface to make custom engines compatible
+    with DSPy's ChainOfThought and other modules.
     """
     def __init__(self, engine: 'LLMEngine'):
         self.engine = engine
+        # Common attributes DSPy LMs have (required for DSPy compatibility)
+        self.model = getattr(engine, 'model', 'unknown')
+        self.max_tokens = getattr(engine, 'max_tokens', 1024)
+        self.temperature = getattr(engine, 'temperature', 0.7)  # DSPy expects this attribute
+        
+        # Store default kwargs for DSPy compatibility
+        # DSPy accesses lm.kwargs["temperature"] so this must be populated
+        self.kwargs = {
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
 
     def basic_request(self, prompt: str, **kwargs):
-        text = self.engine.generate(prompt, **kwargs)
+        """DSPy-compatible basic_request method."""
+        engine_base_url = getattr(self.engine, 'base_url', 'unknown')
+        engine_model = getattr(self.engine, 'model', 'unknown')
+        logger.debug(f"_DSPyEngineShim.basic_request called with prompt length={len(prompt)}, kwargs={list(kwargs.keys())}, model={engine_model}, base_url={engine_base_url}")
+        # Merge defaults with overrides from DSPy
+        gen_kwargs = {**self.kwargs, **kwargs}
+        text = self.engine.generate(prompt, **gen_kwargs)
+        logger.debug(f"_DSPyEngineShim.basic_request returning text length={len(text)}")
         return {"text": text}
 
     def __call__(self, prompt: str, **kwargs):
+        """Call interface for DSPy LM compatibility."""
         return self.basic_request(prompt, **kwargs)
+    
+    def __getattr__(self, name):
+        """Forward any missing attributes to the underlying engine."""
+        return getattr(self.engine, name)
 
 # ------------------ Provider engines ------------------
 
@@ -71,9 +97,10 @@ class OpenAIEngine:
 
 class MLServiceEngine:
     """MLService engine implementation for local LLM inference using MLServiceClient."""
-    def __init__(self, model: str, max_tokens: int = 1024, base_url: str = None):
+    def __init__(self, model: str, max_tokens: int = 1024, temperature: float = 0.7, base_url: str = None):
         self.model = model
         self.max_tokens = max_tokens
+        self.temperature = temperature
         # Resolve base URL (env > ray_utils > localhost)
         if base_url:
             self.base_url = base_url.rstrip("/")
@@ -115,9 +142,9 @@ class MLServiceEngine:
     
     def generate(self, prompt: str, **kwargs) -> str:
         import anyio
-        return anyio.run(self.generate_async, prompt, **kwargs)
+        # Use a lambda to properly pass kwargs to generate_async, not anyio.run
+        return anyio.run(lambda: self.generate_async(prompt, **kwargs))
 
-from seedcore.ml.driver import get_driver as _get_nim_driver
 # get_active_providers parses LLM_PROVIDERS (if you have the registry; otherwise falls back below)
 try:
     from seedcore.utils.llm_registry import get_active_providers
@@ -131,34 +158,63 @@ class NimEngine:
     NIM (OpenAI-compatible) engine using SeedCore nim drivers (SDK or HTTP).
     Keeps the same .generate() contract as other engines.
     """
-    def __init__(self, model: str, max_tokens: int = 1024,
+    def __init__(self, model: str, max_tokens: int = 1024, temperature: float = 0.7,
                  base_url: Optional[str] = None, api_key: Optional[str] = None,
                  use_sdk: Optional[bool] = None, timeout: int = 60):
+        # Harden: refuse to run if base_url is missing
+        base_url = base_url or os.getenv("NIM_LLM_BASE_URL")
+        if not base_url:
+            raise RuntimeError(
+                "NimEngine misconfigured: NIM_LLM_BASE_URL is not set. "
+                "Refusing to fall back to api.openai.com."
+            )
+        
+        # Harden: refuse to run if api_key is missing (but allow "none" as valid placeholder)
+        # Some NIM deployments accept "none" as a placeholder API key
+        api_key = api_key or os.getenv("NIM_LLM_API_KEY")
+        if api_key == "":
+            raise RuntimeError(
+                "NimEngine misconfigured: NIM_LLM_API_KEY is not set."
+            )
+        # If api_key is "none", that's acceptable - some NIM deployments accept it as a placeholder
+
         self.model = model
         self.max_tokens = max_tokens
-        base_url = (base_url or
-                    os.getenv("NIM_LLM_BASE_URL") or
-                    "http://127.0.0.1:8000/v1")
-        api_key = api_key or os.getenv("NIM_LLM_API_KE", "none")
-        self.driver = _get_nim_driver(
-            use_sdk=use_sdk, base_url=base_url, api_key=api_key,
-            model=model, timeout=timeout, auto_fallback=True,
+        self.temperature = temperature
+        self.base_url = base_url
+        self.api_key = api_key
+        self.timeout = timeout
+
+        from openai import OpenAI
+        self.client = OpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key,
+            timeout=self.timeout,
         )
+        logger.info(f"NimEngine configured with model={self.model}, base_url={self.base_url}, timeout={self.timeout}")
 
     def configure_for_dspy(self):
         pass
 
     async def generate_async(self, prompt: str, **kwargs) -> str:
-        messages = [{"role": "user", "content": prompt}]
-        params = {
-            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-            **{k: v for k, v in kwargs.items() if k != "max_tokens"}
-        }
-        return self.driver.chat(messages, **params)
+        logger.debug(f"NimEngine.generate_async model={self.model}, base_url={self.base_url}, prompt_len={len(prompt)}")
+        completion = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=kwargs.get("temperature", self.temperature),
+            max_tokens=kwargs.get("max_tokens", self.max_tokens),
+        )
+        return completion.choices[0].message.content
 
     def generate(self, prompt: str, **kwargs) -> str:
-        import anyio
-        return anyio.run(self.generate_async, prompt, **kwargs)
+        logger.debug(f"NimEngine.generate model={self.model}, base_url={self.base_url}, prompt_len={len(prompt)}")
+        completion = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=kwargs.get("temperature", self.temperature),
+            max_tokens=kwargs.get("max_tokens", self.max_tokens),
+        )
+        return completion.choices[0].message.content
 
 # =============================================================================
 # Circuit breaker
@@ -246,9 +302,17 @@ def _default_provider_fast() -> str:
 
 def _timeout(profile: LLMProfile, provider: str) -> int:
     # Allow global overrides; otherwise set sensible defaults by provider/profile
+    # For NIM/MLService, honor SEEDCORE_NIM_TIMEOUT_S if provided
+    if provider in ("nim", "mlservice"):
+        nim_timeout = os.getenv("SEEDCORE_NIM_TIMEOUT_S")
+        if nim_timeout:
+            return int(nim_timeout)
+        # Sensible defaults for NIM/MLService
+        return 12 if profile is LLMProfile.FAST else 30
+    # Other providers
     if profile is LLMProfile.FAST:
-        return int(os.getenv("FAST_TIMEOUT_SECONDS", "6" if provider in ("nim", "mlservice") else "5"))
-    return int(os.getenv("DEEP_TIMEOUT_SECONDS", "25" if provider in ("nim", "mlservice") else "20"))
+        return int(os.getenv("FAST_TIMEOUT_SECONDS", "5"))
+    return int(os.getenv("DEEP_TIMEOUT_SECONDS", "20"))
 
 def _model_for(provider: str, profile: LLMProfile) -> str:
     pr = provider.lower()
@@ -301,13 +365,14 @@ def _make_engine(provider: str, profile: LLMProfile, model: str):
                 base_url = str(ML)
             except Exception:
                 base_url = "http://127.0.0.1:8000/ml"
-        return MLServiceEngine(model=model, max_tokens=max_tokens, base_url=base_url)
+        return MLServiceEngine(model=model, max_tokens=max_tokens, temperature=0.7, base_url=base_url)
     if provider == "nim":
         return NimEngine(
             model=model,
             max_tokens=max_tokens,
+            temperature=0.7,  # Default temperature for NimEngine
             base_url=os.getenv("NIM_LLM_BASE_URL"),
-            api_key=os.getenv("NIM_LLM_API_KE", "none"),
+            api_key=os.getenv("NIM_LLM_API_KEY", "none"),
             use_sdk=None,
             timeout=_timeout(profile, provider),
         )
@@ -325,8 +390,8 @@ class CognitiveService:
     Service layer for cognitive operations with multi-provider, dual-profile (FAST/DEEP) support.
 
     Behavior:
-      - DEEP provider defaults to OpenAI (LLM_PROVIDER=openai).
-      - FAST provider chosen from LLM_PROVIDERS list, or falls back to LLM_PROVIDER/openai.
+      - DEEP provider set via LLM_PROVIDER_DEEP (defaults to OpenAI if not set).
+      - FAST provider chosen from LLM_PROVIDER_FAST > LLM_PROVIDERS > LLM_PROVIDER > OpenAI.
       - Per-profile provider/model overrides supported via env.
     """
     
@@ -336,14 +401,15 @@ class CognitiveService:
         self._executor = ThreadPoolExecutor(max_workers=4)
 
         # Resolve providers for both profiles
-        deep_provider_resolved = _default_provider_deep()
-        if deep_provider_resolved != "openai":
-            logger.warning(
-                "DEEP profile provider '%s' is not supported; forcing 'openai'",
-                deep_provider_resolved,
-            )
-        deep_provider = "openai"
-        fast_provider = (_first_non_empty(os.getenv("LLM_PROVIDER_FAST"), None) or _default_provider_fast()).lower()
+        deep_provider = _default_provider_deep()
+        logger.info(f"Resolved DEEP profile provider: {deep_provider} (from LLM_PROVIDER_DEEP={os.getenv('LLM_PROVIDER_DEEP', 'not set')})")
+        
+        # Resolve FAST provider with detailed logging
+        explicit_fast = os.getenv("LLM_PROVIDER_FAST")
+        if explicit_fast:
+            logger.info(f"FAST profile provider explicitly set via LLM_PROVIDER_FAST={explicit_fast}")
+        fast_provider = (_first_non_empty(explicit_fast, None) or _default_provider_fast()).lower()
+        logger.info(f"Resolved FAST profile provider: {fast_provider} (from LLM_PROVIDER_FAST={explicit_fast or 'not set'}, LLM_PROVIDERS={os.getenv('LLM_PROVIDERS', 'not set')})")
 
         # Build default profile configs if not supplied
         self.profiles = profiles or {
@@ -373,11 +439,12 @@ class CognitiveService:
 
         # Initialize cores & circuit breakers
         self.cores: Dict[LLMProfile, CognitiveCore] = {}
+        self.core_configs: Dict[LLMProfile, dict] = {}  # Store configs with LM instances
         self.circuit_breakers: Dict[LLMProfile, CircuitBreaker] = {}
         self._initialize_cores()
         
-        # Legacy single core alias (FAST)
-        self.cognitive_core = self.cores.get(LLMProfile.FAST)
+        # Disable legacy single-core fallback to avoid OpenAI calls
+        self.cognitive_core = None
     
     def _initialize_cores(self):
         for profile, config in self.profiles.items():
@@ -387,6 +454,7 @@ class CognitiveService:
                 engine = _make_engine(provider, profile, model)
                 core = self._create_core_with_engine(provider, engine, config)
                 self.cores[profile] = core
+                self.core_configs[profile] = config  # Store config with _dspy_lm
                 self.circuit_breakers[profile] = CircuitBreaker(
                     failure_threshold=3,
                     recovery_timeout=60.0
@@ -401,6 +469,9 @@ class CognitiveService:
         Create an isolated CognitiveCore instance for a profile and configure DSPy LM accordingly.
         - openai / anthropic / google / azure use DSPy's native LMs.
         - nim / mlservice use the DSPy shim (_DSPyEngineShim).
+        
+        Note: We store the LM instance in the core config to avoid global DSPy settings conflicts.
+        Each core will configure DSPy with its own LM before processing.
         """
         import dspy
 
@@ -436,7 +507,9 @@ class CognitiveService:
             # nim / mlservice / others use shim to call your engine
             lm = _DSPyEngineShim(engine)  # type: ignore
 
-        dspy.settings.configure(lm=lm)
+        # Store LM in config for per-request configuration
+        # Don't configure DSPy globally here - do it per-request to avoid conflicts
+        config["_dspy_lm"] = lm
 
         from ..cognitive.cognitive_core import CognitiveCore
         return CognitiveCore(
@@ -454,6 +527,7 @@ class CognitiveService:
         if core is None:
             core = self.cores.get(LLMProfile.FAST)
             circuit_breaker = self.circuit_breakers.get(LLMProfile.FAST)
+            depth = LLMProfile.FAST  # Update depth for correct config lookup
             if core is None:
                 return create_error_result(
                     f"No cognitive core available for profile {depth.value}",
@@ -461,6 +535,14 @@ class CognitiveService:
                 ).model_dump()
         
         timeout_seconds = self.profiles.get(depth, {}).get("timeout_seconds", 10)
+        
+        # CRITICAL: Configure DSPy with the correct LM for this profile before processing
+        import dspy
+        config = self.core_configs.get(depth)
+        logger.info(f"Using timeout={timeout_seconds}s for {depth.value} profile planning (provider={config.get('provider') if config else 'unknown'})")
+        if config and "_dspy_lm" in config:
+            dspy.settings.configure(lm=config["_dspy_lm"])
+            logger.debug(f"Configured DSPy with {depth.value} profile LM (provider={config.get('provider')})")
 
         def _execute_with_timeout():
             future = self._executor.submit(core.forward, context)
@@ -475,6 +557,7 @@ class CognitiveService:
                 result.setdefault("result", {}).setdefault("meta", {})
                 meta = result["result"]["meta"]
                 meta["profile_used"] = depth.value
+                meta["provider_used"] = config.get("provider", "unknown") if config else "unknown"
                 meta["timeout_seconds"] = timeout_seconds
                 meta["circuit_breaker_state"] = circuit_breaker.state.state if circuit_breaker else "N/A"
             return result
@@ -501,16 +584,17 @@ class CognitiveService:
 
     def health_check(self) -> Dict[str, Any]:
         try:
-            if self.cognitive_core is None:
+            if not self.cores:
                 return {
                     "status": "unhealthy",
-                    "reason": "CognitiveCore not initialized",
+                    "reason": "No cognitive cores initialized",
                     "timestamp": time.time()
                 }
             return {
                 "status": "healthy",
                 "cognitive_core_available": True,
                 "schema_version": self.schema_version,
+                "cores": {profile.value: "available" for profile in self.cores.keys()},
                 "timestamp": time.time()
             }
         except Exception as e:
@@ -521,13 +605,8 @@ class CognitiveService:
             }
 
     def process_cognitive_task(self, context: 'CognitiveContext') -> Dict[str, Any]:
-        if self.cognitive_core is None:
-            return create_error_result("CognitiveCore not initialized", "SERVICE_UNAVAILABLE").model_dump()
-        try:
-            return self.cognitive_core.forward(context)
-        except Exception as e:
-            logger.error(f"Error processing cognitive task: {e}")
-            return create_error_result(f"Processing error: {str(e)}", "PROCESSING_ERROR").model_dump()
+        # Thin wrapper that delegates to multi-profile forward_cognitive_task
+        return self.forward_cognitive_task(context, use_deep=False)
 
     def forward_cognitive_task(self, context: 'CognitiveContext', use_deep: bool = False) -> Dict[str, Any]:
         """
@@ -555,8 +634,6 @@ class CognitiveService:
         if model_override:
             target_model = model_override.strip()
             logger.debug(f"Model override requested: {target_model}")
-
-        logger.info(f"Creating temporary core with provider={target_provider}, model={target_model} (override requested)")
         
         # If overrides are provided, try to use/create a core with those settings
         if target_provider or target_model:
@@ -583,6 +660,12 @@ class CognitiveService:
                 }
                 temp_core = self._create_core_with_engine(target_provider, temp_engine, temp_config)
                 
+                # CRITICAL: Configure DSPy with the override LM before processing
+                import dspy
+                if temp_config and "_dspy_lm" in temp_config:
+                    dspy.settings.configure(lm=temp_config["_dspy_lm"])
+                    logger.debug(f"Configured DSPy with override LM (provider={target_provider})")
+                
                 result = temp_core.forward(context)
                 if isinstance(result, dict):
                     result.setdefault("result", {}).setdefault("meta", {})
@@ -602,63 +685,68 @@ class CognitiveService:
             core = self.cores.get(profile)
             if core:
                 try:
+                    # CRITICAL: Configure DSPy with the correct LM for this profile before processing
+                    # This avoids global state conflicts when multiple profiles are used
+                    import dspy
+                    config = self.core_configs.get(profile)
+                    if config and "_dspy_lm" in config:
+                        dspy.settings.configure(lm=config["_dspy_lm"])
+                        logger.debug(f"Configured DSPy with {profile.value} profile LM (provider={config.get('provider')})")
+                    
                     result = core.forward(context)
                     if isinstance(result, dict):
                         result.setdefault("result", {}).setdefault("meta", {})
                         result["result"]["meta"]["profile_used"] = profile.value
+                        result["result"]["meta"]["provider_used"] = config.get("provider", "unknown") if config else "unknown"
                         if meta_extra:
                             result["result"]["meta"].update(meta_extra)
                     return result
                 except Exception as e:
                     logger.error(f"Error forwarding cognitive task with {profile.value} profile: {e}")
-                    # Fallback to legacy core
+                    # No legacy fallback allowed in this deployment
                     pass
         
-        # Fallback to legacy single core
-        if self.cognitive_core is None:
-            return {
-                "success": False,
-                "result": {},
-                "payload": {},
-                "task_type": context.task_type.value,
-                "metadata": {},
-                "error": "CognitiveCore not initialized",
-            }
-        try:
-            result = self.cognitive_core.forward(context)
-            if isinstance(result, dict) and meta_extra:
-                result.setdefault("result", {}).setdefault("meta", {})
-                result["result"]["meta"].update(meta_extra)
-            return result
-        except Exception as e:
-            logger.error(f"Error forwarding cognitive task: {e}")
-            return {
-                "success": False,
-                "result": {},
-                "payload": {},
-                "task_type": context.task_type.value,
-                "metadata": {},
-                "error": f"Processing error: {str(e)}",
-            }
+        # No legacy fallback allowed in this deployment
+        logger.error(f"No compatible cognitive core for request (use_deep={use_deep}, cores={list(self.cores.keys())})")
+        return {
+            "success": False,
+            "result": {},
+            "payload": {},
+            "task_type": context.task_type.value,
+            "metadata": {},
+            "error": "No compatible cognitive core for this request (legacy core disabled)",
+        }
 
     def build_fragments_for_synthesis(self, context: 'CognitiveContext', facts: List['Fact'], summary: str) -> List[Dict[str, Any]]:
-        if self.cognitive_core is None:
+        # Use multi-profile system if available
+        if not self.cores:
+            logger.warning("No cores available for build_fragments_for_synthesis")
+            return []
+        # Default to FAST profile
+        core = self.cores.get(LLMProfile.FAST)
+        if core is None:
+            logger.warning("FAST core not available for build_fragments_for_synthesis")
             return []
         try:
-            return self.cognitive_core.build_fragments_for_synthesis(context, facts, summary)
+            return core.build_fragments_for_synthesis(context, facts, summary)
         except Exception as e:
             logger.error(f"Error building synthesis fragments: {e}")
             return []
 
     def get_cognitive_core(self) -> Optional['CognitiveCore']:
-        return self.cognitive_core
+        # Return FAST profile core for backward compatibility
+        return self.cores.get(LLMProfile.FAST)
 
     def reset_cognitive_core(self):
-        if self.cognitive_core:
-            from ..cognitive.cognitive_core import reset_cognitive_core
-            reset_cognitive_core()
-            self.cognitive_core = None
-            logger.info("Cognitive core reset")
+        # Reset multi-profile cores
+        for profile, core in self.cores.items():
+            if core:
+                from ..cognitive.cognitive_core import reset_cognitive_core
+                reset_cognitive_core()
+        self.cores.clear()
+        self.core_configs.clear()
+        self.circuit_breakers.clear()
+        logger.info("All cognitive cores reset")
     
     def shutdown(self):
         if hasattr(self, '_executor'):
@@ -666,13 +754,13 @@ class CognitiveService:
             logger.info("Thread pool executor shutdown")
 
     def initialize_cognitive_core(self, llm_provider: str = "openai", model: str = "gpt-4o", context_broker: Optional['ContextBroker'] = None) -> 'CognitiveCore':
-        try:
-            self.cognitive_core = initialize_cognitive_core(llm_provider, model, context_broker)
-            logger.info(f"Cognitive core reinitialized with {llm_provider} and {model}")
-            return self.cognitive_core
-        except Exception as e:
-            logger.error(f"Failed to reinitialize cognitive core: {e}")
-            raise
+        """
+        Legacy method - no longer creates legacy core.
+        Multi-profile cores are initialized in __init__.
+        """
+        logger.warning("initialize_cognitive_core() called but is deprecated in multi-profile system")
+        # Return FAST profile core for backward compatibility
+        return self.cores.get(LLMProfile.FAST)
 
 # =============================================================================
 # Global Service Instance Management

@@ -840,29 +840,58 @@ class RayAgent:
             criticality = params.get("criticality", task_data.get("criticality", 0.5))
             drift_score = task_data.get("drift_score", 0.0)
 
-            # Heuristic "is this high complexity / high stakes?"
-            is_complex = (
-                needs_ml_fallback
-                or confidence < 0.5
-                or criticality > 0.6
-                or drift_score > 0.6
-                or len(description.split()) > 15
-                or any(
-                    word in description_lower
-                    for word in [
-                        'complex', 'analysis', 'decompose', 'plan',
-                        'strategy', 'reasoning', 'root cause', 'diagnose',
-                        'mitigation', 'architecture', 'design a plan'
-                    ]
+            # Check if cognitive_profile is explicitly set in params (respect router decision)
+            explicit_profile = params.get("cognitive_profile")
+            if explicit_profile in ("fast", "deep"):
+                # Use the explicit profile from router/params
+                llm_depth = explicit_profile
+                # Calculate is_complex for logging purposes only
+                is_complex = (
+                    needs_ml_fallback
+                    or confidence < 0.5
+                    or criticality > 0.6
+                    or drift_score > 0.6
+                    or len(description.split()) > 15
+                    or any(
+                        word in description_lower
+                        for word in [
+                            'complex', 'analysis', 'decompose', 'plan',
+                            'strategy', 'reasoning', 'root cause', 'diagnose',
+                            'mitigation', 'architecture', 'design a plan'
+                        ]
+                    )
+                    or router_decision in ("planner", "hgnn")
+                    or task_data.get("force_decomposition")
                 )
-                or router_decision in ("planner", "hgnn")
-                or task_data.get("force_decomposition")
-            )
+                logger.debug(
+                    f"Using explicit cognitive_profile={explicit_profile} from params "
+                    f"(heuristic would suggest: {'deep' if is_complex else 'fast'})"
+                )
+            else:
+                # Fall back to heuristic calculation if no explicit profile
+                # Heuristic "is this high complexity / high stakes?"
+                is_complex = (
+                    needs_ml_fallback
+                    or confidence < 0.5
+                    or criticality > 0.6
+                    or drift_score > 0.6
+                    or len(description.split()) > 15
+                    or any(
+                        word in description_lower
+                        for word in [
+                            'complex', 'analysis', 'decompose', 'plan',
+                            'strategy', 'reasoning', 'root cause', 'diagnose',
+                            'mitigation', 'architecture', 'design a plan'
+                        ]
+                    )
+                    or router_decision in ("planner", "hgnn")
+                    or task_data.get("force_decomposition")
+                )
 
-            # Decide which cognitive profile to use:
-            #  - "deep" (OpenAI/high-depth) for complex/high-stakes
-            #  - "fast" (default provider) for normal Q&A / explanation
-            llm_depth = "deep" if is_complex else "fast"
+                # Decide which cognitive profile to use:
+                #  - "deep" (OpenAI/high-depth) for complex/high-stakes
+                #  - "fast" (default provider) for normal Q&A / explanation
+                llm_depth = "deep" if is_complex else "fast"
 
             # If cognition is not available, do NOT pretend success.
             if not self._cog_available or not self._cog:

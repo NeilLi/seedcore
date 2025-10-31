@@ -25,7 +25,7 @@ class NimRetrievalHTTP:
         headers: Optional[Dict[str, str]] = None,
     ):
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or os.getenv("NIM_LLM_API_KE", "none")
+        self.api_key = api_key or os.getenv("NIM_LLM_API_KEY", "none")
         self.model = model
         self.session = httpx.Client(timeout=timeout)
         self.headers = {
