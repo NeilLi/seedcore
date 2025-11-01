@@ -71,13 +71,18 @@ REAP_BATCH     = int(os.getenv("TASK_REAP_BATCH", "200"))
 RUN_LEASE_S    = int(os.getenv("TASK_LEASE_S", "600"))   # 10m default
 
 # --------- SQL (asyncpg-style $1 params) ----------
+# Exclude all graph task types handled by GraphDispatcher
+GRAPH_TASK_TYPES_EXCLUSION = (
+    'graph_embed', 'graph_rag_query', 'graph_embed_v2', 'graph_rag_query_v2',
+    'graph_fact_embed', 'graph_fact_query', 'nim_task_embed', 'graph_sync_nodes'
+)
 CLAIM_BATCH_SQL = f"""
 WITH c AS (
   SELECT id
   FROM tasks
   WHERE status IN ('queued','retry')
     AND (run_after IS NULL OR run_after <= NOW())
-    AND type NOT IN ('graph_embed', 'graph_rag_query')  -- Exclude graph tasks (handled by GraphDispatcher)
+    AND NOT (type = ANY($3::text[]))  -- Exclude graph tasks (handled by GraphDispatcher)
   ORDER BY created_at
   FOR UPDATE SKIP LOCKED
   LIMIT $1
@@ -397,7 +402,7 @@ class Dispatcher:
 
     async def _claim_batch(self, con) -> List[Dict[str, Any]]:
         """Claim tasks, skipping true duplicates but preserving legitimate retries."""
-        rows = await con.fetch(CLAIM_BATCH_SQL, CLAIM_BATCH_SIZE, self.name)
+        rows = await con.fetch(CLAIM_BATCH_SQL, CLAIM_BATCH_SIZE, self.name, list(GRAPH_TASK_TYPES_EXCLUSION))
         batch = []
         seen = set()
 

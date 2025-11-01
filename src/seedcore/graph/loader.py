@@ -1,8 +1,32 @@
 # seedcore/src/seedcore/graph/loader.py
 from __future__ import annotations
 import os, math, time
+import logging
+import sys
 from typing import Dict, List, Tuple, Any, Optional
 from neo4j import GraphDatabase
+
+try:
+    from ray.util import log_once
+    from seedcore.logging_setup import ensure_serve_logger
+    
+    def get_seedcore_logger(name: str, level="DEBUG"):
+        logger = ensure_serve_logger(name, level=level)
+        if not logger.handlers:
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setFormatter(logging.Formatter(
+                "%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+                "%H:%M:%S"))
+            logger.addHandler(handler)
+        logger.propagate = True
+        if log_once(f"logger-init-{name}"):
+            logger.info(f"[Logger Initialized] {name}")
+        return logger
+    
+    logger = get_seedcore_logger("seedcore.graph.loader")
+except ImportError:
+    # Fallback if seedcore modules aren't available (e.g., during standalone testing)
+    logger = logging.getLogger(__name__)
 
 # DGL will be imported when needed to avoid import errors during testing
 DGL_AVAILABLE = None
@@ -102,13 +126,15 @@ class GraphLoader:
             
             # Fallback to just start nodes if no neighbors found
             if not nodes:
+                logger.debug("load_k_hop: k-hop query returned no nodes, trying fallback to direct start_ids")
                 nodes = s.run(
                     "MATCH (n) WHERE id(n) IN $start_ids RETURN id(n) AS id, labels(n) AS labels, properties(n) AS props",
                     start_ids=start_ids
                 ).data()
             
             if not nodes:
-                # Return empty graph
+                # Return empty graph - log warning
+                logger.warning("load_k_hop: no nodes found in Neo4j for start_ids=%s, returning empty graph", start_ids[:20])
                 empty_g = dgl.graph(([], []))
                 return empty_g, {}, torch.empty(0, 128)
             

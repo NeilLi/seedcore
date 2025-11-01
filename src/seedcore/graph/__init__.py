@@ -17,7 +17,7 @@ try:
     # Import DGL-dependent modules
     from .loader import GraphLoader
     from .gnn_models import SAGE
-    from .embeddings import GraphEmbedder, upsert_embeddings
+    from .embeddings import GraphEmbedder, NimRetrievalEmbedder, upsert_embeddings
     
     __all__ = [
         "TaskMetadataRepository",
@@ -25,6 +25,7 @@ try:
         "GraphLoader",
         "SAGE", 
         "GraphEmbedder",
+        "NimRetrievalEmbedder",
         "upsert_embeddings"
     ]
 except (ImportError, FileNotFoundError) as e:

@@ -77,6 +77,11 @@ ENV_KEYS = [
     "MAX_PLAN_STEPS",
     "SEEDCORE_GRAPH_DISPATCHERS",
     "ENABLE_GRAPH_DISPATCHERS",
+    # NIM retrieval configuration (Migration 017)
+    "NIM_RETRIEVAL_MODEL",
+    "NIM_RETRIEVAL_BASE_URL",
+    "NIM_RETRIEVAL_API_KEY",
+    "NIM_RETRIEVAL_PROVIDER",
 ]
 
 
@@ -206,9 +211,9 @@ def _ensure_graph_dispatchers(env_vars: dict):
                 pass
 
         opts = dict(name=name, lifetime="detached", namespace=RAY_NAMESPACE, num_cpus=0.1, runtime_env={"env_vars": env_vars}, max_restarts=1)
-        res = _optional_resources()
-        if res:
-            opts["resources"] = res
+        # Always pin GraphDispatcher to head node to ensure logs appear in bootstrap job stdout
+        # This ensures logs are captured by the bootstrap job's stdout, matching QueueDispatcher behavior
+        opts["resources"] = {"head_node": 0.001}
         a = GraphDispatcher.options(**opts).remote(dsn=PG_DSN, name=name)
         graph_dispatchers_all.append(a)
         graph_dispatchers_created.append(a)
@@ -296,9 +301,12 @@ def _ensure_dispatchers(env_vars: dict):
             runtime_env={"env_vars": env_vars},
             max_restarts=1,
         )
+        # Pin QueueDispatcher to head node for consistent logging visibility
         res = _optional_resources()
-        if res:
-            opts["resources"] = res
+        if not res:
+            # If PIN_TO_HEAD is false, still pin to head node to ensure logs appear in bootstrap stdout
+            res = {"head_node": 0.001}
+        opts["resources"] = res
 
         a = Dispatcher.options(**opts).remote(dsn=PG_DSN, name=name)
         dispatchers.append(a)

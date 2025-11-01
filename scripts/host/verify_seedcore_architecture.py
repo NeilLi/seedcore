@@ -116,6 +116,7 @@ Env:
   STRICT_GRAPH_DISPATCHERS=false      # Allow fewer GraphDispatchers than expected
   VERIFY_GRAPH_TASK=true|false        # Enable legacy graph task verification
   VERIFY_HGNN_TASK=true|false         # Enable HGNN graph task verification (Migration 007+)
+  VERIFY_NIM_TASK_EMBED=false         # Enable NIM task embedding verification (Migration 017)
   DEBUG_ROUTING=true|false          # Enable comprehensive routing debugging
   DEBUG_LEVEL=INFO|DEBUG           # Set logging level for debugging
   STRICT_MODE=true|false           # Exit on validation failures (default: true)
@@ -961,9 +962,51 @@ def verify_database_schema(conn):
         log.error(f"   ❌ Error checking task-fact integration tables: {e}")
         schema_ok = False
     
+    # Check Migration 017: Task embedding support
+    log.info("📋 Checking Migration 017: Task embedding support...")
+    embedding_views = ['tasks_missing_embeddings', 'task_embeddings_primary', 'task_embeddings_stale']
+    
+    try:
+        with conn.cursor() as cur:
+            for view in embedding_views:
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.views 
+                        WHERE table_name = %s
+                    )
+                """, (view,))
+                exists = cur.fetchone()[0]
+                if exists:
+                    log.info(f"   ✅ {view} view exists")
+                else:
+                    log.warning(f"   ⚠️ {view} view missing (may be optional)")
+            
+            # Check graph_embeddings table has new columns
+            cur.execute("""
+                SELECT column_name, data_type 
+                FROM information_schema.columns 
+                WHERE table_name = 'graph_embeddings'
+                AND column_name IN ('label', 'model', 'content_sha256')
+                ORDER BY column_name
+            """)
+            embedding_columns = cur.fetchall()
+            
+            expected_embedding_columns = ['content_sha256', 'label', 'model']
+            found_embedding_columns = [row[0] for row in embedding_columns]
+            
+            for col in expected_embedding_columns:
+                if col in found_embedding_columns:
+                    log.info(f"   ✅ graph_embeddings.{col} column exists")
+                else:
+                    log.error(f"   ❌ graph_embeddings.{col} column missing")
+                    schema_ok = False
+    except Exception as e:
+        log.error(f"   ❌ Error checking task embedding support: {e}")
+        schema_ok = False
+    
     # Check views
     log.info("📋 Checking database views...")
-    views = ['hgnn_edges', 'task_embeddings']
+    views = ['hgnn_edges']
     
     try:
         with conn.cursor() as cur:
@@ -1050,8 +1093,8 @@ def verify_hgnn_graph_structure(conn):
             for edge_type, count in edge_types:
                 log.info(f"   {edge_type}: {count}")
             
-            # Check task_embeddings view
-            cur.execute("SELECT COUNT(*) FROM task_embeddings")
+            # Check task_embeddings_primary view
+            cur.execute("SELECT COUNT(*) FROM task_embeddings_primary")
             embedding_count = cur.fetchone()[0]
             log.info(f"📊 Task embeddings: {embedding_count}")
             
@@ -2825,6 +2868,83 @@ def scenario_hgnn_graph_task(conn) -> Optional[uuid.UUID]:
         log.warning(f"⚠️ HGNN graph task creation failed: {e}")
         return None
 
+def scenario_nim_task_embed(conn) -> Optional[uuid.UUID]:
+    """
+    Test NIM task embedding (Migration 017).
+    
+    Creates a nim_task_embed task that will:
+    1. Fetch task content from Postgres tasks table
+    2. Generate embeddings using NIM Retrieval service
+    3. Store embeddings in graph_embeddings with label='task.primary'
+    4. Track content hashes for change detection
+    
+    This is an alternative to GraphEmbedder that doesn't require Neo4j.
+    """
+    if not conn:
+        return None
+    
+    try:
+        # First, we need to get or create some tasks to embed
+        # Query for recent completed tasks that might need embeddings
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.id, m.node_id
+                FROM tasks t
+                LEFT JOIN graph_node_map m ON m.node_type = 'task' 
+                    AND m.ext_table = 'tasks' 
+                    AND m.ext_uuid = t.id
+                LEFT JOIN graph_embeddings e ON e.node_id = m.node_id 
+                    AND e.label = 'task.primary'
+                WHERE e.node_id IS NULL
+                LIMIT 5
+            """)
+            rows = cur.fetchall()
+        
+        if not rows:
+            # No tasks without embeddings - try to get any recent tasks
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT t.id
+                    FROM tasks t
+                    WHERE t.status IN ('completed', 'queued', 'running')
+                    ORDER BY t.created_at DESC
+                    LIMIT 3
+                """)
+                rows = cur.fetchall()
+        
+        task_ids = [str(row[0]) for row in rows]
+        
+        if not task_ids:
+            log.warning("⚠️ No tasks found for nim_task_embed test")
+            return None
+        
+        log.info(f"📋 Found {len(task_ids)} tasks for nim_task_embed test: {task_ids[:5]}")
+        
+        # Create nim_task_embed task
+        params = {
+            "start_task_ids": task_ids
+        }
+        
+        task_id = pg_insert_generic_task(
+            conn,
+            ttype="nim_task_embed",
+            description=f"Embed {len(task_ids)} tasks with NIM retrieval",
+            params=params,
+            drift=0.0  # No drift for embedding tasks
+        )
+        
+        if task_id:
+            log.info(f"✅ Created nim_task_embed task with ID: {task_id}")
+            return task_id
+        else:
+            log.warning("⚠️ Failed to create nim_task_embed task")
+            return None
+            
+    except Exception as e:
+        log.warning(f"⚠️ NIM task embed creation failed: {e}")
+        log.exception("Full traceback:")
+        return None
+
 def scenario_debug_routing(ray, coord):
     """Debug routing issues by running comprehensive diagnostics."""
     log.info("🔍 RUNNING ROUTING DEBUG DIAGNOSTICS")
@@ -3532,6 +3652,20 @@ def main():
             log.warning("⚠️ HGNN graph task verification skipped - no task ID")
     else:
         log.info("📋 HGNN graph task verification disabled (VERIFY_HGNN_TASK=false or no DB connection)")
+    
+    # Optional: NIM Task Embedding (Migration 017)
+    if env_bool("VERIFY_NIM_TASK_EMBED", False) and conn:
+        log.info("🔍 VERIFYING NIM TASK EMBEDDING PROCESSING")
+        log.info("=" * 50)
+        nim_tid = scenario_nim_task_embed(conn)
+        if nim_tid:
+            log.info(f"⏳ Waiting for NIM task embed {nim_tid} to complete...")
+            wait_for_completion(conn, nim_tid, "NIM-TASK-EMBED", timeout_s=150.0)
+            log.info("✅ NIM task embedding verification completed successfully")
+        else:
+            log.warning("⚠️ NIM task embedding verification skipped - no task ID")
+    else:
+        log.info("📋 NIM task embedding verification disabled (VERIFY_NIM_TASK_EMBED=false or no DB connection)")
 
     # Escalation (Planner path)
     esc_tid = scenario_escalation(conn)

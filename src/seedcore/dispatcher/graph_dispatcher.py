@@ -1,20 +1,44 @@
 from __future__ import annotations
+
+# Import graph modules FIRST before logging setup (prevents logger hijacking)
+from seedcore.graph import GraphEmbedder, NimRetrievalEmbedder, upsert_embeddings
+
 import os
 import json
 import time
 import logging
 import threading
+import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 import ray
 import sqlalchemy as sa
 from sqlalchemy import text
 
-from seedcore.graph.embeddings import GraphEmbedder, upsert_embeddings
+from ray.util import log_once
+import logging, sys
+from seedcore.logging_setup import ensure_serve_logger
+
+def get_seedcore_logger(name: str, level="DEBUG"):
+    logger = ensure_serve_logger(name, level=level)
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+            "%H:%M:%S"))
+        logger.addHandler(handler)
+    logger.propagate = True
+    if log_once(f"logger-init-{name}"):
+        logger.info(f"[Logger Initialized] {name}")
+    return logger
+
+# Usage
+logger = get_seedcore_logger("seedcore.dispatchers")
 
 PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
-logger = logging.getLogger(__name__)
+NIM_MODEL = os.getenv("NIM_RETRIEVAL_MODEL", "nvidia/nv-embedqa-e5-v5")
+
 
 # ---- tunables / env knobs ----
 EMBED_TIMEOUT_S       = float(os.getenv("GRAPH_EMBED_TIMEOUT_S", "600"))
@@ -40,6 +64,8 @@ GRAPH_TASK_TYPES = (
     # facts system support (Migration 009):
     "graph_fact_embed",
     "graph_fact_query",
+    # NIM retrieval embedding (Migration 017):
+    "nim_task_embed",
     # maintenance / mapping:
     "graph_sync_nodes",
 )
@@ -84,6 +110,9 @@ class GraphDispatcher:
                               plus {"k":2}
         - graph_rag_query_v2: same inputs as graph_embed_v2 + {"topk":10}
 
+      NIM Retrieval (Migration 017):
+        - nim_task_embed:     params {"start_task_ids":[uuid,...]}                  # task UUIDs -> fetch from Postgres, embed with NIM
+
       Maintenance:
         - graph_sync_nodes:   calls backfill_task_nodes() to populate graph_node_map for tasks
     """
@@ -119,7 +148,7 @@ class GraphDispatcher:
         with self.engine.begin() as conn:
             conn.execute(text("SELECT 1"))
 
-        # --- GraphEmbedder actor ---
+        # --- GraphEmbedder actor (SAGE/Neo4j) ---
         try:
             self.embedder = ray.get_actor(self._embedder_name, namespace=AGENT_NAMESPACE)
             logger.info("✅ Reusing GraphEmbedder: %s", self._embedder_name)
@@ -135,11 +164,39 @@ class GraphDispatcher:
         try:
             ray.get(self.embedder.ping.remote(), timeout=10)
         except Exception:
-            logger.debug("Embedder ping skipped/failed (non-fatal).")
+            logger.debug("GraphEmbedder ping skipped/failed (non-fatal).")
+
+        # --- NimRetrievalEmbedder actor (NIM/Postgres) ---
+        self._nim_embedder_name = f"{name}_nim_embedder"
+        try:
+            self.nim_embedder = ray.get_actor(self._nim_embedder_name, namespace=AGENT_NAMESPACE)
+            logger.info("✅ Reusing NimRetrievalEmbedder: %s", self._nim_embedder_name)
+        except ValueError:
+            self.nim_embedder = NimRetrievalEmbedder.options(
+                name=self._nim_embedder_name,
+                lifetime="detached",
+                namespace=AGENT_NAMESPACE,
+            ).remote()
+            logger.info("✅ Created NimRetrievalEmbedder: %s", self._nim_embedder_name)
+
+        # quick ping (best-effort)
+        try:
+            ray.get(self.nim_embedder.ping.remote(), timeout=10)
+        except Exception:
+            logger.debug("NimRetrievalEmbedder ping skipped/failed (non-fatal).")
 
         self._startup_complete = True
         self._startup_time = time.time() - start_time
         logger.info("🎉 GraphDispatcher '%s' ready in %.2fs", self.name, self._startup_time)
+        
+        # Auto-start run loop if not already running
+        # This ensures the run loop starts even if bootstrap script doesn't call run()
+        self._run_thread = None
+        try:
+            self.run()
+            logger.info("✅ GraphDispatcher '%s' run loop auto-started in __init__", self.name)
+        except Exception as e:
+            logger.error("❌ GraphDispatcher '%s' failed to auto-start run loop: %s", self.name, e, exc_info=True)
 
     # ---------------- Utils ----------------
 
@@ -447,6 +504,52 @@ class GraphDispatcher:
             rows = conn.execute(q, {"ids": node_ids}).mappings().all()
         return [r["j"] for r in rows if r and r.get("j") is not None]
 
+    def _fetch_task_contents(self, task_uuids: List[str]) -> Dict[str, str]:
+        """
+        Fetch the text content for a list of task UUIDs from Postgres.
+        Uses the same content logic from your task_embeddings_stale view.
+        """
+        if not task_uuids:
+            return {}
+        
+        # This query builds the text content exactly as your migration does
+        q = text("""
+        SELECT
+            t.id::text,
+            left(
+                concat_ws(
+                    '\n',
+                    NULLIF(btrim(t.description), ''),
+                    NULLIF(btrim(t.type), ''),
+                    NULLIF(btrim(jsonb_pretty(t.params)), '')
+                ),
+                16000 -- Max chars, from your migration
+            ) AS content
+        FROM tasks t
+        WHERE t.id::text = ANY(:task_uuids)
+        """)
+        
+        contents = {}
+        with self.engine.begin() as conn:
+            rows = conn.execute(q, {"task_uuids": task_uuids}).mappings().all()
+            for row in rows:
+                contents[row["id"]] = row["content"]
+        
+        logger.debug("Fetched content for %d/%d tasks", len(contents), len(task_uuids))
+        return contents
+
+    def _compute_content_sha256(self, content: str) -> str:
+        """Computes sha256 hash of content, matching the migration logic."""
+        try:
+            # Truncate to 16000 chars (from migration)
+            truncated_content = content[:16000]
+            # Digest requires bytes
+            content_bytes = truncated_content.encode('utf-8')
+            return hashlib.sha256(content_bytes).hexdigest()
+        except Exception as e:
+            logger.warning("Failed to compute sha256: %s", e)
+            return None
+
     # ---------------- Health / control ----------------
 
     def get_startup_status(self) -> Dict[str, Any]:
@@ -483,12 +586,30 @@ class GraphDispatcher:
     # ---------------- Run loop ----------------
 
     def run(self, poll_interval: float = TASK_POLL_INTERVAL_S):
-        logger.info("🚀 GraphDispatcher '%s' run loop (poll=%.1fs)", self.name, poll_interval)
-        self._run_thread = threading.Thread(target=self._run_loop, args=(poll_interval,), daemon=True)
-        self._run_thread.start()
+        # Prevent starting multiple run loops
+        if self._run_thread is not None and self._run_thread.is_alive():
+            logger.warning("⚠️ GraphDispatcher '%s' run loop already running, skipping start", self.name)
+            return
+        
+        logger.info("🚀 GraphDispatcher '%s' starting run loop (poll=%.1fs)", self.name, poll_interval)
+        try:
+            self._run_thread = threading.Thread(target=self._run_loop, args=(poll_interval,), daemon=True)
+            self._run_thread.start()
+            logger.info("✅ GraphDispatcher '%s' run loop thread started (thread_id=%s)", self.name, self._run_thread.ident)
+        except Exception as e:
+            logger.error("❌ GraphDispatcher '%s' failed to start run loop thread: %s", self.name, e, exc_info=True)
+            raise
 
     def _run_loop(self, poll_interval: float = TASK_POLL_INTERVAL_S):
         loop_count = 0
+        
+        # Log thread info for debugging
+        import threading
+        thread_id = threading.current_thread().ident
+        thread_name = threading.current_thread().name
+        logger.info("🔄 GraphDispatcher '%s' run loop STARTED (poll=%.1fs, thread_id=%s, thread_name=%s)", 
+                   self.name, poll_interval, thread_id, thread_name)
+        
         while self._running:
             try:
                 loop_count += 1
@@ -496,9 +617,14 @@ class GraphDispatcher:
                 if not task:
                     time.sleep(poll_interval)
                     continue
+                
+                # Log when we claim a task
+                task_id = str(task.get("id", "unknown")) if task else "unknown"
+                task_type = task.get("type", "unknown") if task else "unknown"
+                logger.info("🎯 GraphDispatcher '%s' claimed task %s (type=%s)", self.name, task_id, task_type)
                 self._process(task)
             except Exception as e:
-                logger.exception("run loop error: %s", e)
+                logger.exception("❌ GraphDispatcher '%s' run loop error: %s", self.name, e)
                 time.sleep(2.0)
 
     def stop(self) -> bool:
@@ -533,9 +659,20 @@ class GraphDispatcher:
                     text(q),
                     {"name": self.name, "lease": LEASE_EXTENSION_S, "types": list(GRAPH_TASK_TYPES)},
                 ).mappings().first()
-            return dict(row) if row else None
+            if row:
+                result = dict(row)
+                # Ensure UUID is stringified for consistent logging
+                if "id" in result:
+                    result["id"] = str(result["id"])
+                task_id = result.get("id", "unknown")
+                task_type = result.get("type", "unknown")
+                logger.debug("✅ GraphDispatcher '%s' claimed task %s (type=%s) from database", self.name, task_id, task_type)
+                return result
+            else:
+                # No tasks available - this is normal, so we don't log it to avoid spam
+                return None
         except Exception as e:
-            logger.error("claim_next_task failed: %s", e)
+            logger.error("❌ GraphDispatcher '%s' claim_next_task failed: %s", self.name, e, exc_info=True)
             return None
 
     def _complete(self, task_id, result=None, error=None, retry_after=None):
@@ -575,41 +712,119 @@ class GraphDispatcher:
 
     def _process(self, task: Dict[str, Any]):
         tid = task["id"]
+        # Ensure UUID is converted to string for consistent logging
+        tid_str = str(tid) if tid else "unknown"
         ttype = task["type"]
         self._metrics["tasks_claimed"] += 1
         self._metrics["last_task_id"] = tid
         t0 = time.time()
 
+        logger.info("🔄 Processing task id=%s type=%s", tid_str, ttype)
+
         # start a heartbeat ticker for long work
-        hb_ev = self._start_heartbeat(tid)
+        hb_ev = self._start_heartbeat(tid_str)
 
         try:
             params = json.loads(task["params"])
+            logger.debug("📋 Task %s params parsed: %s", tid_str, json.dumps(params, default=str)[:200])
         except Exception as e:
-            self._stop_heartbeat(tid)
+            logger.error("❌ Task %s failed to parse params: %s", tid_str, e)
+            self._stop_heartbeat(tid_str)
             self._complete(tid, error=f"Invalid task params: {e}")
             return
 
         try:
+            # --- NIM TASK EMBEDDER LOGIC ---
+            if ttype == "nim_task_embed":
+                logger.info("🚀 Task %s: nim_task_embed operation", tid_str)
+                
+                # 1. Get task UUIDs from params
+                task_uuids = [str(uid) for uid in params.get("start_task_ids", [])]
+                if not task_uuids:
+                    raise ValueError("No 'start_task_ids' provided for nim_task_embed")
+
+                # 2. Get text content for these tasks (from Postgres)
+                content_map = self._fetch_task_contents(task_uuids)  # {uuid: text}
+                
+                # 3. Build the map for the NIM embedder: {node_id: text}
+                text_map = {}
+                node_id_to_uuid = {}
+                for uuid, text in content_map.items():
+                    # This ensures the node exists in graph_node_map and gets its int ID
+                    node_id_list = self._ensure_task_nodes([uuid])
+                    if node_id_list:
+                        node_id = node_id_list[0]
+                        text_map[node_id] = text
+                        node_id_to_uuid[node_id] = uuid
+                    else:
+                        logger.warning("Could not resolve node_id for task_uuid: %s", uuid)
+                
+                if not text_map:
+                    raise ValueError("No content or node_ids found for any provided task_uuids")
+
+                # 4. Call NIM embedder
+                logger.debug("🔢 Task %s: calling NIM for %d nodes", tid_str, len(text_map))
+                # emb_map format: {node_id: [vector]}
+                emb_map = ray.get(self.nim_embedder.embed_texts.remote(text_map), timeout=EMBED_TIMEOUT_S)
+                logger.debug("✅ Task %s: NIM returned %d embeddings", tid_str, len(emb_map))
+
+                # 5. Build hash map for upsert, matching your migration logic
+                content_hash_map = {
+                    nid: self._compute_content_sha256(text_map[nid]) 
+                    for nid in emb_map.keys()
+                }
+
+                # 6. Upsert embeddings into Postgres
+                logger.debug("💾 Task %s: upserting %d NIM embeddings", tid_str, len(emb_map))
+                n = ray.get(upsert_embeddings.remote(
+                    emb_map, 
+                    content_hash_map=content_hash_map,
+                    model_map={nid: NIM_MODEL for nid in emb_map.keys()},
+                    # Use the "task.primary" label from your migration
+                    label_map={nid: "task.primary" for nid in emb_map.keys()}
+                ), timeout=UPSERT_TIMEOUT_S)
+                
+                result = {
+                    "embedded": n, 
+                    "model": NIM_MODEL, 
+                    "embedding_count": len(emb_map),
+                    "task_count": len(task_uuids)
+                }
+                logger.info("✅ Task %s: nim_task_embed completed (embedded=%d) in %.2fs", tid_str, n, time.time() - t0)
+                self._stop_heartbeat(tid_str)
+                self._complete(tid, result=result)
+                return
+
             if ttype in ("graph_embed", "graph_embed_v2"):
+                logger.debug("🎯 Task %s: graph_embed operation (k from params)", tid_str)
                 # resolve node ids (legacy: start_ids; v2: map UUID/text ids)
                 node_ids, debug = self._resolve_start_node_ids(params)
                 k = int(params.get("k", 2))
+                logger.debug("🔍 Task %s: resolved %d node_ids, k=%d, debug=%s", tid_str, len(node_ids), k, debug)
                 if not node_ids:
                     raise ValueError("No start nodes resolved")
 
                 # chunking support
                 if EMBED_BATCH_CHUNK and len(node_ids) > EMBED_BATCH_CHUNK:
+                    logger.debug("📦 Task %s: using chunked embedding (chunk_size=%d, total=%d)", tid_str, EMBED_BATCH_CHUNK, len(node_ids))
                     all_maps: Dict[int, List[float]] = {}
                     for i in range(0, len(node_ids), EMBED_BATCH_CHUNK):
                         chunk = node_ids[i:i+EMBED_BATCH_CHUNK]
+                        logger.debug("📦 Task %s: processing chunk %d-%d (%d nodes)", tid_str, i, min(i+EMBED_BATCH_CHUNK, len(node_ids)), len(chunk))
                         emb_map = ray.get(self.embedder.compute_embeddings.remote(chunk, k), timeout=EMBED_TIMEOUT_S)
                         all_maps.update(emb_map or {})
                     emb_map = all_maps
+                    logger.debug("✅ Task %s: completed chunked embedding, %d total embeddings", tid_str, len(emb_map))
                 else:
+                    logger.debug("🔢 Task %s: computing embeddings for %d nodes", tid_str, len(node_ids))
                     emb_map = ray.get(self.embedder.compute_embeddings.remote(node_ids, k), timeout=EMBED_TIMEOUT_S)
+                    if not emb_map:
+                        logger.warning("⚠️ Task %s: compute_embeddings returned empty result for node_ids=%s", tid_str, node_ids[:20])
+                    logger.debug("✅ Task %s: embeddings computed, %d embeddings", tid_str, len(emb_map or {}))
 
+                logger.debug("💾 Task %s: upserting %d embeddings", tid_str, len(emb_map or {}))
                 n = ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
+                logger.debug("💾 Task %s: upserted %d embeddings", tid_str, n)
 
                 # richer result with node meta (optional)
                 meta_nodes = self._fetch_node_meta(list(emb_map.keys()))
@@ -621,30 +836,48 @@ class GraphDispatcher:
                     "start_debug": debug,
                     "node_meta": meta_nodes[:64],  # cap result size
                 }
-                self._stop_heartbeat(tid)
+                
+                # Add a helpful diagnostic when no embeddings are returned
+                if not emb_map and node_ids:
+                    logger.error("❌ Task %s: compute_embeddings returned empty result for node_ids=%s. This usually means the nodes don't exist in Neo4j or the graph loader is misconfigured.", tid_str, node_ids[:20])
+                
+                logger.info("✅ Task %s: graph_embed completed (embedded=%d, nodes=%d, k=%d) in %.2fs", tid_str, n, len(node_ids), k, time.time() - t0)
+                self._stop_heartbeat(tid_str)
                 self._complete(tid, result=result)
                 return
 
             if ttype in ("graph_rag_query", "graph_rag_query_v2"):
                 import numpy as np
 
+                logger.info("🔍 Task %s: graph_rag_query operation", tid_str)
                 node_ids, debug = self._resolve_start_node_ids(params)
                 k = int(params.get("k", 2))
                 topk = int(params.get("topk", 10))
+                logger.debug("🔍 Task %s: resolved %d node_ids, k=%d, topk=%d, debug=%s", tid_str, len(node_ids), k, topk, debug)
                 if not node_ids:
                     raise ValueError("No start nodes resolved")
 
                 # ensure embeddings exist for seeds
+                logger.debug("🔢 Task %s: computing seed embeddings for %d nodes", tid_str, len(node_ids))
                 emb_map = ray.get(self.embedder.compute_embeddings.remote(node_ids, k), timeout=EMBED_TIMEOUT_S)
+                if not emb_map:
+                    logger.warning("⚠️ Task %s: compute_embeddings returned empty result for node_ids=%s", tid_str, node_ids[:20])
+                logger.debug("💾 Task %s: ensuring seed embeddings are persisted", tid_str)
                 ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
 
                 vecs = list(emb_map.values())
                 centroid = np.asarray(vecs, dtype="float32").mean(0).tolist() if vecs else None
+                logger.debug("📊 Task %s: computed centroid from %d vectors", tid_str, len(vecs))
+                
+                # Add a helpful diagnostic when no embeddings are returned
+                if not vecs and node_ids:
+                    logger.error("❌ Task %s: compute_embeddings returned empty result for node_ids=%s. This usually means the nodes don't exist in Neo4j or the graph loader is misconfigured.", tid_str, node_ids[:20])
 
                 hits: List[Dict[str, Any]] = []
                 if centroid:
                     centroid_json = json.dumps(centroid)
                     centroid_vec_literal = "[" + ",".join(f"{x:.6f}" for x in centroid) + "]"
+                    logger.debug("🔎 Task %s: querying graph_embeddings for topk=%d neighbors", tid_str, topk)
                     try:
                         with self.engine.begin() as conn:
                             rows = conn.execute(
@@ -657,7 +890,9 @@ class GraphDispatcher:
                                 {"c": centroid_json, "k": topk},
                             ).mappings().all()
                             hits = [{"node_id": r["node_id"], "score": float(r["dist"])} for r in rows]
-                    except Exception:
+                        logger.debug("✅ Task %s: found %d neighbors (jsonb method)", tid_str, len(hits))
+                    except Exception as e:
+                        logger.debug("⚠️ Task %s: jsonb method failed, trying literal method: %s", tid_str, e)
                         with self.engine.begin() as conn:
                             rows = conn.execute(
                                 text("""
@@ -669,6 +904,9 @@ class GraphDispatcher:
                                 {"c": centroid_vec_literal, "k": topk},
                             ).mappings().all()
                             hits = [{"node_id": r["node_id"], "score": float(r["dist"])} for r in rows]
+                        logger.debug("✅ Task %s: found %d neighbors (literal method)", tid_str, len(hits))
+                else:
+                    logger.warning("⚠️ Task %s: centroid is None, no hits will be returned", tid_str)
 
                 meta_nodes = self._fetch_node_meta([h["node_id"] for h in hits])
                 result = {
@@ -681,30 +919,43 @@ class GraphDispatcher:
                     "start_debug": debug,
                     "node_meta": meta_nodes[:64],
                 }
-                self._stop_heartbeat(tid)
+                logger.info("✅ Task %s: graph_rag_query completed (hits=%d, seeds=%d, topk=%d) in %.2fs", tid_str, len(hits), len(emb_map or {}), topk, time.time() - t0)
+                self._stop_heartbeat(tid_str)
                 self._complete(tid, result=result)
                 return
 
             if ttype in ("graph_fact_embed", "graph_fact_query"):
+                logger.debug("📝 Task %s: fact operation type=%s", tid_str, ttype)
                 # Facts system support (Migration 009)
                 node_ids, debug = self._resolve_start_node_ids(params)
                 k = int(params.get("k", 2))
+                logger.debug("🔍 Task %s: resolved %d fact node_ids, k=%d, debug=%s", tid_str, len(node_ids), k, debug)
                 if not node_ids:
                     raise ValueError("No start nodes resolved for facts operation")
 
                 if ttype == "graph_fact_embed":
+                    logger.debug("🎯 Task %s: graph_fact_embed operation", tid_str)
                     # Embed facts (similar to graph_embed)
                     if EMBED_BATCH_CHUNK and len(node_ids) > EMBED_BATCH_CHUNK:
+                        logger.debug("📦 Task %s: using chunked fact embedding (chunk_size=%d, total=%d)", tid_str, EMBED_BATCH_CHUNK, len(node_ids))
                         all_maps: Dict[int, List[float]] = {}
                         for i in range(0, len(node_ids), EMBED_BATCH_CHUNK):
                             chunk = node_ids[i:i+EMBED_BATCH_CHUNK]
+                            logger.debug("📦 Task %s: processing fact chunk %d-%d (%d nodes)", tid_str, i, min(i+EMBED_BATCH_CHUNK, len(node_ids)), len(chunk))
                             emb_map = ray.get(self.embedder.compute_embeddings.remote(chunk, k), timeout=EMBED_TIMEOUT_S)
                             all_maps.update(emb_map or {})
                         emb_map = all_maps
+                        logger.debug("✅ Task %s: completed chunked fact embedding, %d total embeddings", tid_str, len(emb_map))
                     else:
+                        logger.debug("🔢 Task %s: computing fact embeddings for %d nodes", tid_str, len(node_ids))
                         emb_map = ray.get(self.embedder.compute_embeddings.remote(node_ids, k), timeout=EMBED_TIMEOUT_S)
+                        if not emb_map:
+                            logger.warning("⚠️ Task %s: compute_embeddings returned empty result for fact node_ids=%s", tid_str, node_ids[:20])
+                        logger.debug("✅ Task %s: fact embeddings computed, %d embeddings", tid_str, len(emb_map or {}))
 
+                    logger.debug("💾 Task %s: upserting %d fact embeddings", tid_str, len(emb_map or {}))
                     n = ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
+                    logger.debug("💾 Task %s: upserted %d fact embeddings", tid_str, n)
 
                     meta_nodes = self._fetch_node_meta(list(emb_map.keys()))
                     result = {
@@ -716,25 +967,43 @@ class GraphDispatcher:
                         "node_meta": meta_nodes[:64],
                         "operation_type": "fact_embed"
                     }
-                    self._stop_heartbeat(tid)
+                    
+                    # Add a helpful diagnostic when no embeddings are returned
+                    if not emb_map and node_ids:
+                        logger.error("❌ Task %s: compute_embeddings returned empty result for fact node_ids=%s. This usually means the nodes don't exist in Neo4j or the graph loader is misconfigured.", tid_str, node_ids[:20])
+                    
+                    logger.info("✅ Task %s: graph_fact_embed completed (embedded=%d, nodes=%d, k=%d) in %.2fs", tid_str, n, len(node_ids), k, time.time() - t0)
+                    self._stop_heartbeat(tid_str)
                     self._complete(tid, result=result)
                     return
 
                 elif ttype == "graph_fact_query":
+                    logger.debug("🔍 Task %s: graph_fact_query operation", tid_str)
                     # Query facts (similar to graph_rag_query)
                     import numpy as np
 
                     # ensure embeddings exist for seeds
+                    logger.debug("🔢 Task %s: computing fact seed embeddings for %d nodes", tid_str, len(node_ids))
                     emb_map = ray.get(self.embedder.compute_embeddings.remote(node_ids, k), timeout=EMBED_TIMEOUT_S)
+                    if not emb_map:
+                        logger.warning("⚠️ Task %s: compute_embeddings returned empty result for fact node_ids=%s", tid_str, node_ids[:20])
+                    logger.debug("💾 Task %s: ensuring fact seed embeddings are persisted", tid_str)
                     ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
 
                     vecs = list(emb_map.values())
                     centroid = np.asarray(vecs, dtype="float32").mean(0).tolist() if vecs else None
+                    logger.debug("📊 Task %s: computed fact centroid from %d vectors", tid_str, len(vecs))
+                    
+                    # Add a helpful diagnostic when no embeddings are returned
+                    if not vecs and node_ids:
+                        logger.error("❌ Task %s: compute_embeddings returned empty result for fact node_ids=%s. This usually means the nodes don't exist in Neo4j or the graph loader is misconfigured.", tid_str, node_ids[:20])
 
                     hits: List[Dict[str, Any]] = []
+                    topk = int(params.get("topk", 10))
                     if centroid:
                         centroid_json = json.dumps(centroid)
                         centroid_vec_literal = "[" + ",".join(f"{x:.6f}" for x in centroid) + "]"
+                        logger.debug("🔎 Task %s: querying graph_embeddings for topk=%d fact neighbors", tid_str, topk)
                         try:
                             with self.engine.begin() as conn:
                                 rows = conn.execute(
@@ -744,10 +1013,12 @@ class GraphDispatcher:
                                     ORDER BY emb <-> (CAST(:c AS jsonb)::vector)
                                        LIMIT :k
                                     """),
-                                    {"c": centroid_json, "k": int(params.get("topk", 10))},
+                                    {"c": centroid_json, "k": topk},
                                 ).mappings().all()
                                 hits = [{"node_id": r["node_id"], "score": float(r["dist"])} for r in rows]
-                        except Exception:
+                            logger.debug("✅ Task %s: found %d fact neighbors (jsonb method)", tid_str, len(hits))
+                        except Exception as e:
+                            logger.debug("⚠️ Task %s: jsonb method failed for facts, trying literal method: %s", tid_str, e)
                             with self.engine.begin() as conn:
                                 rows = conn.execute(
                                     text("""
@@ -756,9 +1027,12 @@ class GraphDispatcher:
                                     ORDER BY emb <-> (:c)::vector
                                        LIMIT :k
                                     """),
-                                    {"c": centroid_vec_literal, "k": int(params.get("topk", 10))},
+                                    {"c": centroid_vec_literal, "k": topk},
                                 ).mappings().all()
                                 hits = [{"node_id": r["node_id"], "score": float(r["dist"])} for r in rows]
+                            logger.debug("✅ Task %s: found %d fact neighbors (literal method)", tid_str, len(hits))
+                    else:
+                        logger.warning("⚠️ Task %s: fact centroid is None, no hits will be returned", tid_str)
 
                     meta_nodes = self._fetch_node_meta([h["node_id"] for h in hits])
                     result = {
@@ -766,32 +1040,39 @@ class GraphDispatcher:
                         "neighbor_count": len(hits),
                         "seed_count": len(emb_map or {}),
                         "k": k,
-                        "topk": int(params.get("topk", 10)),
+                        "topk": topk,
                         "centroid_computed": centroid is not None,
                         "start_debug": debug,
                         "node_meta": meta_nodes[:64],
                         "operation_type": "fact_query"
                     }
-                    self._stop_heartbeat(tid)
+                    logger.info("✅ Task %s: graph_fact_query completed (hits=%d, seeds=%d, topk=%d) in %.2fs", tid_str, len(hits), len(emb_map or {}), topk, time.time() - t0)
+                    self._stop_heartbeat(tid_str)
                     self._complete(tid, result=result)
                     return
 
             if ttype == "graph_sync_nodes":
+                logger.debug("🔄 Task %s: graph_sync_nodes operation", tid_str)
                 # ensure every existing task has a node in graph_node_map
                 with self.engine.begin() as conn:
                     # optional: versioned function name; fall back if not present
                     try:
+                        logger.debug("📝 Task %s: calling backfill_task_nodes()", tid_str)
                         r = conn.execute(text("SELECT backfill_task_nodes() AS updated")).mappings().first()
                         updated = int(r["updated"]) if r and r.get("updated") is not None else None
-                    except Exception:
+                        logger.debug("✅ Task %s: backfill_task_nodes() completed, updated=%s", tid_str, updated)
+                    except Exception as e:
                         # tolerate absence
+                        logger.debug("⚠️ Task %s: backfill_task_nodes() failed or not present: %s", tid_str, e)
                         updated = None
-                self._stop_heartbeat(tid)
+                logger.info("✅ Task %s: graph_sync_nodes completed (updated=%s) in %.2fs", tid_str, updated, time.time() - t0)
+                self._stop_heartbeat(tid_str)
                 self._complete(tid, result={"backfill_task_nodes": updated})
                 return
 
             # Unknown type
-            self._stop_heartbeat(tid)
+            logger.error("❌ Task %s: unsupported task type: %s (supported: %s)", tid_str, ttype, list(GRAPH_TASK_TYPES))
+            self._stop_heartbeat(tid_str)
             self._complete(
                 tid,
                 result={
@@ -801,11 +1082,14 @@ class GraphDispatcher:
             )
 
         except Exception as e:
-            logger.exception("Task %s failed: %s", tid, e)
-            self._stop_heartbeat(tid)
+            elapsed_ms = round((time.time() - t0) * 1000.0, 2)
+            logger.exception("❌ Task %s failed after %.2fms: %s", tid_str, elapsed_ms, e)
+            self._stop_heartbeat(tid_str)
             self._complete(tid, error=str(e), retry_after=30)
         finally:
-            self._metrics["last_complete_ms"] = round((time.time() - t0) * 1000.0, 2)
+            elapsed_ms = round((time.time() - t0) * 1000.0, 2)
+            self._metrics["last_complete_ms"] = elapsed_ms
+            logger.debug("⏱️ Task %s: total processing time %.2fms", tid_str, elapsed_ms)
 
     # ---------------- Cleanup ----------------
 

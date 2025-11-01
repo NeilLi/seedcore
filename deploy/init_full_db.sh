@@ -30,6 +30,7 @@ MIGRATION_015="${SCRIPT_DIR}/migrations/015_pkg_views_functions.sql"
 MIGRATION_016="${SCRIPT_DIR}/migrations/016_fact_pkg_integration.sql"
 MIGRATION_017="${SCRIPT_DIR}/migrations/017_task_embedding_support.sql"
 MIGRATION_018="${SCRIPT_DIR}/migrations/018_task_outbox_hardening.sql"
+MIGRATION_019="${SCRIPT_DIR}/migrations/019_update_embeddings_to_1024d.sql"
 
 # Check if all migration files exist
 for migration in \
@@ -37,7 +38,7 @@ for migration in \
   "$MIGRATION_005" "$MIGRATION_006" "$MIGRATION_007" "$MIGRATION_008" \
   "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" "$MIGRATION_012" \
   "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" "$MIGRATION_016" \
-  "$MIGRATION_017" "$MIGRATION_018"
+  "$MIGRATION_017" "$MIGRATION_018" "$MIGRATION_019"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -66,6 +67,7 @@ echo "   - 015: $MIGRATION_015 (NEW: PKG views and helper functions)"
 echo "   - 016: $MIGRATION_016 (NEW: Fact model PKG integration - temporal facts, policy governance, eventizer support)"
 echo "   - 017: $MIGRATION_017 (NEW: Task embedding support: views/functions/backfill)"
 echo "   - 018: $MIGRATION_018 (NEW: Task outbox hardening: available_at, attempts, index)"
+echo "   - 019: $MIGRATION_019 (NEW: Update graph embeddings from 128-d to 1024-d vectors for NIM Retrieval)"
 
 find_pg_pod() {
   local sel pod
@@ -224,6 +226,11 @@ echo "⚙️  Running migration 018: Task outbox hardening (available_at, attemp
 kubectl -n "$NAMESPACE" cp "$MIGRATION_018" "$POSTGRES_POD:/tmp/018_task_outbox_hardening.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/018_task_outbox_hardening.sql"
 
+# Migration 019 (NEW - Update Embeddings to 1024-d)
+echo "⚙️  Running migration 019: Update graph embeddings from 128-d to 1024-d vectors..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_019" "$POSTGRES_POD:/tmp/019_update_embeddings_to_1024d.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/019_update_embeddings_to_1024d.sql"
+
 # 6) Verify schema
 echo "✅ Verifying schema..."
 
@@ -238,6 +245,21 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 
 echo "📊 Graph embeddings table structure:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ graph_embeddings"
+
+echo "📊 Verifying graph embeddings vector dimension (should be 1024):"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+  psql -U "$DB_USER" -d "$DB_NAME" -c "
+    SELECT 
+      a.attname AS column_name,
+      CASE 
+        WHEN t.typname = 'vector' AND a.atttypmod > 0 THEN (a.atttypmod - 4)::text || '-dimensional'
+        ELSE t.typname
+      END AS type_info
+    FROM pg_attribute a
+    JOIN pg_type t ON a.atttypid = t.oid
+    WHERE a.attrelid = 'graph_embeddings'::regclass
+      AND a.attname = 'emb';
+  "
 
 echo "📊 Holons table structure:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ holons"
@@ -382,6 +404,7 @@ echo "✅ Created PKG enums: pkg_env, pkg_engine, pkg_condition_type, pkg_operat
 echo "✅ Enhanced facts table with PKG integration: temporal facts, policy governance, eventizer support"
 echo "✅ Created fact helper functions: get_facts_by_subject, cleanup_expired_facts, get_fact_statistics"
 echo "✅ Created active_temporal_facts view for efficient temporal fact queries"
+echo "✅ Updated graph_embeddings to 1024-dimensional vectors for NIM Retrieval (nv-embedqa-e5-v5)"
 echo "✅ Enabled extensions: pgcrypto, vector"
 echo "👉 DSN: postgresql://${DB_USER}:${DB_PASS}@postgresql:5432/${DB_NAME}"
 echo ""
