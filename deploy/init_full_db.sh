@@ -288,7 +288,9 @@ done
 
 echo "📊 HGNN views:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ hgnn_edges"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_embeddings"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_embeddings_primary"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_embeddings_stale"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ tasks_missing_embeddings"
 
 echo "📊 Key HGNN functions:"
 for fn in ensure_task_node ensure_agent_node ensure_organ_node ensure_fact_node backfill_task_nodes \
@@ -391,7 +393,7 @@ echo "🎉 SeedCore database setup complete!"
 echo "✅ Created tables: tasks, holons, graph_embeddings, facts"
 echo "✅ Created graph schema (HGNN): graph_node_map, agent_registry, organ_registry,"
 echo "   artifact, capability, memory_cell, edge tables (task_*), organ_provides_capability, agent_owns_memory_cell"
-echo "✅ Created views: graph_tasks, task_embeddings, hgnn_edges"
+echo "✅ Created views: graph_tasks, task_embeddings_primary, task_embeddings_stale, tasks_missing_embeddings, hgnn_edges"
 echo "✅ Helper functions: create_graph_embed_task, create_graph_rag_task, *_v2 variants with agent/organ,"
 echo "   ensure_*_node, backfill_task_nodes"
 echo "✅ Fixed taskstatus enum to use consistent lowercase values"
@@ -422,7 +424,7 @@ echo "   -- Explore edges for DGL ingest:"
 echo "   SELECT * FROM hgnn_edges LIMIT 20;"
 echo ""
 echo '   -- Pull task embeddings joined to numeric node ids:'
-echo "   SELECT task_id, node_id, emb[1:8] AS emb_head FROM task_embeddings LIMIT 5;"
+echo "   SELECT task_id, node_id, emb[1:8] AS emb_head FROM task_embeddings_primary LIMIT 5;"
 echo ""
 echo "   -- Monitor graph tasks:"
 echo "   SELECT * FROM graph_tasks ORDER BY updated_at DESC LIMIT 10;"

@@ -4,16 +4,20 @@ Tests for routing refactor implementation.
 Tests the key functionality: de-duplication, single-flight, fallbacks, and metrics.
 """
 
+# Import mock dependencies BEFORE any other imports
+import sys
+import os
+sys.path.insert(0, os.path.dirname(__file__))
+import mock_ray_dependencies
+
+# Import the classes we're testing
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
 import pytest
 import asyncio
 import time
 from unittest.mock import Mock, AsyncMock, patch
 from typing import Dict, Any, List
-
-# Import the classes we're testing
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from seedcore.services.coordinator_service import RouteCache, RouteEntry
 from seedcore.organs.organism_manager import RoutingDirectory

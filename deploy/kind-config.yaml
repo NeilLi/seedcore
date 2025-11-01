@@ -8,5 +8,5 @@ nodes:
   - hostPath: /var/kind/containerd
     containerPath: /var/lib/containerd
   # This is the new mount for your project code
-  - hostPath: /home/ubuntu/project/seedcore # 👈 This path is now corrected
-    containerPath: /project                 # 👈 This is where it will appear inside the KIND node
+  #- hostPath: /home/ubuntu/project/seedcore # 👈 This path is now corrected
+  #  containerPath: /project                 # 👈 This is where it will appear inside the KIND node

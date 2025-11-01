@@ -1,3 +1,9 @@
+# Import mock dependencies BEFORE any other imports
+import os
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
+import mock_ray_dependencies
+
 import json
 import uuid
 from types import SimpleNamespace

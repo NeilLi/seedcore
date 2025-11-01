@@ -23,9 +23,9 @@ spec:
         image: seedcore:latest
         imagePullPolicy: IfNotPresent
         command: ["python", "/app/bootstraps/bootstrap_entry.py"]
-        volumeMounts:
-        - name: project-src
-          mountPath: /app
+        #volumeMounts:
+        #- name: project-src
+        #  mountPath: /app
         env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -66,8 +66,8 @@ spec:
           limits:
             cpu: "200m"
             memory: "1Gi"
-      volumes:
-      - name: project-src
-        hostPath:
-          path: /project
-          type: Directory
+      #volumes:
+      #- name: project-src
+      #  hostPath:
+      #    path: /project
+      #    type: Directory

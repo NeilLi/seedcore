@@ -123,6 +123,26 @@ class MockAsyncSession:
     async def close(self):
         """Mock close method."""
         self._closed = True
+    
+    async def refresh(self, instance, attribute_names=None, with_for_update=None):
+        """Mock refresh method - no-op for testing."""
+        pass
+    
+    async def flush(self):
+        """Mock flush method - no-op for testing."""
+        pass
+    
+    def add(self, instance):
+        """Mock add method."""
+        pass
+    
+    def add_all(self, instances):
+        """Mock add_all method."""
+        pass
+    
+    def begin(self):
+        """Mock begin method for transaction."""
+        return self
 
 class MockResult:
     """Mock SQLAlchemy result."""
@@ -145,6 +165,18 @@ class MockResult:
     
     def scalar(self):
         """Mock scalar method."""
+        if self._data:
+            return list(self._data[0].values())[0]
+        return None
+    
+    def scalar_one(self):
+        """Mock scalar_one method."""
+        if self._data:
+            return list(self._data[0].values())[0]
+        raise ValueError("No rows returned")
+    
+    def scalar_one_or_none(self):
+        """Mock scalar_one_or_none method."""
         if self._data:
             return list(self._data[0].values())[0]
         return None

@@ -12,9 +12,18 @@ Usage:
     pytest tests/test_nim_driver.py -v
 """
 
+# Import mock dependencies BEFORE any other imports
+import mock_ray_dependencies
+
 import os
+import sys
 import json
 import traceback
+from unittest.mock import patch, MagicMock
+
+# Add the project root to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from seedcore.ml.driver import (
     NimDriverSDK,
     NimClient,
@@ -28,7 +37,7 @@ from seedcore.ml.driver import (
 # ---------------------------------------------------------------------
 BASE_URL = os.getenv(
     "NIM_LLM_BASE_URL",
-    "http://a3055aa0ec20d4fefab34716edbe28ad-419314233.us-east-1.elb.amazonaws.com:8000/v1",
+    "http://localhost:8000/v1",
 )
 MODEL = os.getenv("SEEDCORE_NIM_MODEL", "meta/llama-3.1-8b-base")
 API_KEY = os.getenv("NIM_LLM_API_KE", "none")
@@ -60,30 +69,62 @@ def run_driver(driver, label):
 def test_nimclient():
     """Test low-level NimClient."""
     client = NimClient(base_url=BASE_URL, api_key=API_KEY, model=MODEL)
-    assert run_driver(client, "NimClient (HTTP)") is True
+    # Mock the _post method
+    mock_response = {
+        "choices": [{"message": {"content": "This is a mocked response from NIM"}}]
+    }
+    with patch.object(client, '_post', return_value=mock_response):
+        assert run_driver(client, "NimClient (HTTP)") is True
 
 
 def test_nimdriver_sdk():
     """Test SDK-based driver."""
     driver = NimDriverSDK(base_url=BASE_URL, api_key=API_KEY, model=MODEL)
-    assert run_driver(driver, "NimDriverSDK (OpenAI SDK)") is True
+    # Mock the OpenAI client
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = "This is a mocked response from NIM SDK"
+    with patch.object(driver.client.chat.completions, 'create', return_value=mock_response):
+        assert run_driver(driver, "NimDriverSDK (OpenAI SDK)") is True
 
 
 def test_get_driver_auto_detection():
     """Test get_driver() environment auto-detection."""
     os.environ["SEEDCORE_USE_SDK"] = "true"
     driver = get_driver(base_url=BASE_URL, api_key=API_KEY, model=MODEL)
-    assert run_driver(driver, "get_driver (auto-detect SDK)") is True
+    # Mock the SDK driver
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = "This is a mocked auto-detected SDK response"
+    with patch.object(driver.client.chat.completions, 'create', return_value=mock_response):
+        assert run_driver(driver, "get_driver (auto-detect SDK)") is True
 
     os.environ["SEEDCORE_USE_SDK"] = "false"
     driver = get_driver(base_url=BASE_URL, api_key=API_KEY, model=MODEL)
-    assert run_driver(driver, "get_driver (auto-detect HTTP)") is True
+    # Mock the HTTP client
+    mock_response = {
+        "choices": [{"message": {"content": "This is a mocked auto-detected HTTP response"}}]
+    }
+    with patch.object(driver, '_post', return_value=mock_response):
+        assert run_driver(driver, "get_driver (auto-detect HTTP)") is True
 
 
 def test_fallback_creation():
     """Test automatic fallback behavior."""
     driver = create_fallback_driver(base_url=BASE_URL, api_key=API_KEY, model=MODEL)
-    assert run_driver(driver, "create_fallback_driver (SDK→HTTP)") is True
+    # Try to mock based on driver type
+    if isinstance(driver, NimDriverSDK):
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "This is a mocked fallback SDK response"
+        with patch.object(driver.client.chat.completions, 'create', return_value=mock_response):
+            assert run_driver(driver, "create_fallback_driver (SDK→HTTP)") is True
+    else:
+        mock_response = {
+            "choices": [{"message": {"content": "This is a mocked fallback HTTP response"}}]
+        }
+        with patch.object(driver, '_post', return_value=mock_response):
+            assert run_driver(driver, "create_fallback_driver (SDK→HTTP)") is True
 
 
 # ---------------------------------------------------------------------

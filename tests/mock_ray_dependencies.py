@@ -126,6 +126,11 @@ class MockRay:
         def deployment(*args, **kwargs):
             """Mock serve.deployment decorator."""
             def decorator(cls):
+                # Add bind method to the class (Ray Serve does this)
+                @staticmethod
+                def bind():
+                    return cls
+                cls.bind = bind
                 return cls
             return decorator
         
@@ -365,6 +370,28 @@ class MockObjectRef:
     def __call__(self):
         """Mock call - returns the value."""
         return self.value
+    
+    def __iter__(self):
+        """Make MockObjectRef iterable if value is iterable."""
+        if hasattr(self.value, '__iter__') and not isinstance(self.value, str):
+            return iter(self.value)
+        raise TypeError(f"'{type(self).__name__}' object is not iterable")
+    
+    def __getitem__(self, key):
+        """Make MockObjectRef subscriptable if value is subscriptable."""
+        if hasattr(self.value, '__getitem__'):
+            return self.value[key]
+        raise TypeError(f"'{type(self).__name__}' object is not subscriptable")
+    
+    def __await__(self):
+        """Make MockObjectRef awaitable - returns the value."""
+        import asyncio
+        if asyncio.iscoroutine(self.value):
+            return self.value.__await__()
+        # Return a coroutine that yields the value
+        async def _await():
+            return self.value
+        return _await().__await__()
 
 # Mock DeploymentHandle class
 class MockDeploymentHandle:
@@ -457,6 +484,8 @@ class MockLogger:
     
     def __init__(self):
         self.logger = logging.getLogger("mock_ray")
+        self.handlers = []
+        self.propagate = True
     
     def info(self, msg, *args, **kwargs):
         self.logger.info(msg, *args, **kwargs)
@@ -469,6 +498,14 @@ class MockLogger:
     
     def debug(self, msg, *args, **kwargs):
         self.logger.debug(msg, *args, **kwargs)
+    
+    def addHandler(self, handler):
+        """Mock addHandler method."""
+        self.handlers.append(handler)
+    
+    def exception(self, msg, *args, **kwargs):
+        """Mock exception method."""
+        self.logger.error(msg, *args, **kwargs)
 
 # Create mock modules
 mock_xgboost_ray = type('MockXGBoostRay', (), {
@@ -488,6 +525,9 @@ def _ray_init(*args, **kwargs):
 
 def _ray_is_initialized():
     return True
+
+# Make it callable
+_ray_is_initialized.__name__ = 'is_initialized'
 
 def _ray_shutdown():
     return None
@@ -530,7 +570,11 @@ def _ray_remote(*r_args, **r_kwargs):
 
 # Assign functions to module
 ray_mod.init = _ray_init
+# Ensure is_initialized is callable and accessible
 ray_mod.is_initialized = _ray_is_initialized
+# Also set it as a property that can be called
+if not callable(ray_mod.is_initialized):
+    ray_mod.is_initialized = _ray_is_initialized
 ray_mod.shutdown = _ray_shutdown
 ray_mod.remote = _ray_remote
 ray_mod.get_actor = _ray_get_actor
@@ -545,19 +589,90 @@ ray_mod.logger = MockLogger()
 ray_mod.exceptions = MockRay.exceptions
 # serve submodule
 ray_mod.serve = MockRay.serve
+
+# actor submodule with ActorHandle
+ray_actor_mod = types.ModuleType('ray.actor')
+class ActorHandle:
+    """Mock Ray ActorHandle type."""
+    pass
+ray_actor_mod.ActorHandle = ActorHandle
+
+# data submodule
+ray_data_mod = types.ModuleType('ray.data')
+class Dataset:
+    """Mock Ray Dataset class."""
+    def __init__(self, data=None):
+        self._data = data
+    
+    def map(self, *args, **kwargs):
+        """Mock map method."""
+        return self
+    
+    def __iter__(self):
+        """Mock iterator."""
+        return iter([]) if self._data is None else iter(self._data)
+
+def _data_from_pandas(df, **kwargs):
+    """Mock from_pandas function."""
+    return Dataset(data=df)
+
+def _data_read_csv(path, **kwargs):
+    """Mock read_csv function."""
+    return Dataset()
+
+def _data_read_parquet(path, **kwargs):
+    """Mock read_parquet function."""
+    return Dataset()
+
+ray_data_mod.Dataset = Dataset
+ray_data_mod.from_pandas = _data_from_pandas
+ray_data_mod.read_csv = _data_read_csv
+ray_data_mod.read_parquet = _data_read_parquet
+
 # air submodule
 ray_air = types.ModuleType('ray.air')
 ray_air.config = MockRay.air.config
 
+# util submodule with log_once
+ray_util = types.ModuleType('ray.util')
+def _log_once(*args, **kwargs):
+    """Mock log_once function."""
+    pass
+ray_util.log_once = _log_once
+
+# Assign submodules to ray_mod
+ray_mod.actor = ray_actor_mod
+ray_mod.data = ray_data_mod
+ray_mod.air = ray_air
+ray_mod.util = ray_util
+
 # Register in sys.modules
-sys.modules['ray'] = ray_mod
+# Ensure ray module is always properly mocked, even if it was already imported
+# We need to handle the case where ray might have been imported as a real module
+# Force replace the module completely to avoid any issues with already-imported modules
+sys.modules['ray'] = ray_mod  # Always ensure our mock is registered first
+
+# Also update any already-imported references if they exist
+if 'ray' in sys.modules:
+    existing_ray = sys.modules['ray']
+    # If it's not our mock module, update its attributes
+    if existing_ray is not ray_mod:
+        # Try to update attributes on the existing module object
+        for attr_name in ['is_initialized', 'init', 'shutdown', 'get_actor', 'get', 'put', 'remote']:
+            if hasattr(ray_mod, attr_name):
+                try:
+                    setattr(existing_ray, attr_name, getattr(ray_mod, attr_name))
+                except (TypeError, AttributeError):
+                    pass  # Skip attributes that can't be set
 sys.modules['ray.logger'] = ray_mod.logger
 sys.modules['ray.serve'] = ray_mod.serve
 sys.modules['ray.exceptions'] = ray_mod.exceptions
+sys.modules['ray.actor'] = ray_actor_mod
+sys.modules['ray.data'] = ray_data_mod
 sys.modules['ray.core'] = type('MockRayCore', (), {})()
 sys.modules['ray.core.generated'] = type('MockRayCoreGenerated', (), {})()
 sys.modules['ray.core.generated.ray_client_pb2'] = type('MockRayClientPb2', (), {})()
-sys.modules['ray.util'] = type('MockRayUtil', (), {})()
+sys.modules['ray.util'] = ray_util
 sys.modules['ray.util.client'] = type('MockRayUtilClient', (), {})()
 sys.modules['ray.util.client.server'] = type('MockRayUtilClientServer', (), {})()
 sys.modules['ray.util.client.server.server'] = type('MockRayUtilClientServerServer', (), {})()
