@@ -1,40 +1,55 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Script: port-forward.sh
-# Purpose: Forward all key SeedCore services for local development & debugging
+# Purpose: Safely forward all key SeedCore services for local development & debugging
 
 set -euo pipefail
 
 NAMESPACE=${1:-seedcore-dev}
 
-echo "🔗 Starting port-forwards into namespace: $NAMESPACE"
+echo "🔗 Checking existing port-forwards in namespace: $NAMESPACE"
 
-# 🌐 API Service
-# http://localhost:8002 → SeedCore API
-kubectl -n "$NAMESPACE" port-forward svc/seedcore-api 8002:8002 &
+# Function to check if a port is already listening locally
+is_port_forwarded() {
+  lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+}
 
-# 📊 Ray Dashboard / Management
-# http://localhost:8265 → Ray Dashboard UI
-# localhost:10001 → Ray gRPC (for Ray client connections)
-kubectl -n "$NAMESPACE" port-forward svc/seedcore-svc-head-svc 8265:8265 10001:10001 &
+# Function to start a port-forward if not already active
+start_forward() {
+  local svc=$1
+  local ports=$2
 
-# 🧠 Ray Serve
-# http://localhost:8000 → Ray Serve HTTP endpoint
-kubectl -n "$NAMESPACE" port-forward svc/seedcore-svc-serve-svc 8000:8000 &
+  for port_pair in $ports; do
+    local local_port=${port_pair%%:*}
+    if is_port_forwarded "$local_port"; then
+      echo "⚙️  Port $local_port already forwarded, skipping $svc"
+    else
+      echo "🚀 Forwarding $svc ($port_pair)"
+      kubectl -n "$NAMESPACE" port-forward "svc/$svc" $port_pair >/dev/null 2>&1 &
+      sleep 1
+    fi
+  done
+}
 
-# 🗄️ Databases
-# localhost:5432 → PostgreSQL
-kubectl -n "$NAMESPACE" port-forward svc/postgresql 5432:5432 &
-# localhost:3306 → MySQL
-kubectl -n "$NAMESPACE" port-forward svc/mysql 3306:3306 &
-# http://localhost:7474 → Neo4j Browser (UI)
-# localhost:7687 → Neo4j Bolt (driver protocol)
-kubectl -n "$NAMESPACE" port-forward svc/neo4j 7474:7474 7687:7687 &
+# Define all port-forwards
+start_forward "seedcore-api" "8002:8002"
+start_forward "seedcore-svc-head-svc" "8265:8265 10001:10001"
+start_forward "seedcore-svc-serve-svc" "8000:8000"
+start_forward "postgresql" "5432:5432"
+start_forward "mysql" "3306:3306"
+start_forward "neo4j" "7474:7474 7687:7687"
+start_forward "redis" "6379:6379"
 
-# ⚡ Redis
-# localhost:6379 → Redis
-kubectl -n "$NAMESPACE" port-forward svc/redis 6379:6379 &
+# Wait for core ports to be ready before returning
+check_ports=(8000 8002 5432 6379)
+echo "⏳ Waiting for core services to become available..."
+for port in "${check_ports[@]}"; do
+  until nc -z localhost "$port" >/dev/null 2>&1; do
+    sleep 0.5
+  done
+  echo "✅ Port $port is ready"
+done
 
-# Clean exit: kill all port-forwards on Ctrl+C
-trap "echo '❌ Killing port-forwards...'; kill 0" SIGINT SIGTERM EXIT
+# Clean exit handler
+trap "echo '❌ Killing all port-forwards...'; pkill -P $$; exit 0" SIGINT SIGTERM EXIT
 
-wait
+echo "🌐 All port-forwards established successfully."
