@@ -1,0 +1,40 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: agentic-ml-cluster
+  region: us-east-1
+  version: "1.33"
+
+vpc:
+  id: vpc-0e7e246958ff7c25e
+  securityGroup: sg-0f394a90948a67639
+  subnets:
+    private:
+      us-east-1a:
+        id: subnet-063e9ef0e96a9a19d
+      us-east-1b:
+        id: subnet-04db89f781f2e737c
+
+nodeGroups:
+  - name: seedcore-nodes
+    instanceType: g5.xlarge
+    desiredCapacity: 1
+    minSize: 1
+    maxSize: 2
+    privateNetworking: true
+    volumeSize: 50
+    volumeType: gp2
+    ssh:
+      allow: true
+      publicKeyName: vockey
+    iam:
+      instanceRoleARN: arn:aws:iam::570667384381:role/agentic-ai-node-role
+    labels:
+      role: seedcore
+    tags:
+      Name: agentic-ai-node
+      Project: agentic-ai
+    amiFamily: AmazonLinux2023
+    updateConfig:
+      maxUnavailable: 1
