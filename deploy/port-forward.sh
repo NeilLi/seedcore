@@ -50,6 +50,11 @@ for port in "${check_ports[@]}"; do
 done
 
 # Clean exit handler
-trap "echo '❌ Killing all port-forwards...'; pkill -P $$; exit 0" SIGINT SIGTERM EXIT
+trap "echo '❌ Killing all port-forwards...'; pkill -P $$; exit 0" SIGINT SIGTERM
 
 echo "🌐 All port-forwards established successfully."
+
+echo "🛑 Press Ctrl+C to stop port-forwards manually."
+
+# Keep script running to maintain background forwards
+wait
