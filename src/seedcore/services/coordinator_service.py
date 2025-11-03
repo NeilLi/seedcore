@@ -1163,9 +1163,12 @@ class CoordinatorCore:
             # We treat coordinator as the "routing agent" here.
             agent_id_for_planner = params.get("agent_id", "planner")
             
+            # Create cognitive result with "planner" as routing decision.
+            # Profile="deep" is passed as metadata (via profile in task_data) for LLM selection,
+            # but routing telemetry tracks "planner" only.
             res = create_cognitive_result(
                 agent_id=agent_id_for_planner,
-                task_type="planner",
+                task_type="planner",  # Routing decision: "planner" (not "deep")
                 # CognitiveRouter will receive this in execute_result; giving it our proto_plan
                 # seeds the planner with what we already inferred (tasks/edges, provenance, etc.).
                 result={"proto_plan": proto_plan},
@@ -1173,6 +1176,7 @@ class CoordinatorCore:
                 # pull something from `conf`.
                 confidence_score=None,
                 # This lands in CognitiveResult.metadata
+                # Note: profile="deep" may be in task_data but is metadata, not routing
                 **payload_common,
             ).model_dump()
         

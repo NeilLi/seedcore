@@ -62,7 +62,7 @@
 - **Retry Logic**: Exponential backoff with jitter for resilient communication
 
 ### Cognitive Intelligence Enhancements
-- **DSPy v2 Integration**: Enhanced cognitive reasoning with OCPS fast/deep path routing
+- **DSPy v2 Integration**: Enhanced cognitive reasoning with OCPS fast/planner path routing (planner path uses deep LLM profile)
 - **Advanced Retrieval**: RRF fusion and MMR diversification for better context
 - **Dynamic Budgeting**: OCPS-informed token allocation and escalation hints
 - **Fact Management**: Comprehensive fact schema with provenance and trust scoring
@@ -146,7 +146,7 @@ SERVICE_CLIENTS = {
 Advanced AI reasoning capabilities:
 
 #### **DSPy Integration**
-- **OCPS Fast/Deep Routing**: Intelligent path selection based on complexity
+- **OCPS Fast/Planner Routing**: Intelligent path selection based on complexity (planner path uses deep LLM profile)
 - **RRF Fusion**: Reciprocal Rank Fusion for better retrieval
 - **MMR Diversity**: Maximal Marginal Relevance for diverse results
 - **Dynamic Token Budgeting**: OCPS-informed allocation
@@ -272,7 +272,7 @@ print('🎭 Actors:', ray.list_named_actors())
 16. **Centralized Configuration** - Single source of truth for all service settings
 
 ### Cognitive Intelligence Benefits
-17. **Enhanced Reasoning** - DSPy v2 with OCPS fast/deep path routing
+17. **Enhanced Reasoning** - DSPy v2 with OCPS fast/planner path routing (planner path uses deep LLM profile)
 18. **Better Retrieval** - RRF fusion and MMR diversification for improved context
 19. **Dynamic Optimization** - OCPS-informed token allocation and escalation
 20. **Fact Management** - Comprehensive fact schema with provenance and trust
@@ -346,7 +346,7 @@ The SeedCore system has evolved significantly with comprehensive enhancements ac
 - **Service discovery** and resource management for production-ready deployment
 
 ### **Cognitive Intelligence**
-- **DSPy v2 integration** with OCPS fast/deep path routing
+- **DSPy v2 integration** with OCPS fast/planner path routing (planner path uses deep LLM profile)
 - **Advanced retrieval** using RRF fusion and MMR diversification
 - **Enhanced fact management** with provenance, trust, and conflict resolution
 

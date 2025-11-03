@@ -22,12 +22,18 @@ UPDATED FOR NEW SERVICE BOUNDARIES:
 - Health checks: GET /health (both services)
 - Response format: {"id": "uuid", "status": "string", "result": {...}, "created_at": "datetime"}
 
+ROUTING MODEL (Unified Planner):
+- fast → planner → hgnn (planner is canonical routing label)
+- "deep" is a profile flag (cognitive_profile="deep"), not a routing mode
+- All escalation routes through "planner" which internally selects profile
+- Planner can use DEEP profile internally but route-level decision is always "planner"
+
 - Ray cluster reachable
 - Coordinator actor healthy & organism initialized
 - N Dispatchers + M GraphDispatchers present and responsive
 - Serve apps 'coordinator', 'cognitive', 'ml_service' up
 - Submit fast-path task (low drift) -> COMPLETED
-- Submit escalation task (high drift) -> COMPLETED
+- Submit escalation task (high drift) -> COMPLETED (routes via planner, may use deep profile)
 - (Optional) Submit graph task via DB function -> COMPLETED
 - Pull Coordinator status/metrics snapshot
 
@@ -100,6 +106,12 @@ Env:
   # - Task response: {"id": "uuid", "status": "string", "result": {...}, "created_at": "datetime"}
   # - Coordinator: /coordinator/pipeline/* (Ray Serve coordinator)
   # - Pipeline endpoints: /pipeline/anomaly-triage, /pipeline/tune/status/{job_id}
+  
+  # Routing Model (Unified Planner):
+  # - Routing decisions: "fast", "planner", "hgnn" (NOT "deep")
+  # - "deep" is a profile flag (cognitive_profile="deep"), not a routing decision
+  # - All escalation routes via "planner" which internally selects FAST or DEEP profile
+  # - Use cognitive_profile="deep" in task params to request DEEP profile within planner route
   
   # IMPORTANT: Avoid double colons (::) in COORD_URL - use single colon (:) for port
   # Correct: http://127.0.0.1:8000/coordinator
@@ -434,6 +446,141 @@ def extract_metadata(hgnn_res: dict) -> dict:
         meta = hgnn_res.get("metadata", {})
     
     return meta
+
+def validate_routing_decision(result: dict, expected_route: Optional[str] = None) -> tuple[bool, str]:
+    """
+    Validate routing decision follows unified planner model.
+    
+    Rules:
+    - "deep" should NOT appear as a routing decision (it's a profile flag only)
+    - Valid routing decisions: "fast", "planner", "hgnn"
+    - "planner" is the canonical escalation route
+    - Profile information should be in metadata, not routing decision
+    
+    Returns:
+        tuple[bool, str]: (is_valid, message)
+    """
+    metadata = extract_metadata(result)
+    decision = metadata.get("decision") or result.get("decision")
+    
+    if decision is None:
+        return True, "No routing decision found (may be fast path)"
+    
+    decision_lower = str(decision).lower()
+    
+    # Critical: "deep" should never be a routing decision
+    if decision_lower == "deep":
+        return False, f"❌ ROUTING ERROR: 'deep' found as routing decision (should be 'planner' with profile='deep')"
+    
+    # Validate against expected route if provided
+    if expected_route and decision_lower != expected_route.lower():
+        return False, f"❌ Unexpected routing decision: got '{decision}' but expected '{expected_route}'"
+    
+    # Check valid routing decisions
+    valid_routes = ["fast", "planner", "hgnn"]
+    if decision_lower not in valid_routes:
+        log.warning(f"⚠️ Unknown routing decision: '{decision}' (expected one of {valid_routes})")
+        # Don't fail on unknown routes, just warn
+    
+    return True, f"✅ Valid routing decision: '{decision}'"
+
+def extract_profile_metadata(result: dict) -> Optional[str]:
+    """
+    Extract cognitive profile from result metadata.
+    
+    Looks for profile in:
+    - payload.metadata.profile_used
+    - payload.metadata.cognitive_profile
+    - result.meta.profile_used
+    - top-level profile
+    
+    Returns:
+        Optional[str]: Profile name ("fast", "deep", etc.) or None if not found
+    """
+    metadata = extract_metadata(result)
+    
+    # Check various locations for profile information
+    profile = (
+        metadata.get("profile_used") or
+        metadata.get("cognitive_profile") or
+        result.get("profile_used") or
+        result.get("cognitive_profile")
+    )
+    
+    # Also check nested result structure
+    if not profile:
+        nested_result = result.get("result")
+        if isinstance(nested_result, dict):
+            nested_meta = nested_result.get("meta", {})
+            if isinstance(nested_meta, dict):
+                profile = nested_meta.get("profile_used") or nested_meta.get("cognitive_profile")
+    
+    return str(profile).lower() if profile else None
+
+def validate_profile_usage(result: dict, expected_profile: Optional[str] = None) -> tuple[bool, str]:
+    """
+    Validate that profile is used correctly (as metadata, not routing decision).
+    
+    Returns:
+        tuple[bool, str]: (is_valid, message)
+    """
+    metadata = extract_metadata(result)
+    decision = metadata.get("decision") or result.get("decision")
+    profile = extract_profile_metadata(result)
+    
+    # If decision is "deep", that's an error (should be "planner")
+    if decision and str(decision).lower() == "deep":
+        return False, "❌ ERROR: 'deep' used as routing decision (should be route='planner' with profile='deep')"
+    
+    # Validate expected profile if provided
+    if expected_profile:
+        if not profile:
+            return False, f"❌ Expected profile '{expected_profile}' not found in metadata"
+        if profile != expected_profile.lower():
+            return False, f"❌ Profile mismatch: expected '{expected_profile}', got '{profile}'"
+    
+    # If profile is present, validate it's in metadata, not routing decision
+    if profile:
+        if decision and str(decision).lower() == profile:
+            return False, f"❌ ERROR: Profile '{profile}' used as routing decision (should be metadata only)"
+        
+        return True, f"✅ Profile correctly used as metadata: profile='{profile}', route='{decision or 'unknown'}'"
+    
+    return True, "No profile specified (may be fast path or default)"
+
+def check_compatibility_shims(result: dict) -> tuple[bool, list[str]]:
+    """
+    Check for compatibility shims that handle legacy "deep" routing.
+    
+    Returns:
+        tuple[bool, list[str]]: (shim_detected, warnings)
+        - shim_detected: True if compatibility shim was detected (normalizing "deep" to "planner")
+        - warnings: List of warnings about compatibility shims
+    """
+    warnings = []
+    metadata = extract_metadata(result)
+    decision = metadata.get("decision") or result.get("decision")
+    original_decision = metadata.get("original_decision")
+    profile = extract_profile_metadata(result)
+    
+    # Check if compatibility shim was applied (original_decision="deep" → decision="planner")
+    if original_decision and str(original_decision).lower() == "deep":
+        if decision and str(decision).lower() == "planner":
+            warnings.append("✅ Compatibility shim detected: 'deep' → 'planner' (correct)")
+            if profile != "deep":
+                warnings.append("⚠️ Profile should be 'deep' when original_decision was 'deep'")
+            return True, warnings
+        else:
+            warnings.append(f"⚠️ Compatibility shim incomplete: original='deep', current='{decision}' (expected 'planner')")
+            return False, warnings
+    
+    # Check for direct "deep" routing decision (should trigger shim or error)
+    if decision and str(decision).lower() == "deep":
+        warnings.append("❌ ERROR: 'deep' found as routing decision without compatibility shim")
+        warnings.append("   Expected: decision='planner' with profile='deep' or compatibility shim")
+        return False, warnings
+    
+    return False, warnings
 
 def unwrap_result_envelope(obj: dict, max_depth: int = 3) -> dict:
     """
@@ -2680,7 +2827,13 @@ def scenario_fast_path(conn) -> uuid.UUID:
         raise RuntimeError("Failed to create fast-path task via seedcore-api or coordinator pipeline (no DB fallback)")
 
 def scenario_escalation(conn) -> uuid.UUID:
-    """High drift → escalate to CognitiveCore for planning."""
+    """
+    High drift → escalate via planner route (unified routing model).
+    
+    This should route via "planner" routing decision, which internally
+    delegates to CognitiveCore for planning. The planner may use FAST or
+    DEEP profile internally, but the routing decision is always "planner".
+    """
     payload = {
         "type": "general_query",
         "description": "Plan a multi-step analysis over graph + retrieval + synthesis",
@@ -2727,7 +2880,14 @@ def scenario_cognitive_fast(conn) -> uuid.UUID:
     return tid
 
 def scenario_cognitive_deep(conn) -> uuid.UUID:
-    """Trigger cognitive service (DEEP profile) with a multi-step analysis query."""
+    """
+    Trigger cognitive service via planner route with DEEP profile flag.
+    
+    Note: This should route via "planner" (not "deep" as a route decision).
+    The cognitive_profile="deep" parameter is a profile flag that the planner
+    uses internally to select LLMProfile.DEEP, but the routing decision
+    remains "planner".
+    """
     payload = {
         "type": "general_query",
         "description": "Design a multi-step plan integrating graph retrieval with LLM reasoning for anomaly triage.",
@@ -2738,15 +2898,17 @@ def scenario_cognitive_deep(conn) -> uuid.UUID:
 
     tid = submit_via_seedcore_api(payload)
     if tid:
-        log.info(f"✅ Cognitive (DEEP) task created via seedcore-api: {tid}")
+        log.info(f"✅ Cognitive (DEEP profile via planner) task created via seedcore-api: {tid}")
+        log.info("   Expected routing: decision='planner', profile='deep' (not decision='deep')")
         return tid
 
     tid = submit_via_coordinator(payload)
     if tid:
-        log.info(f"✅ Cognitive (DEEP) task created via coordinator pipeline: {tid}")
+        log.info(f"✅ Cognitive (DEEP profile via planner) task created via coordinator pipeline: {tid}")
+        log.info("   Expected routing: decision='planner', profile='deep' (not decision='deep')")
         return tid
 
-    assert tid, "Failed to create cognitive (DEEP) task via seedcore-api or coordinator pipeline"
+    assert tid, "Failed to create cognitive (DEEP profile via planner) task via seedcore-api or coordinator pipeline"
     return tid
 
 def scenario_hgnn_forced(conn) -> uuid.UUID:
@@ -3613,7 +3775,16 @@ def main():
             cog_fast_tid = scenario_cognitive_fast(conn)
             log.info(f"Cognitive FAST task_id = {cog_fast_tid}")
             if conn:
-                wait_for_completion(conn, cog_fast_tid, "COGNITIVE-FAST", timeout_s=120.0)
+                row = wait_for_completion(conn, cog_fast_tid, "COGNITIVE-FAST", timeout_s=120.0)
+                if row and row.get("result"):
+                    cog_fast_res = normalize_result(row.get("result"))
+                    # Validate routing follows planner model
+                    route_valid, route_msg = validate_routing_decision(cog_fast_res, expected_route="planner")
+                    log.info(f"   {route_msg}")
+                    profile_valid, profile_msg = validate_profile_usage(cog_fast_res, expected_profile="fast")
+                    log.info(f"   {profile_msg}")
+                    if not route_valid:
+                        log.warning("⚠️ Cognitive FAST routing validation failed")
         except Exception as e:
             log.warning(f"⚠️ Cognitive FAST verification skipped/failed: {e}")
 
@@ -3621,7 +3792,32 @@ def main():
             cog_deep_tid = scenario_cognitive_deep(conn)
             log.info(f"Cognitive DEEP task_id = {cog_deep_tid}")
             if conn:
-                wait_for_completion(conn, cog_deep_tid, "COGNITIVE-DEEP", timeout_s=150.0)
+                row = wait_for_completion(conn, cog_deep_tid, "COGNITIVE-DEEP", timeout_s=150.0)
+                if row and row.get("result"):
+                    cog_deep_res = normalize_result(row.get("result"))
+                    # Validate routing follows planner model (decision should be "planner", not "deep")
+                    route_valid, route_msg = validate_routing_decision(cog_deep_res, expected_route="planner")
+                    log.info(f"   {route_msg}")
+                    if not route_valid:
+                        log.error("❌ Cognitive DEEP routing validation FAILED - 'deep' should not be a routing decision")
+                        log.error("   Expected: decision='planner' with profile='deep' in metadata")
+                        log.error("   Got: decision='deep' (INCORRECT)")
+                        exit_if_strict("Cognitive DEEP task incorrectly uses 'deep' as routing decision")
+                    
+                    # Validate profile is in metadata, not routing decision
+                    profile_valid, profile_msg = validate_profile_usage(cog_deep_res, expected_profile="deep")
+                    log.info(f"   {profile_msg}")
+                    if not profile_valid:
+                        log.warning("⚠️ Cognitive DEEP profile validation failed")
+                    
+                    # Log routing model compliance
+                    metadata = extract_metadata(cog_deep_res)
+                    decision = metadata.get("decision") or cog_deep_res.get("decision")
+                    profile = extract_profile_metadata(cog_deep_res)
+                    if decision == "planner" and profile == "deep":
+                        log.info("✅ ROUTING MODEL COMPLIANCE: decision='planner', profile='deep' (correct)")
+                    else:
+                        log.warning(f"⚠️ Routing model deviation: decision='{decision}', profile='{profile}'")
         except Exception as e:
             log.warning(f"⚠️ Cognitive DEEP verification skipped/failed: {e}")
 
@@ -3787,9 +3983,31 @@ def main():
                     log.info(f"✅ Escalation path confirmed with {valid_steps} valid steps")
                 
                 # Log metadata for debugging
-                metadata = {k: v for k, v in res.items() if k in ["escalated", "plan_source", "planner", "cognitive_service_version"]}
-                if metadata:
-                    log.info(f"📋 Escalation metadata: {metadata}")
+                metadata_dict = {k: v for k, v in res.items() if k in ["escalated", "plan_source", "planner", "cognitive_service_version"]}
+                if metadata_dict:
+                    log.info(f"📋 Escalation metadata: {metadata_dict}")
+                
+                # Validate escalation uses planner routing model
+                route_valid, route_msg = validate_routing_decision(res, expected_route="planner")
+                log.info(f"   {route_msg}")
+                if not route_valid:
+                    log.warning("⚠️ Escalation routing validation failed - should use 'planner' route")
+                
+                # Check for compatibility shims (Phase 3: transitional aliases)
+                shim_detected, shim_warnings = check_compatibility_shims(res)
+                for warning in shim_warnings:
+                    log.info(f"   {warning}")
+                if shim_detected:
+                    log.info("   📋 Compatibility shim is active (handling legacy 'deep' routing)")
+                
+                # Validate no "deep" as routing decision (unless compatibility shim applied)
+                metadata = extract_metadata(res)
+                decision = metadata.get("decision") or res.get("decision")
+                if decision and str(decision).lower() == "deep" and not shim_detected:
+                    log.error("❌ COMPATIBILITY SHIM VIOLATION: 'deep' found as routing decision")
+                    log.error("   This indicates backward compatibility shim may need to be added")
+                    log.error("   Expected: decision='planner' (deep should be profile only)")
+                    exit_if_strict("Escalation incorrectly uses 'deep' as routing decision")
             
     else:
         log.warning("No DB connection; cannot verify escalation completion in DB.")
@@ -3831,10 +4049,20 @@ def main():
                             log.info(f"   Surprise Score S: {S:.3f}")
                             log.info(f"   tau_plan: {surprise.get('tau_plan', 0.6)}")
                             
+                            # Validate routing decision (should be "hgnn", "planner", or "fast", but NOT "deep")
+                            route_valid, route_msg = validate_routing_decision(hgnn_res)
+                            log.info(f"   {route_msg}")
+                            
                             if decision == "hgnn":
                                 log.info("✅ HGNN routing confirmed (decision='hgnn')")
+                            elif decision == "planner":
+                                log.info(f"✅ HGNN via planner route (decision='planner') - expected for unified routing model")
+                                # Check if profile is specified
+                                profile = extract_profile_metadata(hgnn_res)
+                                if profile:
+                                    log.info(f"   Profile used: {profile}")
                             else:
-                                log.warning(f"⚠️ Expected decision='hgnn', got '{decision}'")
+                                log.warning(f"⚠️ Expected decision='hgnn' or 'planner', got '{decision}'")
                                 log.warning("   Check that force_hgnn flag is working correctly")
                             
                             # Check if this was forced via flag or natural threshold crossing
@@ -3985,6 +4213,10 @@ def main():
     log.info("=" * 60)
     log.info("🎯 SEEDCORE ARCHITECTURE VALIDATION SUMMARY")
     log.info("=" * 60)
+    log.info("📋 ROUTING MODEL: Unified Planner (fast → planner → hgnn)")
+    log.info("   - 'planner' is canonical escalation route")
+    log.info("   - 'deep' is profile flag, not routing decision")
+    log.info("   - Profile selection is internal to planner")
     log.info("✅ Ray cluster & actors: HEALTHY")
     log.info("✅ Serve apps: RUNNING")
     

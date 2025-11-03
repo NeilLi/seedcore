@@ -45,12 +45,18 @@ from seedcore.cognitive.cognitive_core import (
     CognitiveContext,
     CognitiveTaskType,
 )
+from seedcore.models.result_schema import (
+    create_cognitive_result,
+    create_escalated_result,
+    create_error_result,
+    ResultKind,
+)
 
 # --- Configuration ---
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
 
-# --- Request/Response Models (Unchanged) ---
+# --- Request/Response Models ---
 class CognitiveRequest(BaseModel):
     agent_id: str
     incident_context: Dict[str, Any] = None
@@ -67,6 +73,14 @@ class CognitiveRequest(BaseModel):
     target_capabilities: Dict[str, Any] = None
     knowledge_context: Optional[Dict[str, Any]] = None
     profile: Optional[str] = None  # "fast" | "deep" - profile hint from cognitive client
+    depth: Optional[str] = None  # Legacy alias for profile (maps to profile)
+    context: Optional[Dict[str, Any]] = None  # Router context passthrough
+    task_id: Optional[str] = None  # Task ID for tracking
+    correlation_id: Optional[str] = None  # Correlation ID for tracing
+    proto_plan: Optional[Dict[str, Any]] = None  # Proto plan hint from upstream
+    prior_result: Optional[Dict[str, Any]] = None  # Prior result from upstream
+    return_taskresult: Optional[bool] = False  # Key switch: if True, return TaskResult envelope (for routers)
+    caller: Optional[str] = None  # Caller identifier (e.g., "router" or "agent")
     llm_provider_override: Optional[str] = None  # Optional provider override (e.g., "anthropic")
     llm_model_override: Optional[str] = None  # Optional model override (e.g., "claude-3-5-sonnet")
     providers: Optional[list] = None  # Multi-provider pool hint
@@ -248,21 +262,23 @@ class CognitiveServeService:
                 input_data=input_data
             )
             
-            # Check if request has profile/depth hint for DEEP profile
+            # Check if request has profile hint for DEEP profile
+            # Note: Profile is metadata for LLM selection, routing decision is "planner"
             use_deep = False
             # First check explicit profile parameter from cognitive client
             if request.profile and request.profile.lower() == "deep":
                 use_deep = True
-                logger.info(f"🧠 /plan-task: Using DEEP profile per request.profile='deep'")
+                logger.info(f"🧠 /plan-task: Using DEEP profile (planner path) per request.profile='deep'")
             # Also infer from task description complexity
             elif request.task_description:
                 complex_keywords = ['complex', 'analysis', 'decompose', 'plan', 'strategy', 'reasoning', 'hgnn', 'hypergraph']
                 desc_lower = request.task_description.lower()
                 if any(keyword in desc_lower for keyword in complex_keywords):
                     use_deep = True
-                    logger.info(f"🧠 Detected complex query, using DEEP profile (OpenAI): {request.task_description[:50]}...")
+                    logger.info(f"🧠 Detected complex query, using DEEP profile (planner path): {request.task_description[:50]}...")
             
             # Return immediate minimal response and run actual planning in background
+            # profile_label is metadata, not routing decision (routing is "planner")
             profile_label = "deep" if use_deep else "fast"
             minimal_payload = {
                 "thought_process": f"{profile_label.capitalize()} path: returning immediate minimal plan.",
@@ -293,29 +309,32 @@ class CognitiveServeService:
     async def plan(self, request: CognitiveRequest):
         """
         Plan endpoint that supports profile parameter (FAST/DEEP) and optional provider/model overrides.
-        This is the preferred endpoint for cognitive client with explicit profile selection.
-        Supports all parameters from cognitive_client.plan() method.
+        - RayAgent: returns CognitiveResponse (default).
+        - Routers: set return_taskresult=True to receive TaskResult-like envelope.
         """
         try:
-            # Handle current_capabilities - can be str or dict from client
+            # --- 0) Normalize request -------------------------------------------------
+            # Map legacy 'depth' to 'profile' if necessary
+            profile = (request.profile or request.depth or "fast").lower()
+            if profile not in ("fast", "deep"):
+                profile = "fast"
+
+            # Handle current_capabilities (str or dict)
             agent_capabilities = {}
             if request.current_capabilities:
                 if isinstance(request.current_capabilities, str):
-                    # If it's a string, try to parse or use as-is
-                    if request.current_capabilities.strip():
-                        # Could be JSON string, but for now treat as description
-                        agent_capabilities = {"description": request.current_capabilities}
+                    s = request.current_capabilities.strip()
+                    if s:
+                        agent_capabilities = {"description": s}
                 elif isinstance(request.current_capabilities, dict):
                     agent_capabilities = request.current_capabilities
-            
-            # Prepare input data with all supported parameters
+
+            # Build input_data for cognitive core
             input_data = {
                 "task_description": request.task_description,
                 "agent_capabilities": agent_capabilities,
-                "available_resources": request.available_tools or {}
+                "available_resources": request.available_tools or {},
             }
-            
-            # Include provider/model overrides if provided
             if request.llm_provider_override:
                 input_data["llm_provider_override"] = request.llm_provider_override
             if request.llm_model_override:
@@ -324,93 +343,146 @@ class CognitiveServeService:
                 input_data["providers"] = request.providers
             if request.meta:
                 input_data["meta"] = request.meta
-            
-            context = CognitiveContext(
+
+            # Router context passthrough
+            context_dict = request.context or {}
+            if request.task_id:
+                context_dict["task_id"] = request.task_id
+            if request.correlation_id:
+                context_dict["correlation_id"] = request.correlation_id
+            if request.proto_plan is not None:
+                context_dict["proto_plan"] = request.proto_plan
+            if request.prior_result is not None:
+                context_dict["prior_result"] = request.prior_result
+
+            # Merge router context into input_data for cognitive core
+            if context_dict:
+                input_data["router_context"] = context_dict
+
+            ctx = CognitiveContext(
                 agent_id=request.agent_id,
                 task_type=CognitiveTaskType.TASK_PLANNING,
-                input_data=input_data
+                input_data=input_data,
             )
-            
-            # Use profile parameter directly from request (sent by cognitive client)
-            use_deep = False
-            if request.profile and request.profile.lower() == "deep":
-                use_deep = True
-                logger.info(f"🧠 /plan endpoint: Using DEEP profile per profile='deep'")
-                if request.llm_provider_override:
-                    logger.info(f"   Provider override: {request.llm_provider_override}")
-                if request.llm_model_override:
-                    logger.info(f"   Model override: {request.llm_model_override}")
-            else:
-                logger.info(f"/plan endpoint: Using FAST profile (profile={request.profile})")
-            
-            # Immediate response option (FAST/DEEP) to avoid dispatcher retries/timeouts
-            try:
-                immediate_fast = os.getenv("COG_FAST_IMMEDIATE", "1") in ("1", "true", "True")
-            except Exception:
-                immediate_fast = True
-            try:
-                immediate_deep = os.getenv("COG_DEEP_IMMEDIATE", "1") in ("1", "true", "True")
-            except Exception:
-                immediate_deep = True
 
-            if (not use_deep and immediate_fast) or (use_deep and immediate_deep):
-                # Return a minimal, usable payload immediately for both profiles
-                profile_label = "deep" if use_deep else "fast"
-                # Fire-and-forget actual planning in the background
-                try:
-                    asyncio.create_task(self._run_plan_async(context, use_deep))
-                except Exception as e:
-                    logger.debug(f"Failed to schedule background plan task: {e}")
-                minimal_payload = {
+            # --- 1) Profile selection (planner → deep mapping is upstream; we honor given profile) ----
+            # NOTE: profile="deep" means use deep LLM for single planning, NOT multi-plan/escalation.
+            # Multi-plan/escalation (HGNN decomposition) is only for router escalation paths.
+            # RayAgent calls with profile="deep" → single plan with deep LLM (correct behavior).
+            # Router calls → may escalate to multi-plan elsewhere, but /plan itself is single-plan.
+            use_deep = (profile == "deep")
+            profile_label = "deep" if use_deep else "fast"
+            is_router_call = (request.caller == "router" and request.return_taskresult)
+            logger.info(
+                f"/plan: Using profile={profile_label} for single planning "
+                f"(caller={request.caller or 'unknown'}, router_call={is_router_call})"
+            )
+
+            # --- 2) Immediate/minimal response path (non-blocking) -------------------
+            def _minimal_payload():
+                return {
                     "thought_process": f"{profile_label.capitalize()} path: returning immediate minimal plan.",
-                    "step_by_step_plan": [
-                        {
-                            "step": 1,
-                            "action": "Generate a concise summary addressing the user request.",
-                        }
-                    ],
-                    "estimated_complexity": 3.0 if not use_deep else 5.0,
+                    "step_by_step_plan": [{"step": 1, "action": "Generate a concise summary addressing the user request."}],
+                    "estimated_complexity": 5.0 if use_deep else 3.0,
                     "risk_assessment": "Low risk; detailed planning can be deferred.",
-                    "formatted_response": (
-                        request.task_description or "Task acknowledged; preparing a concise plan."
-                    ),
+                    "formatted_response": request.task_description or "Task acknowledged; preparing a concise plan.",
                     "meta": {"profile_used": profile_label, "immediate": True},
                 }
-                return CognitiveResponse(success=True, agent_id=request.agent_id, result=minimal_payload)
 
-            # Normal path: also use async background execution and return immediately
-            profile_label = "deep" if use_deep else "fast"
-            minimal_payload = {
-                "thought_process": f"{profile_label.capitalize()} path: returning immediate minimal plan.",
-                "step_by_step_plan": [
-                    {
-                        "step": 1,
-                        "action": "Generate a concise summary addressing the user request.",
-                    }
-                ],
-                "estimated_complexity": 3.0 if not use_deep else 5.0,
-                "risk_assessment": "Low risk; detailed planning can be deferred.",
-                "formatted_response": (
-                    request.task_description or "Task acknowledged; preparing a concise plan."
-                ),
-                "meta": {"profile_used": profile_label, "immediate": True},
-            }
-            # Fire-and-forget actual planning in the background
+            immediate_fast = (os.getenv("COG_FAST_IMMEDIATE", "1") in ("1", "true", "True"))
+            immediate_deep = (os.getenv("COG_DEEP_IMMEDIATE", "1") in ("1", "true", "True"))
+
+            if (not use_deep and immediate_fast) or (use_deep and immediate_deep):
+                try:
+                    asyncio.create_task(self._run_plan_async(ctx, use_deep))
+                except Exception as e:
+                    logger.debug(f"Failed to schedule background plan task: {e}")
+
+                minimal = _minimal_payload()
+
+                # If router requested a TaskResult envelope, wrap it
+                if request.return_taskresult:
+                    tr = create_cognitive_result(
+                        agent_id=request.agent_id or "router",
+                        task_type="planner",
+                        result=minimal,
+                        confidence_score=None,
+                        profile_used=profile_label,
+                        immediate=True,
+                        caller=request.caller or "router",
+                    )
+                    # Ensure metadata carries through IDs/context if present
+                    tr.metadata.update({
+                        "path": "cognitive_reasoning",
+                        "task_id": context_dict.get("task_id"),
+                        "correlation_id": context_dict.get("correlation_id"),
+                    })
+                    # Return raw dict; response_model is CognitiveResponse, but routers don't rely on it
+                    return tr.model_dump()
+
+                # Default agent response
+                return CognitiveResponse(success=True, agent_id=request.agent_id, result=minimal)
+
+            # --- 3) Normal path: also return immediately, do work in background ------
             try:
-                asyncio.create_task(self._run_plan_async(context, use_deep))
+                asyncio.create_task(self._run_plan_async(ctx, use_deep))
             except Exception as e:
                 logger.debug(f"Failed to schedule background plan task: {e}")
-            return CognitiveResponse(success=True, agent_id=request.agent_id, result=minimal_payload)
+
+            minimal = _minimal_payload()
+
+            if request.return_taskresult:
+                tr = create_cognitive_result(
+                    agent_id=request.agent_id or "router",
+                    task_type="planner",
+                    result=minimal,
+                    confidence_score=None,
+                    profile_used=profile_label,
+                    immediate=True,
+                    caller=request.caller or "router",
+                )
+                tr.metadata.update({
+                    "path": "cognitive_reasoning",
+                    "task_id": context_dict.get("task_id"),
+                    "correlation_id": context_dict.get("correlation_id"),
+                })
+                return tr.model_dump()
+
+            return CognitiveResponse(success=True, agent_id=request.agent_id, result=minimal)
 
         except Exception as e:
             logger.exception(f"Error in /plan endpoint for agent {request.agent_id}: {e}")
+
+            if request.return_taskresult:
+                # Return unified TaskResult error for routers
+                tr = create_error_result(
+                    error=str(e),
+                    error_type="cognitive_plan_exception",
+                    original_type=ResultKind.COGNITIVE.value,
+                    caller=request.caller or "router",
+                )
+                return tr.model_dump()
+
+            # Default (agent) error shape
             return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
 
     async def _run_plan_async(self, context: CognitiveContext, use_deep: bool) -> None:
-        """Run planning in the background without blocking the HTTP response."""
+        """
+        Run single planning in the background without blocking the HTTP response.
+        
+        NOTE: This performs SINGLE planning with the selected LLM profile (FAST or DEEP).
+        It does NOT perform multi-plan/escalation (HGNN decomposition).
+        Multi-plan is only triggered by router escalation paths, not by profile="deep" requests.
+        """
         try:
+            # forward_cognitive_task with use_deep selects LLM profile for single planning
+            # use_deep=True → uses deep LLM (e.g., OpenAI) for single plan
+            # use_deep=False → uses fast LLM (e.g., Anthropic) for single plan
             result = self.cognitive_service.forward_cognitive_task(context, use_deep=use_deep)
-            logger.debug(f"Background plan task completed for agent {context.agent_id}, use_deep={use_deep}")
+            logger.debug(
+                f"Background single plan completed for agent {context.agent_id}, "
+                f"use_deep={use_deep} (profile={'deep' if use_deep else 'fast'})"
+            )
         except Exception as e:
             logger.exception(
                 f"Background plan task failed for agent {context.agent_id}, use_deep={use_deep}: {e}"
@@ -457,7 +529,7 @@ class CognitiveServeService:
                 "formatted_response": (
                     request.task_description or "Escalation task acknowledged; preparing escalation plan."
                 ),
-                "meta": {"profile_used": "deep", "immediate": True, "escalation": True},
+                    "meta": {"profile_used": "deep", "immediate": True, "escalation": True, "routing": "planner"},
             }
             
             # Fire-and-forget actual escalation planning in the background
@@ -640,7 +712,7 @@ class CognitiveServeService:
     @app.post("/test-deep-profile", response_model=CognitiveResponse)
     async def test_deep_profile(self, request: CognitiveRequest):
         """
-        Test endpoint that explicitly uses DEEP profile (OpenAI) to verify token logging.
+        Test endpoint that explicitly uses DEEP profile (planner path, OpenAI) to verify token logging.
         """
         logger.info("🧪 Testing DEEP profile (OpenAI) to verify token logging...")
         try:

@@ -389,10 +389,13 @@ class CognitiveService:
     """
     Service layer for cognitive operations with multi-provider, dual-profile (FAST/DEEP) support.
 
-    Behavior:
+    Profiles (internal LLM selection, not routing):
       - DEEP provider set via LLM_PROVIDER_DEEP (defaults to OpenAI if not set).
       - FAST provider chosen from LLM_PROVIDER_FAST > LLM_PROVIDERS > LLM_PROVIDER > OpenAI.
       - Per-profile provider/model overrides supported via env.
+    
+    Note: Routing decisions use "planner" (not "deep"). DEEP profile is internal metadata
+    that may be used within the planner path. Telemetry tracks "planner" only.
     """
     
     def __init__(self, ocps_client=None, profiles: Optional[Dict[LLMProfile, dict]] = None):
@@ -573,7 +576,9 @@ class CognitiveService:
         if isinstance(fast_result, dict) and "result" in fast_result:
             meta = fast_result["result"].get("meta", {})
             if meta.get("escalate_hint", False):
-                logger.info(f"Escalation suggested, trying DEEP profile for task {context.task_type.value}")
+                # Escalation to planner path: use DEEP profile internally (LLMProfile.DEEP)
+                # Note: routing decision is "planner", profile="deep" is metadata
+                logger.info(f"Escalation suggested, using DEEP profile (planner path) for task {context.task_type.value}")
                 deep_result = self.plan(context, depth=LLMProfile.DEEP)
                 if isinstance(deep_result, dict) and "result" in deep_result:
                     deep_result["result"]["meta"] = deep_result["result"].get("meta", {})

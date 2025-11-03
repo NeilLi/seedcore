@@ -94,6 +94,13 @@ class CognitiveRouter(Router):
 
     If the upstream already produced kind == "escalated" or kind == "error",
     we DO NOT call cognitive again. We just passthrough that structure.
+
+    Semantic Bridge:
+      - Routing decision: "planner" (from Coordinator routing logic)
+      - LLM profile: "deep" (for model selection within cognitive service)
+      - This router translates planner → deep: when routed via "planner",
+        we default to "deep" profile unless explicitly overridden.
+      - This maintains clean separation: routing uses "planner", LLM uses "deep".
     """
 
     def __init__(
@@ -296,7 +303,19 @@ class CognitiveRouter(Router):
             logger.debug("CognitiveRouter planning invocation starting.")
 
             caps_str = self._build_capability_string(task_data)
-            profile = task_data.get("profile", "deep")
+            
+            # Semantic bridge between routing and LLM profile
+            # - Routing decision uses "planner" (from Coordinator)
+            # - LLM profile uses "deep" (for model selection)
+            # We translate planner → deep for downstream cognitive service calls
+            routing_kind = task_data.get("kind", "planner")  # Routing decision: "planner"
+            profile = task_data.get("profile", "deep")  # Profile metadata: "deep" or "fast" for LLM selection
+            
+            # Ensure consistent routing semantics: if routing is "planner", default to "deep" profile
+            if routing_kind == "planner" and not task_data.get("profile"):
+                # When routed via planner path, default to deep profile unless explicitly overridden
+                profile = "deep"
+            
             agent_id = task_data.get("agent_id", "router")
             task_desc = task_data.get("description", "")
 
@@ -308,12 +327,15 @@ class CognitiveRouter(Router):
 
             proto_plan_hint = self._extract_proto_plan(task_data, prior_result)
 
+            # Build cognitive service request
+            # Note: "profile" is metadata for LLM selection (deep/fast), not routing.
+            # Routing decision is handled by Coordinator (uses "planner" route).
             cog_request = {
                 "agent_id": agent_id,
                 "task_description": task_desc,
                 "current_capabilities": caps_str,
                 "available_tools": available_tools,
-                "profile": profile,
+                "profile": profile,  # Metadata: "deep" or "fast" for LLM selection
 
                 # raw info for planner context / chain-of-thought / safety
                 "context": task_data,
@@ -326,6 +348,10 @@ class CognitiveRouter(Router):
                 # pass along upstream result envelope for richer situational awareness
                 # (e.g. coordinator decision signals, surprise score, etc.)
                 "prior_result": prior_result,
+
+                # Request TaskResult envelope for routers
+                "return_taskresult": True,  # <<< IMPORTANT: routers expect TaskResult
+                "caller": "router",  # Identify caller as router
             }
 
             logger.debug(

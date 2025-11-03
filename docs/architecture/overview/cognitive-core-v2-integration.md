@@ -11,7 +11,7 @@ The Cognitive Core v2 (now integrated into `cognitive_core.py`) represents a com
 - **Dynamic Token Budgeting** based on OCPS signals and energy state
 - **Hardened Cache Governance** with TTL per task type
 - **Post-Condition Checks** for DSPy output validation
-- **OCPS Integration** for fast/deep path routing decisions
+- **OCPS Integration** for fast/planner path routing decisions (planner path uses deep LLM profile internally)
 - **Fact Sanitization** and conflict detection
 
 ## Integration Points with v2 Architecture
@@ -21,8 +21,8 @@ The Cognitive Core v2 (now integrated into `cognitive_core.py`) represents a com
 The enhanced cognitive core integrates directly with the OCPS valve for intelligent routing:
 
 ```python
-def _should_escalate_to_deep_path(self, sufficiency: RetrievalSufficiency, task_type: CognitiveTaskType) -> bool:
-    """Determine if task should be escalated to deep path based on retrieval sufficiency."""
+def _should_escalate_to_planner_path(self, sufficiency: RetrievalSufficiency, task_type: CognitiveTaskType) -> bool:
+    """Determine if task should be escalated to planner path (which may use deep LLM profile) based on retrieval sufficiency."""
     # Escalation criteria based on retrieval quality
     low_coverage = sufficiency.coverage < 0.6
     low_diversity = sufficiency.diversity < 0.5
@@ -200,9 +200,9 @@ class AnalyzeFailureSignature(WithKnowledgeMixin, dspy.Signature):
 - **Validation**: Post-condition checks
 - **Target**: ≥90% of requests
 
-### Deep Path (20s HGNN)
-- **Escalation**: Based on retrieval sufficiency
-- **Processing**: Enhanced with knowledge context
+### Planner Path (20s HGNN, deep LLM profile)
+- **Escalation**: Based on retrieval sufficiency (routing decision: "planner")
+- **Processing**: Enhanced with knowledge context (uses deep LLM profile internally)
 - **Safety**: Full validation and conflict resolution
 - **Target**: Complex tasks with low sufficiency
 
@@ -224,8 +224,8 @@ class AnalyzeFailureSignature(WithKnowledgeMixin, dspy.Signature):
     target_latency_ms: 200
     gnn_model_path: "/app/models/fast_gnn.pkl"
 
-# Deep HGNN Processing (SPREAD placement for compute isolation)
-- name: CognitiveServiceDeep
+# Planner Path HGNN Processing (SPREAD placement for compute isolation, uses deep LLM profile)
+- name: CognitiveServicePlanner
   num_replicas: 1
   ray_actor_options:
     placement_group: "cognitive_spread_group"
@@ -245,7 +245,7 @@ class AnalyzeFailureSignature(WithKnowledgeMixin, dspy.Signature):
 - **Retrieval Sufficiency**: Coverage, diversity, agreement, conflicts
 - **Token Budgeting**: Dynamic adjustments based on energy/load
 - **Cache Performance**: Hit rates, TTL compliance, staleness
-- **OCPS Integration**: Escalation rates, fast/deep path ratios
+- **OCPS Integration**: Escalation rates, fast/planner path ratios (planner path tracks deep LLM profile usage)
 - **Post-Condition Violations**: Policy compliance monitoring
 
 ### Alerting Rules
@@ -287,7 +287,7 @@ class AnalyzeFailureSignature(WithKnowledgeMixin, dspy.Signature):
 The Cognitive Core v2 represents a complete evolution of the cognitive reasoning system, implementing all the suggested improvements while maintaining full integration with the OCPS-enabled v2 architecture. The system now provides:
 
 - **Better Retrieval**: RRF fusion + MMR diversity for higher quality facts
-- **Intelligent Routing**: OCPS integration for optimal fast/deep path decisions
+- **Intelligent Routing**: OCPS integration for optimal fast/planner path decisions (planner path uses deep LLM profile)
 - **Dynamic Resource Management**: Token budgeting based on system state
 - **Enhanced Safety**: Post-condition checks and fact sanitization
 - **Production Readiness**: Comprehensive monitoring and alerting

@@ -534,7 +534,8 @@ class CognitiveCore(dspy.Module):
     Enhanced cognitive core with OCPS integration, cache governance, and post-condition checks.
     
     This module integrates with SeedCore's memory, energy, and lifecycle systems
-    to provide intelligent reasoning capabilities for agents with OCPS fast/deep path routing.
+    to provide intelligent reasoning capabilities for agents with OCPS fast/planner path routing
+    (where planner path may use deep profile internally).
     """
     
     def __init__(self, llm_provider: str = "openai", model: str = "gpt-4o", 
@@ -726,10 +727,10 @@ class CognitiveCore(dspy.Module):
                     except Exception:
                         pass
                 
-                # Check if should escalate to deep path
-                escalate_hint = self._should_escalate_to_deep_path(final_sufficiency, context.task_type)
+                # Check if should escalate to planner path (with deep profile)
+                escalate_hint = self._should_escalate_to_planner_path(final_sufficiency, context.task_type)
                 if escalate_hint:
-                    logger.info(f"Suggesting escalation for {context.task_type.value} due to low sufficiency")
+                    logger.info(f"Suggesting escalation to planner path for {context.task_type.value} due to low sufficiency")
                     # Coordinator will decide whether to escalate based on this hint
                 
                 # Build knowledge context with escalation hint
@@ -738,7 +739,7 @@ class CognitiveCore(dspy.Module):
             else:
                 knowledge_context = {"facts": [], "summary": "No context broker available", "sufficiency": {}, "escalate_hint": False}
                 
-                # Add negative cache for expensive deep-path misses
+                # Add negative cache for expensive planner-path misses
                 if self._mw_enabled:
                     mw = self._mw(context.agent_id)
                     if mw:
@@ -1109,8 +1110,8 @@ class CognitiveCore(dspy.Module):
         
         return len(violations) == 0, violations
 
-    def _should_escalate_to_deep_path(self, sufficiency: RetrievalSufficiency, task_type: CognitiveTaskType) -> bool:
-        """Determine if task should be escalated to deep path based on retrieval sufficiency."""
+    def _should_escalate_to_planner_path(self, sufficiency: RetrievalSufficiency, task_type: CognitiveTaskType) -> bool:
+        """Determine if task should be escalated to planner path (with deep profile) based on retrieval sufficiency."""
         if not self.ocps_client:
             return False
         
