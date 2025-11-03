@@ -26,7 +26,10 @@ class CognitiveServiceClient(BaseServiceClient):
     - Decision making
     - Memory synthesis
     - Capability assessment
-    - Task planning (FAST/DEEP, multi-provider)
+    - Task planning (FAST/DEEP profiles, multi-provider)
+    
+    Note: FAST/DEEP are profile metadata for LLM selection, not routing decisions.
+    Routing decision is "planner" (which may use deep profile internally).
     """
 
     def __init__(
@@ -90,9 +93,9 @@ class CognitiveServiceClient(BaseServiceClient):
         except Exception:
             self.deep_timeout_s = min(90.0, max(timeout, 60.0))
 
-    def _timeout_for_depth(self, depth: Optional[str]) -> float:
-        d = (depth or "").lower()
-        if d == "deep":
+    def _timeout_for_profile(self, profile: Optional[str]) -> float:
+        p = (profile or "").lower()
+        if p == "deep":
             return float(self.deep_timeout_s)
         # default fast
         return float(self.fast_timeout_s)
@@ -147,7 +150,7 @@ class CognitiveServiceClient(BaseServiceClient):
         agent_id: str,
         task_description: str,
         *,
-        depth: str = "fast",                 # "fast" | "deep"
+        profile: str = "fast",                 # "fast" | "deep"
         provider: Optional[str] = None,      # optional override (e.g., "anthropic")
         model: Optional[str] = None,         # optional override (e.g., "claude-3-5-sonnet")
         current_capabilities: Optional[str] = None,
@@ -157,6 +160,9 @@ class CognitiveServiceClient(BaseServiceClient):
         """
         Plan a task with explicit FAST/DEEP profile and optional provider/model override.
         Tries /plan first; falls back to /plan-task for older deployments.
+        
+        Note: profile parameter ("fast"|"deep") is metadata for LLM selection, not routing.
+        Routing decision is handled by Coordinator (uses "planner" route).
         """
         body = {
             "agent_id": agent_id,
@@ -164,7 +170,7 @@ class CognitiveServiceClient(BaseServiceClient):
             "current_capabilities": current_capabilities or "",
             "available_tools": available_tools or {},
             # Hints for the service:
-            "profile": depth.lower(),                     # "fast" | "deep"
+            "profile": profile.lower(),                     # "fast" | "deep"
             "llm_provider_override": (provider or "").lower() or None,
             "llm_model_override": model or None,
             "providers": self._provider_hints() or None,  # multi-provider pool hint
@@ -174,7 +180,7 @@ class CognitiveServiceClient(BaseServiceClient):
         body = {k: v for k, v in body.items() if v is not None}
 
         # New route -> legacy route compatibility
-        eff_timeout = self._timeout_for_depth(depth)
+        eff_timeout = self._timeout_for_profile(profile)
         return await self._post_first_available(
             candidate_paths=("/plan", "/plan-task"),
             json=body,
@@ -215,7 +221,7 @@ class CognitiveServiceClient(BaseServiceClient):
         agent_id: str,
         problem_statement: str,
         *,
-        depth: Optional[str] = None,               # optional "fast" | "deep"
+        profile: Optional[str] = None,               # optional "fast" | "deep"
         provider: Optional[str] = None,
         model: Optional[str] = None,
         constraints: Optional[Dict[str, Any]] = None,
@@ -230,14 +236,14 @@ class CognitiveServiceClient(BaseServiceClient):
             "problem_statement": problem_statement,
             "constraints": constraints or {},
             "available_tools": available_tools or {},
-            "profile": depth.lower() if depth else None,
+            "profile": profile.lower() if profile else None,
             "llm_provider_override": (provider or "").lower() or None,
             "llm_model_override": model or None,
             "providers": self._provider_hints() or None,
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        eff_timeout = self._timeout_for_depth(depth)
+        eff_timeout = self._timeout_for_profile(profile)
         return await self.post("/solve-problem", json=body, timeout=eff_timeout)
 
     # ---------------------------
@@ -249,7 +255,7 @@ class CognitiveServiceClient(BaseServiceClient):
         agent_id: str,
         decision_context: Dict[str, Any],
         *,
-        depth: Optional[str] = None,
+        profile: Optional[str] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
         historical_data: Optional[Dict[str, Any]] = None,
@@ -261,14 +267,14 @@ class CognitiveServiceClient(BaseServiceClient):
             "decision_context": decision_context,
             "historical_data": historical_data or {},
             "knowledge_context": knowledge_context or {},
-            "profile": depth.lower() if depth else None,
+            "profile": profile.lower() if profile else None,
             "llm_provider_override": (provider or "").lower() or None,
             "llm_model_override": model or None,
             "providers": self._provider_hints() or None,
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        eff_timeout = self._timeout_for_depth(depth)
+        eff_timeout = self._timeout_for_profile(profile)
         return await self.post("/make-decision", json=body, timeout=eff_timeout)
 
     # ---------------------------
@@ -281,7 +287,7 @@ class CognitiveServiceClient(BaseServiceClient):
         memory_fragments: List[Dict[str, Any]],
         synthesis_goal: str,
         *,
-        depth: Optional[str] = None,
+        profile: Optional[str] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
         extra_meta: Optional[Dict[str, Any]] = None,
@@ -290,14 +296,14 @@ class CognitiveServiceClient(BaseServiceClient):
             "agent_id": agent_id,
             "memory_fragments": memory_fragments,
             "synthesis_goal": synthesis_goal,
-            "profile": depth.lower() if depth else None,
+            "profile": profile.lower() if profile else None,
             "llm_provider_override": (provider or "").lower() or None,
             "llm_model_override": model or None,
             "providers": self._provider_hints() or None,
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        eff_timeout = self._timeout_for_depth(depth)
+        eff_timeout = self._timeout_for_profile(profile)
         return await self.post("/synthesize-memory", json=body, timeout=eff_timeout)
 
     # ---------------------------
@@ -311,7 +317,7 @@ class CognitiveServiceClient(BaseServiceClient):
         current_capabilities: Dict[str, Any],
         target_capabilities: Dict[str, Any],
         *,
-        depth: Optional[str] = None,
+        profile: Optional[str] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
         extra_meta: Optional[Dict[str, Any]] = None,
@@ -321,14 +327,14 @@ class CognitiveServiceClient(BaseServiceClient):
             "performance_data": performance_data,
             "current_capabilities": current_capabilities,
             "target_capabilities": target_capabilities,
-            "profile": depth.lower() if depth else None,
+            "profile": profile.lower() if profile else None,
             "llm_provider_override": (provider or "").lower() or None,
             "llm_model_override": model or None,
             "providers": self._provider_hints() or None,
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        eff_timeout = self._timeout_for_depth(depth)
+        eff_timeout = self._timeout_for_profile(profile)
         return await self.post("/assess-capabilities", json=body, timeout=eff_timeout)
 
     # ---------------------------
@@ -340,7 +346,7 @@ class CognitiveServiceClient(BaseServiceClient):
         agent_id: str,
         incident_context: Dict[str, Any],
         *,
-        depth: Optional[str] = None,
+        profile: Optional[str] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
         knowledge_context: Optional[Dict[str, Any]] = None,
@@ -350,14 +356,14 @@ class CognitiveServiceClient(BaseServiceClient):
             "agent_id": agent_id,
             "incident_context": incident_context,
             "knowledge_context": knowledge_context or {},
-            "profile": depth.lower() if depth else None,
+            "profile": profile.lower() if profile else None,
             "llm_provider_override": (provider or "").lower() or None,
             "llm_model_override": model or None,
             "providers": self._provider_hints() or None,
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        eff_timeout = self._timeout_for_depth(depth)
+        eff_timeout = self._timeout_for_profile(profile)
         return await self.post("/reason-about-failure", json=body, timeout=eff_timeout)
 
     # ---------------------------
@@ -370,7 +376,7 @@ class CognitiveServiceClient(BaseServiceClient):
         task_type: str,
         input_data: Dict[str, Any],
         *,
-        depth: Optional[str] = None,
+        profile: Optional[str] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
         memory_context: Optional[Dict[str, Any]] = None,
@@ -388,14 +394,14 @@ class CognitiveServiceClient(BaseServiceClient):
             "memory_context": memory_context or {},
             "energy_context": energy_context or {},
             "lifecycle_context": lifecycle_context or {},
-            "profile": depth.lower() if depth else None,
+            "profile": profile.lower() if profile else None,
             "llm_provider_override": (provider or "").lower() or None,
             "llm_model_override": model or None,
             "providers": self._provider_hints() or None,
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        eff_timeout = self._timeout_for_depth(depth)
+        eff_timeout = self._timeout_for_profile(profile)
         return await self.post("/forward", json=body, timeout=eff_timeout)
 
     # ---------------------------
@@ -424,7 +430,7 @@ class CognitiveServiceClient(BaseServiceClient):
         agent_id: str,
         task_description: str,
         *,
-        depth: str = "fast",
+        profile: str = "fast",
         provider: Optional[str] = None,
         model: Optional[str] = None,
         current_capabilities: Optional[str] = None,
@@ -440,13 +446,13 @@ class CognitiveServiceClient(BaseServiceClient):
 
         # Resolve an effective timeout (use your attribute name here)
         base_timeout = getattr(self, "timeout", 8.0)
-        eff_timeout = float(base_timeout) * (4.0 if str(depth).lower() == "deep" else 1.0)
+        eff_timeout = float(base_timeout) * (4.0 if str(profile).lower() == "deep" else 1.0)
 
         async def _call_plan():
             return await self.plan(
                 agent_id=agent_id,
                 task_description=task_description,
-                depth=depth,
+                profile=profile,
                 provider=provider,
                 model=model,
                 current_capabilities=current_capabilities,

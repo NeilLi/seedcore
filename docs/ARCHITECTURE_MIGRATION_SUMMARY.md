@@ -197,7 +197,47 @@ GRAPH_TASK_TYPES = (
 **General Task Types** (handled by QueueDispatcher):
 - All other task types not in `GRAPH_TASK_TYPES`
 - Routed through coordinator service for execution
-- Examples: `cognitive_task`, `agent_task`, `organ_task`, etc.
+- Examples found in verification scripts:
+  - `ping` - Connectivity test tasks
+  - `general_query` - General query tasks (used for escalation testing)
+  - `test_query` - Test query tasks
+  - `fact_search` - Fact search tasks
+  - `execute` - Execute/action tasks (e.g., robot_arm domain)
+  - `unknown_task` - Unknown/fallback task types
+  - `health_check` - Health check tasks
+  - Other examples: `cognitive_task`, `agent_task`, `organ_task`, etc.
+
+**Routing Flow for General Task Types:**
+
+1. **Task Claiming** (`QueueDispatcher`):
+   - Claims tasks from database excluding graph task types (`GRAPH_TASK_TYPES_EXCLUSION`)
+   - Creates `TaskPayload` with task metadata (type, params, domain, drift_score)
+   - Routes via configured router (default: `CoordinatorHttpRouter`)
+
+2. **Entry Router** (`CoordinatorHttpRouter` - default):
+   - Sends task to Coordinator service `/process-task`
+   - Coordinator analyzes task (drift_score, domain, type) and returns routing decision:
+     - `kind == "fast_path"` → delegate to **OrganismRouter** (fast-path execution)
+     - `kind == "cognitive"` → delegate to **CognitiveRouter** (planning/escalation)
+     - `kind == "escalated"` → return directly (already contains multi-step plan)
+     - `kind == "error"` → return error result
+
+3. **Fast-Path Execution** (`OrganismRouter`):
+   - Calls `/resolve-route` to identify which organ handles the task (based on type/domain)
+   - Calls `/execute-on-organ` to execute task on the selected organ
+   - If execution returns `kind == "cognitive"` → escalate to **CognitiveRouter**
+   - Otherwise returns result (`fast_path`, `escalated`, or `error`)
+
+4. **Planning** (`CognitiveRouter`):
+   - Called when Coordinator or Organism determines cognitive reasoning is needed
+   - Calls Cognitive service `/plan` with task context
+   - Returns multi-step plan or escalated result
+   - Uses "deep" profile by default when routed via "planner" path
+
+**Router Configuration:**
+- Default router type: `coordinator_http` (set via `DISPATCHER_ROUTER_TYPE`)
+- Alternative router types: `organism`, `cognitive`, `auto`
+- Routers include circuit breakers and retry logic for resilience
 
 #### Task Structure & Fields
 

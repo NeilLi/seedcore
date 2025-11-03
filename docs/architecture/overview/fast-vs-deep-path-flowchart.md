@@ -1,4 +1,6 @@
-# Fast vs Deep Path Flowchart
+# Fast vs Planner Path Flowchart
+
+**Note**: This document describes routing decisions. The routing decision is "planner" (not "deep"). The "deep" term refers to LLM profile metadata for model selection (e.g., GPT-4o vs mini), while "planner" is the routing decision.
 
 ## OCPS Two-Tier Coordination System
 
@@ -26,7 +28,7 @@
 │  │                    Decision Logic                                      │   │
 │  │                                                                         │   │
 │  │  IF S_t > θ OR fast_path_ratio < 0.9 OR sufficiency_low:              │   │
-│  │      → ESCALATE to Deep Path                                           │   │
+│  │      → ESCALATE to Planner Path (may use deep LLM profile)            │   │
 │  │  ELSE:                                                                  │   │
 │  │      → ROUTE to Fast Path                                               │   │
 │  └─────────────────────────────────────────────────────────────────────────┘   │
@@ -36,8 +38,8 @@
                     │                     │
                     ▼                     ▼
 ┌─────────────────────────┐    ┌─────────────────────────┐
-│      FAST PATH          │    │      DEEP PATH          │
-│    (200ms GNN)          │    │     (20s HGNN)          │
+│      FAST PATH          │    │    PLANNER PATH         │
+│    (200ms GNN)          │    │   (20s HGNN, deep LLM)  │
 │                         │    │                         │
 │  ┌─────────────────┐    │    │  ┌─────────────────┐    │
 │  │  Context Broker │    │    │  │  Context Broker │    │
@@ -58,7 +60,7 @@
 │  ┌─────────────────┐    │    │  ┌─────────────────┐    │
 │  │  DSPy           │    │    │  │  DSPy           │    │
 │  │  Processing     │    │    │  │  Processing     │    │
-│  │  - Fast GNN     │    │    │  │  - Deep HGNN    │    │
+│  │  - Fast GNN     │    │    │  │  - Planner HGNN │    │
 │  │  - Post-conds   │    │    │  │  - Full valid   │    │
 │  │  - Quick return │    │    │  │  - Safety check │    │
 │  └─────────────────┘    │    │  └─────────────────┘    │
@@ -86,13 +88,13 @@
 
 | Condition | Action | Rationale |
 |-----------|--------|-----------|
-| `S_t > θ` (0.8) | Deep Path | CUSUM threshold exceeded |
-| `fast_path_ratio < 0.9` | Deep Path | Maintain 90% fast path guarantee |
-| `sufficiency.coverage < 0.6` | Deep Path | Low retrieval coverage |
-| `sufficiency.diversity < 0.5` | Deep Path | Low fact diversity |
-| `sufficiency.conflict_count > 2` | Deep Path | High fact conflicts |
-| `sufficiency.staleness_ratio > 0.3` | Deep Path | Too many stale facts |
-| `sufficiency.trust_score < 0.4` | Deep Path | Low trust in facts |
+| `S_t > θ` (0.8) | Planner Path | CUSUM threshold exceeded (uses deep LLM profile) |
+| `fast_path_ratio < 0.9` | Planner Path | Maintain 90% fast path guarantee (uses deep LLM profile) |
+| `sufficiency.coverage < 0.6` | Planner Path | Low retrieval coverage (uses deep LLM profile) |
+| `sufficiency.diversity < 0.5` | Planner Path | Low fact diversity (uses deep LLM profile) |
+| `sufficiency.conflict_count > 2` | Planner Path | High fact conflicts (uses deep LLM profile) |
+| `sufficiency.staleness_ratio > 0.3` | Planner Path | Too many stale facts (uses deep LLM profile) |
+| `sufficiency.trust_score < 0.4` | Planner Path | Low trust in facts (uses deep LLM profile) |
 | All else | Fast Path | Default to fast processing |
 
 ### 2. Performance Targets
@@ -100,21 +102,21 @@
 | Path | Latency | Success Rate | Throughput | Use Case |
 |------|---------|--------------|------------|----------|
 | **Fast** | 200ms | 95% | 1000/min | Pattern matching, cache hits |
-| **Deep** | 20s | 90% | 10/min | Complex reasoning, high-stakes |
+| **Planner** | 20s | 90% | 10/min | Complex reasoning, high-stakes (uses deep LLM profile) |
 
 ### 3. Memory Access Patterns
 
 | Path | Primary Memory | Fallback | Compression |
 |------|----------------|----------|-------------|
 | **Fast** | Mw (5ms) | M2.5 (20ms) | LZ4 |
-| **Deep** | Mlt (50ms) | Mfb (10ms) | LZ4 + Delta |
+| **Planner** | Mlt (50ms) | Mfb (10ms) | LZ4 + Delta |
 
 ### 4. Safety Validation
 
 | Path | Validation | Bound | Optional |
 |------|------------|-------|----------|
 | **Fast** | Basic | L_tot < 0.5 | None |
-| **Deep** | Full | L_tot < 0.9 | zk-SNARK, TEE |
+| **Planner** | Full | L_tot < 0.9 | zk-SNARK, TEE |
 
 ## Monitoring Points
 
@@ -124,11 +126,12 @@
 - **Cache Hit Rate**: Target >95%, Alert <90%
 - **Throughput**: Monitor for degradation
 
-### Deep Path Metrics
+### Planner Path Metrics
 - **Latency**: Target <20s, Alert >30s
 - **Success Rate**: Target >90%, Alert <80%
 - **Safety Violations**: Alert on any L_tot ≥ 1.0
 - **Energy Cost**: Monitor for efficiency
+- **LLM Profile**: Tracks "deep" profile usage (model selection metadata)
 
 ### OCPS Valve Metrics
 - **Fast Path Ratio**: Target ≥90%, Alert <85%
@@ -140,10 +143,10 @@
 
 ### Fast Path Failures
 1. **Cache Miss**: Fallback to M2.5
-2. **Pattern Match Failure**: Escalate to Deep Path
+2. **Pattern Match Failure**: Escalate to Planner Path (with deep LLM profile)
 3. **Timeout**: Return error, log for analysis
 
-### Deep Path Failures
+### Planner Path Failures
 1. **Safety Validation Failure**: Reject task
 2. **Memory Access Failure**: Retry with backoff
 3. **Timeout**: Return partial result if possible
@@ -156,3 +159,8 @@
 ---
 
 *This flowchart provides a complete visual guide to the OCPS two-tier coordination system, showing decision points, performance targets, and error handling for production operations.*
+
+**Routing Semantics Clarification:**
+- **Routing Decision**: Uses "planner" (not "deep") for all escalation paths
+- **LLM Profile**: Uses "deep" internally as metadata for model selection (e.g., GPT-4o vs mini)
+- **Semantic Bridge**: CognitiveRouter translates planner → deep for downstream cognitive service calls

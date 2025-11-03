@@ -220,7 +220,8 @@ class TaskProtoPlanDAO:
 
 from seedcore.logging_setup import ensure_serve_logger
 from seedcore.models.result_schema import (
-    create_fast_path_result, create_escalated_result, create_error_result
+    create_fast_path_result, create_cognitive_result, create_escalated_result,
+    create_error_result, ResultKind
 )
 from seedcore.graph.task_repository import GraphTaskSqlRepository
 
@@ -1143,23 +1144,54 @@ class CoordinatorCore:
         # This ensures the task always has a result even if execution fails
         # Keep existing top-level payload fields, but also provide a nested payload.metadata
         if decision == "fast":
+            # Direct / low-surprise: fast path execution.
             res = create_fast_path_result(
                 routed_to="fast",
-                organ_id="coordinator",
+                organ_id="coordinator",  # coordinator is delegating fast path downstream
                 result={"status": "routed"},
-                metadata={"routing": "completed", "executed": False, **payload_common}
+                # This ends up inside FastPathResult.metadata
+                metadata={"routing": "completed", "executed": False, **payload_common},
             ).model_dump()
+        
         elif decision == "planner":
-            res = create_escalated_result(
-                solution_steps=[],
-                plan_source="router_planner",
-                **payload_common
+            # Medium surprise: requires cognitive planning, not direct execution.
+            #
+            # IMPORTANT:
+            # We now emit kind == ResultKind.COGNITIVE ("cognitive")
+            # so that CoordinatorHttpRouter will escalate to CognitiveRouter.
+            #
+            # We treat coordinator as the "routing agent" here.
+            agent_id_for_planner = params.get("agent_id", "planner")
+            
+            # Create cognitive result with "planner" as routing decision.
+            # Profile="deep" is passed as metadata (via profile in task_data) for LLM selection,
+            # but routing telemetry tracks "planner" only.
+            res = create_cognitive_result(
+                agent_id=agent_id_for_planner,
+                task_type="planner",  # Routing decision: "planner" (not "deep")
+                # CognitiveRouter will receive this in execute_result; giving it our proto_plan
+                # seeds the planner with what we already inferred (tasks/edges, provenance, etc.).
+                result={"proto_plan": proto_plan},
+                # We could optionally surface an overall confidence score. For now we omit or
+                # pull something from `conf`.
+                confidence_score=None,
+                # This lands in CognitiveResult.metadata
+                # Note: profile="deep" may be in task_data but is metadata, not routing
+                **payload_common,
             ).model_dump()
+        
         else:
+            # High surprise / critical / incident / multi-step HGNN path.
+            # This is escalated decomposition, not just "please think".
+            # We KEEP this as ResultKind.ESCALATED ("escalated").
+            #
+            # Note: solution_steps is currently [] because we haven't executed or
+            # materialized them yet; downstream systems can extend this.
             res = create_escalated_result(
                 solution_steps=[],
                 plan_source="router_hgnn",
-                **payload_common
+                # This lands in EscalatedResult.metadata
+                **payload_common,
             ).model_dump()
 
         # Ensure payload.metadata exists with decision/surprise/proto_plan for downstream consumers

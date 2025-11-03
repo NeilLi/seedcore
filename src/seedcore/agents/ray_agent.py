@@ -830,9 +830,6 @@ class RayAgent:
             # We are going to invoke cognitive service.
 
             params = task_data.get("params", {}) or {}
-            router_decision = task_data.get("router_decision")
-            router_surprise = task_data.get("router_surprise")
-            proto_plan = task_data.get("proto_plan")
             needs_ml_fallback = params.get("needs_ml_fallback", False)
 
             # Optional confidence struct
@@ -844,11 +841,10 @@ class RayAgent:
             criticality = params.get("criticality", task_data.get("criticality", 0.5))
             drift_score = task_data.get("drift_score", 0.0)
 
-            # Check if cognitive_profile is explicitly set in params (respect router decision)
+            # Check if cognitive_profile is explicitly set in params
             explicit_profile = params.get("cognitive_profile")
             if explicit_profile in ("fast", "deep"):
-                # Use the explicit profile from router/params
-                llm_depth = explicit_profile
+                profile = explicit_profile
                 # Calculate is_complex for logging purposes only
                 is_complex = (
                     needs_ml_fallback
@@ -864,7 +860,6 @@ class RayAgent:
                             'mitigation', 'architecture', 'design a plan'
                         ]
                     )
-                    or router_decision in ("planner", "hgnn")
                     or task_data.get("force_decomposition")
                 )
                 logger.debug(
@@ -888,14 +883,13 @@ class RayAgent:
                             'mitigation', 'architecture', 'design a plan'
                         ]
                     )
-                    or router_decision in ("planner", "hgnn")
                     or task_data.get("force_decomposition")
                 )
 
                 # Decide which cognitive profile to use:
                 #  - "deep" (OpenAI/high-depth) for complex/high-stakes
                 #  - "fast" (default provider) for normal Q&A / explanation
-                llm_depth = "deep" if is_complex else "fast"
+                profile = "deep" if is_complex else "fast"
 
             # If cognition is not available, do NOT pretend success.
             if not self._cog_available or not self._cog:
@@ -904,13 +898,10 @@ class RayAgent:
                     "degraded_mode": True,
                     "reason": "central cognitive service unavailable",
                     "description": description,
-                    "router_decision": router_decision,
-                    "router_surprise": router_surprise,
-                    "proto_plan": proto_plan,
-                    "intended_profile": llm_depth,
+                    "intended_profile": profile,
                 }
                 logger.error(
-                    f"🚫 {self.agent_id}: cognitive service unavailable. Can't run {llm_depth} reasoning for query='{description[:80]}'"
+                    f"🚫 {self.agent_id}: cognitive service unavailable. Can't run {profile} reasoning for query='{description[:80]}'"
                 )
                 return {
                     "agent_id": self.agent_id,
@@ -930,7 +921,7 @@ class RayAgent:
                 # Best-effort task_id extraction for deduplication key
                 task_id = task_data.get("task_id") or task_data.get("id")
                 # Create request key for deduplication (prefer task_id, fallback to description+profile)
-                request_key = task_id if task_id else f"{description[:100]}:{llm_depth}"
+                request_key = task_id if task_id else f"{description[:100]}:{profile}"
                 
                 # Check if there's already an in-flight request for this key
                 async with self._cog_inflight_lock:
@@ -963,10 +954,7 @@ class RayAgent:
                                         ),
                                         "description": description,
                                         "meta": existing_norm.get("meta", {}),
-                                        "profile_used": llm_depth,
-                                        "router_decision": router_decision,
-                                        "router_surprise": router_surprise,
-                                        "proto_plan": proto_plan,
+                                        "profile_used": profile,
                                     }
                                     logger.info(
                                         f"✅ Agent {self.agent_id} reused result from in-flight cognitive request (deduplicated)"
@@ -981,7 +969,7 @@ class RayAgent:
                                         "result": existing_result,
                                         "mem_hits": 1,
                                         "used_cognitive_service": True,
-                                        "cognitive_profile": llm_depth,
+                                        "cognitive_profile": profile,
                                     }
                                 # If existing failed, fall through to make a new call
                                 logger.debug(f"Previous in-flight request failed, making new call")
@@ -992,7 +980,7 @@ class RayAgent:
                 
                 try:
                     logger.info(
-                        f"🧠 Agent {self.agent_id} using cognitive service (profile={llm_depth}, complex={is_complex})"
+                        f"🧠 Agent {self.agent_id} using cognitive service (profile={profile}, complex={is_complex})"
                     )
 
                     # NOTE: plan() is async. We stay async here.
@@ -1003,12 +991,8 @@ class RayAgent:
                             "task_description": str(description or ""),
                             "current_capabilities": self._summarize_agent_capabilities(),
                             "available_tools": {},
-                            "depth": llm_depth,
-                            "extra_meta": {
-                                "decision": router_decision,
-                                "surprise": router_surprise,
-                                "proto_plan": proto_plan,
-                            },
+                            "profile": profile,
+                            # Note: no routing signals used for decision; include none or only as opaque meta if desired
                         }
                         # Log the full payload being sent
                         logger.info("[CognitivePayload_Outgoing] %s", json.dumps(dbg_payload, default=str))
@@ -1023,17 +1007,7 @@ class RayAgent:
                             task_description=str(description or ""),
                             current_capabilities=self._summarize_agent_capabilities(),
                             available_tools=None,
-                            depth=llm_depth,  # <-- fast or deep
-                            extra_meta=json.loads(
-                                json.dumps(
-                                    {
-                                        "decision": router_decision,
-                                        "surprise": router_surprise,
-                                        "proto_plan": proto_plan,
-                                    },
-                                    default=str,
-                                )
-                            ),
+                            profile=profile,  # "fast" | "deep"
                         )
                     
                     # Register the task as in-flight
@@ -1073,15 +1047,12 @@ class RayAgent:
                             ),
                             "description": description,
                             "meta": norm.get("meta", {}),
-                            "profile_used": llm_depth,
-                            "router_decision": router_decision,
-                            "router_surprise": router_surprise,
-                            "proto_plan": proto_plan,
+                            "profile_used": profile,
                         }
 
                         logger.info(
                             f"✅ Agent {self.agent_id} cognitive service "
-                            f"completed with profile={llm_depth}"
+                            f"completed with profile={profile}"
                         )
 
                         return {
@@ -1094,7 +1065,7 @@ class RayAgent:
                             "result": result,
                             "mem_hits": 1,
                             "used_cognitive_service": True,
-                            "cognitive_profile": llm_depth,
+                            "cognitive_profile": profile,
                         }
 
                     else:
@@ -1102,23 +1073,20 @@ class RayAgent:
                             "⚠️ Agent %s cognitive service returned unusable response "
                             "(profile=%s), falling back",
                             self.agent_id,
-                            llm_depth,
+                            profile,
                         )
 
                 except Exception as e:
                     import traceback
                     logger.warning(
-                        f"⚠️ Agent {self.agent_id} cognitive service call failed (profile={llm_depth}): {e}"
+                        f"⚠️ Agent {self.agent_id} cognitive service call failed (profile={profile}): {e}"
                     )
                     logger.debug("Traceback:\n%s", traceback.format_exc())
             # On cognitive failure or unusable response, do not pretend success; return explicit failure
             err_blob = {
                 "query_type": "cognitive_query_failed",
                 "description": description,
-                "router_decision": router_decision,
-                "router_surprise": router_surprise,
-                "proto_plan": proto_plan,
-                "intended_profile": llm_depth,
+                "intended_profile": profile,
                 "error": "cognitive service failure or unusable response",
             }
             return {
@@ -1131,7 +1099,7 @@ class RayAgent:
                 "result": err_blob,
                 "mem_hits": 0,
                 "used_cognitive_service": True,
-                "cognitive_profile": llm_depth,
+                "cognitive_profile": profile,
             }
 
         except Exception as e:
@@ -1958,7 +1926,7 @@ class RayAgent:
                 task_description=task_description,
                 current_capabilities=self._summarize_agent_capabilities(),  # Convert dict to string format
                 available_tools=available_resources or {},
-                depth="deep"  # Use deep profile for complex tasks
+                profile="deep"  # LLM profile only
             )
             norm = self._normalize_cog_resp(resp)
             payload = norm["payload"]
