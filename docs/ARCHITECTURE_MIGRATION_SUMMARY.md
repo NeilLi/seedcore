@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document summarizes the implementation of **Option C** from the architectural recommendation: creating two standalone Ray Serve applications for state aggregation and energy calculations, decoupling them from the organism subsystem. Additionally, it documents the comprehensive database schema evolution including task management, HGNN (Heterogeneous Graph Neural Network) architecture, facts management, and runtime registry systems.
+This document summarizes the implementation of **Option C** from the architectural recommendation: creating two standalone Ray Serve applications for state aggregation and energy calculations, decoupling them from the organism subsystem. Additionally, it documents the comprehensive database schema evolution including task management, HGNN (Heterogeneous Graph Neural Network) architecture, facts management, and runtime registry systems. The document also covers the **dual-dispatcher architecture** that separates graph-related tasks from general task processing, providing specialized handling and optimization for different workload types.
 
 ## 🎯 Implementation Summary
 
@@ -41,6 +41,7 @@ This document summarizes the implementation of **Option C** from the architectur
 
 7. **Database Schema Evolution** (13 migrations)
    - **Task Management System**: Complete coordinator-dispatcher task queue with lease management
+   - **Task Dispatcher Architecture**: Dual-dispatcher system (QueueDispatcher + GraphDispatcher) with specialized task routing
    - **Task Schema Enhancements**: JSONB conversion, check constraints, and optimized indexing
    - **HGNN Architecture**: Two-layer heterogeneous graph with task and agent/organ layers
    - **Graph Embeddings**: Vector-based graph embeddings with ANN indexing
@@ -155,7 +156,300 @@ CREATE TYPE taskstatus AS ENUM (
 - **Data Integrity**: Check constraint ensures `attempts >= 0`
 - **JSONB Support**: Native JSONB for `params` and `result` with efficient querying
 
-### 2. Task Schema Enhancements (Migration 007)
+### 2. Task Dispatcher Architecture
+
+The system implements a **dual-dispatcher architecture** that separates graph-related tasks from general task processing, enabling specialized handling and optimization for different workload types.
+
+#### Dispatcher Types
+
+**1. QueueDispatcher** (`queue_dispatcher.py`)
+- Handles all **non-graph tasks** (excludes graph-specific task types)
+- Uses async PostgreSQL connection pooling with `asyncpg`
+- Implements concurrent task processing with bounded concurrency
+- Routes tasks through a configurable router system (default: `coordinator_http`)
+- Provides automatic lease renewal for long-running tasks
+- Implements watchdog for stuck task recovery
+
+**2. GraphDispatcher** (`graph_dispatcher.py`)
+- Handles **graph-specific tasks** exclusively
+- Manages graph embedding operations (SAGE/Neo4j integration)
+- Manages NIM retrieval embedding operations (PostgreSQL integration)
+- Uses synchronous SQLAlchemy for database operations
+- Supports HGNN-aware node resolution across multiple entity types
+- Implements chunked embedding processing for large batches
+
+#### Task Type Classification
+
+**Graph Task Types** (handled by GraphDispatcher):
+```python
+GRAPH_TASK_TYPES = (
+    "graph_embed",           # Legacy: numeric node IDs
+    "graph_rag_query",       # Legacy: numeric node IDs
+    "graph_embed_v2",        # HGNN-aware: UUID/text IDs
+    "graph_rag_query_v2",    # HGNN-aware: UUID/text IDs
+    "graph_fact_embed",      # Facts system embeddings
+    "graph_fact_query",      # Facts system queries
+    "nim_task_embed",        # NIM retrieval embeddings
+    "graph_sync_nodes",      # Maintenance: sync graph_node_map
+)
+```
+
+**General Task Types** (handled by QueueDispatcher):
+- All other task types not in `GRAPH_TASK_TYPES`
+- Routed through coordinator service for execution
+- Examples: `cognitive_task`, `agent_task`, `organ_task`, etc.
+
+#### Task Structure & Fields
+
+**TaskPayload Model** (for inter-service communication):
+```python
+class TaskPayload(BaseModel):
+    type: str                          # Task type identifier
+    params: Dict[str, Any] = {}       # Task parameters (JSONB)
+    description: str = ""              # Human-readable description
+    domain: Optional[str] = None      # Logical domain/namespace
+    drift_score: float = 0.0          # OCPS drift score (0.0 = fast path)
+    task_id: str                      # Task UUID as string
+```
+
+**Task Database Schema** (PostgreSQL):
+- **Identifiers**: `id` (UUID), `owner_id` (TEXT), `locked_by` (TEXT)
+- **Classification**: `type` (TEXT), `domain` (TEXT), `description` (TEXT)
+- **Inputs/Outputs**: `params` (JSONB), `result` (JSONB), `error` (TEXT)
+- **State Management**: 
+  - `status` (taskstatus enum)
+  - `attempts` (INTEGER, non-negative)
+  - `drift_score` (DOUBLE PRECISION)
+- **Scheduling**: 
+  - `run_after` (TIMESTAMPTZ) - delayed execution
+  - `lease_expires_at` (TIMESTAMPTZ) - lease expiration
+  - `last_heartbeat` (TIMESTAMPTZ) - worker liveness
+  - `locked_at` (TIMESTAMPTZ) - lock acquisition time
+- **Timestamps**: `created_at`, `updated_at` (TIMESTAMPTZ)
+
+#### Task Status Lifecycle
+
+```
+created → queued → running → completed
+                        ↓
+                    failed/retry
+                        ↓
+                    (retry → queued → running ...)
+```
+
+**Status Definitions**:
+- `created`: Initial state after task creation
+- `queued`: Ready for processing, waiting for dispatcher claim
+- `running`: Currently being processed by a dispatcher
+- `completed`: Successfully finished with result stored
+- `failed`: Permanently failed (after max attempts)
+- `cancelled`: Intentionally cancelled (e.g., duplicate detection)
+- `retry`: Scheduled for retry after failure
+
+#### QueueDispatcher Features
+
+**1. Concurrent Processing**
+- Bounded concurrency via semaphore (`MAX_CONCURRENCY`, default: 16)
+- Fire-and-forget task processing (tasks don't block each other)
+- Independent connection acquisition per task worker
+
+**2. Batch Claiming**
+- Claims multiple tasks per iteration (`CLAIM_BATCH_SIZE`, default: 8)
+- In-batch duplicate detection and cancellation
+- Uses `FOR UPDATE SKIP LOCKED` for safe concurrent claiming
+
+**3. Lease Management**
+- Automatic lease extension for running tasks (default: 600 seconds)
+- Periodic lease renewal every 30 seconds during task execution
+- Graceful lease expiration handling via watchdog
+
+**4. Retry Logic**
+- Exponential backoff: `min(10 * (2 ** attempts), 300)` seconds
+- Maximum retry attempts configurable via `MAX_TASK_ATTEMPTS` (default: 3)
+- Jitter added to prevent retry storms
+
+**5. Watchdog System**
+- Periodic stale task detection (default: every 30 seconds)
+- Requeues tasks with expired leases or dead owners
+- Marks tasks as failed after maximum attempts exceeded
+- Uses grace period (90 seconds) for heartbeat staleness
+
+**6. Router-Based Execution**
+- Abstract router interface for task routing
+- Default router: `coordinator_http` (HTTP-based coordinator)
+- Router handles task-to-organ mapping and execution
+- Timeout protection (default: 120 seconds) for router calls
+
+**7. Memory Management**
+- Periodic garbage collection (every `FORCE_GC_EVERY_N` tasks, default: 2000)
+- Soft memory limit enforcement (`DISPATCHER_MEMORY_SOFT_LIMIT_MB`)
+- Result size truncation if configured (`RESULT_MAX_BYTES`)
+- Process recycling after task count threshold (`RECYCLE_AFTER_TASKS`)
+
+#### GraphDispatcher Features
+
+**1. HGNN-Aware Node Resolution**
+Supports multiple entity types with automatic node mapping:
+- **Core Entities**: `start_task_ids`, `start_agent_ids`, `start_organ_ids`
+- **Facts System**: `start_fact_ids` (Migration 009)
+- **Resources**: `start_artifact_ids`, `start_capability_ids`, `start_memory_cell_ids` (Migration 007)
+- **Agent Layer**: `start_model_ids`, `start_policy_ids`, `start_service_ids`, `start_skill_ids` (Migration 008)
+- **Legacy Support**: `start_node_ids`, `start_ids` (numeric node IDs)
+
+**2. Dual Embedding System**
+- **GraphEmbedder**: SAGE-based graph embeddings from Neo4j
+- **NimRetrievalEmbedder**: NIM-based retrieval embeddings from PostgreSQL
+- Automatic actor lifecycle management (detached, namespaced)
+
+**3. Chunked Processing**
+- Configurable chunk size via `GRAPH_EMBED_BATCH_CHUNK`
+- Automatic chunking for large node batches
+- Prevents timeout on large embedding operations
+
+**4. Heartbeat Threading**
+- Background heartbeat thread extends lease during long operations
+- Configurable heartbeat interval (`GRAPH_HEARTBEAT_PING_S`, default: 5s)
+- Automatic cleanup on task completion/failure
+
+**5. Task Processing Flow**
+
+**Graph Embed Operations** (`graph_embed`, `graph_embed_v2`):
+1. Resolve start node IDs (from UUIDs/text IDs to numeric node_ids)
+2. Compute embeddings via GraphEmbedder (with optional chunking)
+3. Upsert embeddings to `graph_embeddings` table
+4. Return embedding statistics and node metadata
+
+**Graph RAG Query Operations** (`graph_rag_query`, `graph_rag_query_v2`):
+1. Resolve start node IDs
+2. Compute seed embeddings
+3. Compute centroid from seed embeddings
+4. Vector similarity search in `graph_embeddings` table
+5. Return top-k neighbors with scores
+
+**NIM Task Embed Operations** (`nim_task_embed`):
+1. Fetch task text content from PostgreSQL
+2. Resolve task UUIDs to node_ids via `graph_node_map`
+3. Embed text content via NimRetrievalEmbedder
+4. Upsert embeddings with content hash and model metadata
+5. Return embedding statistics
+
+**Fact Operations** (`graph_fact_embed`, `graph_fact_query`):
+- Similar to graph embed/query but specifically for facts
+- Uses fact-specific node resolution
+- Supports fact-based similarity search
+
+#### Task Routing Architecture
+
+**Router Factory Pattern**:
+- Configurable router type via `DISPATCHER_ROUTER_TYPE` (default: `coordinator_http`)
+- Abstract router interface enables pluggable routing strategies
+- Supports HTTP-based, direct actor, or future routing implementations
+
+**Coordinator HTTP Router**:
+- Routes tasks to coordinator service via HTTP
+- Handles task-to-organ mapping
+- Returns unified result envelope with metadata
+- Implements timeout and error handling
+
+**Result Schema**:
+Tasks receive unified result envelopes from router:
+```python
+{
+    "kind": "task_result",
+    "payload": {...},              # Actual result data
+    "success": bool,
+    "version": str,
+    "metadata": {...},
+    "created_at": timestamp
+}
+```
+
+#### Environment Configuration
+
+**QueueDispatcher Configuration**:
+```bash
+DISPATCHER_COUNT=2                    # Number of dispatcher instances
+CLAIM_BATCH_SIZE=8                    # Tasks claimed per iteration
+DISPATCHER_CONCURRENCY=16             # Max concurrent tasks per dispatcher
+EMPTY_SLEEP_SECONDS=0.05              # Sleep when no tasks available
+LEASE_SECONDS=90                      # Base lease duration
+TASK_LEASE_S=600                      # Running task lease duration
+USE_LISTEN_NOTIFY=0                   # Enable PostgreSQL LISTEN/NOTIFY
+WATCHDOG_INTERVAL=30                  # Watchdog check interval (seconds)
+DISPATCHER_MEMORY_SOFT_LIMIT_MB=0     # Soft memory limit (0 = disabled)
+DISPATCHER_FORCE_GC_EVERY_N=2000      # GC every N tasks
+DISPATCHER_RECYCLE_AFTER_TASKS=0      # Recycle after N tasks (0 = disabled)
+DISPATCHER_RESULT_MAX_BYTES=0         # Max result size (0 = disabled)
+SERVE_CALL_TIMEOUT_S=120              # Router call timeout
+MAX_TASK_ATTEMPTS=3                   # Maximum retry attempts
+```
+
+**GraphDispatcher Configuration**:
+```bash
+GRAPH_EMBED_TIMEOUT_S=600             # Embedding operation timeout
+GRAPH_UPSERT_TIMEOUT_S=600            # Upsert operation timeout
+GRAPH_HEARTBEAT_PING_S=5              # Heartbeat interval (seconds)
+GRAPH_LEASE_EXTENSION_S=600           # Lease extension per heartbeat
+GRAPH_DB_POOL_SIZE=5                  # SQLAlchemy connection pool size
+GRAPH_DB_MAX_OVERFLOW=5               # Connection pool overflow limit
+GRAPH_DB_POOL_RECYCLE_S=600           # Connection pool recycle interval
+GRAPH_TASK_POLL_INTERVAL_S=1.0        # Task polling interval
+GRAPH_EMBED_BATCH_CHUNK=0             # Chunk size (0 = disabled)
+GRAPH_STRICT_JSON_RESULT=true         # Enforce JSON-serializable results
+NIM_RETRIEVAL_MODEL=nvidia/nv-embedqa-e5-v5  # NIM model identifier
+```
+
+#### Performance Optimizations
+
+**1. Database Indexing**
+- Composite index on `(status, run_after)` for efficient task claiming
+- Index on `created_at` for chronological ordering
+- Indexes on `type` and `domain` for filtering
+- GIN index on `params` JSONB for parameter queries
+
+**2. Connection Pooling**
+- QueueDispatcher: AsyncPG pool with bounded size and idle lifetime
+- GraphDispatcher: SQLAlchemy pool with recycling and pre-ping
+- Automatic pool health monitoring and recreation on failure
+
+**3. Concurrent Execution**
+- QueueDispatcher: Semaphore-based bounded concurrency
+- Independent task workers with separate database connections
+- Non-blocking task processing prevents cascade failures
+
+**4. Batch Operations**
+- Batch task claiming reduces database round-trips
+- Chunked embedding processing prevents timeouts
+- Bulk upsert operations for graph embeddings
+
+**5. Memory Management**
+- Periodic garbage collection prevents memory leaks
+- Result size limiting prevents excessive memory usage
+- Process recycling for long-running dispatchers
+
+#### Monitoring & Observability
+
+**Prometheus Metrics** (QueueDispatcher):
+- `seedcore_tasks_claimed_total`: Counter for claimed tasks
+- `seedcore_tasks_completed_total`: Counter for completed tasks
+- `seedcore_tasks_failed_total`: Counter for failed tasks
+- `seedcore_tasks_retried_total`: Counter for retried tasks
+- `seedcore_dispatcher_inflight`: Gauge for current inflight tasks
+- `seedcore_dispatcher_process_rss_bytes`: Gauge for memory usage
+
+**Health Checks**:
+- `ping()`: Simple responsiveness check
+- `heartbeat()`: Detailed health status with component checks
+- `status()`: Comprehensive status with pool information
+- `get_metrics()`: Task processing statistics (GraphDispatcher)
+
+**Logging**:
+- Structured logging with task IDs for traceability
+- Debug logging for task processing details
+- Warning logs for stuck tasks and lease expiration
+- Error logs with full exception tracebacks
+
+### 3. Task Schema Enhancements (Migration 007)
 
 #### JSONB Conversion
 ```sql
@@ -191,7 +485,7 @@ ADD CONSTRAINT ck_tasks_attempts_nonneg CHECK (attempts >= 0);
 - **Integrity**: Check constraints prevent invalid data
 - **Maintainability**: Clear schema structure for future enhancements
 
-### 3. HGNN Architecture (Migrations 008-009)
+### 4. HGNN Architecture (Migrations 008-009)
 
 #### Two-Layer Graph Structure
 
@@ -239,7 +533,7 @@ CREATE INDEX idx_graph_embeddings_emb ON graph_embeddings
 USING ivfflat (emb vector_l2_ops) WITH (lists = 100);
 ```
 
-### 4. Facts Management System (Migrations 010-011)
+### 5. Facts Management System (Migrations 010-011)
 
 #### Facts Schema
 ```sql
@@ -259,7 +553,7 @@ CREATE TABLE facts (
 - **Metadata Support**: JSONB for flexible fact properties
 - **Task Integration**: `task__reads__fact`, `task__produces__fact` relationships
 
-### 5. Runtime Registry System (Migrations 012-013)
+### 6. Runtime Registry System (Migrations 012-013)
 
 #### Instance Management
 ```sql
@@ -294,7 +588,7 @@ CREATE TABLE cluster_metadata (
 - **Status Tracking**: `starting`, `alive`, `draining`, `dead`
 - **Advisory Locks**: Safe epoch rotation with `pg_try_advisory_lock()`
 
-### 6. Unified Graph View
+### 7. Unified Graph View
 
 The `hgnn_edges` view provides a flattened representation of all graph relationships for DGL export:
 
