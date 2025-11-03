@@ -445,6 +445,20 @@ def extract_metadata(hgnn_res: dict) -> dict:
         # Some routes might place metadata at top-level
         meta = hgnn_res.get("metadata", {})
     
+    # Also check result.meta (ray_agent structure)
+    if not meta:
+        direct_meta = hgnn_res.get("meta")
+        if isinstance(direct_meta, dict):
+            meta = direct_meta
+    
+    # Also check result.result.meta
+    if not meta:
+        nested_result = hgnn_res.get("result")
+        if isinstance(nested_result, dict):
+            nested_meta = nested_result.get("meta")
+            if isinstance(nested_meta, dict):
+                meta = nested_meta
+    
     return meta
 
 def validate_routing_decision(result: dict, expected_route: Optional[str] = None) -> tuple[bool, str]:
@@ -461,7 +475,39 @@ def validate_routing_decision(result: dict, expected_route: Optional[str] = None
         tuple[bool, str]: (is_valid, message)
     """
     metadata = extract_metadata(result)
-    decision = metadata.get("decision") or result.get("decision")
+    
+    # Check multiple locations for decision
+    decision = (
+        metadata.get("decision") or
+        result.get("decision") or
+        result.get("routing_decision") or
+        result.get("route")
+    )
+    
+    # Also check in nested structures
+    if not decision:
+        payload = result.get("payload", {})
+        if isinstance(payload, dict):
+            decision = payload.get("decision") or payload.get("routing_decision") or payload.get("task_type")
+            # If task_type is "planner", treat it as routing decision
+            if payload.get("task_type") == "planner":
+                decision = "planner"
+    
+    if not decision:
+        nested_result = result.get("result")
+        if isinstance(nested_result, dict):
+            decision = nested_result.get("decision") or nested_result.get("routing_decision")
+            # Also check nested payload
+            nested_payload = nested_result.get("payload", {})
+            if isinstance(nested_payload, dict):
+                if nested_payload.get("task_type") == "planner":
+                    decision = "planner"
+                else:
+                    decision = decision or nested_payload.get("decision") or nested_payload.get("routing_decision")
+            if not decision:
+                nested_meta = nested_result.get("meta", {})
+                if isinstance(nested_meta, dict):
+                    decision = nested_meta.get("decision") or nested_meta.get("routing_decision")
     
     if decision is None:
         return True, "No routing decision found (may be fast path)"
@@ -488,32 +534,63 @@ def extract_profile_metadata(result: dict) -> Optional[str]:
     """
     Extract cognitive profile from result metadata.
     
-    Looks for profile in:
-    - payload.metadata.profile_used
-    - payload.metadata.cognitive_profile
-    - result.meta.profile_used
-    - top-level profile
+    Looks for profile in multiple locations:
+    - Top-level: cognitive_profile, profile_used, intended_profile
+    - result.cognitive_profile, result.profile_used, result.intended_profile
+    - result.meta.profile_used/cognitive_profile (direct meta field)
+    - result.result.meta.profile_used/cognitive_profile (nested result.meta)
+    - payload.metadata.profile_used/cognitive_profile
+    - payload.result.meta.profile_used/cognitive_profile (for wrapped results)
     
     Returns:
         Optional[str]: Profile name ("fast", "deep", etc.) or None if not found
     """
     metadata = extract_metadata(result)
     
-    # Check various locations for profile information
+    # Check top-level and metadata first
     profile = (
         metadata.get("profile_used") or
         metadata.get("cognitive_profile") or
+        result.get("cognitive_profile") or  # RayAgent puts it here
         result.get("profile_used") or
-        result.get("cognitive_profile")
+        result.get("intended_profile")  # Error cases might have this
     )
     
-    # Also check nested result structure
+    # Check direct result.meta field (ray_agent puts meta here)
+    if not profile:
+        direct_meta = result.get("meta")
+        if isinstance(direct_meta, dict):
+            profile = direct_meta.get("profile_used") or direct_meta.get("cognitive_profile")
+    
+    # Check result.result (RayAgent structures result nested here)
     if not profile:
         nested_result = result.get("result")
         if isinstance(nested_result, dict):
-            nested_meta = nested_result.get("meta", {})
-            if isinstance(nested_meta, dict):
-                profile = nested_meta.get("profile_used") or nested_meta.get("cognitive_profile")
+            # Check top-level of nested result
+            profile = nested_result.get("profile_used") or nested_result.get("cognitive_profile") or nested_result.get("intended_profile")
+            # Check nested result.meta
+            if not profile:
+                nested_meta = nested_result.get("meta", {})
+                if isinstance(nested_meta, dict):
+                    profile = nested_meta.get("profile_used") or nested_meta.get("cognitive_profile")
+    
+    # Also check payload.result.meta (for wrapped results)
+    if not profile:
+        payload = result.get("payload", {})
+        if isinstance(payload, dict):
+            # Check payload metadata
+            payload_meta = payload.get("metadata", {})
+            if isinstance(payload_meta, dict):
+                profile = payload_meta.get("profile_used") or payload_meta.get("cognitive_profile")
+            # Check payload.result.meta
+            payload_result = payload.get("result")
+            if isinstance(payload_result, dict):
+                if not profile:
+                    profile = payload_result.get("profile_used") or payload_result.get("cognitive_profile")
+                if not profile:
+                    payload_meta = payload_result.get("meta", {})
+                    if isinstance(payload_meta, dict):
+                        profile = payload_meta.get("profile_used") or payload_meta.get("cognitive_profile")
     
     return str(profile).lower() if profile else None
 
@@ -3778,11 +3855,33 @@ def main():
                 row = wait_for_completion(conn, cog_fast_tid, "COGNITIVE-FAST", timeout_s=120.0)
                 if row and row.get("result"):
                     cog_fast_res = normalize_result(row.get("result"))
+                    # Debug: Log result structure
+                    log.debug(f"   COGNITIVE-FAST result structure (keys): {list(cog_fast_res.keys())}")
+                    if "payload" in cog_fast_res:
+                        log.debug(f"   payload keys: {list(cog_fast_res.get('payload', {}).keys())}")
+                    if "result" in cog_fast_res:
+                        log.debug(f"   result keys: {list(cog_fast_res.get('result', {}).keys())}")
+                    if "meta" in cog_fast_res:
+                        log.debug(f"   meta keys: {list(cog_fast_res.get('meta', {}).keys())}")
                     # Validate routing follows planner model
                     route_valid, route_msg = validate_routing_decision(cog_fast_res, expected_route="planner")
                     log.info(f"   {route_msg}")
                     profile_valid, profile_msg = validate_profile_usage(cog_fast_res, expected_profile="fast")
                     log.info(f"   {profile_msg}")
+                    if not profile_valid:
+                        # Additional debugging: try to find where profile might be
+                        found_profile = extract_profile_metadata(cog_fast_res)
+                        if not found_profile:
+                            # Check if this is an error result that might not have profile metadata
+                            if not cog_fast_res.get("success", True) or cog_fast_res.get("error"):
+                                log.warning(f"   ⚠️ Profile 'fast' not found in error result. Task may have failed before profile was set.")
+                                log.debug(f"   Error info: success={cog_fast_res.get('success')}, error={cog_fast_res.get('error')}")
+                            else:
+                                log.warning(f"   ⚠️ Profile 'fast' not found. Checked result structure but profile_used/cognitive_profile not in any expected location.")
+                            log.debug(f"   Result keys: {list(cog_fast_res.keys())}")
+                            if "result" in cog_fast_res and isinstance(cog_fast_res.get("result"), dict):
+                                log.debug(f"   result keys: {list(cog_fast_res.get('result', {}).keys())}")
+                            log.debug(f"   Full result structure (sanitized): {json.dumps({k: (type(v).__name__ if not isinstance(v, dict) else 'dict') for k, v in cog_fast_res.items()}, indent=2)}")
                     if not route_valid:
                         log.warning("⚠️ Cognitive FAST routing validation failed")
         except Exception as e:
@@ -3795,6 +3894,14 @@ def main():
                 row = wait_for_completion(conn, cog_deep_tid, "COGNITIVE-DEEP", timeout_s=150.0)
                 if row and row.get("result"):
                     cog_deep_res = normalize_result(row.get("result"))
+                    # Debug: Log result structure
+                    log.debug(f"   COGNITIVE-DEEP result structure (keys): {list(cog_deep_res.keys())}")
+                    if "payload" in cog_deep_res:
+                        log.debug(f"   payload keys: {list(cog_deep_res.get('payload', {}).keys())}")
+                    if "result" in cog_deep_res:
+                        log.debug(f"   result keys: {list(cog_deep_res.get('result', {}).keys())}")
+                    if "meta" in cog_deep_res:
+                        log.debug(f"   meta keys: {list(cog_deep_res.get('meta', {}).keys())}")
                     # Validate routing follows planner model (decision should be "planner", not "deep")
                     route_valid, route_msg = validate_routing_decision(cog_deep_res, expected_route="planner")
                     log.info(f"   {route_msg}")
@@ -3809,15 +3916,57 @@ def main():
                     log.info(f"   {profile_msg}")
                     if not profile_valid:
                         log.warning("⚠️ Cognitive DEEP profile validation failed")
+                        # Additional debugging
+                        found_profile = extract_profile_metadata(cog_deep_res)
+                        if not found_profile:
+                            # Check if this is an error result that might not have profile metadata
+                            if not cog_deep_res.get("success", True) or cog_deep_res.get("error"):
+                                log.warning(f"   ⚠️ Profile 'deep' not found in error result. Task may have failed before profile was set.")
+                                log.debug(f"   Error info: success={cog_deep_res.get('success')}, error={cog_deep_res.get('error')}")
+                            else:
+                                log.warning(f"   ⚠️ Profile 'deep' not found. Checked result structure but profile_used/cognitive_profile not in any expected location.")
+                            log.debug(f"   Result keys: {list(cog_deep_res.keys())}")
+                            if "result" in cog_deep_res and isinstance(cog_deep_res.get("result"), dict):
+                                log.debug(f"   result keys: {list(cog_deep_res.get('result', {}).keys())}")
+                            log.debug(f"   Full result structure (sanitized): {json.dumps({k: (type(v).__name__ if not isinstance(v, dict) else 'dict') for k, v in cog_deep_res.items()}, indent=2)}")
                     
-                    # Log routing model compliance
+                    # Log routing model compliance - use enhanced decision extraction
+                    # (validate_routing_decision already does comprehensive extraction, but we need it here too)
                     metadata = extract_metadata(cog_deep_res)
-                    decision = metadata.get("decision") or cog_deep_res.get("decision")
+                    decision = (
+                        metadata.get("decision") or
+                        cog_deep_res.get("decision") or
+                        cog_deep_res.get("routing_decision") or
+                        cog_deep_res.get("route")
+                    )
+                    # Check nested structures for decision
+                    if not decision:
+                        payload = cog_deep_res.get("payload", {})
+                        if isinstance(payload, dict):
+                            # Check task_type in payload (CognitiveResult has task_type field)
+                            if payload.get("task_type") == "planner":
+                                decision = "planner"
+                            else:
+                                decision = payload.get("decision") or payload.get("routing_decision")
+                    if not decision:
+                        nested_result = cog_deep_res.get("result")
+                        if isinstance(nested_result, dict):
+                            decision = nested_result.get("decision") or nested_result.get("routing_decision")
+                            # Also check nested payload.task_type
+                            nested_payload = nested_result.get("payload", {})
+                            if isinstance(nested_payload, dict) and nested_payload.get("task_type") == "planner":
+                                decision = "planner"
+                            if not decision:
+                                nested_meta = nested_result.get("meta", {})
+                                if isinstance(nested_meta, dict):
+                                    decision = nested_meta.get("decision") or nested_meta.get("routing_decision")
+                    
                     profile = extract_profile_metadata(cog_deep_res)
                     if decision == "planner" and profile == "deep":
                         log.info("✅ ROUTING MODEL COMPLIANCE: decision='planner', profile='deep' (correct)")
                     else:
                         log.warning(f"⚠️ Routing model deviation: decision='{decision}', profile='{profile}'")
+                        log.debug(f"   Full result structure for debugging: {json.dumps({k: (type(v).__name__ if not isinstance(v, dict) else list(v.keys())[:5]) for k, v in cog_deep_res.items()}, indent=2)}")
         except Exception as e:
             log.warning(f"⚠️ Cognitive DEEP verification skipped/failed: {e}")
 
