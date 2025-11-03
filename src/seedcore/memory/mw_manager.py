@@ -50,10 +50,10 @@ from ..utils.ray_utils import ensure_ray_initialized
 from ..config.mem_config import CONFIG, get_memory_config
 
 try:
-    # If MwStore class is available, we can optionally auto-create it
-    from src.seedcore.memory.mw_store import MwStore  # type: ignore
-except Exception:  # pragma: no cover - MwStore may not be importable in some contexts
-    MwStore = None  # type: ignore
+    # Sharded miss tracker implementation
+    from src.seedcore.memory.mw_store_shard import MwStoreShard  # type: ignore
+except Exception:  # pragma: no cover - MwStoreShard may not be importable in some contexts
+    MwStoreShard = None  # type: ignore
 
 
 # -------------------------
@@ -132,84 +132,14 @@ class NodeCache:
         self._data.pop(key, None)
 
 
-class SharedCacheShard:
-    """L2 cache: sharded global cache with LRU eviction and TTL."""
-    def __init__(self, max_items: int = 100000, default_ttl_s: int = 3600) -> None:
-        self._map: Dict[str, Tuple[Any, float]] = {}  # key -> (value, expire_ts)
-        self._lru: OrderedDict[str, bool] = OrderedDict()
-        self._heap: List[Tuple[float, str]] = []  # (expire_ts, key)
-        self._max_items = max_items
-        self._ttl = default_ttl_s
-
-    async def get(self, key: str) -> Optional[Any]:
-        rec = self._map.get(key)
-        if not rec:
-            return None
-        val, exp = rec
-        if exp < time.time():
-            await self.delete(key)
-            return None
-        self._lru.move_to_end(key, last=True)
-        return val
-
-    async def set(self, key: str, val: Any, ttl_s: Optional[int] = None) -> None:
-        ttl = ttl_s or self._ttl
-        exp = time.time() + ttl
-        self._map[key] = (val, exp)
-        self._lru[key] = True
-        heapq.heappush(self._heap, (exp, key))
-        await self._evict_if_needed()
-
-    async def delete(self, key: str) -> None:
-        self._map.pop(key, None)
-        self._lru.pop(key, None)
-
-    async def setnx(self, key: str, val: Any, ttl_s: int = 5) -> bool:
-        """Set if not exists - atomic CAS operation for sentinels."""
-        now = time.time()
-        rec = self._map.get(key)
-        if rec and rec[1] > now:  # not expired
-            return False
-        await self.set(key, val, ttl_s)
-        return True
-
-    async def _evict_if_needed(self) -> None:
-        now = time.time()
-        # Evict expired items
-        while self._heap and self._heap[0][0] <= now:
-            _, k = heapq.heappop(self._heap)
-            self._map.pop(k, None)
-            self._lru.pop(k, None)
-        # Evict LRU if too many items
-        while len(self._map) > self._max_items and self._lru:
-            k, _ = self._lru.popitem(last=False)
-            self._map.pop(k, None)
+# SharedCacheShard moved to shared_cache_shard.py
+try:
+    from .shared_cache_shard import SharedCacheShard  # type: ignore
+except Exception:  # pragma: no cover
+    SharedCacheShard = None  # type: ignore
 
 
-class MwStore:
-    """
-    Tracks item frequencies/misses; returns hot items.
-    You can repurpose this to also record hits, etc., if needed.
-    """
-    def __init__(self) -> None:
-        self._counts: Dict[str, int] = {}
-
-    def incr(self, item_id: str, by: int = 1) -> int:
-        cur = self._counts.get(item_id, 0) + by
-        self._counts[item_id] = cur
-        return cur
-
-    def get(self, item_id: str) -> int:
-        return self._counts.get(item_id, 0)
-
-    def total(self) -> int:
-        return sum(self._counts.values())
-
-    def topn(self, n: int = 5) -> List[Tuple[str, int]]:
-        return sorted(self._counts.items(), key=lambda kv: kv[1], reverse=True)[: max(0, n)]
-
-    def snapshot(self) -> Dict[str, int]:
-        return dict(self._counts)
+# Legacy in-process MwStore removed; MwStoreShard actors are used instead
 
 # -------------------------
 # Consistent Hashing for Shards
@@ -236,6 +166,10 @@ class _HashRing:
 _RING: Optional[_HashRing] = None
 _SHARDS: Dict[str, Any] = {}
 
+# Separate ring/handles for MwStoreShard (miss tracker)
+_MW_RING: Optional[_HashRing] = None
+_MW_SHARDS: Dict[str, Any] = {}
+
 
 def _get_shard_handles(num_shards: Optional[int] = None, namespace: Optional[str] = None) -> Tuple[_HashRing, Dict[str, Any]]:
     """Initialize shard handles and hash ring."""
@@ -249,6 +183,7 @@ def _get_shard_handles(num_shards: Optional[int] = None, namespace: Optional[str
             h = ray.get_actor(nm, namespace=namespace)
         except Exception:
             if CONFIG.auto_create:
+                from .shared_cache_shard import SharedCacheShard
                 h = _remoteify(SharedCacheShard).options(
                     name=nm, 
                     lifetime="detached", 
@@ -270,6 +205,43 @@ def _shard_for(key: str) -> Any:
         _RING, _SHARDS = _get_shard_handles()
     nm = _RING.node_for(key)
     return _SHARDS[nm]
+
+
+def _get_mw_shard_handles(num_shards: Optional[int] = None, namespace: Optional[str] = None) -> Tuple[_HashRing, Dict[str, Any]]:
+    """Initialize MwStoreShard handles and hash ring."""
+    import ray
+    num_shards = num_shards or CONFIG.num_shards
+    namespace = namespace or CONFIG.namespace
+    # Use MW shard names derived from mw_actor_name
+    names = [f"{CONFIG.mw_actor_name}_shard_{i}" for i in range(num_shards)]
+    handles = {}
+    for nm in names:
+        try:
+            h = ray.get_actor(nm, namespace=namespace)
+        except Exception:
+            if CONFIG.auto_create and MwStoreShard is not None:
+                h = _remoteify(MwStoreShard).options(
+                    name=nm,
+                    lifetime="detached",
+                    namespace=namespace,
+                    num_cpus=0,
+                    max_concurrency=2000,
+                    get_if_exists=True,
+                ).remote()
+            else:
+                raise
+        handles[nm] = h
+    ring = _HashRing(names, vnodes=CONFIG.vnodes_per_shard)
+    return ring, handles
+
+
+def _mw_shard_for(key: str) -> Any:
+    """Get the appropriate MwStoreShard for a key."""
+    global _MW_RING, _MW_SHARDS
+    if _MW_RING is None or not _MW_SHARDS:
+        _MW_RING, _MW_SHARDS = _get_mw_shard_handles()
+    nm = _MW_RING.node_for(key)
+    return _MW_SHARDS[nm]
 
 
 def get_node_cache() -> Any:
@@ -426,7 +398,11 @@ def get_shared_cache():
     return _get_or_create(CONFIG.shared_cache_name, CONFIG.namespace, SharedCache)
 
 def get_mw_store():
-    return _get_or_create(CONFIG.mw_actor_name, CONFIG.namespace, MwStore)
+    """Backwards-compatible getter; retained for legacy callers.
+    New code should use MwManager.incr_miss and get_hot_items which use MwStoreShard.
+    """
+    # Attempt to return a single-actor handle if it exists; else None
+    return _lookup_actor(CONFIG.mw_actor_name, CONFIG.namespace)
 
 
 # -------------------------
@@ -442,7 +418,8 @@ class MwManager:
     def __init__(self, organ_id: str) -> None:
         self.organ_id = organ_id
         self.namespace = CONFIG.namespace
-        self.mw_store = get_mw_store()
+        # MwStoreShard miss tracker uses its own sharded ring; no single actor handle
+        self.mw_store = None
         self._cache: Dict[str, Any] = {}
         
         # Telemetry counters
@@ -571,36 +548,72 @@ class MwManager:
                     extra={"organ": self.organ_id, "namespace": self.namespace, "key": gkey, "error": str(e)},
                 )
 
-        # Miss: record in MwStore
+        # Miss: record in MwStoreShard
         self._miss_count += 1
         logger.warning(
             "MISS",
             extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id},
         )
-        try:
-            self.mw_store.incr.remote(item_id)
-        except Exception as e:
-            logger.error(
-                "MwStore.incr failed",
-                extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id, "error": str(e)},
-            )
+        await self.incr_miss(item_id)
         return None
 
-    async def get_hot_items_async(self, top_n: int = 5) -> List[Tuple[str, int]]:
+    async def incr_miss(self, item_id: str, delta: int = 1) -> None:
+        """Increment miss count in the correct MwStoreShard based on hash ring."""
         try:
-            return await _await_ref(self.mw_store.topn.remote(top_n))
+            shard = _mw_shard_for(item_id)
+            # Fire-and-forget; best-effort
+            shard.incr.remote(item_id, delta)
         except Exception as e:
             logger.error(
+                "MwStoreShard.incr failed",
+                extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id, "error": str(e)},
+            )
+
+    async def get_hot_items_async(self, top_n: int = 5) -> List[Tuple[str, int]]:
+        """Collect top-N from all shards and merge."""
+        try:
+            # Ensure shards exist
+            _, shards = _get_mw_shard_handles()
+            # Launch requests in parallel and await results
+            refs = [h.topn.remote(top_n) for h in shards.values()]
+            per_shard: List[List[Tuple[str, int]]] = await asyncio.gather(*[_await_ref(r) for r in refs])
+        except Exception as e2:
+            logger.error(
                 "get_hot_items_async error",
-                extra={"organ": self.organ_id, "namespace": self.namespace, "error": str(e)},
+                extra={"organ": self.organ_id, "namespace": self.namespace, "error": str(e2)},
             )
             return []
+
+        # Merge results
+        heap: List[Tuple[int, str]] = []  # (count, item)
+        agg: Dict[str, int] = {}
+        for lst in per_shard:
+            for item, cnt in lst:
+                agg[item] = agg.get(item, 0) + int(cnt)
+        for item, cnt in agg.items():
+            heapq.heappush(heap, (cnt, item))
+            if len(heap) > top_n:
+                heapq.heappop(heap)
+        result = [(item, cnt) for cnt, item in sorted(heap, reverse=True)]
+        return result
 
     # ---- sync APIs ----
     def get_hot_items(self, top_n: int = 5) -> List[Tuple[str, int]]:
         try:
             import ray
-            return ray.get(self.mw_store.topn.remote(top_n))
+            # Sync wrapper over async method
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Fallback: do sequential ray.get from shards
+                _, shards = _get_mw_shard_handles()
+                per_shard = [ray.get(h.topn.remote(top_n)) for h in shards.values()]
+                agg: Dict[str, int] = {}
+                for lst in per_shard:
+                    for item, cnt in lst:
+                        agg[item] = agg.get(item, 0) + int(cnt)
+                return sorted(agg.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+            else:
+                return asyncio.run(self.get_hot_items_async(top_n))
         except Exception as e:
             logger.error(
                 "get_hot_items error",

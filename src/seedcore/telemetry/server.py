@@ -66,7 +66,7 @@ from ..memory.adaptive_loop import (
     get_memory_metrics as new_get_memory_metrics,
     estimate_memory_gradient as new_estimate_memory_gradient
 )
-from ..memory.working_memory import MwManager
+from ..memory.mw_manager import MwManager
 from ..memory.long_term_memory import LongTermMemoryManager
 from ..memory.holon_fabric import HolonFabric
 from ..memory.backends.pgvector_backend import PgVectorStore, Holon

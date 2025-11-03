@@ -214,7 +214,7 @@ class RayAgent:
     def _initialize_memory_managers(self):
         """Initialize memory managers with proper error handling."""
         try:
-            from ..memory.working_memory import MwManager
+            from ..memory.mw_manager import MwManager
             from ..memory.long_term_memory import LongTermMemoryManager
             
             # Use provided organ_id or fallback to generated one
@@ -325,6 +325,39 @@ class RayAgent:
         except Exception as e:
             logger.debug(f"[{self.agent_id}] Mw global put failed for {kind}:{scope}:{item_id}: {e}")
             return False
+
+    # --- Simple Mw → Mlt workflow helper ---
+    async def fetch_with_cache(self, item_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Implements the Mw→Mlt workflow:
+          1) Try Mw (L0/L1/L2) via MwManager.get_item_async
+          2) On miss, query LTM via LongTermMemoryManager.query_holon_by_id_async
+          3) If found, write back to Mw via set_global_item
+        """
+        try:
+            if not self.mw_manager or not self.mlt_manager:
+                return None
+
+            # Step 1: Check cache (fast)
+            cached = await self.mw_manager.get_item_async(item_id)
+            if cached is not None:
+                try:
+                    return json.loads(cached) if isinstance(cached, str) else cached
+                except json.JSONDecodeError:
+                    return {"raw_data": cached}
+
+            # Step 3: Check LTM (slow)
+            data = await self.mlt_manager.query_holon_by_id_async(item_id)
+
+            # Step 4: Write-back (optional)
+            if data:
+                try:
+                    self.mw_manager.set_global_item(item_id, data)
+                except Exception:
+                    pass
+            return data
+        except Exception:
+            return None
 
     def cache_task_row(self, task_row: Dict[str, Any]) -> None:
         """Lifecycle-aware Mw caching for a task row via MwManager.cache_task."""

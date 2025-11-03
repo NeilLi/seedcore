@@ -41,7 +41,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
 
 from src.seedcore.agents.ray_agent import RayAgent
-from src.seedcore.memory.working_memory import MwManager
+from src.seedcore.memory.mw_manager import MwManager
 
 
 class TestRayAgentMwIntegration:
@@ -65,7 +65,7 @@ class TestRayAgentMwIntegration:
     @pytest.fixture
     def mock_mw_manager(self):
         """Create a mock MwManager for testing."""
-        with patch('src.seedcore.memory.working_memory.MwManager') as mock_class:
+        with patch('src.seedcore.memory.mw_manager.MwManager') as mock_class:
             mock_instance = Mock(spec=MwManager)
             mock_instance.get_telemetry.return_value = {
                 "hit_ratio": 0.8,
@@ -126,9 +126,9 @@ class TestRayAgentMwIntegration:
         """Test that typed calls don't cause double-prefixing."""
         # Test the MwManager directly
         # Patch get_mw_store to avoid blocking on Ray actor lookup
-        with patch('src.seedcore.memory.working_memory.get_mw_store', return_value=None):
-            with patch('src.seedcore.memory.working_memory.get_node_cache', return_value=None):
-                with patch('src.seedcore.memory.working_memory._shard_for', return_value=None):
+        with patch('src.seedcore.memory.mw_manager.get_mw_store', return_value=None):
+            with patch('src.seedcore.memory.mw_manager.get_node_cache', return_value=None):
+                with patch('src.seedcore.memory.mw_manager._shard_for', return_value=None):
                     manager = MwManager("test_agent")
                     
                     # Mock the internal methods
@@ -260,9 +260,9 @@ class TestRayAgentMwIntegration:
     def test_configurable_ttls(self, monkeypatch):
         """Test that TTLs are configurable via environment variables."""
         # Patch get_mw_store to avoid blocking on Ray actor lookup
-        with patch('src.seedcore.memory.working_memory.get_mw_store', return_value=None):
-            with patch('src.seedcore.memory.working_memory.get_node_cache', return_value=None):
-                with patch('src.seedcore.memory.working_memory._shard_for', return_value=None):
+        with patch('src.seedcore.memory.mw_manager.get_mw_store', return_value=None):
+            with patch('src.seedcore.memory.mw_manager.get_node_cache', return_value=None):
+                with patch('src.seedcore.memory.mw_manager._shard_for', return_value=None):
                     # Create a new MwManager instance (TTLs already set at class definition)
                     manager = MwManager("test_agent")
 

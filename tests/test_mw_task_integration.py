@@ -25,7 +25,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, patch, AsyncMock
 
-from src.seedcore.memory.working_memory import MwManager
+from src.seedcore.memory.mw_manager import MwManager
 
 
 class TestMwTaskIntegration:
@@ -35,9 +35,9 @@ class TestMwTaskIntegration:
     def mw_manager(self):
         """Create a test MwManager instance."""
         # ray.is_initialized should already be mocked by mock_ray_dependencies
-        with patch('src.seedcore.memory.working_memory.get_mw_store'):
-            with patch('src.seedcore.memory.working_memory.get_node_cache'):
-                with patch('src.seedcore.memory.working_memory._shard_for'):
+        with patch('src.seedcore.memory.mw_manager.get_mw_store'):
+            with patch('src.seedcore.memory.mw_manager.get_node_cache'):
+                with patch('src.seedcore.memory.mw_manager._shard_for'):
                     manager = MwManager("test_organ_1")
                     return manager
 

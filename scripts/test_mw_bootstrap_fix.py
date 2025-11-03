@@ -28,7 +28,7 @@ def test_imports():
     log.info("🔍 Testing imports...")
     
     try:
-        from seedcore.memory.working_memory import MwManager, SharedCache
+        from seedcore.memory.mw_manager import MwManager, SharedCache
         log.info("✅ MwManager and SharedCache imported successfully")
     except Exception as e:
         log.error(f"❌ Failed to import MwManager/SharedCache: {e}")
