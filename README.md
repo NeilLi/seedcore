@@ -2,7 +2,11 @@
 
 [![Run Tests](https://github.com/NeilLi/seedcore/actions/workflows/tests.yml/badge.svg)](https://github.com/NeilLi/seedcore/actions/workflows/tests.yml)
 
-A stateful, interactive cognitive architecture system with persistent organs, agents, energy-based control loops, and integrated XGBoost machine learning capabilities featuring realistic agent collaboration learning. Now deployed on Kubernetes with KubeRay, featuring advanced database schema evolution, Ray Serve microservices architecture, and comprehensive runtime registry management.
+SeedCore is a self-evolving cognitive system that merges distributed computing with biological design principles.
+
+It runs on Kubernetes + Ray and combines persistent agents, energy-driven feedback loops, and XGBoost-powered learning to create adaptive, stateful intelligence.
+
+Designed for real-time cognition, schema evolution, and self-repair, SeedCore transforms static software pipelines into a dynamic, collaborative cognitive organism.
 
 ## 🚀 Quick Start (Kubernetes + KubeRay)
 
@@ -52,7 +56,7 @@ cd deploy
 
 #### 5. Initialize Databases
 ```bash
-# Initialize database schema and runtime registry (12 migrations)
+# Initialize database schema and runtime registry (19 migrations)
 ./init-databases.sh
 ```
 
@@ -165,27 +169,31 @@ SeedCore implements a distributed, intelligent organism architecture using Ray S
 - **Redis**: Caching and session management with performance optimization
 - **Neo4j**: Graph database for complex relationships
 
-### Advanced Database Schema (12 Migrations)
+### Advanced Database Schema (19 Migrations)
 
-The system includes a comprehensive database schema evolution with 12 migrations:
+The system includes a comprehensive database schema evolution with 19 migrations:
 
 #### Task Management System (Migrations 001-006)
 - **Coordinator-Dispatcher Pattern**: Complete task queue with lease management
 - **Retry Logic**: Automatic requeuing with exponential backoff
 - **Drift Scoring**: OCPS valve decision making (0.0 = fast path, ≥0.5 = escalation)
 - **Performance Indexes**: Optimized for task claiming and status updates
+- **Task Outbox**: Transactional outbox pattern with scheduling and retry tracking (Migration 018)
 
 #### HGNN Architecture (Migrations 007-008)
 - **Two-Layer Graph**: Task layer and Agent/Organ layer with cross-layer relationships
 - **Node Mapping**: Canonical node-id mapping for DGL integration
-- **Vector Embeddings**: PgVector integration with IVFFlat indexes for fast similarity search
+- **Vector Embeddings**: PgVector integration with IVFFlat indexes for fast similarity search (upgraded to 1024 dimensions in Migration 019)
 - **Graph Analytics**: Unified views for complex relationship analysis
+- **Multi-Label Embeddings**: Support for multiple embeddings per node with label-based organization (Migration 017)
 
-#### Facts Management (Migrations 009-010)
+#### Facts Management (Migrations 009-010, 016)
 - **Full-Text Search**: GIN indexes for efficient text search
 - **Tag-Based Categorization**: Array-based tagging system
 - **Metadata Support**: JSONB for flexible fact properties
 - **Task Integration**: Fact-task relationship mapping
+- **PKG Integration**: Policy-driven fact management with temporal validity, namespaces, and governance (Migration 016)
+- **Temporal Facts**: Time-bound facts with automatic expiration and cleanup
 
 #### Runtime Registry (Migrations 011-012)
 - **Instance Management**: Service instance tracking and health monitoring
@@ -193,10 +201,25 @@ The system includes a comprehensive database schema evolution with 12 migrations
 - **Heartbeat Monitoring**: Automatic stale instance detection and cleanup
 - **Service Discovery**: Active instance views for load balancing
 
+#### PKG Policy Governance System (Migrations 013-015)
+- **Policy Snapshots**: Versioned policy governance with environment-based activation
+- **Rule Engine**: Policy rules with conditions, emissions, and subtask types
+- **Deployment Management**: Canary deployments and targeted rollouts per router/edge class
+- **Validation Framework**: Test fixtures and validation runs for policy correctness
+- **Promotion Tracking**: Audit trail for policy promotions and rollbacks
+- **Device Coverage**: Edge telemetry and version tracking for distributed deployments
+
+#### Embedding Enhancements (Migrations 017, 019)
+- **Multi-Label Embeddings**: Support for multiple embeddings per node (e.g., task.primary, task.content)
+- **Content Hash Tracking**: SHA256-based staleness detection for embedding refresh
+- **1024-Dimensional Vectors**: Upgraded from 128-d to 1024-d for enhanced NIM Retrieval capabilities
+- **Staleness Detection**: Views to identify embeddings that need refresh based on content changes
+
 ### Detailed Architecture Documentation
 
 For comprehensive architecture details, see:
 - **[Architecture Migration Summary](docs/ARCHITECTURE_MIGRATION_SUMMARY.MD)**: Complete system evolution and database schema
+- **[Database Migrations Summary](deploy/migrations/MIGRATIONS_SUMMARY.md)**: Detailed migration documentation and schema evolution
 - **[Ray Centralization Guide](docs/RAY_CENTRALIZATION_GUIDE.MD)**: Ray configuration and deployment patterns
 - **[Configuration Summary](docs/CONFIGURATION-SUMMARY.MD)**: Database and service configuration
 - **[Implementation Summary](docs/IMPLEMENTATION_SUMMARY.MD)**: Independent service deployment
@@ -259,32 +282,51 @@ For comprehensive architecture details, see:
 
 ### 1. Complete Automated Deployment (Recommended)
 ```bash
-# Build Docker image
-./build.sh
+# Clone and setup
+git clone https://github.com/NeilLi/seedcore.git
+cd seedcore
+./deploy/init_env.sh
+cp docker/env.example docker/.env
 
 # Run complete deployment pipeline
 cd deploy
 ./deploy-seedcore.sh
 ```
 
+This matches **Option 1** in the [Quick Start](#-quick-start-kubernetes--kuberay) section.
+
 ### 2. Step-by-Step Manual Deployment
-Follow the detailed steps in the [Quick Start](#-quick-start-kubernetes--kuberay) section above for a complete walkthrough.
+Follow the detailed steps in the [Quick Start](#-quick-start-kubernetes--kuberay) section above for a complete walkthrough (steps 1-12).
 
 ### 3. Development Environment
 ```bash
-# Quick development setup
+# Quick development setup (if Makefile supports it)
 make dev
 
-# Or manual setup
+# Or complete manual setup following Quick Start Option 2
+git clone https://github.com/NeilLi/seedcore.git
+cd seedcore
 ./build.sh
 cd deploy
 ./setup-kind-only.sh
 ./setup-cores.sh
 ./init-databases.sh
+
+# Deploy storage and RBAC
+kubectl apply -f k8s/seedcore-data-pvc.yaml
+kubectl apply -f k8s/seedcore-serviceaccount.yaml
+kubectl apply -f k8s/seedcore-rolebinding.yaml
+kubectl apply -f k8s/allow-api-egress.yaml
+kubectl apply -f k8s/allow-api-to-ray-serve.yaml
+kubectl apply -f k8s/xgb-pvc.yaml
+
+# Continue with Ray and services
 ./setup-ray-serve.sh
+kubectl apply -f ray-stable-svc.yaml
 ./bootstrap_organism.sh
 ./bootstrap_dispatchers.sh
 ./deploy-seedcore-api.sh
+./deploy-k8s-ingress.sh
 ./port-forward.sh
 ```
 
@@ -591,7 +633,7 @@ For issues and questions:
 ## 🎉 Recent Updates
 
 ### Latest Enhancements (2025)
-- ✅ **Complete Database Schema Evolution**: 12 comprehensive migrations for task management, HGNN architecture, facts system, and runtime registry
+- ✅ **Complete Database Schema Evolution**: 19 comprehensive migrations for task management, HGNN architecture, facts system, runtime registry, PKG policy governance, and embedding enhancements
 - ✅ **Ray Serve Microservices Architecture**: Independent services for ML, Cognitive, State, Energy, Coordinator, and Organism management
 - ✅ **Advanced Cognitive Intelligence**: DSPy v2 integration with OCPS fast/deep path routing and enhanced fact management
 - ✅ **Service Communication Architecture**: Circuit breaker pattern, exponential backoff retry, and centralized Ray connection management
@@ -605,4 +647,4 @@ For issues and questions:
 - **Fault Tolerance**: Circuit breakers, retry logic, and graceful degradation
 - **Production Ready**: Comprehensive monitoring, health checks, and operational procedures
 
-**Note**: This README reflects the current Kubernetes + KubeRay deployment setup. For the previous Docker Compose setup, see [docs/LEGACY/README-DOCKER-SETUP.MD](docs/LEGACY/README-DOCKER-SETUP.MD).
+
