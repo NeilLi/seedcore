@@ -30,8 +30,18 @@ class TestNeo4jGraph:
     def mock_driver(self):
         """Create a mock Neo4j async driver."""
         driver = AsyncMock()
-        driver.session.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
-        driver.session.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_session = AsyncMock()
+        mock_session.run = AsyncMock()
+        
+        # Create a proper async context manager
+        async def async_context_manager(*args, **kwargs):
+            return mock_session
+        
+        mock_context = AsyncMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+        
+        driver.session = Mock(return_value=mock_context)
         driver.close = AsyncMock()
         return driver
     
@@ -65,9 +75,7 @@ class TestNeo4jGraph:
     @pytest.mark.asyncio
     async def test_upsert_edge_success(self, neo4j_graph, mock_driver):
         """Test successful edge upsert."""
-        mock_session = AsyncMock()
-        mock_driver.session.return_value.__aenter__.return_value = mock_session
-        mock_session.run = AsyncMock()
+        mock_session = mock_driver.session.return_value.__aenter__.return_value
         
         await neo4j_graph.upsert_edge("src-uuid", "RELATED_TO", "dst-uuid")
         
@@ -79,9 +87,7 @@ class TestNeo4jGraph:
     @pytest.mark.asyncio
     async def test_upsert_edge_invalid_relationship(self, neo4j_graph, mock_driver):
         """Test that invalid relationship types are sanitized."""
-        mock_session = AsyncMock()
-        mock_driver.session.return_value.__aenter__.return_value = mock_session
-        mock_session.run = AsyncMock()
+        mock_session = mock_driver.session.return_value.__aenter__.return_value
         
         # Use invalid relationship type (lowercase, not alphanumeric)
         await neo4j_graph.upsert_edge("src-uuid", "invalid-rel!", "dst-uuid")
@@ -94,8 +100,7 @@ class TestNeo4jGraph:
     @pytest.mark.asyncio
     async def test_neighbors_with_relationship(self, neo4j_graph, mock_driver):
         """Test neighbors query with specific relationship type."""
-        mock_session = AsyncMock()
-        mock_driver.session.return_value.__aenter__.return_value = mock_session
+        mock_session = mock_driver.session.return_value.__aenter__.return_value
         
         # Mock result
         mock_record1 = Mock()
@@ -118,8 +123,7 @@ class TestNeo4jGraph:
     @pytest.mark.asyncio
     async def test_neighbors_without_relationship(self, neo4j_graph, mock_driver):
         """Test neighbors query without relationship type."""
-        mock_session = AsyncMock()
-        mock_driver.session.return_value.__aenter__.return_value = mock_session
+        mock_session = mock_driver.session.return_value.__aenter__.return_value
         
         # Mock result
         mock_record = Mock()
@@ -138,8 +142,7 @@ class TestNeo4jGraph:
     @pytest.mark.asyncio
     async def test_neighbors_empty_result(self, neo4j_graph, mock_driver):
         """Test neighbors returns empty list when no neighbors found."""
-        mock_session = AsyncMock()
-        mock_driver.session.return_value.__aenter__.return_value = mock_session
+        mock_session = mock_driver.session.return_value.__aenter__.return_value
         
         async def async_gen():
             return
@@ -154,8 +157,7 @@ class TestNeo4jGraph:
     @pytest.mark.asyncio
     async def test_neighbors_error_handling(self, neo4j_graph, mock_driver):
         """Test neighbors handles errors gracefully."""
-        mock_session = AsyncMock()
-        mock_driver.session.return_value.__aenter__.return_value = mock_session
+        mock_session = mock_driver.session.return_value.__aenter__.return_value
         mock_session.run = AsyncMock(side_effect=Exception("Connection error"))
         
         result = await neo4j_graph.neighbors("test-uuid")
@@ -165,8 +167,7 @@ class TestNeo4jGraph:
     @pytest.mark.asyncio
     async def test_get_neighbors_alias(self, neo4j_graph, mock_driver):
         """Test get_neighbors is an alias for neighbors."""
-        mock_session = AsyncMock()
-        mock_driver.session.return_value.__aenter__.return_value = mock_session
+        mock_session = mock_driver.session.return_value.__aenter__.return_value
         
         mock_record = Mock()
         mock_record.__getitem__ = Mock(side_effect=lambda k: {"uuid": "neighbor1"}.get(k))
@@ -184,8 +185,7 @@ class TestNeo4jGraph:
     @pytest.mark.asyncio
     async def test_get_count(self, neo4j_graph, mock_driver):
         """Test get_count returns relationship count."""
-        mock_session = AsyncMock()
-        mock_driver.session.return_value.__aenter__.return_value = mock_session
+        mock_session = mock_driver.session.return_value.__aenter__.return_value
         
         mock_record = Mock()
         mock_record.__getitem__ = Mock(side_effect=lambda k: {"count": 42}.get(k))
@@ -198,8 +198,7 @@ class TestNeo4jGraph:
     @pytest.mark.asyncio
     async def test_get_count_no_record(self, neo4j_graph, mock_driver):
         """Test get_count returns 0 when no record found."""
-        mock_session = AsyncMock()
-        mock_driver.session.return_value.__aenter__.return_value = mock_session
+        mock_session = mock_driver.session.return_value.__aenter__.return_value
         mock_session.run.return_value.single = AsyncMock(return_value=None)
         
         count = await neo4j_graph.get_count()
@@ -209,8 +208,7 @@ class TestNeo4jGraph:
     @pytest.mark.asyncio
     async def test_get_count_error_handling(self, neo4j_graph, mock_driver):
         """Test get_count handles errors gracefully."""
-        mock_session = AsyncMock()
-        mock_driver.session.return_value.__aenter__.return_value = mock_session
+        mock_session = mock_driver.session.return_value.__aenter__.return_value
         mock_session.run = AsyncMock(side_effect=Exception("Query error"))
         
         count = await neo4j_graph.get_count()

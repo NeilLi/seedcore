@@ -306,13 +306,27 @@ class CognitiveRouter(Router):
             
             # Semantic bridge between routing and LLM profile
             # - Routing decision uses "planner" (from Coordinator)
-            # - LLM profile uses "deep" (for model selection)
+            # - LLM profile uses "deep" or "fast" (for model selection)
             # We translate planner → deep for downstream cognitive service calls
             routing_kind = task_data.get("kind", "planner")  # Routing decision: "planner"
-            profile = task_data.get("profile", "deep")  # Profile metadata: "deep" or "fast" for LLM selection
+            
+            # Check for profile in multiple locations:
+            # 1. Top-level "profile" field
+            # 2. params.cognitive_profile (from task creation)
+            profile = task_data.get("profile")
+            if not profile:
+                params = task_data.get("params", {})
+                profile = params.get("cognitive_profile")
+            
+            # Normalize profile value (lowercase, strip whitespace)
+            if profile:
+                profile = str(profile).lower().strip()
+                if profile not in ("fast", "deep"):
+                    profile = None  # Invalid profile, will default below
             
             # Ensure consistent routing semantics: if routing is "planner", default to "deep" profile
-            if routing_kind == "planner" and not task_data.get("profile"):
+            # unless explicitly overridden in params
+            if routing_kind == "planner" and not profile:
                 # When routed via planner path, default to deep profile unless explicitly overridden
                 profile = "deep"
             
@@ -349,21 +363,20 @@ class CognitiveRouter(Router):
                 # (e.g. coordinator decision signals, surprise score, etc.)
                 "prior_result": prior_result,
 
-                # Request TaskResult envelope for routers
-                "return_taskresult": True,  # <<< IMPORTANT: routers expect TaskResult
-                "caller": "router",  # Identify caller as router
+                # Identify caller as router (for logging/metadata)
+                "caller": "router",
             }
 
             logger.debug(
-                f"CognitiveRouter /plan request agent_id={agent_id} "
+                f"CognitiveRouter /plan_taskresult request agent_id={agent_id} "
                 f"task_id={task_data.get('task_id')} "
                 f"upstream_kind={upstream_kind}"
             )
 
-            plan_result = await self.client.post("/plan", json=cog_request)
+            plan_result = await self.client.post("/plan_taskresult", json=cog_request)
 
             logger.debug(
-                f"CognitiveRouter /plan response for task_id={task_data.get('task_id')}: {plan_result}"
+                f"CognitiveRouter /plan_taskresult response for task_id={task_data.get('task_id')}: {plan_result}"
             )
 
             # We assume cognitive returns a TaskResult-like dict

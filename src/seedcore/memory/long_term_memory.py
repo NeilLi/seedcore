@@ -269,7 +269,7 @@ class LongTermMemoryManager:
 
     async def close(self):
         """Close all connections."""
-        if hasattr(self, 'pg_store'):
+        if hasattr(self, 'pg_store') and self.pg_store is not None:
             await self.pg_store.close()
-        if hasattr(self, 'neo4j_graph'):
+        if hasattr(self, 'neo4j_graph') and self.neo4j_graph is not None:
             await self.neo4j_graph.close() 

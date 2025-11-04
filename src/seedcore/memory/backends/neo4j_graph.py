@@ -85,5 +85,5 @@ class Neo4jGraph:
 
     async def close(self):
         """Asynchronously close the driver connection."""
-        if hasattr(self, "driver"):
+        if hasattr(self, "driver") and self.driver is not None:
             await self.driver.close() 

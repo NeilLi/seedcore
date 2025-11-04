@@ -59,8 +59,17 @@ class TestPgVectorStore:
     def mock_pool(self):
         """Create a mock asyncpg pool."""
         pool = AsyncMock()
-        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
-        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_conn = AsyncMock()
+        mock_conn.execute = AsyncMock()
+        mock_conn.fetch = AsyncMock(return_value=[])
+        mock_conn.fetchrow = AsyncMock(return_value=None)
+        
+        # Create a proper async context manager for acquire()
+        mock_context = AsyncMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+        
+        pool.acquire = Mock(return_value=mock_context)
         pool.close = AsyncMock()
         return pool
     
@@ -104,9 +113,7 @@ class TestPgVectorStore:
     async def test_upsert_success(self, pg_store, mock_pool):
         """Test successful upsert operation."""
         pg_store._pool = mock_pool
-        mock_conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
-        mock_conn.execute = AsyncMock()
+        mock_conn = mock_pool.acquire.return_value.__aenter__.return_value
         
         embedding = np.random.randn(768).astype(np.float32)
         holon = Holon(
@@ -124,8 +131,7 @@ class TestPgVectorStore:
     async def test_upsert_failure(self, pg_store, mock_pool):
         """Test upsert handles errors gracefully."""
         pg_store._pool = mock_pool
-        mock_conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+        mock_conn = mock_pool.acquire.return_value.__aenter__.return_value
         mock_conn.execute = AsyncMock(side_effect=Exception("DB error"))
         
         embedding = np.random.randn(768).astype(np.float32)
@@ -139,8 +145,7 @@ class TestPgVectorStore:
     async def test_search(self, pg_store, mock_pool):
         """Test vector similarity search."""
         pg_store._pool = mock_pool
-        mock_conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+        mock_conn = mock_pool.acquire.return_value.__aenter__.return_value
         
         # Mock fetch results
         mock_record1 = Mock()
@@ -168,7 +173,7 @@ class TestPgVectorStore:
         """Test search returns empty list when no results."""
         pg_store._pool = mock_pool
         mock_conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+        mock_conn = mock_pool.acquire.return_value.__aenter__.return_value
         mock_conn.fetch = AsyncMock(return_value=[])
         
         embedding = np.random.randn(768).astype(np.float32)
@@ -181,7 +186,7 @@ class TestPgVectorStore:
         """Test get_by_id returns Holon when found."""
         pg_store._pool = mock_pool
         mock_conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+        mock_conn = mock_pool.acquire.return_value.__aenter__.return_value
         
         # Mock fetchrow result
         mock_row = Mock()
@@ -204,7 +209,7 @@ class TestPgVectorStore:
         """Test get_by_id returns None when not found."""
         pg_store._pool = mock_pool
         mock_conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+        mock_conn = mock_pool.acquire.return_value.__aenter__.return_value
         mock_conn.fetchrow = AsyncMock(return_value=None)
         
         result = await pg_store.get_by_id("non-existent-uuid")
@@ -216,7 +221,7 @@ class TestPgVectorStore:
         """Test batch retrieval by UUIDs."""
         pg_store._pool = mock_pool
         mock_conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+        mock_conn = mock_pool.acquire.return_value.__aenter__.return_value
         
         # Mock fetch results
         mock_row1 = Mock()
@@ -245,7 +250,7 @@ class TestPgVectorStore:
         """Test get_count returns total holon count."""
         pg_store._pool = mock_pool
         mock_conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+        mock_conn = mock_pool.acquire.return_value.__aenter__.return_value
         mock_conn.fetchval = AsyncMock(return_value=42)
         
         count = await pg_store.get_count()
@@ -258,7 +263,7 @@ class TestPgVectorStore:
         """Test execute_scalar_query executes and returns scalar value."""
         pg_store._pool = mock_pool
         mock_conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+        mock_conn = mock_pool.acquire.return_value.__aenter__.return_value
         mock_conn.fetchval = AsyncMock(return_value=1024)
         
         result = await pg_store.execute_scalar_query("SELECT pg_total_relation_size('holons')")

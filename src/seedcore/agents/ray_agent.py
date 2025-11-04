@@ -117,8 +117,8 @@ class RayAgent:
     """
     
     def __init__(self, agent_id: str,
-                 mw_manager: "MwManager",
-                 ltm_manager: "LongTermMemoryManager",
+                 mw_manager: Optional["MwManager"] = None,
+                 ltm_manager: Optional["LongTermMemoryManager"] = None,
                  initial_role_probs: Optional[Dict[str, float]] = None,
                  organ_id: Optional[str] = None,
                  checkpoint_cfg: Optional[Dict[str, Any]] = None,
@@ -183,6 +183,29 @@ class RayAgent:
         # --- Store Injected Memory Managers ---
         self.mw_manager = mw_manager
         self.mlt_manager = ltm_manager
+
+        # Lazily construct memory manager clients inside the actor if not injected
+        if self.mw_manager is None:
+            try:
+                from ..memory.mw_manager import MwManager  # lazy import to avoid circular deps
+                self.mw_manager = MwManager(organ_id=self.agent_id)
+                logger.info(f"✅ {self.agent_id}: MwManager created in-actor")
+            except Exception as e:
+                logger.warning(f"⚠️ {self.agent_id}: failed to create MwManager in-actor: {e}")
+
+        if self.mlt_manager is None:
+            try:
+                from ..memory.long_term_memory import LongTermMemoryManager  # lazy import
+                self.mlt_manager = LongTermMemoryManager()
+                # Best-effort async initialization (does not block actor startup)
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(self.mlt_manager.initialize())
+                except Exception as ie:
+                    logger.debug(f"LTM async initialize scheduling failed: {ie}")
+                logger.info(f"✅ {self.agent_id}: LongTermMemoryManager created in-actor")
+            except Exception as e:
+                logger.warning(f"⚠️ {self.agent_id}: failed to create LongTermMemoryManager in-actor: {e}")
         self.mfb_client = None
         
         # --- Initialize cognitive service client ---

@@ -69,13 +69,12 @@ class TestHolonFabric:
     @pytest.mark.asyncio
     async def test_query_exact_found(self, fabric, mock_vec_store, mock_graph):
         """Test query_exact when holon is found."""
-        # Mock vector search result
-        mock_record = Mock()
-        mock_record.__getitem__ = Mock(side_effect=lambda k: {
+        # Mock vector search result as a dict-like object
+        mock_record = {
             "uuid": "test-uuid",
             "meta": {"key": "value"},
             "dist": 0.5
-        }.get(k))
+        }
         mock_vec_store.search = AsyncMock(return_value=[mock_record])
         mock_graph.neighbors = AsyncMock(return_value=["neighbor1", "neighbor2"])
         
@@ -83,6 +82,7 @@ class TestHolonFabric:
         
         assert "meta" in result
         assert "neighbors" in result
+        assert result["meta"] is not None
         assert result["meta"]["uuid"] == "test-uuid"
         assert len(result["neighbors"]) == 2
     
@@ -100,17 +100,18 @@ class TestHolonFabric:
     @pytest.mark.asyncio
     async def test_query_exact_handles_inf_dist(self, fabric, mock_vec_store, mock_graph):
         """Test query_exact handles infinite distance values."""
-        mock_record = Mock()
-        mock_record.__getitem__ = Mock(side_effect=lambda k: {
+        # Mock vector search result as a dict-like object
+        mock_record = {
             "uuid": "test-uuid",
             "meta": {"key": "value"},
             "dist": np.inf
-        }.get(k))
+        }
         mock_vec_store.search = AsyncMock(return_value=[mock_record])
         mock_graph.neighbors = AsyncMock(return_value=[])
         
         result = await fabric.query_exact("test-uuid")
         
+        assert result["meta"] is not None
         assert result["meta"]["dist"] == 0.0
     
     @pytest.mark.asyncio

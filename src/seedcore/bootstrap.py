@@ -20,7 +20,7 @@ from typing import Any, Optional, TYPE_CHECKING
 # Import the ACTOR CLASSES (must be decorated with @ray.remote)
 from .memory.mw_manager import SharedCache, NodeCache  # type: ignore
 from .memory.shared_cache_shard import SharedCacheShard  # type: ignore
-from .memory.mw_store import MwStore  # type: ignore
+from .memory.mw_store_shard import MwStoreShard  # type: ignore
 from .config.mem_config import CONFIG as MEMORY_CONFIG  # type: ignore
 
 # -----------------------------------------------------------------------------
@@ -121,9 +121,9 @@ def _create_shared_cache(name: str, namespace: str, **options):
     ).remote()
 
 def _create_mw_store(name: str, namespace: str, **options):
-    """Create or get existing mw_store actor."""
+    """Create or get existing mw_store actor (using MwStoreShard for backward compatibility)."""
     import ray
-    RayMwStore = _apply_ray_remote(MwStore)
+    RayMwStore = _apply_ray_remote(MwStoreShard)
     return RayMwStore.options(
         name=name, lifetime="detached", namespace=namespace, get_if_exists=True, **options
     ).remote()

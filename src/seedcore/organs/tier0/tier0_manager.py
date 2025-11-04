@@ -206,8 +206,6 @@ class Tier0MemoryManager:
                 agent_id=agent_id,
                 initial_role_probs=role_probs,
                 organ_id=organ_id,
-                mw_manager=self.mw_manager,
-                ltm_manager=self.ltm_manager
             )
             self.agents[agent_id] = agent_handle
             self.heartbeats[agent_id] = {}

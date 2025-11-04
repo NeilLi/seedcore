@@ -19,7 +19,7 @@ class MwStoreShard:
             # A better way is to use a min-heap or periodic pruning
             to_remove = len(self.counts) - self.max_items
             if to_remove > 0:
-                for item, _ in self.counts.most_common()[:-to-remove-1:-1]:
+                for item, _ in self.counts.most_common()[:-to_remove-1:-1]:
                     del self.counts[item]
     
     def topn(self, n: int = 1):

@@ -2934,7 +2934,15 @@ def scenario_escalation(conn) -> uuid.UUID:
     return tid
 
 def scenario_cognitive_fast(conn) -> uuid.UUID:
-    """Trigger cognitive service (FAST profile) with a non-builtin query."""
+    """
+    Trigger cognitive service (FAST profile) with a non-builtin query.
+    
+    Note: Since all tasks route through coordinator first, this task will be routed
+    via "planner" path. However, by explicitly setting cognitive_profile="fast" in params,
+    the router should respect this and use fast profile instead of defaulting to deep.
+    
+    The router checks params.cognitive_profile before defaulting to "deep" for planner routes.
+    """
     payload = {
         "type": "general_query",
         "description": "Summarize implications of Moore's Law on energy usage trends in datacenters.",
@@ -2946,11 +2954,13 @@ def scenario_cognitive_fast(conn) -> uuid.UUID:
     tid = submit_via_seedcore_api(payload)
     if tid:
         log.info(f"✅ Cognitive (FAST) task created via seedcore-api: {tid}")
+        log.info(f"   Note: Task will route via 'planner' but should use 'fast' profile from params")
         return tid
 
     tid = submit_via_coordinator(payload)
     if tid:
         log.info(f"✅ Cognitive (FAST) task created via coordinator pipeline: {tid}")
+        log.info(f"   Note: Task will route via 'planner' but should use 'fast' profile from params")
         return tid
 
     assert tid, "Failed to create cognitive (FAST) task via seedcore-api or coordinator pipeline"
