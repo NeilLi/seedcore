@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==========================================
 # SeedCore Environment Bootstrap Script
-# Installs & initializes Docker, Kind, Python 3.10.14, and kubectl
+# Installs & initializes Docker, Kind, Python 3.10.14, kubectl, and Helm
 # ==========================================
 
 set -euo pipefail
@@ -179,6 +179,18 @@ else
   chmod +x kubectl
   sudo mv kubectl /usr/local/bin/kubectl
   log "kubectl installed."
+fi
+
+# -------- Helm --------
+if have helm; then
+  log "Helm already installed: $(helm version --short 2>/dev/null || helm version | head -n1)"
+else
+  log "Installing Helm..."
+  curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  if ! have helm; then
+    die "Helm installation appears to have failed."
+  fi
+  log "Helm installed: $(helm version --short 2>/dev/null || helm version | head -n1)"
 fi
 
 # -------- kind cluster init --------
