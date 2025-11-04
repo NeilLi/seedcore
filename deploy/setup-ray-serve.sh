@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Resolve script directory for robust relative paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "🚀 Setting up Kind Cluster with RayService and Data Stores"
 
 # ---------- Pretty printing ----------
@@ -21,10 +24,10 @@ RAY_IMAGE="${RAY_IMAGE:-seedcore:latest}"   # your image (already built locally)
 WORKER_REPLICAS="${WORKER_REPLICAS:-1}"
 
 # RayService bits
-RAYSERVICE_FILE="${RAYSERVICE_FILE:-rayservice.yaml}"  # path to your RayService YAML
+RAYSERVICE_FILE="${RAYSERVICE_FILE:-${SCRIPT_DIR}/rayservice.yaml}"  # path to your RayService YAML
 RS_NAME="${RS_NAME:-seedcore-svc}"                      # metadata.name inside rayservice.yaml
 # ✅ ADDED: Path to your new stable service definition
-STABLE_SERVE_SVC_FILE="${STABLE_SERVE_SVC_FILE:-ray-stable-svc.yaml}"
+STABLE_SERVE_SVC_FILE="${STABLE_SERVE_SVC_FILE:-${SCRIPT_DIR}/ray-stable-svc.yaml}"
 
 # Optional CLI: setup-kind-ray.sh [namespace] [cluster_name] [image] [rayservice_file] [rayservice_name]
 if [[ $# -ge 1 ]]; then NAMESPACE="$1"; fi
@@ -34,7 +37,7 @@ if [[ $# -ge 4 ]]; then RAYSERVICE_FILE="$4"; fi
 if [[ $# -ge 5 ]]; then RS_NAME="$5"; fi
 
 # .env → Secret
-ENV_FILE_PATH="${ENV_FILE_PATH:-../docker/.env}"
+ENV_FILE_PATH="${ENV_FILE_PATH:-${SCRIPT_DIR}/../docker/.env}"
 SECRET_NAME="${SECRET_NAME:-seedcore-env-secret}"
 
 # ---------- Tool checks ----------

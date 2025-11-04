@@ -21,12 +21,20 @@ Designed for real-time cognition, schema evolution, and self-repair, SeedCore tr
 # Clone and setup
 git clone https://github.com/NeilLi/seedcore.git
 cd seedcore
+
+# Initialize environment variables and configuration
 ./deploy/init_env.sh
 cp docker/env.example docker/.env
 
 # Run complete deployment pipeline
-cd deploy
-./deploy-seedcore.sh
+./deploy/deploy-seedcore.sh
+
+# Start port forwarding for accessing cluster services locally
+./deploy/port-forward.sh
+
+# Setup and verify the host environment architecture
+./setup_host_env.sh
+
 ```
 
 ### Option 2: Step-by-Step Manual Deployment
@@ -115,14 +123,10 @@ curl http://localhost:8265/api/version
 # Check API health
 curl http://localhost:8002/health
 
-# Check energy system
-curl http://localhost:8002/healthz/energy
-
-# Check runtime registry
-curl http://localhost:8002/healthz/runtime-registry
 
 # Check Ray Serve services
 curl http://localhost:8000/ml/health
+curl http://localhost:8000/pipeline/health
 curl http://localhost:8000/organism/health
 curl http://localhost:8000/cognitive/health
 curl http://localhost:8000/ops/state/health

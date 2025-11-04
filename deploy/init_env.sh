@@ -193,6 +193,29 @@ else
   log "Helm installed: $(helm version --short 2>/dev/null || helm version | head -n1)"
 fi
 
+# -------- docker .env --------
+# Create docker/.env from docker/env.example if missing; never overwrite existing .env
+# Note: To modify an existing .env, use the `seed` command per project conventions.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
+DOCKER_DIR="$ROOT_DIR/docker"
+EXAMPLE_ENV="$DOCKER_DIR/env.example"
+TARGET_ENV="$DOCKER_DIR/.env"
+
+if [[ -d "$DOCKER_DIR" ]]; then
+  if [[ -f "$TARGET_ENV" ]]; then
+    log "docker/.env already exists; leaving unchanged. Use 'seed' to modify."
+  elif [[ -f "$EXAMPLE_ENV" ]]; then
+    log "Creating docker/.env from env.example..."
+    cp "$EXAMPLE_ENV" "$TARGET_ENV"
+    log "docker/.env created."
+  else
+    warn "docker/env.example not found; skipping .env creation."
+  fi
+else
+  warn "docker directory not found at $DOCKER_DIR; skipping .env setup."
+fi
+
 # -------- kind cluster init --------
 if ! have docker || ! docker info >/dev/null 2>&1; then
   warn "Docker not available; skipping kind cluster creation."

@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve script directory for robust relative paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 NAMESPACE="seedcore-dev"
 JOB_NAME="seedcore-bootstrap-dispatchers"
-JOB_FILE="k8s/bootstrap-dispatchers-job.yaml"
+JOB_FILE="${SCRIPT_DIR}/k8s/bootstrap-dispatchers-job.yaml"
 
 echo "🚀 Deploying job: $JOB_NAME in namespace: $NAMESPACE"
 

@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Resolve script directory for robust relative paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "🚀 Deploying SeedCore Ingress Routing Configuration..."
 
 # Set environment variables for the ingress configuration
@@ -43,7 +46,7 @@ echo "📦 Deploying ingress configuration..."
 
 # Create a temporary file with substituted variables
 TEMP_FILE=$(mktemp)
-envsubst < k8s/ingress-routing.yaml > "$TEMP_FILE"
+envsubst < "${SCRIPT_DIR}/k8s/ingress-routing.yaml" > "$TEMP_FILE"
 
 # Deploy the ingress
 kubectl apply -f "$TEMP_FILE"

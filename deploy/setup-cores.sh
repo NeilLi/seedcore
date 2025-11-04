@@ -5,6 +5,9 @@
 
 set -e
 
+# Resolve script directory for robust relative paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "🚀 Deploying data stores to Kubernetes cluster..."
 
 # Create namespace if it doesn't exist
@@ -12,7 +15,7 @@ kubectl create namespace seedcore-dev --dry-run=client -o yaml | kubectl apply -
 
 # Deploy PostgreSQL with pgvector (PgBouncer disabled)
 echo "📦 Deploying PostgreSQL with pgvector..."
-helm upgrade --install postgresql ./helm/postgresql \
+helm upgrade --install postgresql "${SCRIPT_DIR}/helm/postgresql" \
   --namespace seedcore-dev \
   --set pgbouncer.enabled=false \
   --wait \
@@ -21,7 +24,7 @@ helm upgrade --install postgresql ./helm/postgresql \
 
 # Deploy MySQL
 echo "📦 Deploying MySQL..."
-helm upgrade --install mysql ./helm/mysql \
+helm upgrade --install mysql "${SCRIPT_DIR}/helm/mysql" \
   --namespace seedcore-dev \
   --wait \
   --timeout 10m
@@ -98,7 +101,7 @@ helm upgrade --install neo4j neo4j/neo4j \
 
 # Deploy RAGFlow service
 # echo "📦 Deploying RAGFlow..."
-# helm upgrade --install ragflow ./helm/ragflow \
+# helm upgrade --install ragflow "${SCRIPT_DIR}/helm/ragflow" \
 #  --namespace seedcore-dev \
 #  --set database.host=postgresql.seedcore-dev.svc.cluster.local \
 #  --set database.user=postgres \

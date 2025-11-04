@@ -2,6 +2,9 @@
 # deploy/deploy-seedcore-api.sh — SeedCore API deployer for Kind/Kubernetes
 set -euo pipefail
 
+# Resolve script directory for robust relative paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ---- Colors / status
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log() { local lvl=$1 msg=$2; case "$lvl" in
@@ -18,7 +21,7 @@ SERVICE_NAME="${SERVICE_NAME:-seedcore-api}"
 DEPLOY_NAME="${DEPLOY_NAME:-seedcore-api}"
 API_IMAGE="${API_IMAGE:-seedcore:latest}"
 REPLICAS="${REPLICAS:-1}"
-ENV_FILE="${ENV_FILE:-../docker/.env}"
+ENV_FILE="${ENV_FILE:-${SCRIPT_DIR}/../docker/.env}"
 ENV_MODE="${ENV_MODE:-auto}"                 # auto|cm|secret|file
 SKIP_LOAD="${SKIP_LOAD:-0}"
 PORT_FORWARD="${PORT_FORWARD:-0}"
@@ -30,7 +33,7 @@ RAY_HEAD_PORT="${RAY_HEAD_PORT:-10001}"
 SEEDCORE_NS="${SEEDCORE_NS:-seedcore-dev}"
 HOSTPATH_PROJECT="${HOSTPATH_PROJECT:-/project}"
 
-YAML_PATH="${YAML_PATH:-k8s/seedcore-api.yaml}"
+YAML_PATH="${YAML_PATH:-${SCRIPT_DIR}/k8s/seedcore-api.yaml}"
 
 usage() {
   cat <<USAGE
