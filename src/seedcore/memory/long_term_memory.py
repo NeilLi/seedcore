@@ -3,7 +3,7 @@ import json
 import logging
 import time
 from typing import Optional, Dict, Any
-from .backends.pgvector_backend_optimized import PgVectorStoreOptimized
+from .backends.pgvector_backend import PgVectorStore
 from .backends.neo4j_graph import Neo4jGraph
 import numpy as np
 import asyncio
@@ -15,7 +15,7 @@ class LongTermMemoryManager:
         print("🔌 Initializing LongTermMemoryManager...")
         start_time = time.time()
         
-        self.pg_store = PgVectorStoreOptimized(
+        self.pg_store = PgVectorStore(
             os.getenv("PG_DSN", "postgresql://postgres:CHANGE_ME@postgresql:5432/postgres"),
             pool_size=10
         )
@@ -46,17 +46,42 @@ class LongTermMemoryManager:
 
     def query_holon_by_id(self, holon_id: str) -> Optional[Dict[str, Any]]:
         """
-        Optimized retrieval of a holon's metadata from PgVector by its ID.
+        Synchronous retrieval of a holon's metadata from PgVector by its ID.
         """
         try:
             logger.info(f"[{self.__class__.__name__}] Querying Mlt for holon_id: {holon_id}")
             
-            # Use the optimized backend
-            result = self.pg_store.get_by_id_sync(holon_id)
+            # Handle async call in sync context
+            try:
+                # Check if we're in an async context
+                loop = asyncio.get_running_loop()
+                # We're in an async context, need to run in a new thread with new event loop
+                import concurrent.futures
+                def run_async():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    try:
+                        return new_loop.run_until_complete(self.pg_store.get_by_id(holon_id))
+                    finally:
+                        new_loop.close()
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(run_async)
+                    holon = future.result()
+            except RuntimeError:
+                # No event loop running, create a new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                holon = loop.run_until_complete(self.pg_store.get_by_id(holon_id))
+                loop.close()
             
-            if result:
+            if holon:
                 logger.info(f"[{self.__class__.__name__}] Found holon: {holon_id}")
-                return result
+                # Convert Holon object to dict format
+                return {
+                    "id": holon.uuid,
+                    "embedding": holon.embedding.tolist(),
+                    "meta": holon.meta
+                }
             else:
                 logger.warning(f"[{self.__class__.__name__}] Holon '{holon_id}' not found in database.")
                 return None
@@ -69,15 +94,20 @@ class LongTermMemoryManager:
 
     async def query_holon_by_id_async(self, holon_id: str) -> Optional[Dict[str, Any]]:
         """
-        Async version of query_holon_by_id using optimized backend.
+        Async version of query_holon_by_id.
         """
         try:
             logger.info(f"[{self.__class__.__name__}] (async) Querying Mlt for holon_id: {holon_id}")
-            result = await self.pg_store.get_by_id(holon_id)
+            holon = await self.pg_store.get_by_id(holon_id)
             
-            if result:
+            if holon:
                 logger.info(f"[{self.__class__.__name__}] (async) Found holon: {holon_id}")
-                return result
+                # Convert Holon object to dict format
+                return {
+                    "id": holon.uuid,
+                    "embedding": holon.embedding.tolist(),
+                    "meta": holon.meta
+                }
             else:
                 logger.warning(f"[{self.__class__.__name__}] (async) Holon '{holon_id}' not found in database.")
                 return None
@@ -135,7 +165,7 @@ class LongTermMemoryManager:
             start_time = time.time()
             
             # Create a Holon object for PgVector
-            from .backends.pgvector_backend_optimized import Holon
+            from .backends.pgvector_backend import Holon
             holon = Holon(
                 uuid=holon_data['vector']['id'],
                 embedding=np.array(holon_data['vector']['embedding']),
@@ -148,7 +178,7 @@ class LongTermMemoryManager:
             # Insert graph relationships into Neo4j if present
             if success and 'graph' in holon_data:
                 graph_data = holon_data['graph']
-                self.neo4j_graph.upsert_edge(
+                await self.neo4j_graph.upsert_edge(
                     graph_data['src_uuid'],
                     graph_data['rel'],
                     graph_data['dst_uuid']
@@ -173,7 +203,7 @@ class LongTermMemoryManager:
             start_time = time.time()
             
             # Create a Holon object for PgVector
-            from .backends.pgvector_backend_optimized import Holon
+            from .backends.pgvector_backend import Holon
             holon = Holon(
                 uuid=holon_data['vector']['id'],
                 embedding=np.array(holon_data['vector']['embedding']),
@@ -198,11 +228,36 @@ class LongTermMemoryManager:
             # Insert graph relationships into Neo4j if present
             if success and 'graph' in holon_data:
                 graph_data = holon_data['graph']
-                self.neo4j_graph.upsert_edge(
-                    graph_data['src_uuid'],
-                    graph_data['rel'],
-                    graph_data['dst_uuid']
-                )
+                # Handle async Neo4j call in sync context
+                try:
+                    # Check if we're in an async context
+                    loop = asyncio.get_running_loop()
+                    # We're in an async context, need to run in a new thread with new event loop
+                    import concurrent.futures
+                    def run_async():
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        try:
+                            return new_loop.run_until_complete(self.neo4j_graph.upsert_edge(
+                                graph_data['src_uuid'],
+                                graph_data['rel'],
+                                graph_data['dst_uuid']
+                            ))
+                        finally:
+                            new_loop.close()
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(run_async)
+                        future.result()
+                except RuntimeError:
+                    # No event loop running, create a new one
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.neo4j_graph.upsert_edge(
+                        graph_data['src_uuid'],
+                        graph_data['rel'],
+                        graph_data['dst_uuid']
+                    ))
+                    loop.close()
             
             elapsed = time.time() - start_time
             print(f"✅ Successfully inserted holon: {holon_data['vector']['id']} in {elapsed:.2f}s")
@@ -215,4 +270,6 @@ class LongTermMemoryManager:
     async def close(self):
         """Close all connections."""
         if hasattr(self, 'pg_store'):
-            await self.pg_store.close() 
+            await self.pg_store.close()
+        if hasattr(self, 'neo4j_graph'):
+            await self.neo4j_graph.close() 

@@ -1,4 +1,5 @@
 import numpy as np
+import asyncio
 from .backends.pgvector_backend import PgVectorStore, Holon
 from .backends.neo4j_graph import Neo4jGraph
 
@@ -22,7 +23,7 @@ class HolonFabric:
                     meta["dist"] = 0.0
             else:
                 meta = None
-            neigh = self.graph.neighbors(uuid)
+            neigh = await self.graph.neighbors(uuid)
             return dict(meta=meta, neighbors=neigh)
         except Exception as e:
             return dict(meta=None, neighbors=[], error=str(e))
@@ -31,23 +32,45 @@ class HolonFabric:
         vec_hits = await self.vec.search(emb, k)
         # add hop-expansion
         uuids = {str(r["uuid"]) for r in vec_hits}  # Convert UUID to string
-        for u in list(uuids):
-            uuids.update(self.graph.neighbors(u, k=3))
+        # Run neighbor queries in parallel for all initial hits
+        neighbor_tasks = [self.graph.neighbors(u, k=3) for u in uuids]
+        neighbor_lists = await asyncio.gather(*neighbor_tasks)
+        for neighbors in neighbor_lists:
+            uuids.update(neighbors)
         return list(uuids)
 
     async def create_relationship(self, src_uuid: str, rel: str, dst_uuid: str):
         """Create a relationship between two holons"""
-        self.graph.upsert_edge(src_uuid, rel, dst_uuid)
+        await self.graph.upsert_edge(src_uuid, rel, dst_uuid)
 
     async def get_stats(self):
         """Get statistics about the holon fabric"""
-        # Simple stats - in a real implementation, you'd query both databases
-        return {
-            "total_holons": 3,  # From the sample data
-            "total_relationships": 3,  # From the sample data
-            "vector_dimensions": 768,
-            "status": "healthy"
-        }
+        try:
+            # Query relationship count from Neo4j and holon count from PgVector in parallel
+            rel_count_task = self.graph.get_count()
+            holon_count_task = self.vec.get_count()
+            bytes_task = self.vec.execute_scalar_query("SELECT pg_total_relation_size('holons')")
+            
+            rel_count, holon_count, bytes_used = await asyncio.gather(
+                rel_count_task, holon_count_task, bytes_task
+            )
+            
+            return {
+                "total_holons": holon_count if holon_count is not None else 0,
+                "total_relationships": rel_count,
+                "vector_dimensions": 768,
+                "bytes_used": int(bytes_used) if bytes_used is not None else 0,
+                "status": "healthy"
+            }
+        except Exception as e:
+            return {
+                "total_holons": 0,
+                "total_relationships": 0,
+                "vector_dimensions": 768,
+                "bytes_used": 0,
+                "status": "unhealthy",
+                "error": str(e)
+            }
 
 def uuid_vec(uuid: str) -> np.ndarray:
     """Convert UUID to vector for exact search - placeholder implementation"""

@@ -27,9 +27,14 @@ import random
 import ast
 import operator
 import uuid
-from typing import Dict, Any, List, Optional
+import hashlib
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
 import logging
+
+if TYPE_CHECKING:
+    from ..memory.mw_manager import MwManager
+    from ..memory.long_term_memory import LongTermMemoryManager
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -82,6 +87,10 @@ from ..memory.flashbulb_client import FlashbulbClient
 # NEW: Import the Cognitive Service Client
 from ..serve.cognitive_client import CognitiveServiceClient
 
+# --- Import Enhanced Memory Managers ---
+# Note: Actual imports are done inside methods to avoid circular dependencies
+# TYPE_CHECKING imports are used for type hints only
+
 # === COA §6/§8: agent-private memory vector h_i ∈ R^128 ===
 from .private_memory import AgentPrivateMemory, PeerEvent
 from .checkpoint_store import CheckpointStoreFactory, CheckpointStore, NullStore
@@ -107,7 +116,10 @@ class RayAgent:
     - Memory managers for Mw and Mlt access
     """
     
-    def __init__(self, agent_id: str, initial_role_probs: Optional[Dict[str, float]] = None,
+    def __init__(self, agent_id: str,
+                 mw_manager: "MwManager",
+                 ltm_manager: "LongTermMemoryManager",
+                 initial_role_probs: Optional[Dict[str, float]] = None,
                  organ_id: Optional[str] = None,
                  checkpoint_cfg: Optional[Dict[str, Any]] = None,
                  cognitive_base_url: Optional[str] = None):
@@ -168,9 +180,9 @@ class RayAgent:
         self.max_idle: int = 1000
         self._archived: bool = False
         
-        # --- Initialize memory managers with better error handling ---
-        self.mw_manager = None
-        self.mlt_manager = None
+        # --- Store Injected Memory Managers ---
+        self.mw_manager = mw_manager
+        self.mlt_manager = ltm_manager
         self.mfb_client = None
         
         # --- Initialize cognitive service client ---
@@ -212,21 +224,18 @@ class RayAgent:
         )
     
     def _initialize_memory_managers(self):
-        """Initialize memory managers with proper error handling."""
-        try:
-            from ..memory.mw_manager import MwManager
-            from ..memory.long_term_memory import LongTermMemoryManager
-            
-            # Use provided organ_id or fallback to generated one
-            organ_id = self.organ_id or f"organ_for_{self.agent_id}"
-            self.mw_manager = MwManager(organ_id=organ_id)
-            self.mlt_manager = LongTermMemoryManager()
-            
-            logger.info(f"✅ Agent {self.agent_id} initialized with memory managers")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize memory managers for {self.agent_id}: {e}")
-            self.mw_manager = None
-            self.mlt_manager = None
+        """
+        Verifies injected memory managers and initializes FlashbulbClient.
+        """
+        if self.mw_manager:
+            logger.info(f"✅ Agent {self.agent_id} attached to MwManager")
+        else:
+            logger.warning(f"⚠️ Agent {self.agent_id} has no MwManager")
+        
+        if self.mlt_manager:
+            logger.info(f"✅ Agent {self.agent_id} attached to LongTermMemoryManager")
+        else:
+            logger.warning(f"⚠️ Agent {self.agent_id} has no LongTermMemoryManager")
         
         # Initialize Flashbulb Client
         try:
@@ -332,29 +341,30 @@ class RayAgent:
         Implements the Mw→Mlt workflow:
           1) Try Mw (L0/L1/L2) via MwManager.get_item_async
           2) On miss, query LTM via LongTermMemoryManager.query_holon_by_id_async
-          3) If found, write back to Mw via set_global_item
+          3) If found, write back to Mw via set_global_item_typed
         """
         try:
             if not self.mw_manager or not self.mlt_manager:
                 return None
 
             # Step 1: Check cache (fast)
+            # get_item_async (via _unwrap_value) handles JSON decompression
             cached = await self.mw_manager.get_item_async(item_id)
             if cached is not None:
-                try:
-                    return json.loads(cached) if isinstance(cached, str) else cached
-                except json.JSONDecodeError:
-                    return {"raw_data": cached}
+                return cached
 
-            # Step 3: Check LTM (slow)
+            # Step 2: Check LTM (slow)
             data = await self.mlt_manager.query_holon_by_id_async(item_id)
 
-            # Step 4: Write-back (optional)
+            # Step 3: Write-back (fire-and-forget)
             if data:
                 try:
-                    self.mw_manager.set_global_item(item_id, data)
-                except Exception:
-                    pass
+                    # Use typed, compression-aware setter for global cache
+                    self.mw_manager.set_global_item_typed(
+                        "fact", "global", item_id, data, ttl_s=900
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to write-back cache for {item_id}: {e}")
             return data
         except Exception:
             return None
@@ -395,22 +405,51 @@ class RayAgent:
             logger.debug(f"[{self.agent_id}] get_task_cached failed: {e}")
             return None
 
-    def _promote_to_mlt(self, key: str, obj: Dict[str, Any], compression: bool = True) -> bool:
-        """Promote object to Mlt with optional compression."""
+    async def _promote_to_mlt(self, key: str, obj: Dict[str, Any], compression: bool = True) -> bool:
+        """
+        Asynchronously promote an object to Mlt by creating a Holon.
+        """
         if not self.mlt_manager:
             return False
         try:
             payload = obj
             if compression and isinstance(obj, dict):
-                # toy "compression": drop large fields & keep summary size
-                pruned = {k: v for k, v in obj.items() if k not in ("raw", "tokens", "trace")}
+                # Simple "compression": drop large fields
+                pruned = {k: v for k, v in obj.items() if k not in ("raw", "tokens", "trace", "result")}
                 if "raw" in obj:
-                    pruned["raw_size"] = len(str(obj["raw"]))  # track size
+                    pruned["raw_size"] = len(str(obj["raw"]))
+                if "result" in obj:
+                    pruned["result_preview"] = str(obj["result"])[:200]
                 payload = pruned
                 self.total_compression_gain += max(0.0, len(str(obj)) - len(str(pruned)))
-            self.mlt_manager.store_holon(key, payload)  # consistent with your mlt API
-            self._mlt_promotions = getattr(self, "_mlt_promotions", 0) + 1
-            return True
+            
+            # Create a placeholder embedding
+            text_to_embed = json.dumps(payload, sort_keys=True)
+            hash_bytes = hashlib.md5(text_to_embed.encode()).digest()
+            vec = np.frombuffer(hash_bytes, dtype=np.uint8).astype(np.float32)
+            vec = np.pad(vec, (0, 768 - len(vec)), mode='constant')
+            embedding = vec / (np.linalg.norm(vec) + 1e-6)
+            
+            # Build the holon dict for the LTM manager
+            holon_data = {
+                'vector': {
+                    'id': key,  # Use the task artifact key as the UUID
+                    'embedding': embedding,
+                    'meta': payload
+                },
+                'graph': {  # Link the artifact to this agent
+                    'src_uuid': key,
+                    'rel': 'GENERATED_BY',
+                    'dst_uuid': self.agent_id
+                }
+            }
+            
+            success = await self.mlt_manager.insert_holon_async(holon_data)
+            
+            if success:
+                self._mlt_promotions = getattr(self, "_mlt_promotions", 0) + 1
+                return True
+            return False
         except Exception as e:
             logger.debug(f"[{self.agent_id}] Mlt promote failed for {key}: {e}")
             return False
@@ -676,7 +715,7 @@ class RayAgent:
         if sal is not None:
             should_promote = should_promote or (not artifact["success"] and sal >= 0.7)
         if should_promote:
-            self._promote_to_mlt(artifact_key, artifact, compression=True)
+            await self._promote_to_mlt(artifact_key, artifact, compression=True)
         
         return result
 
@@ -1204,26 +1243,30 @@ class RayAgent:
             "peer_interactions": self.peer_interactions,
         }
 
-    def archive(self) -> bool:
-        """Move Tier-0 summaries to Mlt and mark this actor as archived."""
+    async def archive(self) -> bool:
+        """
+        Asynchronously move Tier-0 summaries to Mlt and mark this actor as archived.
+        """
         try:
             summary = self._export_tier0_summary()
-            if self.mlt_manager and hasattr(self.mlt_manager, "store_agent_summary"):
-                self.mlt_manager.store_agent_summary(self.agent_id, summary)  # type: ignore[attr-defined]
+            
+            # Promote the summary to LTM using our async method
+            summary_key = f"agent_summary:{self.agent_id}:{int(time.time())}"
+            await self._promote_to_mlt(summary_key, summary, compression=False)
+            
             if self.mw_manager and hasattr(self.mw_manager, "evict_agent"):
-                self.mw_manager.evict_agent(self.agent_id)  # type: ignore[attr-defined]
-            # Clear L0 cache on archive lifecycle
+                self.mw_manager.evict_agent(self.agent_id)  # Assuming fire-and-forget
+            
             if self.mw_manager and hasattr(self.mw_manager, "clear"):
                 try:
                     self.mw_manager.clear()
                     logger.debug(f"[{self.agent_id}] Cleared L0 cache on archive")
                 except Exception as e:
                     logger.debug(f"[{self.agent_id}] Failed to clear L0 cache: {e}")
+            
             if self.mfb_client and hasattr(self.mfb_client, "log_incident"):
-                try:
-                    self.mfb_client.log_incident({"archive": True, "summary": summary}, salience=0.3)
-                except Exception:
-                    pass
+                self.mfb_client.log_incident({"archive": True, "summary": summary}, salience=0.3)
+            
             self._archived = True
             self.lifecycle_state = "Archived"
             return True
@@ -1271,7 +1314,7 @@ class RayAgent:
         self.peer_interactions[peer_id] = self.peer_interactions.get(peer_id, 0) + 1
         logger.debug(f"Agent {self.agent_id} recorded interaction with {peer_id}")
     
-    def get_heartbeat(self) -> Dict[str, Any]:
+    async def get_heartbeat(self) -> Dict[str, Any]:
         """
         Gathers the agent's current state and performance into a heartbeat.
         This will be serialized to JSON for the meta-controller.
@@ -1344,7 +1387,8 @@ class RayAgent:
                 # Add hot items every 10th heartbeat (low rate)
                 if self.tasks_processed % 10 == 0 and random.random() < 0.05:
                     try:
-                        hot = self.mw_manager.get_hot_items(top_n=5)
+                        # Use async hot item fetch
+                        hot = await self.mw_manager.get_hot_items_async(top_n=5)
                         heartbeat_data["memory_metrics"]["mw_hot_items"] = hot
                     except Exception:
                         pass
@@ -1442,36 +1486,37 @@ class RayAgent:
 
             # 2. On a miss, escalate to Long-Term Memory (Mlt)
             logger.info(f"[{self.agent_id}] ⚠️ '{fact_id}' not in Mw (cache miss). Escalating to Mlt...")
-            try:
-                long_term_data = self.mlt_manager.query_holon_by_id(fact_id)  # No await needed
-
-                if long_term_data:
-                    logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mlt.")
-                    
-                    # 3. Cache the retrieved data back into Mw for future use using global write-through
-                    logger.info(f"[{self.agent_id}] 💾 Caching '{fact_id}' back to Mw...")
-                    try:
-                        # Use set_global_item for cluster-wide visibility with TTL
-                        self.mw_manager.set_global_item_typed("fact", "global", fact_id, json.dumps(long_term_data), ttl_s=900)
-                        logger.info(f"[{self.agent_id}] ✅ Successfully cached to Mw (global)")
-                    except Exception as e:
-                        logger.error(f"[{self.agent_id}] ❌ Failed to cache to Mw: {e}")
-                    
-                    return long_term_data
-                else:
-                    # On total miss: write short-lived negative cache (30s)
-                    logger.info(f"[{self.agent_id}] ❌ '{fact_id}' not found in Mlt. Setting negative cache.")
-                    try:
-                        self.mw_manager.set_negative_cache("fact", "global", fact_id, ttl_s=30)
-                    except Exception as e:
-                        logger.error(f"[{self.agent_id}] ❌ Failed to set negative cache: {e}")
-                    
-                    return None
-            except Exception as e:
-                logger.error(f"[{self.agent_id}] ❌ Error querying Mlt: {e}")
+            
+            # --- ASYNC FIX ---
+            long_term_data = await self.mlt_manager.query_holon_by_id_async(fact_id)
+            
+            if long_term_data:
+                logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mlt.")
+                
+                # 3. Cache the retrieved data back into Mw
+                logger.info(f"[{self.agent_id}] 💾 Caching '{fact_id}' back to Mw...")
+                try:
+                    self.mw_manager.set_global_item_typed("fact", "global", fact_id, long_term_data, ttl_s=900)
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] ❌ Failed to cache to Mw: {e}")
+                
+                return long_term_data
+            else:
+                # On total miss: write negative cache
+                logger.info(f"[{self.agent_id}] ❌ '{fact_id}' not found in Mlt. Setting negative cache.")
+                try:
+                    self.mw_manager.set_negative_cache("fact", "global", fact_id, ttl_s=30)
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] ❌ Failed to set negative cache: {e}")
+                
+                return None
+        except Exception as e:
+            logger.error(f"[{self.agent_id}] ❌ Error querying Mlt: {e}")
+            return None
         finally:
             # Always clear in-flight sentinel
             try:
+                # --- ASYNC FIX ---
                 await self.mw_manager.del_global_key(sentinel_key)
             except Exception:
                 pass
@@ -1557,7 +1602,7 @@ class RayAgent:
         self._mw_put_json_local(artifact_key, artifact)  # L0 for immediate local use
         self._mw_put_json_global("collab_task", "global", artifact_key, artifact, ttl_s=900)
         if success and quality >= 0.8:
-            self._promote_to_mlt(artifact_key, artifact, compression=True)
+            await self._promote_to_mlt(artifact_key, artifact, compression=True)
         
         return result
 
@@ -1780,7 +1825,7 @@ class RayAgent:
         
         while True:
             try:
-                heartbeat = self.get_heartbeat()
+                heartbeat = await self.get_heartbeat()
                 # In a real system, you would publish this to Redis Pub/Sub
                 # or send it to a central telemetry service
                 logger.info(f"HEARTBEAT from {self.agent_id}: capability={heartbeat['performance_metrics']['capability_score_c']:.3f}")
