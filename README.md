@@ -9,14 +9,16 @@ A stateful, interactive cognitive architecture system with persistent organs, ag
 ### Prerequisites
 - **Kubernetes Tools**: `kubectl`, `kind`, `helm`
 - **Docker**: For building and loading images
-- **System Requirements**: 8GB+ RAM, 4+ CPU cores recommended
-- **Operating System**: Linux/macOS/Windows with Docker support
+- **System Requirements**: 16GB+ RAM, 4+ CPU cores recommended
+- **Operating System**: Linux with Docker support
 
 ### Option 1: Complete Automated Deployment
 ```bash
 # Clone and setup
-git clone <repository-url>
+git clone https://github.com/NeilLi/seedcore.git
 cd seedcore
+./deploy/init_env.sh
+cp docker/env.example docker/.env
 
 # Run complete deployment pipeline
 cd deploy
@@ -27,7 +29,7 @@ cd deploy
 
 #### 1. Clone and Setup
 ```bash
-git clone <repository-url>
+git clone https://github.com/NeilLi/seedcore.git
 cd seedcore
 ```
 
