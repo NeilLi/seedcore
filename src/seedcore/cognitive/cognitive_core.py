@@ -45,14 +45,10 @@ logger = logging.getLogger("seedcore.CognitiveCore")
 
 # Optional Mw/Mlt dependencies
 try:
-    from src.seedcore.bootstrap import get_shared_cache, get_mw_store
-    from src.seedcore.memory.mw_store import MwStore
-    MwManager = MwStore  # Alias for backward compatibility
+    from src.seedcore.memory.mw_manager import MwManager
     _MW_AVAILABLE = True
 except Exception:
     MwManager = None  # type: ignore
-    get_shared_cache = None  # type: ignore
-    get_mw_store = None  # type: ignore
     _MW_AVAILABLE = False
 
 MW_ENABLED = os.getenv("MW_ENABLED", "1") in {"1", "true", "True"}
@@ -696,13 +692,15 @@ class CognitiveCore(dspy.Module):
                                 mw.set_global_item_typed("fact", "global", f.id, f.to_dict(), ttl_s=1800)
                                 # Clear any negative cache for this fact
                                 neg_key = f"_neg:fact:global:{f.id}"
-                                if hasattr(mw, "del_key_sync"):
-                                    mw.del_key_sync(neg_key)
-                                elif hasattr(mw, "delete"):
-                                    mw.delete(neg_key)
-                                else:
-                                    # last resort: overwrite with tiny TTL
-                                    mw.set(neg_key, {"expired": True}, ttl_s=1)
+                                try:
+                                    # Use del_global_key_sync if available, otherwise try async in new thread
+                                    if hasattr(mw, "del_global_key_sync"):
+                                        mw.del_global_key_sync(neg_key)
+                                    else:
+                                        # New API: delete via set_global_item with None/expired flag
+                                        mw.set_global_item(neg_key, {"expired": True}, ttl_s=1)
+                                except Exception:
+                                    pass
                             except Exception:
                                 pass
 
@@ -718,14 +716,50 @@ class CognitiveCore(dspy.Module):
                                 "ts": time.time(),
                             }
                             synopsis_id = f"cc:syn:{context.task_type.value}:{int(time.time())}"
-                            self._mlt.store_holon(synopsis_id, synopsis)
+                            
+                            # Create placeholder embedding for the synopsis
+                            import numpy as np
+                            text_to_embed = json.dumps(synopsis, sort_keys=True)
+                            hash_bytes = hashlib.md5(text_to_embed.encode()).digest()
+                            vec = np.frombuffer(hash_bytes, dtype=np.uint8).astype(np.float32)
+                            vec = np.pad(vec, (0, 768 - len(vec)), mode='constant')
+                            embedding = vec / (np.linalg.norm(vec) + 1e-6)
+                            
+                            # Build holon data structure for async insertion
+                            holon_data = {
+                                'vector': {
+                                    'id': synopsis_id,
+                                    'embedding': embedding.tolist(),  # Convert to list for JSON serialization
+                                    'meta': synopsis
+                                },
+                                'graph': {
+                                    'src_uuid': synopsis_id,
+                                    'rel': 'GENERATED_BY',
+                                    'dst_uuid': context.agent_id
+                                }
+                            }
+                            
+                            # Use async insertion (run in new event loop if needed)
+                            try:
+                                loop = asyncio.get_event_loop()
+                                if loop.is_running():
+                                    # Can't await in sync context with running loop, use thread pool
+                                    import concurrent.futures
+                                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                                        future = executor.submit(asyncio.run, self._mlt.insert_holon_async(holon_data))
+                                        future.result(timeout=5.0)
+                                else:
+                                    loop.run_until_complete(self._mlt.insert_holon_async(holon_data))
+                            except RuntimeError:
+                                # No event loop, create new one
+                                asyncio.run(self._mlt.insert_holon_async(holon_data))
                             
                             # Also cache synopsis globally for fast access
                             if self._mw_enabled and mw:
                                 mw.set_global_item_typed("synopsis", "global", f"{context.task_type.value}:{context.agent_id}", 
                                                        synopsis, ttl_s=3600)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to store synopsis in Mlt: {e}")
                 
                 # Check if should escalate to planner path (with deep profile)
                 escalate_hint = self._should_escalate_to_planner_path(final_sufficiency, context.task_type)
@@ -920,25 +954,48 @@ class CognitiveCore(dspy.Module):
             if not mw:
                 return None
             
-            cached_data = mw.get_item(cache_key)  # Use sync method
+            # Use async get_item_async (run in new event loop if needed)
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Can't await in sync context with running loop, use thread pool
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, mw.get_item_async(cache_key))
+                        cached_data = future.result(timeout=2.0)
+                else:
+                    cached_data = loop.run_until_complete(mw.get_item_async(cache_key))
+            except RuntimeError:
+                # No event loop, create new one
+                cached_data = asyncio.run(mw.get_item_async(cache_key))
+            except Exception:
+                cached_data = None
+                
             if not cached_data:
                 return None
             
-            # Check TTL
-            ttl = self.cache_ttl_by_task.get(task_type, 600)
-            cache_age = time.time() - cached_data.get("cached_at", 0)
-            if cache_age > ttl:
-                if hasattr(mw, "del_key_sync"):
-                    mw.del_key_sync(cache_key)
-                elif hasattr(mw, "delete"):
-                    mw.delete(cache_key)
-                else:
-                    # last resort: overwrite with tiny TTL
-                    mw.set(cache_key, {"expired": True}, ttl_s=1)
-                return None
-            
-            logger.info(f"Cache hit: {cache_key} (age: {cache_age:.1f}s) task_id={task_id or 'n/a'}")
-            return cached_data["result"]  # Return the final dict directly
+            # Check TTL (cached_data should be a dict with "cached_at" if it's a cached result)
+            if isinstance(cached_data, dict) and "cached_at" in cached_data:
+                ttl = self.cache_ttl_by_task.get(task_type, 600)
+                cache_age = time.time() - cached_data.get("cached_at", 0)
+                if cache_age > ttl:
+                    # Delete expired cache entry
+                    try:
+                        if hasattr(mw, "del_global_key_sync"):
+                            mw.del_global_key_sync(cache_key)
+                        else:
+                            # New API: delete via set_global_item with None/expired flag
+                            mw.set_global_item(cache_key, {"expired": True}, ttl_s=1)
+                    except Exception:
+                        pass
+                    return None
+                # Log cache hit and return the actual result
+                logger.info(f"Cache hit: {cache_key} (age: {cache_age:.1f}s) task_id={task_id or 'n/a'}")
+                return cached_data.get("result")
+            else:
+                # If cached_data is not in expected format, return it as-is (backward compat)
+                logger.info(f"Cache hit: {cache_key} (unexpected format) task_id={task_id or 'n/a'}")
+                return cached_data
             
         except Exception as e:
             logger.warning(f"Cache retrieval error: {e}")
@@ -961,7 +1018,8 @@ class CognitiveCore(dspy.Module):
                 "schema_version": self.schema_version
             }
             
-            mw.set(cache_key, cache_data)
+            # Use set_global_item instead of set
+            mw.set_global_item(cache_key, cache_data)
             logger.info(f"Cached result: {cache_key} task_id={task_id or 'n/a'}")
             
         except Exception as e:
@@ -1257,7 +1315,8 @@ class CognitiveCore(dspy.Module):
         mgr = self._mw_by_agent.get(agent_id)
         if mgr is None:
             try:
-                mgr = MwManager(agent_id)
+                # MwManager expects organ_id as parameter name
+                mgr = MwManager(organ_id=agent_id)
                 self._mw_by_agent[agent_id] = mgr
             except Exception as e:
                 logger.debug("MwManager unavailable (init failed): %s", e)
@@ -1269,29 +1328,34 @@ class CognitiveCore(dspy.Module):
         mw = self._mw(agent_id)
         if not mw:
             return []
-        # naive example: prefix scan or index lookup if your Mw supports it
-        hits = mw.search_text(q, k=k) if hasattr(mw, "search_text") else []
-        return hits
+        # MwManager doesn't have search_text method - return empty for now
+        # Text search would need to be implemented via Mlt or external search service
+        return []
 
     def _mlt_text_search(self, q: str, k: int) -> List[Dict[str, Any]]:
         """Search text in Mlt."""
         if not self._mlt:
             return []
-        return self._mlt.search_text(q, k=k) if hasattr(self._mlt, "search_text") else []
+        # LongTermMemoryManager doesn't have search_text method - return empty for now
+        # Text search would need to be implemented via HolonFabric or external search service
+        return []
 
     def _mw_vector_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
         """Search vectors in Mw for agent."""
         mw = self._mw(agent_id)
         if not mw:
             return []
-        hits = mw.search_vector(q, k=k) if hasattr(mw, "search_vector") else []
-        return hits
+        # MwManager doesn't have search_vector method - return empty for now
+        # Vector search would need to be implemented via Mlt or external search service
+        return []
 
     def _mlt_vector_search(self, q: str, k: int) -> List[Dict[str, Any]]:
         """Search vectors in Mlt."""
         if not self._mlt:
             return []
-        return self._mlt.search_vector(q, k=k) if hasattr(self._mlt, "search_vector") else []
+        # LongTermMemoryManager doesn't have search_vector method - return empty for now
+        # Vector search would need to be implemented via HolonFabric or external search service
+        return []
 
     def _mw_first_text_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
         """Search Mw first, then Mlt, with Mw backfill on Mlt hits."""

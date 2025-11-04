@@ -50,6 +50,7 @@ from seedcore.models.result_schema import (
     create_escalated_result,
     create_error_result,
     ResultKind,
+    TaskResult,
 )
 
 # --- Configuration ---
@@ -138,6 +139,8 @@ class CognitiveServeService:
                 "cognitive": [
                     "/reason-about-failure",
                     "/plan-task", 
+                    "/plan",
+                    "/plan_taskresult",
                     "/make-decision",
                     "/solve-problem",
                     "/synthesize-memory",
@@ -308,9 +311,110 @@ class CognitiveServeService:
     @app.post("/plan", response_model=CognitiveResponse)
     async def plan(self, request: CognitiveRequest):
         """
-        Plan endpoint that supports profile parameter (FAST/DEEP) and optional provider/model overrides.
-        - RayAgent: returns CognitiveResponse (default).
-        - Routers: set return_taskresult=True to receive TaskResult-like envelope.
+        Plan endpoint for agents - returns CognitiveResponse.
+        For routers, use /plan_taskresult endpoint instead.
+        """
+        try:
+            # --- 0) Normalize request -------------------------------------------------
+            # Map legacy 'depth' to 'profile' if necessary
+            profile = (request.profile or request.depth or "fast").lower()
+            if profile not in ("fast", "deep"):
+                profile = "fast"
+
+            # Handle current_capabilities (str or dict)
+            agent_capabilities = {}
+            if request.current_capabilities:
+                if isinstance(request.current_capabilities, str):
+                    s = request.current_capabilities.strip()
+                    if s:
+                        agent_capabilities = {"description": s}
+                elif isinstance(request.current_capabilities, dict):
+                    agent_capabilities = request.current_capabilities
+
+            # Build input_data for cognitive core
+            input_data = {
+                "task_description": request.task_description,
+                "agent_capabilities": agent_capabilities,
+                "available_resources": request.available_tools or {},
+            }
+            if request.llm_provider_override:
+                input_data["llm_provider_override"] = request.llm_provider_override
+            if request.llm_model_override:
+                input_data["llm_model_override"] = request.llm_model_override
+            if request.providers:
+                input_data["providers"] = request.providers
+            if request.meta:
+                input_data["meta"] = request.meta
+
+            # Router context passthrough (optional, for future use)
+            context_dict = request.context or {}
+            if request.task_id:
+                context_dict["task_id"] = request.task_id
+            if request.correlation_id:
+                context_dict["correlation_id"] = request.correlation_id
+            if request.proto_plan is not None:
+                context_dict["proto_plan"] = request.proto_plan
+            if request.prior_result is not None:
+                context_dict["prior_result"] = request.prior_result
+
+            # Merge router context into input_data for cognitive core
+            if context_dict:
+                input_data["router_context"] = context_dict
+
+            ctx = CognitiveContext(
+                agent_id=request.agent_id,
+                task_type=CognitiveTaskType.TASK_PLANNING,
+                input_data=input_data,
+            )
+
+            # --- 1) Profile selection ----
+            use_deep = (profile == "deep")
+            profile_label = "deep" if use_deep else "fast"
+            logger.info(
+                f"/plan: Using profile={profile_label} for agent {request.agent_id}"
+            )
+
+            # --- 2) Immediate/minimal response path (non-blocking) -------------------
+            def _minimal_payload():
+                return {
+                    "thought_process": f"{profile_label.capitalize()} path: returning immediate minimal plan.",
+                    "step_by_step_plan": [{"step": 1, "action": "Generate a concise summary addressing the user request."}],
+                    "estimated_complexity": 5.0 if use_deep else 3.0,
+                    "risk_assessment": "Low risk; detailed planning can be deferred.",
+                    "formatted_response": request.task_description or "Task acknowledged; preparing a concise plan.",
+                    "meta": {"profile_used": profile_label, "immediate": True},
+                }
+
+            immediate_fast = (os.getenv("COG_FAST_IMMEDIATE", "1") in ("1", "true", "True"))
+            immediate_deep = (os.getenv("COG_DEEP_IMMEDIATE", "1") in ("1", "true", "True"))
+
+            if (not use_deep and immediate_fast) or (use_deep and immediate_deep):
+                try:
+                    asyncio.create_task(self._run_plan_async(ctx, use_deep))
+                except Exception as e:
+                    logger.debug(f"Failed to schedule background plan task: {e}")
+
+                minimal = _minimal_payload()
+                return CognitiveResponse(success=True, agent_id=request.agent_id, result=minimal)
+
+            # --- 3) Normal path: also return immediately, do work in background ------
+            try:
+                asyncio.create_task(self._run_plan_async(ctx, use_deep))
+            except Exception as e:
+                logger.debug(f"Failed to schedule background plan task: {e}")
+
+            minimal = _minimal_payload()
+            return CognitiveResponse(success=True, agent_id=request.agent_id, result=minimal)
+
+        except Exception as e:
+            logger.exception(f"Error in /plan endpoint for agent {request.agent_id}: {e}")
+            return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
+
+    @app.post("/plan_taskresult", response_model=TaskResult)
+    async def plan_taskresult(self, request: CognitiveRequest):
+        """
+        Plan endpoint for routers - returns TaskResult envelope.
+        This endpoint is specifically designed for router calls that need TaskResult structure.
         """
         try:
             # --- 0) Normalize request -------------------------------------------------
@@ -365,17 +469,12 @@ class CognitiveServeService:
                 input_data=input_data,
             )
 
-            # --- 1) Profile selection (planner → deep mapping is upstream; we honor given profile) ----
-            # NOTE: profile="deep" means use deep LLM for single planning, NOT multi-plan/escalation.
-            # Multi-plan/escalation (HGNN decomposition) is only for router escalation paths.
-            # RayAgent calls with profile="deep" → single plan with deep LLM (correct behavior).
-            # Router calls → may escalate to multi-plan elsewhere, but /plan itself is single-plan.
+            # --- 1) Profile selection ----
             use_deep = (profile == "deep")
             profile_label = "deep" if use_deep else "fast"
-            is_router_call = (request.caller == "router" and request.return_taskresult)
             logger.info(
-                f"/plan: Using profile={profile_label} for single planning "
-                f"(caller={request.caller or 'unknown'}, router_call={is_router_call})"
+                f"/plan_taskresult: Using profile={profile_label} for router call "
+                f"(task_id={context_dict.get('task_id')})"
             )
 
             # --- 2) Immediate/minimal response path (non-blocking) -------------------
@@ -399,39 +498,8 @@ class CognitiveServeService:
                     logger.debug(f"Failed to schedule background plan task: {e}")
 
                 minimal = _minimal_payload()
-
-                # If router requested a TaskResult envelope, wrap it
-                if request.return_taskresult:
-                    tr = create_cognitive_result(
-                        agent_id=request.agent_id or "router",
-                        task_type="planner",
-                        result=minimal,
-                        confidence_score=None,
-                        profile_used=profile_label,
-                        immediate=True,
-                        caller=request.caller or "router",
-                    )
-                    # Ensure metadata carries through IDs/context if present
-                    tr.metadata.update({
-                        "path": "cognitive_reasoning",
-                        "task_id": context_dict.get("task_id"),
-                        "correlation_id": context_dict.get("correlation_id"),
-                    })
-                    # Return raw dict; response_model is CognitiveResponse, but routers don't rely on it
-                    return tr.model_dump()
-
-                # Default agent response
-                return CognitiveResponse(success=True, agent_id=request.agent_id, result=minimal)
-
-            # --- 3) Normal path: also return immediately, do work in background ------
-            try:
-                asyncio.create_task(self._run_plan_async(ctx, use_deep))
-            except Exception as e:
-                logger.debug(f"Failed to schedule background plan task: {e}")
-
-            minimal = _minimal_payload()
-
-            if request.return_taskresult:
+                
+                # Return TaskResult envelope
                 tr = create_cognitive_result(
                     agent_id=request.agent_id or "router",
                     task_type="planner",
@@ -441,30 +509,49 @@ class CognitiveServeService:
                     immediate=True,
                     caller=request.caller or "router",
                 )
+                # Ensure metadata carries through IDs/context if present
                 tr.metadata.update({
                     "path": "cognitive_reasoning",
                     "task_id": context_dict.get("task_id"),
                     "correlation_id": context_dict.get("correlation_id"),
                 })
-                return tr.model_dump()
+                return tr
 
-            return CognitiveResponse(success=True, agent_id=request.agent_id, result=minimal)
+            # --- 3) Normal path: also return immediately, do work in background ------
+            try:
+                asyncio.create_task(self._run_plan_async(ctx, use_deep))
+            except Exception as e:
+                logger.debug(f"Failed to schedule background plan task: {e}")
+
+            minimal = _minimal_payload()
+            
+            # Return TaskResult envelope
+            tr = create_cognitive_result(
+                agent_id=request.agent_id or "router",
+                task_type="planner",
+                result=minimal,
+                confidence_score=None,
+                profile_used=profile_label,
+                immediate=True,
+                caller=request.caller or "router",
+            )
+            tr.metadata.update({
+                "path": "cognitive_reasoning",
+                "task_id": context_dict.get("task_id"),
+                "correlation_id": context_dict.get("correlation_id"),
+            })
+            return tr
 
         except Exception as e:
-            logger.exception(f"Error in /plan endpoint for agent {request.agent_id}: {e}")
-
-            if request.return_taskresult:
-                # Return unified TaskResult error for routers
-                tr = create_error_result(
-                    error=str(e),
-                    error_type="cognitive_plan_exception",
-                    original_type=ResultKind.COGNITIVE.value,
-                    caller=request.caller or "router",
-                )
-                return tr.model_dump()
-
-            # Default (agent) error shape
-            return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
+            logger.exception(f"Error in /plan_taskresult endpoint for agent {request.agent_id}: {e}")
+            # Return unified TaskResult error for routers
+            tr = create_error_result(
+                error=str(e),
+                error_type="cognitive_plan_exception",
+                original_type=ResultKind.COGNITIVE.value,
+                caller=request.caller or "router",
+            )
+            return tr
 
     async def _run_plan_async(self, context: CognitiveContext, use_deep: bool) -> None:
         """

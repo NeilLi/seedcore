@@ -39,6 +39,11 @@ from ...registry import list_active_instances
 # Avoid importing EnergyLedger at module import time to prevent circular imports.
 # We'll import it inside functions that need it.
 
+# --- Import New Memory Managers ---
+# These are the clients that will be passed to the agents
+from ...memory.mw_manager import MwManager
+from ...memory.long_term_memory import LongTermMemoryManager
+
 logger = logging.getLogger("seedcore.Tier0MemoryManager")
 
 # Target namespace for agent actors (prefer SEEDCORE_NS, fallback to RAY_NAMESPACE)
@@ -60,23 +65,35 @@ class Tier0MemoryManager:
     
     Responsibilities:
     - Create and manage Ray agent actors
-    - Collect heartbeats from all agents
-    - Provide agent statistics and monitoring
-    - Handle agent lifecycle management
+    - Inject memory manager clients (MwManager, LongTermMemoryManager) into agents
+    - Collect heartbeats and stats from all agents
+    - Provide an async API for task execution
     """
     
-    def __init__(self):
+    def __init__(self, mw_manager: MwManager, ltm_manager: LongTermMemoryManager):
+        """
+        Initialize with memory manager clients.
+        
+        Args:
+            mw_manager: The MwManager (Tier 1) client instance.
+            ltm_manager: The LongTermMemoryManager (Tier 2) client instance.
+        """
         self.agents: Dict[str, Any] = {}  # agent_id -> Ray actor handle
         self.heartbeats: Dict[str, Dict[str, Any]] = {}  # agent_id -> latest heartbeat
         self.agent_stats: Dict[str, Dict[str, Any]] = {}  # agent_id -> summary stats
         self.last_collection = time.time()
         self.collection_interval = 5.0  # seconds
+        
+        # --- Store the memory manager clients ---
+        self.mw_manager = mw_manager
+        self.ltm_manager = ltm_manager
+        
         # Track transient ping failures to avoid pruning on single hiccup
         self._ping_failures: Dict[str, int] = {}
         # Graph client for desired-state reconciliation
         self._graph: Optional[GraphClient] = None
         
-        logger.info("✅ Tier0MemoryManager initialized")
+        logger.info("✅ Tier0MemoryManager initialized with memory clients")
         
         # Best-effort auto-discovery on init so that detached Ray actors get picked up
         try:
@@ -180,6 +197,11 @@ class Tier0MemoryManager:
                 pass
 
             # --- Create fresh actor ---
+            #
+            # ENHANCEMENT: Pass the memory manager clients to the
+            # RayAgent's constructor. This assumes RayAgent.__init__
+            # now accepts mw_manager and ltm_manager.
+            #
             agent_handle = RayAgent.options(**options_kwargs).remote(
                 agent_id=agent_id,
                 initial_role_probs=role_probs,
@@ -527,9 +549,9 @@ class Tier0MemoryManager:
             except Exception as e:
                 logger.debug(f"Ray cluster discovery failed: {e}")
     
-    def execute_task_on_agent(self, agent_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def execute_task_on_agent(self, agent_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Execute a task on a specific agent.
+        Asynchronously execute a task on a specific agent.
         
         Args:
             agent_id: Agent to execute the task on
@@ -544,16 +566,17 @@ class Tier0MemoryManager:
             return None
         
         try:
-            result = ray.get(agent.execute_task.remote(task_data))
+            # ENHANCEMENT: Use async _aget instead of blocking ray.get
+            result = await _aget(agent.execute_task.remote(task_data), timeout=120.0)
             logger.info(f"✅ Task executed on agent {agent_id}")
             return result
         except Exception as e:
             logger.error(f"Failed to execute task on agent {agent_id}: {e}")
             return None
     
-    def execute_task_on_random_agent(self, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def execute_task_on_random_agent(self, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Execute a task on a randomly selected agent.
+        Asynchronously execute a task on a randomly selected agent.
         
         Args:
             task_data: Task information and payload
@@ -567,11 +590,12 @@ class Tier0MemoryManager:
         
         import random
         agent_id = random.choice(list(self.agents.keys()))
-        return self.execute_task_on_agent(agent_id, task_data)
+        # ENHANCEMENT: Await the async method
+        return await self.execute_task_on_agent(agent_id, task_data)
     
-    def execute_task_on_best_agent(self, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def execute_task_on_best_agent(self, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Executes a task on the most suitable agent based on energy optimization.
+        Asynchronously executes a task on the most suitable agent based on energy optimization.
         
         Args:
             task_data: Task information and payload
@@ -594,22 +618,24 @@ class Tier0MemoryManager:
                 logger.error("Could not select a best agent.")
                 return None
             
-            # Execute the task on the selected agent
-            result = ray.get(best_agent.execute_task.remote(task_data))
-            agent_id = ray.get(best_agent.get_id.remote())
+            # ENHANCEMENT: Use async _aget for execution and ID get
+            result_task = _aget(best_agent.execute_task.remote(task_data), timeout=120.0)
+            id_task = _aget(best_agent.get_id.remote())
+            
+            result, agent_id = await asyncio.gather(result_task, id_task)
             
             logger.info(f"✅ Energy-aware selection: Chose agent {agent_id} with predicted ΔE of {predicted_delta_e:.4f}")
             return result
             
         except Exception as e:
             logger.warning(f"Energy optimizer failed ({e}), falling back to random selection.")
-            # Fallback to old method
-            return self.execute_task_on_random_agent(task_data)
+            # ENHANCEMENT: Await the async method
+            return await self.execute_task_on_random_agent(task_data)
 
     # === COA §6: Local GNN-like selection within an organ (fast path Level 4) ===
-    def execute_task_on_best_of(self, candidate_agent_ids: List[str], task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def execute_task_on_best_of(self, candidate_agent_ids: List[str], task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Execute a task on the best agent selected from a provided candidate set.
+        Asynchronously execute a task on the best agent selected from a provided candidate set.
         Supports OrganismManager's Level-4 local selection (COA §6.2).
         """
         handles = [self.agents[a] for a in candidate_agent_ids if a in self.agents]
@@ -618,24 +644,29 @@ class Tier0MemoryManager:
             return None
         try:
             best_agent, predicted_delta_e = select_best_agent(handles, task_data)
-            result = ray.get(best_agent.execute_task.remote(task_data))
-            agent_id = ray.get(best_agent.get_id.remote())
+            
+            # ENHANCEMENT: Use async _aget for execution and ID get
+            result_task = _aget(best_agent.execute_task.remote(task_data), timeout=120.0)
+            id_task = _aget(best_agent.get_id.remote())
+            
+            result, agent_id = await asyncio.gather(result_task, id_task)
             logger.info(f"✅ Best-of selection: {agent_id} ΔE≈{predicted_delta_e:.4f}")
             return result
         except Exception as e:
             logger.warning(f"Best-of optimizer failed ({e}); falling back to random within candidate set.")
             import random
             handle = random.choice(handles)
-            return ray.get(handle.execute_task.remote(task_data))
+            # ENHANCEMENT: Use async _aget
+            return await _aget(handle.execute_task.remote(task_data), timeout=120.0)
 
-    def execute_task_on_organ_best(self, organ_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def execute_task_on_organ_best(self, organ_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Convenience: select best agent among those belonging to an organ.
         Assumes standard agent naming: f"{organ_id}_agent_{'{'}i{'}'}".
         """
         prefix = f"{organ_id}_agent_"
         candidate_ids = [aid for aid in self.agents.keys() if aid.startswith(prefix)]
-        return self.execute_task_on_best_of(candidate_ids, task_data)
+        return await self.execute_task_on_best_of(candidate_ids, task_data)
     
     async def collect_heartbeats(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -746,6 +777,31 @@ class Tier0MemoryManager:
                 return {"h": state.get("h")}
             except Exception:
                 return None
+    
+    async def fetch_agent_memory_with_cache(self, agent_id: str, item_id: str) -> Optional[Any]:
+        """
+        Fetches an item from an agent's perspective, using the
+        full cache -> LTM workflow.
+        
+        Args:
+            agent_id: Agent identifier
+            item_id: Item identifier to fetch
+            
+        Returns:
+            Fetched data or None if not found
+        """
+        agent = self.get_agent(agent_id)
+        if not agent:
+            logger.warning(f"Agent {agent_id} not found for memory fetch")
+            return None
+        try:
+            # ENHANCEMENT: Call the new, unified fetch method on the agent
+            # This replaces get_private_memory_vector
+            data = await _aget(agent.fetch_with_cache.remote(item_id))
+            return data
+        except Exception as e:
+            logger.error(f"Failed to fetch memory via agent {agent_id}: {e}")
+            return None
     
     async def start_heartbeat_monitoring(self, interval_seconds: int = 10):
         """
@@ -943,27 +999,71 @@ class Tier0MemoryManager:
             return False
         return True
 
-    def execute_task_on_graph_best(self, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def execute_task_on_graph_best(self, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Execute task on best agent from graph-filtered candidates."""
         ids = self._graph_filter_candidates(task_data)
         if not ids:
             logger.warning("No graph-qualified agents; falling back to global best")
-            return self.execute_task_on_best_agent(task_data)
-        return self.execute_task_on_best_of(ids, task_data)
+            return await self.execute_task_on_best_agent(task_data)
+        return await self.execute_task_on_best_of(ids, task_data)
 
-# Global instance for easy access - lazy initialization
-_tier0_manager_instance = None
+# --- Global Instance Management (ENHANCED) ---
 
-def get_tier0_manager():
-    """Get the global Tier0MemoryManager instance, creating it if needed."""
+# The global instance is now set by an explicit initializer
+# to ensure dependencies are injected correctly.
+
+_tier0_manager_instance: Optional[Tier0MemoryManager] = None
+
+
+async def initialize_global_tier0_manager(
+    mw_manager: MwManager,
+    ltm_manager: LongTermMemoryManager
+) -> Tier0MemoryManager:
+    """
+    Creates and registers the global Tier0MemoryManager instance
+    with its required memory dependencies.
+    
+    This should be called once at application startup.
+    
+    Args:
+        mw_manager: The MwManager (Tier 1) client instance.
+        ltm_manager: The LongTermMemoryManager (Tier 2) client instance.
+        
+    Returns:
+        The initialized Tier0MemoryManager instance.
+    """
     global _tier0_manager_instance
     if _tier0_manager_instance is None:
-        _tier0_manager_instance = Tier0MemoryManager()
+        logger.info("Initializing global Tier0MemoryManager...")
+        _tier0_manager_instance = Tier0MemoryManager(
+            mw_manager=mw_manager,
+            ltm_manager=ltm_manager
+        )
+        # Perform initial discovery
+        await _tier0_manager_instance.discover_and_refresh_agents()
     return _tier0_manager_instance
 
-# For backward compatibility, create a property-like access
+
+def get_tier0_manager() -> Tier0MemoryManager:
+    """
+    Get the global Tier0MemoryManager instance.
+    
+    Raises:
+        RuntimeError: If initialize_global_tier0_manager() has not been called.
+    """
+    if _tier0_manager_instance is None:
+        raise RuntimeError(
+            "Tier0MemoryManager is not initialized. "
+            "Call 'initialize_global_tier0_manager()' at application startup."
+        )
+    return _tier0_manager_instance
+
+
+# For backward compatibility, a proxy object
 class Tier0ManagerProxy:
     def __getattr__(self, name):
+        # This will raise the RuntimeError if not initialized, which is correct.
         return getattr(get_tier0_manager(), name)
+
 
 tier0_manager = Tier0ManagerProxy() 

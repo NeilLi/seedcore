@@ -12,6 +12,7 @@ import mock_ray_dependencies
 import time
 import random
 import pytest
+import asyncio
 from typing import Dict, Any, List
 
 # Add the project root to the Python path
@@ -264,6 +265,7 @@ def ray_get(obj):
 from src.seedcore.organs.tier0.tier0_manager import Tier0MemoryManager
 from src.seedcore.agents.ray_agent import RayAgent
 from src.seedcore.ops.energy.ledger import EnergyLedger
+from unittest.mock import Mock
 
 class TestTier0MemoryManager:
     """Test the Tier0MemoryManager class directly."""
@@ -273,8 +275,12 @@ class TestTier0MemoryManager:
         # Ensure Ray is initialized (using our mock)
         ensure_ray()
         
+        # Create mock memory managers
+        mock_mw_manager = Mock()
+        mock_ltm_manager = Mock()
+        
         # Create a fresh manager for each test
-        self.manager = Tier0MemoryManager()
+        self.manager = Tier0MemoryManager(mock_mw_manager, mock_ltm_manager)
     
     def teardown_method(self):
         """Clean up after each test method."""
@@ -350,7 +356,6 @@ class TestTier0MemoryManager:
         self.manager.create_agent(agent_id, role_probs)
         
         # Collect heartbeats (async method)
-        import asyncio
         heartbeats = asyncio.run(self.manager.collect_heartbeats())
         
         assert agent_id in heartbeats
@@ -383,8 +388,8 @@ class TestTier0MemoryManager:
             "payload": "Test analysis task"
         }
         
-        # Execute task
-        result = self.manager.execute_task_on_best_agent(task_data)
+        # Execute task (async method, need to run in event loop)
+        result = asyncio.run(self.manager.execute_task_on_best_agent(task_data))
         
         assert result is not None
         assert "success" in result
@@ -520,8 +525,12 @@ class TestTier0Integration:
         # Ensure Ray is initialized (using our mock)
         ensure_ray()
         
+        # Create mock memory managers
+        mock_mw_manager = Mock()
+        mock_ltm_manager = Mock()
+        
         # Create a fresh manager for each test
-        self.manager = Tier0MemoryManager()
+        self.manager = Tier0MemoryManager(mock_mw_manager, mock_ltm_manager)
     
     def teardown_method(self):
         """Clean up after each test method."""
@@ -566,14 +575,13 @@ class TestTier0Integration:
                 "payload": f"Workflow test data for {task_type['type']}"
             }
             
-            result = self.manager.execute_task_on_best_agent(task_data)
+            result = asyncio.run(self.manager.execute_task_on_best_agent(task_data))
             assert result is not None
             assert result["success"] == True
             task_results.append(result)
             print(f"  ✅ Task {i+1}: {result['agent_id']} - {task_type['type']}")
         
         # 3. Get heartbeats
-        import asyncio
         heartbeats = asyncio.run(self.manager.collect_heartbeats())
         assert len(heartbeats) == 3
         print(f"✅ Collected heartbeats from {len(heartbeats)} agents")
@@ -608,7 +616,7 @@ class TestTier0Integration:
         ]
         
         for task in tasks:
-            result = self.manager.execute_task_on_best_agent(task)
+            result = asyncio.run(self.manager.execute_task_on_best_agent(task))
             assert result is not None
             assert result["success"] == True
             print(f"  ✅ Energy-aware selection: {task['type']} -> {result['agent_id']}")
@@ -620,6 +628,10 @@ def test_tier0_direct():
     """Main test function for direct Tier 0 testing."""
     print("🚀 Starting Tier 0 Direct Module Tests")
     print("=" * 50)
+    
+    # Create mock memory managers for direct test
+    mock_mw_manager = Mock()
+    mock_ltm_manager = Mock()
     
     # Run all test classes
     test_classes = [TestTier0MemoryManager, TestRayAgent, TestTier0Integration]

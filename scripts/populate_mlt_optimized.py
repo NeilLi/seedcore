@@ -23,7 +23,7 @@ from typing import Optional
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.seedcore.memory.long_term_memory_optimized import LongTermMemoryManagerOptimized as LongTermMemoryManager
+from src.seedcore.memory.long_term_memory import LongTermMemoryManager
 
 # Save UUIDs to artifacts directory for inspection
 UUID_FILE_PATH = '/app/data/fact_uuids.json'  # Mounted volume in docker-compose

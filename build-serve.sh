@@ -1,1 +1,0 @@
-docker build -f docker/Dockerfile.serve -t seedcore-serve:latest .

@@ -1364,6 +1364,30 @@ class OrganismManager:
             logger.error(f"⚠️ Failed to bootstrap singletons: {e}", exc_info=True)
             logger.warning("⚠️ Agents may have limited functionality without memory managers")
 
+        # Initialize Tier0MemoryManager with memory manager clients
+        try:
+            logger.info("🚀 Initializing Tier0MemoryManager with memory managers...")
+            from ..memory.mw_manager import MwManager
+            from ..memory.long_term_memory import LongTermMemoryManager
+            from .tier0.tier0_manager import initialize_global_tier0_manager
+            
+            # Create memory manager instances
+            mw_manager = MwManager(organ_id="system_tier0")
+            ltm_manager = LongTermMemoryManager()
+            
+            # Initialize async connections for LongTermMemoryManager
+            try:
+                await ltm_manager.initialize()
+            except Exception as e:
+                logger.warning(f"⚠️ LongTermMemoryManager async init failed (non-critical): {e}")
+            
+            # Initialize the global Tier0MemoryManager
+            await initialize_global_tier0_manager(mw_manager, ltm_manager)
+            logger.info("✅ Tier0MemoryManager initialized successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Tier0MemoryManager: {e}", exc_info=True)
+            raise RuntimeError(f"Tier0MemoryManager initialization failed: {e}") from e
+
         max_retries = 3
         retry_delay = 10  # seconds
 

@@ -53,7 +53,11 @@ def calculate_dynamic_mem_util(agent, weights: Dict[str, float] = None) -> float
 
 def calculate_cost_vq(memory_system, compression_knob: float) -> Dict[str, float]:
     """
-    Calculate the CostVQ term representing the trade-off between memory usage and information quality.
+    [DEPRECATED] Calculate the CostVQ term representing the trade-off between memory usage and information quality.
+    
+    This is a legacy synchronous function that uses SharedMemorySystem.
+    For new code, use the async version from `memory.cost_vq.calculate_cost_vq()` which
+    works with the distributed architecture (MwManager and HolonFabric).
     
     This implements the cost function described in Section 5 of the energy validation document.
     
@@ -63,6 +67,8 @@ def calculate_cost_vq(memory_system, compression_knob: float) -> Dict[str, float
         
     Returns:
         Dict: Components of the cost calculation
+        
+    .. deprecated:: Use `memory.cost_vq.calculate_cost_vq()` instead for async/distributed support
     """
     # Get total bytes used across all tiers
     bytes_used = memory_system.Mw.bytes_used + memory_system.Mlt.bytes_used

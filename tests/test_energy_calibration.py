@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.seedcore.ops.energy.calculator import EnergyLedger, calculate_energy
 from src.seedcore.agents.ray_agent import RayAgent
 from src.seedcore.organs.tier0.tier0_manager import Tier0MemoryManager
+from unittest.mock import Mock
 
 
 def create_synthetic_tasks(num_tasks: int = 100) -> List[Dict[str, Any]]:
@@ -59,8 +60,12 @@ def run_energy_calibration(num_tasks: int = 100, num_agents: int = 5):
             print("❌ Failed to initialize Ray connection")
             return None, None
 
+    # Create mock memory managers
+    mock_mw_manager = Mock()
+    mock_ltm_manager = Mock()
+    
     # Create tier0 manager and agents
-    tier0_manager = Tier0MemoryManager()
+    tier0_manager = Tier0MemoryManager(mock_mw_manager, mock_ltm_manager)
     
     # Mock the execute_task_on_best_agent method to return a proper result
     def mock_execute_task_on_best_agent(task_data):

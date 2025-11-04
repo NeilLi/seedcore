@@ -44,6 +44,7 @@ from src.seedcore.ops.energy.optimizer import (
 )
 from src.seedcore.agents.ray_agent import RayAgent
 from src.seedcore.organs.tier0.tier0_manager import Tier0MemoryManager
+from unittest.mock import Mock
 
 
 def test_energy_ledger():
@@ -145,8 +146,12 @@ def test_enhanced_agent_selection():
     """Test the enhanced energy-aware agent selection."""
     print("\n🧪 Testing Enhanced Agent Selection...")
     
+    # Create mock memory managers
+    mock_mw_manager = Mock()
+    mock_ltm_manager = Mock()
+    
     # Create a tier0 manager and some agents
-    tier0_manager = Tier0MemoryManager()
+    tier0_manager = Tier0MemoryManager(mock_mw_manager, mock_ltm_manager)
     
     # Create agents with different characteristics
     agent_configs = [
@@ -191,8 +196,12 @@ def test_energy_aware_task_execution():
     """Test the energy-aware task execution with new features."""
     print("\n🧪 Testing Energy-Aware Task Execution...")
     
+    # Create mock memory managers
+    mock_mw_manager = Mock()
+    mock_ltm_manager = Mock()
+    
     # Create a tier0 manager and some agents
-    tier0_manager = Tier0MemoryManager()
+    tier0_manager = Tier0MemoryManager(mock_mw_manager, mock_ltm_manager)
     
     # Create agents with different characteristics
     agent_configs = [
