@@ -43,6 +43,9 @@ if TYPE_CHECKING:
 # PKG Manager - now uses centralized module
 from ..ops.pkg.manager import get_global_pkg_manager
 
+# Metrics tracking - now uses centralized module
+from ..ops.metrics import get_global_metrics_tracker
+
 
 
 
@@ -279,140 +282,6 @@ class RouteCache:
     def clear(self):
         """Clear the cache."""
         self._cache.clear()
-
-
-# ---------- Metrics tracking ----------
-class MetricsTracker:
-    """Track task execution metrics for monitoring and optimization."""
-    def __init__(self):
-        self._task_metrics = {
-            # Routing metrics
-            "route_cache_hit_total": 0,
-            "route_remote_total": 0,
-            "route_remote_latency_ms": [],
-            "route_remote_fail_total": 0,
-            "bulk_resolve_items": 0,
-            "bulk_resolve_failed_items": 0,
-            # Task totals
-            "total_tasks": 0,
-            "successful_tasks": 0,
-            "failed_tasks": 0,
-            # Routing decisions (counts routing choices, not execution)
-            "fast_routed_total": 0,
-            "planner_routed_total": 0,
-            "hgnn_routed_total": 0,
-            # HGNN plan generation (when routed to HGNN)
-            "hgnn_plan_generated_total": 0,  # Non-empty proto_plan
-            "hgnn_plan_empty_total": 0,       # Empty proto_plan (PKG failed)
-            # Execution metrics (tracks actual pipeline runs)
-            "fast_path_tasks": 0,
-            "hgnn_tasks": 0,
-            "escalation_failures": 0,
-            "fast_path_latency_ms": [],
-            "hgnn_latency_ms": [],
-            "escalation_latency_ms": [],
-            # Persistence / dispatch metrics
-            "proto_plan_upsert_ok_total": 0,
-            "proto_plan_upsert_err_total": 0,
-            "proto_plan_upsert_truncated_total": 0,
-            "outbox_embed_enqueue_ok_total": 0,
-            "outbox_embed_enqueue_dup_total": 0,
-            "outbox_embed_enqueue_err_total": 0,
-            "dispatch_planner_ok_total": 0,
-            "dispatch_planner_err_total": 0,
-            "dispatch_hgnn_ok_total": 0,
-            "dispatch_hgnn_err_total": 0,
-            "route_and_execute_latency_ms": [],
-        }
-    
-    def track_routing_decision(self, decision: str, has_plan: bool = False):
-        """
-        Track routing decisions (separate from execution).
-        
-        Args:
-            decision: 'fast', 'planner', or 'hgnn'
-            has_plan: For HGNN, whether proto_plan has tasks
-        """
-        if decision == "fast":
-            self._task_metrics["fast_routed_total"] += 1
-        elif decision == "planner":
-            self._task_metrics["planner_routed_total"] += 1
-        elif decision == "hgnn":
-            self._task_metrics["hgnn_routed_total"] += 1
-            if has_plan:
-                self._task_metrics["hgnn_plan_generated_total"] += 1
-            else:
-                self._task_metrics["hgnn_plan_empty_total"] += 1
-    
-    def track_metrics(self, path: str, success: bool, latency_ms: float):
-        """Track task execution metrics."""
-        self._task_metrics["total_tasks"] += 1
-        if success:
-            self._task_metrics["successful_tasks"] += 1
-        else:
-            self._task_metrics["failed_tasks"] += 1
-            
-        if path == "fast":
-            self._task_metrics["fast_path_tasks"] += 1
-            self._task_metrics["fast_path_latency_ms"].append(latency_ms)
-        elif path in ["hgnn", "hgnn_fallback"]:
-            self._task_metrics["hgnn_tasks"] += 1
-            self._task_metrics["hgnn_latency_ms"].append(latency_ms)
-        elif path == "escalation_failure":
-            self._task_metrics["escalation_failures"] += 1
-            self._task_metrics["escalation_latency_ms"].append(latency_ms)
-
-    def record_proto_plan_upsert(self, status: str):
-        key = f"proto_plan_upsert_{status}_total"
-        if key not in self._task_metrics:
-            return
-        self._task_metrics[key] += 1
-
-    def record_outbox_enqueue(self, status: str):
-        key = f"outbox_embed_enqueue_{status}_total"
-        if key not in self._task_metrics:
-            return
-        self._task_metrics[key] += 1
-
-    def record_dispatch(self, route: str, status: str):
-        key = f"dispatch_{route}_{status}_total"
-        if key not in self._task_metrics:
-            return
-        self._task_metrics[key] += 1
-
-    def record_route_latency(self, latency_ms: float):
-        self._task_metrics["route_and_execute_latency_ms"].append(latency_ms)
-
-    def get_metrics(self) -> Dict[str, Any]:
-        """Get current task execution metrics."""
-        metrics = self._task_metrics.copy()
-        
-        # Calculate averages
-        if metrics.get("fast_path_latency_ms"):
-            metrics["fast_path_latency_avg_ms"] = sum(metrics["fast_path_latency_ms"]) / len(metrics["fast_path_latency_ms"])
-        if metrics.get("hgnn_latency_ms"):
-            metrics["hgnn_latency_avg_ms"] = sum(metrics["hgnn_latency_ms"]) / len(metrics["hgnn_latency_ms"])
-        if metrics.get("escalation_latency_ms"):
-            metrics["escalation_latency_avg_ms"] = sum(metrics["escalation_latency_ms"]) / len(metrics["escalation_latency_ms"])
-        
-        # Calculate routing rates
-        total_routed = metrics["fast_routed_total"] + metrics["planner_routed_total"] + metrics["hgnn_routed_total"]
-        if total_routed > 0:
-            metrics["fast_routed_rate"] = metrics["fast_routed_total"] / total_routed
-            metrics["planner_routed_rate"] = metrics["planner_routed_total"] / total_routed
-            metrics["hgnn_routed_rate"] = metrics["hgnn_routed_total"] / total_routed
-        
-        # Calculate HGNN plan success rate
-        if metrics["hgnn_routed_total"] > 0:
-            metrics["hgnn_plan_success_rate"] = metrics["hgnn_plan_generated_total"] / metrics["hgnn_routed_total"]
-        
-        # Calculate execution success rates
-        if metrics["total_tasks"] > 0:
-            metrics["success_rate"] = metrics["successful_tasks"] / metrics["total_tasks"]
-            metrics["fast_path_rate"] = metrics["fast_path_tasks"] / metrics["total_tasks"]
-            metrics["hgnn_rate"] = metrics["hgnn_tasks"] / metrics["total_tasks"]
-        
-        return metrics
 
 # ---------- Surprise Score utilities (OCPS-aware) ----------
 EPS = 1e-12
@@ -1150,7 +1019,7 @@ class Coordinator:
             limits=httpx.Limits(max_keepalive_connections=100, max_connections=200),
         )
         self.ocps = OCPSValve()
-        self.metrics = MetricsTracker()
+        self.metrics = get_global_metrics_tracker()
 
         try:
             self._session_factory = get_async_pg_session_factory()
@@ -1618,7 +1487,7 @@ class Coordinator:
         # 1) Try cache
         cached = self.route_cache.get(key)
         if cached:
-            self.metrics._task_metrics["route_cache_hit_total"] += 1
+            self.metrics.increment_counter("route_cache_hit_total")
             logger.info(f"[Coordinator] Route cache hit for ({t}, {d}): {cached.logical_id} from={cached.resolved_from} epoch={cached.epoch}")
             return cached.logical_id
 
@@ -1655,8 +1524,8 @@ class Coordinator:
 
                 # Track metrics
                 latency_ms = (time.time() - start_time) * 1000
-                self.metrics._task_metrics["route_remote_total"] += 1
-                self.metrics._task_metrics["route_remote_latency_ms"].append(latency_ms)
+                self.metrics.increment_counter("route_remote_total")
+                self.metrics.append_latency("route_remote_latency_ms", latency_ms)
 
                 entry = RouteEntry(logical_id=logical_id, epoch=epoch,
                                  resolved_from=resolved_from, instance_id=instance_id,
@@ -1677,7 +1546,7 @@ class Coordinator:
 
             except Exception as e:
                 # 4) Fallback: use static defaults
-                self.metrics._task_metrics["route_remote_fail_total"] += 1
+                self.metrics.increment_counter("route_remote_fail_total")
                 logical_id = self._static_route_fallback(t, d)
                 # Always complete the future - either with result or exception
                 if is_leader and not fut.done():
@@ -1742,7 +1611,7 @@ class Coordinator:
             
             # Track bulk resolve metrics
             latency_ms = (time.time() - start_time) * 1000
-            self.metrics._task_metrics["bulk_resolve_items"] += len(to_resolve)
+            self.metrics.increment_counter("bulk_resolve_items", value=len(to_resolve))
             logger.info(f"[Coordinator] Bulk resolve completed: {len(to_resolve)} items in {latency_ms:.1f}ms")
             # resp: { epoch, results: [ {key, logical_id, status, ...}, ... ] }
             epoch = resp.get("epoch")
@@ -1795,7 +1664,7 @@ class Coordinator:
 
         except Exception as e:
             # Complete fallback: local rules for all unresolved
-            self.metrics._task_metrics["bulk_resolve_failed_items"] += len(to_resolve)
+            self.metrics.increment_counter("bulk_resolve_failed_items", value=len(to_resolve))
             logger.warning(f"[Coordinator] Bulk route resolution failed, using fallback: {e}")
             for item in to_resolve:
                 t, d = item["key"].split("|", 1)
