@@ -33,6 +33,53 @@ from seedcore.ops.eventizer.eventizer_features import (
 )
 from seedcore.models import TaskPayload, Task
 from ..coordinator.dao import TaskRouterTelemetryDAO, TaskOutboxDAO, TaskProtoPlanDAO
+from ..coordinator.models import AnomalyTriageRequest, AnomalyTriageResponse, TuneCallbackRequest
+from ..coordinator.core.routing import (
+    RouteEntry,
+    RouteCache,
+    resolve_route_cached_async,
+    bulk_resolve_routes_cached,
+    static_route_fallback,
+)
+from ..coordinator.core.policies import (
+    OCPSValve,
+    SurpriseComputer,
+    compute_drift_score,
+    compute_fallback_drift_score,
+    compute_surprise_score,
+    decide_route_with_hysteresis,
+    generate_proto_subtasks,
+    get_current_energy_state,
+    create_ocps_valve,
+)
+from ..coordinator.utils import (
+    # Constants
+    MAX_STRING_LENGTH,
+    DEFAULT_RECURSION_DEPTH,
+    # Task normalization and conversion
+    normalize_task_dict,
+    convert_task_to_dict,
+    sync_task_identity,
+    # Extraction utilities
+    extract_agent_id,
+    extract_proto_plan,
+    extract_decision,
+    extract_from_nested,
+    extract_dependency_token,
+    # Normalization utilities
+    normalize_string,
+    normalize_domain,
+    canonicalize_identifier,
+    # Data processing utilities
+    redact_sensitive_data,
+    # Dependency management utilities
+    iter_dependency_entries,
+    resolve_child_task_id,
+    collect_record_aliases,
+    collect_step_aliases,
+    collect_aliases_from_mapping,
+    collect_aliases_from_object,
+)
 
 from collections.abc import Mapping as _MappingABC
 
@@ -151,6 +198,7 @@ async def _maybe_call(func, *a, **kw):
     return await r if inspect.isawaitable(r) else r
 
 def _corr_headers(target: str, cid: str) -> Dict[str, str]:
+    """Create correlation headers for cross-service communication."""
     return {
         "Content-Type": "application/json",
         "X-Service": "coordinator",
@@ -165,364 +213,8 @@ async def _apost(client: httpx.AsyncClient, url: str, payload: Dict[str, Any],
     r.raise_for_status()
     return r.json()
 
-# ---------- Coordination primitives ----------
-class OCPSValve:
-    """
-    Neural-CUSUM accumulator for drift detection and escalation control.
-    
-    This implements the CUSUM algorithm: S_t = max(0, S_{t-1} + drift - nu)
-    where:
-    - S_t is the current CUSUM statistic
-    - drift is the drift score from the ML service
-    - nu is the drift threshold (typically 0.1)
-    - h is the escalation threshold (from OCPS_DRIFT_THRESHOLD env var)
-    
-    RESET SEMANTICS:
-    - Reset (S = 0) occurs ONLY on escalation (S > h)
-    - This prevents under-escalation and spam escalations
-    - The accumulator builds up drift evidence over time
-    - Once threshold is exceeded, it resets to start fresh
-    """
-    def __init__(self, nu: float = 0.1, h: float = None):
-        # h is your drift threshold (env OCPS_DRIFT_THRESHOLD)
-        self.nu = nu
-        self.h = float(os.getenv("OCPS_DRIFT_THRESHOLD", "0.5")) if h is None else h
-        self.S = 0.0
-        self.fast_hits = 0
-        self.esc_hits = 0
-
-    def update(self, drift: float) -> bool:
-        """
-        Update CUSUM statistic with new drift score.
-        
-        Args:
-            drift: Drift score from ML service (s_t)
-            
-        Returns:
-            bool: True if escalation triggered, False otherwise
-            
-        Note:
-            Reset occurs ONLY on escalation to prevent under-escalation.
-            This ensures the accumulator builds evidence over time before
-            triggering escalation, preventing false positives.
-        """
-        self.S = max(0.0, self.S + drift - self.nu)
-        esc = self.S > self.h
-        if esc:
-            self.esc_hits += 1
-            self.S = 0.0  # Reset ONLY on escalation
-        else:
-            self.fast_hits += 1
-        return esc
-
-    @property
-    def p_fast(self) -> float:
-        tot = self.fast_hits + self.esc_hits
-        return (self.fast_hits / tot) if tot else 1.0
-
-# Route cache structures
-class RouteEntry(NamedTuple):
-    logical_id: str
-    epoch: str
-    resolved_from: str
-    instance_id: Optional[str] = None
-    cached_at: float = 0.0
-
-class RouteCache:
-    """Tiny TTL route cache with single-flight to avoid dogpiles."""
-    
-    def __init__(self, ttl_s: float = 3.0, jitter_s: float = 0.5):
-        self.ttl_s = ttl_s
-        self.jitter_s = jitter_s
-        self._cache: Dict[Tuple[str, Optional[str]], Tuple[RouteEntry, float]] = {}
-        self._lock = asyncio.Lock()
-        self._inflight: Dict[Tuple[str, Optional[str]], asyncio.Future] = {}
-
-    def _expired(self, expires_at: float) -> bool:
-        return time.monotonic() > expires_at
-
-    def _expires_at(self) -> float:
-        return time.monotonic() + self.ttl_s + random.uniform(0, self.jitter_s)
-
-    def get(self, key: Tuple[str, Optional[str]]) -> Optional[RouteEntry]:
-        v = self._cache.get(key)
-        if not v:
-            return None
-        entry, expires_at = v
-        if self._expired(expires_at):
-            self._cache.pop(key, None)
-            return None
-        return entry
-
-    def set(self, key: Tuple[str, Optional[str]], entry: RouteEntry) -> None:
-        self._cache[key] = (entry, self._expires_at())
-
-    async def singleflight(self, key: Tuple[str, Optional[str]]):
-        """Ensure only one resolve for a given key at a time (prevents dogpiles).
-
-        Yields a tuple (future, is_leader). Exactly one caller per key will
-        have is_leader=True and is responsible for computing the result and
-        completing the future. All others should await the future result.
-        """
-        async with self._lock:
-            fut = self._inflight.get(key)
-            is_leader = False
-            if fut is None:
-                fut = asyncio.get_event_loop().create_future()
-                self._inflight[key] = fut
-                is_leader = True
-        try:
-            yield fut, is_leader
-        finally:
-            # Only the leader clears the inflight map entry after completion
-            if is_leader:
-                async with self._lock:
-                    self._inflight.pop(key, None)
-
-    def clear(self):
-        """Clear the cache."""
-        self._cache.clear()
-
-# ---------- Surprise Score utilities (OCPS-aware) ----------
-EPS = 1e-12
-
-def _clip01(x: float) -> float:
-    return max(0.0, min(1.0, float(x)))
-
-def _normalize_weights(w: Sequence[float]) -> Tuple[float, ...]:
-    w_pos = [max(0.0, wi) for wi in w]
-    s = sum(w_pos)
-    return tuple((wi / (s + EPS)) for wi in w_pos)
-
-def _normalized_entropy(probs: Sequence[float]) -> float:
-    if not probs:
-        return 0.5
-    probs = [max(EPS, p) for p in probs]
-    Z = sum(probs)
-    if Z <= 0:
-        return 0.5
-    probs = [p / Z for p in probs]
-    H = -sum(p * math.log(p, 2) for p in probs if p > 0)
-    Hmax = math.log(max(2, len(probs)), 2)
-    return _clip01(H / (Hmax + EPS))
-
-def _parse_weights(env_var: str, default: Tuple[float, ...] = (0.25, 0.20, 0.15, 0.20, 0.10, 0.10)) -> Tuple[float, ...]:
-    """Safely parse weights from environment variable with validation and normalization."""
-    raw = os.getenv(env_var)
-    if not raw:
-        return default
-    try:
-        ws = [max(0.0, float(x.strip())) for x in raw.split(",")]
-        if not ws or len(ws) != 6:
-            logger.warning(f"Invalid weights format in {env_var}: {raw}, using defaults")
-            return default
-        s = sum(ws) or 1.0
-        normalized = tuple(w/s for w in ws)
-        logger.info(f"Parsed weights from {env_var}: {normalized}")
-        return normalized
-    except Exception as e:
-        logger.warning(f"Failed to parse weights from {env_var}: {e}, using defaults")
-        return default
-
-def _decide_route_with_hysteresis(S: float, last_decision: Optional[str] = None,
-                                 fast_enter: float = 0.35, fast_exit: float = 0.38,
-                                 plan_enter: float = 0.60, plan_exit: float = 0.57) -> str:
-    """
-    Route decision with hysteresis to prevent flapping around thresholds.
-    
-    Args:
-        S: Surprise score
-        last_decision: Previous decision (for hysteresis)
-        fast_enter: Threshold to enter fast path
-        fast_exit: Threshold to exit fast path (higher for hysteresis)
-        plan_enter: Threshold to enter planner path
-        plan_exit: Threshold to exit planner path (lower for hysteresis)
-    
-    Returns:
-        Decision: 'fast', 'planner', or 'hgnn'
-    """
-    if last_decision == "fast":
-        if S >= fast_exit:
-            # Allow re-evaluation if we've crossed the exit threshold
-            pass
-        else:
-            return "fast"
-    
-    if last_decision == "hgnn":
-        if S <= plan_exit:
-            # Allow re-evaluation if we've crossed the exit threshold
-            pass
-        else:
-            return "hgnn"
-    
-    # Fresh decision based on current score
-    if S < fast_enter:
-        return "fast"
-    elif S < plan_enter:
-        return "planner"
-    else:
-        return "hgnn"
-
-class SurpriseComputer:
-    """
-    Computes S(T) and returns a dict with keys:
-      - S ∈ [0,1]
-      - x: tuple(x1..x6)
-      - weights: normalized weights
-      - decision: 'fast' | 'planner' | 'hgnn'
-      - ocps: meta for x2 mapping
-    """
-    def __init__(
-        self,
-        weights: Sequence[float] = (0.25, 0.20, 0.15, 0.20, 0.10, 0.10),
-        tau_fast: float = 0.35,
-        tau_plan: float = 0.60,
-    ):
-        self.w_hat = _normalize_weights(weights)
-        self.tau_fast = float(tau_fast)
-        self.tau_plan = float(tau_plan)
-
-    def _x1_cache_novelty(self, mw_hit: Optional[float]) -> float:
-        if mw_hit is None:
-            return 0.5
-        try:
-            return _clip01(1.0 - float(mw_hit))
-        except Exception:
-            return 0.5
-
-    def _x2_ocps(self, ocps: Dict[str, Any], drift_minmax: Optional[Tuple[float, float]]) -> Tuple[float, Dict[str, Any]]:
-        meta: Dict[str, Any] = {}
-        try:
-            St   = float(ocps.get("S_t"))
-            h    = float(ocps.get("h"))
-            hclr = float(ocps.get("h_clr", h/2.0))
-            flag = bool(ocps.get("flag_on", ocps.get("drift_flag", False)))
-            meta.update({"S_t": St, "h": h, "h_clr": hclr, "flag_on": flag, "mapping": "ocps"})
-            if h <= 0.0 or (flag and h <= hclr):
-                raise ValueError("invalid thresholds")
-            if not flag:
-                return _clip01(St / h), meta
-            return _clip01((St - hclr) / (h - hclr)), meta
-        except Exception:
-            meta["mapping"] = "minmax_fallback"
-            if not drift_minmax:
-                return 0.5, meta
-            drift = ocps.get("drift")
-            if drift is None:
-                return 0.5, meta
-            p10, p90 = drift_minmax
-            if p90 <= p10:
-                return 0.5, meta
-            try:
-                return _clip01((float(drift) - p10) / (p90 - p10)), meta
-            except Exception:
-                return 0.5, meta
-
-    def _x3_ood(self, ood_dist: Optional[float], ood_to01: Optional[Callable[[float], float]]) -> float:
-        if ood_dist is None:
-            return 0.5
-        if ood_to01 is None:
-            return _clip01(float(ood_dist) / 10.0)
-        try:
-            return _clip01(float(ood_to01(float(ood_dist))))
-        except Exception:
-            return 0.5
-
-    def _x4_graph_novelty(self, graph_delta: Optional[float], mu_delta: Optional[float]) -> float:
-        if graph_delta is None or mu_delta is None or mu_delta <= 0:
-            return 0.5
-        try:
-            return _clip01(float(graph_delta) / float(mu_delta))
-        except Exception:
-            return 0.5
-
-    def _x5_dep_uncertainty(self, dep_probs: Optional[Sequence[float]]) -> float:
-        try:
-            return _normalized_entropy(dep_probs or [])
-        except Exception:
-            return 0.5
-
-    def _x6_cost_risk(self, est_runtime: Optional[float], SLO: Optional[float], kappa: Optional[float], criticality: Optional[float]) -> float:
-        c = _clip01(criticality if criticality is not None else 0.5)
-        if est_runtime is None or SLO is None:
-            r = 0.5
-        else:
-            k = float(kappa) if (kappa and kappa > 0) else 0.8
-            r = _clip01(float(est_runtime) / (max(EPS, float(SLO) * k)))
-        return 0.5 * (r + c)
-
-    def compute(self, signals: Dict[str, Any]) -> Dict[str, Any]:
-        x1 = self._x1_cache_novelty(signals.get("mw_hit"))
-        x2, x2meta = self._x2_ocps(signals.get("ocps", {}), signals.get("drift_minmax"))
-        x3 = self._x3_ood(signals.get("ood_dist"), signals.get("ood_to01"))
-        x4 = self._x4_graph_novelty(signals.get("graph_delta"), signals.get("mu_delta"))
-        x5 = self._x5_dep_uncertainty(signals.get("dep_probs"))
-        x6 = self._x6_cost_risk(signals.get("est_runtime"), signals.get("SLO"), signals.get("kappa"), signals.get("criticality"))
-
-        xs = (x1, x2, x3, x4, x5, x6)
-        S = _clip01(sum(w * x for w, x in zip(self.w_hat, xs)))
-        decision = ("fast" if S < self.tau_fast else "planner" if S < self.tau_plan else "hgnn")
-        return {"S": S, "x": xs, "weights": self.w_hat, "decision": decision, "ocps": x2meta}
-
-
-# ---------- Proto-subtask generator (router-time, PKG-free fallback) ----------
-def build_proto_subtasks(tags: Set[str], x6: float, criticality: float, force: bool = False) -> Dict[str, Any]:
-    """
-    Returns: { "tasks": [{type, params, provenance[]}...], "edges": [(a,b)...] }
-    
-    Args:
-        tags: Set of domain-specific event tags
-        x6: Criticality signal (0-1)
-        criticality: Derived criticality score
-        force: If True, generate baseline tasks even when no domain tags match
-    """
-    tasks: List[Dict[str, Any]] = []
-    edges: List[Tuple[str, str]] = []
-
-    def add(t: str, provenance: str, **params):
-        tasks.append({"type": t, "params": params or {}, "provenance": [provenance]})
-
-    privacy_needed = ("vip" in tags) or ("privacy" in tags) or (criticality >= 0.8)
-    if privacy_needed:
-        add("private_comms", "R_PRIVACY_BASELINE", privacy_mode="STRICT", single_poc=True)
-        add("incident_log_restricted", "R_PRIVACY_BASELINE", visibility="restricted")
-
-    if "allergen" in tags:
-        add("food_safety_containment", "R_ALLERGEN", sla_min=10)
-    if "luggage_custody" in tags:
-        add("privacy_luggage_recovery", "R_LUGGAGE", chain="dual_custody")
-    if "hvac_fault" in tags:
-        add("hvac_stabilize", "R_HVAC", temp_target_c=22)
-
-    if any(t["type"] in {"food_safety_containment","privacy_luggage_recovery","hvac_stabilize"} for t in tasks):
-        add("guest_recovery", "R_GUEST_RECOVERY", comp_policy="VIP_TIER1")
-
-    def has(tt): return any(t["type"] == tt for t in tasks)
-    if has("private_comms"):
-        for tt in ["food_safety_containment","privacy_luggage_recovery","hvac_stabilize","incident_log_restricted"]:
-            if has(tt):
-                edges.append(("private_comms", tt))
-    if has("guest_recovery"):
-        for tt in ["food_safety_containment","privacy_luggage_recovery","hvac_stabilize"]:
-            if has(tt):
-                edges.append((tt, "guest_recovery"))
-
-    # BASELINE TASKS: If no domain-specific tasks and force_decomposition=True,
-    # generate generic baseline trio for multi-step analysis
-    if not tasks and force:
-        add("retrieve_context", "R_GENERIC_BASELINE", retrieval_strategy="semantic")
-        add("graph_rag_seed", "R_GENERIC_BASELINE", hops=2, topk=8)
-        add("synthesis_writeup", "R_GENERIC_BASELINE", format="structured")
-        edges.append(("retrieve_context", "graph_rag_seed"))
-        edges.append(("graph_rag_seed", "synthesis_writeup"))
-
-    if x6 >= 0.9:
-        for t in tasks:
-            t["params"]["priority"] = "critical"
-            if "sla_min" in t["params"]:
-                t["params"]["sla_min"] = max(1, int(0.8 * t["params"]["sla_min"]))
-
-    return {"tasks": tasks, "edges": edges}
+# Coordination primitives (OCPS, Surprise, drift, energy) are now imported from coordinator.core.policies
+# Route cache structures are now imported from coordinator.core.routing
 
 
 # ---------- CoordinatorCore: unified route_and_execute ----------
@@ -543,6 +235,7 @@ class CoordinatorCore:
     - SURPRISE_TAU_PLAN: Planner threshold (default: 0.60)
     - SURPRISE_TAU_FAST_EXIT: Fast path exit threshold for hysteresis (default: 0.38)
     - SURPRISE_TAU_PLAN_EXIT: Planner exit threshold for hysteresis (default: 0.57)
+    - SURPRISE_NORMALIZE_MODE: Feature normalization mode - "simple" (clamp) or "softmax" (probabilistic) (default: "simple")
     - SERVE_CALL_TIMEOUT_S: PKG evaluation timeout (default: 2)
     """
     def __init__(
@@ -558,8 +251,8 @@ class CoordinatorCore:
         self.timeout_s = int(os.getenv("SERVE_CALL_TIMEOUT_S", str(call_timeout_s)))
         self.metrics = metrics_tracker
         
-        # Parse weights and thresholds with safe defaults
-        weights = surprise_weights or _parse_weights("SURPRISE_WEIGHTS")
+        # SurpriseComputer handles weight parsing internally from environment
+        # Parse thresholds with safe defaults
         tau_fast_val = tau_fast or float(os.getenv("SURPRISE_TAU_FAST", "0.35"))
         tau_plan_val = tau_plan or float(os.getenv("SURPRISE_TAU_PLAN", "0.60"))
         
@@ -567,7 +260,7 @@ class CoordinatorCore:
         self.tau_fast_exit = float(os.getenv("SURPRISE_TAU_FAST_EXIT", str(tau_fast_val + 0.03)))
         self.tau_plan_exit = float(os.getenv("SURPRISE_TAU_PLAN_EXIT", str(tau_plan_val - 0.03)))
         
-        self.surprise = SurpriseComputer(weights=weights, tau_fast=tau_fast_val, tau_plan=tau_plan_val)
+        self.surprise = SurpriseComputer(weights=surprise_weights, tau_fast=tau_fast_val, tau_plan=tau_plan_val)
         
         # PKG is now managed by the global PKGManager
         # No need for local initialization here
@@ -709,7 +402,7 @@ class CoordinatorCore:
         
         # Get last decision for hysteresis (from task params if available)
         last_decision = params.get("last_decision")
-        decision = _decide_route_with_hysteresis(
+        decision = decide_route_with_hysteresis(
             S, last_decision, 
             self.surprise.tau_fast, self.tau_fast_exit,
             self.surprise.tau_plan, self.tau_plan_exit
@@ -786,7 +479,7 @@ class CoordinatorCore:
             # 2. Natural HGNN routing (decision='hgnn' means S >= tau_plan, deserves decomposition)
             force_decomp = params.get("force_decomposition", False) or params.get("force_hgnn", False)
             should_decompose = force_decomp or (decision == "hgnn")
-            proto_plan = build_proto_subtasks(tags, xs[5], criticality, force=should_decompose)
+            proto_plan = generate_proto_subtasks(tags, xs[5], criticality, force=should_decompose)
 
         # Add provenance tracking
         proto_plan.setdefault("provenance", [])
@@ -947,33 +640,6 @@ class CoordinatorCore:
         
         return res
 
-# ---------- API models ----------
-# Task model is now imported from centralized models
-
-class AnomalyTriageRequest(BaseModel):
-    agent_id: str
-    series: List[float] = []
-    context: Dict[str, Any] = {}
-    # Note: drift_score is now computed dynamically via ML service
-
-class AnomalyTriageResponse(BaseModel):
-    agent_id: str
-    anomalies: Dict[str, Any]
-    reason: Dict[str, Any]
-    decision: Dict[str, Any]
-    correlation_id: str
-    p_fast: float
-    escalated: bool
-    tuning_job: Optional[Dict[str, Any]] = None
-
-class TuneCallbackRequest(BaseModel):
-    job_id: str
-    E_before: Optional[float] = None
-    E_after: Optional[float] = None
-    gpu_seconds: Optional[float] = None
-    status: str = "completed"  # completed, failed
-    error: Optional[str] = None
-
 # ---------- FastAPI/Serve ----------
 app = FastAPI(
     title="SeedCore Coordinator",
@@ -1018,7 +684,7 @@ class Coordinator:
             timeout=ORCH_TIMEOUT,
             limits=httpx.Limits(max_keepalive_connections=100, max_connections=200),
         )
-        self.ocps = OCPSValve()
+        self.ocps = create_ocps_valve()
         self.metrics = get_global_metrics_tracker()
 
         try:
@@ -1224,13 +890,8 @@ class Coordinator:
 
     def _get_current_energy_state(self, agent_id: str) -> Optional[float]:
         """Get current energy state for an agent."""
-        try:
-            # This would typically call the energy service or get from agent state
-            # For now, return a placeholder value
-            return 0.5  # TODO: Implement actual energy state retrieval
-        except Exception as e:
-            logger.warning(f"Failed to get energy state for agent {agent_id}: {e}")
-            return None
+        # Use the centralized energy state function from policies
+        return get_current_energy_state(agent_id)
 
     async def _task_outbox_flusher_loop(self) -> None:
         """Periodically flush task_outbox embed_task events to the LTM worker with backoff."""
@@ -1323,236 +984,55 @@ class Coordinator:
         """
         Compute drift score using the ML service drift detector.
         
-        This method:
-        1. Calls the ML service /drift/score endpoint
-        2. Extracts drift score from the response
-        3. Falls back to a default value if the service is unavailable
-        4. Tracks performance and error metrics for monitoring
+        Delegates to the centralized compute_drift_score function from policies module.
         
         Returns:
             Drift score suitable for OCPSValve integration
         """
-        start_time = time.time()
-        task_id = task.get("id", "unknown")
-        
-        try:
-            # Build comprehensive text payload for drift detection
-            # Combine description, domain, params, and type for better featurization
-            description = task.get("description", "")
-            domain = task.get("domain", "")
-            task_type = task.get("type", "unknown")
-            params = task.get("params", {})
-            
-            # Build rich text context for drift detection
-            text_parts = []
-            if description:
-                text_parts.append(f"Description: {description}")
-            if domain:
-                text_parts.append(f"Domain: {domain}")
-            if task_type:
-                text_parts.append(f"Type: {task_type}")
-            if params:
-                # Convert params to readable text
-                param_text = ", ".join([f"{k}={v}" for k, v in params.items()])
-                text_parts.append(f"Parameters: {param_text}")
-            
-            # Fallback to task type if no other text available
-            text_payload = " ".join(text_parts) if text_parts else f"Task type: {task_type}"
-            
-            # Log the text payload for debugging
-            logger.info(f"[DriftDetector] Task {task_id}: Text payload: '{text_payload[:100]}{'...' if len(text_payload) > 100 else ''}'")
-            
-            # Prepare request for drift scoring
-            drift_request = {
-                "task": task,
-                "text": text_payload
-            }
-            
-            logger.debug(f"[DriftDetector] Task {task_id}: Calling ML service at {self.ml_client.base_url}/drift/score")
-            logger.debug(f"[DriftDetector] Task {task_id}: Request payload: {drift_request}")
-            
-            # Call ML service drift detector
-            response = await self.ml_client.compute_drift_score(
-                task=drift_request["task"],
-                text=drift_request["text"]
-            )
-            
-            logger.debug(f"[DriftDetector] Task {task_id}: ML service response: {response}")
-            
-            processing_time = (time.time() - start_time) * 1000
-            
-            if response.get("status") == "success":
-                drift_score = response.get("drift_score", 0.0)
-                ml_processing_time = response.get("processing_time_ms", 0.0)
-                
-                # Log performance metrics
-                logger.debug(f"[DriftDetector] Task {task_id}: score={drift_score:.4f}, "
-                           f"total_time={processing_time:.2f}ms, ml_time={ml_processing_time:.2f}ms")
-                
-                # Track metrics for monitoring
-                drift_mode = response.get('drift_mode', 'unknown')
-                self.predicate_router.metrics.record_drift_computation("success", drift_mode, processing_time / 1000.0, drift_score)
-                
-                return drift_score
-            else:
-                error_msg = response.get('error', 'Unknown error')
-                logger.warning(f"[DriftDetector] Task {task_id}: ML service returned error: {error_msg}")
-                self.predicate_router.metrics.record_drift_computation("ml_error", "unknown", processing_time / 1000.0, 0.0)
-                return 0.0
-                
-        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException) as e:
-            processing_time = (time.time() - start_time) * 1000
-            error_msg = str(e) if str(e) else f"{type(e).__name__}"
-            logger.warning(f"[DriftDetector] Task {task_id}: ML service timeout after {processing_time:.2f}ms: {error_msg}, using fallback")
-            
-            # Track timeout metrics
-            self.predicate_router.metrics.record_drift_computation("timeout", "unknown", processing_time / 1000.0, 0.0)
-            
-            # Fallback: use a simple heuristic based on task properties
-            fallback_score = self._fallback_drift_score(task)
-            logger.info(f"[DriftDetector] Task {task_id}: Using fallback score {fallback_score:.4f}")
-            return fallback_score
-            
-        except Exception as e:
-            processing_time = (time.time() - start_time) * 1000
-            error_msg = str(e) if str(e) else f"{type(e).__name__}"
-            logger.warning(f"[DriftDetector] Task {task_id}: Failed to compute drift score: {error_msg}, using fallback")
-            logger.debug(f"[DriftDetector] Task {task_id}: Exception details: {type(e).__name__}: {error_msg}")
-            import traceback
-            logger.debug(f"[DriftDetector] Task {task_id}: Traceback: {traceback.format_exc()}")
-            
-            # Track error metrics
-            self.predicate_router.metrics.record_drift_computation("error", "unknown", processing_time / 1000.0, 0.0)
-            
-            # Fallback: use a simple heuristic based on task properties
-            fallback_score = self._fallback_drift_score(task)
-            logger.info(f"[DriftDetector] Task {task_id}: Using fallback score {fallback_score:.4f}")
-            return fallback_score
+        metrics = getattr(self, 'predicate_router', None)
+        if metrics:
+            metrics = metrics.metrics
+        return await compute_drift_score(
+            task=task,
+            ml_client=self.ml_client,
+            metrics=metrics,
+        )
     
+    # Helper methods now use utils functions
     def _normalize(self, x: Optional[str]) -> Optional[str]:
         """Normalize string for consistent matching."""
-        return str(x).strip().lower() if x is not None else None
+        return normalize_string(x)
     
     def _norm_domain(self, domain: Optional[str]) -> Optional[str]:
         """Normalize domain to standard taxonomy."""
-        if not domain:
-            return None
-        domain = str(domain).strip().lower()
-        # Map common variations to standard domains
-        domain_map = {
-            "fact": "facts",
-            "admin": "management", 
-            "mgmt": "management",
-            "util": "utility"
-        }
-        return domain_map.get(domain, domain)
+        return normalize_domain(domain)
 
     def _static_route_fallback(self, task_type: str, domain: Optional[str]) -> str:
         """Fallback routing using static rules when organism is unavailable."""
-        # Domain-specific overrides (restore any domain-specific rules that were removed)
-        STATIC_DOMAIN_RULES = {
-            # Add any domain-specific overrides here
-            # Example: ("execute", "robot_arm"): "actuator_organ_2",
-            # Example: ("graph_rag_query", "facts"): "graph_dispatcher",
-        }
-        
-        # Check domain-specific rules first
-        if (task_type, (domain or "")) in STATIC_DOMAIN_RULES:
-            return STATIC_DOMAIN_RULES[(task_type, domain or "")]
-        
-        # Generic task type rules
-        if task_type in ["general_query", "health_check", "fact_search", "fact_store",
-                        "artifact_manage", "capability_manage", "memory_cell_manage",
-                        "model_manage", "policy_manage", "service_manage", "skill_manage"]:
-            return "utility_organ_1"
-        if task_type == "execute":
-            return "actuator_organ_1"
-        if task_type in ["graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2",
-                        "graph_sync_nodes", "graph_fact_embed", "graph_fact_query"]:
-            return "graph_dispatcher"
-        return "utility_organ_1"  # Ultimate fallback
+        return static_route_fallback(task_type, domain)
 
     async def _resolve_route_cached(self, task_type: str, domain: Optional[str], *,
                                    preferred_logical_id: Optional[str] = None,
                                    cid: Optional[str] = None) -> str:
         """Resolve route with caching and single-flight."""
-        t = self._normalize(task_type)
-        d = self._normalize(domain)
-        key = (t, d)
-
-        # Check feature flag
-        if not self.routing_remote_enabled or t not in self.routing_remote_types:
-            return self._static_route_fallback(t, d)
-
-        # 1) Try cache
-        cached = self.route_cache.get(key)
-        if cached:
-            self.metrics.increment_counter("route_cache_hit_total")
-            logger.info(f"[Coordinator] Route cache hit for ({t}, {d}): {cached.logical_id} from={cached.resolved_from} epoch={cached.epoch}")
-            return cached.logical_id
-
-        # 2) Single-flight: if another coroutine is already resolving this key, await it
-        async for (fut, is_leader) in self.route_cache.singleflight(key):
-            # double-check cache after acquiring the singleflight slot
-            cached = self.route_cache.get(key)
-            if cached:
-                if is_leader and not fut.done():
-                    fut.set_result(cached.logical_id)
-                return cached.logical_id
-
-            # 3) Remote resolve (primary)
-            start_time = time.time()
-            try:
-                payload = {"task": {"type": t, "domain": d, "params": {}}}
-                if preferred_logical_id:
-                    payload["preferred_logical_id"] = preferred_logical_id
-
-                # Clamp resolve timeout to keep fast-path SLO (30-50ms budget)
-                resolve_timeout = min(0.05, self.organism_client.timeout)  # 50ms max
-                resp = await self.organism_client.post(
-                    "/resolve-route", json=payload,
-                    headers=_corr_headers("organism", cid or uuid.uuid4().hex),
-                    timeout=resolve_timeout
-                )
-                # Expected response: { logical_id, resolved_from, epoch, instance_id? }
-                # CONTRACT: logical_id is required for execution; instance_id is telemetry only
-                # Execution uses logical_id and Organism chooses healthy instance at call time
-                logical_id = resp["logical_id"] if "logical_id" in resp else resp.get("organ_id")
-                epoch = resp.get("epoch", "")
-                resolved_from = resp.get("resolved_from", "unknown")
-                instance_id = resp.get("instance_id")  # Telemetry only - don't pin instances
-
-                # Track metrics
-                latency_ms = (time.time() - start_time) * 1000
-                self.metrics.increment_counter("route_remote_total")
-                self.metrics.append_latency("route_remote_latency_ms", latency_ms)
-
-                entry = RouteEntry(logical_id=logical_id, epoch=epoch,
-                                 resolved_from=resolved_from, instance_id=instance_id,
-                                 cached_at=time.time())
-                self.route_cache.set(key, entry)
-
-                # Optional epoch-aware invalidation: if epoch changes suddenly, clear cache
-                if self._last_seen_epoch and epoch and epoch != self._last_seen_epoch:
-                    # Epoch rotated; keep the new entry but clear older keys
-                    self.route_cache.clear()
-                if epoch:
-                    self._last_seen_epoch = epoch
-
-                logger.info(f"[Coordinator] Route resolved for ({t}, {d}): {logical_id} from={resolved_from} epoch={epoch} latency={latency_ms:.1f}ms")
-                if is_leader and not fut.done():
-                    fut.set_result(logical_id)
-                return logical_id
-
-            except Exception as e:
-                # 4) Fallback: use static defaults
-                self.metrics.increment_counter("route_remote_fail_total")
-                logical_id = self._static_route_fallback(t, d)
-                # Always complete the future - either with result or exception
-                if is_leader and not fut.done():
-                    fut.set_result(logical_id)
-                logger.warning(f"[Coordinator] Route resolution failed for ({t}, {d}), using fallback: {e}")
-                return logical_id
+        logical_id = await resolve_route_cached_async(
+            task_type=task_type,
+            domain=domain,
+            route_cache=self.route_cache,
+            normalize_func=self._normalize,
+            static_route_fallback_func=self._static_route_fallback,
+            organism_client=self.organism_client,
+            routing_remote_enabled=self.routing_remote_enabled,
+            routing_remote_types=self.routing_remote_types,
+            preferred_logical_id=preferred_logical_id,
+            cid=cid,
+            metrics=self.metrics,
+            last_seen_epoch=self._last_seen_epoch,
+        )
+        # Update epoch if we got one from the response (handled internally in routing.py)
+        # For now, we track it via the cache entry, but we could enhance resolve_route_cached_async
+        # to return the epoch if needed
+        return logical_id
 
     async def _bulk_resolve_routes_cached(self, steps: List[Dict[str, Any]], cid: str) -> Dict[int, str]:
         """
@@ -1560,167 +1040,29 @@ class Coordinator:
         return a mapping: { step_index -> logical_id }.
         De-duplicates (type, domain) pairs to minimize network calls.
         """
-        # 1) Group indices by unique (type, domain) pairs and check cache
-        pairs: Dict[Tuple[str, Optional[str]], List[int]] = {}
-        mapping: Dict[int, str] = {}  # final result
-        to_resolve = []
-
-        for idx, step in enumerate(steps):
-            subtask = step.get("task") or {}
-            t = self._normalize(subtask.get("type"))
-            d = self._norm_domain(subtask.get("domain"))  # Use domain normalizer
-            key = (t, d)
-            
-            if not t:
-                continue  # skip; executor will fallback
-            
-            if key not in pairs:
-                pairs[key] = []
-            pairs[key].append(idx)
-
-            # Check cache for this (type, domain) pair
-            cached = self.route_cache.get(key)
-            if cached:
-                # Apply cached result to all indices with this (type, domain)
-                for step_idx in pairs[key]:
-                    mapping[step_idx] = cached.logical_id
-            else:
-                # Only add to resolve list if not already added
-                if key not in [item["key"] for item in to_resolve]:
-                    to_resolve.append({
-                        "key": f"{t}|{d}",
-                        "type": t, 
-                        "domain": d,
-                        "preferred_logical_id": step.get("organ_hint")  # Forward hints
-                    })
-
-        if not to_resolve:
-            return mapping  # all from cache
-
-        # 2) Remote bulk resolve
-        start_time = time.time()
-        try:
-            # Clamp bulk resolve timeout (allow more time for bulk operations)
-            bulk_timeout = min(0.1, self.organism_client.timeout)  # 100ms max for bulk
-            resp = await self.organism_client.post(
-                "/resolve-routes",
-                json={"tasks": to_resolve},
-                headers=_corr_headers("organism", cid),
-                timeout=bulk_timeout
-            )
-            
-            # Track bulk resolve metrics
-            latency_ms = (time.time() - start_time) * 1000
-            self.metrics.increment_counter("bulk_resolve_items", value=len(to_resolve))
-            logger.info(f"[Coordinator] Bulk resolve completed: {len(to_resolve)} items in {latency_ms:.1f}ms")
-            # resp: { epoch, results: [ {key, logical_id, status, ...}, ... ] }
-            epoch = resp.get("epoch")
-            if epoch and self._last_seen_epoch and epoch != self._last_seen_epoch:
-                # epoch rotated => flush stale cache
-                self.route_cache.clear()
-            if epoch:
-                self._last_seen_epoch = epoch
-
-            # Create mapping from key to result
-            key_to_result = {}
-            for r in resp.get("results", []):
-                key = r.get("key")
-                if key:
-                    key_to_result[key] = r
-
-            # Fan-out results to all indices with matching (type, domain)
-            for item in to_resolve:
-                key = item["key"]
-                result = key_to_result.get(key, {})
-                status = result.get("status", "error")
-                
-                if status == "ok" and result.get("logical_id"):
-                    logical_id = result["logical_id"]
-                    # Parse key back to (type, domain)
-                    t, d = key.split("|", 1)
-                    d = d if d else None
-                    
-                    # Backfill cache
-                    self.route_cache.set((t, d), RouteEntry(
-                        logical_id=logical_id,
-                        epoch=result.get("epoch", epoch or ""),
-                        resolved_from=result.get("resolved_from", "bulk"),
-                        instance_id=result.get("instance_id"),
-                        cached_at=time.time()
-                    ))
-                    
-                    # Apply to all indices with this (type, domain)
-                    for step_idx in pairs[(t, d)]:
-                        mapping[step_idx] = logical_id
-                else:
-                    # Fallback for this (type, domain) pair
-                    t, d = key.split("|", 1)
-                    d = d if d else None
-                    logical_id = self._static_route_fallback(t, d)
-                    for step_idx in pairs[(t, d)]:
-                        mapping[step_idx] = logical_id
-                        
-            return mapping
-
-        except Exception as e:
-            # Complete fallback: local rules for all unresolved
-            self.metrics.increment_counter("bulk_resolve_failed_items", value=len(to_resolve))
-            logger.warning(f"[Coordinator] Bulk route resolution failed, using fallback: {e}")
-            for item in to_resolve:
-                t, d = item["key"].split("|", 1)
-                d = d if d else None
-                logical_id = self._static_route_fallback(t, d)
-                for step_idx in pairs[(t, d)]:
-                    mapping[step_idx] = logical_id
-            return mapping
+        mapping, new_epoch = await bulk_resolve_routes_cached(
+            steps=steps,
+            cid=cid,
+            route_cache=self.route_cache,
+            normalize_func=self._normalize,
+            normalize_domain_func=self._norm_domain,
+            static_route_fallback_func=self._static_route_fallback,
+            organism_client=self.organism_client,
+            metrics=self.metrics,
+            last_seen_epoch=self._last_seen_epoch,
+        )
+        # Update epoch if we got a new one
+        if new_epoch:
+            self._last_seen_epoch = new_epoch
+        return mapping
 
     def _fallback_drift_score(self, task: Dict[str, Any]) -> float:
         """
         Fallback drift score computation when ML service is unavailable.
         
-        Uses simple heuristics based on task properties.
+        Delegates to the centralized compute_fallback_drift_score function from policies module.
         """
-        try:
-            # Base score
-            score = 0.0
-            
-            # Task type influence
-            task_type = str(task.get("type", "unknown")).lower()
-            if task_type == "anomaly_triage":
-                score += 0.3  # Anomaly triage tasks are more likely to indicate drift
-            elif task_type == "execute":
-                score += 0.1  # Execute tasks have moderate drift potential
-            elif task_type in ("graph_fact_embed", "graph_fact_query"):
-                score += 0.2  # Fact operations have moderate drift potential
-            elif task_type in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2"):
-                score += 0.15  # Graph operations have moderate drift potential
-            elif task_type in ("artifact_manage", "capability_manage", "memory_cell_manage"):
-                score += 0.1  # Resource management has low drift potential
-            elif task_type in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
-                score += 0.05  # Agent layer management has very low drift potential
-            
-            # Priority influence
-            priority = float(task.get("priority", 5))
-            if priority >= 8:
-                score += 0.2  # High priority tasks may indicate system stress
-            elif priority <= 3:
-                score += 0.1  # Low priority tasks might indicate system changes
-            
-            # Complexity influence
-            complexity = float(task.get("complexity", 0.5))
-            score += complexity * 0.2  # More complex tasks have higher drift potential
-            
-            # History influence
-            history_ids = task.get("history_ids", [])
-            if len(history_ids) == 0:
-                score += 0.1  # New tasks without history might indicate drift
-            
-            # Ensure score is in reasonable range
-            return max(0.0, min(1.0, score))
-            
-        except Exception as e:
-            logger.warning(f"Fallback drift score computation failed: {e}")
-            return 0.5  # Neutral fallback
+        return compute_fallback_drift_score(task)
     
     def _persist_job_state(self, job_id: str, state: Dict[str, Any]):
         """Persist job state using safe storage."""
@@ -1766,67 +1108,19 @@ class Coordinator:
             self.predicate_router.metrics.record_memory_synthesis("failure", duration)
             logger.debug(f"[Coordinator] Memory synthesis failed (best-effort): {e}")
     
+    # Helper methods now use utils functions
     def _redact_sensitive_data(self, data: Any) -> Any:
         """Redact sensitive data from memory synthesis payload."""
-        if isinstance(data, dict):
-            redacted = {}
-            for key, value in data.items():
-                if any(sensitive in key.lower() for sensitive in ['password', 'token', 'key', 'secret', 'auth']):
-                    redacted[key] = "[REDACTED]"
-                else:
-                    redacted[key] = self._redact_sensitive_data(value)
-            return redacted
-        elif isinstance(data, list):
-            return [self._redact_sensitive_data(item) for item in data]
-        elif isinstance(data, str) and len(data) > 1000:
-            return data[:1000] + "... [TRUNCATED]"
-        else:
-            return data
+        return redact_sensitive_data(data)
 
     def _normalize_task_dict(self, task_like: Any) -> Tuple[uuid.UUID, Dict[str, Any]]:
-        task_dict = self._convert_task_to_dict(task_like) or {}
-        raw_id = task_dict.get("id") or task_dict.get("task_id")
-        try:
-            task_uuid = uuid.UUID(str(raw_id)) if raw_id else uuid.uuid4()
-        except (ValueError, TypeError):
-            task_uuid = uuid.uuid4()
-        task_id_str = str(task_uuid)
-        task_dict["id"] = task_id_str
-        self._sync_task_identity(task_like, task_id_str)
-        return task_uuid, task_dict
+        return normalize_task_dict(task_like)
 
     def _sync_task_identity(self, task_like: Any, task_id: str) -> None:
-        if isinstance(task_like, dict):
-            task_like["id"] = task_id
-            return
-        for attr in ("id", "task_id"):
-            if hasattr(task_like, attr):
-                try:
-                    setattr(task_like, attr, task_id)
-                except Exception:
-                    continue
+        sync_task_identity(task_like, task_id)
 
     def _extract_agent_id(self, task_dict: Dict[str, Any]) -> Optional[str]:
-        if not isinstance(task_dict, dict):
-            return None
-        candidate = task_dict.get("agent_id") or task_dict.get("agent")
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
-
-        params = task_dict.get("params")
-        if isinstance(params, dict):
-            for key in ("agent_id", "agent", "owner_agent_id"):
-                value = params.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-
-        metadata = task_dict.get("metadata")
-        if isinstance(metadata, dict):
-            for key in ("agent_id", "agent"):
-                value = metadata.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-        return None
+        return extract_agent_id(task_dict)
 
     def prefetch_context(self, task: Dict[str, Any]) -> None:
         """Hook for Mw/Mlt prefetch as per §8.6 Unified RAG Operations. No-op until memory wired."""
@@ -1919,23 +1213,7 @@ class Coordinator:
 
     def _convert_task_to_dict(self, task) -> Dict[str, Any]:
         """Convert task object to dictionary, handling TaskPayload and other types."""
-        if isinstance(task, dict):
-            return task
-        elif hasattr(task, 'model_dump'):
-            task_dict = task.model_dump()
-            # Handle TaskPayload which has 'task_id' instead of 'id'
-            if hasattr(task, 'task_id') and 'id' not in task_dict:
-                task_dict['id'] = task.task_id
-            return task_dict
-        elif hasattr(task, 'dict'):
-            task_dict = task.dict()
-            # Handle TaskPayload which has 'task_id' instead of 'id'
-            if hasattr(task, 'task_id') and 'id' not in task_dict:
-                task_dict['id'] = task.task_id
-            return task_dict
-        else:
-            logger.warning(f"[Coordinator] Cannot convert task to dict: {type(task)}")
-            return {}
+        return convert_task_to_dict(task)
 
     def _fallback_plan(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Create a minimal safe fallback plan when cognitive reasoning is unavailable."""
@@ -2172,183 +1450,31 @@ class Coordinator:
                 else:
                     edges_added.add(edge_key)
 
+    # Dependency helper methods now use utils functions
     def _iter_dependency_entries(self, dependencies: Any) -> Iterable[Any]:
-        if dependencies is None:
-            return []
-
-        if isinstance(dependencies, (list, tuple, set)):
-            for item in dependencies:
-                if isinstance(item, (list, tuple, set)):
-                    for nested in self._iter_dependency_entries(item):
-                        yield nested
-                else:
-                    yield item
-        else:
-            yield dependencies
+        return iter_dependency_entries(dependencies)
 
     def _resolve_child_task_id(self, record: Any, fallback_step: Any) -> Any:
         """Extract the task identifier for a persisted subtask."""
-        if record is not None:
-            if isinstance(record, dict):
-                for key in ("task_id", "id", "child_task_id", "subtask_id"):
-                    if key in record:
-                        token = self._extract_dependency_token(record[key])
-                        if token is not None:
-                            return token
-                if "task" in record:
-                    token = self._extract_dependency_token(record["task"])
-                    if token is not None:
-                        return token
-            else:
-                for attr in ("task_id", "id", "child_task_id", "subtask_id"):
-                    if hasattr(record, attr):
-                        token = self._extract_dependency_token(getattr(record, attr))
-                        if token is not None:
-                            return token
-                if hasattr(record, "task"):
-                    token = self._extract_dependency_token(getattr(record, "task"))
-                    if token is not None:
-                        return token
-
-        if fallback_step is not None:
-            if isinstance(fallback_step, dict):
-                for key in ("task_id", "id", "step_id"):
-                    if key in fallback_step:
-                        token = self._extract_dependency_token(fallback_step[key])
-                        if token is not None:
-                            return token
-                if "task" in fallback_step:
-                    token = self._extract_dependency_token(fallback_step["task"])
-                    if token is not None:
-                        return token
-            else:
-                for attr in ("task_id", "id", "step_id"):
-                    if hasattr(fallback_step, attr):
-                        token = self._extract_dependency_token(getattr(fallback_step, attr))
-                        if token is not None:
-                            return token
-                if hasattr(fallback_step, "task"):
-                    token = self._extract_dependency_token(getattr(fallback_step, "task"))
-                    if token is not None:
-                        return token
-
-        return None
+        return resolve_child_task_id(record, fallback_step)
 
     def _collect_record_aliases(self, record: Any) -> Set[str]:
-        aliases: Set[str] = set()
-
-        if isinstance(record, dict):
-            aliases.update(self._collect_aliases_from_mapping(record))
-            maybe_task = record.get("task")
-            if isinstance(maybe_task, dict):
-                aliases.update(self._collect_aliases_from_mapping(maybe_task))
-            maybe_meta = record.get("metadata")
-            if isinstance(maybe_meta, dict):
-                aliases.update(self._collect_aliases_from_mapping(maybe_meta))
-        else:
-            aliases.update(self._collect_aliases_from_object(record))
-
-        return aliases
+        return collect_record_aliases(record)
 
     def _collect_step_aliases(self, step: Any) -> Set[str]:
-        aliases: Set[str] = set()
-
-        if isinstance(step, dict):
-            aliases.update(self._collect_aliases_from_mapping(step))
-            maybe_task = step.get("task")
-            if isinstance(maybe_task, dict):
-                aliases.update(self._collect_aliases_from_mapping(maybe_task))
-            maybe_meta = step.get("metadata")
-            if isinstance(maybe_meta, dict):
-                aliases.update(self._collect_aliases_from_mapping(maybe_meta))
-        else:
-            aliases.update(self._collect_aliases_from_object(step))
-
-        return aliases
+        return collect_step_aliases(step)
 
     def _collect_aliases_from_mapping(self, mapping: Dict[str, Any]) -> Set[str]:
-        aliases: Set[str] = set()
-        alias_keys = {"task_id", "id", "step_id", "original_task_id", "child_task_id", "source_task_id", "parent_task_id"}
-
-        for key in alias_keys:
-            if key in mapping:
-                token = self._extract_dependency_token(mapping[key])
-                if token is not None:
-                    aliases.add(self._canonicalize_identifier(token))
-
-        for value in mapping.values():
-            if isinstance(value, dict):
-                aliases.update(self._collect_aliases_from_mapping(value))
-
-        return aliases
+        return collect_aliases_from_mapping(mapping)
 
     def _collect_aliases_from_object(self, obj: Any) -> Set[str]:
-        aliases: Set[str] = set()
-        alias_keys = ("task_id", "id", "step_id", "original_task_id", "child_task_id", "source_task_id", "parent_task_id")
-
-        for key in alias_keys:
-            if hasattr(obj, key):
-                token = self._extract_dependency_token(getattr(obj, key))
-                if token is not None:
-                    aliases.add(self._canonicalize_identifier(token))
-
-        for attr in ("task", "metadata"):
-            if hasattr(obj, attr):
-                value = getattr(obj, attr)
-                if isinstance(value, dict):
-                    aliases.update(self._collect_aliases_from_mapping(value))
-
-        return aliases
+        return collect_aliases_from_object(obj)
 
     def _extract_dependency_token(self, ref: Any) -> Any:
-        if ref is None:
-            return None
-
-        if isinstance(ref, (list, tuple, set)):
-            for item in ref:
-                token = self._extract_dependency_token(item)
-                if token is not None:
-                    return token
-            return None
-
-        if isinstance(ref, dict):
-            for key in ("task_id", "id", "parent_task_id", "source_task_id", "step_id", "child_task_id", "task"):
-                if key in ref:
-                    token = self._extract_dependency_token(ref[key])
-                    if token is not None:
-                        return token
-            return None
-
-        for attr in ("task_id", "id", "parent_task_id", "source_task_id", "step_id", "child_task_id"):
-            if hasattr(ref, attr):
-                token = self._extract_dependency_token(getattr(ref, attr))
-                if token is not None:
-                    return token
-
-        if isinstance(ref, float) and ref.is_integer():
-            return int(ref)
-
-        return ref
+        return extract_dependency_token(ref)
 
     def _canonicalize_identifier(self, value: Any) -> str:
-        if value is None:
-            return ""
-
-        if isinstance(value, uuid.UUID):
-            return str(value)
-
-        if isinstance(value, bool):
-            return "1" if value else "0"
-
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            if isinstance(value, float):
-                if value.is_integer():
-                    value = int(value)
-                else:
-                    return str(value)
-            return str(value)
-
-        return str(value)
+        return canonicalize_identifier(value)
 
     def _make_escalation_result(self, results: List[Dict[str, Any]], plan: List[Dict[str, Any]], success: bool) -> Dict[str, Any]:
         """Create a properly formatted escalation result."""
@@ -2653,32 +1779,10 @@ class Coordinator:
             return err(str(e), "coordinator_error")
 
     def _extract_proto_plan(self, route_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if not isinstance(route_result, dict):
-            return None
-        payload = route_result.get("payload")
-        if not isinstance(payload, dict):
-            return None
-        metadata = payload.get("metadata")
-        if not isinstance(metadata, dict):
-            return None
-        proto_plan = metadata.get("proto_plan")
-        return proto_plan if isinstance(proto_plan, dict) else None
+        return extract_proto_plan(route_result)
 
     def _extract_decision(self, route_result: Dict[str, Any]) -> Optional[str]:
-        if not isinstance(route_result, dict):
-            return None
-        payload = route_result.get("payload")
-        if not isinstance(payload, dict):
-            return None
-        metadata = payload.get("metadata")
-        if isinstance(metadata, dict):
-            decision = metadata.get("decision")
-            if isinstance(decision, str):
-                return decision
-        decision = payload.get("decision")
-        if isinstance(decision, str):
-            return decision
-        return None
+        return extract_decision(route_result)
 
     async def _persist_proto_plan(
         self,
