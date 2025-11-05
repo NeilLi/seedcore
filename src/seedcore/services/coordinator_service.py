@@ -894,7 +894,7 @@ class Coordinator:
         return get_current_energy_state(agent_id)
 
     async def _task_outbox_flusher_loop(self) -> None:
-        """Periodically flush task_outbox embed_task events to the LTM worker with backoff."""
+        """Periodically flush task_outbox nim_task_embed events to the LTM worker with backoff."""
         try:
             session_factory = getattr(self, "_session_factory", None) or get_async_pg_session_factory()
             self._session_factory = session_factory
@@ -918,7 +918,7 @@ class Coordinator:
                                     WITH cte AS (
                                       SELECT id, payload
                                         FROM task_outbox
-                                       WHERE event_type='embed_task'
+                                       WHERE event_type='nim_task_embed'
                                     ORDER BY id
                                        FOR UPDATE SKIP LOCKED
                                        LIMIT :n
@@ -940,7 +940,7 @@ class Coordinator:
                                 if ok:
                                     await s.execute(sa_text("DELETE FROM task_outbox WHERE id=:id"), {"id": r["id"]})
                                     try:
-                                        COORD_OUTBOX_FLUSH_OK.labels("embed_task").inc()
+                                        COORD_OUTBOX_FLUSH_OK.labels("nim_task_embed").inc()
                                     except Exception:
                                         pass
                                 else:
@@ -956,7 +956,7 @@ class Coordinator:
                                         {"id": r["id"]},
                                     )
                                     try:
-                                        COORD_OUTBOX_FLUSH_RETRY.labels("embed_task").inc()
+                                        COORD_OUTBOX_FLUSH_RETRY.labels("nim_task_embed").inc()
                                     except Exception:
                                         pass
                             except Exception as exc:
@@ -973,7 +973,7 @@ class Coordinator:
                                     {"id": r["id"]},
                                 )
                                 try:
-                                    COORD_OUTBOX_FLUSH_RETRY.labels("embed_task").inc()
+                                    COORD_OUTBOX_FLUSH_RETRY.labels("nim_task_embed").inc()
                                 except Exception:
                                     pass
             except Exception as exc:
@@ -2072,7 +2072,7 @@ class Coordinator:
                         ocps_metadata=ocps_metadata,
                         chosen_route=str(decision),
                     )
-                    inserted = await outbox_dao.enqueue_embed_task(
+                    inserted = await outbox_dao.enqueue_nim_task_embed(
                         session,
                         task_id=str(task_id),
                         reason="router",
@@ -2081,7 +2081,7 @@ class Coordinator:
                     if metrics is not None:
                         metrics.record_outbox_enqueue("ok" if inserted else "dup")
                     try:
-                        (COORD_OUTBOX_INSERT_OK if inserted else COORD_OUTBOX_INSERT_DUP).labels("embed_task").inc()
+                        (COORD_OUTBOX_INSERT_OK if inserted else COORD_OUTBOX_INSERT_DUP).labels("nim_task_embed").inc()
                     except Exception:
                         pass
         except Exception as exc:
@@ -2093,7 +2093,7 @@ class Coordinator:
             if metrics is not None:
                 metrics.record_outbox_enqueue("err")
             try:
-                COORD_OUTBOX_INSERT_ERR.labels("embed_task").inc()
+                COORD_OUTBOX_INSERT_ERR.labels("nim_task_embed").inc()
             except Exception:
                 pass
             raise

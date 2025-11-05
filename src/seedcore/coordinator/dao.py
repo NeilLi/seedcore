@@ -56,15 +56,15 @@ class TaskOutboxDAO:
     between the coordinator and downstream task processors.
 
     Lifecycle:
-      1. enqueue_embed_task() — write event to outbox
-      2. list_pending_embed_tasks() — read pending events
+      1. enqueue_nim_task_embed() — write event to outbox
+      2. list_pending_nim_task_embeds() — read pending events
       3. delete() — remove processed event
       4. backoff() — defer retry for failed event
     """
 
     _TABLE_NAME = "task_outbox"
 
-    async def enqueue_embed_task(
+    async def enqueue_nim_task_embed(
         self,
         session,
         *,
@@ -72,7 +72,7 @@ class TaskOutboxDAO:
         reason: str = "coordinator",
         dedupe_key: Optional[str] = None,
     ) -> bool:
-        """Insert an 'embed_task' event into the outbox.
+        """Insert a 'nim_task_embed' event into the outbox.
 
         Args:
             session: Active database session.
@@ -109,25 +109,25 @@ class TaskOutboxDAO:
             stmt,
             {
                 "task_id": task_id,
-                "event_type": "embed_task",
+                "event_type": "nim_task_embed",
                 "payload": encoded_payload,
                 "dedupe_key": dedupe_key,
             },
         )
         inserted = bool(getattr(result, "rowcount", 0))
         if inserted:
-            logger.debug(f"[Coordinator] Enqueued embed_task for {task_id}")
+            logger.debug(f"[Coordinator] Enqueued nim_task_embed for {task_id}")
         else:
-            logger.debug(f"[Coordinator] Skipped duplicate embed_task for {task_id}")
+            logger.debug(f"[Coordinator] Skipped duplicate nim_task_embed for {task_id}")
         return inserted
 
-    async def list_pending_embed_tasks(self, session, limit: int = 100) -> List[Any]:
-        """Retrieve pending 'embed_task' events awaiting processing."""
+    async def list_pending_nim_task_embeds(self, session, limit: int = 100) -> List[Any]:
+        """Retrieve pending 'nim_task_embed' events awaiting processing."""
         stmt = text(
             f"""
             SELECT id, task_id, payload, attempts
             FROM {self._TABLE_NAME}
-            WHERE event_type = 'embed_task'
+            WHERE event_type = 'nim_task_embed'
             ORDER BY id
             LIMIT :limit
             """
