@@ -32,6 +32,7 @@ from seedcore.ops.eventizer.eventizer_features import (
     features_from_payload as default_features_from_payload,
 )
 from seedcore.models import TaskPayload, Task
+from ..coordinator.dao import TaskRouterTelemetryDAO, TaskOutboxDAO, TaskProtoPlanDAO
 
 from collections.abc import Mapping as _MappingABC
 
@@ -39,183 +40,11 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-# PKG WASM Loader Utility
-def load_pkg_wasm(wasm_path: str, snapshot: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """
-    Load PKG WASM binary and return evaluator metadata.
-    
-    Args:
-        wasm_path: Path to WASM binary file
-        snapshot: Optional snapshot version string
-    
-    Returns:
-        Dict with 'enabled', 'loaded', 'version', 'path' or None if load fails
-    """
-    try:
-        wasm_file = Path(wasm_path)
-        if not wasm_file.exists():
-            logger.warning(f"PKG WASM file not found: {wasm_path}")
-            return {"enabled": True, "loaded": False, "version": snapshot, "path": wasm_path, "error": "file_not_found"}
-        
-        # For now, we just verify the file exists and return metadata
-        # Actual WASM evaluation would be implemented here when needed
-        file_size = wasm_file.stat().st_size
-        logger.info(f"PKG WASM loaded: {wasm_path} ({file_size} bytes), version={snapshot}")
-        
-        return {
-            "enabled": True,
-            "loaded": True,
-            "version": snapshot or "unknown",
-            "path": str(wasm_path),
-            "size_bytes": file_size,
-            "error": None
-        }
-    except Exception as e:
-        logger.error(f"Failed to load PKG WASM: {e}")
-        return {"enabled": True, "loaded": False, "version": snapshot, "path": wasm_path, "error": str(e)}
+# PKG Manager - now uses centralized module
+from ..ops.pkg.manager import get_global_pkg_manager
 
 
 
-class TaskRouterTelemetryDAO:
-    """Lightweight helper for persisting router telemetry snapshots."""
-
-    def __init__(self, table_name: str = "task_router_telemetry") -> None:
-        self._table_name = table_name
-
-    async def insert(
-        self,
-        session,
-        *,
-        task_id: str,
-        surprise_score: float,
-        x_vector: Sequence[float],
-        weights: Sequence[float],
-        ocps_metadata: Dict[str, Any],
-        chosen_route: str,
-    ) -> None:
-        stmt = text(
-            f"""
-            INSERT INTO {self._table_name}
-            (task_id, surprise_score, x_vector, weights, ocps_metadata, chosen_route)
-            VALUES (CAST(:task_id AS uuid), :surprise_score, CAST(:x_vector AS jsonb), CAST(:weights AS jsonb), CAST(:ocps_metadata AS jsonb), :chosen_route)
-            """
-        )
-        await session.execute(
-            stmt,
-            {
-                "task_id": task_id,
-                "surprise_score": surprise_score,
-                "x_vector": json.dumps(list(x_vector), sort_keys=True),
-                "weights": json.dumps(list(weights), sort_keys=True),
-                "ocps_metadata": json.dumps(dict(ocps_metadata or {}), sort_keys=True),
-                "chosen_route": chosen_route,
-            },
-        )
-
-
-MAX_PROTO_PLAN_BYTES = 256 * 1024
-
-
-class TaskOutboxDAO:
-    """DAO for writing coordinator outbox events."""
-
-    _TABLE_NAME = "task_outbox"
-
-    async def enqueue_embed_task(
-        self,
-        session,
-        *,
-        task_id: str,
-        reason: str = "coordinator",
-        dedupe_key: Optional[str] = None,
-    ) -> bool:
-        payload = {"reason": reason, "task_id": task_id}
-        encoded_payload = json.dumps(payload, sort_keys=True)
-        if len(encoded_payload.encode("utf-8")) > MAX_PROTO_PLAN_BYTES:
-            logger.warning(
-                "[Coordinator] Outbox payload for %s exceeded %s bytes; truncating",
-                task_id,
-                MAX_PROTO_PLAN_BYTES,
-            )
-            encoded_payload = json.dumps(
-                {
-                    "reason": reason,
-                    "task_id": task_id,
-                    "_truncated": True,
-                },
-                sort_keys=True,
-            )
-        stmt = text(
-            """
-            INSERT INTO task_outbox (task_id, event_type, payload, dedupe_key)
-            VALUES (CAST(:task_id AS uuid), :event_type, CAST(:payload AS jsonb), :dedupe_key)
-            ON CONFLICT (dedupe_key) DO NOTHING
-            """
-        )
-        result = await session.execute(
-            stmt,
-            {
-                "task_id": task_id,
-                "event_type": "embed_task",
-                "payload": encoded_payload,
-                "dedupe_key": dedupe_key,
-            },
-        )
-        return bool(getattr(result, "rowcount", 0))
-
-
-class TaskProtoPlanDAO:
-    """DAO for persisting proto-plan payloads for downstream workers."""
-
-    _TABLE_NAME = "task_proto_plan"
-
-    async def upsert(
-        self,
-        session,
-        *,
-        task_id: str,
-        route: str,
-        proto_plan: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        serialized = json.dumps(proto_plan, sort_keys=True)
-        encoded = serialized.encode("utf-8")
-        truncated = False
-        if len(encoded) > MAX_PROTO_PLAN_BYTES:
-            truncated = True
-            logger.warning(
-                "[Coordinator] Proto-plan for %s exceeded %s bytes (got %s); truncating",
-                task_id,
-                MAX_PROTO_PLAN_BYTES,
-                len(encoded),
-            )
-            preview = encoded[: MAX_PROTO_PLAN_BYTES - 128].decode("utf-8", "ignore")
-            proto_plan = {
-                "_truncated": True,
-                "size_bytes": len(encoded),
-                "preview": preview,
-            }
-            serialized = json.dumps(proto_plan, sort_keys=True)
-
-        stmt = text(
-            """
-            INSERT INTO task_proto_plan (task_id, route, proto_plan)
-            VALUES (CAST(:task_id AS uuid), :route, CAST(:proto_plan AS jsonb))
-            ON CONFLICT (task_id) DO UPDATE
-            SET route = EXCLUDED.route,
-                proto_plan = EXCLUDED.proto_plan
-            """
-        )
-        await session.execute(
-            stmt,
-            {
-                "task_id": task_id,
-                "route": route,
-                "proto_plan": serialized,
-            },
-        )
-        if truncated:
-            return {"truncated": True}
-        return {"truncated": False}
 
 
 from seedcore.logging_setup import ensure_serve_logger
@@ -849,7 +678,6 @@ class CoordinatorCore:
     """
     def __init__(
         self,
-        pkg_eval: Optional[Callable[..., Any]] = None,
         ood_to01: Optional[Callable[[float], float]] = None,
         surprise_weights: Optional[Sequence[float]] = None,
         tau_fast: Optional[float] = None,
@@ -857,7 +685,6 @@ class CoordinatorCore:
         call_timeout_s: int = 2,
         metrics_tracker: Optional["MetricsTracker"] = None,
     ):
-        self.pkg_eval = pkg_eval
         self.ood_to01 = ood_to01
         self.timeout_s = int(os.getenv("SERVE_CALL_TIMEOUT_S", str(call_timeout_s)))
         self.metrics = metrics_tracker
@@ -873,21 +700,8 @@ class CoordinatorCore:
         
         self.surprise = SurpriseComputer(weights=weights, tau_fast=tau_fast_val, tau_plan=tau_plan_val)
         
-        # PKG WASM initialization
-        self.pkg_metadata: Optional[Dict[str, Any]] = None
-        pkg_enabled = os.getenv("COORDINATOR_PKG_ENABLED", "0") == "1"
-        if pkg_enabled:
-            wasm_path = os.getenv("PKG_WASM_PATH", "/opt/pkg/policy_rules.wasm")
-            snapshot_version = os.getenv("PKG_SNAPSHOT_VERSION")
-            self.pkg_metadata = load_pkg_wasm(wasm_path, snapshot=snapshot_version)
-            if self.pkg_metadata and self.pkg_metadata.get("loaded"):
-                logger.info(f"✅ PKG enabled: {self.pkg_metadata['version']} at {wasm_path}")
-            else:
-                error = self.pkg_metadata.get("error") if self.pkg_metadata else "unknown"
-                logger.warning(f"⚠️ PKG enabled but not loaded: {error}")
-        else:
-            logger.info("PKG evaluation disabled (COORDINATOR_PKG_ENABLED=0)")
-            self.pkg_metadata = {"enabled": False, "loaded": False, "version": None, "error": None}
+        # PKG is now managed by the global PKGManager
+        # No need for local initialization here
 
     async def route_and_execute(
         self,
@@ -1044,24 +858,57 @@ class CoordinatorCore:
                 proto_plan_hints.setdefault("eventizer_confidence", eventizer_data["confidence"])
         pkg_meta = {"evaluated": False, "version": None, "error": None}
 
-        async def _eval_pkg():
-            context = {"domain": task.domain, "type": task.type, "task_id": tid, "pii_redacted": pii_redacted}
-            return await self.pkg_eval(tags=tags, signals={
-                "S": S, "x1": xs[0], "x2": xs[1], "x3": xs[2], "x4": xs[3], "x5": xs[4], "x6": xs[5],
-                "ocps": s_out["ocps"],
-            }, context=context)
-
+        # Use global PKG manager to get active evaluator
+        pkg_manager = get_global_pkg_manager()
         used_fallback = False
+        
         try:
-            if self.pkg_eval is not None:
-                pkg_res = await asyncio.wait_for(_eval_pkg(), timeout=self.timeout_s)
-                if isinstance(pkg_res, dict) and "tasks" in pkg_res and "edges" in pkg_res:
-                    proto_plan = {"tasks": pkg_res["tasks"], "edges": pkg_res["edges"]}
-                    pkg_meta.update({"evaluated": True, "version": pkg_res.get("version")})
+            if pkg_manager is not None:
+                evaluator = pkg_manager.get_active_evaluator()
+                if evaluator is not None:
+                    # Build task_facts dict for evaluator
+                    task_facts = {
+                        "tags": list(tags),
+                        "signals": {
+                            "S": S,
+                            "x1": xs[0],
+                            "x2": xs[1],
+                            "x3": xs[2],
+                            "x4": xs[3],
+                            "x5": xs[4],
+                            "x6": xs[5],
+                            "ocps": s_out["ocps"],
+                        },
+                        "context": {
+                            "domain": task.domain,
+                            "type": task.type,
+                            "task_id": tid,
+                            "pii_redacted": pii_redacted
+                        }
+                    }
+                    
+                    # Evaluate using the active evaluator (synchronous call)
+                    pkg_res = evaluator.evaluate(task_facts)
+                    
+                    # Convert evaluator output to expected format
+                    # Evaluator returns: {"subtasks": ..., "dag": ..., "rules": ..., "snapshot": ...}
+                    # We need: {"tasks": ..., "edges": ...}
+                    if isinstance(pkg_res, dict):
+                        # Map subtasks -> tasks, dag -> edges
+                        proto_plan = {
+                            "tasks": pkg_res.get("subtasks", []),
+                            "edges": pkg_res.get("dag", [])
+                        }
+                        pkg_meta.update({
+                            "evaluated": True,
+                            "version": pkg_res.get("snapshot") or evaluator.version
+                        })
+                    else:
+                        raise ValueError("PKG returned unexpected type")
                 else:
-                    raise ValueError("PKG returned unexpected shape")
+                    raise RuntimeError("PKG evaluator not available (no active snapshot)")
             else:
-                raise RuntimeError("PKG evaluator not configured")
+                raise RuntimeError("PKG manager not initialized")
         except Exception as e:
             used_fallback = True
             pkg_meta["error"] = f"PKG unavailable or timed out: {e}"

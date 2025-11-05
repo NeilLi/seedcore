@@ -471,7 +471,6 @@ async def dispatch_hgnn(
 # ============================================================================
 
 async def evaluate_pkg_plan(
-    pkg_eval: Optional[Callable[..., Any]],
     *,
     tags: Sequence[str],
     signals: Mapping[str, Any],
@@ -479,39 +478,57 @@ async def evaluate_pkg_plan(
     timeout_s: int,
     log: Optional[logging.Logger] = None,
 ) -> Dict[str, Any]:
-    """Execute the configured PKG evaluator and return its response.
+    """Execute PKG evaluation using the global PKG manager and return its response.
 
     Args:
-        pkg_eval: Callable responsible for performing the PKG evaluation.
         tags: Collection of event tags associated with the task.
         signals: Numeric routing signals forwarded to the evaluator.
         context: Optional context dictionary supplied to the evaluator.
-        timeout_s: Maximum time in seconds to wait for the evaluation.
+        timeout_s: Maximum time in seconds to wait for the evaluation (for compatibility, actual evaluation is synchronous).
         log: Logger used for debug information.
     """
     from .utils import _normalise_sequence_length, _coerce_pkg_result
+    from ...ops.pkg.manager import get_global_pkg_manager
     
     logger = log or logger
 
-    if pkg_eval is None:
-        raise RuntimeError("PKG evaluator not configured")
+    # Get the global PKG manager
+    pkg_manager = get_global_pkg_manager()
+    if pkg_manager is None:
+        raise RuntimeError("PKG manager not initialized")
 
+    # Get the active evaluator
+    evaluator = pkg_manager.get_active_evaluator()
+    if evaluator is None:
+        raise RuntimeError("PKG evaluator not available (no active snapshot)")
+
+    # Build task_facts dict for evaluator
+    task_facts: Dict[str, Any] = {
+        "tags": list(tags),
+        "signals": dict(signals),
+    }
+    if context is not None:
+        task_facts["context"] = dict(context)
+
+    # Evaluate using the active evaluator (synchronous call)
+    # Wrap in async for timeout compatibility
     async def _invoke() -> Mapping[str, Any]:
-        call_kwargs = {"tags": tags, "signals": signals}
-        if context is not None:
-            call_kwargs["context"] = context
-
-        result = pkg_eval(**call_kwargs)
-        if inspect.isawaitable(result):
-            return await result  # type: ignore[return-value]
-        if isinstance(result, Mapping):
-            return result
-        raise TypeError("PKG evaluator returned unsupported type")
+        return evaluator.evaluate(task_facts)
 
     pkg_res = await asyncio.wait_for(_invoke(), timeout=timeout_s)
 
     if not isinstance(pkg_res, Mapping):
         raise ValueError("PKG returned unexpected type")
+    
+    # Convert evaluator output format (subtasks/dag) to expected format (tasks/edges)
+    if "subtasks" in pkg_res or "dag" in pkg_res:
+        # Map subtasks -> tasks, dag -> edges
+        pkg_res = {
+            "tasks": pkg_res.get("subtasks", []),
+            "edges": pkg_res.get("dag", []),
+            "version": pkg_res.get("snapshot", evaluator.version)
+        }
+    
     if "tasks" not in pkg_res or "edges" not in pkg_res:
         raise ValueError("PKG returned unexpected shape")
 

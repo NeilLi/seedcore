@@ -25,7 +25,6 @@ from ..ops.eventizer.schemas.eventizer_models import (
     EventizerConfig,
     PKGEnv
 )
-from ..ops.eventizer.clients.pkg_client import PKGClient
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +44,6 @@ class FactManager:
     def __init__(
         self, 
         db_session: AsyncSession, 
-        pkg_client: Optional[PKGClient] = None,
         eventizer_config: Optional[EventizerConfig] = None
     ):
         """
@@ -53,11 +51,9 @@ class FactManager:
         
         Args:
             db_session: Database session for fact operations
-            pkg_client: Optional PKG client for policy validation
             eventizer_config: Optional eventizer configuration
         """
         self.db = db_session
-        self.pkg_client = pkg_client
         self.eventizer_config = eventizer_config or EventizerConfig()
         self._eventizer: Optional[EventizerService] = None
         self._initialized = False
@@ -481,15 +477,8 @@ class FactManager:
             created_by=created_by
         )
         
-        # Validate with PKG if available
-        if self.pkg_client:
-            try:
-                pkg_fact_data = fact.to_pkg_fact()
-                await self.pkg_client.create_temporal_fact(pkg_fact_data)
-                fact.validation_status = "pkg_validated"
-            except Exception as e:
-                logger.warning(f"PKG validation failed for temporal fact: {e}")
-                fact.validation_status = "pkg_validation_failed"
+        # PKG validation is now handled upstream by the coordinator
+        # This method just creates the temporal fact
         
         self.db.add(fact)
         await self.db.flush()
@@ -633,30 +622,8 @@ class FactManager:
     # PKG Integration
     # -----------------
     
-    async def validate_with_pkg(self, fact: Fact) -> bool:
-        """
-        Validate fact against PKG policies.
-        
-        Args:
-            fact: Fact to validate
-        
-        Returns:
-            True if validation passes, False otherwise
-        """
-        if not self.pkg_client:
-            logger.warning("PKG client not available for validation")
-            return True
-        
-        try:
-            pkg_fact_data = fact.to_pkg_fact()
-            # Use PKG client to validate
-            # This would integrate with PKG validation logic
-            fact.validation_status = "pkg_validated"
-            return True
-        except Exception as e:
-            logger.error(f"PKG validation failed for fact {fact.id}: {e}")
-            fact.validation_status = "pkg_validation_failed"
-            return False
+    # validate_with_pkg method removed - PKG validation is now handled upstream by the coordinator
+    # Facts should receive PKG governance data from the coordinator after evaluation
     
     async def get_pkg_governed_facts(
         self,
@@ -816,19 +783,16 @@ async def create_fact_manager(
     
     Args:
         db_session: Database session
-        pkg_environment: PKG environment
-        enable_pkg_validation: Whether to enable PKG validation
+        pkg_environment: PKG environment (for eventizer config)
+        enable_pkg_validation: Whether to enable PKG validation in eventizer
     
     Returns:
         Initialized FactManager instance
-    """
-    pkg_client = None
-    if enable_pkg_validation:
-        try:
-            pkg_client = PKGClient(pkg_environment)
-        except Exception as e:
-            logger.warning(f"Failed to create PKG client: {e}")
     
+    Note:
+        PKG validation is now handled by the global PKGManager, not by FactManager.
+        This parameter only affects eventizer configuration.
+    """
     eventizer_config = EventizerConfig(
         pkg_validation_enabled=enable_pkg_validation,
         pkg_environment=pkg_environment
@@ -836,7 +800,6 @@ async def create_fact_manager(
     
     fact_manager = FactManager(
         db_session=db_session,
-        pkg_client=pkg_client,
         eventizer_config=eventizer_config
     )
     

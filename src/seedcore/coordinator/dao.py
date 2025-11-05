@@ -1,13 +1,19 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence
 import json
+import logging
+import os
 from sqlalchemy import text
 
 
-MAX_PROTO_PLAN_BYTES = 256 * 1024
+MAX_PROTO_PLAN_BYTES = int(os.getenv("MAX_PROTO_PLAN_BYTES", str(256 * 1024)))
+
+logger = logging.getLogger(__name__)
 
 
 class TaskRouterTelemetryDAO:
+    """Lightweight helper for persisting router telemetry snapshots."""
+
     def __init__(self, table_name: str = "task_router_telemetry") -> None:
         self._table_name = table_name
 
@@ -42,7 +48,20 @@ class TaskRouterTelemetryDAO:
         )
 
 
+
 class TaskOutboxDAO:
+    """DAO for managing coordinator outbox events (enqueue, list, delete, backoff).
+
+    Implements the Outbox Pattern to ensure reliable, decoupled communication
+    between the coordinator and downstream task processors.
+
+    Lifecycle:
+      1. enqueue_embed_task() — write event to outbox
+      2. list_pending_embed_tasks() — read pending events
+      3. delete() — remove processed event
+      4. backoff() — defer retry for failed event
+    """
+
     _TABLE_NAME = "task_outbox"
 
     async def enqueue_embed_task(
@@ -53,13 +72,31 @@ class TaskOutboxDAO:
         reason: str = "coordinator",
         dedupe_key: Optional[str] = None,
     ) -> bool:
+        """Insert an 'embed_task' event into the outbox.
+
+        Args:
+            session: Active database session.
+            task_id: The UUID of the related task.
+            reason: Origin or cause of the enqueue (default: 'coordinator').
+            dedupe_key: Optional key for idempotent insert.
+
+        Returns:
+            True if the event was inserted, False if skipped due to deduplication.
+        """
         payload = {"reason": reason, "task_id": task_id}
         encoded_payload = json.dumps(payload, sort_keys=True)
+
         if len(encoded_payload.encode("utf-8")) > MAX_PROTO_PLAN_BYTES:
+            logger.warning(
+                "[Coordinator] Outbox payload for %s exceeded %s bytes; truncating.",
+                task_id,
+                MAX_PROTO_PLAN_BYTES,
+            )
             encoded_payload = json.dumps(
                 {"reason": reason, "task_id": task_id, "_truncated": True},
                 sort_keys=True,
             )
+
         stmt = text(
             """
             INSERT INTO task_outbox (task_id, event_type, payload, dedupe_key)
@@ -67,6 +104,7 @@ class TaskOutboxDAO:
             ON CONFLICT (dedupe_key) DO NOTHING
             """
         )
+
         result = await session.execute(
             stmt,
             {
@@ -76,10 +114,15 @@ class TaskOutboxDAO:
                 "dedupe_key": dedupe_key,
             },
         )
-        return bool(getattr(result, "rowcount", 0))
+        inserted = bool(getattr(result, "rowcount", 0))
+        if inserted:
+            logger.debug(f"[Coordinator] Enqueued embed_task for {task_id}")
+        else:
+            logger.debug(f"[Coordinator] Skipped duplicate embed_task for {task_id}")
+        return inserted
 
     async def list_pending_embed_tasks(self, session, limit: int = 100) -> List[Any]:
-        """List pending embed_task events from the outbox."""
+        """Retrieve pending 'embed_task' events awaiting processing."""
         stmt = text(
             f"""
             SELECT id, task_id, payload, attempts
@@ -91,25 +134,27 @@ class TaskOutboxDAO:
         )
         result = await session.execute(stmt, {"limit": limit})
         rows = result.fetchall()
-        
-        # Convert to simple objects with attributes
+
         class Row:
+            """Simple DTO wrapper for pending outbox entries."""
+
             def __init__(self, id_val, task_id, payload, attempts):
                 self.id = id_val
                 self.task_id = task_id
                 self.payload = payload
                 self.attempts = attempts or 0
-                self.reason = "outbox"  # Default reason
-        
+                self.reason = payload.get("reason", "outbox") if isinstance(payload, dict) else "outbox"
+
         return [Row(row.id, row.task_id, row.payload, row.attempts) for row in rows]
 
     async def delete(self, session, id_val: Any) -> None:
-        """Delete a row from the outbox by ID."""
+        """Delete a processed event from the outbox."""
         stmt = text(f"DELETE FROM {self._TABLE_NAME} WHERE id = :id")
         await session.execute(stmt, {"id": id_val})
+        logger.debug(f"[Coordinator] Deleted outbox event {id_val}")
 
     async def backoff(self, session, id_val: Any) -> None:
-        """Increment attempts and schedule retry for a row."""
+        """Increment retry attempts and defer event availability using backoff strategy."""
         stmt = text(
             f"""
             UPDATE {self._TABLE_NAME}
@@ -119,9 +164,12 @@ class TaskOutboxDAO:
             """
         )
         await session.execute(stmt, {"id": id_val})
+        logger.warning(f"[Coordinator] Backed off event {id_val} for retry.")
 
 
 class TaskProtoPlanDAO:
+    """DAO for persisting proto-plan payloads for downstream workers."""
+
     _TABLE_NAME = "task_proto_plan"
 
     async def upsert(
@@ -137,9 +185,20 @@ class TaskProtoPlanDAO:
         truncated = False
         if len(encoded) > MAX_PROTO_PLAN_BYTES:
             truncated = True
+            logger.warning(
+                "[Coordinator] Proto-plan for %s exceeded %s bytes (got %s); truncating",
+                task_id,
+                MAX_PROTO_PLAN_BYTES,
+                len(encoded),
+            )
             preview = encoded[: MAX_PROTO_PLAN_BYTES - 128].decode("utf-8", "ignore")
-            proto_plan = {"_truncated": True, "size_bytes": len(encoded), "preview": preview}
+            proto_plan = {
+                "_truncated": True,
+                "size_bytes": len(encoded),
+                "preview": preview,
+            }
             serialized = json.dumps(proto_plan, sort_keys=True)
+
         stmt = text(
             """
             INSERT INTO task_proto_plan (task_id, route, proto_plan)
@@ -151,8 +210,14 @@ class TaskProtoPlanDAO:
         )
         await session.execute(
             stmt,
-            {"task_id": task_id, "route": route, "proto_plan": serialized},
+            {
+                "task_id": task_id,
+                "route": route,
+                "proto_plan": serialized,
+            },
         )
-        return {"truncated": truncated}
+        if truncated:
+            return {"truncated": True}
+        return {"truncated": False}
 
 
