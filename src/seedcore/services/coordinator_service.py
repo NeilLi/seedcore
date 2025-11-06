@@ -90,23 +90,24 @@ from ..coordinator.utils import (
     # Data processing
     redact_sensitive_data,
 )
-from ..ops.metrics import get_global_metrics_tracker
-from ..ops.pkg.manager import get_global_pkg_manager
 from ..predicates import PredicateRouter, load_predicates
 from ..predicates.safe_metrics import create_safe_counter
 from ..predicates.safe_storage import SafeStorage
 from ..serve.cognitive_client import CognitiveServiceClient
 from ..serve.ml_client import MLServiceClient
 from ..serve.organism_client import OrganismServiceClient
-from ..utils.ray_utils import COG, ML, SERVE_GATEWAY  # Used for constants
-from seedcore.database import get_async_pg_session_factory
-from seedcore.logging_setup import ensure_serve_logger
-from seedcore.models import Task, TaskPayload
-from seedcore.models.result_schema import ResultKind, create_error_result
-from seedcore.ops.eventizer.eventizer_features import (
+from ..utils.ray_utils import COG, ML, ORG  # Used for constants
+from ..database import get_async_pg_session_factory
+from ..logging_setup import ensure_serve_logger
+from ..models import Task, TaskPayload
+from ..models.result_schema import ResultKind, create_error_result
+from ..ops.eventizer.eventizer_features import (
     features_from_payload as default_features_from_payload,
 )
-from seedcore.ops.eventizer.fact_dao import FactDAO
+from ..ops.eventizer.fact_dao import FactDAO
+from ..ops.metrics import get_global_metrics_tracker
+from ..ops.pkg.manager import get_global_pkg_manager
+
 
 # ---------------------------------------------------------------------------
 # 4. Constants
@@ -128,7 +129,7 @@ SEEDCORE_API_URL = os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 # --- Ray Gateway URLs (derived from imported constants) ---
-ORG = f"{SERVE_GATEWAY}/organism"
+ORG_URL = ORG    # Alias for clarity
 ML_URL = ML  # Alias for clarity
 COG_URL = COG  # Alias for clarity
 
@@ -152,10 +153,9 @@ logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
 
 # Log derived gateway URLs for debugging
 logger.info("🔗 Coordinator using gateway URLs:")
-logger.info(f"   SERVE_GATEWAY: {SERVE_GATEWAY}")
 logger.info(f"   ML_URL: {ML_URL}")
 logger.info(f"   COG_URL: {COG_URL}")
-logger.info(f"   ORG_URL: {ORG}")
+logger.info(f"   ORG_URL: {ORG_URL}")
 
 # --- Prometheus Metrics (optional, safe fallback) ---
 COORD_OUTBOX_FLUSH_OK = create_safe_counter(
@@ -273,7 +273,7 @@ def build_execution_config(
         }
         res = await _apost(
             coordinator.http,
-            f"{ORG}/execute-on-organ",
+            f"{ORG_URL}/execute-on-organ",
             payload,
             _corr_headers("organism", cid_local),
             timeout=ORG_TIMEOUT,
@@ -479,7 +479,7 @@ class Coordinator:
             return val.lower() in ("1", "true", "yes", "y", "on")
         
         self.routing_remote_enabled = _env_bool("ROUTING_REMOTE", False)
-        self.routing_remote_types = set(os.getenv("ROUTING_REMOTE_TYPES", "graph_embed,graph_rag_query,graph_embed_v2,graph_rag_query_v2").split(","))
+        self.routing_remote_types = set(os.getenv("ROUTING_REMOTE_TYPES", "graph_embed,graph_rag_query,graph_fact_embed,graph_fact_query,nim_task_embed,graph_sync_nodes").split(","))
 
         self.graph_repository = None  # Lazily instantiated GraphTaskRepository
         self._graph_repo_checked = False

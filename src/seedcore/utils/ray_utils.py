@@ -31,6 +31,7 @@ ENV_SERVE_GATEWAY   = "SERVE_GATEWAY"    # explicit override
 ENV_RAY_ADDRESS     = "RAY_ADDRESS"      # canonical source set by Ray
 ENV_SERVE_BASE      = "SERVE_BASE_PATH"  # default "/ml"
 ENV_COG_BASE        = "COG_BASE_PATH"    # default "/cognitive"
+ENV_ORG_BASE        = "ORG_BASE_PATH"    # default "/organism"
 ENV_SERVE_SERVICE   = "SERVE_SERVICE"    # "stable" (default) or "serve"
 ENV_POD_NAMESPACE   = "POD_NAMESPACE"    # set via Downward API when possible
 
@@ -197,24 +198,28 @@ def _derive_serve_gateway() -> str:
     _log.info("Derived SERVE gateway (cluster-aware fallback): %s", gw)
     return gw
 
-def _derive_base_paths() -> Tuple[str, str]:
+def _derive_base_paths() -> Tuple[str, str, str]:
     ml  = (os.getenv(ENV_SERVE_BASE) or "/ml").strip() or "/ml"
     cog = (os.getenv(ENV_COG_BASE) or "/cognitive").strip() or "/cognitive"
+    org = (os.getenv(ENV_ORG_BASE) or "/organism").strip() or "/organism"
     if not ml.startswith("/"):
         ml = "/" + ml
     if not cog.startswith("/"):
         cog = "/" + cog
-    return ml.rstrip("/"), cog.rstrip("/")
+    if not org.startswith("/"):
+        org = "/" + org
+    return ml.rstrip("/"), cog.rstrip("/"), org.rstrip("/")
 
 # Compute once (fast, side-effect free). Keep helpers to rebuild on-demand if env changes.
 _SERVE_GATEWAY: str
 _ML_BASE: str
 _COG_BASE: str
+_ORG_BASE: str
 
 def _recompute_globals() -> None:
-    global _SERVE_GATEWAY, _ML_BASE, _COG_BASE
+    global _SERVE_GATEWAY, _ML_BASE, _COG_BASE, _ORG_BASE
     _SERVE_GATEWAY = _derive_serve_gateway().rstrip("/")
-    _ML_BASE, _COG_BASE = _derive_base_paths()
+    _ML_BASE, _COG_BASE, _ORG_BASE = _derive_base_paths()
 
 # initialize at import
 _recompute_globals()
@@ -223,6 +228,7 @@ _recompute_globals()
 SERVE_GATEWAY: str = _SERVE_GATEWAY
 ML: str  = f"{SERVE_GATEWAY}{_ML_BASE}"
 COG: str = f"{SERVE_GATEWAY}{_COG_BASE}"
+ORG: str = f"{SERVE_GATEWAY}{_ORG_BASE}"
 
 def get_serve_urls(
     base_gateway: Optional[str] = None,
