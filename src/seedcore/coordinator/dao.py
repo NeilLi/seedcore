@@ -147,6 +147,39 @@ class TaskOutboxDAO:
 
         return [Row(row.id, row.task_id, row.payload, row.attempts) for row in rows]
 
+    async def claim_pending_nim_task_embeds(
+        self, session, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Claim pending 'nim_task_embed' events for processing with FOR UPDATE SKIP LOCKED.
+        
+        This method uses row-level locking to ensure concurrent-safe processing:
+        - FOR UPDATE SKIP LOCKED prevents multiple workers from processing the same event
+        - Returns events that are ready to be processed (not locked by other workers)
+        
+        Args:
+            session: Active database session (must be in a transaction).
+            limit: Maximum number of events to claim.
+            
+        Returns:
+            List of dictionaries with 'id' and 'payload' keys.
+        """
+        stmt = text(
+            f"""
+            WITH cte AS (
+              SELECT id, payload
+                FROM {self._TABLE_NAME}
+               WHERE event_type = 'nim_task_embed'
+            ORDER BY id
+               FOR UPDATE SKIP LOCKED
+               LIMIT :limit
+            )
+            SELECT id, payload FROM cte
+            """
+        )
+        result = await session.execute(stmt, {"limit": limit})
+        rows = result.mappings().all()
+        return [{"id": row["id"], "payload": row["payload"]} for row in rows]
+
     async def delete(self, session, id_val: Any) -> None:
         """Delete a processed event from the outbox."""
         stmt = text(f"DELETE FROM {self._TABLE_NAME} WHERE id = :id")

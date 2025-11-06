@@ -299,11 +299,18 @@ class OCPSValve:
         )
 
 
-def _decide_route_with_hysteresis(S: float, last_decision: Optional[str] = None,
-                                 fast_enter: float = 0.35, fast_exit: float = 0.38,
-                                 plan_enter: float = 0.60, plan_exit: float = 0.57) -> str:
+def _decide_route_with_hysteresis(
+    S: float,
+    last_decision: Optional[str] = None,
+    fast_enter: float = 0.35,
+    fast_exit: float = 0.38,
+    plan_enter: float = 0.60,
+    plan_exit: float = 0.57
+) -> str:
     """
-    Route decision with hysteresis to prevent flapping around thresholds.
+    Route decision with hysteresis between fast, planner, and HGNN.
+    
+    Includes optional error fallback for invalid input.
     
     Hysteresis prevents rapid oscillation between routing decisions by using
     different thresholds for entering vs exiting each path:
@@ -321,23 +328,20 @@ def _decide_route_with_hysteresis(S: float, last_decision: Optional[str] = None,
         plan_exit: Threshold to exit planner path (default: 0.57, lower for hysteresis)
     
     Returns:
-        Decision: 'fast', 'planner', or 'hgnn'
+        Decision: 'fast', 'planner', 'hgnn', or 'error' (for invalid input)
     """
-    if last_decision == "fast":
-        if S >= fast_exit:
-            # Allow re-evaluation if we've crossed the exit threshold
-            pass
-        else:
-            return "fast"
-    
-    if last_decision == "hgnn":
-        if S <= plan_exit:
-            # Allow re-evaluation if we've crossed the exit threshold
-            pass
-        else:
-            return "hgnn"
-    
-    # Fresh decision based on current score
+    try:
+        # Clamp to [0, 1] to avoid nonsense inputs
+        S = max(0.0, min(1.0, float(S)))
+    except Exception:
+        return "error"
+
+    if last_decision == "fast" and S < fast_exit:
+        return "fast"
+    if last_decision == "hgnn" and S > plan_exit:
+        return "hgnn"
+
+    # Fresh decision
     if S < fast_enter:
         return "fast"
     elif S < plan_enter:

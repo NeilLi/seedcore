@@ -56,7 +56,7 @@ class CoordinatorServiceClient(BaseServiceClient):
         )
     
     # Task Processing Methods
-    async def process_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+    async def route_and_execute(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process a task through the coordinator.
         
@@ -66,7 +66,7 @@ class CoordinatorServiceClient(BaseServiceClient):
         Returns:
             Task processing result
         """
-        return await self.post("/process-task", json=task)
+        return await self.post("/route-and-execute", json=task)
     
     async def submit_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """

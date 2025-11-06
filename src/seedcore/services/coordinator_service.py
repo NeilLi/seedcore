@@ -1,201 +1,192 @@
-# coordinator_service.py
-import os, time, uuid, httpx, asyncio, random, inspect
-import math
-from fastapi import FastAPI, HTTPException
-from typing import Dict, Any, List, Optional, Iterable, Set, Tuple, NamedTuple, Sequence, Callable, Awaitable, Mapping, TYPE_CHECKING
-from urllib.parse import urlparse
-from pathlib import Path
-from ray import serve
-from pydantic import BaseModel, Field, field_validator
-import logging
+"""
+Coordinator Service: Main entrypoint for routing, executing, and orchestrating
+tasks across different execution paths (Fast, Planner, HGNN, and ERROR).
+"""
 
-try:  # Optional dependency - repository may not exist in all deployments
-    from ..graph.task_metadata_repository import TaskMetadataRepository  # type: ignore
-except ImportError:  # pragma: no cover - keep coordinator resilient when module missing
-    TaskMetadataRepository = None  # type: ignore
-
-# Import predicate system
-from ..predicates import PredicateRouter, load_predicates, load_predicates_async, get_metrics
-from ..predicates.metrics import update_ocps_signals, update_energy_signals, record_request, record_latency
-from ..predicates.circuit_breaker import CircuitBreaker, RetryConfig
-from ..serve.ml_client import MLServiceClient
-from ..serve.cognitive_client import CognitiveServiceClient
-from ..serve.organism_client import OrganismServiceClient
-from ..predicates.safe_storage import SafeStorage
-import redis
+# ---------------------------------------------------------------------------
+# 1. Standard Library Imports
+# ---------------------------------------------------------------------------
+import asyncio
+import inspect
 import json
+import logging
+import os
+import random
+import time
+import uuid
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence, Set
+from pathlib import Path
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping as AbcMapping
+
+# ---------------------------------------------------------------------------
+# 2. Third-Party Imports
+# ---------------------------------------------------------------------------
+import httpx
+import redis
+from fastapi import FastAPI, HTTPException
+from ray import serve
 from sqlalchemy import text
 
-from seedcore.database import get_async_pg_session_factory
-from seedcore.ops.eventizer.fact_dao import FactDAO
-from seedcore.ops.eventizer.eventizer_features import (
-    features_from_payload as default_features_from_payload,
+# ---------------------------------------------------------------------------
+# 3. First-Party (Local) Imports
+# ---------------------------------------------------------------------------
+
+# Optional graph dependency
+try:
+    from ..graph.task_metadata_repository import TaskMetadataRepository  # type: ignore
+except ImportError:  # pragma: no cover
+    TaskMetadataRepository = None  # type: ignore
+
+from ..coordinator.core.execute import (
+    ExecutionConfig,
+    HGNNConfig,
+    RouteConfig,
+    route_and_execute as execute_route_and_execute,
 )
-from seedcore.models import TaskPayload, Task
-from ..coordinator.dao import TaskRouterTelemetryDAO, TaskOutboxDAO, TaskProtoPlanDAO
-from ..coordinator.models import AnomalyTriageRequest, AnomalyTriageResponse, TuneCallbackRequest
-from ..coordinator.core.routing import (
-    RouteEntry,
-    RouteCache,
-    resolve_route_cached_async,
-    bulk_resolve_routes_cached,
-    static_route_fallback,
-)
+from ..coordinator.core.plan import persist_and_register_dependencies
 from ..coordinator.core.policies import (
     OCPSValve,
     SurpriseComputer,
     compute_drift_score,
-    compute_fallback_drift_score,
-    compute_surprise_score,
+    create_ocps_valve,
     decide_route_with_hysteresis,
     generate_proto_subtasks,
     get_current_energy_state,
-    create_ocps_valve,
+)
+from ..coordinator.core.routing import (
+    RouteCache,
+    bulk_resolve_routes_cached,
+    resolve_route_cached_async,
+    static_route_fallback,
+)
+from ..coordinator.dao import TaskOutboxDAO, TaskProtoPlanDAO, TaskRouterTelemetryDAO
+from ..coordinator.models import (
+    AnomalyTriageRequest,
+    AnomalyTriageResponse,
+    TuneCallbackRequest,
 )
 from ..coordinator.utils import (
-    # Constants
-    MAX_STRING_LENGTH,
-    DEFAULT_RECURSION_DEPTH,
-    # Task normalization and conversion
-    normalize_task_dict,
+    # Task normalization
     convert_task_to_dict,
+    normalize_task_dict,
     sync_task_identity,
-    # Extraction utilities
+    # Extraction
     extract_agent_id,
-    extract_proto_plan,
     extract_decision,
-    extract_from_nested,
-    extract_dependency_token,
-    # Normalization utilities
-    normalize_string,
+    extract_proto_plan,
+    # Normalization
     normalize_domain,
-    canonicalize_identifier,
-    # Data processing utilities
+    normalize_string,
+    # Data processing
     redact_sensitive_data,
-    # Dependency management utilities
-    iter_dependency_entries,
-    resolve_child_task_id,
-    collect_record_aliases,
-    collect_step_aliases,
-    collect_aliases_from_mapping,
-    collect_aliases_from_object,
 )
-
-from collections.abc import Mapping as _MappingABC
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
-
-# PKG Manager - now uses centralized module
-from ..ops.pkg.manager import get_global_pkg_manager
-
-# Metrics tracking - now uses centralized module
 from ..ops.metrics import get_global_metrics_tracker
-
-
-
-
-
+from ..ops.pkg.manager import get_global_pkg_manager
+from ..predicates import PredicateRouter, load_predicates
+from ..predicates.safe_metrics import create_safe_counter
+from ..predicates.safe_storage import SafeStorage
+from ..serve.cognitive_client import CognitiveServiceClient
+from ..serve.ml_client import MLServiceClient
+from ..serve.organism_client import OrganismServiceClient
+from ..utils.ray_utils import COG, ML, SERVE_GATEWAY  # Used for constants
+from seedcore.database import get_async_pg_session_factory
 from seedcore.logging_setup import ensure_serve_logger
-from seedcore.models.result_schema import (
-    create_fast_path_result, create_cognitive_result, create_escalated_result,
-    create_error_result, ResultKind
+from seedcore.models import Task, TaskPayload
+from seedcore.models.result_schema import ResultKind, create_error_result
+from seedcore.ops.eventizer.eventizer_features import (
+    features_from_payload as default_features_from_payload,
 )
-from seedcore.graph.task_repository import GraphTaskSqlRepository
+from seedcore.ops.eventizer.fact_dao import FactDAO
 
-logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
+# ---------------------------------------------------------------------------
+# 4. Constants
+# ---------------------------------------------------------------------------
 
-# ---------- TaskPayload Model (matches dispatcher) ----------
-# TaskPayload is now imported from centralized models
-
-# ---------- Result Helpers ----------
-def ok_fast(payload: dict) -> dict:
-    """Create a fast path result."""
-    return create_fast_path_result(
-        routed_to=payload.get("routed_to", "coordinator"),
-        organ_id=payload.get("organ_id", "coordinator"),
-        result=payload
-    ).model_dump()
-
-def err(msg: str, error_type: str = "coordinator_error") -> dict:
-    """Create an error result."""
-    return create_error_result(error=msg, error_type=error_type).model_dump()
-
-def _normalize_result(res: Any) -> dict:
-    """Normalize downstream results to unified schema."""
-    try:
-        # already unified?
-        if isinstance(res, dict) and "success" in res and ("payload" in res or "error" in res):
-            return res
-        # pydantic
-        if hasattr(res, "model_dump"):
-            return ok_fast(res.model_dump())
-        # generic object
-        if hasattr(res, "__dict__"):
-            return ok_fast(res.__dict__)
-        # list-of-steps → escalated
-        if isinstance(res, list):
-            from seedcore.models.result_schema import TaskStep
-            steps = []
-            for step in res:
-                steps.append(TaskStep(
-                    organ_id="coordinator",
-                    success=True,
-                    metadata=step if isinstance(step, dict) else {"raw": str(step)}
-                ))
-            return create_escalated_result(solution_steps=steps, plan_source="coordinator_list").model_dump()
-        # fallback
-        return ok_fast({"result": res})
-    except Exception as e:
-        return err(f"normalize failed: {e}", "normalize_error")
-
-# ---------- Config ----------
-ORCH_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10"))
-ML_TIMEOUT = float(os.getenv("ML_SERVICE_TIMEOUT", "8"))
-COG_TIMEOUT = float(os.getenv("COGNITIVE_SERVICE_TIMEOUT", "15"))
-ORG_TIMEOUT = float(os.getenv("ORGANISM_SERVICE_TIMEOUT", "5"))
-
-# Serve call timeout for cross-deployment calls
+# --- Timeouts ---
+ORCH_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10.0"))
+ML_TIMEOUT = float(os.getenv("ML_SERVICE_TIMEOUT", "8.0"))
+COG_TIMEOUT = float(os.getenv("COGNITIVE_SERVICE_TIMEOUT", "15.0"))
+ORG_TIMEOUT = float(os.getenv("ORGANISM_SERVICE_TIMEOUT", "5.0"))
+SEEDCORE_API_TIMEOUT = float(os.getenv("SEEDCORE_API_TIMEOUT", "5.0"))
 CALL_TIMEOUT_S = int(os.getenv("SERVE_CALL_TIMEOUT_S", "120"))
 
+# --- Service URLs ---
 SEEDCORE_API_URL = os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002")
-SEEDCORE_API_TIMEOUT = float(os.getenv("SEEDCORE_API_TIMEOUT", "5.0"))
-
-# Use Ray utilities to properly derive gateway URLs
-from ..utils.ray_utils import SERVE_GATEWAY, ML, COG
-ORG = f"{SERVE_GATEWAY}/organism"
-
-# Log the derived gateway URLs for debugging
-logger.info(f"🔗 Coordinator using gateway URLs:")
-logger.info(f"   SERVE_GATEWAY: {SERVE_GATEWAY}")
-logger.info(f"   ML: {ML}")
-logger.info(f"   COG: {COG}")
-logger.info(f"   ORG: {ORG}")
-
-# Additional configuration for Coordinator
-FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
-MAX_PLAN_STEPS = int(os.getenv("MAX_PLAN_STEPS", "16"))
-COGNITIVE_MAX_INFLIGHT = int(os.getenv("COGNITIVE_MAX_INFLIGHT", "64"))
-
-# Predicate system configuration
-PREDICATES_CONFIG_PATH = os.getenv("PREDICATES_CONFIG_PATH", "/app/config/predicates.yaml")
-
-# Redis configuration for job state persistence
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
-# Tuning configuration
+# --- Ray Gateway URLs (derived from imported constants) ---
+ORG = f"{SERVE_GATEWAY}/organism"
+ML_URL = ML  # Alias for clarity
+COG_URL = COG  # Alias for clarity
+
+# --- Feature & Tuning Configuration ---
+FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000.0"))
+MAX_PLAN_STEPS = int(os.getenv("MAX_PLAN_STEPS", "16"))
+COGNITIVE_MAX_INFLIGHT = int(os.getenv("COGNITIVE_MAX_INFLIGHT", "64"))
+PREDICATES_CONFIG_PATH = os.getenv(
+    "PREDICATES_CONFIG_PATH", "/app/config/predicates.yaml"
+)
 TUNE_SPACE_TYPE = os.getenv("TUNE_SPACE_TYPE", "basic")
 TUNE_CONFIG_TYPE = os.getenv("TUNE_CONFIG_TYPE", "fast")
 TUNE_EXPERIMENT_PREFIX = os.getenv("TUNE_EXPERIMENT_PREFIX", "coordinator-tune")
 
-# ---------- Small helpers ----------
-import inspect
+# ---------------------------------------------------------------------------
+# 5. Service-Level Setup
+# ---------------------------------------------------------------------------
 
-async def _maybe_call(func, *a, **kw):
-    """Helper to safely call either sync or async functions."""
-    r = func(*a, **kw)
-    return await r if inspect.isawaitable(r) else r
+logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
+
+# Log derived gateway URLs for debugging
+logger.info("🔗 Coordinator using gateway URLs:")
+logger.info(f"   SERVE_GATEWAY: {SERVE_GATEWAY}")
+logger.info(f"   ML_URL: {ML_URL}")
+logger.info(f"   COG_URL: {COG_URL}")
+logger.info(f"   ORG_URL: {ORG}")
+
+# --- Prometheus Metrics (optional, safe fallback) ---
+COORD_OUTBOX_FLUSH_OK = create_safe_counter(
+    "coord_outbox_flush_ok_total",
+    "Number of successful outbox flush operations",
+    labelnames=["event_type"]
+)
+COORD_OUTBOX_FLUSH_RETRY = create_safe_counter(
+    "coord_outbox_flush_retry_total",
+    "Number of outbox flush retry operations",
+    labelnames=["event_type"]
+)
+COORD_OUTBOX_INSERT_OK = create_safe_counter(
+    "coord_outbox_insert_ok_total",
+    "Number of successful outbox insert operations",
+    labelnames=["event_type"]
+)
+COORD_OUTBOX_INSERT_DUP = create_safe_counter(
+    "coord_outbox_insert_dup_total",
+    "Number of duplicate outbox insert operations",
+    labelnames=["event_type"]
+)
+COORD_OUTBOX_INSERT_ERR = create_safe_counter(
+    "coord_outbox_insert_err_total",
+    "Number of failed outbox insert operations",
+    labelnames=["event_type"]
+)
+
+# ---------------------------------------------------------------------------
+# 6. Helper Functions
+# ---------------------------------------------------------------------------
+
+def err(msg: str, error_type: str = "coordinator_error") -> dict:
+    """Create a standardized error result."""
+    return create_error_result(error=msg, error_type=error_type).model_dump()
 
 def _corr_headers(target: str, cid: str) -> Dict[str, str]:
     """Create correlation headers for cross-service communication."""
@@ -215,6 +206,116 @@ async def _apost(client: httpx.AsyncClient, url: str, payload: Dict[str, Any],
 
 # Coordination primitives (OCPS, Surprise, drift, energy) are now imported from coordinator.core.policies
 # Route cache structures are now imported from coordinator.core.routing
+
+
+# ---------- Config Builders (for dependency injection) ----------
+def build_route_config(
+    router: "CoordinatorCore",
+) -> RouteConfig:
+    """Build RouteConfig from CoordinatorCore instance."""
+    async def evaluate_pkg_func(
+        tags: Sequence[str],
+        signals: Mapping[str, Any],
+        context: Mapping[str, Any] | None,
+        timeout_s: int,
+    ) -> dict[str, Any]:
+        """PKG evaluation adapter."""
+        pkg_mgr = get_global_pkg_manager()
+        evaluator = pkg_mgr and pkg_mgr.get_active_evaluator()
+        if not evaluator:
+            raise RuntimeError("PKG evaluator not available")
+        
+        res = evaluator.evaluate({
+            "tags": list(tags),
+            "signals": signals,
+            "context": context or {},
+        })
+        if not isinstance(res, dict):
+            raise ValueError("Invalid PKG result type")
+        
+        return {
+            "tasks": res.get("subtasks", []),
+            "edges": res.get("dag", []),
+            "version": res.get("snapshot") or evaluator.version,
+        }
+    
+    return RouteConfig(
+        surprise_computer=router.surprise,
+        tau_fast_exit=router.tau_fast_exit,
+        tau_plan_exit=router.tau_plan_exit,
+        evaluate_pkg_func=evaluate_pkg_func,
+        ood_to01=router.ood_to01,
+        pkg_timeout_s=router.timeout_s,
+    )
+
+
+def build_execution_config(
+    coordinator: "Coordinator",
+    metrics: Any,
+    cid: str,
+) -> ExecutionConfig:
+    """Build ExecutionConfig from Coordinator instance."""
+    async def organism_execute(
+        organ_id: str,
+        task_dict: dict[str, Any],
+        timeout: float,
+        cid_local: str,
+    ) -> dict[str, Any]:
+        """Wrapper to call Coordinator's organism execution."""
+        payload = {
+            "organ_id": organ_id,
+            "task": task_dict,
+            "organ_timeout_s": timeout,
+        }
+        res = await _apost(
+            coordinator.http,
+            f"{ORG}/execute-on-organ",
+            payload,
+            _corr_headers("organism", cid_local),
+            timeout=ORG_TIMEOUT,
+        )
+        res["organ_id"] = organ_id
+        return res
+    
+    return ExecutionConfig(
+        normalize_task_dict=coordinator._normalize_task_dict,
+        extract_agent_id=coordinator._extract_agent_id,
+        compute_drift_score=coordinator._compute_drift_score,
+        organism_execute=organism_execute,
+        graph_task_repo=coordinator.graph_task_repo,
+        ml_client=coordinator.ml_client,
+        predicate_router=coordinator.predicate_router,
+        metrics=metrics,
+        cid=cid,
+        resolve_route_cached=coordinator._resolve_route_cached,
+        static_route_fallback=coordinator._static_route_fallback,
+        normalize_type=coordinator._normalize,
+        normalize_domain=coordinator._norm_domain,
+    )
+
+
+def build_hgnn_config(
+    coordinator: "Coordinator",
+) -> Optional[HGNNConfig]:
+    """Build HGNNConfig from Coordinator instance if HGNN methods are available."""
+    if not getattr(coordinator, "_hgnn_decompose", None):
+        return None
+    
+    # Bind instance methods to create callables with correct signatures
+    async def hgnn_decompose(task: Any) -> list[dict[str, Any]]:
+        return await coordinator._hgnn_decompose(task)
+    
+    async def bulk_resolve_func(steps: list[dict[str, Any]], cid: str) -> dict[int, str]:
+        return await coordinator._bulk_resolve_routes_cached(steps, cid)
+    
+    async def persist_plan_func(task: Any, plan: list[dict[str, Any]], root_db_id: Any | None) -> None:
+        await coordinator._persist_plan_subtasks(task, plan, root_db_id=root_db_id)
+    
+    return HGNNConfig(
+        hgnn_decompose=hgnn_decompose,
+        bulk_resolve_func=bulk_resolve_func,
+        persist_plan_func=persist_plan_func,
+    )
 
 
 # ---------- CoordinatorCore: unified route_and_execute ----------
@@ -271,374 +372,36 @@ class CoordinatorCore:
         *,
         fact_dao: Optional[FactDAO] = None,
         eventizer_helper: Optional[Callable[[Any], Any]] = None,
+        coordinator_instance: Any,
+        correlation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        t0 = time.perf_counter()
-        if not isinstance(task, TaskPayload):
-            task = TaskPayload.model_validate(task)
-
-        tid = task.task_id
-        helper = eventizer_helper or default_features_from_payload
-        eventizer_data: Dict[str, Any] = {}
-        if helper is not None:
-            maybe_features = helper(task)
-            if inspect.isawaitable(maybe_features):
-                maybe_features = await maybe_features
-            if isinstance(maybe_features, dict):
-                eventizer_data = maybe_features
-
-        params = task.params or {}
-
-        def _coerce_uuid_list(values: Any) -> List[uuid.UUID]:
-            if isinstance(values, (str, bytes)) or values is None:
-                return []
-            if not isinstance(values, Iterable):
-                values = [values]
-            normalized: List[uuid.UUID] = []
-            seen = set()
-            for value in values:
-                try:
-                    item = uuid.UUID(str(value))
-                except (TypeError, ValueError):
-                    continue
-                if item in seen:
-                    continue
-                seen.add(item)
-                normalized.append(item)
-            return normalized
-
-        tags: Set[str] = set()
-        param_tags = params.get("event_tags") or []
-        if isinstance(param_tags, Iterable) and not isinstance(param_tags, (str, bytes)):
-            tags.update(str(tag) for tag in param_tags)
-        eventizer_tags: Dict[str, Any] = {}
-        if isinstance(eventizer_data.get("event_tags"), dict):
-            eventizer_tags = eventizer_data["event_tags"]
-            eventizer_types = eventizer_tags.get("event_types")
-            if isinstance(eventizer_types, Iterable) and not isinstance(eventizer_types, (str, bytes)):
-                tags.update(str(tag) for tag in eventizer_types)
-            evt_domain = eventizer_tags.get("domain")
-            if evt_domain and not task.domain:
-                task.domain = str(evt_domain)
-
-        attributes: Dict[str, Any] = {}
-        if isinstance(eventizer_data.get("attributes"), dict):
-            attributes.update(eventizer_data["attributes"])
-        if isinstance(params.get("attributes"), dict):
-            attributes.update(params["attributes"])
-
-        conf: Dict[str, Any] = {}
-        if isinstance(eventizer_data.get("confidence"), dict):
-            conf.update(eventizer_data["confidence"])
-        if isinstance(params.get("confidence"), dict):
-            conf.update(params["confidence"])
-
-        pii_redacted = bool(params.get("pii", {}).get("was_redacted", False))
-        if "pii_redacted" in eventizer_data:
-            pii_redacted = bool(eventizer_data.get("pii_redacted"))
-
-        fact_reads: List[str] = []
-        fact_produced: List[str] = []
-        if fact_dao is not None:
-            start_ids = _coerce_uuid_list(params.get("start_fact_ids") or [])
-            if start_ids:
-                facts = await fact_dao.get_for_task(start_ids, tid)
-                fact_reads = [str(fact.id) for fact in facts]
-            produced_candidates: List[uuid.UUID] = []
-            for key in ("produced_fact_ids", "produce_fact_ids", "fact_output_ids"):
-                produced_candidates.extend(_coerce_uuid_list(params.get(key) or []))
-            if produced_candidates:
-                for fact_id in produced_candidates:
-                    await fact_dao.record_produced_fact(fact_id, tid)
-                fact_produced = [str(fid) for fid in produced_candidates]
-
-        # Infer domain from tags if not explicitly set
-        if not task.domain:
-            # Map domain-specific tags to domains
-            if any(tag in tags for tag in ["vip", "allergen", "luggage_custody", "hvac_fault", "privacy"]):
-                task.domain = "hotel_ops"
-            elif any(tag in tags for tag in ["fraud", "chargeback", "payment"]):
-                task.domain = "fintech"
-            elif any(tag in tags for tag in ["healthcare", "medical", "allergy"]):
-                task.domain = "healthcare"
-            elif any(tag in tags for tag in ["robotics", "iot", "fault"]):
-                task.domain = "robotics"
-
-        mw_hit = params.get("cache", {}).get("mw_hit") if isinstance(params.get("cache"), dict) else None
-        ocps = params.get("ocps") or {}
-        drift_minmax: Optional[Tuple[float, float]] = None
-        if "drift_p10" in params and "drift_p90" in params:
-            try:
-                drift_minmax = (float(params["drift_p10"]), float(params["drift_p90"]))
-            except Exception:
-                drift_minmax = None
-
-        ood_dist = params.get("ood_dist")
-        graph_delta = params.get("graph_delta")
-        mu_delta = params.get("mu_delta")
-        dep_probs = params.get("dependency_probs")
-        est_runtime = params.get("est_runtime")
-        SLO = params.get("slo")
-        kappa = params.get("kappa", 0.8)
-        criticality = params.get("criticality", 0.5)
-
-        signals = {
-            "mw_hit": mw_hit,
-            "ocps": ocps,
-            "drift_minmax": drift_minmax,
-            "ood_dist": ood_dist,
-            "ood_to01": self.ood_to01,
-            "graph_delta": graph_delta,
-            "mu_delta": mu_delta,
-            "dep_probs": dep_probs,
-            "est_runtime": est_runtime,
-            "SLO": SLO,
-            "kappa": kappa,
-            "criticality": criticality,
-        }
-
-        s_out = self.surprise.compute(signals)
-        S = s_out["S"]
-        xs = s_out["x"]
+        """
+        Adapter wrapper that wires coordinator dependencies into execute.py's
+        unified route_and_execute() function.
         
-        # Get last decision for hysteresis (from task params if available)
-        last_decision = params.get("last_decision")
-        decision = decide_route_with_hysteresis(
-            S, last_decision, 
-            self.surprise.tau_fast, self.tau_fast_exit,
-            self.surprise.tau_plan, self.tau_plan_exit
+        This method only handles dependency binding - all orchestration logic
+        (routing decisions, PKG evaluation, execution flow) is handled by execute.py.
+        """
+        if not coordinator_instance:
+            raise ValueError("coordinator_instance is required")
+        
+        # Generate correlation ID
+        cid = correlation_id or str(uuid.uuid4())
+        
+        # Build configs using helper functions
+        routing_config = build_route_config(self)
+        execution_config = build_execution_config(coordinator_instance, self.metrics, cid)
+        hgnn_config = build_hgnn_config(coordinator_instance)
+        
+        # Delegate everything to core execute.py
+        return await execute_route_and_execute(
+            task=task,
+            fact_dao=fact_dao,
+            eventizer_helper=eventizer_helper or default_features_from_payload,
+            routing_config=routing_config,
+            execution_config=execution_config,
+            hgnn_config=hgnn_config,
         )
-
-        proto_plan: Dict[str, Any] = {"tasks": [], "edges": []}
-        proto_plan_hints = proto_plan.setdefault("hints", {})
-        if fact_reads:
-            proto_plan_hints["facts_read"] = fact_reads
-        if fact_produced:
-            proto_plan_hints["facts_produced"] = fact_produced
-        if eventizer_data:
-            proto_plan_hints.setdefault("event_tags", sorted(tags))
-            if isinstance(eventizer_data.get("confidence"), dict):
-                proto_plan_hints.setdefault("eventizer_confidence", eventizer_data["confidence"])
-        pkg_meta = {"evaluated": False, "version": None, "error": None}
-
-        # Use global PKG manager to get active evaluator
-        pkg_manager = get_global_pkg_manager()
-        used_fallback = False
-        
-        try:
-            if pkg_manager is not None:
-                evaluator = pkg_manager.get_active_evaluator()
-                if evaluator is not None:
-                    # Build task_facts dict for evaluator
-                    task_facts = {
-                        "tags": list(tags),
-                        "signals": {
-                            "S": S,
-                            "x1": xs[0],
-                            "x2": xs[1],
-                            "x3": xs[2],
-                            "x4": xs[3],
-                            "x5": xs[4],
-                            "x6": xs[5],
-                            "ocps": s_out["ocps"],
-                        },
-                        "context": {
-                            "domain": task.domain,
-                            "type": task.type,
-                            "task_id": tid,
-                            "pii_redacted": pii_redacted
-                        }
-                    }
-                    
-                    # Evaluate using the active evaluator (synchronous call)
-                    pkg_res = evaluator.evaluate(task_facts)
-                    
-                    # Convert evaluator output to expected format
-                    # Evaluator returns: {"subtasks": ..., "dag": ..., "rules": ..., "snapshot": ...}
-                    # We need: {"tasks": ..., "edges": ...}
-                    if isinstance(pkg_res, dict):
-                        # Map subtasks -> tasks, dag -> edges
-                        proto_plan = {
-                            "tasks": pkg_res.get("subtasks", []),
-                            "edges": pkg_res.get("dag", [])
-                        }
-                        pkg_meta.update({
-                            "evaluated": True,
-                            "version": pkg_res.get("snapshot") or evaluator.version
-                        })
-                    else:
-                        raise ValueError("PKG returned unexpected type")
-                else:
-                    raise RuntimeError("PKG evaluator not available (no active snapshot)")
-            else:
-                raise RuntimeError("PKG manager not initialized")
-        except Exception as e:
-            used_fallback = True
-            pkg_meta["error"] = f"PKG unavailable or timed out: {e}"
-            # Generate baseline tasks when:
-            # 1. User explicitly requests decomposition (force_decomposition/force_hgnn flags)
-            # 2. Natural HGNN routing (decision='hgnn' means S >= tau_plan, deserves decomposition)
-            force_decomp = params.get("force_decomposition", False) or params.get("force_hgnn", False)
-            should_decompose = force_decomp or (decision == "hgnn")
-            proto_plan = generate_proto_subtasks(tags, xs[5], criticality, force=should_decompose)
-
-        # Add provenance tracking
-        proto_plan.setdefault("provenance", [])
-        if used_fallback:
-            proto_plan["provenance"].append("fallback:router_rules@1.0")
-        else:
-            proto_plan["provenance"].append(f"pkg:{pkg_meta.get('version', 'unknown')}")
-
-        # Honor force_decomposition: promote fast→planner or planner→hgnn
-        force_decomp = params.get("force_decomposition", False)
-        force_hgnn = params.get("force_hgnn", False)
-        
-        original_decision = decision
-        if force_hgnn and decision != "hgnn":
-            logger.info(f"[Coordinator] force_hgnn=True: promoting {decision} → hgnn")
-            decision = "hgnn"
-        elif force_decomp and decision == "fast":
-            logger.info(f"[Coordinator] force_decomposition=True: promoting fast → planner")
-            decision = "planner"
-        
-        router_latency_ms = round((time.perf_counter()-t0)*1000.0, 3)
-
-        eventizer_summary = None
-        if eventizer_data:
-            eventizer_summary = {
-                "event_tags": eventizer_tags.get("event_types") if eventizer_tags else None,
-                "attributes": eventizer_data.get("attributes"),
-                "confidence": eventizer_data.get("confidence"),
-                "patterns_applied": eventizer_data.get("patterns_applied"),
-                "pii_redacted": eventizer_data.get("pii_redacted"),
-            }
-
-        payload_common = {
-            "task_id": tid,
-            "type": task.type,
-            "domain": task.domain,
-            "decision": decision,
-            "last_decision": last_decision,  # For hysteresis tracking
-            "original_decision": original_decision if decision != original_decision else None,
-            "surprise": {
-                "S": S,
-                "x": list(xs),
-                "weights": list(self.surprise.w_hat),
-                "tau_fast": self.surprise.tau_fast,
-                "tau_plan": self.surprise.tau_plan,
-                "tau_fast_exit": self.tau_fast_exit,
-                "tau_plan_exit": self.tau_plan_exit,
-                "ocps": s_out["ocps"],
-                "version": "surprise/1.2.0",
-            },
-            "signals_present": sorted([k for k,v in signals.items() if v is not None]),
-            "pkg": {"used": not used_fallback, "version": pkg_meta["version"], "error": pkg_meta["error"]},
-            "proto_plan": proto_plan,
-            "event_tags": sorted(list(tags)),
-            "attributes": attributes,
-            "confidence": conf,
-            "pii_redacted": pii_redacted,
-            "router_latency_ms": router_latency_ms,
-            "payload_version": "router/1.2.0",
-        }
-        if eventizer_summary is not None:
-            payload_common["eventizer"] = eventizer_summary
-
-        # Structured logging for observability
-        ocps_meta = s_out["ocps"]
-        logger.info(
-            f"[Coordinator] task_id={tid} S={S:.3f} x2_meta(S_t={ocps_meta.get('S_t', 'N/A')},h={ocps_meta.get('h', 'N/A')},h_clr={ocps_meta.get('h_clr', 'N/A')},flag_on={ocps_meta.get('flag_on', 'N/A')}) decision={decision} pkg_used={not used_fallback} latency_ms={router_latency_ms:.1f}"
-        )
-
-        # Create routing metadata result (always non-null)
-        # This ensures the task always has a result even if execution fails
-        # Keep existing top-level payload fields, but also provide a nested payload.metadata
-        if decision == "fast":
-            # Direct / low-surprise: fast path execution.
-            res = create_fast_path_result(
-                routed_to="fast",
-                organ_id="coordinator",  # coordinator is delegating fast path downstream
-                result={"status": "routed"},
-                # This ends up inside FastPathResult.metadata
-                metadata={"routing": "completed", "executed": False, **payload_common},
-            ).model_dump()
-        
-        elif decision == "planner":
-            # Medium surprise: requires cognitive planning, not direct execution.
-            #
-            # IMPORTANT:
-            # We now emit kind == ResultKind.COGNITIVE ("cognitive")
-            # so that CoordinatorHttpRouter will escalate to CognitiveRouter.
-            #
-            # We treat coordinator as the "routing agent" here.
-            agent_id_for_planner = params.get("agent_id", "planner")
-            
-            # Create cognitive result with "planner" as routing decision.
-            # Profile="deep" is passed as metadata (via profile in task_data) for LLM selection,
-            # but routing telemetry tracks "planner" only.
-            res = create_cognitive_result(
-                agent_id=agent_id_for_planner,
-                task_type="planner",  # Routing decision: "planner" (not "deep")
-                # CognitiveRouter will receive this in execute_result; giving it our proto_plan
-                # seeds the planner with what we already inferred (tasks/edges, provenance, etc.).
-                result={"proto_plan": proto_plan},
-                # We could optionally surface an overall confidence score. For now we omit or
-                # pull something from `conf`.
-                confidence_score=None,
-                # This lands in CognitiveResult.metadata
-                # Note: profile="deep" may be in task_data but is metadata, not routing
-                **payload_common,
-            ).model_dump()
-        
-        else:
-            # High surprise / critical / incident / multi-step HGNN path.
-            # This is escalated decomposition, not just "please think".
-            # We KEEP this as ResultKind.ESCALATED ("escalated").
-            #
-            # Note: solution_steps is currently [] because we haven't executed or
-            # materialized them yet; downstream systems can extend this.
-            res = create_escalated_result(
-                solution_steps=[],
-                plan_source="router_hgnn",
-                # This lands in EscalatedResult.metadata
-                **payload_common,
-            ).model_dump()
-
-        # Ensure payload.metadata exists with decision/surprise/proto_plan for downstream consumers
-        try:
-            if isinstance(res, dict):
-                payload_dict = res.setdefault("payload", {}) if isinstance(res.get("payload"), dict) else res.get("payload")
-                if not isinstance(payload_dict, dict):
-                    res["payload"] = payload_dict = {}
-                meta = payload_dict.setdefault("metadata", {}) if isinstance(payload_dict.get("metadata"), dict) else payload_dict.get("metadata")
-                if not isinstance(meta, dict):
-                    payload_dict["metadata"] = meta = {}
-
-                # Populate commonly-read fields for verifiers/consumers
-                if "decision" in payload_common:
-                    meta.setdefault("decision", payload_common.get("decision"))
-                if "original_decision" in payload_common and payload_common.get("original_decision") is not None:
-                    meta.setdefault("original_decision", payload_common.get("original_decision"))
-                if "surprise" in payload_common and isinstance(payload_common.get("surprise"), dict):
-                    meta.setdefault("surprise", payload_common.get("surprise"))
-                if "proto_plan" in payload_common and isinstance(payload_common.get("proto_plan"), dict):
-                    meta.setdefault("proto_plan", payload_common.get("proto_plan"))
-                # Optional pass-throughs
-                if "event_tags" in payload_common:
-                    meta.setdefault("event_tags", payload_common.get("event_tags"))
-                if "attributes" in payload_common and isinstance(payload_common.get("attributes"), dict):
-                    meta.setdefault("attributes", payload_common.get("attributes"))
-                if "confidence" in payload_common and isinstance(payload_common.get("confidence"), dict):
-                    meta.setdefault("confidence", payload_common.get("confidence"))
-        except Exception:
-            # Best-effort; do not fail routing on formatting issues
-            pass
-
-        # Track routing decision metrics (separate from execution)
-        if self.metrics:
-            has_plan = bool(proto_plan.get("tasks"))
-            self.metrics.track_routing_decision(decision, has_plan=has_plan)
-        
-        return res
 
 # ---------- FastAPI/Serve ----------
 app = FastAPI(
@@ -717,8 +480,6 @@ class Coordinator:
         self.graph_repository = None  # Lazily instantiated GraphTaskRepository
         self._graph_repo_checked = False
         self.graph_task_repo = self._get_graph_repository()  # Consistent attribute name
-        self._graph_sql_repo = None
-        self._graph_sql_repo_checked = False
 
         
         # Initialize safe storage (Redis with in-memory fallback)
@@ -745,9 +506,6 @@ class Coordinator:
         # Configuration
         self.fast_path_latency_slo_ms = FAST_PATH_LATENCY_SLO_MS
         self.max_plan_steps = MAX_PLAN_STEPS
-
-        # Downstream clients (optional; may be injected by environment/tests)
-        self.planner_client = None
         
         # Initialize predicate system synchronously first
         try:
@@ -894,7 +652,10 @@ class Coordinator:
         return get_current_energy_state(agent_id)
 
     async def _task_outbox_flusher_loop(self) -> None:
-        """Periodically flush task_outbox nim_task_embed events to the LTM worker with backoff."""
+        """Periodically flush task_outbox nim_task_embed events to the LTM worker with backoff.
+        
+        Uses TaskOutboxDAO for all database operations to maintain separation of concerns.
+        """
         try:
             session_factory = getattr(self, "_session_factory", None) or get_async_pg_session_factory()
             self._session_factory = session_factory
@@ -905,73 +666,37 @@ class Coordinator:
         interval_s = float(os.getenv("TASK_OUTBOX_FLUSH_INTERVAL_S", "5"))
         batch_size = int(os.getenv("TASK_OUTBOX_FLUSH_BATCH", "100"))
 
-        from sqlalchemy import text as sa_text
-
         while True:
             try:
                 async with session_factory() as s:
                     async with s.begin():
-                        rows = (
-                            await s.execute(
-                                sa_text(
-                                    """
-                                    WITH cte AS (
-                                      SELECT id, payload
-                                        FROM task_outbox
-                                       WHERE event_type='nim_task_embed'
-                                    ORDER BY id
-                                       FOR UPDATE SKIP LOCKED
-                                       LIMIT :n
-                                    )
-                                    SELECT id, payload FROM cte
-                                    """
-                                ),
-                                {"n": batch_size},
-                            )
-                        ).mappings().all()
+                        # Use DAO method for concurrent-safe event claiming
+                        rows = await self.outbox_dao.claim_pending_nim_task_embeds(s, limit=batch_size)
 
                         if not rows:
                             await s.rollback()
-                        for r in rows:
+                        for row in rows:
                             try:
-                                data = json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"]
+                                data = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
                                 task_id = data.get("task_id")
                                 ok = await self._enqueue_task_embedding_now(task_id, reason="outbox")
                                 if ok:
-                                    await s.execute(sa_text("DELETE FROM task_outbox WHERE id=:id"), {"id": r["id"]})
+                                    await self.outbox_dao.delete(s, row["id"])
                                     try:
                                         COORD_OUTBOX_FLUSH_OK.labels("nim_task_embed").inc()
                                     except Exception:
                                         pass
                                 else:
-                                    await s.execute(
-                                        sa_text(
-                                            """
-                                            UPDATE task_outbox
-                                               SET attempts = COALESCE(attempts,0)+1,
-                                                   available_at = NOW() + (LEAST(COALESCE(attempts,0)+1,5) * INTERVAL '30 seconds')
-                                             WHERE id = :id
-                                            """
-                                        ),
-                                        {"id": r["id"]},
-                                    )
+                                    # Use DAO backoff method for retry logic
+                                    await self.outbox_dao.backoff(s, row["id"])
                                     try:
                                         COORD_OUTBOX_FLUSH_RETRY.labels("nim_task_embed").inc()
                                     except Exception:
                                         pass
                             except Exception as exc:
-                                logger.warning(f"[Coordinator] Outbox item {r.get('id')} failed: {exc}")
-                                await s.execute(
-                                    sa_text(
-                                        """
-                                        UPDATE task_outbox
-                                           SET attempts = COALESCE(attempts,0)+1,
-                                               available_at = NOW() + INTERVAL '60 seconds'
-                                         WHERE id = :id
-                                        """
-                                    ),
-                                    {"id": r["id"]},
-                                )
+                                logger.warning(f"[Coordinator] Outbox item {row.get('id')} failed: {exc}")
+                                # Use DAO backoff method for error handling
+                                await self.outbox_dao.backoff(s, row["id"])
                                 try:
                                     COORD_OUTBOX_FLUSH_RETRY.labels("nim_task_embed").inc()
                                 except Exception:
@@ -1056,14 +781,6 @@ class Coordinator:
             self._last_seen_epoch = new_epoch
         return mapping
 
-    def _fallback_drift_score(self, task: Dict[str, Any]) -> float:
-        """
-        Fallback drift score computation when ML service is unavailable.
-        
-        Delegates to the centralized compute_fallback_drift_score function from policies module.
-        """
-        return compute_fallback_drift_score(task)
-    
     def _persist_job_state(self, job_id: str, state: Dict[str, Any]):
         """Persist job state using safe storage."""
         success = self.storage.set(f"job:{job_id}", state, ttl=86400)  # 24h TTL
@@ -1122,93 +839,93 @@ class Coordinator:
     def _extract_agent_id(self, task_dict: Dict[str, Any]) -> Optional[str]:
         return extract_agent_id(task_dict)
 
-    def prefetch_context(self, task: Dict[str, Any]) -> None:
-        """Hook for Mw/Mlt prefetch as per §8.6 Unified RAG Operations. No-op until memory wired."""
-        pass
-
     async def _hgnn_decompose(self, task: Task) -> List[Dict[str, Any]]:
         """
-        Enhanced HGNN-based decomposition using CognitiveCore Serve deployment.
+        HGNN-based task decomposition using CognitiveCore Serve deployment.
         
-        This method:
-        1. Checks if cognitive client is available and healthy
-        2. Calls CognitiveCore for intelligent task decomposition
-        3. Validates the returned plan
-        4. Falls back to simple routing if cognitive reasoning fails
+        Steps:
+          1. Verifies cognitive client health
+          2. Calls CognitiveCore (/solve-problem)
+          3. Handles immediate minimal vs deep HGNN results
+          4. Validates plan or falls back to simple routing
         """
         try:
-            # Prepare request for cognitive service
+            # --- Step 1: Cognitive service health check ---
+            try:
+                if not await self.cognitive_client.is_healthy():
+                    logger.warning("[HGNN] Cognitive service unavailable, using fallback")
+                    return self._fallback_plan(self._convert_task_to_dict(task))
+            except Exception as e:
+                logger.warning(f"[HGNN] Health check failed: {e}")
+                return self._fallback_plan(self._convert_task_to_dict(task))
+
+            # --- Step 2: Prepare Cognitive request ---
             req = {
                 "agent_id": f"hgnn_planner_{task.id}",
                 "problem_statement": task.description or str(task.model_dump()),
                 "task_id": task.id,
-                "type": task.type,
-                "constraints": {"latency_ms": self.fast_path_latency_slo_ms},
-                "context": {
-                    "features": task.features, 
-                    "history_ids": task.history_ids,
-                    # Add support for new node types (Migration 007+)
-                    "start_fact_ids": getattr(task, 'start_fact_ids', []),
-                    "start_artifact_ids": getattr(task, 'start_artifact_ids', []),
-                    "start_capability_ids": getattr(task, 'start_capability_ids', []),
-                    "start_memory_cell_ids": getattr(task, 'start_memory_cell_ids', []),
-                    "start_model_ids": getattr(task, 'start_model_ids', []),
-                    "start_policy_ids": getattr(task, 'start_policy_ids', []),
-                    "start_service_ids": getattr(task, 'start_service_ids', []),
-                    "start_skill_ids": getattr(task, 'start_skill_ids', []),
+                "constraints": {
+                    "latency_ms": self.fast_path_latency_slo_ms,
+                    "max_depth": getattr(task, "max_depth", 3),
                 },
-                "available_organs": [],  # Could be populated from organism status
+                "available_tools": getattr(task, "available_tools", {}),
+                "meta": {
+                    "origin": "coordinator_hgnn",
+                    "has_context": bool(task.features),
+                    "history_ids": task.history_ids,
+                    "start_nodes": {
+                        "facts": getattr(task, "start_fact_ids", []),
+                        "artifacts": getattr(task, "start_artifact_ids", []),
+                        "models": getattr(task, "start_model_ids", []),
+                        "capabilities": getattr(task, "start_capability_ids", []),
+                        "policies": getattr(task, "start_policy_ids", []),
+                        "services": getattr(task, "start_service_ids", []),
+                        "skills": getattr(task, "start_skill_ids", []),
+                    },
+                },
             }
-            
-            # Call cognitive service
+
+            # --- Step 3: Call CognitiveCore ---
             plan = await _apost(
-                self.http, f"{COG}/plan-task", req, 
-                _corr_headers("cognitive", task.id), timeout=COG_TIMEOUT
+                self.http,
+                f"{COG}/solve-problem",
+                req,
+                _corr_headers("cognitive", task.id),
+                timeout=COG_TIMEOUT,
             )
-            
-            # Extract solution steps from cognitive response
-            steps = []
-            meta = {}
-            if plan.get("success") and plan.get("result"):
-                # The cognitive service returns {success, agent_id, result, error}
-                # We need to extract the solution steps from the result
-                result = plan.get("result", {})
-                steps = result.get("solution_steps", [])
-                meta = result.get("meta", {})
-                if not steps:
-                    # If no solution_steps, try to extract from other fields
-                    steps = result.get("plan", []) or result.get("steps", [])
-            
-            # Ingest Cognitive meta data
+
+            # --- Step 4: Handle Cognitive response ---
+            result = plan.get("result", {}) if isinstance(plan, dict) else {}
+            steps = result.get("solution_steps") or result.get("plan") or result.get("steps") or []
+            meta = result.get("meta", {})
+
+            # Distinguish immediate vs deep result
+            immediate = meta.get("immediate", False)
+            if immediate:
+                logger.info(f"[HGNN] CognitiveCore returned immediate minimal plan for {task.id}")
+            else:
+                logger.info(f"[HGNN] Received deep HGNN decomposition: {len(steps)} steps")
+
+            # --- Step 5: Handle Cognitive metadata ---
             if meta:
-                # Feed escalate_hint into predicate signals
-                escalate_hint = meta.get("escalate_hint", False)
-                if escalate_hint and hasattr(self, 'predicate_router') and self.predicate_router:
-                    # Update predicate signals with escalation hint
+                escalate_hint = meta.get("escalate_hint")
+                if escalate_hint and hasattr(self, "predicate_router") and self.predicate_router:
                     self.predicate_router.update_signals(escalate_hint=escalate_hint)
                 
-                # Add planner timings to metrics if available
-                planner_timings = meta.get("planner_timings_ms", {})
-                if planner_timings:
-                    logger.info(f"[Coordinator] Cognitive planner timings: {planner_timings}")
-                    # Could add to metrics here if needed
-                
-                # Log confidence score if available
                 confidence = meta.get("confidence")
                 if confidence is not None:
-                    logger.info(f"[Coordinator] Cognitive plan confidence: {confidence}")
-            
+                    logger.info(f"[HGNN] Cognitive plan confidence: {confidence:.2f}")
+
+            # --- Step 6: Validate or fallback ---
             validated_plan = self._validate_or_fallback(steps, self._convert_task_to_dict(task))
-            
             if validated_plan:
-                logger.info(f"[Coordinator] HGNN decomposition successful: {len(validated_plan)} steps")
                 return validated_plan
-            else:
-                logger.warning(f"[Coordinator] HGNN plan validation failed, using fallback")
-                return self._fallback_plan(self._convert_task_to_dict(task))
-                
+
+            logger.warning(f"[HGNN] Validation failed or empty plan; using fallback")
+            return self._fallback_plan(self._convert_task_to_dict(task))
+
         except Exception as e:
-            logger.warning(f"[Coordinator] HGNN decomposition failed: {e}, using fallback")
+            logger.warning(f"[HGNN] Decomposition failed: {e}", exc_info=True)
             return self._fallback_plan(self._convert_task_to_dict(task))
 
     def _convert_task_to_dict(self, task) -> Dict[str, Any]:
@@ -1281,502 +998,23 @@ class Coordinator:
         *,
         root_db_id: Optional[uuid.UUID] = None,
     ):
-        """Insert subtasks for the HGNN plan and register dependency edges."""
-        if not plan:
-            return []
-
+        """Insert subtasks for the HGNN plan and register dependency edges.
+        
+        Delegates to persist_and_register_dependencies from coordinator.core.plan.
+        """
         repo = self._get_graph_repository()
         if repo is None:
             return []
-
-        if not hasattr(repo, "insert_subtasks"):
-            logger.debug("GraphTaskRepository missing insert_subtasks; skipping subtask persistence")
-            return []
-
-        try:
-            inserted = await _maybe_call(repo.insert_subtasks, task.id, plan)
-        except Exception as exc:
-            logger.warning(
-                "[Coordinator] insert_subtasks failed for task %s: %s",
-                getattr(task, "id", "unknown"),
-                exc,
-            )
-            return []
-
-        if root_db_id is not None and hasattr(repo, "add_dependency"):
-            try:
-                for idx, record in enumerate(inserted or []):
-                    fallback_step = plan[idx] if idx < len(plan) else None
-                    child_value = self._resolve_child_task_id(record, fallback_step)
-                    if child_value is None:
-                        continue
-                    try:
-                        await _maybe_call(repo.add_dependency, root_db_id, child_value)
-                    except Exception as exc:
-                        logger.error(
-                            f"[Coordinator] Failed to add root dependency {root_db_id} -> {child_value}: {exc}"
-                        )
-            except Exception as exc:
-                logger.error(
-                    "[Coordinator] Failed to register root dependency edges for %s: %s",
-                    getattr(task, "id", "unknown"),
-                    exc,
-                )
-
-        try:
-            await self._register_task_dependencies(plan, inserted)
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.error(
-                "[Coordinator] Failed to register task dependencies for %s: %s",
-                getattr(task, "id", "unknown"),
-                exc,
-            )
-
-        return inserted
-
-    async def _register_task_dependencies(self, plan: List[Dict[str, Any]], inserted_subtasks: Any) -> None:
-        """Record dependency edges (parent → child) for inserted subtasks."""
-        repo = self._get_graph_repository()
-        if repo is None or not hasattr(repo, "add_dependency"):
-            return
-
-        plan_steps = list(plan or [])
-        inserted = list(inserted_subtasks or [])
-
-        if not plan_steps or not inserted:
-            return
-
-        alias_to_child: Dict[str, Any] = {}
-        index_to_child: Dict[int, Any] = {}
-        known_child_keys: Set[str] = set()
-
-        for idx, record in enumerate(inserted):
-            fallback_step = plan_steps[idx] if idx < len(plan_steps) else None
-            child_value = self._resolve_child_task_id(record, fallback_step)
-            if child_value is None:
-                continue
-
-            child_key = self._canonicalize_identifier(child_value)
-            if not child_key:
-                continue
-
-            index_to_child[idx] = child_value
-            known_child_keys.add(child_key)
-            alias_to_child[child_key] = child_value
-
-            for alias in self._collect_record_aliases(record):
-                alias_to_child[alias] = child_value
-
-            if fallback_step is not None:
-                for alias in self._collect_step_aliases(fallback_step):
-                    alias_to_child[alias] = child_value
-
-        if not index_to_child:
-            logger.debug("No subtask identifiers resolved; skipping dependency registration")
-            return
-
-        invalid_refs: Set[str] = set()
-        edges_added: Set[Tuple[str, str]] = set()
-
-        for idx, step in enumerate(plan_steps):
-            dependencies = step.get("depends_on") if isinstance(step, dict) else getattr(step, "depends_on", None)
-            if not dependencies:
-                continue
-
-            child_value = index_to_child.get(idx)
-            if child_value is None:
-                for alias in self._collect_step_aliases(step):
-                    child_value = alias_to_child.get(alias)
-                    if child_value is not None:
-                        break
-
-            if child_value is None:
-                logger.warning(f"[Coordinator] Skipping dependency recording for step {idx}: missing child task ID")
-                continue
-
-            child_key = self._canonicalize_identifier(child_value)
-
-            for dep_entry in self._iter_dependency_entries(dependencies):
-                dep_token = self._extract_dependency_token(dep_entry)
-                if dep_token is None:
-                    dep_repr = repr(dep_entry)
-                    if dep_repr not in invalid_refs:
-                        logger.warning(f"[Coordinator] Ignoring invalid dependency reference {dep_repr} for child {child_key}")
-                        invalid_refs.add(dep_repr)
-                    continue
-
-                parent_value = None
-                if isinstance(dep_token, int):
-                    parent_value = index_to_child.get(dep_token)
-                else:
-                    parent_key = self._canonicalize_identifier(dep_token)
-                    parent_value = alias_to_child.get(parent_key)
-                    if parent_value is None and parent_key.isdigit():
-                        parent_value = index_to_child.get(int(parent_key))
-
-                if parent_value is None:
-                    dep_key = self._canonicalize_identifier(dep_token)
-                    if dep_key not in invalid_refs:
-                        logger.warning(
-                            f"[Coordinator] Dependency reference {dep_entry!r} for child {child_key} does not match any known subtask"
-                        )
-                        invalid_refs.add(dep_key)
-                    continue
-
-                parent_key = self._canonicalize_identifier(parent_value)
-
-                if parent_key not in known_child_keys:
-                    if parent_key not in invalid_refs:
-                        logger.warning(
-                            f"[Coordinator] Dependency parent {parent_key} for child {child_key} is unknown; skipping"
-                        )
-                        invalid_refs.add(parent_key)
-                    continue
-
-                if parent_key == child_key:
-                    logger.warning(f"[Coordinator] Skipping self-dependency for task {child_key}")
-                    continue
-
-                edge_key = (parent_key, child_key)
-                if edge_key in edges_added:
-                    continue
-
-                try:
-                    await _maybe_call(repo.add_dependency, parent_value, child_value)
-                except Exception as exc:  # pragma: no cover - repository errors should not crash coordinator
-                    logger.error(
-                        f"[Coordinator] Failed to add dependency {parent_key} -> {child_key}: {exc}"
-                    )
-                else:
-                    edges_added.add(edge_key)
-
-    # Dependency helper methods now use utils functions
-    def _iter_dependency_entries(self, dependencies: Any) -> Iterable[Any]:
-        return iter_dependency_entries(dependencies)
-
-    def _resolve_child_task_id(self, record: Any, fallback_step: Any) -> Any:
-        """Extract the task identifier for a persisted subtask."""
-        return resolve_child_task_id(record, fallback_step)
-
-    def _collect_record_aliases(self, record: Any) -> Set[str]:
-        return collect_record_aliases(record)
-
-    def _collect_step_aliases(self, step: Any) -> Set[str]:
-        return collect_step_aliases(step)
-
-    def _collect_aliases_from_mapping(self, mapping: Dict[str, Any]) -> Set[str]:
-        return collect_aliases_from_mapping(mapping)
-
-    def _collect_aliases_from_object(self, obj: Any) -> Set[str]:
-        return collect_aliases_from_object(obj)
-
-    def _extract_dependency_token(self, ref: Any) -> Any:
-        return extract_dependency_token(ref)
-
-    def _canonicalize_identifier(self, value: Any) -> str:
-        return canonicalize_identifier(value)
-
-    def _make_escalation_result(self, results: List[Dict[str, Any]], plan: List[Dict[str, Any]], success: bool) -> Dict[str, Any]:
-        """Create a properly formatted escalation result."""
-        return {
-            "success": success,
-            "escalated": True,
-            "plan_source": "cognitive_service",
-            "plan": plan,
-            "results": results,
-            "path": "hgnn"
-        }
-
-    async def _execute_fast(self, task: Task, cid: str) -> Dict[str, Any]:
-        _, task_dict = self._normalize_task_dict(task)
-        agent_id = self._extract_agent_id(task_dict)
         
-        # Resolve route via TTL cache + Organism
-        organ_id = None
-        try:
-            # Optional: preferred hint from predicates
-            preferred = getattr(self.predicate_router, "preferred_logical_id", lambda *_: None)(task_dict)
-            route = await self._resolve_route_cached(
-                task_dict.get("type", ""), 
-                task_dict.get("domain"), 
-                preferred_logical_id=preferred,
-                cid=cid
-            )
-            organ_id = route
-        except Exception as e:
-            logger.warning(f"resolve-route failed ({e}); using static fallback")
-            organ_id = self._static_route_fallback(
-                self._normalize(task_dict.get("type")),
-                self._norm_domain(task_dict.get("domain"))
-            )
-
-        params = task_dict.get("params") if isinstance(task_dict.get("params"), dict) else {}
-        organ_timeout = params.get("organ_timeout_s", 30.0)
-        try:
-            organ_timeout = float(organ_timeout)
-            # Clamp organ_timeout to reasonable bounds (1s to 300s)
-            organ_timeout = max(1.0, min(300.0, organ_timeout))
-        except (TypeError, ValueError):
-            organ_timeout = 30.0
-
-        # Inject computed drift_score and energy budgets before persisting
-        task_dict["drift_score"] = await self._compute_drift_score(task_dict)
-        
-        # Ensure params has token/energy settings if present in predicates
-        if "params" not in task_dict:
-            task_dict["params"] = {}
-        
-        # Add energy budget information if available
-        if hasattr(self, 'predicate_router') and self.predicate_router:
-            energy_budget = getattr(self.predicate_router, 'get_energy_budget', lambda: None)()
-            if energy_budget is not None:
-                task_dict["params"]["energy_budget"] = energy_budget
-        
-        try:
-            await self.graph_task_repo.create_task(task_dict, agent_id=agent_id, organ_id=organ_id)
-        except Exception as e:
-            logger.warning(
-                f"[Coordinator] Failed to persist fast path task {task_dict.get('id')}: {e}"
-            )
-
-        payload = {
-            "organ_id": organ_id,
-            "task": task_dict,
-            "organ_timeout_s": organ_timeout,
-        }
-        result = await _apost(
-            self.http, f"{ORG}/execute-on-organ", payload,
-            _corr_headers("organism", cid), timeout=ORG_TIMEOUT
+        return await persist_and_register_dependencies(
+            plan=plan,
+            repo=repo,
+            task=task,
+            root_db_id=root_db_id,
         )
-        # Include organ_id in the response for tracking
-        result["organ_id"] = organ_id
-        return result
 
-    async def _execute_hgnn(self, task: Task, cid: str) -> Dict[str, Any]:
-        """
-        Ask Cognitive to decompose → then call Organism step-by-step.
-        Falls back to round-robin if Cognitive fails.
-        """
-        start_time = time.time()
-        _, root_task_dict = self._normalize_task_dict(task)
-        root_agent_id = self._extract_agent_id(root_task_dict)
-
-        try:
-            # Get decomposition plan
-            plan = await self._hgnn_decompose(task)
-
-            if not plan:
-                # Fallback to random organ execution
-                rr = await _apost(self.http, f"{ORG}/execute-on-random",
-                                  {"task": root_task_dict}, _corr_headers("organism", cid), timeout=ORG_TIMEOUT)
-                latency_ms = (time.time() - start_time) * 1000
-                self.metrics.track_metrics("hgnn_fallback", rr.get("success", False), latency_ms)
-                return {"success": rr.get("success", False), "result": rr, "path": "hgnn_fallback"}
-
-            root_task_dict = self._convert_task_to_dict(task)
-            root_agent_id = None
-            if isinstance(getattr(task, "params", None), dict):
-                root_agent_id = task.params.get("agent_id")
-
-            # Inject computed drift_score and energy budgets for root task
-            root_task_dict["drift_score"] = await self._compute_drift_score(root_task_dict)
-            
-            # Ensure params has token/energy settings if present in predicates
-            if "params" not in root_task_dict:
-                root_task_dict["params"] = {}
-            
-            # Add energy budget information if available
-            if hasattr(self, 'predicate_router') and self.predicate_router:
-                energy_budget = getattr(self.predicate_router, 'get_energy_budget', lambda: None)()
-                if energy_budget is not None:
-                    root_task_dict["params"]["energy_budget"] = energy_budget
-
-            root_db_id: Optional[uuid.UUID] = None
-            repo = self._get_graph_repository()
-            if repo is not None and hasattr(repo, "create_task"):
-                try:
-                    root_db_id = await repo.create_task(
-                        root_task_dict,
-                        agent_id=root_agent_id,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "[Coordinator] Failed to persist root HGNN task %s: %s",
-                        root_task_dict.get("id"),
-                        e,
-                    )
-                    root_db_id = None
-            else:
-                logger.debug(
-                    "[Coordinator] graph_task_repo not configured; skipping root task persistence"
-                )
-
-            try:
-                await self._persist_plan_subtasks(task, plan, root_db_id=root_db_id)
-            except Exception as persist_exc:
-                logger.warning(
-                    "[Coordinator] Failed to persist HGNN subtasks for task %s: %s",
-                    getattr(task, "id", "unknown"),
-                    persist_exc,
-                )
-
-
-            # Bulk resolve routes for all steps in the plan
-            try:
-                idx_to_logical = await self._bulk_resolve_routes_cached(plan, cid)
-                # Stamp resolved organ_ids into each step
-                for idx, step in enumerate(plan):
-                    if "organ_id" not in step or not step["organ_id"]:
-                        step["organ_id"] = idx_to_logical.get(idx) or self._static_route_fallback(
-                            self._normalize(step.get("task", {}).get("type")),
-                            self._normalize(step.get("task", {}).get("domain"))
-                        )
-            except Exception as e:
-                logger.warning(f"[Coordinator] Bulk route resolution failed, using fallback: {e}")
-                # Fallback: use static routing for each step
-                for idx, step in enumerate(plan):
-                    if "organ_id" not in step or not step["organ_id"]:
-                        step["organ_id"] = self._static_route_fallback(
-                            self._normalize(step.get("task", {}).get("type")),
-                            self._normalize(step.get("task", {}).get("domain"))
-                        )
-
-            # Execute steps sequentially
-            results = []
-            for idx, step in enumerate(plan):
-                organ_id = step.get("organ_id")
-                raw_subtask = step.get("task")
-                if isinstance(raw_subtask, dict):
-                    subtask_payload = raw_subtask
-                else:
-                    subtask_payload = dict(self._convert_task_to_dict(task))
-
-                _, subtask_dict = self._normalize_task_dict(subtask_payload)
-                step["task"] = subtask_dict
-
-                sub_agent_id = self._extract_agent_id(subtask_dict) or root_agent_id
-
-                # Inject computed drift_score and energy budgets for subtask
-                subtask_dict["drift_score"] = await self._compute_drift_score(subtask_dict)
-                
-                # Ensure params has token/energy settings if present in predicates
-                if "params" not in subtask_dict:
-                    subtask_dict["params"] = {}
-                
-                # Add energy budget information if available
-                if hasattr(self, 'predicate_router') and self.predicate_router:
-                    energy_budget = getattr(self.predicate_router, 'get_energy_budget', lambda: None)()
-                    if energy_budget is not None:
-                        subtask_dict["params"]["energy_budget"] = energy_budget
-
-                try:
-                    child_db_id = await self.graph_task_repo.create_task(
-                        subtask_dict,
-                        agent_id=sub_agent_id,
-                        organ_id=organ_id,
-                    )
-                    if root_db_id:
-                        await self.graph_task_repo.add_dependency(root_db_id, child_db_id)
-                except Exception as e:
-                    logger.warning(
-                        f"[Coordinator] Failed to persist HGNN subtask {subtask_dict.get('id')} (step {idx + 1}): {e}"
-                    )
-
-                r = await _apost(self.http, f"{ORG}/execute-on-organ",
-                                 {"organ_id": organ_id, "task": subtask_dict},
-                                 _corr_headers("organism", cid), timeout=ORG_TIMEOUT)
-                results.append({"organ_id": organ_id, **r})
-            
-            success = all(x.get("success") for x in results)
-            latency_ms = (time.time() - start_time) * 1000
-            self.metrics.track_metrics("hgnn", success, latency_ms)
-            
-            return self._make_escalation_result(results, plan, success)
-            
-        except Exception as e:
-            latency_ms = (time.time() - start_time) * 1000
-            self.metrics.track_metrics("escalation_failure", False, latency_ms)
-            logger.error(f"[Coordinator] HGNN execution failed: {e}")
-            return {"success": False, "error": str(e), "path": "hgnn"}
-
-    async def route_and_execute(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Serve deployment method for Ray remote calls.
-        Delegates to core router with unified result schema.
-        """
-        await self._ensure_background_tasks_started()
-        start_time = time.perf_counter()
-        try:
-            # Convert dict to TaskPayload if needed
-            if not isinstance(payload, TaskPayload):
-                payload = TaskPayload.model_validate(payload)
-
-            session_factory = self._resolve_session_factory(self.graph_task_repo)
-            if session_factory is None:
-                res = await self.core.route_and_execute(
-                    payload,
-                    eventizer_helper=default_features_from_payload,
-                )
-            else:
-                async with session_factory() as session:
-                    async with session.begin():
-                        dao = FactDAO(session)
-                        res = await self.core.route_and_execute(
-                            payload,
-                            fact_dao=dao,
-                            eventizer_helper=default_features_from_payload,
-                        )
-
-            decision = self._extract_decision(res)
-            proto_plan = self._extract_proto_plan(res)
-
-            if proto_plan:
-                try:
-                    await self._persist_proto_plan(
-                        self.graph_task_repo,
-                        payload.task_id,
-                        decision,
-                        proto_plan,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "[Coordinator] Failed to persist proto-plan for %s: %s",
-                        payload.task_id,
-                        exc,
-                    )
-
-            followup_metadata: Optional[Dict[str, Any]] = None
-            if decision in {"planner", "hgnn"}:
-                try:
-                    followup_metadata = await self._dispatch_route_followup(
-                        decision,
-                        payload,
-                        proto_plan,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "[Coordinator] Post-route dispatch failed for %s (%s): %s",
-                        payload.task_id,
-                        decision,
-                        exc,
-                    )
-
-            if followup_metadata:
-                res.setdefault("payload", {}).setdefault("metadata", {}).update(followup_metadata)
-
-            # Track metrics
-            latency_ms = (time.perf_counter() - start_time) * 1000
-            decision = self._extract_decision(res) or "unknown"
-            self.metrics.record_route_latency(latency_ms)
-            self.metrics.track_metrics(decision, res.get("success", False), latency_ms)
-
-            return res
-        except Exception as e:
-            latency_ms = (time.perf_counter() - start_time) * 1000
-            self.metrics.record_route_latency(latency_ms)
-            self.metrics.track_metrics("error", False, latency_ms)
-            logger.exception(f"[Coordinator] route_and_execute failed: {e}")
-            return err(str(e), "coordinator_error")
+    # Removed _execute_fast and _execute_hgnn - these are now handled by execute.py's route_and_execute
+    # Removed _make_escalation_result - this is now in execute.py
 
     def _extract_proto_plan(self, route_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return extract_proto_plan(route_result)
@@ -1821,171 +1059,8 @@ class Coordinator:
             if metrics is not None:
                 metrics.record_proto_plan_upsert("err")
 
-    async def _dispatch_route_followup(
-        self,
-        decision: str,
-        task: "TaskPayload",
-        proto_plan: Optional[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
-        if decision == "planner":
-            return await self._dispatch_planner(task, proto_plan)
-        if decision == "hgnn":
-            return await self._dispatch_hgnn(task, proto_plan)
-        return None
-
-    async def _dispatch_planner(
-        self,
-        task: "TaskPayload",
-        proto_plan: Optional[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
-        planner = getattr(self, "planner_client", None)
-        if planner is None or not hasattr(planner, "execute_plan"):
-            logger.debug("[Coordinator] Planner client unavailable; skipping planner dispatch")
-            return None
-        try:
-            planner_result = await _maybe_call(
-                planner.execute_plan,
-                task=task.model_dump(),
-                proto_plan=proto_plan,
-            )
-            metrics = getattr(self, "metrics", None)
-            if metrics is not None:
-                metrics.record_dispatch("planner", "ok")
-        except Exception as exc:
-            logger.warning(
-                "[Coordinator] Planner dispatch failed for %s: %s",
-                task.task_id,
-                exc,
-            )
-            metrics = getattr(self, "metrics", None)
-            if metrics is not None:
-                metrics.record_dispatch("planner", "err")
-            return {"planner_error": str(exc)}
-        return {"planner_response": planner_result}
-
-    async def _dispatch_hgnn(
-        self,
-        task: "TaskPayload",
-        proto_plan: Optional[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
-        if proto_plan is None:
-            return None
-        repo = self._get_graph_sql_repository()
-        if repo is None or not hasattr(repo, "create_task_async"):
-            logger.debug("[Coordinator] Graph SQL repository unavailable; skipping HGNN dispatch")
-            return None
-
-        tasks = proto_plan.get("tasks") if isinstance(proto_plan, dict) else None
-        if not isinstance(tasks, Iterable):
-            return None
-
-        agent_id = None
-        try:
-            agent_id = task.params.get("agent_id") if isinstance(task.params, dict) else None
-        except Exception:
-            agent_id = None
-
-        created: List[Dict[str, Any]] = []
-        had_error = False
-        allowed_types = {
-            "graph_embed": "graph_embed",
-            "graph_rag_query": "graph_rag_query",
-            "graph_rag_seed": "graph_rag_query",
-        }
-        for entry in tasks:
-            if not isinstance(entry, dict):
-                continue
-            task_type = (entry.get("type") or "").strip().lower()
-            if task_type not in allowed_types:
-                logger.debug(
-                    "[Coordinator] Skipping unsupported HGNN task type '%s' for %s",
-                    task_type,
-                    task.task_id,
-                )
-                continue
-
-            raw_params = entry.get("params")
-            if isinstance(raw_params, _MappingABC):
-                params = dict(raw_params)
-            elif isinstance(raw_params, Mapping):
-                params = dict(raw_params)  # type: ignore[arg-type]
-            else:
-                params = {}
-            description = entry.get("description")
-            if not isinstance(description, str):
-                description = None
-
-            target_type = allowed_types[task_type]
-
-            if task_type == "graph_embed":
-                try:
-                    graph_task_id = await repo.create_task_async(
-                        target_type,
-                        params,
-                        description,
-                        agent_id=agent_id,
-                        organ_id=params.get("organ_id"),
-                    )
-                    created.append({
-                        "type": target_type,
-                        "task_id": str(graph_task_id),
-                    })
-                except Exception as exc:
-                    logger.warning(
-                        "[Coordinator] Failed to create graph_embed task for %s: %s",
-                        task.task_id,
-                        exc,
-                    )
-                    had_error = True
-            elif task_type in {"graph_rag_query", "graph_rag_seed"}:
-                try:
-                    graph_task_id = await repo.create_task_async(
-                        target_type,
-                        params,
-                        description,
-                        agent_id=agent_id,
-                        organ_id=params.get("organ_id"),
-                    )
-                    created.append({
-                        "type": target_type,
-                        "task_id": str(graph_task_id),
-                    })
-                except Exception as exc:
-                    logger.warning(
-                        "[Coordinator] Failed to create graph_rag task for %s: %s",
-                        task.task_id,
-                        exc,
-                    )
-                    had_error = True
-
-        metrics = getattr(self, "metrics", None)
-        if not created:
-            if metrics is not None:
-                metrics.record_dispatch("hgnn", "err" if had_error else "ok")
-            return None
-        if metrics is not None:
-            metrics.record_dispatch("hgnn", "ok" if not had_error else "err")
-        return {"graph_dispatch": {"graph_tasks": created}}
-
-    def _get_graph_sql_repository(self) -> Optional[GraphTaskSqlRepository]:
-        if getattr(self, "_graph_sql_repo", None) is not None:
-            return self._graph_sql_repo
-        if getattr(self, "_graph_sql_repo_checked", False):
-            return None
-        self._graph_sql_repo_checked = True
-        try:
-            self._graph_sql_repo = GraphTaskSqlRepository()
-        except Exception as exc:
-            logger.debug(f"[Coordinator] GraphTaskSqlRepository unavailable: {exc}")
-            self._graph_sql_repo = None
-        return self._graph_sql_repo
-
-    @app.post(f"{router_prefix}/route-and-execute")
-    async def route_and_execute_http(self, task: TaskPayload):
-        """
-        HTTP endpoint for route-and-execute.
-        """
-        return await self.route_and_execute(task.model_dump())
+    # Removed _dispatch_route_followup, _dispatch_planner, _dispatch_hgnn, and _get_graph_sql_repository
+    # These are no longer needed - follow-up dispatch is handled by execute.py via HGNNConfig
 
     def _resolve_session_factory(self, repo: Optional[Any] = None):
         session_factory = getattr(self, "_session_factory", None)
@@ -2143,10 +1218,10 @@ class Coordinator:
             )
         return False
 
-    @app.post(f"{router_prefix}/process-task")
-    async def process_task(self, payload: Dict[str, Any]):
+    @app.post(f"{router_prefix}/route-and-execute")
+    async def route_and_execute(self, payload: Dict[str, Any]):
         """
-        HTTP client entry to match CoordinatorServiceClient; wraps route_and_execute.
+        HTTP endpoint for route-and-execute. Wraps core.route_and_execute.
         Accepts flexible dict and ensures TaskPayload has a task_id.
         """
         await self._ensure_background_tasks_started()
@@ -2162,6 +1237,13 @@ class Coordinator:
             task_obj = TaskPayload.model_validate(payload)
             task_dict = task_obj.model_dump()
             task_dict.setdefault("id", task_obj.task_id)
+
+            # Extract correlation_id from request if present
+            correlation_id = None
+            if isinstance(payload, dict):
+                correlation_id = payload.get("correlation_id") or task_dict.get("correlation_id")
+            if not correlation_id and hasattr(task_obj, "correlation_id"):
+                correlation_id = getattr(task_obj, "correlation_id", None)
 
             repo = self.graph_task_repo or self._get_graph_repository()
             self.graph_task_repo = repo
@@ -2195,7 +1277,29 @@ class Coordinator:
                 )
                 raise HTTPException(status_code=503, detail="Failed to persist task metadata") from persist_exc
 
-            res = await self.core.route_and_execute(task_obj)
+            res = await self.core.route_and_execute(
+                task_obj,
+                correlation_id=correlation_id,
+            )
+            
+            # Persist proto-plan if present
+            decision = self._extract_decision(res)
+            proto_plan = self._extract_proto_plan(res)
+            if proto_plan:
+                try:
+                    await self._persist_proto_plan(
+                        repo,
+                        task_obj.task_id,
+                        decision,
+                        proto_plan,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[Coordinator] Failed to persist proto-plan for %s: %s",
+                        task_obj.task_id,
+                        exc,
+                    )
+            
             try:
                 await self._record_router_telemetry(repo, task_obj.task_id, res)
             except Exception as exc:  # pragma: no cover - defensive logging, main result already returned
@@ -2208,7 +1312,7 @@ class Coordinator:
         except HTTPException:
             raise
         except Exception as e:
-            logger.exception(f"[Coordinator] process_task failed: {e}")
+            logger.exception(f"[Coordinator] route_and_execute failed: {e}")
             return err(str(e), "coordinator_error")
 
     @app.get("/health")
@@ -2341,24 +1445,23 @@ class Coordinator:
             logger.error(f"❌ Error processing tuning callback: {e}")
             return {"success": False, "error": str(e)}
 
-    # Enhanced anomaly triage pipeline matching the sequence diagram
     @app.post(f"{router_prefix}/anomaly-triage", response_model=AnomalyTriageResponse)
     async def anomaly_triage(self, payload: AnomalyTriageRequest):
         """
-        Anomaly triage pipeline that follows the sequence diagram:
-        1. Detect anomalies via ML service
-        2. Reason about failure via Cognitive service  
-        3. Make decision via Cognitive service
-        4. Conditionally submit tune/retrain job if action requires it
-        5. Best-effort memory synthesis
-        6. Return aggregated response
+        Anomaly triage pipeline:
+          1) Detect anomalies (ML)
+          2) If OCPS escalates → HGNN (multi-plan) via Cognitive
+             Else → FAST path (no planner/HGNN)
+          3) Predicate: possibly submit tuning/retrain
+          4) Fire-and-forget memory synthesis
+          5) Return aggregated response
         """
         cid = uuid.uuid4().hex
         agent_id = payload.agent_id
-        series = payload.series
-        context = payload.context
-        
-        # Compute drift score using ML service
+        series = payload.series or []
+        context = payload.context or {}
+
+        # Drift & OCPS gate (True now means HGNN escalation)
         task_data = {
             "id": f"anomaly_triage_{agent_id}",
             "type": "anomaly_triage",
@@ -2366,99 +1469,178 @@ class Coordinator:
             "priority": 7,
             "complexity": 0.8,
             "series_length": len(series),
-            "context": context
+            "context": context,
         }
         drift_score = await self._compute_drift_score(task_data)
-        escalate = self.ocps.update(drift_score)
-        
-        logger.info(f"[Coordinator] Anomaly triage started for agent {agent_id}, drift={drift_score}, escalate={escalate}, cid={cid}")
+        ocps = getattr(self, "ocps", None)
+        hgnn_escalate = bool(ocps.update(drift_score)) if ocps else True
 
-        # 1. Detect anomalies via ML service
-        anomalies = await self.ml_client.detect_anomaly({"data": series})
+        logger.info(
+            "[Coordinator] anomaly_triage start agent=%s drift=%.4f hgnn_escalate=%s cid=%s",
+            agent_id, drift_score, hgnn_escalate, cid
+        )
 
-        # 2. Reason about failure (only if escalating or no OCPS gating)
-        reason = {}
-        decision = {"result": {"action": "hold"}}
-        
-        if escalate or not hasattr(self, 'ocps'):  # Always reason if no OCPS or escalating
+        # 1) Detect anomalies
+        try:
+            anomalies = await asyncio.wait_for(
+                self.ml_client.detect_anomaly({"data": series}), timeout=10
+            )
+        except Exception as e:
+            logger.exception("[Coordinator] anomaly detection failed: %s", e)
+            # Error envelope via your response model (FAST fallback semantics)
+            return AnomalyTriageResponse(
+                agent_id=agent_id,
+                anomalies={"error": str(e)},
+                reason={"result": {"thought": "ml error"}},
+                decision={"result": {"action": "hold"}},
+                correlation_id=cid,
+                p_fast=getattr(ocps, "p_fast", None),
+                escalated=False,
+                tuning_job={"skipped": True},
+            )
+
+        # FAST short-circuit: no anomalies
+        if not anomalies.get("anomalies"):
+            decision = {"result": {"action": "hold", "reason": "no anomalies"}}
+            asyncio.create_task(self._fire_and_forget_memory_synthesis(agent_id, anomalies, {}, decision, cid))
+            logger.info("[Coordinator] No anomalies; FAST path (hold). cid=%s", cid)
+            return AnomalyTriageResponse(
+                agent_id=agent_id,
+                anomalies=anomalies,
+                reason={},                 # no planner/hgnn reasoning
+                decision=decision,
+                correlation_id=cid,
+                p_fast=getattr(ocps, "p_fast", None),
+                escalated=False,           # FAST
+                tuning_job=None,
+            )
+
+        # 2) Route: HGNN (escalated) vs FAST
+        reason: dict = {}                       # keep field for schema continuity
+        decision: dict = {"result": {"action": "hold"}}
+
+        if hgnn_escalate:
+            # ESCALATED == "hgnn": trigger multi-plan path
+            logger.info("[Coordinator] OCPS escalated → HGNN path. cid=%s", cid)
+
+            # Canonical HGNN endpoint for multi-plan decomposition
+            path = "/solve-problem"
+            body = {
+                "agent_id": agent_id,
+                "problem_statement": f"Anomaly triage HGNN plan (agent={agent_id})",
+                "constraints": {"latency_ms": self.fast_path_latency_slo_ms},
+                "available_tools": {},                # optional
+                "context": {                          # router context passthrough
+                    "anomalies": anomalies.get("anomalies", []),
+                    "meta": context,
+                    "task_id": task_data["id"],
+                    "correlation_id": cid,
+                },
+            }
+
             try:
-                reason = await self.cognitive_client.post("/reason-about-failure",
-                                                         json={"incident_context": {"anomalies": anomalies.get("anomalies", []), "meta": context}},
-                                                         headers=_corr_headers("cognitive", cid))
+                hgnn_resp = await asyncio.wait_for(
+                    self.cognitive_client.post(path, json=body, headers=_corr_headers("cognitive", cid)),
+                    timeout=20,
+                )
             except Exception as e:
-                logger.warning(f"[Coordinator] Reasoning failed: {e}")
-                reason = {"result": {"thought": "cognitive error", "proposed_solution": "retry"}, "error": str(e)}
+                logger.warning("[Coordinator] HGNN /solve-problem call failed: %s; trying legacy fallback", e)
+                hgnn_resp = {"success": False, "error": str(e), "result": {}}
+                
+                # Fallback to legacy /plan-with-escalation for backward compatibility
+                if not hgnn_resp.get("success"):
+                    try:
+                        legacy_body = {
+                            "agent_id": agent_id,
+                            "task_description": f"Anomaly triage HGNN plan (agent={agent_id})",
+                            "current_capabilities": {},
+                            "available_tools": {},
+                            "context": {
+                                "anomalies": anomalies.get("anomalies", []),
+                                "meta": context,
+                                "task_id": task_data["id"],
+                                "correlation_id": cid,
+                            },
+                            "profile": "deep",
+                            "caller": "coordinator",
+                        }
+                        hgnn_resp = await self.cognitive_client.post(
+                            "/plan-with-escalation", json=legacy_body, headers=_corr_headers("cognitive", cid)
+                        )
+                        logger.info("[Coordinator] Legacy /plan-with-escalation fallback succeeded")
+                    except Exception as legacy_e:
+                        logger.warning("[Coordinator] Legacy fallback also failed: %s; staying HOLD", legacy_e)
+                        hgnn_resp = {"success": False, "error": str(legacy_e), "result": {}}
 
-            # 3. Make decision
-            try:
-                decision = await self.cognitive_client.post("/make-decision",
-                                                           json={"decision_context": {"anomaly_count": len(anomalies.get("anomalies", [])),
-                                                                                     "reason": reason.get("result", {})}},
-                                                           headers=_corr_headers("cognitive", cid))
-            except Exception as e:
-                logger.warning(f"[Coordinator] Decision making failed: {e}")
-                decision = {"result": {"action": "hold"}, "error": str(e)}
+            # Optionally extract a suggested action from HGNN meta/plan (if your cog returns it)
+            suggested = (
+                hgnn_resp.get("result", {}).get("meta", {}) or {}
+            ).get("suggested_action")
+
+            if suggested:
+                decision = {"result": {"action": suggested, "source": "hgnn"}}
+            else:
+                decision = {"result": {"action": "hold", "source": "hgnn"}}
+
+            # Keep some reasoning breadcrumbs (optional)
+            reason = {"result": {"planner": "hgnn", "meta": hgnn_resp.get("result", {}).get("meta", {})}}
+
         else:
-            logger.info(f"[Coordinator] Skipping cognitive calls due to OCPS gating (low drift)")
+            # FAST: no planner, no hgnn
+            logger.info("[Coordinator] OCPS gated HGNN; FAST path. cid=%s", cid)
+            decision = {"result": {"action": "hold", "source": "fast"}}
 
-        # 4. Conditional tune/retrain based on predicate evaluation
+        # 3) Predicate: tune / retrain
         tuning_job = None
         action = (decision.get("result") or {}).get("action", "hold")
-        
-        # Use predicate system to evaluate mutation decision
         mutation_decision = self.predicate_router.evaluate_mutation(
             task={"type": "anomaly_triage", "domain": "anomaly", "priority": 7, "complexity": 0.8},
-            decision=decision.get("result", {})
+            decision=decision.get("result", {}),
         )
-        
-        if mutation_decision.action in ["submit_tuning", "submit_retrain"]:
+
+        if mutation_decision.action in {"submit_tuning", "submit_retrain"}:
             try:
-                # Get current energy state for E_before
                 current_energy = self._get_current_energy_state(agent_id)
-                
                 tuning_job = await self.ml_client.submit_tuning_job({
                     "space_type": TUNE_SPACE_TYPE,
                     "config_type": TUNE_CONFIG_TYPE,
                     "experiment_name": f"{TUNE_EXPERIMENT_PREFIX}-{agent_id}-{cid}",
-                    "callback_url": f"{SEEDCORE_API_URL}/pipeline/ml/tune/callback"
+                    "callback_url": f"{SEEDCORE_API_URL}/pipeline/ml/tune/callback",
                 })
-                
-                # Persist E_before for later ΔE calculation
                 if tuning_job.get("job_id") and current_energy is not None:
                     self._persist_job_state(tuning_job["job_id"], {
                         "E_before": current_energy,
                         "agent_id": agent_id,
                         "submitted_at": time.time(),
-                        "job_type": mutation_decision.action.replace("submit_", "")
+                        "job_type": mutation_decision.action.replace("submit_", ""),
                     })
                     self.predicate_router.update_gpu_job_status(tuning_job["job_id"], "started")
-                
-                logger.info(f"[Coordinator] Tuning job submitted: {tuning_job.get('job_id', 'unknown')} (reason: {mutation_decision.reason})")
+                logger.info("[Coordinator] tuning job submitted: %s (%s)", tuning_job.get("job_id", "unknown"), mutation_decision.reason)
             except Exception as e:
-                logger.warning(f"[Coordinator] Tuning submission failed: {e}")
+                logger.warning("[Coordinator] tuning submission failed: %s", e)
                 tuning_job = {"error": str(e)}
         else:
-            logger.info(f"[Coordinator] Mutation decision: {mutation_decision.action} (reason: {mutation_decision.reason})")
+            logger.info("[Coordinator] mutation decision: %s (%s)", mutation_decision.action, mutation_decision.reason)
 
-        # 5. Best-effort memory synthesis (fire-and-forget)
-        asyncio.create_task(self._fire_and_forget_memory_synthesis(
-            agent_id, anomalies, reason, decision, cid
-        ))
+        # 4) Memory synthesis (best-effort)
+        asyncio.create_task(self._fire_and_forget_memory_synthesis(agent_id, anomalies, reason, decision, cid))
 
-        # 6. Build response
-        response = AnomalyTriageResponse(
+        # 5) Build response
+        logger.info(
+            "[Coordinator] anomaly_triage done agent=%s action=%s hgnn_escalated=%s cid=%s",
+            agent_id, action, hgnn_escalate, cid
+        )
+        return AnomalyTriageResponse(
             agent_id=agent_id,
             anomalies=anomalies,
-            reason=reason,
-            decision=decision,
+            reason=reason,                 # may include minimal HGNN meta
+            decision=decision,             # action from HGNN if available; else 'hold'
             correlation_id=cid,
-            p_fast=self.ocps.p_fast,
-            escalated=escalate,
-            tuning_job=tuning_job
+            p_fast=getattr(ocps, "p_fast", None),
+            escalated=hgnn_escalate,       # True → HGNN (ResultKind.ESCALATED), False → FAST
+            tuning_job=tuning_job,
         )
-            
-        logger.info(f"[Coordinator] Anomaly triage completed for agent {agent_id}, action={action}, cid={cid}")
-        return response
+
 
 # Bind the deployment
 coordinator_deployment = Coordinator.bind()

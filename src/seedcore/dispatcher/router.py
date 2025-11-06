@@ -10,12 +10,12 @@ Routers:
 
 Routing policy (aligned with seedcore.models.result_schema.ResultKind):
 - Coordinator inspects .kind from Coordinator service response:
-    - kind == "fast_path"   -> delegate to fast router (default: OrganismRouter)
+    - kind == "fast"   -> delegate to fast router (default: OrganismRouter)
     - kind == "cognitive"   -> delegate to escalation router (default: CognitiveRouter)
-    - else (incl. "escalated", "error") -> return Coordinator's result
+    - else (incl. "hgnn", "error") -> return Coordinator's result
 - Organism executes fast path, then inspects its own result:
     - kind == "cognitive"   -> delegate to escalation router (default: CognitiveRouter)
-    - else (fast_path / escalated / error) -> return Organism result
+    - else (fast / hgnn / error) -> return Organism result
 """
 
 import os
@@ -92,7 +92,7 @@ class CognitiveRouter(Router):
     It may receive partial reasoning context (proto_plan, surprise, etc.)
     and should forward that context into the cognitive service.
 
-    If the upstream already produced kind == "escalated" or kind == "error",
+    If the upstream already produced kind == "hgnn" or kind == "error",
     we DO NOT call cognitive again. We just passthrough that structure.
 
     Semantic Bridge:
@@ -155,7 +155,7 @@ class CognitiveRouter(Router):
         Returns dict with:
             task_data: dict describing the original task from dispatcher
             prior_result: Optional[dict], TaskResult-like structure from upstream
-            upstream_kind: Optional[str], e.g. "cognitive", "escalated", ...
+            upstream_kind: Optional[str], e.g. "cognitive", "hgnn", ...
         """
         if isinstance(payload, TaskPayload):
             task_data = payload.model_dump()
@@ -190,7 +190,7 @@ class CognitiveRouter(Router):
         Decide if we should just return the upstream result without invoking /plan.
         We passthrough if upstream already has a final structured result.
 
-        Case 1: upstream_kind == "escalated"
+        Case 1: upstream_kind == "hgnn"
             => already a multi-step decomposition (EscalatedResult).
         Case 2: upstream_kind == "error"
             => we can't improve this by planning.
@@ -380,7 +380,7 @@ class CognitiveRouter(Router):
             )
 
             # We assume cognitive returns a TaskResult-like dict
-            # with kind in {"cognitive","escalated","error"}.
+            # with kind in {"cognitive","hgnn","error"}.
             return plan_result
 
         except Exception as e:
@@ -435,8 +435,8 @@ class OrganismRouter(Router):
             Return execute_result directly.
 
     NOTE:
-    - If execute_result.kind == "fast_path": that's a normal success, return it.
-    - If execute_result.kind == "escalated": that should already be a fully
+    - If execute_result.kind == "fast": that's a normal success, return it.
+    - If execute_result.kind == "hgnn": that should already be a fully
       decomposed HGNN-style plan (EscalatedResult). We DO NOT forward again.
     - If execute_result.kind == "error": just return it.
     """
@@ -606,17 +606,17 @@ class CoordinatorHttpRouter(Router):
     HTTP-based router that calls Coordinator service.
 
     Flow:
-      1. Send task to Coordinator (/process-task).
+      1. Send task to Coordinator (/route-and-execute).
       2. Inspect Coordinator's result["kind"]:
-          - kind == ResultKind.FAST_PATH ("fast_path")
+          - kind == ResultKind.FAST_PATH ("fast")
                 → delegate to fast router (default: OrganismRouter)
           - kind == ResultKind.COGNITIVE ("cognitive")
                 → delegate to escalation router (default: CognitiveRouter)
-          - else (ResultKind.ESCALATED "escalated", ResultKind.ERROR "error", etc.)
+          - else (ResultKind.ESCALATED "hgnn", ResultKind.ERROR "error", etc.)
                 → return Coordinator's result directly
 
-    Why we do NOT forward "escalated":
-      "escalated" in the new schema already means we HAVE a decomposed multi-step
+    Why we do NOT forward "hgnn":
+      "hgnn" in the new schema already means we HAVE a decomposed multi-step
       plan (EscalatedResult). There's nothing further to plan.
     """
 
@@ -678,8 +678,19 @@ class CoordinatorHttpRouter(Router):
             logger.info(f"Routing task via Coordinator HTTP: {task_id}")
 
             # 1. Ask Coordinator to process / decide
-            result = await self.client.post("/process-task", json=task_data)
+            result = await self.client.post("/route-and-execute", json=task_data)
             logger.info(f"Coordinator returned: {result}")
+
+            # Extract correlation_id if Coordinator issued one (trace propagation override)
+            # This allows Coordinator to start new trace segments for sub-tasks or cognitive plans
+            coordinator_corr = (
+                result.get("payload", {}).get("metadata", {}).get("correlation_id")
+                or result.get("metadata", {}).get("correlation_id")
+                or result.get("correlation_id")
+            )
+            if coordinator_corr:
+                correlation_id = coordinator_corr
+                logger.debug(f"Using Coordinator-issued correlation_id: {correlation_id}")
 
             result_kind = result.get("kind")
 
@@ -739,7 +750,7 @@ class CoordinatorHttpRouter(Router):
                     )
                     return result
 
-            # 4. Otherwise: "escalated" (already planned multi-step),
+            # 4. Otherwise: "hgnn" (already planned multi-step),
             #               "error", or anything unknown → return as-is.
             return result
 

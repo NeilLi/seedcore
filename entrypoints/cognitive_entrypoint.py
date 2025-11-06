@@ -274,7 +274,7 @@ class CognitiveServeService:
                 logger.info(f"🧠 /plan-task: Using DEEP profile (planner path) per request.profile='deep'")
             # Also infer from task description complexity
             elif request.task_description:
-                complex_keywords = ['complex', 'analysis', 'decompose', 'plan', 'strategy', 'reasoning', 'hgnn', 'hypergraph']
+                complex_keywords = ['complex', 'analysis', 'decompose', 'plan', 'strategy', 'reasoning', 'hypergraph']
                 desc_lower = request.task_description.lower()
                 if any(keyword in desc_lower for keyword in complex_keywords):
                     use_deep = True

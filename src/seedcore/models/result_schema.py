@@ -31,11 +31,11 @@ def _maybe_parse_str(value: Any) -> Any:
 
 
 class ResultKind(str, Enum):
-    """Type of result processing path."""
-    FAST_PATH = "fast_path"
-    ESCALATED = "escalated"
-    COGNITIVE = "cognitive"
-    ERROR = "error"
+    """Canonical routing or processing path kinds across Coordinator and Cognitive subsystems."""
+    FAST_PATH = "fast"          # Direct organism execution
+    COGNITIVE = "planner"       # Reasoning route on cognitive
+    ESCALATED = "hgnn"          # HGNN-based multi-plan decomposition (legacy escalation path)
+    ERROR = "error"             # Fallback or failure condition
 
 
 class TaskStep(BaseModel):
@@ -136,7 +136,25 @@ def create_fast_path_result(
     processing_time_ms: Optional[float] = None,
     **metadata
 ) -> TaskResult:
-    """Create a fast path result."""
+    """
+    Create a fast path result for Coordinator routing.
+    
+    CoordinatorHttpRouter checks kind == ResultKind.FAST_PATH.value ("fast")
+    and then delegates task_data to OrganismRouter for execution.
+    
+    The organ_id indicates the target organ where the task should be routed.
+    This result is returned as a routing decision; actual execution happens downstream.
+    
+    Args:
+        routed_to: Organ that processed the task (e.g., "random", "hotel_ops", "organism")
+        organ_id: ID of the organ that handled the task (e.g., "random", "hotel_ops")
+        result: Result payload (typically {"status": "routed"} for routing decisions)
+        processing_time_ms: Optional processing time in milliseconds
+        **metadata: Additional metadata (decision, surprise, proto_plan, etc.)
+    
+    Returns:
+        TaskResult with kind=ResultKind.FAST_PATH suitable for router delegation
+    """
     fast_path = FastPathResult(
         routed_to=routed_to,
         organ_id=organ_id,
@@ -188,7 +206,33 @@ def create_cognitive_result(
     confidence_score: Optional[float] = None,
     **metadata
 ) -> TaskResult:
-    """Create a cognitive reasoning result."""
+    """
+    Create a cognitive reasoning result for Coordinator routing.
+    
+    CoordinatorHttpRouter checks kind == ResultKind.COGNITIVE.value ("cognitive")
+    and then delegates to CognitiveRouter with both task_data and execute_result.
+    
+    CognitiveRouter extracts proto_plan from:
+      - prior_result["payload"]["result"]["proto_plan"] (primary)
+      - prior_result["payload"]["metadata"]["proto_plan"] (fallback)
+      - task_data["proto_plan"] (fallback)
+    
+    The result field should contain {"proto_plan": <proto_plan_dict>} to seed
+    the cognitive planner with Coordinator's initial analysis.
+    
+    Args:
+        agent_id: Agent ID for cognitive processing (e.g., "planner")
+        task_type: Actual task type being processed (e.g., "ping", "general_query", "execute",
+                   "fact_search", "unknown_task", etc.). Should NOT be routing metadata like
+                   "planner" or "fast" - those are routing decisions, not task types.
+        result: Result payload containing proto_plan and other hints
+                Expected shape: {"proto_plan": {...}, ...}
+        confidence_score: Optional confidence score
+        **metadata: Additional metadata (decision, surprise, etc.)
+    
+    Returns:
+        TaskResult with kind=ResultKind.COGNITIVE suitable for router escalation
+    """
     cognitive = CognitiveResult(
         agent_id=agent_id,
         task_type=task_type,
