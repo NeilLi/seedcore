@@ -111,6 +111,9 @@ from seedcore.ops.eventizer.fact_dao import FactDAO
 # ---------------------------------------------------------------------------
 # 4. Constants
 # ---------------------------------------------------------------------------
+# NOTE: Default values here should match those defined in coordinator_entrypoint.py
+# The entrypoint sets these environment variables before importing this module,
+# but these defaults ensure consistent behavior if env vars are not set.
 
 # --- Timeouts ---
 ORCH_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10.0"))
@@ -130,7 +133,8 @@ ML_URL = ML  # Alias for clarity
 COG_URL = COG  # Alias for clarity
 
 # --- Feature & Tuning Configuration ---
-FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000.0"))
+# NOTE: Defaults should match coordinator_entrypoint.py env_vars dictionary
+FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
 MAX_PLAN_STEPS = int(os.getenv("MAX_PLAN_STEPS", "16"))
 COGNITIVE_MAX_INFLIGHT = int(os.getenv("COGNITIVE_MAX_INFLIGHT", "64"))
 PREDICATES_CONFIG_PATH = os.getenv(
