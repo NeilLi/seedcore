@@ -19,6 +19,7 @@ def sync_task_identity(task_like: Any, task_id: str) -> None:
     """Sync task identity by setting id/task_id on the task object or dict."""
     if isinstance(task_like, dict):
         task_like["id"] = task_id
+        task_like.setdefault("task_id", task_id)
         return
     for attr in ("id", "task_id"):
         if hasattr(task_like, attr):
@@ -28,7 +29,7 @@ def sync_task_identity(task_like: Any, task_id: str) -> None:
                 continue
 
 
-def normalize_task_dict(task: Any) -> Tuple[uuid.UUID, Dict[str, Any]]:
+def normalize_task_dict(task: Any) -> Tuple[Union[uuid.UUID, str], Dict[str, Any]]:
     """
     Normalize a task-like object to a (task_id, task_dict).
 
@@ -49,18 +50,27 @@ def normalize_task_dict(task: Any) -> Tuple[uuid.UUID, Dict[str, Any]]:
     
     # 2) Resolve/generate ID
     raw_id = task_dict.get("id") or task_dict.get("task_id")
-    try:
-        task_uuid = uuid.UUID(str(raw_id)) if raw_id else uuid.uuid4()
-    except (ValueError, TypeError):
+    task_id_str: str
+    if raw_id:
+        try:
+            task_uuid = uuid.UUID(str(raw_id))
+            task_id_value: Union[uuid.UUID, str] = task_uuid
+            task_id_str = str(task_uuid)
+        except (ValueError, TypeError):
+            task_id_str = canonicalize_identifier(raw_id)
+            task_id_value = task_id_str
+    else:
         task_uuid = uuid.uuid4()
-    
-    task_id_str = str(task_uuid)
+        task_id_value = task_uuid
+        task_id_str = str(task_uuid)
+
     task_dict["id"] = task_id_str
+    task_dict.setdefault("task_id", task_id_str)
     
     # 3) Sync identity back to original object if possible
     sync_task_identity(task, task_id_str)
     
-    return task_uuid, task_dict
+    return task_id_value, task_dict
 
 
 def convert_task_to_dict(task: Any) -> Dict[str, Any]:
@@ -108,8 +118,11 @@ def redact_sensitive_data(data: Any) -> Any:
     if isinstance(data, dict):
         redacted = {}
         for key, value in data.items():
-            if any(sensitive in key.lower() for sensitive in ['password', 'token', 'key', 'secret', 'auth']):
-                redacted[key] = "[REDACTED]"
+            if any(sensitive in key.lower() for sensitive in ['password', 'token', 'key', 'secret']):
+                if isinstance(value, (dict, list)):
+                    redacted[key] = redact_sensitive_data(value)
+                else:
+                    redacted[key] = "[REDACTED]"
             else:
                 redacted[key] = redact_sensitive_data(value)
         return redacted
@@ -298,11 +311,8 @@ def build_task_from_dict(task_data: Dict[str, Any]) -> Task:
         raise TypeError("task_data must be a dict")
 
     # ID
-    tid = task_data.get("id") or task_data.get("task_id")
-    try:
-        tid = str(uuid.UUID(str(tid))) if tid else str(uuid.uuid4())
-    except Exception:
-        tid = str(uuid.uuid4())
+    tid_raw = task_data.get("id") or task_data.get("task_id")
+    tid = canonicalize_identifier(tid_raw) if tid_raw else str(uuid.uuid4())
 
     return Task(
         id=tid,

@@ -7,6 +7,7 @@ OpenTelemetry, Redis streams, or custom endpoints.
 from __future__ import annotations
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import time
@@ -111,7 +112,7 @@ class PrometheusExporter(MetricsExporter):
     Then register metrics with Prometheus registry and update them here.
     """
     
-    def __init__(self, registry: Optional[Any] = None):
+    def __init__(self, registry: Optional[Any] = None, *, enabled: Optional[bool] = None):
         """
         Initialize Prometheus exporter.
         
@@ -120,8 +121,18 @@ class PrometheusExporter(MetricsExporter):
         """
         self.registry = registry
         self._prometheus_available = False
+
+        if enabled is None:
+            env_flag = os.getenv("PROMETHEUS_EXPORTER_ENABLED", "0").lower()
+            enabled = env_flag in {"1", "true", "yes", "on"}
+
+        if not enabled and registry is None:
+            logger.warning("prometheus_client not available, PrometheusExporter disabled")
+            return
+
         try:
-            from prometheus_client import Counter, Histogram, Gauge, REGISTRY
+            from prometheus_client import Counter, Histogram, Gauge, REGISTRY  # type: ignore
+
             self._prometheus_available = True
             self._registry = registry or REGISTRY
             # Initialize Prometheus metrics (would be created here)

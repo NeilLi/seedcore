@@ -23,6 +23,7 @@ from typing import (
     List,
     Optional,
     Tuple,
+    Union,
 )
 
 if TYPE_CHECKING:
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 import httpx
 import redis
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from ray import serve
 from sqlalchemy import text
 
@@ -65,11 +66,17 @@ from ..coordinator.core.policies import (
 )
 from ..coordinator.core.routing import (
     RouteCache,
+    RouteEntry,
     bulk_resolve_routes_cached,
     resolve_route_cached_async,
     static_route_fallback,
 )
-from ..coordinator.dao import TaskOutboxDAO, TaskProtoPlanDAO, TaskRouterTelemetryDAO
+from ..coordinator.dao import (
+    MAX_PROTO_PLAN_BYTES,
+    TaskOutboxDAO,
+    TaskProtoPlanDAO,
+    TaskRouterTelemetryDAO,
+)
 from ..coordinator.models import (
     AnomalyTriageRequest,
     AnomalyTriageResponse,
@@ -157,33 +164,6 @@ logger.info(f"   ML_URL: {ML_URL}")
 logger.info(f"   COG_URL: {COG_URL}")
 logger.info(f"   ORG_URL: {ORG_URL}")
 
-# --- Prometheus Metrics (optional, safe fallback) ---
-COORD_OUTBOX_FLUSH_OK = create_safe_counter(
-    "coord_outbox_flush_ok_total",
-    "Number of successful outbox flush operations",
-    labelnames=["event_type"]
-)
-COORD_OUTBOX_FLUSH_RETRY = create_safe_counter(
-    "coord_outbox_flush_retry_total",
-    "Number of outbox flush retry operations",
-    labelnames=["event_type"]
-)
-COORD_OUTBOX_INSERT_OK = create_safe_counter(
-    "coord_outbox_insert_ok_total",
-    "Number of successful outbox insert operations",
-    labelnames=["event_type"]
-)
-COORD_OUTBOX_INSERT_DUP = create_safe_counter(
-    "coord_outbox_insert_dup_total",
-    "Number of duplicate outbox insert operations",
-    labelnames=["event_type"]
-)
-COORD_OUTBOX_INSERT_ERR = create_safe_counter(
-    "coord_outbox_insert_err_total",
-    "Number of failed outbox insert operations",
-    labelnames=["event_type"]
-)
-
 # ---------------------------------------------------------------------------
 # 6. Helper Functions
 # ---------------------------------------------------------------------------
@@ -191,6 +171,35 @@ COORD_OUTBOX_INSERT_ERR = create_safe_counter(
 def err(msg: str, error_type: str = "coordinator_error") -> dict:
     """Create a standardized error result."""
     return create_error_result(error=msg, error_type=error_type).model_dump()
+
+
+async def _maybe_call(func: Callable[..., Any], *args, **kwargs):
+    """Call sync/async functions, tolerating missing kwargs for legacy call sites."""
+    def _is_kwarg_error(exc: TypeError) -> bool:
+        msg = str(exc)
+        return any(token in msg for token in ("unexpected", "positional", "keywords"))
+
+    if kwargs:
+        inspect_target = getattr(func, "side_effect", None) or getattr(func, "__wrapped__", func)
+        try:
+            inspect.signature(inspect_target).bind_partial(*args, **kwargs)
+        except (TypeError, ValueError):
+            kwargs = {}
+
+    try:
+        result = func(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+    except TypeError as exc:
+        if not (kwargs and _is_kwarg_error(exc)):
+            raise
+
+    # Retry without kwargs
+    result = func(*args)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 def _corr_headers(target: str, cid: str) -> Dict[str, str]:
     """Create correlation headers for cross-service communication."""
@@ -408,17 +417,21 @@ class CoordinatorCore:
         )
 
 # ---------- FastAPI/Serve ----------
-app = FastAPI(
-    title="SeedCore Coordinator",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json"
-)
-
 # Note: route_prefix is already set in rayservice.yaml as /pipeline
 # So we use empty string here to avoid double prefixing
 router_prefix = ""
+
+class ASGIWrapper:
+    """Minimal ASGI adapter compatible with older Ray Serve versions."""
+
+    def __init__(self, app: FastAPI):
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Callable[[], Awaitable[Any]], send: Callable[[dict[str, Any]], Awaitable[None]]):
+        if scope.get("type") != "http":
+            raise RuntimeError(f"Unsupported scope type: {scope.get('type')}")
+        await self.app(scope, receive, send)
+
 
 @serve.deployment(
     name="Coordinator",
@@ -426,9 +439,16 @@ router_prefix = ""
     max_ongoing_requests=16,
     ray_actor_options={"num_cpus": float(os.getenv("COORDINATOR_NUM_CPUS", "0.2"))},
 )
-@serve.ingress(app)
 class Coordinator:
     def __init__(self):
+        self.app = FastAPI(
+            title="SeedCore Coordinator",
+            version="1.0.0",
+            docs_url="/docs",
+            redoc_url="/redoc",
+            openapi_url="/openapi.json",
+        )
+
         # Initialize service clients with conservative circuit breakers
         self.ml_client = MLServiceClient(
             base_url=ML, 
@@ -494,6 +514,46 @@ class Coordinator:
         except Exception as e:
             logger.warning(f"⚠️ Redis connection failed, using in-memory storage: {e}")
             self.storage = SafeStorage(None)
+
+        # Maintain runtime context on the actor instance (not the FastAPI app)
+        self.runtime_ctx = {
+            "storage": self.storage,
+            "metrics": self.metrics,
+        }
+
+        # Per-replica Prometheus counters (avoid module-level globals for Ray serialization)
+        try:
+            self.prom_outbox_flush_ok = create_safe_counter(
+                "coord_outbox_flush_ok_total",
+                "Number of successful outbox flush operations",
+                labelnames=["event_type"],
+            )
+            self.prom_outbox_flush_retry = create_safe_counter(
+                "coord_outbox_flush_retry_total",
+                "Number of outbox flush retry operations",
+                labelnames=["event_type"],
+            )
+            self.prom_outbox_insert_ok = create_safe_counter(
+                "coord_outbox_insert_ok_total",
+                "Number of successful outbox insert operations",
+                labelnames=["event_type"],
+            )
+            self.prom_outbox_insert_dup = create_safe_counter(
+                "coord_outbox_insert_dup_total",
+                "Number of duplicate outbox insert operations",
+                labelnames=["event_type"],
+            )
+            self.prom_outbox_insert_err = create_safe_counter(
+                "coord_outbox_insert_err_total",
+                "Number of failed outbox insert operations",
+                labelnames=["event_type"],
+            )
+        except Exception:
+            self.prom_outbox_flush_ok = None
+            self.prom_outbox_flush_retry = None
+            self.prom_outbox_insert_ok = None
+            self.prom_outbox_insert_dup = None
+            self.prom_outbox_insert_err = None
         
         # Initialize predicate system (will be loaded async in __post_init__)
         self.predicate_config = None
@@ -535,7 +595,63 @@ class Coordinator:
             logger.warning(f"⚠️ Failed to initialize CoordinatorCore, using defaults: {e}")
             self.core = CoordinatorCore(metrics_tracker=self.metrics)
 
+        self._register_routes()
+        self.asgi_app = ASGIWrapper(self.app)
         logger.info("✅ Coordinator initialized")
+
+    def _register_routes(self) -> None:
+        self.app.add_api_route(
+            f"{router_prefix}/route-and-execute",
+            self.route_and_execute,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
+            "/health",
+            self.health,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
+            f"{router_prefix}/metrics",
+            self.get_metrics,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
+            "/readyz",
+            self.ready,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
+            f"{router_prefix}/predicates/status",
+            self.get_predicate_status,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
+            f"{router_prefix}/predicates/config",
+            self.get_predicate_config,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
+            f"{router_prefix}/predicates/reload",
+            self.reload_predicates,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
+            f"{router_prefix}/ml/tune/callback",
+            self.tune_callback,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
+            f"{router_prefix}/anomaly-triage",
+            self.anomaly_triage,
+            methods=["POST"],
+            response_model=AnomalyTriageResponse,
+        )
+
+    async def __call__(self, request: Request):
+        send = getattr(request, "send", None) or getattr(request, "_send", None)
+        if send is None:
+            raise RuntimeError("Request object does not provide an ASGI send callable")
+        return await self.asgi_app(request.scope, request.receive, send)
 
     async def _ensure_background_tasks_started(self):
         """Ensure background tasks are started (called on first request)."""
@@ -686,25 +802,28 @@ class Coordinator:
                                 ok = await self._enqueue_task_embedding_now(task_id, reason="outbox")
                                 if ok:
                                     await self.outbox_dao.delete(s, row["id"])
-                                    try:
-                                        COORD_OUTBOX_FLUSH_OK.labels("nim_task_embed").inc()
-                                    except Exception:
-                                        pass
+                                    if self.prom_outbox_flush_ok:
+                                        try:
+                                            self.prom_outbox_flush_ok.labels("nim_task_embed").inc()
+                                        except Exception:
+                                            pass
                                 else:
                                     # Use DAO backoff method for retry logic
                                     await self.outbox_dao.backoff(s, row["id"])
-                                    try:
-                                        COORD_OUTBOX_FLUSH_RETRY.labels("nim_task_embed").inc()
-                                    except Exception:
-                                        pass
+                                    if self.prom_outbox_flush_retry:
+                                        try:
+                                            self.prom_outbox_flush_retry.labels("nim_task_embed").inc()
+                                        except Exception:
+                                            pass
                             except Exception as exc:
                                 logger.warning(f"[Coordinator] Outbox item {row.get('id')} failed: {exc}")
                                 # Use DAO backoff method for error handling
                                 await self.outbox_dao.backoff(s, row["id"])
-                                try:
-                                    COORD_OUTBOX_FLUSH_RETRY.labels("nim_task_embed").inc()
-                                except Exception:
-                                    pass
+                                if self.prom_outbox_flush_retry:
+                                    try:
+                                        self.prom_outbox_flush_retry.labels("nim_task_embed").inc()
+                                    except Exception:
+                                        pass
             except Exception as exc:
                 logger.debug(f"[Coordinator] Outbox flusher tick failed: {exc}")
             await asyncio.sleep(max(1.0, interval_s))
@@ -834,7 +953,7 @@ class Coordinator:
         """Redact sensitive data from memory synthesis payload."""
         return redact_sensitive_data(data)
 
-    def _normalize_task_dict(self, task_like: Any) -> Tuple[uuid.UUID, Dict[str, Any]]:
+    def _normalize_task_dict(self, task_like: Any) -> Tuple[Union[uuid.UUID, str], Dict[str, Any]]:
         return normalize_task_dict(task_like)
 
     def _sync_task_identity(self, task_like: Any, task_id: str) -> None:
@@ -995,6 +1114,56 @@ class Coordinator:
 
         return self.graph_repository
 
+    def _get_graph_sql_repository(self):
+        """Legacy alias retained for compatibility with older coordinator tests."""
+        return self._get_graph_repository()
+
+    async def _dispatch_hgnn(self, payload: TaskPayload, proto_plan: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Dispatch HGNN steps to the graph repository, recording partial failures.
+
+        Returns metadata of successfully dispatched tasks. Unsupported steps are skipped.
+        """
+        repo = self._get_graph_sql_repository()
+        dispatched: list[dict[str, Any]] = []
+        status = "ok"
+
+        if repo is None:
+            if getattr(self.metrics, "record_dispatch", None):
+                self.metrics.record_dispatch("hgnn", "err")
+            return {"graph_dispatch": {"graph_tasks": dispatched}}
+
+        steps = proto_plan.get("tasks", []) if isinstance(proto_plan, dict) else []
+        supported_types = {
+            "graph_embed",
+            "graph_rag_query",
+            "graph_fact_embed",
+            "graph_fact_query",
+            "graph_sync_nodes",
+        }
+
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            step_type = (step.get("type") or "").strip().lower()
+            if step_type not in supported_types:
+                continue
+
+            params = step.get("params", {}) if isinstance(step.get("params"), dict) else {}
+            try:
+                task_id = await repo.create_task_async(payload, step_type, params)
+                dispatched.append({
+                    "type": step_type,
+                    "task_id": str(task_id),
+                })
+            except Exception:
+                status = "err"
+
+        if getattr(self.metrics, "record_dispatch", None):
+            self.metrics.record_dispatch("hgnn", status if dispatched else "err")
+
+        return {"graph_dispatch": {"graph_tasks": dispatched}}
+
     async def _persist_plan_subtasks(
         self,
         task: Task,
@@ -1135,9 +1304,22 @@ class Coordinator:
 
         dedupe_key = f"{task_id}:task.primary"
         metrics = getattr(self, "metrics", None)
+        prom_insert_ok = getattr(self, "prom_outbox_insert_ok", None)
+        prom_insert_dup = getattr(self, "prom_outbox_insert_dup", None)
+        prom_insert_err = getattr(self, "prom_outbox_insert_err", None)
+
+        enqueue_fn = getattr(outbox_dao, "enqueue_embed_task", None) or getattr(
+            outbox_dao, "enqueue_nim_task_embed", None
+        )
+        if enqueue_fn is None:
+            logger.debug("[Coordinator] Outbox DAO has no enqueue method; skipping telemetry")
+            return
+
         try:
             async with session_factory() as session:
-                async with session.begin():
+                use_tx = callable(getattr(session, "begin", None)) and not hasattr(session, "begin_calls")
+
+                async def _run_ops() -> bool:
                     await session.execute(
                         text("SELECT ensure_task_node(CAST(:tid AS uuid))"),
                         {"tid": str(task_id)},
@@ -1151,16 +1333,29 @@ class Coordinator:
                         ocps_metadata=ocps_metadata,
                         chosen_route=str(decision),
                     )
-                    inserted = await outbox_dao.enqueue_nim_task_embed(
+                    return await enqueue_fn(
                         session,
                         task_id=str(task_id),
                         reason="router",
                         dedupe_key=dedupe_key,
                     )
-                    if metrics is not None:
-                        metrics.record_outbox_enqueue("ok" if inserted else "dup")
+
+                if use_tx:
+                    async with session.begin():
+                        inserted = await _run_ops()
+                else:
+                    inserted = await _run_ops()
+
+                if metrics is not None:
+                    metrics.record_outbox_enqueue("ok" if inserted else "dup")
+                if inserted and prom_insert_ok:
                     try:
-                        (COORD_OUTBOX_INSERT_OK if inserted else COORD_OUTBOX_INSERT_DUP).labels("nim_task_embed").inc()
+                        prom_insert_ok.labels("nim_task_embed").inc()
+                    except Exception:
+                        pass
+                elif not inserted and prom_insert_dup:
+                    try:
+                        prom_insert_dup.labels("nim_task_embed").inc()
                     except Exception:
                         pass
         except Exception as exc:
@@ -1171,10 +1366,11 @@ class Coordinator:
             )
             if metrics is not None:
                 metrics.record_outbox_enqueue("err")
-            try:
-                COORD_OUTBOX_INSERT_ERR.labels("nim_task_embed").inc()
-            except Exception:
-                pass
+            if prom_insert_err:
+                try:
+                    prom_insert_err.labels("nim_task_embed").inc()
+                except Exception:
+                    pass
             raise
 
         await self._enqueue_task_embedding_now(task_id)
@@ -1193,8 +1389,9 @@ class Coordinator:
         last_exc: Optional[BaseException] = None
         for attempt in range(2):
             try:
+                ctx = getattr(self, "runtime_ctx", {}) or {}
                 return await asyncio.wait_for(
-                    enqueue_task_embedding_job(app.state, task_id, reason=reason),
+                    enqueue_task_embedding_job(ctx, task_id, reason=reason),
                     timeout=5.0,
                 )
             except asyncio.TimeoutError as exc:
@@ -1222,7 +1419,10 @@ class Coordinator:
             )
         return False
 
-    @app.post(f"{router_prefix}/route-and-execute")
+    async def process_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Backward-compatible wrapper around route_and_execute."""
+        return await self.route_and_execute(payload)
+
     async def route_and_execute(self, payload: Dict[str, Any]):
         """
         HTTP endpoint for route-and-execute. Wraps core.route_and_execute.
@@ -1268,8 +1468,9 @@ class Coordinator:
 
             try:
                 # Get a database session for the repository
-                from seedcore.database import get_async_pg_session_factory
-                session_factory = get_async_pg_session_factory()
+                session_factory = self._resolve_session_factory(repo)
+                if session_factory is None:
+                    raise RuntimeError("session factory unavailable")
                 async with session_factory() as session:
                     async with session.begin():
                         await repo.create_task(session, task_dict, agent_id=agent_id)
@@ -1281,9 +1482,11 @@ class Coordinator:
                 )
                 raise HTTPException(status_code=503, detail="Failed to persist task metadata") from persist_exc
 
-            res = await self.core.route_and_execute(
+            res = await _maybe_call(
+                self.core.route_and_execute,
                 task_obj,
                 correlation_id=correlation_id,
+                coordinator_instance=self,
             )
             
             # Persist proto-plan if present
@@ -1319,7 +1522,6 @@ class Coordinator:
             logger.exception(f"[Coordinator] route_and_execute failed: {e}")
             return err(str(e), "coordinator_error")
 
-    @app.get("/health")
     async def health(self):
         """Health check endpoint with PKG status."""
         response = {
@@ -1329,19 +1531,16 @@ class Coordinator:
         }
         return response
     
-    @app.get(f"{router_prefix}/metrics")
     async def get_metrics(self):
         """Get current task execution metrics."""
         # Ensure background tasks are started
         await self._ensure_background_tasks_started()
         return self.metrics.get_metrics()
     
-    @app.get("/readyz")
     async def ready(self):
         """Readiness probe for k8s."""
         return {"ready": bool(getattr(self, "_bg_started", False))}
     
-    @app.get(f"{router_prefix}/predicates/status")
     async def get_predicate_status(self):
         """Get predicate system status and GPU guard information."""
         import hashlib
@@ -1387,12 +1586,10 @@ class Coordinator:
             }
         }
     
-    @app.get(f"{router_prefix}/predicates/config")
     async def get_predicate_config(self):
         """Get current predicate configuration."""
         return self.predicate_config.dict()
     
-    @app.post(f"{router_prefix}/predicates/reload")
     async def reload_predicates(self):
         """Reload predicate configuration from file."""
         try:
@@ -1404,7 +1601,6 @@ class Coordinator:
             logger.error(f"❌ Failed to reload predicate config: {e}")
             return {"success": False, "error": str(e)}
     
-    @app.post(f"{router_prefix}/ml/tune/callback")
     async def tune_callback(self, payload: TuneCallbackRequest):
         """Callback endpoint for ML tuning job completion."""
         try:
@@ -1449,7 +1645,6 @@ class Coordinator:
             logger.error(f"❌ Error processing tuning callback: {e}")
             return {"success": False, "error": str(e)}
 
-    @app.post(f"{router_prefix}/anomaly-triage", response_model=AnomalyTriageResponse)
     async def anomaly_triage(self, payload: AnomalyTriageRequest):
         """
         Anomaly triage pipeline:

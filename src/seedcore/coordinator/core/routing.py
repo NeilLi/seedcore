@@ -170,6 +170,7 @@ async def bulk_resolve_routes_cached(
     pairs: Dict[Tuple[str, Optional[str]], List[int]] = {}
     mapping: Dict[int, str] = {}  # final result
     to_resolve = []
+    seen_keys: set[str] = set()
 
     for idx, step in enumerate(steps):
         subtask = step.get("task") or {}
@@ -186,19 +187,28 @@ async def bulk_resolve_routes_cached(
 
         # Check cache for this (type, domain) pair
         cached = route_cache.get(key)
-        if cached:
+        is_stale = (
+            cached is not None
+            and last_seen_epoch is not None
+            and cached.epoch == last_seen_epoch
+        )
+
+        if cached and not is_stale:
             # Apply cached result to all indices with this (type, domain)
             for step_idx in pairs[key]:
                 mapping[step_idx] = cached.logical_id
         else:
             # Only add to resolve list if not already added
-            if key not in [item.get("key") for item in to_resolve]:
+            domain_key = d or ""
+            key_str = f"{t}|{domain_key}"
+            if key_str not in seen_keys:
                 to_resolve.append({
-                    "key": f"{t}|{d}",
-                    "type": t, 
+                    "key": key_str,
+                    "type": t,
                     "domain": d,
-                    "preferred_logical_id": step.get("organ_hint")  # Forward hints
+                    "preferred_logical_id": step.get("organ_hint"),  # Forward hints
                 })
+                seen_keys.add(key_str)
 
     if not to_resolve:
         return mapping, None  # all from cache
@@ -208,7 +218,12 @@ async def bulk_resolve_routes_cached(
     new_epoch = None
     try:
         # Clamp bulk resolve timeout (allow more time for bulk operations)
-        bulk_timeout = min(0.1, organism_client.timeout)  # 100ms max for bulk
+        client_timeout = getattr(organism_client, "timeout", None)
+        try:
+            client_timeout = float(client_timeout) if client_timeout is not None else 0.1
+        except (TypeError, ValueError):
+            client_timeout = 0.1
+        bulk_timeout = min(0.1, max(0.01, client_timeout))  # 10-100ms window
         resp = await organism_client.post(
             "/resolve-routes",
             json={"tasks": to_resolve},
@@ -343,17 +358,26 @@ async def resolve_route_cached_async(
     d = normalize_func(domain)
     key = (t, d)
 
-    # Check feature flag
-    if not routing_remote_enabled or t not in routing_remote_types:
-        return static_route_fallback_func(t, d)
-
-    # 1) Try cache
+    # 1) Try cache first regardless of remote flag. When cache is warm we can
+    #     serve entries even if remote routing is currently disabled.
     cached = route_cache.get(key)
     if cached:
         if metrics:
             metrics.increment_counter("route_cache_hit_total")
-        logger.info(f"[Coordinator] Route cache hit for ({t}, {d}): {cached.logical_id} from={cached.resolved_from} epoch={cached.epoch}")
+        logger.info(
+            "[Coordinator] Route cache hit for (%s, %s): %s from=%s epoch=%s",
+            t,
+            d,
+            cached.logical_id,
+            cached.resolved_from,
+            cached.epoch,
+        )
         return cached.logical_id
+
+    # Check feature flag after cache lookup. If remote routing is disabled (or
+    # type not enabled) fall back to static routing.
+    if not routing_remote_enabled or t not in routing_remote_types:
+        return static_route_fallback_func(t, d)
 
     # 2) Single-flight: if another coroutine is already resolving this key, await it
     async for (fut, is_leader) in route_cache.singleflight(key):
@@ -371,8 +395,13 @@ async def resolve_route_cached_async(
             if preferred_logical_id:
                 payload["preferred_logical_id"] = preferred_logical_id
 
-            # Clamp resolve timeout to keep fast-path SLO (30-50ms budget)
-            resolve_timeout = min(0.05, organism_client.timeout)  # 50ms max
+            # Clamp resolve timeout to keep fast-path SLO (30-50ms budget).
+            client_timeout = getattr(organism_client, "timeout", None)
+            try:
+                client_timeout = float(client_timeout) if client_timeout is not None else 0.05
+            except (TypeError, ValueError):
+                client_timeout = 0.05
+            resolve_timeout = min(0.05, max(0.005, client_timeout))  # 5-50ms window
             resp = await organism_client.post(
                 "/resolve-route", json=payload,
                 headers=_corr_headers("organism", cid or uuid.uuid4().hex),

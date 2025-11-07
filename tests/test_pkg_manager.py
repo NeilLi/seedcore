@@ -40,7 +40,15 @@ class TestPKGManager:
     def mock_redis_client(self):
         """Create a mock Redis client."""
         redis = AsyncMock()
-        redis.pubsub = AsyncMock(return_value=AsyncMock())
+
+        pubsub = AsyncMock()
+
+        async def empty_listen():
+            if False:
+                yield None
+
+        pubsub.listen = MagicMock(return_value=empty_listen())
+        redis.pubsub = AsyncMock(return_value=pubsub)
         return redis
     
     @pytest.fixture
@@ -94,15 +102,18 @@ class TestPKGManager:
     async def test_manager_start_loads_snapshot(self, manager, mock_pkg_client, wasm_snapshot):
         """Test manager start loads initial snapshot."""
         mock_pkg_client.get_active_snapshot = AsyncMock(return_value=wasm_snapshot)
+        manager._redis_client = None  # disable redis listener to prevent hangs
         
         await manager.start()
-        
-        # Wait a bit for async tasks
-        await asyncio.sleep(0.1)
-        
-        assert manager._active_evaluator is not None
-        assert manager._active_version == 'rules@1.4.0'
-        mock_pkg_client.get_active_snapshot.assert_called_once()
+        try:
+            # Wait a bit for async tasks
+            await asyncio.sleep(0.1)
+
+            assert manager._active_evaluator is not None
+            assert manager._active_version == 'rules@1.4.0'
+            mock_pkg_client.get_active_snapshot.assert_called_once()
+        finally:
+            await manager.stop()
     
     @pytest.mark.asyncio
     async def test_manager_start_no_snapshot(self, manager, mock_pkg_client):
@@ -110,9 +121,11 @@ class TestPKGManager:
         mock_pkg_client.get_active_snapshot = AsyncMock(return_value=None)
         
         await manager.start()
-        
-        assert manager._active_evaluator is None
-        assert manager._status["degraded_mode"] is True
+        try:
+            assert manager._active_evaluator is None
+            assert manager._status["degraded_mode"] is True
+        finally:
+            await manager.stop()
     
     @pytest.mark.asyncio
     async def test_manager_start_without_redis(self, mock_pkg_client):
@@ -121,8 +134,10 @@ class TestPKGManager:
         mock_pkg_client.get_active_snapshot = AsyncMock(return_value=None)
         
         await manager.start()
-        
-        assert manager._redis_task is None
+        try:
+            assert manager._redis_task is None
+        finally:
+            await manager.stop()
     
     @pytest.mark.asyncio
     async def test_manager_async_context_manager(self, manager, mock_pkg_client):
@@ -317,7 +332,7 @@ class TestPKGManager:
         mock_redis_client.pubsub.assert_called()
     
     @pytest.mark.asyncio
-    async def test_redis_listen_loop_handles_activate_message(self, manager, mock_pkg_client, wasm_snapshot):
+    async def test_redis_listen_loop_handles_activate_message(self, manager, mock_pkg_client, wasm_snapshot, mock_redis_client):
         """Test Redis listener handles activate message."""
         pubsub = AsyncMock()
         mock_redis_client.pubsub = AsyncMock(return_value=pubsub)
@@ -355,14 +370,17 @@ class TestPKGManager:
     @pytest.mark.asyncio
     async def test_manager_stop(self, manager, mock_redis_client):
         """Test manager stop."""
-        # Create a mock task
-        task = AsyncMock()
-        task.done.return_value = False
-        manager._redis_task = task
-        
+        async def dummy_task():
+            await asyncio.sleep(0)
+
+        real_task = asyncio.create_task(dummy_task())
+        real_task.done = Mock(return_value=False)
+        real_task.cancel = Mock()
+        manager._redis_task = real_task
+
         await manager.stop()
-        
-        task.cancel.assert_called_once()
+
+        real_task.cancel.assert_called_once()
 
 
 class TestGlobalPKGManager:

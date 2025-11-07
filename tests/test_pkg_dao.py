@@ -13,6 +13,7 @@ import mock_database_dependencies
 import pytest
 import asyncio
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 from datetime import datetime
 from typing import Dict, Any, List
 
@@ -35,8 +36,8 @@ class TestPKGSnapshotsDAO:
         """Create a mock session factory."""
         def _create_session():
             session = AsyncMock()
-            session.__aenter__ = AsyncMock(return_value=session)
-            session.__aexit__ = AsyncMock(return_value=None)
+            session.__aenter__.return_value = session
+            session.__aexit__.return_value = None
             return session
         return _create_session
     
@@ -130,17 +131,17 @@ class TestPKGSnapshotsDAO:
     async def test_get_active_snapshot_wasm(self, dao, mock_session_factory, mock_snapshot_row, mock_wasm_artifact_row):
         """Test getting active WASM snapshot."""
         session = mock_session_factory()
+        dao._sf = lambda: session
         
         # Mock snapshot query
         snapshot_result = AsyncMock()
         snapshot_result.first.return_value = mock_snapshot_row
-        session.execute.return_value = snapshot_result
-        
-        # Mock artifact query
+
         artifact_result = AsyncMock()
         artifact_result.first.return_value = mock_wasm_artifact_row
-        session.execute.return_value = artifact_result
-        
+
+        session.execute.side_effect = [snapshot_result, artifact_result]
+
         snapshot = await dao.get_active_snapshot()
         
         assert snapshot is not None
@@ -155,22 +156,20 @@ class TestPKGSnapshotsDAO:
     async def test_get_active_snapshot_native(self, dao, mock_session_factory, mock_snapshot_row, mock_native_rules_rows):
         """Test getting active native snapshot with rules."""
         session = mock_session_factory()
+        dao._sf = lambda: session
         
         # Mock snapshot query
         snapshot_result = AsyncMock()
         snapshot_result.first.return_value = mock_snapshot_row
-        session.execute.return_value = snapshot_result
-        
-        # Mock artifact query (no WASM artifact)
+
         artifact_result = AsyncMock()
         artifact_result.first.return_value = None
-        session.execute.return_value = artifact_result
-        
-        # Mock rules query
+
         rules_result = AsyncMock()
         rules_result.__iter__ = Mock(return_value=iter(mock_native_rules_rows))
-        session.execute.return_value = rules_result
-        
+
+        session.execute.side_effect = [snapshot_result, artifact_result, rules_result]
+
         snapshot = await dao.get_active_snapshot()
         
         assert snapshot is not None
@@ -185,11 +184,12 @@ class TestPKGSnapshotsDAO:
     async def test_get_active_snapshot_not_found(self, dao, mock_session_factory):
         """Test getting active snapshot when none exists."""
         session = mock_session_factory()
+        dao._sf = lambda: session
         
         snapshot_result = AsyncMock()
         snapshot_result.first.return_value = None
-        session.execute.return_value = snapshot_result
-        
+        session.execute.side_effect = [snapshot_result]
+
         snapshot = await dao.get_active_snapshot()
         
         assert snapshot is None
@@ -198,15 +198,16 @@ class TestPKGSnapshotsDAO:
     async def test_get_snapshot_by_version(self, dao, mock_session_factory, mock_snapshot_row, mock_wasm_artifact_row):
         """Test getting snapshot by version."""
         session = mock_session_factory()
+        dao._sf = lambda: session
         
         snapshot_result = AsyncMock()
         snapshot_result.first.return_value = mock_snapshot_row
-        session.execute.return_value = snapshot_result
-        
+
         artifact_result = AsyncMock()
         artifact_result.first.return_value = mock_wasm_artifact_row
-        session.execute.return_value = artifact_result
-        
+
+        session.execute.side_effect = [snapshot_result, artifact_result]
+
         snapshot = await dao.get_snapshot_by_version('rules@1.4.0')
         
         assert snapshot is not None
@@ -216,6 +217,7 @@ class TestPKGSnapshotsDAO:
     async def test_get_active_artifact(self, dao, mock_session_factory):
         """Test getting active artifact."""
         session = mock_session_factory()
+        dao._sf = lambda: session
         
         result = AsyncMock()
         row = Mock()
@@ -228,8 +230,8 @@ class TestPKGSnapshotsDAO:
             'sha256': 'abc123'
         }
         result.first.return_value = row
-        session.execute.return_value = result
-        
+        session.execute.side_effect = [result]
+
         artifact = await dao.get_active_artifact('prod')
         
         assert artifact is not None
@@ -245,8 +247,8 @@ class TestPKGDeploymentsDAO:
         """Create a mock session factory."""
         def _create_session():
             session = AsyncMock()
-            session.__aenter__ = AsyncMock(return_value=session)
-            session.__aexit__ = AsyncMock(return_value=None)
+            session.__aenter__.return_value = session
+            session.__aexit__.return_value = None
             return session
         return _create_session
     
@@ -259,7 +261,8 @@ class TestPKGDeploymentsDAO:
     async def test_get_deployments(self, dao, mock_session_factory):
         """Test getting deployments."""
         session = mock_session_factory()
-        
+        dao._sf = lambda: session
+
         result = AsyncMock()
         row1 = Mock()
         row1._mapping = {
@@ -282,7 +285,7 @@ class TestPKGDeploymentsDAO:
             'snapshot_version': 'rules@1.4.0'
         }
         result.__iter__ = Mock(return_value=iter([row1, row2]))
-        session.execute.return_value = result
+        session.execute.side_effect = [result]
         
         deployments = await dao.get_deployments()
         
@@ -294,7 +297,8 @@ class TestPKGDeploymentsDAO:
     async def test_get_deployments_filtered(self, dao, mock_session_factory):
         """Test getting deployments with filters."""
         session = mock_session_factory()
-        
+        dao._sf = lambda: session
+
         result = AsyncMock()
         row = Mock()
         row._mapping = {
@@ -307,7 +311,7 @@ class TestPKGDeploymentsDAO:
             'snapshot_version': 'rules@1.4.0'
         }
         result.__iter__ = Mock(return_value=iter([row]))
-        session.execute.return_value = result
+        session.execute.side_effect = [result]
         
         deployments = await dao.get_deployments(target='router', region='global')
         
@@ -318,7 +322,8 @@ class TestPKGDeploymentsDAO:
     async def test_get_deployment_coverage(self, dao, mock_session_factory):
         """Test getting deployment coverage."""
         session = mock_session_factory()
-        
+        dao._sf = lambda: session
+
         result = AsyncMock()
         row = Mock()
         row._mapping = {
@@ -330,7 +335,7 @@ class TestPKGDeploymentsDAO:
             'devices_total': 50
         }
         result.__iter__ = Mock(return_value=iter([row]))
-        session.execute.return_value = result
+        session.execute.side_effect = [result]
         
         coverage = await dao.get_deployment_coverage()
         
@@ -347,9 +352,12 @@ class TestPKGValidationDAO:
         """Create a mock session factory."""
         def _create_session():
             session = AsyncMock()
-            session.__aenter__ = AsyncMock(return_value=session)
-            session.__aexit__ = AsyncMock(return_value=None)
-            session.begin = AsyncMock(return_value=AsyncMock())
+            session.__aenter__.return_value = session
+            session.__aexit__.return_value = None
+            tx = AsyncMock()
+            tx.__aenter__.return_value = session
+            tx.__aexit__.return_value = None
+            session.begin = Mock(return_value=tx)
             return session
         return _create_session
     
@@ -362,7 +370,8 @@ class TestPKGValidationDAO:
     async def test_get_validation_fixtures(self, dao, mock_session_factory):
         """Test getting validation fixtures."""
         session = mock_session_factory()
-        
+        dao._sf = lambda: session
+
         result = AsyncMock()
         row = Mock()
         row._mapping = {
@@ -373,7 +382,7 @@ class TestPKGValidationDAO:
             'created_at': datetime.now()
         }
         result.__iter__ = Mock(return_value=iter([row]))
-        session.execute.return_value = result
+        session.execute.side_effect = [result]
         
         fixtures = await dao.get_validation_fixtures(snapshot_id=1)
         
@@ -384,10 +393,11 @@ class TestPKGValidationDAO:
     async def test_create_validation_run(self, dao, mock_session_factory):
         """Test creating validation run."""
         session = mock_session_factory()
-        
+        dao._sf = lambda: session
+
         result = AsyncMock()
         result.scalar.return_value = 123
-        session.execute.return_value = result
+        session.execute.side_effect = [result]
         
         run_id = await dao.create_validation_run(snapshot_id=1)
         
@@ -398,9 +408,13 @@ class TestPKGValidationDAO:
     async def test_finish_validation_run(self, dao, mock_session_factory):
         """Test finishing validation run."""
         session = mock_session_factory()
-        
+        dao._sf = lambda: session
+
         session.execute = AsyncMock()
-        session.begin = AsyncMock(return_value=AsyncMock())
+        tx = AsyncMock()
+        tx.__aenter__ = AsyncMock(return_value=session)
+        tx.__aexit__ = AsyncMock(return_value=None)
+        session.begin = Mock(return_value=tx)
         
         await dao.finish_validation_run(
             run_id=123,
@@ -415,7 +429,8 @@ class TestPKGValidationDAO:
     async def test_get_validation_runs(self, dao, mock_session_factory):
         """Test getting validation runs."""
         session = mock_session_factory()
-        
+        dao._sf = lambda: session
+
         result = AsyncMock()
         row = Mock()
         row._mapping = {
@@ -427,7 +442,7 @@ class TestPKGValidationDAO:
             'report': {}
         }
         result.__iter__ = Mock(return_value=iter([row]))
-        session.execute.return_value = result
+        session.execute.side_effect = [result]
         
         runs = await dao.get_validation_runs(snapshot_id=1)
         
@@ -446,7 +461,10 @@ class TestPKGPromotionsDAO:
             session = AsyncMock()
             session.__aenter__ = AsyncMock(return_value=session)
             session.__aexit__ = AsyncMock(return_value=None)
-            session.begin = AsyncMock(return_value=AsyncMock())
+            tx = AsyncMock()
+            tx.__aenter__ = AsyncMock(return_value=session)
+            tx.__aexit__ = AsyncMock(return_value=None)
+            session.begin = Mock(return_value=tx)
             return session
         return _create_session
     
@@ -459,7 +477,8 @@ class TestPKGPromotionsDAO:
     async def test_get_promotions(self, dao, mock_session_factory):
         """Test getting promotions."""
         session = mock_session_factory()
-        
+        dao._sf = lambda: session
+
         result = AsyncMock()
         row = Mock()
         row._mapping = {
@@ -475,7 +494,7 @@ class TestPKGPromotionsDAO:
             'snapshot_version': 'rules@1.4.0'
         }
         result.__iter__ = Mock(return_value=iter([row]))
-        session.execute.return_value = result
+        session.execute.side_effect = [result]
         
         promotions = await dao.get_promotions()
         
@@ -487,25 +506,22 @@ class TestPKGPromotionsDAO:
     async def test_create_promotion(self, dao, mock_session_factory):
         """Test creating promotion."""
         session = mock_session_factory()
+        dao._sf = lambda: session
         
-        # Mock current version query
         current_result = AsyncMock()
         current_row = Mock()
         current_row._mapping = {'version': 'rules@1.3.0'}
         current_result.first.return_value = current_row
-        session.execute.return_value = current_result
-        
-        # Mock to_version query
+
         to_result = AsyncMock()
         to_row = Mock()
         to_row._mapping = {'version': 'rules@1.4.0'}
         to_result.first.return_value = to_row
-        session.execute.return_value = to_result
-        
-        # Mock insert
+
         insert_result = AsyncMock()
         insert_result.scalar.return_value = 456
-        session.execute.return_value = insert_result
+
+        session.execute.side_effect = [current_result, to_result, insert_result]
         
         promo_id = await dao.create_promotion(
             snapshot_id=1,
@@ -528,7 +544,10 @@ class TestPKGDevicesDAO:
             session = AsyncMock()
             session.__aenter__ = AsyncMock(return_value=session)
             session.__aexit__ = AsyncMock(return_value=None)
-            session.begin = AsyncMock(return_value=AsyncMock())
+            tx = AsyncMock()
+            tx.__aenter__ = AsyncMock(return_value=session)
+            tx.__aexit__ = AsyncMock(return_value=None)
+            session.begin = Mock(return_value=tx)
             return session
         return _create_session
     
@@ -541,6 +560,7 @@ class TestPKGDevicesDAO:
     async def test_get_device_versions(self, dao, mock_session_factory):
         """Test getting device versions."""
         session = mock_session_factory()
+        dao._sf = lambda: session
         
         result = AsyncMock()
         row = Mock()
@@ -554,7 +574,7 @@ class TestPKGDevicesDAO:
             'snapshot_version': 'rules@1.4.0'
         }
         result.__iter__ = Mock(return_value=iter([row]))
-        session.execute.return_value = result
+        session.execute = AsyncMock(return_value=result)
         
         devices = await dao.get_device_versions(device_type='door')
         
@@ -565,9 +585,9 @@ class TestPKGDevicesDAO:
     async def test_update_device_heartbeat(self, dao, mock_session_factory):
         """Test updating device heartbeat."""
         session = mock_session_factory()
+        dao._sf = lambda: session
         
         session.execute = AsyncMock()
-        session.begin = AsyncMock(return_value=AsyncMock())
         
         await dao.update_device_heartbeat(
             device_id='door:D-1510',
@@ -600,12 +620,11 @@ class TestPKGIntegrity:
         session = mock_session_factory()
         
         result = AsyncMock()
-        row = Mock()
-        row._mapping = {'ok': True, 'msg': 'OK'}
-        result.first.return_value = row
-        session.execute.return_value = result
+        row = SimpleNamespace(_mapping={'ok': True, 'msg': 'OK'})
+        result.first = AsyncMock(return_value=row)
+        session.execute = AsyncMock(return_value=result)
         
-        integrity = await check_pkg_integrity(mock_session_factory)
+        integrity = await check_pkg_integrity(lambda: session)
         
         assert integrity['ok'] is True
         assert integrity['msg'] == 'OK'
@@ -616,12 +635,11 @@ class TestPKGIntegrity:
         session = mock_session_factory()
         
         result = AsyncMock()
-        row = Mock()
-        row._mapping = {'ok': False, 'msg': 'Cross-snapshot emission mismatch found'}
-        result.first.return_value = row
-        session.execute.return_value = result
+        row = SimpleNamespace(_mapping={'ok': False, 'msg': 'Cross-snapshot emission mismatch found'})
+        result.first = AsyncMock(return_value=row)
+        session.execute = AsyncMock(return_value=result)
         
-        integrity = await check_pkg_integrity(mock_session_factory)
+        integrity = await check_pkg_integrity(lambda: session)
         
         assert integrity['ok'] is False
         assert 'mismatch' in integrity['msg']

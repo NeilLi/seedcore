@@ -15,7 +15,8 @@ testability, and maintainability.
 
 import logging
 import asyncio
-from typing import Optional, List, Dict, Any
+import inspect
+from typing import Optional, List, Dict, Any, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -25,6 +26,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...database import get_async_pg_session_factory
 
 logger = logging.getLogger(__name__)
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _row_mapping(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+
+    mapping = getattr(row, "_mapping", None)
+    if mapping is None:
+        try:
+            return dict(row)
+        except TypeError:
+            return None
+
+    mapping = await _maybe_await(mapping)
+
+    if isinstance(mapping, Mapping):
+        return dict(mapping)
+
+    try:
+        return dict(mapping)
+    except TypeError:
+        return None
+
 
 __all__ = [
     "PKGSnapshotsDAO",
@@ -88,13 +116,14 @@ class PKGSnapshotsDAO:
         
         async with self._sf() as session:
             res = await session.execute(sql)
-            snapshot_row = res.first()
-            
-            if not snapshot_row:
+            snapshot_row = await _maybe_await(res.first())
+            snapshot_mapping = await _row_mapping(snapshot_row)
+
+            if not snapshot_mapping:
                 logger.warning("No active PKG snapshot found in database.")
                 return None
-                
-            return await self._build_snapshot_data(snapshot_row._mapping, session)
+
+            return await self._build_snapshot_data(snapshot_mapping, session)
     
     async def get_snapshot_by_version(self, version: str) -> Optional[PKGSnapshotData]:
         """
@@ -111,13 +140,14 @@ class PKGSnapshotsDAO:
         
         async with self._sf() as session:
             res = await session.execute(sql, {"version": version})
-            snapshot_row = res.first()
-            
-            if not snapshot_row:
+            snapshot_row = await _maybe_await(res.first())
+            snapshot_mapping = await _row_mapping(snapshot_row)
+
+            if not snapshot_mapping:
                 logger.error(f"Snapshot version '{version}' not found in database.")
                 return None
-                
-            return await self._build_snapshot_data(snapshot_row._mapping, session)
+
+            return await self._build_snapshot_data(snapshot_mapping, session)
     
     async def _build_snapshot_data(
         self, 
@@ -145,11 +175,11 @@ class PKGSnapshotsDAO:
             LIMIT 1
         """)
         artifact_res = await session.execute(artifact_sql, {"snapshot_id": snapshot_id})
-        artifact_row = artifact_res.first()
+        artifact_row = await _maybe_await(artifact_res.first())
+        artifact_dict = await _row_mapping(artifact_row)
         
         wasm_artifact: Optional[bytes] = None
-        if artifact_row:
-            artifact_dict = dict(artifact_row._mapping)
+        if artifact_dict:
             # Only use if it's a WASM artifact
             if artifact_dict.get("artifact_type") == "wasm_pack":
                 wasm_artifact = artifact_dict.get("artifact_bytes")
@@ -296,8 +326,9 @@ class PKGSnapshotsDAO:
         
         async with self._sf() as session:
             res = await session.execute(sql, {"env": env})
-            row = res.first()
-            return dict(row._mapping) if row else None
+            row = await _maybe_await(res.first())
+            mapping = await _row_mapping(row)
+            return mapping if mapping is not None else None
 
 
 # =========================
@@ -473,7 +504,7 @@ class PKGValidationDAO:
                     sql, 
                     {"snapshot_id": snapshot_id, "started_at": started_at}
                 )
-                run_id = res.scalar()
+                run_id = await _maybe_await(res.scalar())
                 return run_id
     
     async def finish_validation_run(
@@ -624,17 +655,19 @@ class PKGPromotionsDAO:
                     LIMIT 1
                 """)
                 current_res = await session.execute(current_sql)
-                current_row = current_res.first()
-                if current_row:
-                    from_version = current_row[0]
+                current_row = await _maybe_await(current_res.first())
+                current_mapping = await _row_mapping(current_row)
+                if current_mapping:
+                    from_version = current_mapping.get("version") or next(iter(current_mapping.values()))
                 
                 # Get to_version
                 to_sql = text("SELECT version FROM pkg_snapshots WHERE id = :snapshot_id")
                 to_res = await session.execute(to_sql, {"snapshot_id": snapshot_id})
-                to_row = to_res.first()
-                if not to_row:
+                to_row = await _maybe_await(to_res.first())
+                to_mapping = await _row_mapping(to_row)
+                if not to_mapping:
                     raise ValueError(f"Snapshot {snapshot_id} not found")
-                to_version = to_row[0]
+                to_version = to_mapping.get("version") or next(iter(to_mapping.values()))
                 
                 # Insert promotion record
                 sql = text("""
@@ -657,7 +690,7 @@ class PKGPromotionsDAO:
                         "success": success
                     }
                 )
-                promo_id = res.scalar()
+                promo_id = await _maybe_await(res.scalar())
                 return promo_id
 
 
@@ -785,9 +818,10 @@ async def check_pkg_integrity(session_factory: Optional[callable] = None) -> Dic
     """
     sf = session_factory or get_async_pg_session_factory()
     sql = text("SELECT * FROM pkg_check_integrity()")
-    
+
     async with sf() as session:
         res = await session.execute(sql)
-        row = res.first()
-        return dict(row._mapping) if row else {"ok": False, "msg": "Integrity check failed"}
+        row = await _maybe_await(res.first())
+        mapping = await _row_mapping(row)
+        return mapping if mapping is not None else {"ok": False, "msg": "Integrity check failed"}
 

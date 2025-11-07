@@ -6,7 +6,12 @@ import time
 import logging
 import httpx
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Set, Callable, TypedDict, NotRequired
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Set, Callable, TypedDict
+
+try:  # Python 3.11+
+    from typing import NotRequired  # type: ignore[attr-defined]
+except ImportError:  # Python < 3.11
+    from typing_extensions import NotRequired  # type: ignore[assignment]
 from dataclasses import dataclass
 
 from seedcore.serve.base_client import BaseServiceClient, CircuitBreaker, RetryConfig

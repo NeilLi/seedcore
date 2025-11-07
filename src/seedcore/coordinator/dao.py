@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence
+import inspect
 import json
 import logging
 import os
@@ -114,12 +115,38 @@ class TaskOutboxDAO:
                 "dedupe_key": dedupe_key,
             },
         )
-        inserted = bool(getattr(result, "rowcount", 0))
+
+        rowcount = getattr(result, "rowcount", None)
+        if isinstance(rowcount, (int, float)):
+            inserted = rowcount > 0
+        elif hasattr(result, "fetchone"):
+            try:
+                inserted = bool(result.fetchone())
+            except Exception:  # pragma: no cover - defensive for mocks only
+                inserted = False
+        else:
+            inserted = False
         if inserted:
             logger.debug(f"[Coordinator] Enqueued nim_task_embed for {task_id}")
         else:
             logger.debug(f"[Coordinator] Skipped duplicate nim_task_embed for {task_id}")
         return inserted
+
+    async def enqueue_embed_task(
+        self,
+        session,
+        *,
+        task_id: str,
+        reason: str = "coordinator",
+        dedupe_key: Optional[str] = None,
+    ) -> bool:
+        """Backward-compatible alias for legacy enqueue method."""
+        return await self.enqueue_nim_task_embed(
+            session,
+            task_id=task_id,
+            reason=reason,
+            dedupe_key=dedupe_key,
+        )
 
     async def list_pending_nim_task_embeds(self, session, limit: int = 100) -> List[Any]:
         """Retrieve pending 'nim_task_embed' events awaiting processing."""
@@ -177,17 +204,53 @@ class TaskOutboxDAO:
             """
         )
         result = await session.execute(stmt, {"limit": limit})
-        rows = result.mappings().all()
+
+        rows: List[Any] = []
+        try:
+            mappings_fn = getattr(result, "mappings", None)
+            if callable(mappings_fn):
+                mapped = mappings_fn()
+                all_fn = getattr(mapped, "all", None)
+                if callable(all_fn):
+                    maybe_rows = all_fn()
+                    if isinstance(maybe_rows, list):
+                        rows = maybe_rows
+        except Exception:
+            rows = []
+
+        if not rows:
+            fetchall = getattr(result, "fetchall", None)
+            if callable(fetchall):
+                maybe_rows = fetchall()
+                rows = await maybe_rows if inspect.isawaitable(maybe_rows) else maybe_rows
         return [{"id": row["id"], "payload": row["payload"]} for row in rows]
 
-    async def delete(self, session, id_val: Any) -> None:
+    async def delete(
+        self,
+        session,
+        id_val: Any | None = None,
+        *,
+        event_id: Any | None = None,
+    ) -> None:
         """Delete a processed event from the outbox."""
+        target_id = id_val if id_val is not None else event_id
+        if target_id is None:
+            raise ValueError("delete() requires id_val or event_id")
         stmt = text(f"DELETE FROM {self._TABLE_NAME} WHERE id = :id")
-        await session.execute(stmt, {"id": id_val})
-        logger.debug(f"[Coordinator] Deleted outbox event {id_val}")
+        await session.execute(stmt, {"id": target_id})
+        logger.debug(f"[Coordinator] Deleted outbox event {target_id}")
 
-    async def backoff(self, session, id_val: Any) -> None:
+    async def backoff(
+        self,
+        session,
+        id_val: Any | None = None,
+        *,
+        event_id: Any | None = None,
+    ) -> None:
         """Increment retry attempts and defer event availability using backoff strategy."""
+        target_id = id_val if id_val is not None else event_id
+        if target_id is None:
+            raise ValueError("backoff() requires id_val or event_id")
         stmt = text(
             f"""
             UPDATE {self._TABLE_NAME}
@@ -196,8 +259,8 @@ class TaskOutboxDAO:
             WHERE id = :id
             """
         )
-        await session.execute(stmt, {"id": id_val})
-        logger.warning(f"[Coordinator] Backed off event {id_val} for retry.")
+        await session.execute(stmt, {"id": target_id})
+        logger.warning(f"[Coordinator] Backed off event {target_id} for retry.")
 
 
 class TaskProtoPlanDAO:
@@ -239,9 +302,10 @@ class TaskProtoPlanDAO:
             ON CONFLICT (task_id) DO UPDATE
             SET route = EXCLUDED.route,
                 proto_plan = EXCLUDED.proto_plan
+            RETURNING id
             """
         )
-        await session.execute(
+        result = await session.execute(
             stmt,
             {
                 "task_id": task_id,
@@ -249,8 +313,55 @@ class TaskProtoPlanDAO:
                 "proto_plan": serialized,
             },
         )
-        if truncated:
-            return {"truncated": True}
-        return {"truncated": False}
+        row = None
+        if hasattr(result, "fetchone"):
+            maybe_row = result.fetchone()
+            row = await maybe_row if inspect.isawaitable(maybe_row) else maybe_row
+
+        response: Dict[str, Any] = {"truncated": truncated}
+        if row is not None:
+            if isinstance(row, dict):
+                id_value = row.get("id")
+            else:
+                id_value = getattr(row, "id", None)
+            if isinstance(id_value, (int, str)):
+                response["id"] = id_value
+        return response
+
+    async def get_by_task_id(
+        self, session, *, task_id: str
+    ) -> Optional[Dict[str, Any]]:
+        stmt = text(
+            """
+            SELECT id, task_id, route, proto_plan
+              FROM task_proto_plan
+             WHERE task_id = CAST(:task_id AS uuid)
+            """
+        )
+        result = await session.execute(stmt, {"task_id": task_id})
+
+        row = None
+        fetchone = getattr(result, "fetchone", None)
+        if callable(fetchone):
+            maybe_row = fetchone()
+            row = await maybe_row if inspect.isawaitable(maybe_row) else maybe_row
+
+        if not row:
+            return None
+
+        # Support both dict-like and object-style rows
+        get = row.get if isinstance(row, dict) else lambda k, default=None: getattr(row, k, default)
+        proto_plan_raw = get("proto_plan")
+        try:
+            proto_plan = json.loads(proto_plan_raw) if isinstance(proto_plan_raw, str) else proto_plan_raw
+        except (TypeError, json.JSONDecodeError):
+            proto_plan = proto_plan_raw
+
+        return {
+            "id": get("id"),
+            "task_id": get("task_id"),
+            "route": get("route"),
+            "proto_plan": proto_plan,
+        }
 
 

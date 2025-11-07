@@ -9,9 +9,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies
 
 import pytest
-from unittest.mock import Mock, AsyncMock, MagicMock
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from unittest.mock import Mock, AsyncMock
+from typing import Any, Optional
+
+from seedcore.models.result_schema import ResultKind
 from seedcore.coordinator.core.execute import (
     route_and_execute,
     RouteConfig,
@@ -20,39 +21,30 @@ from seedcore.coordinator.core.execute import (
 )
 
 
-# Mock classes for testing
-@dataclass
-class MockRouteConfig:
-    surprise_computer: Any
-    tau_fast_exit: float
-    tau_plan_exit: float
-    evaluate_pkg_func: Any
-    ood_to01: Any
-    pkg_timeout_s: int
+class FakeSurpriseComputer:
+    """Lightweight stub mimicking SurpriseComputer interface."""
 
+    def __init__(
+        self,
+        *,
+        return_value: dict[str, Any] | None = None,
+        side_effect: Optional[Exception] = None,
+        tau_fast: float = 0.35,
+        tau_plan: float = 0.6,
+        w_hat: Optional[list[float]] = None,
+    ) -> None:
+        self._return_value = return_value or {}
+        self._side_effect = side_effect
+        self.tau_fast = tau_fast
+        self.tau_plan = tau_plan
+        self.w_hat = w_hat or [0.25, 0.20, 0.15, 0.20, 0.10, 0.10]
+        self.last_signals: Optional[dict[str, Any]] = None
 
-@dataclass
-class MockExecutionConfig:
-    normalize_task_dict: Any
-    extract_agent_id: Any
-    compute_drift_score: Any
-    organism_execute: Any
-    graph_task_repo: Any
-    ml_client: Any
-    predicate_router: Any
-    metrics: Any
-    cid: str
-    resolve_route_cached: Any
-    static_route_fallback: Any
-    normalize_type: Any
-    normalize_domain: Any
-
-
-@dataclass
-class MockHGNNConfig:
-    hgnn_decompose: Any
-    bulk_resolve_func: Any
-    persist_plan_func: Any
+    def compute(self, signals: dict[str, Any]) -> dict[str, Any]:
+        self.last_signals = signals
+        if self._side_effect:
+            raise self._side_effect
+        return self._return_value
 
 
 @pytest.mark.asyncio
@@ -65,37 +57,35 @@ class TestRouteAndExecute:
         task = {"id": "task-123", "type": "test", "description": "test task"}
         
         # Mock surprise computer
-        surprise_computer = Mock()
-        surprise_computer.compute = Mock(return_value={
+        surprise_computer = FakeSurpriseComputer(return_value={
             "S": 0.2,  # Low surprise -> fast path
             "x": [0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
             "weights": [0.25, 0.20, 0.15, 0.20, 0.10, 0.10],
             "decision": "fast",
-            "ocps": {"S_t": 0.1, "h": 0.5, "flag_on": False}
+            "ocps": {"S_t": 0.1, "h": 0.5, "flag_on": False},
         })
-        
-        # Mock route config
-        route_config = MockRouteConfig(
+
+        route_config = RouteConfig(
             surprise_computer=surprise_computer,
             tau_fast_exit=0.38,
             tau_plan_exit=0.57,
             evaluate_pkg_func=AsyncMock(return_value={"tasks": [], "edges": []}),
             ood_to01=lambda x: x,
-            pkg_timeout_s=2
+            pkg_timeout_s=2,
         )
         
         # Mock execution config
         organism_execute = AsyncMock(return_value={
             "success": True,
-            "result": {"output": "test result"}
+            "result": {"output": "test result"},
         })
-        
-        execution_config = MockExecutionConfig(
-            normalize_task_dict=lambda t: (t.get("id"), t),
+
+        execution_config = ExecutionConfig(
+            normalize_task_dict=lambda t: (dict(t), {"task_id": t.get("id")}),
             extract_agent_id=lambda t: None,
             compute_drift_score=AsyncMock(return_value=0.1),
             organism_execute=organism_execute,
-            graph_task_repo=None,
+            graph_task_repo=Mock(),
             ml_client=Mock(),
             predicate_router=Mock(),
             metrics=Mock(),
@@ -103,7 +93,7 @@ class TestRouteAndExecute:
             resolve_route_cached=AsyncMock(return_value="organ-123"),
             static_route_fallback=lambda t, d: "organ-123",
             normalize_type=lambda x: x.lower() if x else "unknown",
-            normalize_domain=lambda x: x.lower() if x else None
+            normalize_domain=lambda x: x.lower() if x else None,
         )
         
         # Call route_and_execute
@@ -116,46 +106,45 @@ class TestRouteAndExecute:
             hgnn_config=None
         )
         
-        # Verify result structure
-        assert "success" in result or "kind" in result
-        organism_execute.assert_called_once()
+        assert result["kind"] == ResultKind.FAST_PATH
+        assert result["payload"]["metadata"]["decision"] == "fast"
+        organism_execute.assert_not_called()
     
     async def test_route_and_execute_planner_path(self):
         """Test route and execute for planner path decision."""
         task = {"id": "task-123", "type": "test", "description": "test task"}
         
-        surprise_computer = Mock()
-        surprise_computer.compute = Mock(return_value={
+        surprise_computer = FakeSurpriseComputer(return_value={
             "S": 0.5,  # Medium surprise -> planner
             "x": [0.2, 0.2, 0.2, 0.2, 0.2, 0.2],
             "weights": [0.25, 0.20, 0.15, 0.20, 0.10, 0.10],
             "decision": "planner",
             "ocps": {"S_t": 0.3, "h": 0.5, "flag_on": False}
         })
-        
-        route_config = MockRouteConfig(
+
+        route_config = RouteConfig(
             surprise_computer=surprise_computer,
             tau_fast_exit=0.38,
             tau_plan_exit=0.57,
             evaluate_pkg_func=AsyncMock(return_value={
                 "tasks": [{"organ_id": "organ-1", "task": {"type": "test"}}],
-                "edges": []
+                "edges": [],
             }),
             ood_to01=lambda x: x,
-            pkg_timeout_s=2
+            pkg_timeout_s=2,
         )
-        
+
         organism_execute = AsyncMock(return_value={
             "success": True,
-            "result": {"output": "planner result"}
+            "result": {"output": "planner result"},
         })
-        
-        execution_config = MockExecutionConfig(
-            normalize_task_dict=lambda t: (t.get("id"), t),
+
+        execution_config = ExecutionConfig(
+            normalize_task_dict=lambda t: (dict(t), {"task_id": t.get("id")}),
             extract_agent_id=lambda t: None,
             compute_drift_score=AsyncMock(return_value=0.3),
             organism_execute=organism_execute,
-            graph_task_repo=None,
+            graph_task_repo=Mock(),
             ml_client=Mock(),
             predicate_router=Mock(),
             metrics=Mock(),
@@ -163,7 +152,7 @@ class TestRouteAndExecute:
             resolve_route_cached=AsyncMock(return_value="organ-123"),
             static_route_fallback=lambda t, d: "organ-123",
             normalize_type=lambda x: x.lower() if x else "unknown",
-            normalize_domain=lambda x: x.lower() if x else None
+            normalize_domain=lambda x: x.lower() if x else None,
         )
         
         result = await route_and_execute(
@@ -175,28 +164,28 @@ class TestRouteAndExecute:
             hgnn_config=None
         )
         
-        assert "success" in result or "kind" in result
+        assert result["kind"] == ResultKind.COGNITIVE
+        assert result["payload"]["result"]["proto_plan"]
     
     async def test_route_and_execute_hgnn_path(self):
         """Test route and execute for HGNN path decision."""
         task = {"id": "task-123", "type": "test", "description": "test task"}
         
-        surprise_computer = Mock()
-        surprise_computer.compute = Mock(return_value={
+        surprise_computer = FakeSurpriseComputer(return_value={
             "S": 0.8,  # High surprise -> HGNN
             "x": [0.4, 0.4, 0.4, 0.4, 0.4, 0.4],
             "weights": [0.25, 0.20, 0.15, 0.20, 0.10, 0.10],
             "decision": "hgnn",
             "ocps": {"S_t": 0.6, "h": 0.5, "flag_on": True}
         })
-        
-        route_config = MockRouteConfig(
+
+        route_config = RouteConfig(
             surprise_computer=surprise_computer,
             tau_fast_exit=0.38,
             tau_plan_exit=0.57,
             evaluate_pkg_func=AsyncMock(return_value={"tasks": [], "edges": []}),
             ood_to01=lambda x: x,
-            pkg_timeout_s=2
+            pkg_timeout_s=2,
         )
         
         hgnn_decompose = AsyncMock(return_value=[
@@ -208,23 +197,23 @@ class TestRouteAndExecute:
         
         persist_plan_func = AsyncMock()
         
-        hgnn_config = MockHGNNConfig(
+        hgnn_config = HGNNConfig(
             hgnn_decompose=hgnn_decompose,
             bulk_resolve_func=bulk_resolve_func,
-            persist_plan_func=persist_plan_func
+            persist_plan_func=persist_plan_func,
         )
         
         organism_execute = AsyncMock(return_value={
             "success": True,
-            "result": {"output": "hgnn result"}
+            "result": {"output": "hgnn result"},
         })
-        
-        execution_config = MockExecutionConfig(
-            normalize_task_dict=lambda t: (t.get("id"), t),
+
+        execution_config = ExecutionConfig(
+            normalize_task_dict=lambda t: (dict(t), {"task_id": t.get("id")}),
             extract_agent_id=lambda t: None,
             compute_drift_score=AsyncMock(return_value=0.6),
             organism_execute=organism_execute,
-            graph_task_repo=None,
+            graph_task_repo=Mock(),
             ml_client=Mock(),
             predicate_router=Mock(),
             metrics=Mock(),
@@ -232,7 +221,7 @@ class TestRouteAndExecute:
             resolve_route_cached=AsyncMock(return_value="organ-123"),
             static_route_fallback=lambda t, d: "organ-123",
             normalize_type=lambda x: x.lower() if x else "unknown",
-            normalize_domain=lambda x: x.lower() if x else None
+            normalize_domain=lambda x: x.lower() if x else None,
         )
         
         result = await route_and_execute(
@@ -244,32 +233,38 @@ class TestRouteAndExecute:
             hgnn_config=hgnn_config
         )
         
-        assert "success" in result or "kind" in result
-        hgnn_decompose.assert_called_once()
-        bulk_resolve_func.assert_called_once()
+        assert result["path"] == "hgnn"
+        assert organism_execute.await_count == 2
+        hgnn_decompose.assert_awaited_once()
+        bulk_resolve_func.assert_awaited_once()
     
-    async def test_route_and_execute_error_handling(self):
-        """Test route and execute error handling."""
+    async def test_route_and_execute_handles_missing_hgnn_config(self):
+        """Ensure HGNN decision returns metadata when config is unavailable."""
         task = {"id": "task-123", "type": "test"}
         
-        surprise_computer = Mock()
-        surprise_computer.compute = Mock(side_effect=Exception("Surprise computation error"))
-        
-        route_config = MockRouteConfig(
+        surprise_computer = FakeSurpriseComputer(return_value={
+            "S": 0.95,
+            "x": [0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
+            "weights": [0.25, 0.20, 0.15, 0.20, 0.10, 0.10],
+            "decision": "unknown",
+            "ocps": {"S_t": 0.9, "h": 0.8, "flag_on": True},
+        })
+
+        route_config = RouteConfig(
             surprise_computer=surprise_computer,
             tau_fast_exit=0.38,
             tau_plan_exit=0.57,
-            evaluate_pkg_func=AsyncMock(return_value={"tasks": [], "edges": []}),
+            evaluate_pkg_func=AsyncMock(side_effect=Exception("PKG error")),
             ood_to01=lambda x: x,
-            pkg_timeout_s=2
+            pkg_timeout_s=2,
         )
-        
-        execution_config = MockExecutionConfig(
-            normalize_task_dict=lambda t: (t.get("id"), t),
+
+        execution_config = ExecutionConfig(
+            normalize_task_dict=lambda t: (dict(t), {"task_id": t.get("id")}),
             extract_agent_id=lambda t: None,
             compute_drift_score=AsyncMock(return_value=0.1),
             organism_execute=AsyncMock(return_value={"success": True}),
-            graph_task_repo=None,
+            graph_task_repo=Mock(),
             ml_client=Mock(),
             predicate_router=Mock(),
             metrics=Mock(),
@@ -277,9 +272,9 @@ class TestRouteAndExecute:
             resolve_route_cached=AsyncMock(return_value="organ-123"),
             static_route_fallback=lambda t, d: "organ-123",
             normalize_type=lambda x: x.lower() if x else "unknown",
-            normalize_domain=lambda x: x.lower() if x else None
+            normalize_domain=lambda x: x.lower() if x else None,
         )
-        
+
         result = await route_and_execute(
             task=task,
             fact_dao=None,
@@ -289,6 +284,6 @@ class TestRouteAndExecute:
             hgnn_config=None
         )
         
-        # Should return error result
-        assert "error" in result or "kind" in result
+        assert result["kind"] == ResultKind.ESCALATED
+        assert result["payload"]["metadata"]["decision"] == "hgnn"
 

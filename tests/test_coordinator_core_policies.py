@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies
 
 import pytest
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import Mock, AsyncMock
 from seedcore.coordinator.core.policies import (
     SurpriseComputer,
     OCPSValve,
@@ -244,36 +244,36 @@ class TestDecideRouteWithHysteresis:
     def test_fast_path_decision(self):
         """Test fast path decision."""
         decision = decide_route_with_hysteresis(
-            S=0.2,
-            tau_fast=0.35,
-            tau_plan=0.60,
-            tau_fast_exit=0.38,
-            tau_plan_exit=0.57,
-            last_decision="fast"
+            surprise_score=0.2,
+            last_decision="fast",
+            fast_enter=0.35,
+            fast_exit=0.38,
+            plan_enter=0.60,
+            plan_exit=0.57,
         )
         assert decision == "fast"
     
     def test_planner_path_decision(self):
         """Test planner path decision."""
         decision = decide_route_with_hysteresis(
-            S=0.45,
-            tau_fast=0.35,
-            tau_plan=0.60,
-            tau_fast_exit=0.38,
-            tau_plan_exit=0.57,
-            last_decision=None
+            surprise_score=0.45,
+            last_decision=None,
+            fast_enter=0.35,
+            fast_exit=0.38,
+            plan_enter=0.60,
+            plan_exit=0.57,
         )
         assert decision == "planner"
     
     def test_hgnn_path_decision(self):
         """Test HGNN path decision."""
         decision = decide_route_with_hysteresis(
-            S=0.75,
-            tau_fast=0.35,
-            tau_plan=0.60,
-            tau_fast_exit=0.38,
-            tau_plan_exit=0.57,
-            last_decision=None
+            surprise_score=0.75,
+            last_decision=None,
+            fast_enter=0.35,
+            fast_exit=0.38,
+            plan_enter=0.60,
+            plan_exit=0.57,
         )
         assert decision == "hgnn"
     
@@ -281,12 +281,12 @@ class TestDecideRouteWithHysteresis:
         """Test hysteresis prevents fast exit too early."""
         # S is between tau_fast and tau_fast_exit, but last decision was fast
         decision = decide_route_with_hysteresis(
-            S=0.36,  # Between tau_fast and tau_fast_exit
-            tau_fast=0.35,
-            tau_plan=0.60,
-            tau_fast_exit=0.38,
-            tau_plan_exit=0.57,
-            last_decision="fast"
+            surprise_score=0.36,  # Between fast_enter and fast_exit
+            last_decision="fast",
+            fast_enter=0.35,
+            fast_exit=0.38,
+            plan_enter=0.60,
+            plan_exit=0.57,
         )
         assert decision == "fast"  # Should stay in fast due to hysteresis
     
@@ -294,39 +294,44 @@ class TestDecideRouteWithHysteresis:
         """Test hysteresis prevents planner exit too early."""
         # S is between tau_plan_exit and tau_plan, but last decision was planner
         decision = decide_route_with_hysteresis(
-            S=0.58,  # Between tau_plan_exit and tau_plan
-            tau_fast=0.35,
-            tau_plan=0.60,
-            tau_fast_exit=0.38,
-            tau_plan_exit=0.57,
-            last_decision="planner"
+            surprise_score=0.58,  # Between plan_exit and plan_enter
+            last_decision="planner",
+            fast_enter=0.35,
+            fast_exit=0.38,
+            plan_enter=0.60,
+            plan_exit=0.57,
         )
         assert decision == "planner"  # Should stay in planner due to hysteresis
 
 
 class TestGenerateProtoSubtasks:
     """Tests for generate_proto_subtasks function."""
-    
-    def test_generate_from_pkg_result(self):
-        """Test generating proto subtasks from PKG result."""
-        pkg_result = {
-            "tasks": [
-                {"organ_id": "organ-1", "task": {"type": "test1"}},
-                {"organ_id": "organ-2", "task": {"type": "test2"}}
-            ],
-            "edges": [{"from": 0, "to": 1}],
-            "version": "v1.0"
-        }
-        subtasks = generate_proto_subtasks(pkg_result)
-        assert len(subtasks) == 2
-        assert subtasks[0]["organ_id"] == "organ-1"
-        assert subtasks[1]["organ_id"] == "organ-2"
-    
-    def test_generate_empty_result(self):
-        """Test generating from empty PKG result."""
-        pkg_result = {"tasks": [], "edges": [], "version": "v1.0"}
-        subtasks = generate_proto_subtasks(pkg_result)
-        assert len(subtasks) == 0
+
+    def test_generate_from_event_tags(self):
+        """Domain tags should produce targeted proto plan."""
+        tags = {"vip", "allergen"}
+        proto_plan = generate_proto_subtasks(tags, x6=0.7, criticality=0.85)
+
+        task_types = {task["type"] for task in proto_plan["tasks"]}
+        assert {"private_comms", "incident_log_restricted", "food_safety_containment", "guest_recovery"}.issubset(task_types)
+
+        # Ensure privacy task edges were created
+        assert ("private_comms", "food_safety_containment") in proto_plan["edges"]
+
+    def test_generate_force_baseline(self):
+        """Force flag should create baseline workflow when no tags match."""
+        proto_plan = generate_proto_subtasks(set(), x6=0.4, criticality=0.3, force=True)
+
+        task_types = {task["type"] for task in proto_plan["tasks"]}
+        assert task_types == {"retrieve_context", "graph_rag_seed", "synthesis_writeup"}
+        assert ("retrieve_context", "graph_rag_seed") in proto_plan["edges"]
+        assert ("graph_rag_seed", "synthesis_writeup") in proto_plan["edges"]
+
+    def test_generate_empty_when_no_force(self):
+        """Without tags or force flag no tasks should be produced."""
+        proto_plan = generate_proto_subtasks(set(), x6=0.2, criticality=0.1, force=False)
+        assert proto_plan["tasks"] == []
+        assert proto_plan["edges"] == []
 
 
 @pytest.mark.asyncio
@@ -336,52 +341,68 @@ class TestComputeDriftScore:
     async def test_compute_drift_score_success(self):
         """Test computing drift score successfully."""
         ml_client = Mock()
-        ml_client.detect_drift = AsyncMock(return_value={"drift_score": 0.75})
-        
-        task = {"type": "test", "description": "test task"}
+        ml_client.base_url = "http://ml-service"
+        ml_client.compute_drift_score = AsyncMock(return_value={
+            "status": "success",
+            "drift_score": 0.75,
+            "processing_time_ms": 12.0,
+            "drift_mode": "text",
+        })
+
+        task = {"id": "task-1", "type": "test", "description": "test task"}
         metrics = Mock()
-        
+
         drift_score = await compute_drift_score(
             task=task,
             ml_client=ml_client,
             metrics=metrics
         )
-        
+
         assert drift_score == 0.75
-        ml_client.detect_drift.assert_called_once()
+        ml_client.compute_drift_score.assert_awaited_once()
     
     async def test_compute_drift_score_fallback(self):
         """Test computing drift score with fallback on error."""
         ml_client = Mock()
-        ml_client.detect_drift = AsyncMock(side_effect=Exception("ML service error"))
-        
-        task = {"type": "test"}
+        ml_client.base_url = "http://ml-service"
+        ml_client.compute_drift_score = AsyncMock(side_effect=Exception("ML service error"))
+
+        task = {
+            "type": "anomaly_triage",
+            "priority": 9,
+            "complexity": 1.0,
+            "history_ids": [],
+        }
         metrics = Mock()
-        
+
         drift_score = await compute_drift_score(
             task=task,
             ml_client=ml_client,
             metrics=metrics
         )
-        
-        # Should return fallback value (0.0) on error
-        assert drift_score == 0.0
+
+        # Fallback heuristics should yield high drift for critical anomalies
+        assert pytest.approx(drift_score, rel=1e-3) == 0.8
 
 
 class TestGetCurrentEnergyState:
     """Tests for get_current_energy_state function."""
-    
-    @patch('seedcore.coordinator.core.policies.get_current_energy_state')
-    def test_get_energy_state(self, mock_get):
-        """Test getting current energy state."""
-        mock_get.return_value = 100.0
-        result = get_current_energy_state("agent-123")
+
+    def test_get_energy_state_with_provider(self):
+        """Provider callback should supply energy reading."""
+        provider = Mock(return_value=100.0)
+        result = get_current_energy_state("agent-123", provider=provider)
+        provider.assert_called_once_with("agent-123")
         assert result == 100.0
-    
-    @patch('seedcore.coordinator.core.policies.get_current_energy_state')
-    def test_get_energy_state_none(self, mock_get):
-        """Test getting energy state when not available."""
-        mock_get.return_value = None
-        result = get_current_energy_state("agent-123")
+
+    def test_get_energy_state_fallback_and_default(self):
+        """No provider should return default placeholder value."""
+        assert get_current_energy_state("agent-xyz") == 0.5
+
+    def test_get_energy_state_none(self):
+        """Provider returning None should propagate None."""
+        provider = Mock(return_value=None)
+        result = get_current_energy_state("agent-123", provider=provider)
+        provider.assert_called_once_with("agent-123")
         assert result is None
 

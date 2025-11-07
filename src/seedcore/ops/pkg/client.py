@@ -27,7 +27,7 @@ from .dao import (
     PKGPromotionsDAO,
     PKGDevicesDAO,
     PKGSnapshotData,
-    check_pkg_integrity as _check_integrity,
+    check_pkg_integrity,
 )
 from ...database import get_async_pg_session_factory 
 
@@ -226,4 +226,4 @@ class PKGClient:
     
     async def check_integrity(self) -> Dict[str, Any]:
         """Run integrity check function to validate PKG data consistency."""
-        return await _check_integrity(self._sf)
+        return await check_pkg_integrity(self._sf)

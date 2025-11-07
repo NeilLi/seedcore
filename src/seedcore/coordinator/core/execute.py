@@ -620,7 +620,21 @@ async def _execute_hgnn(
 
     # Root task
     root_task_dict, meta = exec_cfg.normalize_task_dict(task)
-    task_id = str(root_task_dict.get("id") or meta.get("task_id") or ctx.task_id or "unknown")
+    if not isinstance(root_task_dict, Mapping):
+        if isinstance(root_task_dict, uuid.UUID):
+            root_task_dict = {"id": str(root_task_dict)}
+        elif isinstance(root_task_dict, str):
+            root_task_dict = {"id": root_task_dict}
+        else:
+            root_task_dict = {"id": str(root_task_dict)}
+    if not isinstance(meta, Mapping):
+        meta = {}
+    task_id = str(
+        root_task_dict.get("id")
+        or meta.get("task_id")
+        or getattr(ctx, "task_id", None)
+        or "unknown"
+    )
     root_agent_id = exec_cfg.extract_agent_id(root_task_dict)
 
     # Try decomposition
