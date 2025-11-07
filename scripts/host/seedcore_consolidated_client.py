@@ -110,7 +110,7 @@ class CognitiveServeClient:
 
     def plan_task(self, agent_id: str, task_description: str, **kwargs) -> dict:
         body = {"agent_id": agent_id, "task_description": task_description, **kwargs}
-        return self.http.post(f"{self.rp}/plan-task", json=body)
+        return self.http.post(f"{self.rp}/plan", json=body)
 
     def synthesize_memory(self, agent_id: str, fragments: List[dict], goal: str) -> dict:
         body = {"agent_id": agent_id, "memory_fragments": fragments, "synthesis_goal": goal}

@@ -135,7 +135,7 @@ class OrganismServiceClient(BaseServiceClient):
             "task": task,
             "app_state": app_state or {}
         }
-        return await self.post("/plan-task", json=request_data)
+        return await self.post("/plan", json=request_data)
     
     # Organ Management
     async def get_organ_status(self, organ_name: str = None) -> Dict[str, Any]:

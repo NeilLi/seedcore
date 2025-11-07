@@ -138,7 +138,6 @@ class CognitiveServeService:
                 "info": "/info",
                 "cognitive": [
                     "/reason-about-failure",
-                    "/plan-task", 
                     "/plan",
                     "/plan_taskresult",
                     "/make-decision",
@@ -225,88 +224,6 @@ class CognitiveServeService:
                 }, 
                 error=str(e)
             )
-
-    @app.post("/plan-task", response_model=CognitiveResponse)
-    async def plan_task(self, request: CognitiveRequest):
-        """
-        Legacy plan-task endpoint (backward compatibility).
-        Supports same parameters as /plan endpoint for consistency.
-        """
-        try:
-            # Handle current_capabilities - can be str or dict from client
-            agent_capabilities = {}
-            if request.current_capabilities:
-                if isinstance(request.current_capabilities, str):
-                    if request.current_capabilities.strip():
-                        agent_capabilities = {"description": request.current_capabilities}
-                elif isinstance(request.current_capabilities, dict):
-                    agent_capabilities = request.current_capabilities
-            
-            # Prepare input data with all supported parameters
-            input_data = {
-                "task_description": request.task_description,
-                "agent_capabilities": agent_capabilities,
-                "available_resources": request.available_tools or {}
-            }
-            
-            # Include provider/model overrides if provided
-            if request.llm_provider_override:
-                input_data["llm_provider_override"] = request.llm_provider_override
-            if request.llm_model_override:
-                input_data["llm_model_override"] = request.llm_model_override
-            if request.providers:
-                input_data["providers"] = request.providers
-            if request.meta:
-                input_data["meta"] = request.meta
-            
-            context = CognitiveContext(
-                agent_id=request.agent_id,
-                task_type=CognitiveTaskType.TASK_PLANNING,
-                input_data=input_data
-            )
-            
-            # Check if request has profile hint for DEEP profile
-            # Note: Profile is metadata for LLM selection, routing decision is "planner"
-            use_deep = False
-            # First check explicit profile parameter from cognitive client
-            if request.profile and request.profile.lower() == "deep":
-                use_deep = True
-                logger.info(f"🧠 /plan-task: Using DEEP profile (planner path) per request.profile='deep'")
-            # Also infer from task description complexity
-            elif request.task_description:
-                complex_keywords = ['complex', 'analysis', 'decompose', 'plan', 'strategy', 'reasoning', 'hypergraph']
-                desc_lower = request.task_description.lower()
-                if any(keyword in desc_lower for keyword in complex_keywords):
-                    use_deep = True
-                    logger.info(f"🧠 Detected complex query, using DEEP profile (planner path): {request.task_description[:50]}...")
-            
-            # Return immediate minimal response and run actual planning in background
-            # profile_label is metadata, not routing decision (routing is "planner")
-            profile_label = "deep" if use_deep else "fast"
-            minimal_payload = {
-                "thought_process": f"{profile_label.capitalize()} path: returning immediate minimal plan.",
-                "step_by_step_plan": [
-                    {
-                        "step": 1,
-                        "action": "Generate a concise summary addressing the user request.",
-                    }
-                ],
-                "estimated_complexity": 3.0 if not use_deep else 5.0,
-                "risk_assessment": "Low risk; detailed planning can be deferred.",
-                "formatted_response": (
-                    request.task_description or "Task acknowledged; preparing a concise plan."
-                ),
-                "meta": {"profile_used": profile_label, "immediate": True},
-            }
-            # Fire-and-forget actual planning in the background
-            try:
-                asyncio.create_task(self._run_plan_async(context, use_deep))
-            except Exception as e:
-                logger.debug(f"Failed to schedule background plan-task: {e}")
-            return CognitiveResponse(success=True, agent_id=request.agent_id, result=minimal_payload)
-        except Exception as e:
-            logger.exception(f"Error in /plan-task endpoint for agent {request.agent_id}: {e}")
-            return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
 
     @app.post("/plan", response_model=CognitiveResponse)
     async def plan(self, request: CognitiveRequest):
@@ -409,6 +326,29 @@ class CognitiveServeService:
         except Exception as e:
             logger.exception(f"Error in /plan endpoint for agent {request.agent_id}: {e}")
             return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
+
+    async def plan_task(
+        self,
+        agent_id: str,
+        task_description: str,
+        current_capabilities: Optional[Any] = None,
+        available_tools: Optional[Dict[str, Any]] = None,
+        profile: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        """Serve-handle compatibility shim for legacy plan_task RPC calls."""
+        request = CognitiveRequest(
+            agent_id=agent_id,
+            task_description=task_description,
+            current_capabilities=current_capabilities,
+            available_tools=available_tools,
+            profile=profile,
+            llm_provider_override=kwargs.get("llm_provider_override"),
+            llm_model_override=kwargs.get("llm_model_override"),
+            providers=kwargs.get("providers"),
+            meta=kwargs.get("meta"),
+        )
+        return await self.plan(request)
 
     @app.post("/plan_taskresult", response_model=TaskResult)
     async def plan_taskresult(self, request: CognitiveRequest):
@@ -589,8 +529,8 @@ class CognitiveServeService:
             # Note: This is a fire-and-forget task, so we don't propagate the error.
             # The immediate response has already been sent to the client.
 
-    @app.post("/plan-with-escalation", response_model=CognitiveResponse)
-    async def plan_with_escalation(self, request: CognitiveRequest):
+    @app.post("/plan-with-deep", response_model=CognitiveResponse)
+    async def plan_with_deep(self, request: CognitiveRequest):
         try:
             context = CognitiveContext(
                 agent_id=request.agent_id,
@@ -621,23 +561,23 @@ class CognitiveServeService:
             
             # Fire-and-forget actual escalation planning in the background
             try:
-                asyncio.create_task(self._run_plan_with_escalation_async(context))
+                asyncio.create_task(self._run_plan_with_deep_async(context))
             except Exception as e:
-                logger.debug(f"Failed to schedule background plan-with-escalation task: {e}")
+                logger.debug(f"Failed to schedule background plan-with-deep task: {e}")
                 
             return CognitiveResponse(success=True, agent_id=request.agent_id, result=minimal_payload)
         except Exception as e:
-            logger.exception(f"Error in /plan-with-escalation endpoint for agent {request.agent_id}: {e}")
+            logger.exception(f"Error in /plan-with-deep endpoint for agent {request.agent_id}: {e}")
             return CognitiveResponse(success=False, agent_id=request.agent_id, result={}, error=str(e))
 
-    async def _run_plan_with_escalation_async(self, context: CognitiveContext) -> None:
+    async def _run_plan_with_deep_async(self, context: CognitiveContext) -> None:
         """Run escalation planning in the background without blocking the HTTP response."""
         try:
-            result = self.cognitive_service.plan_with_escalation(context)
-            logger.debug(f"Background plan-with-escalation task completed for agent {context.agent_id}")
+            result = self.cognitive_service.plan_with_deep(context)
+            logger.debug(f"Background plan-with-deep task completed for agent {context.agent_id}")
         except Exception as e:
             logger.exception(
-                f"Background plan-with-escalation task failed for agent {context.agent_id}: {e}"
+                f"Background plan-with-deep task failed for agent {context.agent_id}: {e}"
             )
             # Note: This is a fire-and-forget task, so we don't propagate the error.
             # The immediate response has already been sent to the client.

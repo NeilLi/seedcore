@@ -9,7 +9,7 @@ What this validates:
   4) CognitiveService /info and /health
   5) Functional calls:
       - plan (FAST, DEEP)
-      - plan_with_escalation (FAST -> DEEP)
+      - plan_with_deep (FAST -> DEEP)
       - solve_problem
       - synthesize_memory
       - assess_capabilities
@@ -190,9 +190,9 @@ async def run_smoke() -> int:
         print(f"OK in {dt:.2f}s")
         print(_pretty(res))
 
-    # plan_with_escalation (FAST -> DEEP)
+    # plan_with_deep (FAST -> DEEP)
     _print_header("PLAN WITH ESCALATION")
-    plan_escalate = _elapsed(client.plan_with_escalation)
+    plan_escalate = _elapsed(client.plan_with_deep)
     res, dt = await plan_escalate(
         agent_id=agent_id,
         task_description="Give me a brief incident response playbook for a minor data leak, highlight first-hour actions.",
@@ -200,7 +200,7 @@ async def run_smoke() -> int:
     )
     if isinstance(res, Exception):
         print("ERROR:", res)
-        failures.append("plan_with_escalation failed")
+        failures.append("plan_with_deep failed")
     else:
         print(f"OK in {dt:.2f}s")
         print(_pretty(res))

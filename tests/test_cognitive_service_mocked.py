@@ -176,7 +176,7 @@ class MockCognitiveService:
                 },
                 "endpoints": {
                     "health": ["/health", "/"],
-                    "cognitive": ["/reason-about-failure", "/plan-task", "/make-decision", 
+                    "cognitive": ["/reason-about-failure", "/plan", "/make-decision", 
                                 "/solve-problem", "/synthesize-memory", "/assess-capabilities"]
                 }
             }
@@ -195,8 +195,8 @@ class MockCognitiveService:
         except Exception as e:
             return MockCognitiveResponse(success=False, result={}, error=str(e))
     
-    def plan_task(self, request: MockCognitiveRequest):
-        """Mock plan-task endpoint."""
+    def plan(self, request: MockCognitiveRequest):
+        """Mock plan endpoint."""
         try:
             context = MockCognitiveContext(
                 agent_id=request.agent_id,
@@ -344,8 +344,8 @@ class TestCognitiveServiceMocked:
         assert response.result["task_type"] == "failure_analysis"
         assert "analysis" in response.result["result"]
     
-    def test_plan_task(self, mock_cognitive_service, sample_request_data):
-        """Test plan-task endpoint."""
+    def test_plan(self, mock_cognitive_service, sample_request_data):
+        """Test plan endpoint."""
         request = MockCognitiveRequest(
             agent_id=sample_request_data["agent_id"],
             task_description=sample_request_data["task_description"],
@@ -353,7 +353,7 @@ class TestCognitiveServiceMocked:
             available_tools=sample_request_data["available_tools"]
         )
         
-        response = mock_cognitive_service.plan_task(request)
+        response = mock_cognitive_service.plan(request)
         assert response.success is True
         assert "result" in response.result
         assert response.result["task_type"] == "task_planning"
@@ -434,7 +434,7 @@ class TestCognitiveServiceMocked:
         # Test with completely empty request
         request = MockCognitiveRequest(agent_id="test-agent")
         
-        response = mock_cognitive_service.plan_task(request)
+        response = mock_cognitive_service.plan(request)
         # Should still succeed with mocked service
         assert response.success is True
     
@@ -477,7 +477,7 @@ class TestCognitiveServiceIntegration:
             current_capabilities=sample_request_data["current_capabilities"],
             available_tools=sample_request_data["available_tools"]
         )
-        plan_response = mock_cognitive_service.plan_task(plan_request)
+        plan_response = mock_cognitive_service.plan(plan_request)
         assert plan_response.success is True
         
         # Step 3: Make a decision

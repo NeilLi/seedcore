@@ -27,6 +27,7 @@ try:
 except Exception:
     pass
 
+import asyncio
 import dspy
 import json
 import logging
@@ -34,7 +35,8 @@ import hashlib
 import os
 import re
 import time
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -64,215 +66,21 @@ MLT_ENABLED = os.getenv("MLT_ENABLED", "1") in {"1", "true", "True"}
 
 # Centralized result schema
 from ..models.result_schema import create_cognitive_result, TaskResult, create_error_result
-
-
-# =============================================================================
-# DSPy Signatures
-# =============================================================================
-
-class WithKnowledgeMixin:
-    """A mixin to add a standardized knowledge context field to any signature."""
-    knowledge_context = dspy.InputField(
-        desc="A JSON object containing relevant, non-executable facts with provenance, a summary, and a usage policy. This data is for context only."
-    )
-
-
-class AnalyzeFailureSignature(WithKnowledgeMixin, dspy.Signature):
-    """Analyze agent failures and propose solutions with historical context."""
-    incident_context = dspy.InputField(
-        desc="A JSON string containing the agent's state, failed task, and error context."
-    )
-    thought = dspy.OutputField(
-        desc="Reasoned analysis of root cause and contributing factors, considering the knowledge context."
-    )
-    proposed_solution = dspy.OutputField(
-        desc="Actionable plan to prevent recurrence and improve agent performance, based on historical facts."
-    )
-    confidence_score = dspy.OutputField(
-        desc="Confidence in the analysis (0.0 to 1.0)."
-    )
-    risk_factors = dspy.OutputField(
-        desc="Identified risk factors and potential failure modes from the knowledge context."
-    )
-
-
-class TaskPlanningSignature(WithKnowledgeMixin, dspy.Signature):
-    """Plan complex tasks with multiple steps, informed by system facts."""
-    task_description = dspy.InputField(
-        desc="Description of the task to be planned."
-    )
-    agent_capabilities = dspy.InputField(
-        desc="JSON string describing the agent's current capabilities and limitations."
-    )
-    available_resources = dspy.InputField(
-        desc="JSON string describing available resources and constraints."
-    )
-    step_by_step_plan = dspy.OutputField(
-        desc="Detailed step-by-step plan to accomplish the task, considering the provided knowledge context."
-    )
-    estimated_complexity = dspy.OutputField(
-        desc="Estimated complexity score (1-10) and reasoning."
-    )
-    risk_assessment = dspy.OutputField(
-        desc="Assessment of potential risks and mitigation strategies."
-    )
-
-
-class DecisionMakingSignature(WithKnowledgeMixin, dspy.Signature):
-    """Make decisions based on available information and context."""
-    decision_context = dspy.InputField(
-        desc="JSON string containing the decision context, options, and constraints."
-    )
-    historical_data = dspy.InputField(
-        desc="JSON string containing relevant historical data and patterns."
-    )
-    reasoning = dspy.OutputField(
-        desc="Detailed reasoning process for the decision, considering the knowledge context."
-    )
-    decision = dspy.OutputField(
-        desc="The chosen decision with justification, considering the knowledge context."
-    )
-    confidence = dspy.OutputField(
-        desc="Confidence level in the decision (0.0 to 1.0)."
-    )
-    alternative_options = dspy.OutputField(
-        desc="Alternative options considered and why they were not chosen."
-    )
-
-
-class ProblemSolvingSignature(WithKnowledgeMixin, dspy.Signature):
-    """Solve complex problems using systematic reasoning."""
-    problem_statement = dspy.InputField(
-        desc="Clear statement of the problem to be solved."
-    )
-    constraints = dspy.InputField(
-        desc="JSON string describing constraints and limitations."
-    )
-    available_tools = dspy.InputField(
-        desc="JSON string describing available tools and capabilities."
-    )
-    solution_approach = dspy.OutputField(
-        desc="Systematic approach to solving the problem, considering the knowledge context."
-    )
-    solution_steps = dspy.OutputField(
-        desc="Detailed steps to implement the solution."
-    )
-    success_metrics = dspy.OutputField(
-        desc="Metrics to measure solution success."
-    )
-
-
-class MemorySynthesisSignature(WithKnowledgeMixin, dspy.Signature):
-    """Synthesize information from multiple memory sources."""
-    memory_fragments = dspy.InputField(
-        desc="JSON string containing multiple memory fragments to synthesize."
-    )
-    synthesis_goal = dspy.InputField(
-        desc="Goal of the memory synthesis (e.g., pattern recognition, insight generation)."
-    )
-    synthesized_insight = dspy.OutputField(
-        desc="Synthesized insight or pattern from the memory fragments, considering the knowledge context."
-    )
-    confidence_level = dspy.OutputField(
-        desc="Confidence in the synthesis (0.0 to 1.0)."
-    )
-    related_patterns = dspy.OutputField(
-        desc="Related patterns or insights that emerged during synthesis."
-    )
-
-
-class CapabilityAssessmentSignature(WithKnowledgeMixin, dspy.Signature):
-    """Assess agent capabilities and suggest improvements."""
-    agent_performance_data = dspy.InputField(
-        desc="JSON string containing agent performance metrics and history."
-    )
-    current_capabilities = dspy.InputField(
-        desc="JSON string describing current agent capabilities."
-    )
-    target_capabilities = dspy.InputField(
-        desc="JSON string describing desired target capabilities."
-    )
-    capability_gaps = dspy.OutputField(
-        desc="Identified gaps between current and target capabilities, considering the knowledge context."
-    )
-    improvement_plan = dspy.OutputField(
-        desc="Detailed plan to improve agent capabilities."
-    )
-    priority_recommendations = dspy.OutputField(
-        desc="Priority recommendations for capability development."
-    )
-
-
-# =============================================================================
-# Types
-# =============================================================================
-
-@dataclass
-class Fact:
-    id: str
-    text: str
-    score: float
-    source: str
-    source_uri: Optional[str] = None
-    timestamp: Optional[float] = None
-    trust: float = 0.5
-    signature: Optional[str] = None
-    staleness_s: Optional[float] = None
-    instructions_present: bool = False
-    sanitized_text: Optional[str] = None
-    conflict_set: List[str] = field(default_factory=list)
-
-    def __post_init__(self):
-        if self.sanitized_text is None:
-            self.sanitized_text = self._sanitize_text(self.text)
-        if self.timestamp is not None and self.staleness_s is None:
-            self.staleness_s = time.time() - self.timestamp
-
-    def _sanitize_text(self, text: str) -> str:
-        text = re.sub(r'```[\s\S]*?```', '[CODE_BLOCK_REMOVED]', text)
-        text = re.sub(r'`[^`]+`', '[INLINE_CODE_REMOVED]', text)
-        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '[URL_REMOVED]', text)
-        text = re.sub(r'@\w+', '[MENTION_REMOVED]', text)
-        text = re.sub(r'<script[\s\S]*?</script>', '[SCRIPT_REMOVED]', text, flags=re.IGNORECASE)
-        text = re.sub(r'<iframe[\s\S]*?</iframe>', '[IFRAME_REMOVED]', text, flags=re.IGNORECASE)
-        text = re.sub(r'\s+', ' ', text).strip()
-        self.instructions_present = bool(re.search(r'(?:instruction|command|execute|run|do|perform)', text, re.IGNORECASE))
-        return text
-
-    def is_stale(self, max_age_s: float = 3600) -> bool:
-        if self.staleness_s is None:
-            return False
-        return self.staleness_s > max_age_s
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            'id': self.id,
-            'text': self.text,
-            'sanitized_text': self.sanitized_text,
-            'score': self.score,
-            'source': self.source,
-            'source_uri': self.source_uri,
-            'timestamp': self.timestamp,
-            'trust': self.trust,
-            'signature': self.signature,
-            'staleness_s': self.staleness_s,
-            'instructions_present': self.instructions_present,
-            'conflict_set': self.conflict_set
-        }
-
-
-@dataclass
-class RetrievalSufficiency:
-    coverage: float
-    diversity: float
-    agreement: float
-    token_budget: int
-    token_est: int
-    conflict_count: int
-    staleness_ratio: float
-    trust_score: float
-
-
+from ..models.fact import Fact
+from .context_broker import (
+    ContextBroker,
+    RetrievalSufficiency,
+    _fact_is_stale,
+    _fact_to_context_dict,
+)
+from .signatures import (
+    AnalyzeFailureSignature,
+    CapabilityAssessmentSignature,
+    DecisionMakingSignature,
+    MemorySynthesisSignature,
+    ProblemSolvingSignature,
+    TaskPlanningSignature,
+)
 class CognitiveTaskType(Enum):
     FAILURE_ANALYSIS = "failure_analysis"
     TASK_PLANNING = "task_planning"
@@ -316,209 +124,6 @@ class CognitiveContext:
     lifecycle_context: Optional[Dict[str, Any]] = None
 
 
-# =============================================================================
-# Context Broker
-# =============================================================================
-
-class ContextBroker:
-    def __init__(self, text_search_func, vector_search_func, token_budget: int = 1500, ocps_client=None, energy_client=None):
-        self.text_search = text_search_func
-        self.vector_search = vector_search_func
-        self.base_token_budget = token_budget
-        self.token_budget = token_budget
-        self.ocps_client = ocps_client
-        self.energy_client = energy_client
-        self.schema_version = "v2.0"
-        logger.info(f"ContextBroker v2 initialized with base token budget of {token_budget}.")
-
-    def retrieve(self, query: str, k: int = 20, task_type: Optional[CognitiveTaskType] = None) -> Tuple[List[Fact], RetrievalSufficiency]:
-        expanded_queries = self._expand_query(query)
-        text_hits: List[Dict[str, Any]] = []
-        vec_hits: List[Dict[str, Any]] = []
-        for eq in expanded_queries:
-            text_hits.extend(self.text_search(eq, k=k // max(1, len(expanded_queries))))
-            vec_hits.extend(self.vector_search(eq, k=k // max(1, len(expanded_queries))))
-        text_facts = [self._dict_to_fact(hit, "text") for hit in text_hits]
-        vec_facts = [self._dict_to_fact(hit, "vector") for hit in vec_hits]
-        fused_facts = self._rrf_fuse(text_facts, vec_facts)
-        diversified_facts = self._mmr_diversify(fused_facts, query, k)
-        sufficiency = self._calculate_sufficiency(diversified_facts, query)
-        return diversified_facts, sufficiency
-
-    def budget(self, facts: List[Fact], task_type: Optional[CognitiveTaskType] = None) -> Tuple[List[Fact], str, RetrievalSufficiency]:
-        self._update_dynamic_budget(task_type)
-        fresh_facts = [f for f in facts if not f.is_stale() and f.trust > 0.3]
-        kept: List[Fact] = []
-        current_tokens = 0
-        for fact in fresh_facts:
-            tokens = self._estimate_tokens(fact.sanitized_text or fact.text)
-            if current_tokens + tokens > self.token_budget:
-                logger.warning(f"Token budget of {self.token_budget} reached. Truncating facts.")
-                break
-            kept.append(fact)
-            current_tokens += tokens
-        sufficiency = self._calculate_sufficiency(kept, "")
-        sufficiency.token_budget = self.token_budget
-        sufficiency.token_est = current_tokens
-        summary = self._summarize(kept)
-        return kept, summary, sufficiency
-
-    def _expand_query(self, query: str) -> List[str]:
-        expanded = [query]
-        synonyms = {
-            "error": ["failure", "issue", "problem", "bug"],
-            "performance": ["speed", "efficiency", "throughput"],
-            "memory": ["storage", "cache", "buffer"],
-            "task": ["job", "work", "operation", "process"],
-        }
-        for term, syns in synonyms.items():
-            if term.lower() in query.lower():
-                for syn in syns[:2]:
-                    expanded.append(query.lower().replace(term.lower(), syn))
-        return expanded[:3]
-
-    def _dict_to_fact(self, hit: Dict[str, Any], source_type: str) -> Fact:
-        return Fact(
-            id=hit.get("id", ""),
-            text=hit.get("text", ""),
-            score=hit.get("score", 0.0),
-            source=hit.get("source", source_type),
-            source_uri=hit.get("source_uri"),
-            timestamp=hit.get("timestamp", time.time()),
-            trust=hit.get("trust", 0.5),
-            signature=hit.get("signature"),
-        )
-
-    def _rrf_fuse(self, text_facts: List[Fact], vec_facts: List[Fact]) -> List[Fact]:
-        text_weight = 0.6
-        vec_weight = 0.4
-        all_facts: Dict[str, Fact] = {}
-        for i, fact in enumerate(text_facts):
-            if fact.id not in all_facts:
-                all_facts[fact.id] = fact
-            all_facts[fact.id].score += text_weight / (i + 60)
-        for i, fact in enumerate(vec_facts):
-            if fact.id not in all_facts:
-                all_facts[fact.id] = fact
-            all_facts[fact.id].score += vec_weight / (i + 60)
-        return sorted(all_facts.values(), key=lambda x: x.score, reverse=True)
-
-    def _mmr_diversify(self, facts: List[Fact], query: str, k: int) -> List[Fact]:
-        if len(facts) <= k:
-            return facts
-        selected: List[Fact] = []
-        remaining = facts.copy()
-        if remaining:
-            selected.append(remaining.pop(0))
-        while len(selected) < k and remaining:
-            best_fact: Optional[Fact] = None
-            best_score = -1.0
-            for fact in remaining:
-                relevance = fact.score
-                max_sim = max(self._similarity(fact, sel) for sel in selected) if selected else 0
-                mmr_score = 0.7 * relevance - 0.3 * max_sim
-                if mmr_score > best_score:
-                    best_score = mmr_score
-                    best_fact = fact
-            if best_fact:
-                selected.append(best_fact)
-                remaining.remove(best_fact)
-            else:
-                break
-        return selected
-
-    def _similarity(self, fact1: Fact, fact2: Fact) -> float:
-        words1 = set((fact1.sanitized_text or fact1.text).lower().split())
-        words2 = set((fact2.sanitized_text or fact2.text).lower().split())
-        if not words1 or not words2:
-            return 0.0
-        intersection = len(words1.intersection(words2))
-        union = len(words1.union(words2))
-        return intersection / union if union > 0 else 0.0
-
-    def _calculate_sufficiency(self, facts: List[Fact], query: str) -> RetrievalSufficiency:
-        if not facts:
-            return RetrievalSufficiency(0.0, 0.0, 0.0, self.token_budget, 0, 0, 0.0, 0.0)
-        coverage = sum(1 for f in facts if f.score > 0.5) / len(facts)
-        if len(facts) <= 1:
-            diversity = 1.0
-        else:
-            similarities: List[float] = []
-            for i in range(len(facts)):
-                for j in range(i + 1, len(facts)):
-                    similarities.append(self._similarity(facts[i], facts[j]))
-            diversity = 1.0 - (sum(similarities) / len(similarities)) if similarities else 1.0
-        conflict_count = sum(len(f.conflict_set) for f in facts)
-        agreement = 1.0 - (conflict_count / len(facts)) if facts else 1.0
-        stale_count = sum(1 for f in facts if f.is_stale())
-        staleness_ratio = stale_count / len(facts) if facts else 0.0
-        trust_score = sum(f.trust for f in facts) / len(facts) if facts else 0.0
-        return RetrievalSufficiency(
-            coverage=coverage,
-            diversity=diversity,
-            agreement=agreement,
-            token_budget=self.token_budget,
-            token_est=sum(self._estimate_tokens(f.sanitized_text or f.text) for f in facts),
-            conflict_count=conflict_count,
-            staleness_ratio=staleness_ratio,
-            trust_score=trust_score,
-        )
-
-    def _update_dynamic_budget(self, task_type: Optional[CognitiveTaskType] = None):
-        base_budget = self.base_token_budget
-        if task_type:
-            task_multipliers = {
-                CognitiveTaskType.FAILURE_ANALYSIS: 1.2,
-                CognitiveTaskType.TASK_PLANNING: 1.5,
-                CognitiveTaskType.DECISION_MAKING: 1.0,
-                CognitiveTaskType.PROBLEM_SOLVING: 1.3,
-                CognitiveTaskType.MEMORY_SYNTHESIS: 1.4,
-                CognitiveTaskType.CAPABILITY_ASSESSMENT: 1.1,
-                CognitiveTaskType.GRAPH_EMBED: 1.2,
-                CognitiveTaskType.GRAPH_RAG_QUERY: 1.1,
-                CognitiveTaskType.GRAPH_EMBED_V2: 1.2,
-                CognitiveTaskType.GRAPH_RAG_QUERY_V2: 1.1,
-                CognitiveTaskType.GRAPH_SYNC_NODES: 1.0,
-                CognitiveTaskType.GRAPH_FACT_EMBED: 1.3,
-                CognitiveTaskType.GRAPH_FACT_QUERY: 1.2,
-                CognitiveTaskType.FACT_SEARCH: 1.1,
-                CognitiveTaskType.FACT_STORE: 1.0,
-                CognitiveTaskType.ARTIFACT_MANAGE: 1.1,
-                CognitiveTaskType.CAPABILITY_MANAGE: 1.1,
-                CognitiveTaskType.MEMORY_CELL_MANAGE: 1.1,
-                CognitiveTaskType.MODEL_MANAGE: 1.1,
-                CognitiveTaskType.POLICY_MANAGE: 1.1,
-                CognitiveTaskType.SERVICE_MANAGE: 1.1,
-                CognitiveTaskType.SKILL_MANAGE: 1.1,
-            }
-            base_budget *= task_multipliers.get(task_type, 1.0)
-        if self.energy_client:
-            try:
-                energy_state = self.energy_client.get_current_energy()
-                if energy_state.get("total_energy", 1.0) < 0.5:
-                    base_budget *= 0.8
-            except Exception as e:
-                logger.warning(f"Failed to get energy state: {e}")
-        if self.ocps_client:
-            try:
-                ocps_status = self.ocps_client.get_status()
-                if ocps_status.get("current_load", 0.5) > 0.8:
-                    base_budget *= 0.7
-            except Exception as e:
-                logger.warning(f"Failed to get OCPS status: {e}")
-        self.token_budget = max(500, int(base_budget))
-
-    def _estimate_tokens(self, text: str) -> int:
-        return max(1, int(len(text) / 3.5))
-
-    def _summarize(self, facts: List[Fact]) -> str:
-        if not facts:
-            return "No relevant facts found."
-        keypoints: List[str] = []
-        for fact in facts[:5]:
-            text = fact.sanitized_text or fact.text
-            keypoints.append(f"{text[:140]} (source: {fact.source}, trust: {fact.trust:.2f})")
-        return "Key information includes: " + " • ".join(keypoints)
 
 
 # =============================================================================
@@ -689,7 +294,7 @@ class CognitiveCore(dspy.Module):
                         for f in budgeted_facts[:10]:
                             try:
                                 # Use global write-through for cluster-wide visibility
-                                mw.set_global_item_typed("fact", "global", f.id, f.to_dict(), ttl_s=1800)
+                                mw.set_global_item_typed("fact", "global", f.id, _fact_to_context_dict(f), ttl_s=1800)
                                 # Clear any negative cache for this fact
                                 neg_key = f"_neg:fact:global:{f.id}"
                                 try:
@@ -922,7 +527,7 @@ class CognitiveCore(dspy.Module):
         return [
             {"agent_id": context.agent_id},
             {"knowledge_summary": summary},
-            {"top_facts": [f.to_dict() for f in facts[:5]]},
+            {"top_facts": [_fact_to_context_dict(f) for f in facts[:5]]},
             {"ocps_sufficiency": getattr(self, "last_sufficiency", {})},
         ]
 
@@ -1291,7 +896,7 @@ class CognitiveCore(dspy.Module):
     def _build_knowledge_context(self, facts: List[Fact], summary: str, sufficiency: RetrievalSufficiency) -> Dict[str, Any]:
         """Build knowledge context for DSPy signatures."""
         return {
-            "facts": [fact.to_dict() for fact in facts],
+            "facts": [_fact_to_context_dict(fact) for fact in facts],
             "summary": summary,
             "sufficiency": {
                 "coverage": sufficiency.coverage,

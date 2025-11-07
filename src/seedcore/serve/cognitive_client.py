@@ -8,7 +8,7 @@ supporting multi-provider & dual-profile (FAST/DEEP) requests.
 
 import os
 import logging
-from typing import Dict, Any, Optional, List, Sequence
+from typing import Dict, Any, Optional, List
 
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
 
@@ -104,28 +104,6 @@ class CognitiveServiceClient(BaseServiceClient):
     # Helpers
     # ---------------------------
 
-    async def _post_first_available(
-        self,
-        candidate_paths: Sequence[str],
-        json: Dict[str, Any],
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        """
-        Try a list of endpoint paths in order, returning the first success.
-        Useful for smooth migrations (e.g., /plan vs /plan-task).
-        """
-        last_exc: Optional[Exception] = None
-        for p in candidate_paths:
-            try:
-                return await self.post(p, json=json, **kwargs)
-            except Exception as e:
-                last_exc = e
-                logger.debug("POST %s failed: %s; trying next candidate", p, e)
-        # If all failed, raise final exception
-        if last_exc:
-            raise last_exc
-        return {"success": False, "error": "No candidate path attempted"}
-
     def _provider_hints(self) -> List[str]:
         """
         Collect multi-provider hints from env to send with requests.
@@ -159,8 +137,7 @@ class CognitiveServiceClient(BaseServiceClient):
     ) -> Dict[str, Any]:
         """
         Plan a task with explicit FAST/DEEP profile and optional provider/model override.
-        Tries /plan first; falls back to /plan-task for older deployments.
-        
+
         Note: profile parameter ("fast"|"deep") is metadata for LLM selection, not routing.
         Routing decision is handled by Coordinator (uses "planner" route).
         """
@@ -181,13 +158,9 @@ class CognitiveServiceClient(BaseServiceClient):
 
         # New route -> legacy route compatibility
         eff_timeout = self._timeout_for_profile(profile)
-        return await self._post_first_available(
-            candidate_paths=("/plan", "/plan-task"),
-            json=body,
-            timeout=eff_timeout,
-        )
+        return await self.post("/plan", json=body, timeout=eff_timeout)
 
-    async def plan_with_escalation(
+    async def plan_with_deep(
         self,
         agent_id: str,
         task_description: str,
@@ -210,7 +183,7 @@ class CognitiveServiceClient(BaseServiceClient):
             "meta": extra_meta or {},
         }
         body = {k: v for k, v in body.items() if v is not None}
-        return await self.post("/plan-with-escalation", json=body)
+        return await self.post("/plan-with-deep", json=body)
 
     # ---------------------------
     # Problem Solving

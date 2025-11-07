@@ -1746,7 +1746,7 @@ class Coordinator:
                 logger.warning("[Coordinator] HGNN /solve-problem call failed: %s; trying legacy fallback", e)
                 hgnn_resp = {"success": False, "error": str(e), "result": {}}
                 
-                # Fallback to legacy /plan-with-escalation for backward compatibility
+                # Fallback to legacy /plan-with-deep for backward compatibility
                 if not hgnn_resp.get("success"):
                     try:
                         legacy_body = {
@@ -1764,9 +1764,9 @@ class Coordinator:
                             "caller": "coordinator",
                         }
                         hgnn_resp = await self.cognitive_client.post(
-                            "/plan-with-escalation", json=legacy_body, headers=_corr_headers("cognitive", cid)
+                            "/plan-with-deep", json=legacy_body, headers=_corr_headers("cognitive", cid)
                         )
-                        logger.info("[Coordinator] Legacy /plan-with-escalation fallback succeeded")
+                        logger.info("[Coordinator] Legacy /plan-with-deep fallback succeeded")
                     except Exception as legacy_e:
                         logger.warning("[Coordinator] Legacy fallback also failed: %s; staying HOLD", legacy_e)
                         hgnn_resp = {"success": False, "error": str(legacy_e), "result": {}}

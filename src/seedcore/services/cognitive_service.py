@@ -571,7 +571,7 @@ class CognitiveService:
                 error_msg += " (Circuit breaker OPEN)"
             return create_error_result(error_msg, "PROCESSING_ERROR").model_dump()
 
-    def plan_with_escalation(self, context: 'CognitiveContext') -> Dict[str, Any]:
+    def plan_with_deep(self, context: 'CognitiveContext') -> Dict[str, Any]:
         fast_result = self.plan(context, depth=LLMProfile.FAST)
         if isinstance(fast_result, dict) and "result" in fast_result:
             meta = fast_result["result"].get("meta", {})

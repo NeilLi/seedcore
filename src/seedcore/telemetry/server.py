@@ -2265,11 +2265,11 @@ async def plan_task(
         
         # Use HTTP client to separate serve service
         try:
-            response = await client.post("/cognitive/plan-task", json={
+            response = await client.post("/cognitive/plan", json={
                 "agent_id": agent_id or "default_agent",
                 "task_description": task_description,
-                "agent_capabilities": agent_capabilities or {"capability_score": 0.5},
-                "available_resources": available_resources or {}
+                "current_capabilities": agent_capabilities or {"capability_score": 0.5},
+                "available_tools": available_resources or {}
             })
             result = response.json()
             return result
