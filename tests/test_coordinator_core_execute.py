@@ -12,7 +12,7 @@ import pytest
 from unittest.mock import Mock, AsyncMock
 from typing import Any, Optional
 
-from seedcore.models.result_schema import ResultKind
+from seedcore.models.cognitive import DecisionKind
 from seedcore.coordinator.core.execute import (
     route_and_execute,
     RouteConfig,
@@ -106,7 +106,7 @@ class TestRouteAndExecute:
             hgnn_config=None
         )
         
-        assert result["kind"] == ResultKind.FAST_PATH
+        assert result["kind"] == DecisionKind.FAST_PATH
         assert result["payload"]["metadata"]["decision"] == "fast"
         organism_execute.assert_not_called()
     
@@ -164,7 +164,7 @@ class TestRouteAndExecute:
             hgnn_config=None
         )
         
-        assert result["kind"] == ResultKind.COGNITIVE
+        assert result["kind"] == DecisionKind.COGNITIVE
         assert result["payload"]["result"]["proto_plan"]
     
     async def test_route_and_execute_hgnn_path(self):
@@ -284,6 +284,6 @@ class TestRouteAndExecute:
             hgnn_config=None
         )
         
-        assert result["kind"] == ResultKind.ESCALATED
+        assert result["kind"] == DecisionKind.ESCALATED
         assert result["payload"]["metadata"]["decision"] == "hgnn"
 

@@ -15,6 +15,7 @@ except ImportError:  # Python < 3.11
 from dataclasses import dataclass
 
 from seedcore.serve.base_client import BaseServiceClient, CircuitBreaker, RetryConfig
+from seedcore.models.cognitive import DecisionKind
 
 # Import feature extraction functions and shared types
 from ._features import (
@@ -201,11 +202,17 @@ class SurpriseComputer:
         
         # Compute weighted surprise score
         S = _clip01(sum(w * x for w, x in zip(self.w_hat, xs)))
-        decision = ("fast" if S < self.tau_fast else "planner" if S < self.tau_plan else "hgnn")
+        decision_kind = (
+            DecisionKind.FAST_PATH.value
+            if S < self.tau_fast
+            else DecisionKind.COGNITIVE.value
+            if S < self.tau_plan
+            else DecisionKind.ESCALATED.value
+        )
         
-        # Structured logging for decision points
-        logger.info("Surprise computation: S=%.3f, decision=%s, thresholds=(fast=%.3f, plan=%.3f), mode=%s", 
-                   S, decision, self.tau_fast, self.tau_plan, self.normalize_mode)
+        # Structured logging for decision_kind points
+        logger.info("Surprise computation: S=%.3f, decision_kind=%s, thresholds=(fast=%.3f, plan=%.3f), mode=%s", 
+                   S, decision_kind, self.tau_fast, self.tau_plan, self.normalize_mode)
         logger.debug("Component scores: x1=%.3f, x2=%.3f, x3=%.3f, x4=%.3f, x5=%.3f, x6=%.3f", *xs)
         logger.debug("OCPS state: S_t=%.3f, h=%.3f, h_clr=%.3f, flag_on=%s, mapping=%s",
                     ocps_state.S_t, ocps_state.h, ocps_state.h_clr, ocps_state.flag_on, ocps_state.mapping)
@@ -214,7 +221,7 @@ class SurpriseComputer:
             "S": S, 
             "x": xs, 
             "weights": self.w_hat, 
-            "decision": decision,
+            "decision_kind": decision_kind,
             "normalize_mode": self.normalize_mode,
             "ocps": {
                 "S_t": ocps_state.S_t,
@@ -313,7 +320,7 @@ def _decide_route_with_hysteresis(
     plan_exit: float = 0.57
 ) -> str:
     """
-    Route decision with hysteresis between fast, planner, and HGNN.
+    Route decision_kind with hysteresis between fast, planner, and HGNN.
     
     Includes optional error fallback for invalid input.
     
@@ -326,33 +333,37 @@ def _decide_route_with_hysteresis(
     
     Args:
         S: Surprise score [0, 1]
-        last_decision: Previous decision (for hysteresis)
+        last_decision: Previous decision_kind (for hysteresis)
         fast_enter: Threshold to enter fast path (default: 0.35)
         fast_exit: Threshold to exit fast path (default: 0.38, higher for hysteresis)
         plan_enter: Threshold to enter planner path (default: 0.60)
         plan_exit: Threshold to exit planner path (default: 0.57, lower for hysteresis)
     
     Returns:
-        Decision: 'fast', 'planner', 'hgnn', or 'error' (for invalid input)
+        decision_kind: 'fast', 'planner', 'hgnn', or 'error' (for invalid input)
     """
     try:
         # Clamp to [0, 1] to avoid nonsense inputs
         S = max(0.0, min(1.0, float(S)))
     except Exception:
-        return "error"
+        return DecisionKind.ERROR.value
 
-    if last_decision == "fast" and S < fast_exit:
-        return "fast"
-    if last_decision == "hgnn" and S > plan_exit:
-        return "hgnn"
+    fast_value = DecisionKind.FAST_PATH.value
+    planner_value = DecisionKind.COGNITIVE.value
+    hgnn_value = DecisionKind.ESCALATED.value
 
-    # Fresh decision
+    if last_decision == fast_value and S < fast_exit:
+        return fast_value
+    if last_decision == hgnn_value and S > plan_exit:
+        return hgnn_value
+
+    # Fresh decision_kind
     if S < fast_enter:
-        return "fast"
+        return fast_value
     elif S < plan_enter:
-        return "planner"
+        return planner_value
     else:
-        return "hgnn"
+        return hgnn_value
 
 
 def build_proto_subtasks(tags: Set[str], x6: float, criticality: float, force: bool = False) -> Dict[str, Any]:
@@ -494,7 +505,7 @@ def compute_surprise_score(signals: Dict[str, Any]) -> Dict[str, Any]:
         signals: Dictionary of signals for surprise computation
         
     Returns:
-        Dictionary with surprise score, decision, and metadata
+        Dictionary with surprise score, decision_kind, and metadata
     """
     computer = SurpriseComputer()
     return computer.compute(signals)
@@ -523,18 +534,18 @@ def decide_route_with_hysteresis(
     plan_exit: float = 0.57
 ) -> str:
     """
-    Make routing decision with hysteresis to prevent flapping.
+    Make routing decision_kind with hysteresis to prevent flapping.
     
     Args:
         surprise_score: Current surprise score
-        last_decision: Previous routing decision
+        last_decision: Previous routing decision_kind
         fast_enter: Threshold to enter fast path
         fast_exit: Threshold to exit fast path
         plan_enter: Threshold to enter planner path
         plan_exit: Threshold to exit planner path
         
     Returns:
-        Routing decision: 'fast', 'planner', or 'hgnn'
+        Routing decision_kind: 'fast', 'planner', or 'hgnn'
     """
     return _decide_route_with_hysteresis(
         surprise_score, last_decision, fast_enter, fast_exit, plan_enter, plan_exit

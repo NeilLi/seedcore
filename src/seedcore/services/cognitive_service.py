@@ -9,39 +9,41 @@ Multi-provider enhancements:
 """
 
 # Ensure DSP logging is patched before any DSP/DSPy import via transitive imports
-import sys as _sys
-_sys.path.insert(0, '/app/docker')
 try:
-    import dsp_patch  # type: ignore
+    from seedcore.cognitive import dsp_patch  # type: ignore
 except Exception:
     pass
 
 import json
 import logging
 import os
+import random
 import time
 import threading
+import httpx
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-from enum import Enum
-from typing import Dict, Any, Optional, List, Protocol, Callable
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from seedcore.logging_setup import ensure_serve_logger
 
 logger = ensure_serve_logger("seedcore.CognitiveService", level="DEBUG")
 
-# =============================================================================
-# LLM Profile Management
-# =============================================================================
 
 class LLMProfile(Enum):
     """LLM profile types for different cognitive processing depths."""
+
     FAST = "fast"
     DEEP = "deep"
 
+
 class LLMEngine(Protocol):
     """Protocol for LLM engine abstraction."""
-    def configure_for_dspy(self) -> Any: ...
+
+    def configure_for_dspy(self) -> Any:
+        ...
+
 
 class _DSPyEngineShim:
     """
@@ -95,13 +97,22 @@ class OpenAIEngine:
     def configure_for_dspy(self):
         pass  # DSPy configured in _create_core_with_engine
 
+
+class MLServiceError(RuntimeError):
+    """Raised when MLService returns an invalid response or fails."""
+
+    def __init__(self, message: str, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status
+
+
 class MLServiceEngine:
-    """MLService engine implementation for local LLM inference using MLServiceClient."""
+    """Synchronous MLService engine backed by httpx with retries and structured errors."""
+
     def __init__(self, model: str, max_tokens: int = 1024, temperature: float = 0.7, base_url: str = None):
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
-        # Resolve base URL (env > ray_utils > localhost)
         if base_url:
             self.base_url = base_url.rstrip("/")
         else:
@@ -114,36 +125,108 @@ class MLServiceEngine:
                     self.base_url = str(ML).rstrip("/")
                 except Exception:
                     self.base_url = "http://127.0.0.1:8000/ml"
-        from seedcore.serve.ml_client import MLServiceClient
-        self.client = MLServiceClient(base_url=self.base_url)
-    
+
+        self.timeout = float(os.getenv("MLS_TIMEOUT", "10.0"))
+        connect_timeout = float(os.getenv("MLS_CONNECT_TIMEOUT", "2.0"))
+        write_timeout = float(os.getenv("MLS_WRITE_TIMEOUT", "5.0"))
+        pool_timeout = float(os.getenv("MLS_POOL_TIMEOUT", "2.0"))
+        self._client = httpx.Client(
+            base_url=self.base_url,
+            timeout=httpx.Timeout(connect=connect_timeout, read=self.timeout, write=write_timeout, pool=pool_timeout),
+            limits=httpx.Limits(
+                max_keepalive_connections=int(os.getenv("MLS_MAX_KEEPALIVE_CONNECTIONS", "20")),
+                max_connections=int(os.getenv("MLS_MAX_CONNECTIONS", "100")),
+            ),
+            http2=os.getenv("MLS_HTTP2", "1") not in {"0", "false", "False"},
+        )
+        self._closed = False
+        self._client_lock = threading.Lock()
+
     def configure_for_dspy(self):
         pass
-    
-    async def generate_async(self, prompt: str, **kwargs) -> str:
-        try:
-            messages = [{"role": "user", "content": prompt}]
-            generation_params = {
-                "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-                **{k: v for k, v in kwargs.items() if k != "max_tokens"}
-            }
-            response = await self.client.chat(
-                model=self.model,
-                messages=messages,
-                **generation_params
-            )
-            if "choices" in response and len(response["choices"]) > 0:
-                return response["choices"][0]["message"]["content"]
-            logger.error(f"Unexpected response format from MLService: {response}")
-            return "Error: Invalid response from MLService"
-        except Exception as e:
-            logger.error(f"Error generating text with MLService: {e}")
-            return f"Error: {str(e)}"
-    
+
+    def _post_chat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        attempts = max(1, int(os.getenv("MLS_RETRY_ATTEMPTS", "3")))
+        base_delay = float(os.getenv("MLS_RETRY_BASE_DELAY", "0.25"))
+
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self._client.post("/chat", json=payload)
+                response.raise_for_status()
+                return response.json()
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.RemoteProtocolError) as exc:
+                if attempt < attempts:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    delay += random.random() * 0.2
+                    time.sleep(delay)
+                    continue
+                logger.error("Transient MLService error after retries: %s", exc, exc_info=True)
+                raise MLServiceError(f"MLService transient error: {exc}") from exc
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                body = None
+                try:
+                    body = exc.response.text
+                except Exception:
+                    pass
+                logger.error("MLService HTTP %s: %s", status, body)
+                raise MLServiceError(f"MLService HTTP {status}", status=status) from exc
+            except Exception as exc:
+                logger.error("Unexpected MLService error: %s", exc, exc_info=True)
+                raise MLServiceError(f"Unexpected MLService error: {exc}") from exc
+
+        # Should not reach here
+        raise MLServiceError("MLService request failed after retries")
+
     def generate(self, prompt: str, **kwargs) -> str:
-        import anyio
-        # Use a lambda to properly pass kwargs to generate_async, not anyio.run
-        return anyio.run(lambda: self.generate_async(prompt, **kwargs))
+        if self._closed:
+            raise MLServiceError("MLServiceEngine is closed")
+
+        messages = [{"role": "user", "content": prompt}]
+        generation_params = {
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            **{k: v for k, v in kwargs.items() if k != "max_tokens"}
+        }
+        generation_params.setdefault("temperature", self.temperature)
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            **generation_params,
+        }
+
+        data = self._post_chat(payload)
+        if not isinstance(data, dict):
+            raise MLServiceError("Invalid MLService response: expected object")
+
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            if isinstance(first, dict):
+                message = first.get("message")
+                if isinstance(message, dict) and "content" in message:
+                    return message["content"]
+
+        if "content" in data:
+            return data["content"]
+
+        raise MLServiceError("Invalid MLService response: missing 'content'")
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        with self._client_lock:
+            if self._closed:
+                return
+            try:
+                self._client.close()
+            finally:
+                self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
 # get_active_providers parses LLM_PROVIDERS (if you have the registry; otherwise falls back below)
 try:
@@ -262,8 +345,18 @@ class CircuitBreaker:
 # =============================================================================
 
 from ..cognitive.cognitive_core import (
-    CognitiveCore, ContextBroker, Fact, RetrievalSufficiency, 
-    CognitiveTaskType, CognitiveContext, initialize_cognitive_core, get_cognitive_core
+    CognitiveCore,
+    ContextBroker,
+    Fact,
+    RetrievalSufficiency,
+    LLMEngine,
+    LLMProfile,
+    initialize_cognitive_core,
+    get_cognitive_core,
+)
+
+from ..models.cognitive import (
+    CognitiveType, CognitiveContext, DecisionKind,
 )
 
 from ..models.result_schema import (
@@ -571,22 +664,6 @@ class CognitiveService:
                 error_msg += " (Circuit breaker OPEN)"
             return create_error_result(error_msg, "PROCESSING_ERROR").model_dump()
 
-    def plan_with_deep(self, context: 'CognitiveContext') -> Dict[str, Any]:
-        fast_result = self.plan(context, depth=LLMProfile.FAST)
-        if isinstance(fast_result, dict) and "result" in fast_result:
-            meta = fast_result["result"].get("meta", {})
-            if meta.get("escalate_hint", False):
-                # Escalation to planner path: use DEEP profile internally (LLMProfile.DEEP)
-                # Note: routing decision is "planner", profile="deep" is metadata
-                logger.info(f"Escalation suggested, using DEEP profile (planner path) for task {context.task_type.value}")
-                deep_result = self.plan(context, depth=LLMProfile.DEEP)
-                if isinstance(deep_result, dict) and "result" in deep_result:
-                    deep_result["result"]["meta"] = deep_result["result"].get("meta", {})
-                    deep_result["result"]["meta"]["escalated_from_fast"] = True
-                    deep_result["result"]["meta"]["fast_escalate_hint"] = True
-                return deep_result
-        return fast_result
-
     def health_check(self) -> Dict[str, Any]:
         try:
             if not self.cores:
@@ -610,114 +687,192 @@ class CognitiveService:
             }
 
     def process_cognitive_task(self, context: 'CognitiveContext') -> Dict[str, Any]:
-        # Thin wrapper that delegates to multi-profile forward_cognitive_task
-        return self.forward_cognitive_task(context, use_deep=False)
-
-    def forward_cognitive_task(self, context: 'CognitiveContext', use_deep: bool = False) -> Dict[str, Any]:
         """
-        Forward cognitive task to appropriate core.
+        DEPRECATED: Legacy wrapper retained for backwards compatibility.
+
+        Callers should set 'meta.decision_kind' on the context input_data and call
+        'forward_cognitive_task' directly.
+        """
+        logger.warning(
+            "process_cognitive_task() is deprecated. "
+            "Inject 'meta.decision_kind' and call forward_cognitive_task() directly."
+        )
+
+        # Inject the default FAST path decision kind if missing
+        input_data = context.input_data or {}
+        meta = input_data.get("meta")
+        if meta is None:
+            meta = {}
+            input_data["meta"] = meta
+        if "decision_kind" not in meta:
+            meta["decision_kind"] = DecisionKind.FAST_PATH.value
+        context.input_data = input_data
+
+        return self.forward_cognitive_task(context)
+
+    def forward_cognitive_task(
+        self,
+        context: 'CognitiveContext',
+        use_deep: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """
+        Forward cognitive task to the appropriate core based on decision_kind.
         
         Args:
             context: Cognitive context for the task
-            use_deep: If True, use DEEP profile (OpenAI), otherwise use FAST profile (default: False)
+            use_deep: Deprecated legacy flag. Prefer `meta.decision_kind` on context input_data.
         """
-        # Check for provider/model overrides in input_data
         input_data = context.input_data or {}
+        meta_extra = input_data.get("meta")
+        if meta_extra is None:
+            meta_extra = {}
+            input_data["meta"] = meta_extra
+            context.input_data = input_data
+
+        # Support legacy callers passing use_deep flag by projecting into decision_kind
+        if use_deep is not None and "decision_kind" not in meta_extra:
+            inferred_kind = DecisionKind.COGNITIVE if use_deep else DecisionKind.FAST_PATH
+            meta_extra["decision_kind"] = inferred_kind.value
+            logger.debug(
+                "Injected decision_kind='%s' based on deprecated use_deep=%s flag",
+                inferred_kind.value,
+                use_deep,
+            )
+
+        decision_kind_raw = meta_extra.get("decision_kind")
+        decision_kind_value = (
+            str(decision_kind_raw).strip().lower()
+            if decision_kind_raw is not None
+            else DecisionKind.FAST_PATH.value
+        )
+
+        legacy_aliases = {
+            "ray_agent_fast": DecisionKind.FAST_PATH,
+        }
+
+        try:
+            decision_kind_enum = DecisionKind(decision_kind_value)
+        except ValueError:
+            decision_kind_enum = legacy_aliases.get(decision_kind_value)
+
+        if decision_kind_enum is None:
+            logger.warning(
+                "Unknown decision_kind '%s'. Defaulting to FAST profile.",
+                decision_kind_raw,
+            )
+            decision_kind_enum = DecisionKind.FAST_PATH
+
+        # Step 1: select LLM profile based on decision_kind
+        if decision_kind_enum is DecisionKind.FAST_PATH:
+            profile_key = LLMProfile.FAST
+        elif decision_kind_enum in (DecisionKind.COGNITIVE, DecisionKind.ESCALATED):
+            profile_key = LLMProfile.DEEP
+        else:
+            profile_key = LLMProfile.FAST
+
+        logger.debug(
+            "Routing task from decision_kind '%s' to LLMProfile '%s'",
+            decision_kind_enum.value,
+            profile_key.value,
+        )
+
+        # Step 2: provider/model overrides
         provider_override = input_data.get("llm_provider_override")
         model_override = input_data.get("llm_model_override")
-        providers_hint = input_data.get("providers")  # Multi-provider pool hint
-        meta_extra = input_data.get("meta", {})
-        
-        # Determine which provider/model to use
-        target_provider = None
-        target_model = None
-        
-        if provider_override:
-            target_provider = provider_override.lower().strip()
-            logger.debug(f"Provider override requested: {target_provider}")
-        
-        if model_override:
-            target_model = model_override.strip()
-            logger.debug(f"Model override requested: {target_model}")
-        
-        # If overrides are provided, try to use/create a core with those settings
-        if target_provider or target_model:
-            # Resolve full provider/model
+
+        if provider_override or model_override:
+            target_provider = (provider_override or "").lower().strip()
+            target_model = (model_override or "").strip()
+
             if not target_provider:
-                # Use default provider for the profile
-                profile = LLMProfile.DEEP if use_deep else LLMProfile.FAST
-                target_provider = self.profiles.get(profile, {}).get("provider", "openai")
+                target_provider = self.profiles.get(profile_key, {}).get("provider", "openai")
             if not target_model:
-                # Use default model for the provider/profile
-                profile = LLMProfile.DEEP if use_deep else LLMProfile.FAST
-                target_model = _model_for(target_provider, profile)
-            
-            # Check if we have a matching core (exact match on provider/model)
-            # For now, create a temporary core with the override settings
-            # TODO: Consider caching temporary cores by provider+model key
+                target_model = _model_for(target_provider, profile_key)
+
             try:
-                logger.info(f"Creating temporary core with provider={target_provider}, model={target_model} (override requested)")
-                temp_engine = _make_engine(target_provider, LLMProfile.DEEP if use_deep else LLMProfile.FAST, target_model)
+                logger.info(
+                    "Creating temporary core with provider=%s, model=%s (override requested)",
+                    target_provider,
+                    target_model,
+                )
+                temp_engine = _make_engine(target_provider, profile_key, target_model)
                 temp_config = {
                     "provider": target_provider,
                     "model": target_model,
-                    "max_tokens": 2048 if use_deep else 1024,
+                    "max_tokens": self.profiles.get(profile_key, {}).get("max_tokens", 2048),
                 }
                 temp_core = self._create_core_with_engine(target_provider, temp_engine, temp_config)
                 
-                # CRITICAL: Configure DSPy with the override LM before processing
                 import dspy
                 if temp_config and "_dspy_lm" in temp_config:
                     dspy.settings.configure(lm=temp_config["_dspy_lm"])
-                    logger.debug(f"Configured DSPy with override LM (provider={target_provider})")
+                    logger.debug(
+                        "Configured DSPy with override LM (provider=%s, profile=%s)",
+                        target_provider,
+                        profile_key.value,
+                    )
                 
                 result = temp_core.forward(context)
                 if isinstance(result, dict):
                     result.setdefault("result", {}).setdefault("meta", {})
-                    result["result"]["meta"]["profile_used"] = ("deep" if use_deep else "fast")
+                    result["result"]["meta"]["profile_used"] = profile_key.value
                     result["result"]["meta"]["provider_override"] = target_provider
                     result["result"]["meta"]["model_override"] = target_model
                     if meta_extra:
                         result["result"]["meta"].update(meta_extra)
                 return result
             except Exception as e:
-                logger.warning(f"Failed to create temporary core with overrides (provider={target_provider}, model={target_model}): {e}. Falling back to default core.")
-                # Fall through to default core selection
-        
-        # Use new multi-profile system if available (no overrides or override creation failed)
+                logger.warning(
+                    "Failed to create temporary core with overrides (provider=%s, model=%s): %s. "
+                    "Falling back to default core.",
+                    target_provider,
+                    target_model,
+                    e,
+                )
+
+        # Step 3: Use default profile core (no overrides)
         if self.cores:
-            profile = LLMProfile.DEEP if use_deep else LLMProfile.FAST
-            core = self.cores.get(profile)
+            core = self.cores.get(profile_key)
             if core:
                 try:
-                    # CRITICAL: Configure DSPy with the correct LM for this profile before processing
-                    # This avoids global state conflicts when multiple profiles are used
                     import dspy
-                    config = self.core_configs.get(profile)
+                    config = self.core_configs.get(profile_key)
                     if config and "_dspy_lm" in config:
                         dspy.settings.configure(lm=config["_dspy_lm"])
-                        logger.debug(f"Configured DSPy with {profile.value} profile LM (provider={config.get('provider')})")
+                        logger.debug(
+                            "Configured DSPy with %s profile LM (provider=%s)",
+                            profile_key.value,
+                            config.get("provider"),
+                        )
                     
                     result = core.forward(context)
                     if isinstance(result, dict):
                         result.setdefault("result", {}).setdefault("meta", {})
-                        result["result"]["meta"]["profile_used"] = profile.value
+                        result["result"]["meta"]["profile_used"] = profile_key.value
                         result["result"]["meta"]["provider_used"] = config.get("provider", "unknown") if config else "unknown"
                         if meta_extra:
                             result["result"]["meta"].update(meta_extra)
                     return result
                 except Exception as e:
-                    logger.error(f"Error forwarding cognitive task with {profile.value} profile: {e}")
-                    # No legacy fallback allowed in this deployment
+                    logger.error(
+                        "Error forwarding cognitive task with %s profile: %s",
+                        profile_key.value,
+                        e,
+                    )
                     pass
-        
-        # No legacy fallback allowed in this deployment
-        logger.error(f"No compatible cognitive core for request (use_deep={use_deep}, cores={list(self.cores.keys())})")
+
+        # Step 4: Fallback error
+        logger.error(
+            "No compatible cognitive core for request (decision_kind=%s, profile=%s, cores=%s)",
+            decision_kind_enum.value,
+            profile_key.value,
+            list(self.cores.keys()),
+        )
         return {
             "success": False,
             "result": {},
             "payload": {},
-            "task_type": context.task_type.value,
+            "cog_type": context.cog_type.value,
             "metadata": {},
             "error": "No compatible cognitive core for this request (legacy core disabled)",
         }
@@ -799,7 +954,7 @@ __all__ = [
     "initialize_cognitive_service", 
     "get_cognitive_service", 
     "reset_cognitive_service",
-    "CognitiveTaskType", 
+    "CognitiveType", 
     "CognitiveContext",
     "LLMProfile",
     "LLMEngine",

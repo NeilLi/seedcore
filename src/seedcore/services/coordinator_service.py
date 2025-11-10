@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # 2. Third-Party Imports
 # ---------------------------------------------------------------------------
-import httpx
 import redis
 from fastapi import FastAPI, HTTPException, Request
 from ray import serve
@@ -107,7 +106,8 @@ from ..utils.ray_utils import COG, ML, ORG  # Used for constants
 from ..database import get_async_pg_session_factory
 from ..logging_setup import ensure_serve_logger
 from ..models import Task, TaskPayload
-from ..models.result_schema import ResultKind, create_error_result
+from ..models.cognitive import CognitiveType, DecisionKind
+from ..models.result_schema import create_error_result
 from ..ops.eventizer.eventizer_features import (
     features_from_payload as default_features_from_payload,
 )
@@ -211,12 +211,6 @@ def _corr_headers(target: str, cid: str) -> Dict[str, str]:
         "X-Correlation-ID": cid,
     }
 
-async def _apost(client: httpx.AsyncClient, url: str, payload: Dict[str, Any],
-                 headers: Dict[str, str], timeout: float) -> Dict[str, Any]:
-    r = await client.post(url, json=payload, headers=headers, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
-
 # Coordination primitives (OCPS, Surprise, drift, energy) are now imported from coordinator.core.policies
 # Route cache structures are now imported from coordinator.core.routing
 
@@ -280,14 +274,16 @@ def build_execution_config(
             "task": task_dict,
             "organ_timeout_s": timeout,
         }
-        res = await _apost(
-            coordinator.http,
-            f"{ORG_URL}/execute-on-organ",
-            payload,
-            _corr_headers("organism", cid_local),
+        client = getattr(coordinator, "organism_client", None)
+        if client is None:
+            raise RuntimeError("OrganismServiceClient is not initialized on coordinator")
+        res = await client.post(
+            "/execute-on-organ",
+            json=payload,
+            headers=_corr_headers("organism", cid_local),
             timeout=ORG_TIMEOUT,
         )
-        res["organ_id"] = organ_id
+        res.setdefault("organ_id", organ_id)
         return res
     
     return ExecutionConfig(
@@ -341,7 +337,7 @@ class CoordinatorCore:
     - Computes 6-signal Surprise Score S(T) with OCPS-correct x₂ mapping
     - Evaluates PKG with strict timeout; falls back to deterministic rules
     - Returns unified result schema: {success, kind, payload}
-    - Supports hysteresis to prevent decision flapping
+    - Supports hysteresis to prevent decision_kind flapping
     
     Environment Variables:
     - SURPRISE_WEIGHTS: Comma-separated weights for x1..x6 (default: 0.25,0.20,0.15,0.20,0.10,0.10)
@@ -466,11 +462,6 @@ class Coordinator:
             timeout=float(os.getenv("CB_ORG_TIMEOUT_S", "5.0"))
         )
         
-        # Legacy HTTP client for backward compatibility
-        self.http = httpx.AsyncClient(
-            timeout=ORCH_TIMEOUT,
-            limits=httpx.Limits(max_keepalive_connections=100, max_connections=200),
-        )
         self.ocps = create_ocps_valve()
         self.metrics = get_global_metrics_tracker()
 
@@ -561,11 +552,6 @@ class Coordinator:
         
         # Routing is now handled by OrganismManager via resolve-route endpoints
         # Old static routing rules are preserved in _static_route_fallback method
-        
-        # Escalation concurrency control
-        self.escalation_max_inflight = COGNITIVE_MAX_INFLIGHT
-        self.escalation_semaphore = asyncio.Semaphore(5)
-        self._inflight_escalations = 0
         
         # Configuration
         self.fast_path_latency_slo_ms = FAST_PATH_LATENCY_SLO_MS
@@ -915,7 +901,7 @@ class Coordinator:
         return self.storage.get(f"job:{job_id}")
 
     async def _fire_and_forget_memory_synthesis(self, agent_id: str, anomalies: dict, 
-                                               reason: dict, decision: dict, cid: str):
+                                               reason: dict, decision_kind: dict, cid: str):
         """Fire-and-forget memory synthesis with proper error handling and metrics."""
         start_time = time.time()
         
@@ -923,14 +909,14 @@ class Coordinator:
             # Redact sensitive data
             redacted_anomalies = self._redact_sensitive_data(anomalies.get("anomalies", []))
             redacted_reason = self._redact_sensitive_data(reason.get("result") or reason)
-            redacted_decision = self._redact_sensitive_data(decision.get("result") or decision)
+            redacted_decision = self._redact_sensitive_data(decision_kind.get("result") or decision_kind)
             
             payload = {
                 "agent_id": agent_id,
                 "memory_fragments": [
                     {"anomalies": redacted_anomalies},
                     {"reason": redacted_reason},
-                    {"decision": redacted_decision}
+                    {"decision_kind": redacted_decision}
                 ],
                 "synthesis_goal": "incident_triage_summary"
             }
@@ -964,16 +950,15 @@ class Coordinator:
 
     async def _hgnn_decompose(self, task: Task) -> List[Dict[str, Any]]:
         """
-        HGNN-based task decomposition using CognitiveCore Serve deployment.
-        
-        Steps:
-          1. Verifies cognitive client health
-          2. Calls CognitiveCore (/solve-problem)
-          3. Handles immediate minimal vs deep HGNN results
-          4. Validates plan or falls back to simple routing
+        HGNN-based task decomposition using the unified CognitiveServiceClient.
+
+        This function handles the "ESCALATED" (hgnn) path. It calls the
+        CognitiveCore with the 'PROBLEM_SOLVING' cog_type to get a
+        multi-step plan (solution_steps) for decomposition.
         """
         try:
             # --- Step 1: Cognitive service health check ---
+            # (This uses the new client's built-in health check)
             try:
                 if not await self.cognitive_client.is_healthy():
                     logger.warning("[HGNN] Cognitive service unavailable, using fallback")
@@ -982,59 +967,66 @@ class Coordinator:
                 logger.warning(f"[HGNN] Health check failed: {e}")
                 return self._fallback_plan(self._convert_task_to_dict(task))
 
-            # --- Step 2: Prepare Cognitive request ---
-            req = {
-                "agent_id": f"hgnn_planner_{task.id}",
+            # --- Step 2: Prepare Cognitive request parameters ---
+
+            # Build the 'input_data' payload for the ProblemSolvingSignature
+            input_data = {
                 "problem_statement": task.description or str(task.model_dump()),
                 "task_id": task.id,
-                "constraints": {
-                    "latency_ms": self.fast_path_latency_slo_ms,
-                    "max_depth": getattr(task, "max_depth", 3),
-                },
+                "constraints": getattr(task, "constraints", {}),
                 "available_tools": getattr(task, "available_tools", {}),
-                "meta": {
-                    "origin": "coordinator_hgnn",
-                    "has_context": bool(task.features),
-                    "history_ids": task.history_ids,
-                    "start_nodes": {
-                        "facts": getattr(task, "start_fact_ids", []),
-                        "artifacts": getattr(task, "start_artifact_ids", []),
-                        "models": getattr(task, "start_model_ids", []),
-                        "capabilities": getattr(task, "start_capability_ids", []),
-                        "policies": getattr(task, "start_policy_ids", []),
-                        "services": getattr(task, "start_service_ids", []),
-                        "skills": getattr(task, "start_skill_ids", []),
-                    },
+            }
+
+            # Build the 'meta' payload for tracing and HGNN context
+            meta = {
+                "task_id": task.id,
+                # This is the "evolved meaning" from Stage 1 (HGNN)
+                "hgnn_embedding": task.features,
+                "history_ids": task.history_ids,
+                "start_nodes": {
+                    "facts": getattr(task, "start_fact_ids", []),
+                    "artifacts": getattr(task, "start_artifact_ids", []),
+                    "models": getattr(task, "start_model_ids", []),
+                    "capabilities": getattr(task, "start_capability_ids", []),
+                    "policies": getattr(task, "start_policy_ids", []),
+                    "services": getattr(task, "start_service_ids", []),
+                    "skills": getattr(task, "start_skill_ids", []),
                 },
             }
 
-            # --- Step 3: Call CognitiveCore ---
-            plan = await _apost(
-                self.http,
-                f"{COG}/solve-problem",
-                req,
-                _corr_headers("cognitive", task.id),
+            # --- Step 3: Call CognitiveCore via the new unified client ---
+            # This is the single, blocking call that waits for the full plan.
+            # The old, complex logic for 'immediate' results is no longer needed.
+            response = await self.cognitive_client.execute_async(
+                agent_id=f"hgnn_planner_{task.id}",
+                cog_type=CognitiveType.PROBLEM_SOLVING,
+                decision_kind=DecisionKind.ESCALATED,
+                input_data=input_data,
+                meta=meta,
                 timeout=COG_TIMEOUT,
             )
 
             # --- Step 4: Handle Cognitive response ---
-            result = plan.get("result", {}) if isinstance(plan, dict) else {}
-            steps = result.get("solution_steps") or result.get("plan") or result.get("steps") or []
+            if not response.get("success"):
+                logger.warning(f"[HGNN] Cognitive service returned an error: {response.get('error')}")
+                return self._fallback_plan(self._convert_task_to_dict(task))
+
+            result = response.get("result", {})
+
+            # We only look for 'solution_steps', as this is now the
+            # canonical key guaranteed by the CognitiveCore and our signatures.
+            steps = result.get("solution_steps") or []
             meta = result.get("meta", {})
 
-            # Distinguish immediate vs deep result
-            immediate = meta.get("immediate", False)
-            if immediate:
-                logger.info(f"[HGNN] CognitiveCore returned immediate minimal plan for {task.id}")
-            else:
-                logger.info(f"[HGNN] Received deep HGNN decomposition: {len(steps)} steps")
+            logger.info(f"[HGNN] Received deep HGNN decomposition: {len(steps)} steps")
 
             # --- Step 5: Handle Cognitive metadata ---
             if meta:
+                # (Your existing metadata handling logic)
                 escalate_hint = meta.get("escalate_hint")
                 if escalate_hint and hasattr(self, "predicate_router") and self.predicate_router:
                     self.predicate_router.update_signals(escalate_hint=escalate_hint)
-                
+
                 confidence = meta.get("confidence")
                 if confidence is not None:
                     logger.info(f"[HGNN] Cognitive plan confidence: {confidence:.2f}")
@@ -1199,7 +1191,7 @@ class Coordinator:
         self,
         repo: Optional[Any],
         task_id: str,
-        decision: Optional[str],
+        decision_kind: Optional[str],
         proto_plan: Optional[Dict[str, Any]],
     ) -> None:
         if proto_plan is None:
@@ -1217,7 +1209,7 @@ class Coordinator:
                     result = await dao.upsert(
                         session,
                         task_id=str(task_id),
-                        route=decision or "unknown",
+                        route=decision_kind or "unknown",
                         proto_plan=proto_plan,
                     )
             if metrics is not None:
@@ -1273,8 +1265,8 @@ class Coordinator:
             return
 
         surprise = payload.get("surprise") if isinstance(payload.get("surprise"), dict) else None
-        decision = payload.get("decision")
-        if surprise is None or decision is None:
+        decision_kind = payload.get("decision_kind")
+        if surprise is None or decision_kind is None:
             return
 
         try:
@@ -1331,7 +1323,7 @@ class Coordinator:
                         x_vector=x_list,
                         weights=weights_list,
                         ocps_metadata=ocps_metadata,
-                        chosen_route=str(decision),
+                        chosen_route=str(decision_kind),
                     )
                     return await enqueue_fn(
                         session,
@@ -1490,14 +1482,14 @@ class Coordinator:
             )
             
             # Persist proto-plan if present
-            decision = self._extract_decision(res)
+            decision_kind = self._extract_decision(res)
             proto_plan = self._extract_proto_plan(res)
             if proto_plan:
                 try:
                     await self._persist_proto_plan(
                         repo,
                         task_obj.task_id,
-                        decision,
+                        decision_kind,
                         proto_plan,
                     )
                 except Exception as exc:
@@ -1691,7 +1683,7 @@ class Coordinator:
                 agent_id=agent_id,
                 anomalies={"error": str(e)},
                 reason={"result": {"thought": "ml error"}},
-                decision={"result": {"action": "hold"}},
+                decision_kind={"result": {"action": "hold"}},
                 correlation_id=cid,
                 p_fast=getattr(ocps, "p_fast", None),
                 escalated=False,
@@ -1700,14 +1692,14 @@ class Coordinator:
 
         # FAST short-circuit: no anomalies
         if not anomalies.get("anomalies"):
-            decision = {"result": {"action": "hold", "reason": "no anomalies"}}
-            asyncio.create_task(self._fire_and_forget_memory_synthesis(agent_id, anomalies, {}, decision, cid))
+            decision_kind = {"result": {"action": "hold", "reason": "no anomalies"}}
+            asyncio.create_task(self._fire_and_forget_memory_synthesis(agent_id, anomalies, {}, decision_kind, cid))
             logger.info("[Coordinator] No anomalies; FAST path (hold). cid=%s", cid)
             return AnomalyTriageResponse(
                 agent_id=agent_id,
                 anomalies=anomalies,
                 reason={},                 # no planner/hgnn reasoning
-                decision=decision,
+                decision_kind=decision_kind,
                 correlation_id=cid,
                 p_fast=getattr(ocps, "p_fast", None),
                 escalated=False,           # FAST
@@ -1716,70 +1708,54 @@ class Coordinator:
 
         # 2) Route: HGNN (escalated) vs FAST
         reason: dict = {}                       # keep field for schema continuity
-        decision: dict = {"result": {"action": "hold"}}
+        decision_kind: dict = {"result": {"action": "hold"}}
 
         if hgnn_escalate:
-            # ESCALATED == "hgnn": trigger multi-plan path
-            logger.info("[Coordinator] OCPS escalated → HGNN path. cid=%s", cid)
+            logger.info("[Coordinator] OCPS escalated → CognitiveService (ESCALATED) path. cid=%s", cid)
 
-            # Canonical HGNN endpoint for multi-plan decomposition
-            path = "/solve-problem"
-            body = {
-                "agent_id": agent_id,
+            input_data = {
                 "problem_statement": f"Anomaly triage HGNN plan (agent={agent_id})",
                 "constraints": {"latency_ms": self.fast_path_latency_slo_ms},
-                "available_tools": {},                # optional
-                "context": {                          # router context passthrough
-                    "anomalies": anomalies.get("anomalies", []),
-                    "meta": context,
-                    "task_id": task_data["id"],
-                    "correlation_id": cid,
-                },
+                "available_tools": {},
+                "anomalies": anomalies.get("anomalies", []),
+            }
+
+            meta = {
+                "task_id": task_data["id"],
+                "correlation_id": cid,
+                "original_context": context,
             }
 
             try:
                 hgnn_resp = await asyncio.wait_for(
-                    self.cognitive_client.post(path, json=body, headers=_corr_headers("cognitive", cid)),
+                    self.cognitive_client.execute_async(
+                        agent_id=agent_id,
+                        cog_type=CognitiveType.PROBLEM_SOLVING,
+                        decision_kind=DecisionKind.ESCALATED,
+                        input_data=input_data,
+                        meta=meta,
+                    ),
                     timeout=20,
                 )
-            except Exception as e:
-                logger.warning("[Coordinator] HGNN /solve-problem call failed: %s; trying legacy fallback", e)
-                hgnn_resp = {"success": False, "error": str(e), "result": {}}
-                
-                # Fallback to legacy /plan-with-deep for backward compatibility
-                if not hgnn_resp.get("success"):
-                    try:
-                        legacy_body = {
-                            "agent_id": agent_id,
-                            "task_description": f"Anomaly triage HGNN plan (agent={agent_id})",
-                            "current_capabilities": {},
-                            "available_tools": {},
-                            "context": {
-                                "anomalies": anomalies.get("anomalies", []),
-                                "meta": context,
-                                "task_id": task_data["id"],
-                                "correlation_id": cid,
-                            },
-                            "profile": "deep",
-                            "caller": "coordinator",
-                        }
-                        hgnn_resp = await self.cognitive_client.post(
-                            "/plan-with-deep", json=legacy_body, headers=_corr_headers("cognitive", cid)
-                        )
-                        logger.info("[Coordinator] Legacy /plan-with-deep fallback succeeded")
-                    except Exception as legacy_e:
-                        logger.warning("[Coordinator] Legacy fallback also failed: %s; staying HOLD", legacy_e)
-                        hgnn_resp = {"success": False, "error": str(legacy_e), "result": {}}
 
-            # Optionally extract a suggested action from HGNN meta/plan (if your cog returns it)
+                if not hgnn_resp.get("success"):
+                    logger.warning(
+                        "[Coordinator] HGNN /execute call failed: %s; staying HOLD",
+                        hgnn_resp.get("error"),
+                    )
+                    hgnn_resp = {"success": False, "error": hgnn_resp.get("error"), "result": {}}
+            except Exception as e:
+                logger.warning(f"[Coordinator] HGNN /execute call failed: {e}; staying HOLD")
+                hgnn_resp = {"success": False, "error": str(e), "result": {}}
+
             suggested = (
                 hgnn_resp.get("result", {}).get("meta", {}) or {}
             ).get("suggested_action")
 
             if suggested:
-                decision = {"result": {"action": suggested, "source": "hgnn"}}
+                decision_kind = {"result": {"action": suggested, "source": "hgnn"}}
             else:
-                decision = {"result": {"action": "hold", "source": "hgnn"}}
+                decision_kind = {"result": {"action": "hold", "source": "hgnn"}}
 
             # Keep some reasoning breadcrumbs (optional)
             reason = {"result": {"planner": "hgnn", "meta": hgnn_resp.get("result", {}).get("meta", {})}}
@@ -1787,14 +1763,14 @@ class Coordinator:
         else:
             # FAST: no planner, no hgnn
             logger.info("[Coordinator] OCPS gated HGNN; FAST path. cid=%s", cid)
-            decision = {"result": {"action": "hold", "source": "fast"}}
+            decision_kind = {"result": {"action": "hold", "source": "fast"}}
 
         # 3) Predicate: tune / retrain
         tuning_job = None
-        action = (decision.get("result") or {}).get("action", "hold")
+        action = (decision_kind.get("result") or {}).get("action", "hold")
         mutation_decision = self.predicate_router.evaluate_mutation(
             task={"type": "anomaly_triage", "domain": "anomaly", "priority": 7, "complexity": 0.8},
-            decision=decision.get("result", {}),
+            decision_kind=decision_kind.get("result", {}),
         )
 
         if mutation_decision.action in {"submit_tuning", "submit_retrain"}:
@@ -1822,7 +1798,7 @@ class Coordinator:
             logger.info("[Coordinator] mutation decision: %s (%s)", mutation_decision.action, mutation_decision.reason)
 
         # 4) Memory synthesis (best-effort)
-        asyncio.create_task(self._fire_and_forget_memory_synthesis(agent_id, anomalies, reason, decision, cid))
+        asyncio.create_task(self._fire_and_forget_memory_synthesis(agent_id, anomalies, reason, decision_kind, cid))
 
         # 5) Build response
         logger.info(
@@ -1833,10 +1809,10 @@ class Coordinator:
             agent_id=agent_id,
             anomalies=anomalies,
             reason=reason,                 # may include minimal HGNN meta
-            decision=decision,             # action from HGNN if available; else 'hold'
+            decision_kind=decision_kind,             # action from HGNN if available; else 'hold'
             correlation_id=cid,
             p_fast=getattr(ocps, "p_fast", None),
-            escalated=hgnn_escalate,       # True → HGNN (ResultKind.ESCALATED), False → FAST
+            escalated=hgnn_escalate,       # True → HGNN (DecisionKind.ESCALATED), False → FAST
             tuning_job=tuning_job,
         )
 

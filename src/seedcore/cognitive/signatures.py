@@ -1,9 +1,4 @@
-# =============================================================================
-# DSPy Signatures
-# =============================================================================
-
 from __future__ import annotations
-
 import dspy
 
 __all__ = [
@@ -16,135 +11,213 @@ __all__ = [
     "CapabilityAssessmentSignature",
 ]
 
+# =============================================================================
+# Mixins and Base Signatures
+# =============================================================================
 
 class WithKnowledgeMixin:
-    """A mixin to add a standardized knowledge context field to any signature."""
+    """
+    A mixin to add a standardized knowledge context field to any signature.
+    This data is for read-only context.
+    """
     knowledge_context = dspy.InputField(
-        desc="A JSON object containing relevant, non-executable facts with provenance, a summary, and a usage policy. This data is for context only."
+        desc=("A JSON object containing relevant, non-executable facts with provenance, "
+              "a summary, and a usage policy. This data is for context only. "
+              "It may also contain an 'hgnn_embedding' key, which represents "
+              "deep graph context from the 'ESCALATED' (hgnn) path.")
     )
 
+# =============================================================================
+# Production-Level DSPy Signatures
+# =============================================================================
 
 class AnalyzeFailureSignature(WithKnowledgeMixin, dspy.Signature):
-    """Analyze agent failures and propose solutions with historical context."""
+    """Analyze agent failures and propose a structured solution."""
+    
     incident_context = dspy.InputField(
-        desc="A JSON string containing the agent's state, failed task, and error context."
+        desc=("A JSON string describing the failure. "
+              "Schema: {'agent_id': str, 'failed_task': dict, 'error': str, 'timestamp': str}")
     )
+    
     thought = dspy.OutputField(
-        desc="Reasoned analysis of root cause and contributing factors, considering the knowledge context."
+        desc="Step-by-step reasoning. Analyze the root cause, contributing factors, "
+             "and how the knowledge context (especially historical facts) informs your plan."
     )
-    proposed_solution = dspy.OutputField(
-        desc="Actionable plan to prevent recurrence and improve agent performance, based on historical facts."
+    
+    solution_steps = dspy.OutputField(
+        desc=("A JSON list of dictionaries for the corrective plan. "
+              "Schema: [{'step': int, 'action': str, 'description': str, 'target_agent': str}]"),
+        prefix="```json\n"
     )
+    
     confidence_score = dspy.OutputField(
-        desc="Confidence in the analysis (0.0 to 1.0)."
+        desc="A single floating-point number between 0.0 and 1.0 (e.g., 0.9)."
     )
+    
     risk_factors = dspy.OutputField(
-        desc="Identified risk factors and potential failure modes from the knowledge context."
+        desc="A brief text summary of identified risk factors and potential failure modes from the knowledge context."
     )
 
 
 class TaskPlanningSignature(WithKnowledgeMixin, dspy.Signature):
-    """Plan complex tasks with multiple steps, informed by system facts."""
+    """
+    Decompose a complex task description into a structured, multi-step plan
+    for the Coordinator to execute.
+    """
+    
     task_description = dspy.InputField(
-        desc="Description of the task to be planned."
+        desc="High-level description of the task to be planned."
     )
+    
     agent_capabilities = dspy.InputField(
-        desc="JSON string describing the agent's current capabilities and limitations."
+        desc=("JSON string describing the agent's capabilities. "
+              "Schema: {'tools': ['tool_name_1', ...], 'skills': ['skill_1', ...]}")
     )
+    
     available_resources = dspy.InputField(
-        desc="JSON string describing available resources and constraints."
+        desc=("JSON string describing available resources. "
+              "Schema: {'memory_cells': ['cell_id_1', ...], 'available_gpus': int}")
     )
-    step_by_step_plan = dspy.OutputField(
-        desc="Detailed step-by-step plan to accomplish the task, considering the provided knowledge context."
+    
+    thought = dspy.OutputField(
+        desc="Step-by-step reasoning. Analyze the task, constraints, and resources. "
+             "Break down the problem. Use the knowledge context (especially the hgnn_embedding, if present) "
+             "to inform the plan structure. Finally, generate the JSON plan."
     )
+    
+    solution_steps = dspy.OutputField(
+        desc=("A JSON list of dictionaries for the plan. "
+              "Schema: [{'step': int, 'tool_to_call': str, 'params': dict, 'description': str}]"),
+        prefix="```json\n"
+    )
+    
     estimated_complexity = dspy.OutputField(
-        desc="Estimated complexity score (1-10) and reasoning."
-    )
-    risk_assessment = dspy.OutputField(
-        desc="Assessment of potential risks and mitigation strategies."
+        desc="A single integer between 1 and 10, representing the plan's complexity."
     )
 
 
 class DecisionMakingSignature(WithKnowledgeMixin, dspy.Signature):
-    """Make decisions based on available information and context."""
+    """Evaluate a set of options and select the single best one."""
+    
     decision_context = dspy.InputField(
-        desc="JSON string containing the decision context, options, and constraints."
+        desc=("JSON string containing the decision to be made and all available options. "
+              "Schema: {'question': 'Which VM should we use?', "
+              "'options': [{'id': 'A', 'desc': 'VM-Large'}, {'id': 'B', 'desc': 'VM-Small'}]}")
     )
+    
     historical_data = dspy.InputField(
-        desc="JSON string containing relevant historical data and patterns."
+        desc=("JSON string of relevant historical data. "
+              "Schema: [{'past_decision': 'A', 'outcome': 'Success', 'cost': 1.0}, ...]")
     )
-    reasoning = dspy.OutputField(
-        desc="Detailed reasoning process for the decision, considering the knowledge context."
+    
+    thought = dspy.OutputField(
+        desc="Step-by-step reasoning. Evaluate each option against the historical data "
+             "and knowledge context. State the pros and cons of each. Conclude with the best choice."
     )
+    
     decision = dspy.OutputField(
-        desc="The chosen decision with justification, considering the knowledge context."
+        desc="The single 'id' of the chosen option from the decision_context (e.g., 'A')."
     )
+    
     confidence = dspy.OutputField(
-        desc="Confidence level in the decision (0.0 to 1.0)."
-    )
-    alternative_options = dspy.OutputField(
-        desc="Alternative options considered and why they were not chosen."
+        desc="A single floating-point number between 0.0 and 1.0 (e.g., 0.75)."
     )
 
 
 class ProblemSolvingSignature(WithKnowledgeMixin, dspy.Signature):
-    """Solve complex problems using systematic reasoning."""
+    """
+    Given an open-ended problem, generate a structured, multi-step plan.
+    This is the default handler for the 'hgnn' (ESCALATED) path.
+    """
+    
     problem_statement = dspy.InputField(
-        desc="Clear statement of the problem to be solved."
+        desc="Clear, high-level statement of the problem to be solved (e.g., 'Analyze Q3 sales dip')."
     )
+    
     constraints = dspy.InputField(
-        desc="JSON string describing constraints and limitations."
+        desc=("JSON string describing constraints. "
+              "Schema: {'max_time_ms': 5000, 'allowed_tools': ['...'], 'priority': 'high'}")
     )
+    
     available_tools = dspy.InputField(
-        desc="JSON string describing available tools and capabilities."
+        desc=("JSON string describing available tools (functions) the plan can use. "
+              "Schema: {'tool_name_1': {'desc': '...', 'params': {'arg1': 'type'}}, ...}")
     )
-    solution_approach = dspy.OutputField(
-        desc="Systematic approach to solving the problem, considering the knowledge context."
+    
+    thought = dspy.OutputField(
+        desc="Step-by-step reasoning. Analyze the problem, constraints, and tools. "
+             "Pay close attention to the 'knowledge_context', especially the 'hgnn_embedding' if present, "
+             "as it contains critical information from historical tasks. "
+             "Formulate a high-level approach, then break it down into concrete steps using the available tools. "
+             "Finally, generate the JSON plan."
     )
+    
     solution_steps = dspy.OutputField(
-        desc="Detailed steps to implement the solution."
+        desc=("A JSON list of dictionaries for the solution plan. This will be parsed and "
+              "executed by the Coordinator. "
+              "Schema: [{'step': int, 'tool_to_call': str, 'params': dict, 'description': str}]"),
+        prefix="```json\n"
     )
+    
     success_metrics = dspy.OutputField(
-        desc="Metrics to measure solution success."
+        desc="A brief text description of 1-3 metrics to measure the solution's success."
     )
 
 
 class MemorySynthesisSignature(WithKnowledgeMixin, dspy.Signature):
-    """Synthesize information from multiple memory sources."""
+    """Synthesize a single, actionable insight from multiple memory fragments."""
+    
     memory_fragments = dspy.InputField(
-        desc="JSON string containing multiple memory fragments to synthesize."
+        desc=("JSON string. A list of memory fragments to synthesize. "
+              "Schema: [{'source': 'task_123', 'content': '...'}, {'source': 'agent_abc', 'content': '...'}]")
     )
+    
     synthesis_goal = dspy.InputField(
-        desc="Goal of the memory synthesis (e.g., pattern recognition, insight generation)."
+        desc="The specific goal of the synthesis (e.g., 'Find a common failure pattern', 'Identify new opportunities')."
     )
+    
+    thought = dspy.OutputField(
+        desc="Step-by-step reasoning. Analyze the fragments in light of the goal and knowledge context. "
+             "Identify connections, contradictions, and emerging patterns. Formulate a final insight."
+    )
+    
     synthesized_insight = dspy.OutputField(
-        desc="Synthesized insight or pattern from the memory fragments, considering the knowledge context."
+        desc="A concise, actionable insight or pattern derived from the fragments."
     )
+    
     confidence_level = dspy.OutputField(
-        desc="Confidence in the synthesis (0.0 to 1.0)."
-    )
-    related_patterns = dspy.OutputField(
-        desc="Related patterns or insights that emerged during synthesis."
+        desc="A single floating-point number between 0.0 and 1.0 (e.g., 0.8)."
     )
 
 
 class CapabilityAssessmentSignature(WithKnowledgeMixin, dspy.Signature):
-    """Assess agent capabilities and suggest improvements."""
+    """Assess an agent's capabilities and generate a plan for improvement."""
+    
     agent_performance_data = dspy.InputField(
-        desc="JSON string containing agent performance metrics and history."
+        desc=("JSON string. "
+              "Schema: {'task_history': [{'task': '...', 'success': bool}], 'success_rate': 0.8}")
     )
+    
     current_capabilities = dspy.InputField(
-        desc="JSON string describing current agent capabilities."
+        desc="JSON string. Schema: {'skills': ['skill_A', 'skill_B']}"
     )
+    
     target_capabilities = dspy.InputField(
-        desc="JSON string describing desired target capabilities."
+        desc="JSON string. Schema: {'skills': ['skill_A', 'skill_B', 'skill_C']}"
     )
+    
+    thought = dspy.OutputField(
+        desc="Step-by-step reasoning. Compare current vs. target capabilities. "
+             "Analyze performance data and knowledge context to identify gaps. "
+             "Formulate an improvement plan."
+    )
+    
     capability_gaps = dspy.OutputField(
-        desc="Identified gaps between current and target capabilities, considering the knowledge context."
+        desc="A concise text summary of the identified gaps (e.g., 'Missing skill_C, low success in skill_A')."
     )
-    improvement_plan = dspy.OutputField(
-        desc="Detailed plan to improve agent capabilities."
-    )
-    priority_recommendations = dspy.OutputField(
-        desc="Priority recommendations for capability development."
+    
+    solution_steps = dspy.OutputField(
+        desc=("A JSON list of dictionaries for the improvement plan. "
+              "Schema: [{'step': int, 'action': str, 'metric': str, 'description': str}]"),
+        prefix="```json\n"
     )

@@ -28,7 +28,7 @@ import ast
 import operator
 import uuid
 import hashlib
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 import logging
 
@@ -86,6 +86,7 @@ from ..memory.flashbulb_client import FlashbulbClient
 
 # NEW: Import the Cognitive Service Client
 from ..serve.cognitive_client import CognitiveServiceClient
+from ..models.cognitive import CognitiveType, DecisionKind
 
 # --- Import Enhanced Memory Managers ---
 # Note: Actual imports are done inside methods to avoid circular dependencies
@@ -747,13 +748,35 @@ class RayAgent:
         Handle general_query tasks with real implementations.
 
         1. Fast-path local handlers (time/date/status/math).
-        2. Otherwise call cognitive service:
-           - "fast" profile for normal queries
-           - "deep" profile for high-complexity queries
-        3. Fall back to stub ONLY if cognitive fails.
+        2. Otherwise call cognitive service (via unified execute endpoint).
+        3. Fall back ONLY if cognitive fails.
 
         Returns a dict shaped for upstream callers.
         """
+
+        def _extract_formatted(payload: Dict[str, Any]) -> str:
+            formatted = payload.get("formatted_response")
+            if not formatted:
+                steps = payload.get("solution_steps")
+                if isinstance(steps, list) and steps:
+                    first_step = steps[0]
+                    if isinstance(first_step, dict):
+                        formatted = first_step.get("description")
+            if not formatted:
+                formatted = f"Cognitive analysis: {description}"
+            return formatted
+
+        def _normalize_cog_v2_response(cog_response: Dict[str, Any]) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+            if not isinstance(cog_response, dict):
+                return None
+            if not cog_response.get("success"):
+                return None
+            payload = cog_response.get("result") or cog_response.get("payload")
+            if not isinstance(payload, dict):
+                return None
+            metadata = cog_response.get("metadata") or cog_response.get("meta") or {}
+            return payload, metadata
+
         try:
             description_lower = description.lower()
 
@@ -927,20 +950,17 @@ class RayAgent:
             params = task_data.get("params", {}) or {}
             needs_ml_fallback = params.get("needs_ml_fallback", False)
 
-            # Optional confidence struct
             if isinstance(params.get("confidence"), dict):
                 confidence = params["confidence"].get("overall_confidence", 1.0)
             else:
-                confidence = 1.0
+                confidence = params.get("confidence", 1.0) if isinstance(params.get("confidence"), (int, float)) else 1.0
 
             criticality = params.get("criticality", task_data.get("criticality", 0.5))
             drift_score = task_data.get("drift_score", 0.0)
 
-            # Check if cognitive_profile is explicitly set in params
             explicit_profile = params.get("cognitive_profile")
             if explicit_profile in ("fast", "deep"):
                 profile = explicit_profile
-                # Calculate is_complex for logging purposes only
                 is_complex = (
                     needs_ml_fallback
                     or confidence < 0.5
@@ -962,8 +982,6 @@ class RayAgent:
                     f"(heuristic would suggest: {'deep' if is_complex else 'fast'})"
                 )
             else:
-                # Fall back to heuristic calculation if no explicit profile
-                # Heuristic "is this high complexity / high stakes?"
                 is_complex = (
                     needs_ml_fallback
                     or confidence < 0.5
@@ -980,13 +998,10 @@ class RayAgent:
                     )
                     or task_data.get("force_decomposition")
                 )
-
-                # Decide which cognitive profile to use:
-                #  - "deep" (OpenAI/high-depth) for complex/high-stakes
-                #  - "fast" (default provider) for normal Q&A / explanation
                 profile = "deep" if is_complex else "fast"
 
-            # If cognition is not available, do NOT pretend success.
+            decision_kind = DecisionKind.COGNITIVE if profile == "deep" else DecisionKind.FAST_PATH
+
             if not self._cog_available or not self._cog:
                 degraded_blob = {
                     "query_type": "cognitive_query_unserved",
@@ -1008,176 +1023,145 @@ class RayAgent:
                     "result": degraded_blob,
                     "mem_hits": 0,
                     "used_cognitive_service": False,
-                    "cognitive_profile": None,
+                    "cognitive_profile": profile,
                 }
 
-            # We have cognition; attempt call.
-            if self._cog:
-                # Best-effort task_id extraction for deduplication key
-                task_id = task_data.get("task_id") or task_data.get("id")
-                # Create request key for deduplication (prefer task_id, fallback to description+profile)
-                request_key = task_id if task_id else f"{description[:100]}:{profile}"
-                
-                # Check if there's already an in-flight request for this key
-                async with self._cog_inflight_lock:
-                    if request_key in self._cog_inflight:
-                        existing_task = self._cog_inflight[request_key]
-                        if not existing_task.done():
-                            logger.info(
-                                f"🔄 Agent {self.agent_id} deduplicating cognitive request for {request_key[:50]}... "
-                                f"(waiting for existing call to complete)"
-                            )
-                            try:
-                                # Wait for the existing request to complete
-                                existing_cog_response = await existing_task
-                                # Normalize the response like we would for a fresh call
-                                existing_norm = self._normalize_cog_resp(existing_cog_response)
-                                if existing_norm.get("success") and existing_norm.get("payload"):
-                                    # Build the same result structure as a fresh call would
-                                    existing_payload = existing_norm["payload"]
-                                    existing_result = {
-                                        "query_type": (
-                                            "complex_cognitive_query" if is_complex else "fast_cognitive_query"
-                                        ),
-                                        "query": description,
-                                        "thought_process": existing_payload.get("thought_process", ""),
-                                        "plan": existing_payload.get("step_by_step_plan", ""),
-                                        "formatted": (
-                                            existing_payload.get("formatted_response")
-                                            or existing_payload.get("answer")
-                                            or f"Cognitive analysis: {description}"
-                                        ),
-                                        "description": description,
-                                        "meta": existing_norm.get("meta", {}),
-                                        "profile_used": profile,
-                                    }
-                                    logger.info(
-                                        f"✅ Agent {self.agent_id} reused result from in-flight cognitive request (deduplicated)"
-                                    )
-                                    return {
-                                        "agent_id": self.agent_id,
-                                        "task_processed": True,
-                                        "success": True,
-                                        "quality": 0.9 if is_complex else 0.8,
-                                        "capability_score": self.capability_score,
-                                        "mem_util": self.mem_util,
-                                        "result": existing_result,
-                                        "mem_hits": 1,
-                                        "used_cognitive_service": True,
-                                        "cognitive_profile": profile,
-                                    }
-                                # If existing failed, fall through to make a new call
-                                logger.debug(f"Previous in-flight request failed, making new call")
-                            except Exception as e:
-                                logger.debug(f"Error waiting for in-flight request: {e}, making new call")
-                            # Clean up the failed task
-                            self._cog_inflight.pop(request_key, None)
-                
-                try:
-                    logger.info(
-                        f"🧠 Agent {self.agent_id} using cognitive service (profile={profile}, complex={is_complex})"
-                    )
+            task_id = task_data.get("task_id") or task_data.get("id")
+            request_key = task_id if task_id else f"{description[:100]}:{profile}"
 
-                    # NOTE: plan() is async. We stay async here.
-                    # Debug outgoing payload to diagnose any 4xx validation issues on the cognitive service
-                    try:
-                        dbg_payload = {
-                            "agent_id": self.agent_id,
-                            "task_description": str(description or ""),
-                            "current_capabilities": self._summarize_agent_capabilities(),
-                            "available_tools": {},
-                            "profile": profile,
-                            # Note: no routing signals used for decision; include none or only as opaque meta if desired
-                        }
-                        # Log the full payload being sent
-                        logger.info("[CognitivePayload_Outgoing] %s", json.dumps(dbg_payload, default=str))
-                    except Exception:
-                        # Do not block execution on debug logging failures
-                        pass
-
-                    # Create the cognitive request as a task so we can track it
-                    async def _cog_call():
-                        return await self._cog.plan(
-                            agent_id=self.agent_id,
-                            task_description=str(description or ""),
-                            current_capabilities=self._summarize_agent_capabilities(),
-                            available_tools=None,
-                            profile=profile,  # "fast" | "deep"
-                        )
-                    
-                    # Register the task as in-flight
-                    cog_task = asyncio.create_task(_cog_call())
-                    async with self._cog_inflight_lock:
-                        self._cog_inflight[request_key] = cog_task
-                    
-                    try:
-                        cog_response = await cog_task
-                    finally:
-                        # Clean up the in-flight tracking
-                        async with self._cog_inflight_lock:
-                            self._cog_inflight.pop(request_key, None)
-
-                    norm = self._normalize_cog_resp(cog_response)
-
-                    # norm structure expected:
-                    # {
-                    #   "success": bool,
-                    #   "payload": {...},
-                    #   "meta": {...}
-                    # }
-                    if norm.get("success") and norm.get("payload"):
-                        payload = norm["payload"]
-
-                        result = {
-                            "query_type": (
-                                "complex_cognitive_query" if is_complex else "fast_cognitive_query"
-                            ),
-                            "query": description,
-                            "thought_process": payload.get("thought_process", ""),
-                            "plan": payload.get("step_by_step_plan", ""),
-                            "formatted": (
-                                payload.get("formatted_response")
-                                or payload.get("answer")
-                                or f"Cognitive analysis: {description}"
-                            ),
-                            "description": description,
-                            "meta": norm.get("meta", {}),
-                            "profile_used": profile,
-                        }
-
+            async with self._cog_inflight_lock:
+                if request_key in self._cog_inflight:
+                    existing_task = self._cog_inflight[request_key]
+                    if not existing_task.done():
                         logger.info(
-                            f"✅ Agent {self.agent_id} cognitive service "
-                            f"completed with profile={profile}"
+                            f"🔄 Agent {self.agent_id} deduplicating cognitive request for {request_key[:50]}... "
+                            f"(waiting for existing call to complete)"
                         )
+                        try:
+                            existing_response = await existing_task
+                            normalized = _normalize_cog_v2_response(existing_response)
+                            if normalized:
+                                payload, metadata = normalized
+                                result = {
+                                    "query_type": (
+                                        "complex_cognitive_query" if profile == "deep" else "fast_cognitive_query"
+                                    ),
+                                    "query": description,
+                                    "thought_process": payload.get("thought", ""),
+                                    "plan": payload.get("solution_steps", []),
+                                    "formatted": _extract_formatted(payload),
+                                    "description": description,
+                                    "meta": metadata,
+                                    "profile_used": profile,
+                                }
+                                logger.info(
+                                    f"✅ Agent {self.agent_id} reused result from in-flight cognitive request (deduplicated)"
+                                )
+                                return {
+                                    "agent_id": self.agent_id,
+                                    "task_processed": True,
+                                    "success": True,
+                                    "quality": 0.9 if profile == "deep" else 0.8,
+                                    "capability_score": self.capability_score,
+                                    "mem_util": self.mem_util,
+                                    "result": result,
+                                    "mem_hits": 1,
+                                    "used_cognitive_service": True,
+                                    "cognitive_profile": profile,
+                                }
+                        except Exception as e:
+                            logger.debug(f"Error waiting for in-flight request: {e}, making new call")
+                        finally:
+                            self._cog_inflight.pop(request_key, None)
 
-                        return {
-                            "agent_id": self.agent_id,
-                            "task_processed": True,
-                            "success": True,
-                            "quality": 0.9 if is_complex else 0.8,
-                            "capability_score": self.capability_score,
-                            "mem_util": self.mem_util,
-                            "result": result,
-                            "mem_hits": 1,
-                            "used_cognitive_service": True,
-                            "cognitive_profile": profile,
-                        }
+            try:
+                logger.info(
+                    f"🧠 Agent {self.agent_id} using cognitive service (decision_kind={decision_kind.value}, complex={profile == 'deep'})"
+                )
+                try:
+                    dbg_payload = {
+                        "agent_id": self.agent_id,
+                        "problem_statement": str(description or ""),
+                        "decision_kind": decision_kind.value,
+                        "profile": profile,
+                    }
+                    logger.info("[CognitivePayload_Outgoing] %s", json.dumps(dbg_payload, default=str))
+                except Exception:
+                    pass
 
-                    else:
-                        logger.warning(
-                            "⚠️ Agent %s cognitive service returned unusable response "
-                            "(profile=%s), falling back",
-                            self.agent_id,
-                            profile,
-                        )
-
-                except Exception as e:
-                    import traceback
-                    logger.warning(
-                        f"⚠️ Agent {self.agent_id} cognitive service call failed (profile={profile}): {e}"
+                async def _cog_call():
+                    input_data = {
+                        "problem_statement": str(description or ""),
+                        "constraints": params.get("constraints") or {},
+                        "available_tools": params.get("available_tools") or {},
+                    }
+                    meta = {
+                        "task_id": task_id,
+                        "requested_profile": profile,
+                        "agent_capabilities": self._summarize_agent_capabilities(),
+                    }
+                    return await self._cog.execute_async(
+                        agent_id=self.agent_id,
+                        cog_type=CognitiveType.PROBLEM_SOLVING,
+                        decision_kind=decision_kind,
+                        input_data=input_data,
+                        meta=meta,
                     )
-                    logger.debug("Traceback:\n%s", traceback.format_exc())
-            # On cognitive failure or unusable response, do not pretend success; return explicit failure
+
+                cog_task = asyncio.create_task(_cog_call())
+                async with self._cog_inflight_lock:
+                    self._cog_inflight[request_key] = cog_task
+
+                try:
+                    cog_response = await cog_task
+                finally:
+                    async with self._cog_inflight_lock:
+                        self._cog_inflight.pop(request_key, None)
+
+                normalized = _normalize_cog_v2_response(cog_response)
+                if normalized:
+                    payload, metadata = normalized
+                    result = {
+                        "query_type": (
+                            "complex_cognitive_query" if profile == "deep" else "fast_cognitive_query"
+                        ),
+                        "query": description,
+                        "thought_process": payload.get("thought", ""),
+                        "plan": payload.get("solution_steps", []),
+                        "formatted": _extract_formatted(payload),
+                        "description": description,
+                        "meta": metadata,
+                        "profile_used": profile,
+                    }
+                    logger.info(
+                        f"✅ Agent {self.agent_id} cognitive service completed with profile={profile}"
+                    )
+                    return {
+                        "agent_id": self.agent_id,
+                        "task_processed": True,
+                        "success": True,
+                        "quality": 0.9 if profile == "deep" else 0.8,
+                        "capability_score": self.capability_score,
+                        "mem_util": self.mem_util,
+                        "result": result,
+                        "mem_hits": 1,
+                        "used_cognitive_service": True,
+                        "cognitive_profile": profile,
+                    }
+
+                logger.warning(
+                    "⚠️ Agent %s cognitive service returned unusable response (profile=%s), falling back",
+                    self.agent_id,
+                    profile,
+                )
+
+            except Exception as e:
+                import traceback
+                logger.warning(
+                    f"⚠️ Agent {self.agent_id} cognitive service call failed (profile={profile}): {e}"
+                )
+                logger.debug("Traceback:\n%s", traceback.format_exc())
+
             err_blob = {
                 "query_type": "cognitive_query_failed",
                 "description": description,
@@ -2002,53 +1986,6 @@ class RayAgent:
                 "success": False,
                 "agent_id": self.agent_id,
                 "incident_id": incident_id,
-                "error": str(e)
-            }
-    
-    async def plan_complex_task(self, task_description: str, available_resources: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Plan complex tasks using cognitive reasoning.
-        
-        Args:
-            task_description: Description of the task to plan
-            available_resources: Available resources and constraints
-            
-        Returns:
-            Dictionary containing task plan
-        """
-        if not self._cog:
-            return {"success": False, "reason": "Cognitive service not available."}
-
-        try:
-            # Call cognitive service via HTTP client using plan() method
-            # Note: plan() expects current_capabilities as a string (summarized format)
-            resp = await self._cog.plan(
-                agent_id=self.agent_id,
-                task_description=task_description,
-                current_capabilities=self._summarize_agent_capabilities(),  # Convert dict to string format
-                available_tools=available_resources or {},
-                profile="deep"  # LLM profile only
-            )
-            norm = self._normalize_cog_resp(resp)
-            payload = norm["payload"]
-            
-            return {
-                "success": True,
-                "agent_id": self.agent_id,
-                "task_description": task_description,
-                "step_by_step_plan": payload.get("step_by_step_plan", ""),
-                "estimated_complexity": payload.get("estimated_complexity", ""),
-                "risk_assessment": payload.get("risk_assessment", ""),
-                "meta": norm["meta"],
-                "error": norm["error"],
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in task planning for agent {self.agent_id}: {e}")
-            return {
-                "success": False,
-                "agent_id": self.agent_id,
-                "task_description": task_description,
                 "error": str(e)
             }
     

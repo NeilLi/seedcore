@@ -26,8 +26,8 @@ from collections.abc import (
 from dataclasses import dataclass
 from typing import Any
 
+from ...models.cognitive import DecisionKind
 from ...models.result_schema import (
-    ResultKind,
     create_cognitive_result,
     create_escalated_result,
     create_error_result,
@@ -78,7 +78,7 @@ async def route_and_execute(
     hgnn_config: HGNNConfig | None = None,
 ) -> dict[str, Any]:
     """
-    Unified route and execute: computes routing decision and executes appropriate path.
+    Unified route and execute: computes routing decision_kind and executes appropriate path.
 
     Returns a standardized result object produced by result_schema helpers.
     """
@@ -90,7 +90,7 @@ async def route_and_execute(
     )
     ctx = TaskContext.from_dict(task_data)
 
-    # 2) Compute routing decision
+    # 2) Compute routing decision_kind
     # Extract correlation_id from execution_config if available
     cid = execution_config.cid if hasattr(execution_config, 'cid') else None
     routing_result = await _compute_routing_decision(
@@ -99,11 +99,11 @@ async def route_and_execute(
         correlation_id=cid,
     )
 
-    decision = routing_result["decision"]
-    decision_kind = ResultKind(routing_result["result"]["kind"])
+    decision_kind = routing_result["decision_kind"]
+    decision_kind = DecisionKind(routing_result["result"]["kind"])
 
     # HGNN path: execute if config is wired; else return routing result
-    if decision_kind == ResultKind.ESCALATED:
+    if decision_kind == DecisionKind.ESCALATED:
         if hgnn_config is None:
             logger.warning("[route] HGNN config unavailable; returning routing metadata only")
             return routing_result["result"]
@@ -216,7 +216,7 @@ async def _compute_routing_decision(
     correlation_id: str | None = None,
 ) -> dict[str, Any]:
     """
-    Compute routing decision using surprise score, PKG evaluation, and hysteresis.
+    Compute routing decision_kind using surprise score, PKG evaluation, and hysteresis.
     """
     t0 = time.perf_counter()
 
@@ -262,18 +262,8 @@ async def _compute_routing_decision(
         cfg.tau_plan_exit,
     )
     
-    # Normalize to canonical enum
-    if decision_str == "fast":
-        decision_kind = ResultKind.FAST_PATH
-    elif decision_str == "planner":
-        decision_kind = ResultKind.COGNITIVE
-    elif decision_str == "hgnn":
-        decision_kind = ResultKind.ESCALATED
-    else:
-        decision_kind = ResultKind.ERROR
-    
     # Keep decision_str for backward compatibility in logging and metadata
-    decision = decision_str
+    decision_kind = decision_str
 
     # 4. Proto plan scaffold
     proto_plan: dict[str, Any] = {"tasks": [], "edges": [], "hints": {}}
@@ -328,23 +318,14 @@ async def _compute_routing_decision(
         used_fallback = True
         pkg_meta["error"] = f"PKG unavailable or timed out: {e}"
         force_decomp = bool(params.get("force_decomposition", False) or params.get("force_hgnn", False))
-        should_decompose = force_decomp or (decision_kind == ResultKind.ESCALATED)
+        should_decompose = force_decomp or (decision_kind == DecisionKind.ESCALATED)
         proto_plan = generate_proto_subtasks(ctx.tags, xs[5], signals["criticality"], force=should_decompose)
 
     proto_plan.setdefault("provenance", [])
     proto_plan["provenance"].append("fallback:router_rules@1.0" if used_fallback else f"pkg:{pkg_meta.get('version', 'unknown')}")
 
     # 6. Apply operator overrides
-    decision, original_decision = _apply_forced_promotions(decision, params)
-    # Re-normalize decision_kind after forced promotions
-    if decision == "fast":
-        decision_kind = ResultKind.FAST_PATH
-    elif decision == "planner":
-        decision_kind = ResultKind.COGNITIVE
-    elif decision == "hgnn":
-        decision_kind = ResultKind.ESCALATED
-    else:
-        decision_kind = ResultKind.ERROR
+    decision_kind, original_decision = _apply_forced_promotions(decision_kind, params)
 
     # 7. Create payloads
     router_latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
@@ -366,7 +347,7 @@ async def _compute_routing_decision(
         task_id=ctx.task_id,
         task_type=ctx.task_type,
         domain=ctx.domain,
-        decision=decision,
+        decision_kind=decision_kind,
         last_decision=last_decision,
         original_decision=original_decision,
         surprise_data=surprise_payload,
@@ -386,20 +367,20 @@ async def _compute_routing_decision(
     # 8. Log
     ocps_meta = s_out["ocps"]
     logger.info(
-        "[route] task_id=%s S=%.3f x2_meta(S_t=%s,h=%s,h_clr=%s,flag_on=%s) decision=%s pkg_used=%s latency_ms=%.1f",
+        "[route] task_id=%s S=%.3f x2_meta(S_t=%s,h=%s,h_clr=%s,flag_on=%s) decision_kind=%s pkg_used=%s latency_ms=%.1f",
         ctx.task_id,
         S,
         ocps_meta.get("S_t", "N/A"),
         ocps_meta.get("h", "N/A"),
         ocps_meta.get("h_clr", "N/A"),
         ocps_meta.get("flag_on", "N/A"),
-        decision,
+        decision_kind,
         not used_fallback,
         router_latency_ms,
     )
 
     # 9. Emit result schema
-    if decision_kind == ResultKind.FAST_PATH:
+    if decision_kind == DecisionKind.FAST_PATH:
         # Note: organ_id is set to "organism" as a placeholder since actual routing
         # happens downstream in OrganismRouter. CoordinatorHttpRouter delegates task_data
         # to OrganismRouter which resolves the organ_id itself.
@@ -409,7 +390,7 @@ async def _compute_routing_decision(
             result={"status": "routed"},
             metadata={"routing": "completed", "executed": False, **payload_common},
         ).model_dump()
-    elif decision_kind == ResultKind.COGNITIVE:
+    elif decision_kind == DecisionKind.COGNITIVE:
         # Extract agent_id from task params for cognitive planning
         agent_id_for_planner = ctx.params.get("agent_id", "planner")
         # proto_plan is placed in result field for CognitiveRouter extraction:
@@ -423,7 +404,7 @@ async def _compute_routing_decision(
             confidence_score=None,
             **payload_common,
         ).model_dump()
-    elif decision_kind == ResultKind.ESCALATED:
+    elif decision_kind == DecisionKind.ESCALATED:
         res = create_escalated_result(
             solution_steps=[],
             plan_source="hgnn",
@@ -431,7 +412,7 @@ async def _compute_routing_decision(
         ).model_dump()
     else:
         res = create_error_result(
-            error="unrecognized decision",
+            error="unrecognized decision_kind",
             error_type="router_unrecognized_decision",
             original_type="routing",
             **payload_common,
@@ -442,7 +423,7 @@ async def _compute_routing_decision(
         payload = res.setdefault("payload", {})
         meta = payload.setdefault("metadata", {})
         meta.update({
-            "decision": payload_common.get("decision"),
+            "decision_kind": payload_common.get("decision_kind"),
             "original_decision": payload_common.get("original_decision"),
             "surprise": payload_common.get("surprise"),
             "proto_plan": payload_common.get("proto_plan"),
@@ -457,7 +438,7 @@ async def _compute_routing_decision(
         logger.debug("payload normalization best-effort failed: %s", e)
 
     return {
-        "decision": decision,
+        "decision_kind": decision_kind,
         "original_decision": original_decision,
         "last_decision": last_decision,
         "surprise": surprise_payload,
@@ -724,23 +705,23 @@ async def _execute_hgnn(
 # Routing Helpers (Internal)
 # ---------------------------------------------------------------------------
 
-def _apply_forced_promotions(decision: str, params: dict[str, Any]) -> tuple[str, str | None]:
+def _apply_forced_promotions(decision_kind: str, params: dict[str, Any]) -> tuple[str, str | None]:
     """
-    Apply operator overrides to a routing decision.
+    Apply operator overrides to a routing decision_kind.
     Returns (final_decision, original_if_changed).
     """
     force_decomp = bool(params.get("force_decomposition", False))
     force_hgnn = bool(params.get("force_hgnn", False))
-    original = decision
+    original = decision_kind
 
-    if force_hgnn and decision != "hgnn":
-        logger.info("[route] force_hgnn=True: promoting %s → hgnn", decision)
-        decision = "hgnn"
-    elif force_decomp and decision == "fast":
+    if force_hgnn and decision_kind != "hgnn":
+        logger.info("[route] force_hgnn=True: promoting %s → hgnn", decision_kind)
+        decision_kind = "hgnn"
+    elif force_decomp and decision_kind == "fast":
         logger.info("[route] force_decomposition=True: promoting fast → planner")
-        decision = "planner"
+        decision_kind = "planner"
 
-    return decision, (original if decision != original else None)
+    return decision_kind, (original if decision_kind != original else None)
 
 
 def _create_eventizer_summary(
@@ -764,7 +745,7 @@ def _create_payload_common(
     task_id: str,
     task_type: str,
     domain: str | None,
-    decision: str,
+    decision_kind: str,
     last_decision: str | None,
     original_decision: str | None,
     surprise_data: dict[str, Any],
@@ -787,9 +768,9 @@ def _create_payload_common(
         "task_id": task_id,
         "type": task_type,
         "domain": domain,
-        "decision": decision,
+        "decision_kind": decision_kind,
         "last_decision": last_decision,
-        "original_decision": original_decision if decision != original_decision else None,
+        "original_decision": original_decision if decision_kind != original_decision else None,
         "surprise": surprise_data,
         "signals_present": sorted(signals_present),
         "pkg": {"used": not used_fallback, "version": pkg_meta.get("version"), "error": pkg_meta.get("error")},
@@ -937,7 +918,7 @@ class TaskContext:
 
 @dataclass(frozen=True)
 class RouteConfig:
-    """Routing decision configuration: thresholds, evaluators, timeouts."""
+    """Routing decision_kind configuration: thresholds, evaluators, timeouts."""
     surprise_computer: SurpriseComputer
     tau_fast_exit: float
     tau_plan_exit: float
