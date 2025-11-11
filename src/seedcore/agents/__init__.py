@@ -17,42 +17,21 @@ Agent implementations for SeedCore.
 """
 
 # Core agent classes
-from .base import Agent
+from .base import BaseAgent
 from .ray_agent import RayAgent
 from .observer_agent import ObserverAgent
 
 # Lifecycle management
 from .lifecycle import evaluate_lifecycle, LifecycleDecision
 
-# Dispatchers
-from ..dispatcher import Dispatcher, Reaper, GraphDispatcher
-
 # Memory and storage
 from .private_memory import AgentPrivateMemory
-from .checkpoint_store import CheckpointStore, CheckpointStoreFactory
+from .checkpoint import CheckpointStore, CheckpointStoreFactory
 
-# Capability management
-from .capability_feedback import (
-    CapabilityFeedback, 
-    CapabilityAssessment, 
-    CapabilityManager,
-    get_capability_manager,
-    evaluate_cognitive_task,
-    get_agent_assessment,
-    get_promotion_recommendations,
-    get_improvement_plan
-)
-
-# Utility inference
-from .utility_inference_actor import (
-    UtilityPredictor,
-    get_utility_predictor,
-    reset_utility_predictor
-)
 
 __all__ = [
     # Core agent classes
-    'Agent',
+    'BaseAgent',
     'RayAgent', 
     'ObserverAgent',
     
@@ -60,28 +39,9 @@ __all__ = [
     'evaluate_lifecycle',
     'LifecycleDecision',
     
-    # Dispatchers
-    'Dispatcher',
-    'Reaper', 
-    'GraphDispatcher',
-    
     # Memory and storage
     'AgentPrivateMemory',
     'CheckpointStore',
     'CheckpointStoreFactory',
     
-    # Capability management
-    'CapabilityFeedback',
-    'CapabilityAssessment', 
-    'CapabilityManager',
-    'get_capability_manager',
-    'evaluate_cognitive_task',
-    'get_agent_assessment',
-    'get_promotion_recommendations',
-    'get_improvement_plan',
-    
-    # Utility inference
-    'UtilityPredictor',
-    'get_utility_predictor',
-    'reset_utility_predictor'
 ]

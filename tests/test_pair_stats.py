@@ -17,8 +17,29 @@ Tests for pair statistics tracking functionality.
 """
 
 import numpy as np
+
 from seedcore.ops.energy.pair_stats import PairStats, PairStatsTracker
-from seedcore.agents.base import Agent
+from seedcore.agents.base import BaseAgent
+
+
+class DummyAgent(BaseAgent):
+    """Minimal test double extending BaseAgent with personality vector support."""
+
+    def __init__(self, agent_id: str, *, capability: float = 0.5, mem_util: float = 0.0, h: np.ndarray | None = None):
+        super().__init__(
+            agent_id=agent_id,
+            initial_capability=capability,
+            initial_mem_util=mem_util,
+        )
+        self._h = h if h is not None else np.random.rand(8)
+
+    @property
+    def h(self) -> np.ndarray:
+        return self._h
+
+    @h.setter
+    def h(self, value: np.ndarray) -> None:
+        self._h = value
 
 def test_pair_stats_initialization():
     """Test that PairStats initializes with correct default values."""
@@ -142,26 +163,25 @@ def test_pair_stats_tracker_get_all_stats():
     assert pair1_stats["success_rate"] == 0.5
 
 def test_agent_personality_vector():
-    """Test that agents have personality vectors."""
-    agent = Agent(agent_id="test_agent")
+    """Test that base agents can expose a personality vector via test double."""
+    agent = DummyAgent(agent_id="test_agent")
     
-    assert hasattr(agent, 'h')
     assert isinstance(agent.h, np.ndarray)
     assert len(agent.h) == 8
 
 def test_agent_custom_personality():
     """Test creating agent with custom personality vector."""
     custom_vector = np.array([1.0, 0.5, 0.3, 0.8, 0.2, 0.9, 0.1, 0.7])
-    agent = Agent(agent_id="test_agent", h=custom_vector)
+    agent = DummyAgent(agent_id="test_agent", h=custom_vector)
     
     assert np.array_equal(agent.h, custom_vector)
 
 def test_cosine_similarity_calculation():
     """Test cosine similarity calculation between agent personalities."""
     # Create agents with known personality vectors
-    agent1 = Agent(agent_id="agent1", h=np.array([1.0, 0.0, 0.0, 0.0]))
-    agent2 = Agent(agent_id="agent2", h=np.array([1.0, 0.0, 0.0, 0.0]))
-    agent3 = Agent(agent_id="agent3", h=np.array([0.0, 1.0, 0.0, 0.0]))
+    agent1 = DummyAgent(agent_id="agent1", h=np.array([1.0, 0.0, 0.0, 0.0]))
+    agent2 = DummyAgent(agent_id="agent2", h=np.array([1.0, 0.0, 0.0, 0.0]))
+    agent3 = DummyAgent(agent_id="agent3", h=np.array([0.0, 1.0, 0.0, 0.0]))
     
     # Calculate similarities
     sim_same = np.dot(agent1.h, agent2.h) / (np.linalg.norm(agent1.h) * np.linalg.norm(agent2.h))

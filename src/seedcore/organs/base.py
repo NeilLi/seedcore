@@ -31,6 +31,13 @@ import logging
 import ray
 from typing import List, Any, TYPE_CHECKING, Dict, Optional
 
+from ..agents.roles import (
+    RoleRegistry,
+    DEFAULT_ROLE_REGISTRY,
+    SkillStoreProtocol,
+    NullSkillStore,
+)
+
 if TYPE_CHECKING:
     from ..agents.ray_agent import RayAgent
 
@@ -50,11 +57,23 @@ class Organ:
     reflecting the "swarm-of-swarms" model central to the COA framework.
     """
     
-    def __init__(self, organ_id: str, organ_type: str, serve_route: Optional[str] = None):
+    def __init__(
+        self,
+        organ_id: str,
+        organ_type: str,
+        serve_route: Optional[str] = None,
+        *,
+        role_registry: Optional[RoleRegistry] = None,
+        skill_store: Optional[SkillStoreProtocol] = None,
+    ):
         self.organ_id = organ_id
         self.organ_type = organ_type
         self.serve_route = serve_route
         self.agents: Dict[str, 'RayAgent'] = {}
+
+        # Role/skill context shared with registered agents (if applicable)
+        self.role_registry: RoleRegistry = role_registry or DEFAULT_ROLE_REGISTRY
+        self.skill_store: SkillStoreProtocol = skill_store or NullSkillStore()
 
         # Runtime registry fields
         self.instance_id = uuid.uuid4().hex

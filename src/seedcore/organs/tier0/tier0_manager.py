@@ -33,6 +33,7 @@ import logging
 import json
 
 from ...agents.ray_agent import RayAgent
+from ...agents.roles import RoleRegistry, DEFAULT_ROLE_REGISTRY, SkillStoreProtocol, NullSkillStore
 from ...ops.energy.optimizer import select_best_agent, score_agent
 from .specs import GraphClient, AgentSpec
 from ...registry import list_active_instances
@@ -70,7 +71,14 @@ class Tier0MemoryManager:
     - Provide an async API for task execution
     """
     
-    def __init__(self, mw_manager: MwManager, ltm_manager: LongTermMemoryManager):
+    def __init__(
+        self,
+        mw_manager: MwManager,
+        ltm_manager: LongTermMemoryManager,
+        *,
+        role_registry: Optional[RoleRegistry] = None,
+        skill_store: Optional[SkillStoreProtocol] = None,
+    ):
         """
         Initialize with memory manager clients.
         
@@ -87,6 +95,8 @@ class Tier0MemoryManager:
         # --- Store the memory manager clients ---
         self.mw_manager = mw_manager
         self.ltm_manager = ltm_manager
+        self.role_registry = role_registry or DEFAULT_ROLE_REGISTRY
+        self.skill_store = skill_store or NullSkillStore()
         
         # Track transient ping failures to avoid pruning on single hiccup
         self._ping_failures: Dict[str, int] = {}
@@ -206,6 +216,10 @@ class Tier0MemoryManager:
                 agent_id=agent_id,
                 initial_role_probs=role_probs,
                 organ_id=organ_id,
+                role_registry=self.role_registry,
+                skill_store=self.skill_store,
+                mw_manager=self.mw_manager,
+                ltm_manager=self.ltm_manager,
             )
             self.agents[agent_id] = agent_handle
             self.heartbeats[agent_id] = {}

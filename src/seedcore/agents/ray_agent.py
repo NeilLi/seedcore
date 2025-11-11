@@ -15,6 +15,8 @@
 """
 Tier 0 (Ma): Per-Agent Memory Implementation
 Ray actor-based stateful agents with private memory and performance tracking.
+
+Refactored to inherit from BaseAgent.
 """
 
 import os
@@ -26,15 +28,26 @@ import json
 import random
 import ast
 import operator
-import uuid
 import hashlib
 from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import logging
+
+# --- REFACTOR: Import all new BaseAgent components ---
+from .base import BaseAgent
+from .roles import Specialization, RoleRegistry, DEFAULT_ROLE_REGISTRY, SkillStoreProtocol, NullSkillStore
+from .checkpoint import CheckpointStoreFactory, CheckpointStore, NullStore
+from ..memory.flashbulb_client import FlashbulbClient
+from ..serve.cognitive_client import CognitiveServiceClient
+from ..models.cognitive import CognitiveType, DecisionKind
+
+# --- End REFACTOR ---
 
 if TYPE_CHECKING:
     from ..memory.mw_manager import MwManager
     from ..memory.long_term_memory import LongTermMemoryManager
+    from ..tools.manager import ToolManager
+    from ..serve.ml_client import MLServiceClient
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -43,6 +56,10 @@ if not logger.handlers:
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
     logger.addHandler(handler)
+
+REQUEST_TIMEOUT_S = 5.0
+MAX_TEXT_LEN = 4096
+MAX_IN_FLIGHT_SALIENCE = 20
 
 # Safe arithmetic evaluator to replace unsafe eval()
 _ALLOWED_OPS = {
@@ -81,171 +98,209 @@ def _safe_eval_arith(expr: str) -> float:
     tree = ast.parse(expr, mode="eval")
     return float(_eval(tree.body))
 
-# NEW: Import the FlashbulbClient
-from ..memory.flashbulb_client import FlashbulbClient
-
-# NEW: Import the Cognitive Service Client
-from ..serve.cognitive_client import CognitiveServiceClient
-from ..models.cognitive import CognitiveType, DecisionKind
-
-# --- Import Enhanced Memory Managers ---
-# Note: Actual imports are done inside methods to avoid circular dependencies
-# TYPE_CHECKING imports are used for type hints only
-
-# === COA §6/§8: agent-private memory vector h_i ∈ R^128 ===
-from .private_memory import AgentPrivateMemory, PeerEvent
-from .checkpoint_store import CheckpointStoreFactory, CheckpointStore, NullStore
-
 @dataclass
-class AgentState:
-    """Holds the local state for an agent."""
+class LegacyAgentState:
+    """Holds legacy state parts (h, p) for backward compatibility."""
     h: Any  # Embedding (kept JSON-safe as Python list)
     p: Dict[str, float]  # Role probabilities
-    c: float = 0.5  # Capability
-    mem_util: float = 0.0  # Memory Utility
 
 @ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
-class RayAgent:
+class RayAgent(BaseAgent):
     """
     Stateful Ray actor for Tier 0 per-agent memory (Ma).
     
-    Each agent maintains:
-    - 128-dimensional state vector (h)
-    - Performance metrics and capability score
-    - Task history and quality scores
-    - Memory interaction tracking
-    - Memory managers for Mw and Mlt access
+    This class inherits from BaseAgent to get modern state management,
+    RBAC, and salience, but maintains its legacy methods and memory
+    I/O for backward compatibility.
     """
     
-    def __init__(self, agent_id: str,
-                 mw_manager: Optional["MwManager"] = None,
-                 ltm_manager: Optional["LongTermMemoryManager"] = None,
-                 initial_role_probs: Optional[Dict[str, float]] = None,
-                 organ_id: Optional[str] = None,
-                 checkpoint_cfg: Optional[Dict[str, Any]] = None,
-                 cognitive_base_url: Optional[str] = None):
-        # 1. Agent Identity and State
-        self.agent_id = agent_id
-        self.instance_id = uuid.uuid4().hex  # Use UUID for instance_id
-        self.organ_id = organ_id or "_"  # Set organ_id properly
+    def __init__(
+        self,
+        agent_id: str,
+        *,
+        specialization: Specialization = Specialization.GENERALIST,
+        role_registry: Optional[RoleRegistry] = None,
+        skill_store: Optional[SkillStoreProtocol] = None,
+        tool_manager: Optional["ToolManager"] = None,
+        cognitive_base_url: Optional[str] = None,
+        organ_id: Optional[str] = None,
+        mw_manager: Optional["MwManager"] = None,
+        ltm_manager: Optional["LongTermMemoryManager"] = None,
+        checkpoint_cfg: Optional[Dict[str, Any]] = None,
+        initial_role_probs: Optional[Dict[str, float]] = None,
+        **legacy_kwargs: Any,
+    ):
+        if legacy_kwargs:
+            logger.debug("RayAgent %s received legacy kwargs: %s", agent_id, legacy_kwargs)
 
-        # Dispatcher-facing identity branding
-        self.agent_role = "cognitive_runtime"
-        
-        # 2. Initialize AgentState with COA specifications
-        self.state = AgentState(
-            h=[0.0] * 128,  # JSON-safe list; managed by AgentPrivateMemory
-            p=initial_role_probs or {'E': 0.9, 'S': 0.1, 'O': 0.0},
-            c=0.5,  # Initial capability
-            mem_util=0.0  # Initial memory utility
+        super().__init__(
+            agent_id=agent_id,
+            tool_manager=tool_manager,
+            specialization=specialization,
+            role_registry=role_registry or DEFAULT_ROLE_REGISTRY,
+            skill_store=skill_store or NullSkillStore(),
+            cognitive_base_url=cognitive_base_url,
+            initial_capability=0.5,
+            initial_mem_util=0.0,
+            organ_id=organ_id,
         )
-        
-        # 3. Backward compatibility - keep old attributes
-        # Keep a separate numpy copy for legacy paths that expect ndarray
-        self.state_embedding = np.array(self.state.h, dtype=np.float32)
-        self.role_probs = self.state.p
-        
-        # 4. Performance Tracking Metrics
-        self.tasks_processed = 0
-        self.successful_tasks = 0
-        self.quality_scores: List[float] = []
+
+        # Legacy state shim (embedding + role probabilities)
+        self._legacy_state = LegacyAgentState(
+            h=[0.0] * 128,
+            p=initial_role_probs or {"E": 0.9, "S": 0.1, "O": 0.0},
+        )
+
+        # Legacy metrics / history surfaces
+        self._legacy_quality_scores: List[float] = []
+        self._legacy_successful_tasks: int = 0
         self.task_history: List[Dict[str, Any]] = []
-        
-        # 5. Capability Score (c_i) with EWMA smoothing
-        self.capability_score: float = 0.5  # Initial capability
-        self.smoothing_factor: float = 0.1   # η_c smoothing parameter
-        
-        # 6. Memory Utilization (mem_util) for lifecycle transitions
-        self.mem_util: float = 0.0
-        
-        # 7. Memory Interaction Tracking (from original Agent)
+        self.smoothing_factor: float = 0.1
+
+        # Legacy counters (some duplicated in AgentState for telemetry)
         self.memory_writes: int = 0
         self.memory_hits_on_writes: int = 0
         self.salient_events_logged: int = 0
         self.total_compression_gain: float = 0.0
-        
-        # 8. Local Skill Deltas (per-agent scratch memory)
-        self.skill_deltas: Dict[str, float] = {}
-        
-        # 9. Peer Stats (local tracking of interactions)
+
+        # Legacy peer / lifecycle trackers
         self.peer_interactions: Dict[str, int] = {}
-        
-        # 10. Timestamps for tracking
         self.created_at = time.time()
-        self.last_heartbeat = time.time()
-        
-        # 11. Energy State Tracking (NEW)
+        self.last_heartbeat = self.created_at
         self.energy_state: Dict[str, float] = {}
         self.lifecycle_state: str = "Employed"
         self.idle_ticks: int = 0
         self.max_idle: int = 1000
         self._archived: bool = False
-        
-        # --- Store Injected Memory Managers ---
+
+        # Working/long-term memory managers (lazy init when not injected)
         self.mw_manager = mw_manager
         self.mlt_manager = ltm_manager
 
-        # Lazily construct memory manager clients inside the actor if not injected
         if self.mw_manager is None:
             try:
                 from ..memory.mw_manager import MwManager  # lazy import to avoid circular deps
+
                 self.mw_manager = MwManager(organ_id=self.agent_id)
-                logger.info(f"✅ {self.agent_id}: MwManager created in-actor")
-            except Exception as e:
-                logger.warning(f"⚠️ {self.agent_id}: failed to create MwManager in-actor: {e}")
+                logger.info("✅ %s: MwManager created in-actor", self.agent_id)
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.warning("⚠️ %s: failed to create MwManager in-actor: %s", self.agent_id, exc)
 
         if self.mlt_manager is None:
             try:
-                from ..memory.long_term_memory import LongTermMemoryManager  # lazy import
+                from ..memory.long_term_memory import LongTermMemoryManager
+
                 self.mlt_manager = LongTermMemoryManager()
-                # Best-effort async initialization (does not block actor startup)
                 try:
                     loop = asyncio.get_event_loop()
                     loop.create_task(self.mlt_manager.initialize())
-                except Exception as ie:
-                    logger.debug(f"LTM async initialize scheduling failed: {ie}")
-                logger.info(f"✅ {self.agent_id}: LongTermMemoryManager created in-actor")
-            except Exception as e:
-                logger.warning(f"⚠️ {self.agent_id}: failed to create LongTermMemoryManager in-actor: {e}")
+                except Exception as inner_exc:
+                    logger.debug("LTM async initialize scheduling failed: %s", inner_exc)
+                logger.info("✅ %s: LongTermMemoryManager created in-actor", self.agent_id)
+            except Exception as exc:  # pragma: no cover
+                logger.warning("⚠️ %s: failed to create LongTermMemoryManager in-actor: %s", self.agent_id, exc)
+
         self.mfb_client = None
-        
-        # --- Initialize cognitive service client ---
+
+        # Legacy cognitive client handles (BaseAgent already tracks ML client)
         self._cog = None
         self._cog_available = False
-        self._cog_base_url = cognitive_base_url
-        
-        # --- Track in-flight cognitive requests to prevent duplicates ---
-        self._cog_inflight: Dict[str, asyncio.Task] = {}  # key: request_key (task_id or desc+profile), value: task
-        self._cog_inflight_lock = asyncio.Lock()  # Lock for accessing _cog_inflight dict
 
-        # --- Initialize private memory (lifetime-only persistence) ---
-        self._privmem = AgentPrivateMemory(agent_id=self.agent_id, alpha=0.1)
-        # Optional checkpoint store (disabled by default)
+        # Track in-flight cognitive requests to prevent duplicates
+        self._cog_inflight: Dict[str, asyncio.Task] = {}
+        self._cog_inflight_lock = asyncio.Lock()
+
+        # Checkpointing uses BaseAgent._privmem
         self._ckpt_cfg = checkpoint_cfg or {"enabled": False}
         self._ckpt_store: CheckpointStore = CheckpointStoreFactory.from_config(self._ckpt_cfg)
         self._ckpt_key = f"{self.organ_id}/{self.agent_id}"
         self._maybe_restore()
-        
-        # Initialize memory managers asynchronously to avoid hanging
+
         try:
-            # Only initialize basic components, defer complex initialization
-            logger.info(f"✅ RayAgent {self.agent_id} created with basic state")
-            
-            # Initialize memory managers later if needed
+            logger.info("✅ RayAgent %s created with BaseAgent core state", self.agent_id)
             self._initialize_memory_managers()
-            
-            # Initialize cognitive systems
             self._initialize_cognitive_systems()
-            
-            # Initialize optional registry reporting
             self._initialize_registry_reporting()
-            
-        except Exception as e:
-            logger.warning(f"⚠️ RayAgent {self.agent_id} created with limited functionality: {e}")
+        except Exception as exc:  # pragma: no cover
+            logger.warning("⚠️ RayAgent %s created with limited functionality: %s", self.agent_id, exc)
 
         logger.info(
-            f"✅ RayAgent {self.agent_id} ({self.agent_role}) is online. Cognitive available={self._cog_available}"
+            "✅ RayAgent %s (%s) is online. Cog=%s, ML=%s",
+            self.agent_id,
+            self.specialization.value,
+            self._cog_available,
+            self._ml_client is not None,
         )
+
+    # ============================================================================
+    # Backward compatibility shims
+    # ============================================================================
+
+    @property
+    def agent_role(self) -> str:
+        """Shim for legacy agent_role attribute."""
+        return self.specialization.value
+
+    @property
+    def state_embedding(self) -> np.ndarray:
+        """Legacy accessor that returns the private memory vector as ndarray."""
+        return self._privmem.get_vector()
+
+    @state_embedding.setter
+    def state_embedding(self, value: np.ndarray) -> None:
+        if value.shape != (128,):
+            raise ValueError(f"Invalid embedding shape: {value.shape}, expected (128,)")
+        self._privmem.set_vector(value.astype(np.float32, copy=True))
+        self._legacy_state.h = value.astype(float).tolist()
+
+    @property
+    def role_probs(self) -> Dict[str, float]:
+        """Legacy role probability dict."""
+        return self._legacy_state.p
+
+    @role_probs.setter
+    def role_probs(self, new_probs: Dict[str, float]) -> None:
+        self._legacy_state.p = dict(new_probs)
+
+    @property
+    def capability_score(self) -> float:
+        return float(self.state.c)
+
+    @capability_score.setter
+    def capability_score(self, value: float) -> None:
+        self.state.c = float(value)
+
+    @property
+    def mem_util(self) -> float:
+        return float(self.state.mem_util)
+
+    @mem_util.setter
+    def mem_util(self, value: float) -> None:
+        self.state.mem_util = float(value)
+
+    @property
+    def tasks_processed(self) -> int:
+        return int(self.state.tasks_processed)
+
+    @tasks_processed.setter
+    def tasks_processed(self, value: int) -> None:
+        self.state.tasks_processed = int(value)
+
+    @property
+    def successful_tasks(self) -> int:
+        return int(self._legacy_successful_tasks)
+
+    @successful_tasks.setter
+    def successful_tasks(self, value: int) -> None:
+        self._legacy_successful_tasks = int(value)
+
+    @property
+    def quality_scores(self) -> List[float]:
+        return self._legacy_quality_scores
+
+    @property
+    def skill_deltas(self) -> Dict[str, float]:
+        return self.skills.deltas
     
     def _initialize_memory_managers(self):
         """
@@ -483,7 +538,7 @@ class RayAgent:
         try:
             norm = float(np.linalg.norm(self.state_embedding))
         except Exception:
-            norm = float(np.linalg.norm(np.array(self.state.h, dtype=np.float32)))
+            norm = float(np.linalg.norm(np.array(self._legacy_state.h, dtype=np.float32)))
         return norm + float(self.capability_score) + 0.1 * float(self.mem_util)
 
     def build_memory_fragments(self, *, anomalies=None, reason=None, decision=None) -> List[Dict[str, Any]]:
@@ -570,24 +625,25 @@ class RayAgent:
                 new_role_probs[role] /= total_prob
         
         self.role_probs = new_role_probs.copy()
-        self.state.p = new_role_probs.copy()  # Update AgentState
         logger.debug(f"Agent {self.agent_id} role probabilities updated: {self.role_probs}")
     
     def update_local_metrics(self, success: float, quality: float, mem_hits: int):
         """
         Update capability and memory utility using EWMA after a task.
         """
-        # Update Capability (c) using EWMA
-        self.state.c = (1 - 0.1) * self.state.c + 0.1 * (0.6 * success + 0.4 * quality)
-        
-        # Update Memory Utility (mem_util) using EWMA
-        self.state.mem_util = (1 - 0.1) * self.state.mem_util + 0.1 * mem_hits
-        
-        # Update backward compatibility attributes
-        self.capability_score = self.state.c
-        self.mem_util = self.state.mem_util
-        
-        logger.debug(f"Agent {self.agent_id} metrics updated - capability: {self.state.c:.3f}, mem_util: {self.state.mem_util:.3f}")
+        alpha = 0.1
+        new_cap = (1 - alpha) * self.capability_score + alpha * (0.6 * float(success) + 0.4 * float(quality))
+        new_mem = (1 - alpha) * self.mem_util + alpha * float(mem_hits)
+
+        self.capability_score = new_cap
+        self.mem_util = max(0.0, min(1.0, new_mem))
+
+        logger.debug(
+            "Agent %s metrics updated - capability: %.3f, mem_util: %.3f",
+            self.agent_id,
+            self.capability_score,
+            self.mem_util,
+        )
     
     def get_energy_proxy(self) -> Dict[str, float]:
         """
@@ -595,19 +651,19 @@ class RayAgent:
         This is a lightweight local estimate.
         """
         return {
-            'capability': self.state.c,
-            'entropy_contribution': -sum(p * np.log2(p + 1e-9) for p in self.state.p.values()),
-            'mem_util': self.state.mem_util,
-            'state_norm': np.linalg.norm(self.state.h)
+            'capability': self.capability_score,
+            'entropy_contribution': -sum(p * np.log2(p + 1e-9) for p in self.role_probs.values()),
+            'mem_util': self.mem_util,
+            'state_norm': np.linalg.norm(self._legacy_state.h),
         }
     
     def update_state_embedding(self, new_embedding: np.ndarray):
         """Updates the state embedding vector."""
-        if new_embedding.shape == (128,):
-            self.state_embedding = new_embedding.copy()
-            logger.debug(f"Agent {self.agent_id} state embedding updated")
-        else:
-            logger.warning(f"Invalid embedding shape: {new_embedding.shape}, expected (128,)")
+        try:
+            self.state_embedding = new_embedding
+            logger.debug("Agent %s state embedding updated", self.agent_id)
+        except ValueError as exc:
+            logger.warning("Invalid embedding shape for %s: %s", self.agent_id, exc)
     
     def update_performance(self, success: bool, quality: float, task_metadata: Optional[Dict] = None):
         """
@@ -618,57 +674,43 @@ class RayAgent:
             quality: Quality score (0.0 to 1.0)
             task_metadata: Optional metadata about the task
         """
-        self.tasks_processed += 1
+        self._legacy_quality_scores.append(quality)
+        if len(self._legacy_quality_scores) > 20:
+            self._legacy_quality_scores.pop(0)
+
         if success:
-            self.successful_tasks += 1
-        
-        self.quality_scores.append(quality)
-        # Keep only the last 20 scores for rolling average
-        if len(self.quality_scores) > 20:
-            self.quality_scores.pop(0)
-        
-        # Store task in history
+            self._legacy_successful_tasks += 1
+
         task_record = {
             "timestamp": time.time(),
             "success": success,
             "quality": quality,
-            "metadata": task_metadata or {}
+            "metadata": task_metadata or {},
         }
         self.task_history.append(task_record)
-        
-        # Keep only last 100 tasks in history
         if len(self.task_history) > 100:
             self.task_history.pop(0)
-        
-        # Calculate current success rate and average quality
-        success_rate = (self.successful_tasks / self.tasks_processed) if self.tasks_processed > 0 else 0
-        avg_quality = sum(self.quality_scores) / len(self.quality_scores) if self.quality_scores else 0
-        
-        # Update capability score using EWMA formula
-        w_s = 0.6  # Weight for success rate
-        w_q = 0.4  # Weight for quality
-        current_performance = (w_s * success_rate) + (w_q * avg_quality)
-        
-        self.capability_score = (
-            (1 - self.smoothing_factor) * self.capability_score + 
-            self.smoothing_factor * current_performance
+
+        self.state.record_task_outcome(
+            success=success,
+            quality=quality,
+            salience=(task_metadata or {}).get("salience"),
+            duration_s=(task_metadata or {}).get("duration_s"),
         )
-        
-        # Update state for backward compatibility
-        self.state.capability_score = self.capability_score
-        
-        # Update memory utility if memory stats are provided
+
         if task_metadata and 'memory_stats' in task_metadata:
-            from .lifecycle import update_agent_metrics
-            mem_stats = task_metadata['memory_stats']
-            update_agent_metrics(self.state, success, quality, mem_stats)
-            self.mem_util = self.state.mem_util
-        
-        # Update task record with capability and memory utility
+            mem_hits = task_metadata['memory_stats'].get('hits', 0)
+            self.update_local_metrics(float(success), quality, mem_hits)
+
         task_record['capability_score'] = self.capability_score
         task_record['mem_util'] = self.mem_util
-        
-        logger.info(f"📈 Agent {self.agent_id} performance updated: Capability={self.capability_score:.3f}, MemUtil={self.mem_util:.3f}")
+
+        logger.info(
+            "📈 Agent %s performance updated: Capability=%.3f, MemUtil=%.3f",
+            self.agent_id,
+            self.capability_score,
+            self.mem_util,
+        )
     
     async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -710,6 +752,36 @@ class RayAgent:
         
         # Update local metrics using the new energy-aware method
         self.update_local_metrics(result.get('success', False), result.get('quality', 0.5), result.get('mem_hits', 0))
+
+        success_flag = bool(result.get("success", False))
+        quality_score = float(result.get("quality", 0.5))
+        salience_score = result.get("salience_score")
+        duration_s = result.get("duration_s")
+
+        self._legacy_quality_scores.append(quality_score)
+        if len(self._legacy_quality_scores) > 20:
+            self._legacy_quality_scores.pop(0)
+
+        if success_flag:
+            self._legacy_successful_tasks += 1
+
+        task_record = {
+            "timestamp": time.time(),
+            "task_id": task_data.get("task_id"),
+            "success": success_flag,
+            "quality": quality_score,
+            "metadata": task_data,
+        }
+        self.task_history.append(task_record)
+        if len(self.task_history) > 100:
+            self.task_history.pop(0)
+
+        self.state.record_task_outcome(
+            success=success_flag,
+            quality=quality_score,
+            salience=salience_score,
+            duration_s=duration_s,
+        )
         
         # Calculate energy after task execution
         E_after = self._energy_slice()
@@ -1235,13 +1307,13 @@ class RayAgent:
 
     def reset_private_memory(self) -> bool:
         self._privmem.reset()
-        self.state.h[:] = 0.0
+        self._legacy_state.h = [0.0] * 128
         return True
 
     def _export_tier0_summary(self) -> Dict[str, Any]:
         return {
             "agent_id": self.agent_id,
-            "embedding": self.state.h,
+            "embedding": self._privmem.get_vector_list(),
             "capability_score": self.capability_score,
             "mem_util": self.mem_util,
             "tasks_processed": self.tasks_processed,
@@ -1288,8 +1360,8 @@ class RayAgent:
                 blob = self._ckpt_store.load(self._ckpt_key)
                 if blob:
                     self._privmem.load(blob)
-                    self.state.h = self._privmem.get_vector_list()
-                    self.state_embedding = np.array(self.state.h, dtype=np.float32)
+                    vec = self._privmem.get_vector_list()
+                    self._legacy_state.h = list(vec)
         except Exception as e:
             logger.warning(f"[{self.agent_id}] restore failed: {e}")
 
@@ -1308,8 +1380,11 @@ class RayAgent:
             skill_name: Name of the skill
             delta: Change in skill level
         """
-        self.skill_deltas[skill_name] = self.skill_deltas.get(skill_name, 0.0) + delta
-        logger.debug(f"Agent {self.agent_id} skill delta updated: {skill_name} += {delta}")
+        try:
+            new_val = self.skills.bump(skill_name, delta, clamp_delta=False)
+            logger.debug("Agent %s skill delta updated: %s -> %.3f", self.agent_id, skill_name, new_val)
+        except Exception as exc:
+            logger.warning("Failed to update skill delta for %s on %s: %s", skill_name, self.agent_id, exc)
     
     def record_peer_interaction(self, peer_id: str):
         """
@@ -1324,18 +1399,26 @@ class RayAgent:
     async def get_heartbeat(self) -> Dict[str, Any]:
         """
         Gathers the agent's current state and performance into a heartbeat.
-        This will be serialized to JSON for the meta-controller.
-        
-        Returns:
-            Dictionary containing agent state and metrics
+        This merges BaseAgent telemetry with legacy fields expected by Tier-0.
         """
-        success_rate = (self.successful_tasks / self.tasks_processed) if self.tasks_processed > 0 else 0
+        base_heartbeat = await super().get_heartbeat()
+
+        success_rate = (self.successful_tasks / self.tasks_processed) if self.tasks_processed > 0 else 0.0
         current_quality = self.quality_scores[-1] if self.quality_scores else 0.0
-        
-        heartbeat_data = {
+
+        legacy_memory_metrics = {
+            "memory_writes": self.memory_writes,
+            "memory_hits_on_writes": self.memory_hits_on_writes,
+            "salient_events_logged": self.salient_events_logged,
+            "total_compression_gain": self.total_compression_gain,
+            "mw_puts": getattr(self, "_mw_puts", 0),
+            "mlt_promotions": getattr(self, "_mlt_promotions", 0),
+        }
+
+        legacy_payload = {
             "timestamp": time.time(),
             "agent_id": self.agent_id,
-            "state_embedding_h": self.state_embedding.tolist(),  # Convert numpy array for JSON
+            "state_embedding_h": self.state_embedding.tolist(),
             "role_probs": self.role_probs,
             "performance_metrics": {
                 "success_rate": success_rate,
@@ -1343,20 +1426,13 @@ class RayAgent:
                 "capability_score_c": self.capability_score,
                 "mem_util": self.mem_util,
                 "tasks_processed": self.tasks_processed,
-                "successful_tasks": self.successful_tasks
+                "successful_tasks": self.successful_tasks,
             },
-            "memory_metrics": {
-                "memory_writes": self.memory_writes,
-                "memory_hits_on_writes": self.memory_hits_on_writes,
-                "salient_events_logged": self.salient_events_logged,
-                "total_compression_gain": self.total_compression_gain,
-                "mw_puts": getattr(self, "_mw_puts", 0),
-                "mlt_promotions": getattr(self, "_mlt_promotions", 0),
-            },
+            "memory_metrics": legacy_memory_metrics,
             "local_state": {
                 "skill_deltas": self.skill_deltas,
                 "peer_interactions": self.peer_interactions,
-                "recent_quality_scores": self.quality_scores[-5:] if self.quality_scores else []
+                "recent_quality_scores": self.quality_scores[-5:] if self.quality_scores else [],
             },
             "lifecycle": {
                 "state": self.lifecycle_state,
@@ -1368,19 +1444,23 @@ class RayAgent:
                 "idle_ticks": self.idle_ticks,
                 "archived": self._archived,
             },
-            "energy_state": self.energy_state,  # Add energy state to heartbeat
-            "memory_metrics": {
-                "memory_writes": self.memory_writes,
-                "memory_hits_on_writes": self.memory_hits_on_writes,
-                "salient_events_logged": self.salient_events_logged,
-            }
+            "energy_state": self.energy_state,
         }
-        
-        # Add Mw telemetry if available
+
+        merged = {**base_heartbeat, **legacy_payload}
+
+        perf = dict(base_heartbeat.get("performance_metrics", {}))
+        perf.update(legacy_payload["performance_metrics"])
+        merged["performance_metrics"] = perf
+
+        mem_metrics = dict(base_heartbeat.get("memory_metrics", {}))
+        mem_metrics.update(legacy_memory_metrics)
+        merged["memory_metrics"] = mem_metrics
+
         if self.mw_manager:
             try:
                 tele = self.mw_manager.get_telemetry()
-                heartbeat_data["memory_metrics"].update({
+                mem_metrics.update({
                     "mw_hit_ratio": tele.get("hit_ratio", 0),
                     "mw_l0_hits": tele.get("l0_hits", 0),
                     "mw_l1_hits": tele.get("l1_hits", 0),
@@ -1390,20 +1470,18 @@ class RayAgent:
                     "mw_task_evictions": tele.get("task_evictions", 0),
                     "mw_negative_cache_hits": tele.get("negative_cache_hits", 0),
                 })
-                
-                # Add hot items every 10th heartbeat (low rate)
+
                 if self.tasks_processed % 10 == 0 and random.random() < 0.05:
                     try:
-                        # Use async hot item fetch
                         hot = await self.mw_manager.get_hot_items_async(top_n=5)
-                        heartbeat_data["memory_metrics"]["mw_hot_items"] = hot
+                        mem_metrics["mw_hot_items"] = hot
                     except Exception:
                         pass
-            except Exception as e:
-                logger.debug(f"[{self.agent_id}] Failed to get Mw telemetry: {e}")
-        
+            except Exception as exc:
+                logger.debug("[%s] Failed to get Mw telemetry: %s", self.agent_id, exc)
+
         self.last_heartbeat = time.time()
-        return heartbeat_data
+        return merged
     
     def on_task_row_loaded(self, task_row: Dict[str, Any]) -> None:
         """Hook called when a task row is loaded from database."""
@@ -1422,15 +1500,28 @@ class RayAgent:
         Returns:
             Dictionary with key performance indicators
         """
+        try:
+            ad = self.advertise_capabilities()
+        except Exception as exc:
+            logger.debug("advertise_capabilities failed for %s: %s", self.agent_id, exc)
+            ad = {
+                "agent_id": self.agent_id,
+                "capability": self.capability_score,
+                "mem_util": self.mem_util,
+                "quality_avg": self.state.rolling_quality_avg() or 0.0,
+            }
+
+        success_rate = (self.successful_tasks / self.tasks_processed) if self.tasks_processed > 0 else 0.0
+
         return {
-            "agent_id": self.agent_id,
-            "capability_score": self.capability_score,
-            "mem_util": self.mem_util,
+            "agent_id": ad.get("agent_id", self.agent_id),
+            "capability_score": ad.get("capability", self.capability_score),
+            "mem_util": ad.get("mem_util", self.mem_util),
             "tasks_processed": self.tasks_processed,
-            "success_rate": (self.successful_tasks / self.tasks_processed) if self.tasks_processed > 0 else 0,
-            "avg_quality": sum(self.quality_scores) / len(self.quality_scores) if self.quality_scores else 0,
+            "success_rate": success_rate,
+            "avg_quality": ad.get("quality_avg", self.state.rolling_quality_avg() or 0.0),
             "memory_writes": self.memory_writes,
-            "peer_interactions_count": len(self.peer_interactions)
+            "peer_interactions_count": len(self.peer_interactions),
         }
     
     # --- NEW: Knowledge Finding Method for Scenario 1 ---
@@ -1612,127 +1703,6 @@ class RayAgent:
             await self._promote_to_mlt(artifact_key, artifact, compression=True)
         
         return result
-
-    def execute_high_stakes_task(self, task_info: dict) -> dict:
-        """
-        Simulates a high-stakes task that fails, potentially triggering a
-        flashbulb memory incident.
-        """
-        logger.info(f"[{self.agent_id}] Attempting high-stakes task: {task_info.get('name')}")
-        
-        # --- 1. Simulate an unexpected failure ---
-        success = False
-        error_context = {"reason": "External API timeout", "code": 504}
-        logger.warning(f"[{self.agent_id}] Task failed! Reason: {error_context['reason']}")
-        
-        # --- 2. Calculate Salience Score using ML Service ---
-        salience_score = self._calculate_ml_salience_score(task_info, error_context)
-        logger.info(f"[{self.agent_id}] Calculated ML salience score: {salience_score:.2f}")
-
-        # --- 3. Trigger Flashbulb Logging if threshold is met ---
-        SALIENCE_THRESHOLD = 0.7  # Changed from 7.0 to 0.7
-        incident_logged = False
-        
-        if salience_score >= SALIENCE_THRESHOLD:
-            logger.warning(f"[{self.agent_id}] Salience threshold met! Logging to Flashbulb Memory (Mfb)...")
-            
-            if self.mfb_client:
-                # Prepare the full event data payload
-                incident_data = {
-                    "agent_state": self.get_heartbeat(), # Capture agent's full state (Ma)
-                    "failed_task": task_info,
-                    "error_context": error_context
-                }
-                
-                # Log the incident using the client
-                incident_logged = self.mfb_client.log_incident(incident_data, salience_score)
-                
-                if incident_logged:
-                    logger.info(f"[{self.agent_id}] ✅ Incident successfully logged to Flashbulb Memory")
-                    
-                    # Also drop a compact pointer in Mw with a short TTL
-                    if self.mw_manager:
-                        try:
-                            ptr_key = f"incident:{task_info.get('id', 'unknown')}"
-                            self.mw_manager.set_global_item_typed("incident", "global", ptr_key, 
-                                                                {"mfb_id": incident_logged}, ttl_s=1800)
-                            logger.debug(f"[{self.agent_id}] Incident pointer cached in Mw")
-                        except Exception as e:
-                            logger.debug(f"[{self.agent_id}] Failed to cache incident pointer: {e}")
-                else:
-                    logger.error(f"[{self.agent_id}] ❌ Failed to log incident to Flashbulb Memory")
-            else:
-                logger.error(f"[{self.agent_id}] ❌ FlashbulbClient not available")
-        
-        # Update agent's internal performance metrics
-        self.update_performance(success=False, quality=0.0, task_metadata=task_info)
-        
-        return {
-            "agent_id": self.agent_id,
-            "success": success,
-            "salience_score": salience_score,
-            "incident_logged": incident_logged,
-            "error_context": error_context
-        }
-    
-    def _calculate_ml_salience_score(self, task_info: dict, error_context: dict) -> float:
-        """Calculate salience score using ML service with circuit breaker pattern."""
-        try:
-            # Import the salience service client
-            from src.seedcore.ml.serve_app import SalienceServiceClient
-            
-            # Initialize client (will be created once and reused)
-            if not hasattr(self, '_salience_client'):
-                self._salience_client = SalienceServiceClient()
-            
-            # Prepare features for ML model
-            features = self._extract_salience_features(task_info, error_context)
-            
-            # Score using ML service
-            scores = self._salience_client.score_salience([features])
-            
-            if scores and len(scores) > 0:
-                return scores[0]
-            else:
-                logger.warning(f"[{self.agent_id}] No scores returned from ML service, using fallback")
-                return self._fallback_salience_scorer([features])[0]
-                
-        except Exception as e:
-            logger.error(f"[{self.agent_id}] Error in ML salience scoring: {e}, using fallback")
-            return self._fallback_salience_scorer([self._extract_salience_features(task_info, error_context)])[0]
-    
-    def _extract_salience_features(self, task_info: dict, error_context: dict) -> dict:
-        """Extract features for salience scoring from task and error context."""
-        # Get current system state
-        heartbeat = self.get_heartbeat()
-        performance_metrics = heartbeat.get('performance_metrics', {})
-        
-        # Extract features for ML model
-        features = {
-            # Task-related features
-            'task_risk': task_info.get('risk', 0.5),
-            'failure_severity': 1.0,  # High severity for task failures
-            'task_complexity': task_info.get('complexity', 0.5),
-            'user_impact': task_info.get('user_impact', 0.5),
-            'business_criticality': task_info.get('business_criticality', 0.5),
-            
-            # Agent-related features
-            'agent_capability': performance_metrics.get('capability_score_c', 0.5),
-            'agent_memory_util': performance_metrics.get('mem_util', 0.0),
-            
-            # System-related features (from energy state)
-            'system_load': self._get_system_load(),
-            'memory_usage': self._get_memory_usage(),
-            'cpu_usage': self._get_cpu_usage(),
-            'response_time': self._get_response_time(),
-            'error_rate': self._get_error_rate(),
-            
-            # Error context features
-            'error_code': error_context.get('code', 500),
-            'error_type': self._classify_error_type(error_context.get('reason', ''))
-        }
-        
-        return features
     
     def _get_system_load(self) -> float:
         """Get current system load from energy state."""
@@ -1913,6 +1883,10 @@ class RayAgent:
         self.task_history.clear()
         self.capability_score = 0.5
         self.mem_util = 0.0
+        try:
+            self.state.reset_rolling()
+        except Exception:
+            pass
         self.memory_writes = 0
         self.memory_hits_on_writes = 0
         self.salient_events_logged = 0

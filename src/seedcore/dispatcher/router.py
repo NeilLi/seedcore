@@ -19,6 +19,7 @@ Routing policy (aligned with seedcore.models.cognitive.DecisionKind):
 
 import os
 import logging
+from datetime import datetime, timezone
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Union
 from dataclasses import dataclass
@@ -28,6 +29,73 @@ from seedcore.serve.base_client import BaseServiceClient, CircuitBreaker, RetryC
 from seedcore.models.cognitive import DecisionKind, CognitiveType
 from seedcore.models.result_schema import create_cognitive_result, create_error_result
 from seedcore.serve.cognitive_client import CognitiveServiceClient
+
+
+def _ensure_routing_envelope(task_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Guarantee task_data['params']['routing'] exists and contains mirrored
+    fields if the caller only set top-level hints. Safe no-op otherwise.
+    """
+    params = task_data.setdefault("params", {})
+    routing = params.setdefault("routing", {})
+
+    mirrors = {
+        "required_specialization": task_data.get("required_specialization"),
+        "desired_skills": task_data.get("desired_skills"),
+        "tool_calls": task_data.get("tool_calls"),
+        "hints": {
+            "min_capability": task_data.get("min_capability"),
+            "max_mem_util": task_data.get("max_mem_util"),
+            "priority": task_data.get("priority"),
+            "deadline_at": task_data.get("deadline_at"),
+            "ttl_seconds": task_data.get("ttl_seconds"),
+        },
+        "v": 1,
+    }
+
+    for key, value in mirrors.items():
+        if value is None:
+            continue
+        if key == "hints":
+            hints = routing.setdefault("hints", {})
+            for hint_key, hint_val in value.items():
+                if hint_val is not None:
+                    hints[hint_key] = hint_val
+        else:
+            routing[key] = value
+    return task_data
+
+
+def _attach_routing_decision(
+    result: Dict[str, Any],
+    agent_id: Optional[str],
+    score: Optional[float],
+) -> None:
+    """Add router decision info into result.meta.routing_decision."""
+    meta = result.setdefault("meta", {})
+    routing_decision = meta.setdefault("routing_decision", {})
+    if agent_id:
+        routing_decision["selected_agent_id"] = agent_id
+    if score is not None:
+        routing_decision["router_score"] = score
+    routing_decision["routed_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def _attach_exec_metrics(
+    result: Dict[str, Any],
+    started_at: datetime,
+    attempt: int = 1,
+) -> None:
+    """Attach execution timing metadata into result.meta.exec."""
+    finished_at = datetime.now(timezone.utc)
+    latency_ms = int((finished_at - started_at).total_seconds() * 1000)
+    meta = result.setdefault("meta", {})
+    meta["exec"] = {
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "latency_ms": latency_ms,
+        "attempt": attempt,
+    }
 
 
 def _wrap_cognitive_response(
@@ -261,6 +329,10 @@ class OrganismRouter(Router):
             if correlation_id:
                 task_data["correlation_id"] = correlation_id
 
+            task_data = _ensure_routing_envelope(task_data)
+
+            started_at = datetime.now(timezone.utc)
+
             task_id = task_data.get("task_id", "unknown")
             logger.debug(f"Routing task via Organism: {task_id}")
 
@@ -352,16 +424,28 @@ class OrganismRouter(Router):
             # - fast_path → direct success (FastPathResult)
             # - escalated → already decomposed HGNN plan (EscalatedResult)
             # - error     → pass it along
-            return execute_result
+            result = execute_result
 
         except Exception as e:
             logger.error(f"OrganismRouter failed to route task: {e}")
-            return {
+            result = {
                 "kind": DecisionKind.ERROR.value,
                 "success": False,
                 "error": str(e),
                 "path": "organism_error"
             }
+
+        selected_agent = (
+            result.get("selected_agent_id")
+            or result.get("meta", {}).get("routing_decision", {}).get("selected_agent_id")
+        )
+        score = (
+            result.get("router_score")
+            or result.get("meta", {}).get("routing_decision", {}).get("router_score")
+        )
+        _attach_routing_decision(result, selected_agent, score)
+        _attach_exec_metrics(result, started_at, attempt=1)
+        return result
 
     async def health_check(self) -> Dict[str, Any]:
         """Check Organism service health."""
@@ -482,6 +566,10 @@ class CoordinatorHttpRouter(Router):
             if correlation_id:
                 task_data["correlation_id"] = correlation_id
 
+            task_data = _ensure_routing_envelope(task_data)
+
+            started_at = datetime.now(timezone.utc)
+
             task_id = task_data.get("task_id", "unknown")
             logger.info(f"Routing task via Coordinator HTTP: {task_id}")
 
@@ -517,19 +605,16 @@ class CoordinatorHttpRouter(Router):
                         correlation_id=correlation_id
                     )
                     await fast_router.close()
-                    return fast_res
+                    result = fast_res
 
                 except Exception as handoff_err:
                     logger.warning(
                         f"Fast-path delegation failed for task {task_id}: {handoff_err}"
                     )
-                    result["warning"] = (
+                    result.setdefault("warnings", []).append(
                         f"Fast-path delegation failed: {handoff_err}"
                     )
-                    return result
-
-            # 3. COGNITIVE → delegate directly to CognitiveService (planner path)
-            if decision_kind == DecisionKind.COGNITIVE.value:
+            elif decision_kind == DecisionKind.COGNITIVE.value:
                 logger.info(
                     f"Task {task_id}: Cognitive planning requested; delegating to CognitiveService (RAG + Plan)."
                 )
@@ -538,57 +623,64 @@ class CoordinatorHttpRouter(Router):
                         logger.error(
                             f"Task {task_id}: CognitiveServiceClient is not initialized. Cannot delegate."
                         )
-                        result["warning"] = "CognitiveServiceClient not available"
-                        return result
+                        result.setdefault("warnings", []).append(
+                            "CognitiveServiceClient not available"
+                        )
+                    else:
+                        input_data = {
+                            "task_description": task_data.get("description", "No description provided."),
+                            "agent_capabilities": {},
+                            "available_resources": {},
+                        }
 
-                    input_data = {
-                        "task_description": task_data.get("description", "No description provided."),
-                        "agent_capabilities": {},
-                        "available_resources": {},
-                    }
+                        meta = {
+                            "task_id": task_id,
+                            "correlation_id": correlation_id,
+                        }
 
-                    meta = {
-                        "task_id": task_id,
-                        "correlation_id": correlation_id,
-                    }
-
-                    cog_res = await self.cognitive_client.execute_async(
-                        agent_id=task_data.get("agent_id", f"dispatcher_planner_{task_id}"),
-                        cog_type=CognitiveType.TASK_PLANNING,
-                        decision_kind=DecisionKind.COGNITIVE,
-                        input_data=input_data,
-                        meta=meta,
-                    )
-                    return self._wrap_cognitive_response(
-                        task_data=task_data,
-                        correlation_id=correlation_id,
-                        cog_res=cog_res,
-                    )
+                        cog_res = await self.cognitive_client.execute_async(
+                            agent_id=task_data.get("agent_id", f"dispatcher_planner_{task_id}"),
+                            cog_type=CognitiveType.TASK_PLANNING,
+                            decision_kind=DecisionKind.COGNITIVE,
+                            input_data=input_data,
+                            meta=meta,
+                        )
+                        result = _wrap_cognitive_response(
+                            task_data=task_data,
+                            correlation_id=correlation_id,
+                            cog_res=cog_res,
+                        )
 
                 except Exception as cog_err:
                     logger.error(
                         f"CognitiveService delegation failed for task {task_id}: {cog_err}",
                         exc_info=True
                     )
-                    result["warning"] = (
+                    result.setdefault("warnings", []).append(
                         f"CognitiveService delegation failed: {cog_err}"
                     )
                     result["success"] = False
                     result["error"] = f"CognitiveService delegation failed: {cog_err}"
-                    return result
-
-            # 4. Otherwise: "hgnn" (already planned multi-step),
-            #               "error", or anything unknown → return as-is.
-            return result
-
         except Exception as e:
             logger.error(f"CoordinatorHttpRouter failed to route task: {e}")
-            return {
+            result = {
                 "kind": DecisionKind.ERROR.value,
                 "success": False,
                 "error": str(e),
                 "path": "coordinator_http_error"
             }
+
+        selected_agent = (
+            result.get("selected_agent_id")
+            or result.get("meta", {}).get("routing_decision", {}).get("selected_agent_id")
+        )
+        score = (
+            result.get("router_score")
+            or result.get("meta", {}).get("routing_decision", {}).get("router_score")
+        )
+        _attach_routing_decision(result, selected_agent, score)
+        _attach_exec_metrics(result, started_at, attempt=1)
+        return result
 
     async def health_check(self) -> Dict[str, Any]:
         """Check Coordinator service health."""
