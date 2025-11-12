@@ -22,21 +22,21 @@ IMPORTANT (Ray client):
 - Use actor handles for information; avoid state APIs
 """
 
-from seedcore.logging_setup import setup_logging
-setup_logging(app_name="seedcore.organism")
+from __future__ import annotations
 
-import yaml
-import logging
+
+import yaml  # pyright: ignore[reportMissingModuleSource]
+
 import asyncio
 import time
-import ray
+import ray  # pyright: ignore[reportMissingImports]
 import os
 import concurrent.futures
 import numpy as np
 import traceback
 import random
 import uuid
-import httpx
+import httpx  # pyright: ignore[reportMissingImports]
 import json
 import contextlib
 from pathlib import Path
@@ -44,11 +44,11 @@ from typing import Dict, List, Any, Optional, NamedTuple, Tuple, Union
 
 from .base import Organ
 from .tier0 import tier0_manager
+from ..models import TaskPayload
+from seedcore.agents.roles.specialization import Specialization
 
-logger = logging.getLogger(__name__)
-
-from seedcore.logging_setup import ensure_serve_logger
-from seedcore.models import TaskPayload
+from seedcore.logging_setup import setup_logging, ensure_serve_logger
+setup_logging(app_name="seedcore.organism")
 
 logger = ensure_serve_logger("seedcore.OrganismManager", level="DEBUG")
 
@@ -281,6 +281,7 @@ class OrganismManager:
 
     def __init__(self, config_path: str = "src/seedcore/config/defaults.yaml"):
         self.organs: Dict[str, ray.actor.ActorHandle] = {}
+        self.specialization_to_organ: Dict[Specialization, str] = {}
         self.agent_to_organ_map: Dict[str, str] = {}
         self.organ_configs: List[Dict[str, Any]] = []
         self._load_config(config_path)
@@ -395,6 +396,28 @@ class OrganismManager:
                 e,
             )
             raise
+
+    async def _call_actor_method(
+        self,
+        actor_handle: Any,
+        method_name: str,
+        *args,
+        timeout: Optional[float] = None,
+        **kwargs,
+    ) -> Any:
+        """Invoke a Ray actor method or coroutine-friendly mock."""
+        method = getattr(actor_handle, method_name, None)
+        if method is None:
+            raise AttributeError(f"{actor_handle!r} has no attribute '{method_name}'")
+
+        if hasattr(method, "remote"):
+            remote_call = method.remote(*args, **kwargs)
+            return await self._async_ray_get(remote_call, timeout=timeout or 30.0)
+
+        result = method(*args, **kwargs)
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
 
     async def get_agent_handle(self, agent_name: str) -> Optional[ray.actor.ActorHandle]:
         """Find a RayAgent actor handle by explicitly looking in the correct namespace."""
@@ -1087,26 +1110,26 @@ class OrganismManager:
                 logger.error(f"❌ Graph-based routing failed: {e}; falling back")
         
         # Enhanced routing based on task type (Migration 007+)
-        ttype = task.get("type", "").lower()
+        task_type = task.get("type", "").lower()
         
         # Route graph tasks to graph dispatcher if available
-        if ttype in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2", 
+        if task_type in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2", 
                      "graph_sync_nodes", "graph_fact_embed", "graph_fact_query"):
             if "graph_dispatcher" in self.organs:
                 return await self.execute_task_on_organ("graph_dispatcher", task)
         
         # Route fact operations to utility organ if available
-        if ttype in ("fact_search", "fact_store"):
+        if task_type in ("fact_search", "fact_store"):
             if "utility_organ_1" in self.organs:
                 return await self.execute_task_on_organ("utility_organ_1", task)
         
         # Route resource management to utility organ if available
-        if ttype in ("artifact_manage", "capability_manage", "memory_cell_manage"):
+        if task_type in ("artifact_manage", "capability_manage", "memory_cell_manage"):
             if "utility_organ_1" in self.organs:
                 return await self.execute_task_on_organ("utility_organ_1", task)
         
         # Route agent layer management to utility organ if available
-        if ttype in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
+        if task_type in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
             if "utility_organ_1" in self.organs:
                 return await self.execute_task_on_organ("utility_organ_1", task)
         
@@ -1117,30 +1140,49 @@ class OrganismManager:
     # -------------------------------------------------------------------------
     # Incoming task handler (local-only)
     # -------------------------------------------------------------------------
-    async def handle_incoming_task(self, task: Dict[str, Any], app_state=None) -> Dict[str, Any]:
+    async def handle_incoming_task(self, task: Dict[str, Any], app_state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Unified handler for incoming tasks addressed to the Organism (local).
         - Prefer builtin handlers (registered on app_state).
         - Expose local API operations for direct control.
         """
-        task_id = task.get('id') or task.get('task_id', 'unknown')
+        task_obj: TaskPayload
+        original_payload: Dict[str, Any] = {}
+
+        if isinstance(task, TaskPayload):
+            task_obj = task
+            original_payload = task.model_dump()
+        else:
+            if isinstance(task, dict):
+                original_payload = dict(task)
+            try:
+                source_payload = task if isinstance(task, dict) else task.model_dump()  # type: ignore[call-arg]
+                task_obj = TaskPayload.from_db(source_payload)
+            except Exception as exc:
+                logger.error(f"[OrganismManager] ❌ Failed to parse task payload: {exc}. Payload: {task}")
+                return {"success": False, "error": f"Invalid task payload: {exc}"}
+
+        task_id = task_obj.task_id
+        task_type = (task_obj.type or "").strip().lower()
+        params = dict(task_obj.params or {})
+        domain_value = task_obj.domain or "None"
+
         logger.info(f"[OrganismManager] 🎯 Received task {task_id}")
-        domain_value = task.get('domain') if task.get('domain') is not None else "None"
-        logger.info(f"[OrganismManager] 📋 Task details: type={task.get('type')}, domain={domain_value}")
+        logger.info(f"[OrganismManager] 📋 Task details: type={task_type}, domain={domain_value}")
+        try:
+            pretty_payload = task_obj.model_dump_json(indent=2)
+        except Exception:
+            pretty_payload = str(task_obj.model_dump())
+        print(f"[OrganismManager] Received task {task_id} with payload={pretty_payload}")
 
-        print(f"[OrganismManager] Received task {task_id} with payload={task}")
-
-        ttype = (task.get("type") or task.get("task_type") or "").strip().lower()
-        task["type"] = ttype  # normalize
-        logger.info(f"[OrganismManager] 🔍 Normalized task type: '{ttype}'")
-
-        if not ttype:
+        if not task_type:
             logger.error(f"[OrganismManager] ❌ Task {task_id} missing required type field")
             return {"success": False, "error": "task.type is required"}
 
+        logger.info(f"[OrganismManager] 🔍 Normalized task type: '{task_type}'")
+
         # Enhanced parameter validation for new node types (Migration 007+)
-        params = task.get("params", {})
-        if ttype in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2", "graph_sync_nodes"):
+        if task_type in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2", "graph_sync_nodes"):
             # Validate graph task parameters
             required_params = ["start_node_ids", "k"]
             for param in required_params:
@@ -1155,49 +1197,66 @@ class OrganismManager:
                 if param in params and params[param]:
                     logger.info(f"[OrganismManager] 📋 Graph task {task_id} includes {param}: {len(params[param])} items")
         
-        elif ttype in ("graph_fact_embed", "graph_fact_query"):
+        elif task_type in ("graph_fact_embed", "graph_fact_query"):
             # Validate fact task parameters
             if "start_fact_ids" not in params:
                 logger.warning(f"[OrganismManager] ⚠️ Fact task {task_id} missing start_fact_ids parameter")
         
-        elif ttype in ("fact_search", "fact_store"):
+        elif task_type in ("fact_search", "fact_store"):
             # Validate fact operation parameters
-            if ttype == "fact_search" and "query" not in params:
+            if task_type == "fact_search" and "query" not in params:
                 logger.warning(f"[OrganismManager] ⚠️ Fact search task {task_id} missing query parameter")
-            elif ttype == "fact_store" and "text" not in params:
+            elif task_type == "fact_store" and "text" not in params:
                 logger.warning(f"[OrganismManager] ⚠️ Fact store task {task_id} missing text parameter")
         
-        elif ttype in ("artifact_manage", "capability_manage", "memory_cell_manage"):
+        elif task_type in ("artifact_manage", "capability_manage", "memory_cell_manage"):
             # Validate resource management parameters
             if "action" not in params:
                 logger.warning(f"[OrganismManager] ⚠️ Resource management task {task_id} missing action parameter")
         
-        elif ttype in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
+        elif task_type in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
             # Validate agent layer management parameters
             if "action" not in params:
                 logger.warning(f"[OrganismManager] ⚠️ Agent layer management task {task_id} missing action parameter")
 
         # 1) Builtins (app_state.builtin_task_handlers)
-        logger.info(f"[OrganismManager] 🔍 Checking builtin handlers for '{ttype}'")
+        logger.info(f"[OrganismManager] 🔍 Checking builtin handlers for '{task_type}'")
         if app_state is not None:
-            handlers = getattr(app_state, "builtin_task_handlers", {}) or {}
+            if isinstance(app_state, dict):
+                handlers = app_state.get("builtin_task_handlers", {}) or {}
+            else:
+                handlers = getattr(app_state, "builtin_task_handlers", {}) or {}
+                if not isinstance(handlers, dict):
+                    handlers = {}
             logger.info(f"[OrganismManager] 📦 Available builtin handlers: {list(handlers.keys())}")
-            handler = handlers.get(ttype)
+            handler = handlers.get(task_type)
             if callable(handler):
                 try:
-                    out = handler() if task.get("params") is None else handler(**task.get("params", {}))
+                    handler_kwargs = params or {}
+                    out = handler(**handler_kwargs) if handler_kwargs else handler()
                     if asyncio.iscoroutine(out):
                         out = await out
-                    logger.info(f"[OrganismManager] ✅ Builtin handler for '{ttype}' completed")
+                    logger.info(f"[OrganismManager] ✅ Builtin handler for '{task_type}' completed")
                     return {"success": True, "path": "builtin", "result": out}
                 except Exception as e:
-                    logger.exception(f"[OrganismManager] ❌ Builtin task '{ttype}' failed: {e}")
+                    logger.exception(f"[OrganismManager] ❌ Builtin task '{task_type}' failed: {e}")
                     return {"success": False, "path": "builtin", "error": str(e)}
         else:
-            logger.info(f"[OrganismManager] ⚠️ No app_state provided, skipping builtin handlers")
+            logger.info("[OrganismManager] ⚠️ No app_state provided, skipping builtin handlers")
 
         # 2) Local API handlers (for direct organism control)
-        if ttype == "get_organism_status":
+        task_to_delegate = task_obj.model_dump()
+        task_to_delegate.setdefault("task_id", task_id)
+        task_to_delegate.setdefault("id", original_payload.get("id", task_id))
+        task_to_delegate["type"] = task_type or task_obj.type
+
+        for key, value in original_payload.items():
+            if key not in task_to_delegate:
+                task_to_delegate[key] = value
+
+        specialization_hint = (task_obj.required_specialization or params.get("required_specialization") or "").strip()
+
+        if task_type == "get_organism_status":
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
@@ -1206,13 +1265,12 @@ class OrganismManager:
             except Exception as e:
                 return {"success": False, "path": "api_handler", "error": str(e)}
 
-        elif ttype == "execute_on_organ":
+        elif task_type == "execute_on_organ":
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
-                params = task.get("params", {})
                 organ_id = params.get("organ_id")
-                task_data = params.get("task_data", {})
+                task_data = params.get("task_data", task_to_delegate)
                 if not organ_id:
                     return {"success": False, "error": "organ_id is required"}
                 result = await self.execute_task_on_organ(organ_id, task_data)
@@ -1220,18 +1278,17 @@ class OrganismManager:
             except Exception as e:
                 return {"success": False, "path": "api_handler", "error": str(e)}
 
-        elif ttype == "execute_on_random_organ":
+        elif task_type == "execute_on_random_organ":
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
-                params = task.get("params", {})
-                task_data = params.get("task_data", {})
+                task_data = params.get("task_data", task_to_delegate)
                 result = await self.execute_task_on_random_organ(task_data)
                 return {"success": True, "path": "api_handler", "result": result}
             except Exception as e:
                 return {"success": False, "path": "api_handler", "error": str(e)}
 
-        elif ttype == "get_organism_summary":
+        elif task_type == "get_organism_summary":
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
@@ -1245,7 +1302,7 @@ class OrganismManager:
                     organ_handle = self.get_organ_handle(organ_id)
                     if organ_handle:
                         try:
-                            status = await self._async_ray_get(organ_handle.get_status.remote())
+                            status = await self._call_actor_method(organ_handle, "get_status")
                             summary["organs"][organ_id] = status
                         except Exception as e:
                             summary["organs"][organ_id] = {"error": str(e)}
@@ -1253,7 +1310,7 @@ class OrganismManager:
             except Exception as e:
                 return {"success": False, "path": "api_handler", "error": str(e)}
 
-        elif ttype == "initialize_organism":
+        elif task_type == "initialize_organism":
             try:
                 if self._initialized:
                     return {"success": True, "path": "api_handler", "result": "Organism already initialized"}
@@ -1262,7 +1319,7 @@ class OrganismManager:
             except Exception as e:
                 return {"success": False, "path": "api_handler", "error": str(e)}
 
-        elif ttype == "shutdown_organism":
+        elif task_type == "shutdown_organism":
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
@@ -1271,7 +1328,7 @@ class OrganismManager:
             except Exception as e:
                 return {"success": False, "path": "api_handler", "error": str(e)}
 
-        elif ttype == "recover_stale_tasks":
+        elif task_type == "recover_stale_tasks":
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
@@ -1280,7 +1337,7 @@ class OrganismManager:
             except Exception as e:
                 return {"success": False, "path": "api_handler", "error": str(e)}
 
-        elif ttype == "debug_namespace":
+        elif task_type == "debug_namespace":
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
@@ -1296,7 +1353,7 @@ class OrganismManager:
                     try:
                         expected_namespace = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
                         debug_info["organ_namespaces"][organ_id] = expected_namespace
-                        status = await self._async_ray_get(organ_handle.get_status.remote(), timeout=5.0)
+                        status = await self._call_actor_method(organ_handle, "get_status", timeout=5.0)
                         debug_info["organs"][organ_id] = {"status": "responsive", "status_data": status}
                     except Exception as e:
                         debug_info["organs"][organ_id] = {"status": "error", "error": str(e)}
@@ -1304,77 +1361,117 @@ class OrganismManager:
             except Exception as e:
                 return {"success": False, "path": "api_handler", "error": str(e)}
 
+        elif specialization_hint:
+            if not self._initialized:
+                return {"success": False, "error": "Organism not initialized"}
+
+            spec_enum: Optional[Specialization] = None
+            normalized = specialization_hint.strip()
+            if normalized:
+                try:
+                    spec_enum = Specialization(normalized)
+                except ValueError:
+                    try:
+                        spec_enum = Specialization[normalized.upper()]
+                    except (KeyError, AttributeError):
+                        spec_enum = None
+
+            if spec_enum is None:
+                logger.error(f"[OrganismManager] ❌ Unknown specialization: {specialization_hint}")
+                return {
+                    "success": False,
+                    "path": "specialization_router",
+                    "error": f"Unknown specialization: {specialization_hint}",
+                }
+
+            organ_id = self.specialization_to_organ.get(spec_enum)
+            if not organ_id:
+                logger.error(f"[OrganismManager] ❌ No organ registered for specialization '{specialization_hint}'")
+                return {
+                    "success": False,
+                    "path": "specialization_router",
+                    "error": f"No organ registered to handle specialization: {specialization_hint}",
+                }
+
+            try:
+                logger.info(
+                    "[OrganismManager] 🔀 Routing task %s (type=%s, specialization=%s) to organ %s",
+                    task_id,
+                    task_type,
+                    spec_enum.value,
+                    organ_id,
+                )
+                result = await self.execute_task_on_organ(organ_id, task_to_delegate)
+                return {"success": True, "path": "specialization_router", "result": result}
+            except Exception as exc:
+                logger.exception(f"[OrganismManager] ❌ Failed to route work task {task_id}: {exc}")
+                return {
+                    "success": False,
+                    "path": "specialization_router",
+                    "error": str(exc),
+                }
+
         # Graph task handlers (Migration 007+)
-        elif ttype in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2", "graph_sync_nodes"):
+        elif task_type in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2", "graph_sync_nodes"):
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
-                # Route graph tasks to graph dispatcher
-                params = task.get("params", {})
                 organ_id = params.get("organ_id", "graph_dispatcher")
-                task_data = params.get("task_data", task)
+                task_data = params.get("task_data", task_to_delegate)
                 result = await self.execute_task_on_organ(organ_id, task_data)
                 return {"success": True, "path": "graph_handler", "result": result}
             except Exception as e:
                 return {"success": False, "path": "graph_handler", "error": str(e)}
 
         # Facts system handlers (Migration 009)
-        elif ttype in ("graph_fact_embed", "graph_fact_query"):
+        elif task_type in ("graph_fact_embed", "graph_fact_query"):
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
-                # Route fact tasks to graph dispatcher
-                params = task.get("params", {})
                 organ_id = params.get("organ_id", "graph_dispatcher")
-                task_data = params.get("task_data", task)
+                task_data = params.get("task_data", task_to_delegate)
                 result = await self.execute_task_on_organ(organ_id, task_data)
                 return {"success": True, "path": "fact_handler", "result": result}
             except Exception as e:
                 return {"success": False, "path": "fact_handler", "error": str(e)}
 
-        elif ttype in ("fact_search", "fact_store"):
+        elif task_type in ("fact_search", "fact_store"):
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
-                # Route fact operations to utility organ
-                params = task.get("params", {})
                 organ_id = params.get("organ_id", "utility_organ_1")
-                task_data = params.get("task_data", task)
+                task_data = params.get("task_data", task_to_delegate)
                 result = await self.execute_task_on_organ(organ_id, task_data)
                 return {"success": True, "path": "fact_handler", "result": result}
             except Exception as e:
                 return {"success": False, "path": "fact_handler", "error": str(e)}
 
         # Resource management handlers (Migration 007)
-        elif ttype in ("artifact_manage", "capability_manage", "memory_cell_manage"):
+        elif task_type in ("artifact_manage", "capability_manage", "memory_cell_manage"):
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
-                # Route resource management to utility organ
-                params = task.get("params", {})
                 organ_id = params.get("organ_id", "utility_organ_1")
-                task_data = params.get("task_data", task)
+                task_data = params.get("task_data", task_to_delegate)
                 result = await self.execute_task_on_organ(organ_id, task_data)
                 return {"success": True, "path": "resource_handler", "result": result}
             except Exception as e:
                 return {"success": False, "path": "resource_handler", "error": str(e)}
 
         # Agent layer management handlers (Migration 008)
-        elif ttype in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
+        elif task_type in ("model_manage", "policy_manage", "service_manage", "skill_manage"):
             try:
                 if not self._initialized:
                     return {"success": False, "error": "Organism not initialized"}
-                # Route agent layer management to utility organ
-                params = task.get("params", {})
                 organ_id = params.get("organ_id", "utility_organ_1")
-                task_data = params.get("task_data", task)
+                task_data = params.get("task_data", task_to_delegate)
                 result = await self.execute_task_on_organ(organ_id, task_data)
                 return {"success": True, "path": "agent_layer_handler", "result": result}
             except Exception as e:
                 return {"success": False, "path": "agent_layer_handler", "error": str(e)}
 
         # No local handler
-        return {"success": False, "path": "none", "error": f"No local handler for task.type='{ttype}'"}
+        return {"success": False, "path": "none", "error": f"No local handler for task.type='{task_type}'"}
 
     # -------------------------------------------------------------------------
     # Initialize / shutdown
@@ -1393,6 +1490,7 @@ class OrganismManager:
             return
 
         logger.info("🚀 Initializing the Cognitive Organism...")
+        self.specialization_to_organ.clear()
 
         if not ray.is_initialized():
             raise RuntimeError("Ray is not initialized. Ensure connection before initialize_organism().")
@@ -1501,6 +1599,7 @@ class OrganismManager:
         
         # Note: detached Ray actors persist until explicitly terminated (out of scope here)
         self._initialized = False
+        self.specialization_to_organ.clear()
         logger.info("✅ Organism shutdown complete")
 
     async def _reconcile_loop(self):

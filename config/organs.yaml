@@ -1,0 +1,69 @@
+# SeedCore Organism Configuration (v2)
+#
+# This file defines the structure of the organism, which organs to spawn,
+# and which agent specializations each organ is responsible for.
+# The OrganismManager reads this at startup to build its routing map.
+
+seedcore:
+  organism:
+    
+    schema_version: 2
+    default_actor_class: "seedcore.organs.tier0.Tier0MemoryManager"
+    
+    # A list of Organs to spawn.
+    # The OrganismManager will iterate this list, spawn each organ actor,
+    # and then spawn the defined agents within it.
+    organs:
+      
+      # === Guest Relations Organ ===
+      - id: "guest_relations_organ"
+        description: "Handles all direct guest interaction, experience, and concierge."
+        # (Optional) specify the actor class for this organ
+        # actor_class: "seedcore.managers.tier0.Tier0MemoryManager"
+        agents:
+          - specialization: "GEA"  # guest_empathy_agent
+            count: 3
+          - specialization: "PEA"  # proactive_experience_agent
+            count: 1
+          - specialization: "RCD"  # robotic_concierge_dispatcher
+            count: 2
+
+      # === Security Organ ===
+      - id: "security_organ"
+        description: "Manages physical and digital asset protection, access, and auditing."
+        agents:
+          - specialization: "AAC"  # asset_access_controller
+            count: 2
+          - specialization: "DSS"  # digital_security_sentinel
+            count: 1
+
+      # === F&B Organ ===
+      - id: "fnb_organ"
+        description: "Manages all culinary, dietary, inventory, and kitchen automation."
+        agents:
+          - specialization: "CIS"  # culinary_innovation_scout
+            count: 1
+          - specialization: "RKO"  # robotic_kitchen_orchestrator
+            count: 1
+
+      # === Engineering & Operations Organ ===
+      - id: "engineering_organ"
+        description: "Manages building health, IoT sensors, and maintenance."
+        agents:
+          - specialization: "BHM"  # building_health_monitor
+            count: 1
+          - specialization: "RMD"  # robotic_maintenance_dispatcher
+            count: 1
+            
+      # === Meta-System Organ (Utility, Learning, etc.) ===
+      - id: "meta_system_organ"
+        description: "Handles system-level learning, crisis response, and observation."
+        agents:
+          - specialization: "IRS"  # incident_resolution_specialist
+            count: 1
+          - specialization: "ULA"  # utility_learning_agent
+            count: 1
+          - specialization: "OBS"  # observer_agent
+            count: 1
+          - specialization: "GENERALIST" # General-purpose agents
+            count: 2

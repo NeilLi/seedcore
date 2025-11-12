@@ -11,13 +11,11 @@ import os
 import time
 import asyncio
 import uuid
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 
 import ray  # type: ignore[reportMissingImports]
 from ray import serve  # type: ignore[reportMissingImports]
 from fastapi import FastAPI  # type: ignore[reportMissingImports]
-from pydantic import BaseModel  # type: ignore[reportMissingImports]
-
 # Ensure project roots are importable (mirrors original file behavior)
 import sys
 sys.path.insert(0, '/app')
@@ -26,6 +24,16 @@ sys.path.insert(0, '/app/src')
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.organs.organism_manager import OrganismManager
 from seedcore.models import TaskPayload
+from seedcore.models.organism import (
+    BulkResolveRequest,
+    BulkResolveResponse,
+    BulkResolveResult,
+    OrganismRequest,
+    OrganismResponse,
+    OrganismStatusResponse,
+    ResolveRouteRequest,
+    ResolveRouteResponse,
+)
 
 # Configure logging for driver process (script that invokes serve.run)
 setup_logging(app_name="seedcore.organism_service.driver")
@@ -34,73 +42,6 @@ logger = ensure_serve_logger("seedcore.organism_service", level="DEBUG")
 # --- Configuration ---
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
-
-
-# --- Request/Response Models ---
-class OrganismRequest(BaseModel):
-    task_type: str
-    params: Dict[str, Any] | None = None
-    description: str | None = None
-    domain: str | None = None
-    drift_score: float | None = None
-    app_state: Dict[str, Any] | None = None
-
-
-class OrganismResponse(BaseModel):
-    success: bool
-    result: Dict[str, Any]
-    error: Optional[str] = None
-    task_type: Optional[str] = None
-
-
-class OrganismStatusResponse(BaseModel):
-    status: str
-    organism_initialized: bool
-    organism_info: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-
-
-# Routing models
-class ResolveRouteRequest(BaseModel):
-    task: Dict[str, Any]
-    preferred_logical_id: Optional[str] = None
-
-
-class ResolveRouteResponse(BaseModel):
-    logical_id: str
-    resolved_from: str
-    epoch: str
-    instance_id: Optional[str] = None
-
-
-class BulkResolveItem(BaseModel):
-    index: Optional[int] = None  # Optional for key-based de-duplication
-    key: Optional[str] = None    # For de-duplication: "type|domain"
-    type: str
-    domain: Optional[str] = None
-    preferred_logical_id: Optional[str] = None
-
-
-class BulkResolveRequest(BaseModel):
-    tasks: List[BulkResolveItem]
-
-
-class BulkResolveResult(BaseModel):
-    index: Optional[int] = None  # Optional for key-based responses
-    key: Optional[str] = None    # For de-duplication responses
-    logical_id: Optional[str] = None
-    resolved_from: Optional[str] = None
-    epoch: Optional[str] = None
-    instance_id: Optional[str] = None
-    status: str = "ok"  # "ok" | "fallback" | "no_active_instance" | "unknown_type" | "error"
-    error: Optional[str] = None
-    cache_hit: bool = False
-    cache_age_ms: Optional[float] = None
-
-
-class BulkResolveResponse(BaseModel):
-    epoch: str
-    results: List[BulkResolveResult]
 
 
 # --- FastAPI app for ingress ---
@@ -219,37 +160,32 @@ class OrganismService:
         Handle incoming tasks through the organism manager.
         This is the main endpoint that replaces the plain Ray actor task handling.
         """
-        task_id = getattr(request, 'id', 'unknown')
+        task_id = request.task_id or getattr(request, "id", "unknown")
         self.logger.info(f"[OrganismService] 🎯 Received task {task_id} via HTTP endpoint")
-        self.logger.info(f"[OrganismService] 📋 Task details: type={request.task_type}, domain={request.domain}")
+        task_type = request.type or "general_query"
+        self.logger.info(f"[OrganismService] 📋 Task details: type={task_type}, domain={request.domain}")
 
         try:
-            self.logger.info(f"[OrganismService] 🔧 Checking organism initialization status: {self._initialized}")
+            self.logger.info("[OrganismService] 🔧 Checking organism initialization status...")
             if not self._initialized:
                 self.logger.error(f"[OrganismService] ❌ Organism not initialized for task {task_id}")
                 return OrganismResponse(
                     success=False,
                     result={},
                     error="Organism not initialized",
-                    task_type=request.task_type,
+                    task_type=request.type,
                 )
 
-            # Convert request to task format expected by OrganismManager
-            ttype = request.task_type or "general_query"
-            task = {
-                "type": ttype,
-                "params": request.params or {},
-                "description": request.description or "",
-                "domain": request.domain or "general",
-                "drift_score": request.drift_score or 0.0,
-            }
-            self.logger.info(f"[OrganismService] 🔄 Converted request to task format for {task_id}")
+            # Convert OrganismRequest -> dict without app_state for manager
+            task_data = request.model_dump(exclude={"app_state"})
+            transient_app_state = request.app_state or {}
+            self.logger.info(f"[OrganismService] 🔄 Converted request to task payload for {task_id}")
 
             # Handle the task through the organism manager
             self.logger.info(f"[OrganismService] 🚀 Calling organism_manager.handle_incoming_task for {task_id}")
             result = await self.organism_manager.handle_incoming_task(
-                task,
-                app_state=request.app_state,
+                task_data,
+                app_state=transient_app_state,
             )
             self.logger.info(f"[OrganismService] ✅ Organism manager completed for {task_id}: success={result.get('success')}")
 
@@ -257,15 +193,16 @@ class OrganismService:
             return OrganismResponse(
                 success=result.get("success", True),
                 result=result,
-                task_type=request.task_type,
+                task_type=request.type,
             )
 
         except Exception as e:
+            self.logger.exception(f"[OrganismService] ❌ Unhandled error processing task {task_id}: {e}")
             return OrganismResponse(
                 success=False,
                 result={},
                 error=str(e),
-                task_type=request.task_type,
+                task_type=request.type,
             )
 
     # --- Organism Management Endpoints ---

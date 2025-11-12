@@ -28,9 +28,9 @@ import uuid
 import random
 import signal
 import logging
-from typing import List, Any, TYPE_CHECKING, Dict, Optional, Union
+from typing import Any, TYPE_CHECKING, Dict, Optional, Union
 
-import ray
+import ray  # pyright: ignore[reportMissingImports]
 
 from seedcore.models import TaskPayload
 from ..agents.roles import (
