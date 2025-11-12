@@ -4,31 +4,18 @@ import os
 import math
 import time
 import logging
-import httpx
-from pathlib import Path
+import httpx  # pyright: ignore[reportMissingImports]
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Set, Callable, TypedDict
 
 try:  # Python 3.11+
     from typing import NotRequired  # type: ignore[attr-defined]
 except ImportError:  # Python < 3.11
     from typing_extensions import NotRequired  # type: ignore[assignment]
-from dataclasses import dataclass
-
-from seedcore.serve.base_client import BaseServiceClient, CircuitBreaker, RetryConfig
+from seedcore.serve.base_client import BaseServiceClient
 from seedcore.models.cognitive import DecisionKind
 
 # Import feature extraction functions and shared types
-from ._features import (
-    compute_x1_cache_novelty,
-    compute_x2_ocps,
-    compute_x3_ood,
-    compute_x4_graph_novelty,
-    compute_x5_dep_uncertainty,
-    compute_x6_cost_risk,
-    compute_all_features,
-    normalize_features,
-    OCPSState,  # Import from _features to avoid circular dependency
-)
+from ._features import compute_all_features, OCPSState  # Import from _features to avoid circular dependency
 
 logger = logging.getLogger(__name__)
 
@@ -646,7 +633,7 @@ async def compute_drift_score(
             )
         else:
             # Fallback if method doesn't exist
-            logger.warning(f"[DriftDetector] ML client missing compute_drift_score method, using fallback")
+            logger.warning("[DriftDetector] ML client missing compute_drift_score method, using fallback")
             return compute_fallback_drift_score(task)
         
         logger.debug(f"[DriftDetector] Task {task_id}: ML service response: {response}")

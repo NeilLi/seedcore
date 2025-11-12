@@ -101,7 +101,6 @@ async def route_and_execute(
     )
 
     decision_kind = routing_result["decision_kind"]
-    decision_kind = DecisionKind(routing_result["result"]["kind"])
 
     # HGNN path: execute if config is wired; else return routing result
     if decision_kind == DecisionKind.ESCALATED:
