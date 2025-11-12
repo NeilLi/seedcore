@@ -40,7 +40,7 @@ import httpx
 import json
 import contextlib
 from pathlib import Path
-from typing import Dict, List, Any, Optional, NamedTuple, Tuple
+from typing import Dict, List, Any, Optional, NamedTuple, Tuple, Union
 
 from .base import Organ
 from .tier0 import tier0_manager
@@ -48,6 +48,7 @@ from .tier0 import tier0_manager
 logger = logging.getLogger(__name__)
 
 from seedcore.logging_setup import ensure_serve_logger
+from seedcore.models import TaskPayload
 
 logger = ensure_serve_logger("seedcore.OrganismManager", level="DEBUG")
 
@@ -965,7 +966,7 @@ class OrganismManager:
     def is_initialized(self) -> bool:
         return self._initialized
 
-    async def execute_task_on_organ(self, organ_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_task_on_organ(self, organ_id: str, task: Union[TaskPayload, Dict[str, Any]]) -> Dict[str, Any]:
         """Execute a task on a specific organ with timeout & status handling."""
         if not self._initialized:
             raise RuntimeError("Organism not initialized")
@@ -973,11 +974,54 @@ class OrganismManager:
         if not organ_handle:
             raise ValueError(f"Organ {organ_id} not found")
 
-        task_id = task.get('id', 'unknown')
-        timeout_s = float(task.get("organ_timeout_s", 30.0))
+        # Normalize task into TaskPayload for mirrored routing fields, but preserve extras.
+        extra_fields: Dict[str, Any] = {}
+        organ_timeout_s = 30.0
+
+        if isinstance(task, TaskPayload):
+            task_payload = task
+            task_dict = task_payload.model_dump()
+        elif isinstance(task, dict):
+            raw_task = dict(task)
+            organ_timeout_s = float(raw_task.get("organ_timeout_s", organ_timeout_s))
+            try:
+                task_payload = TaskPayload.from_db(raw_task)
+            except Exception as exc:
+                logger.debug(
+                    "execute_task_on_organ: TaskPayload.from_db fallback for organ %s due to %s",
+                    organ_id,
+                    exc,
+                )
+                fallback_id = raw_task.get("task_id") or raw_task.get("id") or str(uuid.uuid4())
+                task_payload = TaskPayload(
+                    task_id=str(fallback_id),
+                    type=raw_task.get("type") or "unknown_task",
+                    params=raw_task.get("params") or {},
+                    description=raw_task.get("description") or "",
+                    domain=raw_task.get("domain"),
+                    drift_score=float(raw_task.get("drift_score") or 0.0),
+                )
+            task_dict = task_payload.model_dump()
+            extra_fields = {k: v for k, v in raw_task.items() if k not in task_dict}
+        else:
+            raise TypeError(f"Unsupported task payload type: {type(task)}")
+
+        task_id = task_payload.task_id or str(uuid.uuid4())
+        if not task_payload.task_id or task_payload.task_id in ("", "None"):
+            task_payload = task_payload.copy(update={"task_id": task_id})
+            task_dict = task_payload.model_dump()
+
+        # Reapply any extra fields (e.g., organ hints) not represented in TaskPayload.
+        for key, value in extra_fields.items():
+            if key not in task_dict:
+                task_dict[key] = value
+
+        timeout_s = float(task_dict.get("organ_timeout_s", organ_timeout_s))
+        task_dict["organ_timeout_s"] = timeout_s
+        task_dict.setdefault("id", task_id)
 
         try:
-            result = await self._execute_task_with_timeout(organ_handle, task, timeout_s)
+            result = await self._execute_task_with_timeout(organ_handle, task_dict, timeout_s)
             if result["success"]:
                 await self._update_task_status(task_id, "FINISHED", result=result["result"])
             else:

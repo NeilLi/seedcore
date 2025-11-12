@@ -27,6 +27,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from seedcore.logging_setup import ensure_serve_logger
+from ..coordinator.utils import normalize_task_payloads
 
 logger = ensure_serve_logger("seedcore.CognitiveService", level="DEBUG")
 
@@ -656,13 +657,13 @@ class CognitiveService:
                 meta["provider_used"] = config.get("provider", "unknown") if config else "unknown"
                 meta["timeout_seconds"] = timeout_seconds
                 meta["circuit_breaker_state"] = circuit_breaker.state.state if circuit_breaker else "N/A"
-            return result
+            return normalize_task_payloads(result)
         except Exception as e:
             logger.error(f"Error in {depth.value} planning: {e}")
             error_msg = f"Planning error: {str(e)}"
             if circuit_breaker and circuit_breaker.state.state == "OPEN":
                 error_msg += " (Circuit breaker OPEN)"
-            return create_error_result(error_msg, "PROCESSING_ERROR").model_dump()
+            return normalize_task_payloads(create_error_result(error_msg, "PROCESSING_ERROR").model_dump())
 
     def health_check(self) -> Dict[str, Any]:
         try:
@@ -722,12 +723,13 @@ class CognitiveService:
             context: Cognitive context for the task
             use_deep: Deprecated legacy flag. Prefer `meta.decision_kind` on context input_data.
         """
-        input_data = context.input_data or {}
+        input_data_raw = context.input_data or {}
+        input_data = normalize_task_payloads(dict(input_data_raw))
         meta_extra = input_data.get("meta")
         if meta_extra is None:
             meta_extra = {}
             input_data["meta"] = meta_extra
-            context.input_data = input_data
+        context.input_data = input_data
 
         # Support legacy callers passing use_deep flag by projecting into decision_kind
         if use_deep is not None and "decision_kind" not in meta_extra:
@@ -820,7 +822,7 @@ class CognitiveService:
                     result["result"]["meta"]["model_override"] = target_model
                     if meta_extra:
                         result["result"]["meta"].update(meta_extra)
-                return result
+                return normalize_task_payloads(result)
             except Exception as e:
                 logger.warning(
                     "Failed to create temporary core with overrides (provider=%s, model=%s): %s. "
@@ -844,7 +846,7 @@ class CognitiveService:
                             profile_key.value,
                             config.get("provider"),
                         )
-                    
+
                     result = core.forward(context)
                     if isinstance(result, dict):
                         result.setdefault("result", {}).setdefault("meta", {})
@@ -852,7 +854,7 @@ class CognitiveService:
                         result["result"]["meta"]["provider_used"] = config.get("provider", "unknown") if config else "unknown"
                         if meta_extra:
                             result["result"]["meta"].update(meta_extra)
-                    return result
+                    return normalize_task_payloads(result)
                 except Exception as e:
                     logger.error(
                         "Error forwarding cognitive task with %s profile: %s",
@@ -868,14 +870,16 @@ class CognitiveService:
             profile_key.value,
             list(self.cores.keys()),
         )
-        return {
-            "success": False,
-            "result": {},
-            "payload": {},
-            "cog_type": context.cog_type.value,
-            "metadata": {},
-            "error": "No compatible cognitive core for this request (legacy core disabled)",
-        }
+        return normalize_task_payloads(
+            {
+                "success": False,
+                "result": {},
+                "payload": {},
+                "cog_type": context.cog_type.value,
+                "metadata": {},
+                "error": "No compatible cognitive core for this request (legacy core disabled)",
+            }
+        )
 
     def build_fragments_for_synthesis(self, context: 'CognitiveContext', facts: List['Fact'], summary: str) -> List[Dict[str, Any]]:
         # Use multi-profile system if available

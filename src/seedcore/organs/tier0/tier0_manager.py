@@ -24,15 +24,17 @@ setup_logging(app_name="seedcore.Tier0MemoryManager")
 import os
 import ray
 import time
+import uuid
 import asyncio
 import concurrent.futures
 from ...utils.ray_utils import ensure_ray_initialized
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from collections import defaultdict
 import logging
 import json
 
 from ...agents.ray_agent import RayAgent
+from ...models import TaskPayload
 from ...agents.roles import RoleRegistry, DEFAULT_ROLE_REGISTRY, SkillStoreProtocol, NullSkillStore
 from ...ops.energy.optimizer import select_best_agent, score_agent
 from .specs import GraphClient, AgentSpec
@@ -141,6 +143,49 @@ class Tier0MemoryManager:
                     logger.info(f"🔗 Attached {attached} actor(s) from TIER0_ATTACH_ACTORS")
         except Exception as e:
             logger.debug(f"Env-driven attachment skipped: {e}")
+    
+    def _prepare_task_payload(self, task: Union[TaskPayload, Dict[str, Any]]) -> Dict[str, Any]:
+        """Normalize task payloads and preserve additional fields for agent execution."""
+        extra_fields: Dict[str, Any] = {}
+
+        if isinstance(task, TaskPayload):
+            payload = task
+            task_dict = payload.model_dump()
+        elif isinstance(task, dict):
+            raw_task = dict(task)
+            try:
+                payload = TaskPayload.from_db(raw_task)
+            except Exception as exc:
+                logger.debug(
+                    "Tier0MemoryManager: TaskPayload.from_db fallback due to %s; constructing payload directly",
+                    exc,
+                )
+                fallback_id = raw_task.get("task_id") or raw_task.get("id") or uuid.uuid4().hex
+                payload = TaskPayload(
+                    task_id=str(fallback_id),
+                    type=raw_task.get("type") or "unknown_task",
+                    params=raw_task.get("params") or {},
+                    description=raw_task.get("description") or "",
+                    domain=raw_task.get("domain"),
+                    drift_score=float(raw_task.get("drift_score") or 0.0),
+                )
+            task_dict = payload.model_dump()
+            extra_fields = {k: v for k, v in raw_task.items() if k not in task_dict}
+        else:
+            raise TypeError(f"Unsupported task payload type: {type(task)}")
+
+        task_id = payload.task_id or uuid.uuid4().hex
+        if not payload.task_id or payload.task_id in ("", "None"):
+            payload = payload.copy(update={"task_id": task_id})
+            task_dict = payload.model_dump()
+
+        for key, value in extra_fields.items():
+            if key not in task_dict:
+                task_dict[key] = value
+
+        task_dict.setdefault("id", task_id)
+        task_dict.setdefault("task_id", task_id)
+        return task_dict
     
     def create_agent(
         self,
@@ -563,7 +608,7 @@ class Tier0MemoryManager:
             except Exception as e:
                 logger.debug(f"Ray cluster discovery failed: {e}")
     
-    async def execute_task_on_agent(self, agent_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def execute_task_on_agent(self, agent_id: str, task_data: Union[TaskPayload, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
         Asynchronously execute a task on a specific agent.
         
@@ -580,15 +625,16 @@ class Tier0MemoryManager:
             return None
         
         try:
+            prepared_task = self._prepare_task_payload(task_data)
             # ENHANCEMENT: Use async _aget instead of blocking ray.get
-            result = await _aget(agent.execute_task.remote(task_data), timeout=120.0)
+            result = await _aget(agent.execute_task.remote(prepared_task), timeout=120.0)
             logger.info(f"✅ Task executed on agent {agent_id}")
             return result
         except Exception as e:
             logger.error(f"Failed to execute task on agent {agent_id}: {e}")
             return None
     
-    async def execute_task_on_random_agent(self, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def execute_task_on_random_agent(self, task_data: Union[TaskPayload, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
         Asynchronously execute a task on a randomly selected agent.
         
@@ -607,7 +653,7 @@ class Tier0MemoryManager:
         # ENHANCEMENT: Await the async method
         return await self.execute_task_on_agent(agent_id, task_data)
     
-    async def execute_task_on_best_agent(self, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def execute_task_on_best_agent(self, task_data: Union[TaskPayload, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
         Asynchronously executes a task on the most suitable agent based on energy optimization.
         
@@ -625,15 +671,16 @@ class Tier0MemoryManager:
         agent_handles = list(self.agents.values())
         
         try:
+            prepared_task = self._prepare_task_payload(task_data)
             # Use the new energy-aware selection
-            best_agent, predicted_delta_e = select_best_agent(agent_handles, task_data)
+            best_agent, predicted_delta_e = select_best_agent(agent_handles, prepared_task)
             
             if not best_agent:
                 logger.error("Could not select a best agent.")
                 return None
             
             # ENHANCEMENT: Use async _aget for execution and ID get
-            result_task = _aget(best_agent.execute_task.remote(task_data), timeout=120.0)
+            result_task = _aget(best_agent.execute_task.remote(prepared_task), timeout=120.0)
             id_task = _aget(best_agent.get_id.remote())
             
             result, agent_id = await asyncio.gather(result_task, id_task)
@@ -647,7 +694,7 @@ class Tier0MemoryManager:
             return await self.execute_task_on_random_agent(task_data)
 
     # === COA §6: Local GNN-like selection within an organ (fast path Level 4) ===
-    async def execute_task_on_best_of(self, candidate_agent_ids: List[str], task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def execute_task_on_best_of(self, candidate_agent_ids: List[str], task_data: Union[TaskPayload, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
         Asynchronously execute a task on the best agent selected from a provided candidate set.
         Supports OrganismManager's Level-4 local selection (COA §6.2).
@@ -656,11 +703,12 @@ class Tier0MemoryManager:
         if not handles:
             logger.warning("No candidate agents available for constrained best-of selection")
             return None
+        prepared_task = self._prepare_task_payload(task_data)
         try:
-            best_agent, predicted_delta_e = select_best_agent(handles, task_data)
+            best_agent, predicted_delta_e = select_best_agent(handles, prepared_task)
             
             # ENHANCEMENT: Use async _aget for execution and ID get
-            result_task = _aget(best_agent.execute_task.remote(task_data), timeout=120.0)
+            result_task = _aget(best_agent.execute_task.remote(prepared_task), timeout=120.0)
             id_task = _aget(best_agent.get_id.remote())
             
             result, agent_id = await asyncio.gather(result_task, id_task)
@@ -671,9 +719,9 @@ class Tier0MemoryManager:
             import random
             handle = random.choice(handles)
             # ENHANCEMENT: Use async _aget
-            return await _aget(handle.execute_task.remote(task_data), timeout=120.0)
+            return await _aget(handle.execute_task.remote(prepared_task), timeout=120.0)
 
-    async def execute_task_on_organ_best(self, organ_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def execute_task_on_organ_best(self, organ_id: str, task_data: Union[TaskPayload, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
         Convenience: select best agent among those belonging to an organ.
         Assumes standard agent naming: f"{organ_id}_agent_{'{'}i{'}'}".

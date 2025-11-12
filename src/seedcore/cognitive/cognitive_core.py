@@ -42,6 +42,7 @@ import numpy as np
 import dspy
 
 from seedcore.logging_setup import setup_logging
+from ..coordinator.utils import normalize_task_payloads
 
 try:
     from ..ml.driver.nim_retrieval import NimRetrievalHTTP  # type: ignore
@@ -690,8 +691,10 @@ class CognitiveCore(dspy.Module):
             }
 
         if "task" in payload:
+            normalized_task = normalize_task_payloads(payload["task"])
+            payload["task"] = normalized_task
             plan_result = self._wrap_single_step_as_plan(
-                payload["task"], escalate_hint, sufficiency, confidence
+                normalized_task, escalate_hint, sufficiency, confidence
             )
             payload["solution_steps"] = plan_result["solution_steps"]
             payload["meta"] = plan_result["meta"]

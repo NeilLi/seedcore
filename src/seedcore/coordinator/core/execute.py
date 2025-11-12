@@ -38,6 +38,7 @@ from ..core.policies import (
     decide_route_with_hysteresis,
     generate_proto_subtasks,
 )
+from ..utils import coerce_task_payload
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -458,16 +459,20 @@ async def _process_task_input(
     """
     Process task input to extract eventizer data, tags, facts, and other metadata.
     """
-    # Basic fields
-    task_id = str(getattr(task, "task_id", task.get("task_id") if isinstance(task, dict) else "unknown"))
-    task_type = str(getattr(task, "type", task.get("type") if isinstance(task, dict) else ""))
-    domain = getattr(task, "domain", task.get("domain") if isinstance(task, dict) else None)
-    params = getattr(task, "params", task.get("params") if isinstance(task, dict) else {}) or {}
+    payload, merged = coerce_task_payload(task)
+
+    # Basic fields from normalized payload
+    task_id = payload.task_id
+    task_type = payload.type
+    domain = payload.domain
+    params = dict(merged.get("params") or {})
+    if not domain:
+        domain = merged.get("domain")
 
     # Eventizer
     eventizer_data: dict[str, Any] = {}
     if eventizer_helper is not None:
-        features = eventizer_helper(task)
+        features = eventizer_helper(merged)
         if inspect.isawaitable(features):
             features = await features
         if isinstance(features, dict):
@@ -475,7 +480,8 @@ async def _process_task_input(
 
     # Tags
     tags: set[str] = set()
-    param_tags = params.get("event_tags") or []
+    routing_envelope = params.get("routing") if isinstance(params.get("routing"), dict) else {}
+    param_tags = params.get("event_tags") or routing_envelope.get("event_tags") or []
     if isinstance(param_tags, IterableABC) and not isinstance(param_tags, (str, bytes)):
         tags.update(str(t) for t in param_tags)
 

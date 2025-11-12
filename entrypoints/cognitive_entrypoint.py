@@ -32,6 +32,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from seedcore.logging_setup import setup_logging
+from seedcore.coordinator.utils import normalize_task_payloads
 setup_logging(app_name="seedcore.CognitiveCore")
 logger = logging.getLogger("seedcore.CognitiveCore")
 
@@ -170,10 +171,10 @@ class CognitiveServeService:
             # the input_data and meta (with decision_kind). This endpoint
             # just merges and passes them through.
             
-            input_data = request.input_data or {}
-            meta = request.meta or {}
-            
-            # Merge meta back into input_data for the service
+            input_data_raw = request.input_data or {}
+            meta_raw = request.meta or {}
+            input_data = normalize_task_payloads(dict(input_data_raw))
+            meta = normalize_task_payloads(dict(meta_raw))
             input_data["meta"] = meta
             
             # Add overrides
@@ -181,6 +182,9 @@ class CognitiveServeService:
                 input_data["llm_provider_override"] = request.llm_provider_override
             if request.llm_model_override:
                 input_data["llm_model_override"] = request.llm_model_override
+
+            input_data = normalize_task_payloads(input_data)
+            meta = input_data.get("meta", meta)
 
             # Create the final, standard context object
             context = CognitiveContext(

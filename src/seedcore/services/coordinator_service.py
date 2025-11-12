@@ -28,6 +28,7 @@ from typing import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping as AbcMapping
+    from ..ops.metrics import MetricsTracker
 
 # ---------------------------------------------------------------------------
 # 2. Third-Party Imports
@@ -86,6 +87,7 @@ from ..coordinator.utils import (
     convert_task_to_dict,
     normalize_task_dict,
     sync_task_identity,
+    coerce_task_payload,
     # Extraction
     extract_agent_id,
     extract_decision,
@@ -1411,35 +1413,26 @@ class Coordinator:
             )
         return False
 
-    async def process_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def process_task(self, payload: Union[TaskPayload, Dict[str, Any]]) -> Dict[str, Any]:
         """Backward-compatible wrapper around route_and_execute."""
         return await self.route_and_execute(payload)
 
-    async def route_and_execute(self, payload: Dict[str, Any]):
+    async def route_and_execute(self, payload: Union[TaskPayload, Dict[str, Any]]):
         """
         HTTP endpoint for route-and-execute. Wraps core.route_and_execute.
         Accepts flexible dict and ensures TaskPayload has a task_id.
         """
         await self._ensure_background_tasks_started()
         try:
-            # Ensure task_id exists for correlation
-            if isinstance(payload, dict) and "task_id" not in payload:
-                # Allow using 'id' if provided by callers
-                if "id" in payload:
-                    payload["task_id"] = str(payload["id"])
-                else:
-                    payload["task_id"] = uuid.uuid4().hex
-
-            task_obj = TaskPayload.model_validate(payload)
-            task_dict = task_obj.model_dump()
-            task_dict.setdefault("id", task_obj.task_id)
+            task_obj, task_dict = coerce_task_payload(payload)
 
             # Extract correlation_id from request if present
             correlation_id = None
             if isinstance(payload, dict):
-                correlation_id = payload.get("correlation_id") or task_dict.get("correlation_id")
+                correlation_id = payload.get("correlation_id")
+            correlation_id = correlation_id or task_dict.get("correlation_id")
             if not correlation_id and hasattr(task_obj, "correlation_id"):
-                correlation_id = getattr(task_obj, "correlation_id", None)
+                correlation_id = getattr(task_obj, "correlation_id", None)  # type: ignore[attr-defined]
 
             repo = self.graph_task_repo or self._get_graph_repository()
             self.graph_task_repo = repo

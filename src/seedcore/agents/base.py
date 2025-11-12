@@ -17,13 +17,13 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import logging
 import time
 import uuid
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple, Union
 
 # ---- Roles / Skills / RBAC / Routing -------------------------------------------
 
+from seedcore.models import TaskPayload
 from .roles import (
     Specialization,
     RoleProfile,
@@ -31,7 +31,6 @@ from .roles import (
     DEFAULT_ROLE_REGISTRY,
     SkillVector,
     SkillStoreProtocol,
-    NullSkillStore,
     RbacEnforcer,
     build_advertisement,
 )
@@ -51,7 +50,9 @@ try:
 except Exception:  # pragma: no cover
     MLServiceClient = None  # type: ignore
 
-logger = logging.getLogger(__name__)
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.agents.base", level="DEBUG")
 
 
 class BaseAgent:
@@ -612,6 +613,89 @@ class BaseAgent:
         numerator = sum(x * y for x, y in zip(a, b))
         denominator = (sum(x * x for x in a) ** 0.5) * (sum(y * y for y in b) ** 0.5) or 1.0
         return max(0.0, min(1.0, numerator / denominator))
+    
+    def _normalize_task_payload(
+        self, task: Union[TaskPayload, Dict[str, Any], Any]
+    ) -> Tuple[TaskPayload, Dict[str, Any]]:
+        """
+        Normalize incoming task representations to TaskPayload while preserving original fields.
+        Returns the TaskPayload and a merged dict that includes any extra keys from the input.
+        """
+        raw_dict: Dict[str, Any]
+        payload: TaskPayload
+
+        if isinstance(task, TaskPayload):
+            payload = task
+            raw_dict = task.model_dump()
+        else:
+            if hasattr(task, "model_dump"):
+                try:
+                    raw_dict = task.model_dump()
+                except Exception:
+                    raw_dict = {}
+            elif hasattr(task, "to_dict"):
+                try:
+                    raw_dict = task.to_dict()
+                except Exception:
+                    raw_dict = {}
+            elif isinstance(task, dict):
+                raw_dict = dict(task)
+            else:
+                try:
+                    raw_dict = dict(task)
+                except Exception:
+                    raw_dict = {}
+
+            try:
+                payload = TaskPayload.from_db(raw_dict)
+            except Exception:
+                fallback_id = raw_dict.get("task_id") or raw_dict.get("id") or uuid.uuid4().hex
+                tool_calls_raw = raw_dict.get("tool_calls") or []
+                payload = TaskPayload(
+                    task_id=str(fallback_id),
+                    type=raw_dict.get("type") or raw_dict.get("task_type") or "unknown_task",
+                    params=raw_dict.get("params") or {},
+                    description=raw_dict.get("description") or raw_dict.get("prompt") or "",
+                    domain=raw_dict.get("domain"),
+                    drift_score=float(raw_dict.get("drift_score") or 0.0),
+                    required_specialization=raw_dict.get("required_specialization"),
+                    desired_skills=raw_dict.get("desired_skills") or {},
+                    tool_calls=tool_calls_raw,
+                    min_capability=raw_dict.get("min_capability"),
+                    max_mem_util=raw_dict.get("max_mem_util"),
+                    priority=int(raw_dict.get("priority") or 0),
+                    deadline_at=raw_dict.get("deadline_at"),
+                    ttl_seconds=raw_dict.get("ttl_seconds"),
+                )
+
+        if not payload.task_id or payload.task_id in ("", "None"):
+            payload = payload.copy(update={"task_id": uuid.uuid4().hex})
+
+        normalized_dict = payload.model_dump()
+        merged_dict = dict(raw_dict)
+
+        normalized_params = dict(normalized_dict.get("params") or {})
+        raw_params = dict(merged_dict.get("params") or {})
+        if normalized_params:
+            routing = normalized_params.get("routing")
+            if routing is not None:
+                raw_params["routing"] = routing
+            for key, value in normalized_params.items():
+                if key == "routing":
+                    continue
+                raw_params.setdefault(key, value)
+            merged_dict["params"] = raw_params
+
+        for key, value in normalized_dict.items():
+            if key == "params":
+                continue
+            if key not in merged_dict or merged_dict[key] in (None, "", {}):
+                merged_dict[key] = value
+
+        merged_dict["task_id"] = payload.task_id
+        merged_dict.setdefault("id", payload.task_id)
+
+        return payload, merged_dict
 
     class _TaskView:
         """Lightweight normalized task representation."""
@@ -633,50 +717,43 @@ class BaseAgent:
 
     def _coerce_task_view(self, task) -> "_TaskView":
         """Normalize Task/TaskPayload/dict inputs into a TaskView."""
+        payload, merged = self._normalize_task_payload(task)
         tv = self._TaskView()
 
-        if hasattr(task, "model_dump"):
-            as_dict = task.model_dump()
-        elif hasattr(task, "to_dict"):
-            as_dict = task.to_dict()
-        elif isinstance(task, dict):
-            as_dict = dict(task)
-        else:
-            try:
-                as_dict = dict(task)
-            except Exception:
-                as_dict = {}
+        tv.task_id = payload.task_id
+        tv.prompt = payload.description or merged.get("prompt") or ""
 
-        tv.task_id = str(as_dict.get("task_id") or as_dict.get("id") or "unknown")
-        tv.prompt = as_dict.get("description") or as_dict.get("prompt") or ""
-
-        meta = as_dict.get("meta") or {}
+        meta = merged.get("meta") or {}
         tv.embedding = meta.get("embedding")
 
-        params = as_dict.get("params") or {}
+        params = merged.get("params") or {}
         routing = params.get("routing") or {}
 
-        tv.required_specialization = as_dict.get("required_specialization") or routing.get("required_specialization")
-        tv.desired_skills = as_dict.get("desired_skills") or routing.get("desired_skills") or {}
-
-        tc_top = as_dict.get("tool_calls")
-        tc_env = routing.get("tool_calls")
-        raw_tc = tc_top if isinstance(tc_top, list) else tc_env if isinstance(tc_env, list) else []
+        tv.required_specialization = payload.required_specialization or routing.get("required_specialization")
+        tv.desired_skills = dict(payload.desired_skills or {}) or routing.get("desired_skills") or {}
 
         tool_calls: List[Dict[str, Any]] = []
-        for item in raw_tc:
-            if isinstance(item, dict) and "name" in item:
-                tool_calls.append({"name": item["name"], "args": dict(item.get("args") or {})})
+        for item in payload.tool_calls or []:
+            if isinstance(item, dict):
+                name = item.get("name")
+                if not name:
+                    continue
+                tool_calls.append({"name": name, "args": dict(item.get("args") or {})})
+            else:
+                name = getattr(item, "name", None)
+                if not name:
+                    continue
+                tool_calls.append({"name": name, "args": dict(getattr(item, "args", {}) or {})})
         tv.tool_calls = tool_calls
 
         hints = routing.get("hints") or {}
-        tv.min_capability = as_dict.get("min_capability", hints.get("min_capability"))
-        tv.max_mem_util = as_dict.get("max_mem_util", hints.get("max_mem_util"))
-        tv.priority = int(as_dict.get("priority", hints.get("priority", 0)) or 0)
-        tv.deadline_at_iso = as_dict.get("deadline_at", hints.get("deadline_at"))
-        tv.ttl_seconds = as_dict.get("ttl_seconds", hints.get("ttl_seconds"))
+        tv.min_capability = payload.min_capability if payload.min_capability is not None else hints.get("min_capability")
+        tv.max_mem_util = payload.max_mem_util if payload.max_mem_util is not None else hints.get("max_mem_util")
+        tv.priority = int(payload.priority or hints.get("priority", 0) or 0)
+        tv.deadline_at_iso = payload.deadline_at or hints.get("deadline_at")
+        tv.ttl_seconds = payload.ttl_seconds if payload.ttl_seconds is not None else hints.get("ttl_seconds")
 
-        created_at = as_dict.get("created_at")
+        created_at = merged.get("created_at")
         tv.created_at_ts = None
         try:
             if isinstance(created_at, str):

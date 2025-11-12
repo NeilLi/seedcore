@@ -17,6 +17,7 @@ import time
 import traceback
 import asyncio
 import logging
+import uuid
 from typing import Dict, Any, Optional
 
 import ray
@@ -39,6 +40,7 @@ from seedcore.utils.ray_utils import ensure_ray_initialized
 
 # Import organism components
 from seedcore.organs.organism_manager import OrganismManager
+from seedcore.models import TaskPayload
 
 # --- Configuration ---
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
@@ -399,20 +401,62 @@ class OrganismService:
                 return {"success": False, "error": "Organism not initialized"}
             
             organ_id = request.get("organ_id")
-            task = request.get("task", {})
+            task_raw = request.get("task", {}) or {}
             organ_timeout_s = request.get("organ_timeout_s", 30.0)
             
             if not organ_id:
                 return {"success": False, "error": "organ_id is required"}
             
             # Add timeout to task if provided
-            if organ_timeout_s:
-                task["organ_timeout_s"] = organ_timeout_s
+            if isinstance(task_raw, dict):
+                raw_timeout = task_raw.get("organ_timeout_s")
+                if raw_timeout is not None:
+                    organ_timeout_s = raw_timeout
+
+            try:
+                task_payload = TaskPayload.from_db(task_raw)
+            except Exception as exc:
+                logger.warning(
+                    "[execute-on-organ] TaskPayload.from_db fallback due to %s; attempting direct construction",
+                    exc,
+                )
+                fallback_id = task_raw.get("task_id") or task_raw.get("id") or str(uuid.uuid4())
+                task_payload = TaskPayload(
+                    task_id=str(fallback_id),
+                    type=task_raw.get("type") or "unknown_task",
+                    params=task_raw.get("params") or {},
+                    description=task_raw.get("description") or "",
+                    domain=task_raw.get("domain"),
+                    drift_score=float(task_raw.get("drift_score") or 0.0),
+                )
+
+            task_id = task_payload.task_id or str(uuid.uuid4())
+            if not task_payload.task_id or task_payload.task_id in ("", "None"):
+                task_payload = task_payload.copy(update={"task_id": task_id})
+            else:
+                task_id = task_payload.task_id
+
+            task_data = task_payload.model_dump()
+
+            # Retain any extra keys from the raw task that the payload model doesn't surface
+            if isinstance(task_raw, dict):
+                for key, value in task_raw.items():
+                    if key not in task_data:
+                        task_data[key] = value
+
+            task_data["organ_timeout_s"] = organ_timeout_s
+            task_data.setdefault("id", task_id)
             
             logger.info(
-                f"[execute-on-organ] ⏩ organ_id={organ_id} task.type={task.get('type')} domain={task.get('domain')} timeout={organ_timeout_s}s"
+                "[execute-on-organ] ⏩ organ_id=%s task_id=%s task.type=%s domain=%s priority=%s timeout=%ss",
+                organ_id,
+                task_id,
+                task_payload.type,
+                task_payload.domain,
+                getattr(task_payload, "priority", None),
+                organ_timeout_s,
             )
-            result = await self.organism_manager.execute_task_on_organ(organ_id, task)
+            result = await self.organism_manager.execute_task_on_organ(organ_id, task_data)
             duration = time.time() - start_time
             logger.info(
                 f"[execute-on-organ] ✅ completed organ_id={organ_id} success={result.get('success', True)} in {duration:.2f}s"

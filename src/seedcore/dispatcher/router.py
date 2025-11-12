@@ -31,39 +31,18 @@ from seedcore.models.result_schema import create_cognitive_result, create_error_
 from seedcore.serve.cognitive_client import CognitiveServiceClient
 
 
-def _ensure_routing_envelope(task_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Guarantee task_data['params']['routing'] exists and contains mirrored
-    fields if the caller only set top-level hints. Safe no-op otherwise.
-    """
-    params = task_data.setdefault("params", {})
-    routing = params.setdefault("routing", {})
+def _coerce_task_payload(payload: Union[TaskPayload, Dict[str, Any]]) -> TaskPayload:
+    """Normalize incoming payloads to TaskPayload instances."""
+    if isinstance(payload, TaskPayload):
+        return payload
 
-    mirrors = {
-        "required_specialization": task_data.get("required_specialization"),
-        "desired_skills": task_data.get("desired_skills"),
-        "tool_calls": task_data.get("tool_calls"),
-        "hints": {
-            "min_capability": task_data.get("min_capability"),
-            "max_mem_util": task_data.get("max_mem_util"),
-            "priority": task_data.get("priority"),
-            "deadline_at": task_data.get("deadline_at"),
-            "ttl_seconds": task_data.get("ttl_seconds"),
-        },
-        "v": 1,
-    }
+    if isinstance(payload, dict):
+        data = dict(payload)
+        if "task_id" in data:
+            return TaskPayload(**data)
+        return TaskPayload.from_db(data)
 
-    for key, value in mirrors.items():
-        if value is None:
-            continue
-        if key == "hints":
-            hints = routing.setdefault("hints", {})
-            for hint_key, hint_val in value.items():
-                if hint_val is not None:
-                    hints[hint_key] = hint_val
-        else:
-            routing[key] = value
-    return task_data
+    raise TypeError(f"Unsupported payload type for routing: {type(payload)}")
 
 
 def _attach_routing_decision(
@@ -320,20 +299,14 @@ class OrganismRouter(Router):
     ) -> Dict[str, Any]:
         """Route task through Organism service for fast-path execution."""
         try:
-            # Normalize task_data
-            if isinstance(payload, TaskPayload):
-                task_data = payload.model_dump()
-            else:
-                task_data = payload
-
+            task_payload = _coerce_task_payload(payload)
+            task_data = task_payload.model_dump()
             if correlation_id:
                 task_data["correlation_id"] = correlation_id
 
-            task_data = _ensure_routing_envelope(task_data)
-
             started_at = datetime.now(timezone.utc)
 
-            task_id = task_data.get("task_id", "unknown")
+            task_id = task_payload.task_id
             logger.debug(f"Routing task via Organism: {task_id}")
 
             # Step 1: resolve which organ should handle this task
@@ -387,7 +360,7 @@ class OrganismRouter(Router):
                         return execute_result
 
                     input_data = {
-                        "task_description": task_data.get("description", "No description provided."),
+                        "task_description": task_payload.description or "No description provided.",
                         "agent_capabilities": {},
                         "available_resources": {},
                     }
@@ -557,20 +530,14 @@ class CoordinatorHttpRouter(Router):
     ) -> Dict[str, Any]:
         """Route task through Coordinator HTTP API and then follow its routing kind."""
         try:
-            # Normalize task_data
-            if isinstance(payload, TaskPayload):
-                task_data = payload.model_dump()
-            else:
-                task_data = payload
-
+            task_payload = _coerce_task_payload(payload)
+            task_data = task_payload.model_dump()
             if correlation_id:
                 task_data["correlation_id"] = correlation_id
 
-            task_data = _ensure_routing_envelope(task_data)
-
             started_at = datetime.now(timezone.utc)
 
-            task_id = task_data.get("task_id", "unknown")
+            task_id = task_payload.task_id
             logger.info(f"Routing task via Coordinator HTTP: {task_id}")
 
             # 1. Ask Coordinator to process / decide
@@ -628,7 +595,7 @@ class CoordinatorHttpRouter(Router):
                         )
                     else:
                         input_data = {
-                            "task_description": task_data.get("description", "No description provided."),
+                            "task_description": task_payload.description or "No description provided.",
                             "agent_capabilities": {},
                             "available_resources": {},
                         }

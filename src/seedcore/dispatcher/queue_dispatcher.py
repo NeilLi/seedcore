@@ -503,15 +503,9 @@ class Dispatcher:
             logger.info(f"[QueueDispatcher] 🔍 Raw item data: {item}")
             logger.info(f"[QueueDispatcher] 🔍 Item types: params={type(item.get('params'))}, domain={type(item.get('domain'))}")
             
-            payload = TaskPayload(
-                type=item["type"],
-                params=item["params"],
-                description=item.get("description") or "",
-                domain=item["domain"],
-                drift_score=item["drift_score"],
-                task_id=str(tid)
-            )
-            logger.info(f"[QueueDispatcher] ✅ Task payload created for {tid}: {payload.dict()}")
+            task_row = {**item, "id": tid}
+            payload = TaskPayload.from_db(task_row)
+            logger.info(f"[QueueDispatcher] ✅ Task payload created for {tid}: {payload.model_dump()}")
             logger.info(f"[QueueDispatcher] 🔧 Router type: {type(self.router)}")
             
             try:

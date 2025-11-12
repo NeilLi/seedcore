@@ -15,6 +15,17 @@ MAX_STRING_LENGTH = 1000  # Maximum string length before truncation in redaction
 DEFAULT_RECURSION_DEPTH = 10  # Default maximum recursion depth for nested structure traversal
 
 
+def _is_empty(value: Any) -> bool:
+    """Utility to determine if a value should be treated as empty."""
+    if value is None:
+        return True
+    if isinstance(value, (str, bytes)) and value == "":
+        return True
+    if isinstance(value, (list, tuple, set, dict)) and len(value) == 0:
+        return True
+    return False
+
+
 def sync_task_identity(task_like: Any, task_id: str) -> None:
     """Sync task identity by setting id/task_id on the task object or dict."""
     if isinstance(task_like, dict):
@@ -400,6 +411,91 @@ def validate_task(task_data: Dict[str, Any]) -> Task:
             features=task_data.get("features", {}),
             history_ids=task_data.get("history_ids", [])
         )
+
+
+def coerce_task_payload(task: Any) -> Tuple[TaskPayload, Dict[str, Any]]:
+    """
+    Normalize any task-like object into a TaskPayload while preserving caller-supplied fields.
+    Returns the TaskPayload and a merged dict containing the canonical payload plus extras.
+    """
+    original_dict = convert_task_to_dict(task)
+
+    if isinstance(task, TaskPayload):
+        payload = task
+    else:
+        try:
+            payload = TaskPayload.model_validate(original_dict)
+        except Exception:
+            try:
+                payload = TaskPayload.from_db(original_dict)
+            except Exception:
+                fallback_id = original_dict.get("task_id") or original_dict.get("id") or uuid.uuid4().hex
+                payload = TaskPayload(
+                    task_id=str(fallback_id),
+                    type=original_dict.get("type") or original_dict.get("task_type") or "unknown_task",
+                    params=original_dict.get("params") or {},
+                    description=original_dict.get("description") or original_dict.get("prompt") or "",
+                    domain=original_dict.get("domain"),
+                    drift_score=float(original_dict.get("drift_score") or 0.0),
+                )
+
+    if not payload.task_id or payload.task_id in ("", "None"):
+        payload = payload.copy(update={"task_id": uuid.uuid4().hex})
+
+    normalized_dict = payload.model_dump()
+    merged: Dict[str, Any] = dict(normalized_dict)
+
+    # Merge params while preserving routing envelope from normalized payload
+    merged_params = dict(normalized_dict.get("params") or {})
+    orig_params = original_dict.get("params")
+    if isinstance(orig_params, dict):
+        for key, value in orig_params.items():
+            if key == "routing" and isinstance(value, dict):
+                routing = merged_params.setdefault("routing", {})
+                for routing_key, routing_value in value.items():
+                    if routing_key not in routing:
+                        routing[routing_key] = routing_value
+                continue
+            if key not in merged_params:
+                merged_params[key] = value
+    merged["params"] = merged_params
+
+    # Merge top-level extras from original dict (e.g., correlation_id)
+    for key, value in original_dict.items():
+        if key == "params":
+            continue
+        if key not in merged or _is_empty(merged.get(key)):
+            merged[key] = value
+
+    merged["task_id"] = payload.task_id
+    merged.setdefault("id", payload.task_id)
+    sync_task_identity(task, payload.task_id)
+    return payload, merged
+
+
+def normalize_task_payloads(data: Any) -> Any:
+    """
+    Recursively normalize any task payloads contained within the provided data structure.
+    Returns the transformed structure (mutates dict/list inputs in place when possible).
+    """
+    if isinstance(data, TaskPayload):
+        _, normalized = coerce_task_payload(data)
+        return normalized
+
+    if isinstance(data, dict):
+        looks_like_task = "type" in data and "params" in data
+        params = data.get("params")
+        already_normalized = looks_like_task and isinstance(params, dict) and "routing" in params
+        if looks_like_task and not already_normalized:
+            _, data = coerce_task_payload(data)
+        for key, value in list(data.items()):
+            data[key] = normalize_task_payloads(value)
+        return data
+
+    if isinstance(data, list):
+        return [normalize_task_payloads(item) for item in data]
+
+    return data
 
 
 def task_to_payload(task: Task) -> TaskPayload:
