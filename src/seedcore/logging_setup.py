@@ -1,4 +1,3 @@
-# src/seedcore/logging_setup.py
 from __future__ import annotations
 import os, sys, logging
 from logging.config import dictConfig
@@ -14,7 +13,7 @@ _STDOUT_ONLY = {
     "handlers": {
         "stdout": {
             "class": "logging.StreamHandler",
-            "stream": "ext://sys.stdout",
+            "stream": "ext://sys.stdout",  # This is crucial for Ray
             "formatter": "std",
             "level": DEFAULT_LEVEL,
         }
@@ -80,40 +79,51 @@ def setup_logging(app_name: str = "", config_path_env: str = "SEEDCORE_LOGCFG"):
     # No external config → enforce stdout-only and remove any file handlers
     _nuke_file_handlers()
     dictConfig(_STDOUT_ONLY)
-    # Defensive: If another library calls basicConfig later without 'force=True',
-    # this initial call prevents it from silently adding a duplicate handler.
-    # We explicitly set the handlers to ensure we only have one stream.
-    logging.basicConfig(level=DEFAULT_LEVEL, force=True, handlers=[logging.StreamHandler(sys.stdout)])
+    
+    # ***REMOVED BUGGY BASICCONFIG CALL***
+    # The dictConfig call above is sufficient and correct.
+    # The old basicConfig call was overwriting the 'ext://sys.stdout'
+    # handler with a raw 'sys.stdout' handler.
+    #
+    # logging.basicConfig(level=DEFAULT_LEVEL, force=True, handlers=[logging.StreamHandler(sys.stdout)]) # <-- THIS WAS THE BUG
 
 def ensure_serve_logger(module: str,
                         level: str = "INFO",
                         fmt: str = "%(asctime)s %(levelname)s %(name)s %(message)s") -> logging.Logger:
     """
-    Ensure a logger for a Ray Serve replica writes to stdout and is not silently dropped.
+    Gets a logger for a Ray Serve replica and sets its level.
+    
+    Assumes `setup_logging()` has already been called in this process
+    to configure the root handler. This function just sets the *level*
+    for the specified module.
     
     Args:
         module (str): Logger name (e.g., "seedcore.ml")
         level (str): Log level (default: INFO)
-        fmt (str): Formatter string
+        fmt: str: (This is now unused, as the root formatter is used)
     
     Returns:
         logging.Logger: Configured logger
     """
     logger = logging.getLogger(module)
 
-    # Only attach handler if none exist (avoids duplicate logs)
-    if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(logging.Formatter(fmt))
-        logger.addHandler(handler)
+    # ***REMOVED HANDLER LOGIC***
+    # We should not add a handler here. We want logs to propagate
+    # to the root logger, which setup_logging() has already
+    # configured to point to 'ext://sys.stdout'.
+    #
+    # if not logger.handlers:
+    #     handler = logging.StreamHandler(sys.stdout) # <-- This was the bug
+    #     handler.setFormatter(logging.Formatter(fmt))
+    #     logger.addHandler(handler)
 
-    # Normalize log level
+    # Just set the level for this specific module
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
     # Allow propagation to root (so dictConfig / root handlers still see messages)
     logger.propagate = True
 
     # Emit a sentinel log to confirm logger is alive
-    logger.info("✅ Serve logger initialized for module '%s'", module)
+    logger.info("✅ Serve logger configured for module '%s' (propagating to root)", module)
 
     return logger

@@ -87,7 +87,7 @@ spec:
         import_path: entrypoints.organism_entrypoint:build_organism_app
         route_prefix: /organism
         deployments:
-          - name: OrganismManager
+          - name: OrganismService
             num_replicas: 1
             ray_actor_options:
               num_cpus: 0.3

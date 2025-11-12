@@ -9,12 +9,10 @@ tasks across different execution paths (Fast, Planner, HGNN, and ERROR).
 import asyncio
 import inspect
 import json
-import logging
 import os
-import random
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence, Set
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -27,16 +25,15 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping as AbcMapping
     from ..ops.metrics import MetricsTracker
 
 # ---------------------------------------------------------------------------
 # 2. Third-Party Imports
 # ---------------------------------------------------------------------------
-import redis
-from fastapi import FastAPI, HTTPException, Request
-from ray import serve
-from sqlalchemy import text
+import redis  # type: ignore[reportMissingImports]
+from fastapi import FastAPI, HTTPException, Request  # type: ignore[reportMissingImports]
+from ray import serve  # type: ignore[reportMissingImports]
+from sqlalchemy import text  # type: ignore[reportMissingImports]
 
 # ---------------------------------------------------------------------------
 # 3. First-Party (Local) Imports
@@ -56,27 +53,18 @@ from ..coordinator.core.execute import (
 )
 from ..coordinator.core.plan import persist_and_register_dependencies
 from ..coordinator.core.policies import (
-    OCPSValve,
     SurpriseComputer,
     compute_drift_score,
     create_ocps_valve,
-    decide_route_with_hysteresis,
-    generate_proto_subtasks,
     get_current_energy_state,
 )
 from ..coordinator.core.routing import (
     RouteCache,
-    RouteEntry,
     bulk_resolve_routes_cached,
     resolve_route_cached_async,
     static_route_fallback,
 )
-from ..coordinator.dao import (
-    MAX_PROTO_PLAN_BYTES,
-    TaskOutboxDAO,
-    TaskProtoPlanDAO,
-    TaskRouterTelemetryDAO,
-)
+from ..coordinator.dao import TaskOutboxDAO, TaskProtoPlanDAO, TaskRouterTelemetryDAO
 from ..coordinator.models import (
     AnomalyTriageRequest,
     AnomalyTriageResponse,
@@ -106,7 +94,7 @@ from ..serve.ml_client import MLServiceClient
 from ..serve.organism_client import OrganismServiceClient
 from ..utils.ray_utils import COG, ML, ORG  # Used for constants
 from ..database import get_async_pg_session_factory
-from ..logging_setup import ensure_serve_logger
+from ..logging_setup import ensure_serve_logger, setup_logging
 from ..models import Task, TaskPayload
 from ..models.cognitive import CognitiveType, DecisionKind
 from ..models.result_schema import create_error_result
@@ -158,7 +146,9 @@ TUNE_EXPERIMENT_PREFIX = os.getenv("TUNE_EXPERIMENT_PREFIX", "coordinator-tune")
 # 5. Service-Level Setup
 # ---------------------------------------------------------------------------
 
-logger = ensure_serve_logger("seedcore.coordinator", level="DEBUG")
+setup_logging(app_name="seedcore.coordinator_service.driver")
+setup_logging(app_name="seedcore.coordinator_service.driver")
+logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
 
 # Log derived gateway URLs for debugging
 logger.info("🔗 Coordinator using gateway URLs:")
@@ -439,6 +429,9 @@ class ASGIWrapper:
 )
 class Coordinator:
     def __init__(self):
+        setup_logging(app_name="seedcore.coordinator_service.replica")
+        self.logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
+
         self.app = FastAPI(
             title="SeedCore Coordinator",
             version="1.0.0",
@@ -503,9 +496,9 @@ class Coordinator:
         try:
             redis_client = redis.from_url(REDIS_URL, decode_responses=True)
             self.storage = SafeStorage(redis_client)
-            logger.info(f"✅ Storage initialized: {self.storage.get_backend_type()}")
+            self.logger.info(f"✅ Storage initialized: {self.storage.get_backend_type()}")
         except Exception as e:
-            logger.warning(f"⚠️ Redis connection failed, using in-memory storage: {e}")
+            self.logger.warning(f"⚠️ Redis connection failed, using in-memory storage: {e}")
             self.storage = SafeStorage(None)
 
         # Maintain runtime context on the actor instance (not the FastAPI app)
@@ -563,9 +556,9 @@ class Coordinator:
         try:
             self.predicate_config = load_predicates(PREDICATES_CONFIG_PATH)
             self.predicate_router = PredicateRouter(self.predicate_config)
-            logger.info("✅ Predicate system initialized")
+            self.logger.info("✅ Predicate system initialized")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to load predicate config, using fallback: {e}")
+            self.logger.warning(f"⚠️ Failed to load predicate config, using fallback: {e}")
             # Create a minimal fallback configuration
             from ..predicates.loader import create_default_config
             self.predicate_config = create_default_config()
@@ -673,13 +666,13 @@ class Coordinator:
             # Predicate router should already be initialized synchronously
             if self.predicate_router is not None:
                 await self.predicate_router.start_background_tasks()
-                logger.info("🚀 Started Coordinator background tasks")
+                self.logger.info("🚀 Started Coordinator background tasks")
             else:
-                logger.warning("⚠️ Predicate router not initialized, skipping background tasks")
+                self.logger.warning("⚠️ Predicate router not initialized, skipping background tasks")
             # Start task outbox flusher loop
             asyncio.create_task(self._task_outbox_flusher_loop())
         except Exception as e:
-            logger.error(f"❌ Failed to start background tasks: {e}")
+            self.logger.error(f"❌ Failed to start background tasks: {e}")
     
     async def _warmup_drift_detector(self):
         """
@@ -1038,7 +1031,7 @@ class Coordinator:
             if validated_plan:
                 return validated_plan
 
-            logger.warning(f"[HGNN] Validation failed or empty plan; using fallback")
+            logger.warning("[HGNN] Validation failed or empty plan; using fallback")
             return self._fallback_plan(self._convert_task_to_dict(task))
 
         except Exception as e:
@@ -1529,7 +1522,6 @@ class Coordinator:
     async def get_predicate_status(self):
         """Get predicate system status and GPU guard information."""
         import hashlib
-        import os
         
         # Get file modification time and hash
         config_path = Path(PREDICATES_CONFIG_PATH)

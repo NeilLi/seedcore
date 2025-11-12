@@ -15,11 +15,9 @@ This entrypoint is designed to be deployed by Ray Serve YAML configuration.
 
 import os
 import sys
-import logging
-from typing import Dict, Any
+import time
 
-import ray
-from ray import serve
+from ray import serve  # type: ignore[reportMissingImports]
 
 
 # Add the project root to Python path
@@ -27,13 +25,14 @@ sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
 
 # Use Ray Serve specific logging setup to force stdout output
-from seedcore.logging_setup import ensure_serve_logger
-logger = ensure_serve_logger("seedcore.ml", level="DEBUG")
-
+from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.utils.ray_utils import ensure_ray_initialized
 
 # Import the ML service components
-from seedcore.ml.serve_app import MLService, ml_app
+from seedcore.ml.serve_app import MLService
+
+setup_logging(app_name="seedcore.ml_service.driver")
+logger = ensure_serve_logger("seedcore.ml_service", level="DEBUG")
 
 # --- Configuration ---
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
@@ -93,7 +92,6 @@ def main():
         logger.info("✅ ML Service is running.")
         
         # Keep the service running
-        import time
         while True:
             time.sleep(3600)
             

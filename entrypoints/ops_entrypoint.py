@@ -14,16 +14,14 @@ OpsGateway that fans in/out to each service via Ray Serve handles.
 
 import os
 import sys
-import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-import ray
-from ray import serve
-from fastapi import FastAPI, APIRouter, HTTPException, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request  # type: ignore[reportMissingImports]
+from ray import serve  # type: ignore[reportMissingImports]
 
 # Type hint for Ray Serve handles
 try:
-    from ray.serve.handle import DeploymentHandle
+    from ray.serve.handle import DeploymentHandle  # type: ignore[reportMissingImports]
 except ImportError:
     # Fallback for older versions or if not available
     DeploymentHandle = Any
@@ -32,13 +30,11 @@ except ImportError:
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
 
-from seedcore.logging_setup import setup_logging
-setup_logging(app_name="seedcore.ops")
-logger = logging.getLogger("seedcore.ops")
-
-# Import service implementations
+from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.services.eventizer_service import EventizerService as EventizerServiceImpl
-from seedcore.services.fact_manager import FactManager as FactManagerImpl
+
+setup_logging(app_name="seedcore.ops_service.driver")
+logger = ensure_serve_logger("seedcore.ops_service", level="DEBUG")
 # Note: StateService and EnergyService from seedcore.services have @serve.ingress(FastAPI())
 # which would conflict with OpsGateway's docs. We create lightweight wrappers below instead.
 
