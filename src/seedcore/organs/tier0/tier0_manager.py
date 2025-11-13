@@ -17,26 +17,21 @@ Tier 0 Memory Manager
 Manages Ray agents and collects heartbeats for the meta-controller.
 """
 
-from seedcore.logging_setup import setup_logging
-setup_logging(app_name="seedcore.Tier0MemoryManager")
-
+from __future__ import annotations
 
 import os
-import ray
+import ray  # pyright: ignore[reportMissingImports]
 import time
 import uuid
 import asyncio
 import concurrent.futures
-from ...utils.ray_utils import ensure_ray_initialized
 from typing import Dict, List, Any, Optional, Union
-from collections import defaultdict
-import logging
-import json
+from ...utils.ray_utils import ensure_ray_initialized
 
 from ...agents.ray_agent import RayAgent
 from ...models import TaskPayload
 from ...agents.roles import RoleRegistry, DEFAULT_ROLE_REGISTRY, SkillStoreProtocol, NullSkillStore
-from ...ops.energy.optimizer import select_best_agent, score_agent
+from ...ops.energy.optimizer import select_best_agent
 from .specs import GraphClient, AgentSpec
 from ...registry import list_active_instances
 # Avoid importing EnergyLedger at module import time to prevent circular imports.
@@ -47,7 +42,11 @@ from ...registry import list_active_instances
 from ...memory.mw_manager import MwManager
 from ...memory.long_term_memory import LongTermMemoryManager
 
-logger = logging.getLogger("seedcore.Tier0MemoryManager")
+from seedcore.logging_setup import setup_logging, ensure_serve_logger
+setup_logging(app_name="seedcore.Tier0MemoryManager")
+
+
+logger = ensure_serve_logger("seedcore.Tier0MemoryManager")
 
 # Target namespace for agent actors (prefer SEEDCORE_NS, fallback to RAY_NAMESPACE)
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
@@ -412,7 +411,6 @@ class Tier0MemoryManager:
         Ensure Ray is initialized, with exponential backoff.
         Prefers explicit args; falls back to env, then cluster defaults.
         """
-        import ray
 
         try:
             _is_init = getattr(ray, "is_initialized", None)

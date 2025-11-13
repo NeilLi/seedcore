@@ -129,6 +129,66 @@ def _resolve_ok(host: str, timeout_s: float = 0.4) -> bool:
     finally:
         socket.setdefaulttimeout(old)
 
+def get_ray_node_ip() -> str:
+    """
+    Robustly resolve the Ray node IP address where the current process/actor is running.
+    
+    Uses a multi-tier fallback strategy:
+    1. ray.util.get_node_ip_address() - Most reliable, gets actual node IP
+    2. Extract from RAY_ADDRESS env var - May be head node IP, but better than nothing
+    3. Socket-based hostname resolution - Last resort for local development
+    4. "unknown" - Final fallback
+    
+    Returns:
+        str: The resolved IP address or "unknown" if all methods fail
+    """
+    # Method 1: Ray's native API (most reliable for actors running on Ray nodes)
+    try:
+        from ray.util import get_node_ip_address
+        node_ip = get_node_ip_address()
+        if node_ip and node_ip not in ("127.0.0.1", "localhost", "0.0.0.0"):
+            _log.debug("Resolved Ray node IP via ray.util.get_node_ip_address(): %s", node_ip)
+            return node_ip
+    except Exception as e:
+        _log.debug("ray.util.get_node_ip_address() failed: %s", e)
+    
+    # Method 2: Extract from RAY_ADDRESS (may be head node, not this node)
+    try:
+        ra = os.getenv(ENV_RAY_ADDRESS)
+        if ra:
+            host = _host_from_ray_address(ra)
+            if host and host not in ("127.0.0.1", "localhost", "0.0.0.0"):
+                _log.debug("Resolved node IP from RAY_ADDRESS: %s", host)
+                return host
+    except Exception as e:
+        _log.debug("Failed to extract IP from RAY_ADDRESS: %s", e)
+    
+    # Method 3: Socket-based resolution (for local development)
+    try:
+        hostname = socket.gethostname()
+        resolved_ip = socket.gethostbyname(hostname)
+        if resolved_ip and resolved_ip not in ("127.0.0.1", "127.0.1.1", "0.0.0.0"):
+            _log.debug("Resolved node IP via socket.gethostbyname(%s): %s", hostname, resolved_ip)
+            return resolved_ip
+    except Exception as e:
+        _log.debug("Socket-based IP resolution failed: %s", e)
+    
+    # Method 4: Try to get primary interface IP (Linux/Mac)
+    try:
+        # Connect to a dummy address to determine primary interface
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        if local_ip and local_ip not in ("127.0.0.1", "0.0.0.0"):
+            _log.debug("Resolved node IP via primary interface: %s", local_ip)
+            return local_ip
+    except Exception as e:
+        _log.debug("Primary interface IP resolution failed: %s", e)
+    
+    _log.warning("All IP resolution methods failed, using 'unknown'")
+    return "unknown"
+
 # -------------------------------
 # Gateway & paths
 # -------------------------------

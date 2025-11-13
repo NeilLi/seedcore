@@ -20,7 +20,7 @@ Typical safety keys (conventions, not enforced by schema):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Optional
 
 from .specialization import RoleProfile
 

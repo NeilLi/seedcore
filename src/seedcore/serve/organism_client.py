@@ -78,7 +78,7 @@ class OrganismServiceClient(BaseServiceClient):
         }
         return await self.post("/execute-on-organ", json=request_data)
     
-    async def handle_task(self, 
+    async def route_task(self, 
                          task: Dict[str, Any],
                          app_state: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -95,7 +95,7 @@ class OrganismServiceClient(BaseServiceClient):
             "task": task,
             "app_state": app_state or {}
         }
-        return await self.post("/handle-task", json=request_data)
+        return await self.post("/route-task", json=request_data)
     
     # Decision Making
     async def make_decision(self, 

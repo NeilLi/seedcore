@@ -1,20 +1,78 @@
 #!/usr/bin/env python3
 """
-Task Router Interface for SeedCore Dispatcher
+SeedCore Task Routing Layer
+===========================
 
-Routers:
-- CoordinatorHttpRouter (entry point)
-- OrganismRouter (fast-path execution)
-- RouterFactory (creates routers)
+This module defines the routing interface used by the Dispatcher to send tasks
+into the unified SeedCore execution pipeline. After the recent refactoring,
+routing now follows a multi-stage decision architecture:
 
-Routing policy (aligned with seedcore.models.cognitive.DecisionKind):
-- Coordinator inspects .kind from Coordinator service response:
-    - kind == "fast"   -> delegate to fast router (default: OrganismRouter)
-    - kind == "cognitive"   -> delegate to CognitiveService orchestration
-    - else (incl. "hgnn", "error") -> return Coordinator's result
-- Organism executes fast path, then inspects its own result:
-    - kind == "cognitive"   -> delegate to CognitiveService orchestration
-    - else (fast / hgnn / error) -> return Organism result
+Routers
+-------
+- CoordinatorHttpRouter:
+    The primary entry point. Sends tasks to the Coordinator service for
+    scoring and high-level decision making.
+- OrganismRouter:
+    Executes tasks through the Organism Service (Organs + Agents + Tools).
+    Handles both fast-path and deep-path agent execution.
+- RouterFactory:
+    Simple factory that returns appropriate router instances.
+
+End-to-End Routing Flow
+-----------------------
+
+1. Dispatcher receives a task from the DB queue.
+
+2. CoordinatorHttpRouter sends the task to the Coordinator Service, which:
+    - Computes scores (skill vectors, specialization fit, organ metrics).
+    - Determines classification & routing decision using DecisionKind:
+        * FAST / DEEP  → execute locally via OrganismRouter
+        * COGNITIVE    → escalate to planning + HGNN + cognitive composition
+        * HGNN         → Coordinator has already decomposed the task
+        * ERROR        → return error directly
+
+3. Coordinator Decision Routing:
+    - kind == "fast" or "deep":
+        → Execute through OrganismRouter (Organs → Workers → Tools).
+    - kind == "cognitive":
+        → OrganismRouter performs orchestration:
+            * Invoke CognitiveService, RAG, or planning
+            * Compose results or decompose subtasks
+    - kind in {"hgnn", "error"}:
+        → Return Coordinator’s output as the final result.
+
+4. OrganismRouter Execution:
+    - Runs the task through Organism Core:
+        * specialization selection
+        * organ routing
+        * worker agent execution
+        * skill vectors, capability updates
+        * tool execution (train.*, mem.*, external APIs)
+    - After execution:
+        * If Organism result.kind == "cognitive":
+              → Invoke Cognitive orchestration path
+        * Else (fast/deep/hgnn/error):
+              → Return Organism result
+
+Summary of Updated Policy
+-------------------------
+
+Coordinator:
+    - Handles scoring, drift detection, specialization matching,
+      surprise detection, and classification.
+    - Determines DecisionKind and returns a high-level routing decision.
+
+Organism:
+    - Handles the majority of real work (fast/deep tasks).
+    - Routes tasks to organs and agents based on specialization.
+    - Executes tools, cognitive modules, training modules, etc.
+    - Only escalates to Cognitive path when explicitly required.
+
+This keeps the pipeline:
+    * Fast for normal tasks
+    * Intelligent for ambiguous tasks
+    * Scalable for composite workloads
+    * Unified across Coordinator, Organism, and Cognitive services
 """
 
 import os
@@ -293,164 +351,116 @@ class OrganismRouter(Router):
         logger.info(f"OrganismRouter initialized with base_url: {base_url}")
 
     async def route_and_execute(
-        self,
-        payload: Union[TaskPayload, Dict[str, Any]],
-        correlation_id: Optional[str] = None
+    self,
+    payload: Union[TaskPayload, Dict[str, Any]],
+    correlation_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Route task through Organism service for fast-path execution."""
+        """
+        Unified entrypoint for routing + executing tasks through the OrganismService.
+
+        - Always POSTs to /route-task (canonical endpoint)
+        - Lets OrganismCore handle routing, agent selection, execution, escalation
+        - Client does NOT need to know organism internals
+        """
+        started_at = datetime.now(timezone.utc)
+
         try:
+            # 1. Coerce into a proper TaskPayload
             task_payload = _coerce_task_payload(payload)
             task_data = task_payload.model_dump()
+
+            task_id = task_payload.task_id
+            logger.debug(f"[OrganismRouter] Routing task {task_id}")
+
             if correlation_id:
                 task_data["correlation_id"] = correlation_id
 
-            started_at = datetime.now(timezone.utc)
-
-            task_id = task_payload.task_id
-            logger.debug(f"Routing task via Organism: {task_id}")
-
-            # Step 1: resolve which organ should handle this task
-            route_result = await self.client.post(
-                "/resolve-route",
-                json={"task": task_data},
+            # 2. Call the single universal endpoint
+            response = await self.client.post(
+                "/route-task",
+                json=task_data,
             )
 
-            if isinstance(route_result, dict) and route_result.get("error"):
-                return {
-                    "kind": DecisionKind.ERROR.value,
-                    "success": False,
-                    "error": f"Route resolution failed: {route_result.get('error')}",
-                    "path": "organism_route_error"
-                }
+            # Ensure response is dict
+            if not isinstance(response, dict):
+                raise ValueError("OrganismService returned non-dict response")
 
-            organ_id = route_result.get("organ_id") or route_result.get("logical_id")
-            if not organ_id:
-                return {
-                    "kind": DecisionKind.ERROR.value,
-                    "success": False,
-                    "error": "No organ ID returned from route resolution",
-                    "path": "organism_no_organ"
-                }
+            # Pull out results
+            result = response.get("result", {}) if "result" in response else response
 
-            # Step 2: execute on that organ
-            execute_payload = {
-                "organ_id": organ_id,
-                "task": task_data
-            }
-            execute_result = await self.client.post(
-                "/execute-on-organ",
-                json=execute_payload,
-            )
+            # Add warnings if success=False
+            if not response.get("success", True):
+                result.setdefault("error", response.get("error"))
+                result.setdefault("success", False)
 
-            logger.debug(f"Organism execute result: {execute_result}")
-
-            decision_kind = execute_result.get("kind")
-
-            # 3. COGNITIVE → delegate directly to CognitiveService (planner path)
+            # 3. Handle possible cognitive escalation
+            decision_kind = result.get("kind")
             if decision_kind == DecisionKind.COGNITIVE.value:
                 logger.info(
-                    f"Task {task_id}: Cognitive planning requested; delegating to CognitiveService (RAG + Plan)."
+                    f"[OrganismRouter] Cognitive escalation required for {task_id}; "
+                    "delegating to CognitiveService"
                 )
+
                 try:
                     if not self.cognitive_client:
                         logger.error(
-                            f"Task {task_id}: CognitiveServiceClient is not initialized. Cannot delegate."
+                            "[OrganismRouter] cognitive_client is not initialized; "
+                            "cannot process cognitive escalation"
                         )
-                        execute_result["warning"] = "CognitiveServiceClient not available"
-                        return execute_result
+                        result["warning"] = "CognitiveServiceClient unavailable"
+                    else:
+                        cog_res = await self.cognitive_client.execute_async(
+                            agent_id=result.get("agent_id", f"planner_{task_id}"),
+                            cog_type=CognitiveType.TASK_PLANNING,
+                            decision_kind=DecisionKind.COGNITIVE,
+                            input_data={
+                                "task_description": task_payload.description or "",
+                                "agent_capabilities": {},
+                                "available_resources": {},
+                            },
+                            meta={
+                                "task_id": task_id,
+                                "correlation_id": correlation_id,
+                            },
+                        )
 
-                    input_data = {
-                        "task_description": task_payload.description or "No description provided.",
-                        "agent_capabilities": {},
-                        "available_resources": {},
-                    }
+                        # Replace result payload entirely
+                        result = _wrap_cognitive_response(
+                            task_data=task_data,
+                            correlation_id=correlation_id,
+                            cog_res=cog_res,
+                        )
 
-                    meta = {
-                        "task_id": task_id,
-                        "correlation_id": correlation_id,
-                    }
-
-                    cog_res = await self.cognitive_client.execute_async(
-                        agent_id=task_data.get("agent_id", f"dispatcher_planner_{task_id}"),
-                        cog_type=CognitiveType.TASK_PLANNING,
-                        decision_kind=DecisionKind.COGNITIVE,
-                        input_data=input_data,
-                        meta=meta,
-                    )
-                    return _wrap_cognitive_response(
-                        task_data=task_data,
-                        correlation_id=correlation_id,
-                        cog_res=cog_res,
-                    )
-
-                except Exception as plan_err:
+                except Exception as exc:
                     logger.warning(
-                        f"Escalation router failed for task {task_id}: {plan_err}"
+                        f"[OrganismRouter] Cognitive escalation failed for {task_id}: {exc}"
                     )
-                    # Attach warning but still surface organism output
-                    execute_result["warning"] = (
-                        f"Escalation router failed: {plan_err}"
-                    )
-                    return execute_result
-
-            # Otherwise:
-            # - fast_path → direct success (FastPathResult)
-            # - escalated → already decomposed HGNN plan (EscalatedResult)
-            # - error     → pass it along
-            result = execute_result
+                    result.setdefault("warning", f"Cognitive escalation failed: {exc}")
 
         except Exception as e:
-            logger.error(f"OrganismRouter failed to route task: {e}")
+            logger.error(f"[OrganismRouter] Failed to route task {task_payload.task_id}: {e}")
             result = {
                 "kind": DecisionKind.ERROR.value,
                 "success": False,
                 "error": str(e),
-                "path": "organism_error"
+                "path": "organism_router_exception",
             }
 
+        # 4. Attach routing metadata + execution metrics
         selected_agent = (
             result.get("selected_agent_id")
             or result.get("meta", {}).get("routing_decision", {}).get("selected_agent_id")
         )
+
         score = (
             result.get("router_score")
             or result.get("meta", {}).get("routing_decision", {}).get("router_score")
         )
+
         _attach_routing_decision(result, selected_agent, score)
         _attach_exec_metrics(result, started_at, attempt=1)
+
         return result
-
-    async def health_check(self) -> Dict[str, Any]:
-        """Check Organism service health."""
-        try:
-            return await self.client.health_check()
-        except Exception as e:
-            return {
-                "status": "unhealthy",
-                "error": str(e),
-                "router_type": "organism"
-            }
-
-    async def close(self):
-        """Close HTTP client."""
-        await self.client.close()
-        if getattr(self, "cognitive_client", None):
-            try:
-                await self.cognitive_client.close()
-            except Exception as close_err:
-                logger.debug(
-                    "OrganismRouter failed to close CognitiveServiceClient: %s",
-                    close_err,
-                )
-        if getattr(self, "cognitive_client", None):
-            try:
-                await self.cognitive_client.close()
-            except Exception as close_err:
-                logger.debug(
-                    "CoordinatorHttpRouter failed to close CognitiveServiceClient: %s",
-                    close_err,
-                )
-
 
 # -----------------------------------------------------------------------------
 # CoordinatorHttpRouter
@@ -555,79 +565,30 @@ class CoordinatorHttpRouter(Router):
                 correlation_id = coordinator_corr
                 logger.debug(f"Using Coordinator-issued correlation_id: {correlation_id}")
 
-            decision_kind = result.get("kind")
-
-            # 2. FAST_PATH → delegate to fast router (default: OrganismRouter)
-            if decision_kind == DecisionKind.FAST_PATH.value:
-                logger.info(
-                    f"Task {task_id}: Coordinator chose fast_path; delegating."
+            # decision_kind = result.get("kind")
+            logger.info(
+                f"Task {task_id}: Coordinator chose fast_path; delegating."
+            )
+            try:
+                fast_router = RouterFactory.create_router(
+                    router_type="organism",
+                    config=self.config
                 )
-                try:
-                    fast_router = RouterFactory.create_router(
-                        router_type="organism",
-                        config=self.config
-                    )
-                    fast_res = await fast_router.route_and_execute(
-                        task_data,
-                        correlation_id=correlation_id
-                    )
-                    await fast_router.close()
-                    result = fast_res
-
-                except Exception as handoff_err:
-                    logger.warning(
-                        f"Fast-path delegation failed for task {task_id}: {handoff_err}"
-                    )
-                    result.setdefault("warnings", []).append(
-                        f"Fast-path delegation failed: {handoff_err}"
-                    )
-            elif decision_kind == DecisionKind.COGNITIVE.value:
-                logger.info(
-                    f"Task {task_id}: Cognitive planning requested; delegating to CognitiveService (RAG + Plan)."
+                fast_res = await fast_router.route_and_execute(
+                    task_data,
+                    correlation_id=correlation_id
                 )
-                try:
-                    if not self.cognitive_client:
-                        logger.error(
-                            f"Task {task_id}: CognitiveServiceClient is not initialized. Cannot delegate."
-                        )
-                        result.setdefault("warnings", []).append(
-                            "CognitiveServiceClient not available"
-                        )
-                    else:
-                        input_data = {
-                            "task_description": task_payload.description or "No description provided.",
-                            "agent_capabilities": {},
-                            "available_resources": {},
-                        }
+                await fast_router.close()
+                result = fast_res
 
-                        meta = {
-                            "task_id": task_id,
-                            "correlation_id": correlation_id,
-                        }
+            except Exception as handoff_err:
+                logger.warning(
+                    f"Fast-path or deep delegation failed for task {task_id}: {handoff_err}"
+                )
+                result.setdefault("warnings", []).append(
+                    f"Fast-path or deep delegation failed: {handoff_err}"
+                )
 
-                        cog_res = await self.cognitive_client.execute_async(
-                            agent_id=task_data.get("agent_id", f"dispatcher_planner_{task_id}"),
-                            cog_type=CognitiveType.TASK_PLANNING,
-                            decision_kind=DecisionKind.COGNITIVE,
-                            input_data=input_data,
-                            meta=meta,
-                        )
-                        result = _wrap_cognitive_response(
-                            task_data=task_data,
-                            correlation_id=correlation_id,
-                            cog_res=cog_res,
-                        )
-
-                except Exception as cog_err:
-                    logger.error(
-                        f"CognitiveService delegation failed for task {task_id}: {cog_err}",
-                        exc_info=True
-                    )
-                    result.setdefault("warnings", []).append(
-                        f"CognitiveService delegation failed: {cog_err}"
-                    )
-                    result["success"] = False
-                    result["error"] = f"CognitiveService delegation failed: {cog_err}"
         except Exception as e:
             logger.error(f"CoordinatorHttpRouter failed to route task: {e}")
             result = {

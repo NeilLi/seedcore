@@ -4,20 +4,14 @@ init_dispatchers.py
 Create/refresh Reaper, GraphDispatchers, and N queue Dispatchers.
 Warm them up (DB pools) and kick off their run loops.
 """
-from seedcore.logging_setup import setup_logging
-setup_logging(app_name="seedcore.dispatchers")  # centralized stdout logging only
+
 
 import os
 import sys
 import time
-import logging
 from pathlib import Path
 
-# Add src to path for imports
-ROOT = Path(__file__).resolve().parents[1]  # /app
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+import ray  # pyright: ignore[reportMissingImports]
 
 from seedcore.utils.ray_utils import (
     ensure_ray_initialized,
@@ -26,9 +20,17 @@ from seedcore.utils.ray_utils import (
     shutdown_ray
 )
 
-import ray
+from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
-log = logging.getLogger("seedcore.dispatchers")
+setup_logging(app_name="seedcore.dispatchers")  # centralized stdout logging only
+log = ensure_serve_logger("seedcore.dispatchers")
+
+# Add src to path for imports
+ROOT = Path(__file__).resolve().parents[1]  # /app
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
 
 # ---------- helpers ----------
 def _env_bool(name: str, default: str | bool = "false") -> bool:

@@ -7,7 +7,8 @@ and learning/evolution policies.
 
 Exposed modules:
 - specialization: Specialization enum, RoleProfile dataclass, RoleRegistry
-- role_registry_defaults: DEFAULT_ROLE_REGISTRY and builder
+- role_registry_hospitality: HOSPITALITY_ROLE_REGISTRY and builder
+- generic_defaults: DEFAULT_ROLE_REGISTRY (generic/minimal defaults)
 - skill_vector: SkillVector and simple persistence protocol
 - skill_learning: Outcome-driven skill updates and promotion/demotion policy
 - rbac: Tool/data access enforcement based on RoleProfile
@@ -19,9 +20,13 @@ from .specialization import (
     RoleProfile,
     RoleRegistry,
 )
-from .role_registry_defaults import (
+from .generic_defaults import (
     DEFAULT_ROLE_REGISTRY,
     build_default_role_registry,
+)
+from .role_registry_hospitality import (
+    HOSPITALITY_ROLE_REGISTRY,
+    build_hospitality_role_registry,
 )
 from .skill_vector import (
     SkillVector,
@@ -49,9 +54,12 @@ __all__ = [
     "Specialization",
     "RoleProfile",
     "RoleRegistry",
-    # defaults
+    # generic defaults
     "DEFAULT_ROLE_REGISTRY",
     "build_default_role_registry",
+    # hospitality registry
+    "HOSPITALITY_ROLE_REGISTRY",
+    "build_hospitality_role_registry",
     # skills
     "SkillVector",
     "SkillStoreProtocol",
@@ -71,9 +79,9 @@ __all__ = [
 ]
 
 
-def make_default_roles() -> RoleRegistry:
+def make_hospitality_roles() -> RoleRegistry:
     """
     Convenience factory that returns a fresh RoleRegistry populated with
-    the default hotel-scenario profiles. Equivalent to build_default_role_registry().
+    the hospitality hotel-scenario profiles. Equivalent to build_hospitality_role_registry().
     """
-    return build_default_role_registry()
+    return build_hospitality_role_registry()

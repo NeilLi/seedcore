@@ -21,30 +21,72 @@ import json
 
 
 class Specialization(str, Enum):
-    """Agent specialization taxonomy."""
+    """Agent specialization taxonomy for AI-driven smart habitats."""
+
+    # -------------------------------------------------------------
+    # META-CONTROL & GLOBAL PLANNING
+    # -------------------------------------------------------------
+    CONTEXTUAL_PLANNER = "contextual_planner"
+    GOAL_SYNTHESIZER = "goal_synthesizer"              # translates user intent → actionable goals
+    ROUTING_META_AGENT = "routing_meta_agent"          # organ-level routing / cross-organ coordination
+
+    # -------------------------------------------------------------
+    # USER INTERACTION & PREFERENCE MANAGEMENT
+    # -------------------------------------------------------------
+    USER_LIAISON = "user_liaison"                      # natural dialog, clarification, negotiation
+    MOOD_INFERENCE_AGENT = "mood_inference_agent"      # detects user state from sensors
+    SCHEDULE_ORACLE = "schedule_oracle"                # plans around calendars, routines, guests
+    PREFERENCE_MODEL = "preference_model"              # long-term user preference learning
+
+    # -------------------------------------------------------------
+    # ENVIRONMENT MODELING & UNDERSTANDING
+    # -------------------------------------------------------------
+    ENVIRONMENT_MODEL = "environment_model"            # unified world state from multi-sensor fusion
+    ANOMALY_DETECTOR = "anomaly_detector"              # detects unusual patterns, failures, risks
+    FORECASTER = "forecaster"                          # predicts air quality, energy, occupancy
+    SAFETY_MONITOR = "safety_monitor"                  # detects hazards, emergencies
+
+    # -------------------------------------------------------------
+    # DEVICE & ROBOT ORCHESTRATION
+    # -------------------------------------------------------------
+    DEVICE_ORCHESTRATOR = "device_orchestrator"        # maps goals → device commands
+    ROBOT_COORDINATOR = "robot_coordinator"            # multi-robot path & task orchestration
+    HVAC_CONTROLLER = "hvac_controller"
+    LIGHTING_CONTROLLER = "lighting_controller"
+    ENERGY_MANAGER = "energy_manager"
+    CLEANING_MANAGER = "cleaning_manager"
+    SECURITY_DRONE_MANAGER = "security_drone_manager"
+    MAINTENANCE_MANAGER = "maintenance_manager"
+
+    # -------------------------------------------------------------
+    # EXECUTION AGENTS (physical robots / device drivers)
+    # -------------------------------------------------------------
+    EXECUTION_ROBOT = "execution_robot"                # base type
+    CLEANING_ROBOT = "cleaning_robot"
+    DELIVERY_ROBOT = "delivery_robot"
+    SECURITY_DRONE = "security_drone"
+    INSPECTION_ROBOT = "inspection_robot"
+
+    # -------------------------------------------------------------
+    # VERIFICATION, QA, SELF-CORRECTION
+    # -------------------------------------------------------------
+    ENVIRONMENT_VERIFIER = "environment_verifier"      # compares goals vs reality
+    RESULT_VALIDATOR = "result_validator"              # checks "was task done properly?"
+    FEEDBACK_INTEGRATOR = "feedback_integrator"        # integrates user or sensor feedback
+
+    # -------------------------------------------------------------
+    # LEARNING, CRITIC, ADAPTATION
+    # -------------------------------------------------------------
+    CRITIC = "critic"                                  # identifies suboptimal plans
+    ADAPTIVE_LEARNER = "adaptive_learner"              # improves future strategies
+    FAILURE_ANALYZER = "failure_analyzer"
+    PLAN_REFINER = "plan_refiner"
+
+    # -------------------------------------------------------------
+    # GENERALIST / FLEX ROLES
+    # -------------------------------------------------------------
     GENERALIST = "generalist"
-
-    # Guest Relations Organ
-    GEA = "guest_empathy_agent"
-    PEA = "proactive_experience_agent"
-    RCD = "robotic_concierge_dispatcher"
-
-    # Security Organ
-    AAC = "asset_access_controller"
-    DSS = "digital_security_sentinel"
-
-    # Food & Beverage Organ
-    CIS = "culinary_innovation_scout"
-    RKO = "robotic_kitchen_orchestrator"
-
-    # Engineering & Operations Organ
-    BHM = "building_health_monitor"
-    RMD = "robotic_maintenance_dispatcher"
-
-    # Meta-System & Learning Roles
-    IRS = "incident_resolution_specialist"
-    ULA = "utility_learning_agent"
-    OBS = "observer_agent"
+    OBSERVER = "observer"
 
 
 @dataclass(frozen=True)

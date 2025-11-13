@@ -1,3 +1,20 @@
+# =================================================================================================
+#  LEGACY MODULE — queue_dispatcher.py
+#
+#  This file is retained **only for backward compatibility and historical reference**.
+#
+#  SeedCore v2 no longer uses QueueDispatcher as part of the runtime pipeline.
+#  The modern execution path is:
+#      - Dispatcher (Ray Actor)            → seedcore/dispatcher/dispatcher.py
+#      - Reaper (Ray Actor)                → seedcore/dispatcher/reaper.py
+#
+#  This module should NOT be imported by any new code. It contains outdated logic
+#  from the Legacy Queue-Loop architecture, which has been replaced by Ray-native
+#  async actors with integrated routing, claiming, execution, and heartbeat.
+#
+#  ⚠ SAFE TO DELETE once existing downstream systems confirm they no longer rely on it.
+# =================================================================================================
+
 from __future__ import annotations
 
 import os
@@ -10,14 +27,12 @@ import contextlib
 import random
 import time
 import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-import ray
-from ray import serve
-from pydantic import BaseModel, field_validator, Field
-from prometheus_client import Counter, Gauge, CollectorRegistry
+import ray  # pyright: ignore[reportMissingImports]
+from prometheus_client import Counter, Gauge, CollectorRegistry  # pyright: ignore[reportMissingImports]
 try:
-    import psutil  # for RSS telemetry if available
+    import psutil  # for RSS telemetry if available  # pyright: ignore[reportMissingModuleSource]
 except Exception:
     psutil = None
 

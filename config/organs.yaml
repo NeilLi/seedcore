@@ -1,69 +1,122 @@
-# SeedCore Organism Configuration (v2)
-#
-# This file defines the structure of the organism, which organs to spawn,
-# and which agent specializations each organ is responsible for.
-# The OrganismManager reads this at startup to build its routing map.
+# Smart Habitat Organism Configuration (SeedCore v2)
+# ---------------------------------------------------
+# Defines organs (agent clusters) and the specializations they host.
+# Each organ is an autonomous subsystem in the Habitat AI Organism.
 
 seedcore:
   organism:
-    
-    schema_version: 2
-    default_actor_class: "seedcore.organs.tier0.Tier0MemoryManager"
-    
-    # A list of Organs to spawn.
-    # The OrganismManager will iterate this list, spawn each organ actor,
-    # and then spawn the defined agents within it.
+
     organs:
-      
-      # === Guest Relations Organ ===
-      - id: "guest_relations_organ"
-        description: "Handles all direct guest interaction, experience, and concierge."
-        # (Optional) specify the actor class for this organ
-        # actor_class: "seedcore.managers.tier0.Tier0MemoryManager"
-        agents:
-          - specialization: "GEA"  # guest_empathy_agent
-            count: 3
-          - specialization: "PEA"  # proactive_experience_agent
-            count: 1
-          - specialization: "RCD"  # robotic_concierge_dispatcher
-            count: 2
 
-      # === Security Organ ===
-      - id: "security_organ"
-        description: "Manages physical and digital asset protection, access, and auditing."
+      # =============================================================
+      #  META-CONTROL & GLOBAL REASONING ORGAN
+      # =============================================================
+      - id: "meta_control_organ"
+        description: "High-level planning, cross-organ routing, intent synthesis."
         agents:
-          - specialization: "AAC"  # asset_access_controller
-            count: 2
-          - specialization: "DSS"  # digital_security_sentinel
+          - specialization: "CONTEXTUAL_PLANNER"
+            count: 1
+          - specialization: "GOAL_SYNTHESIZER"
+            count: 1
+          - specialization: "ROUTING_META_AGENT"
+            count: 1
+          - specialization: "GENERALIST"
             count: 1
 
-      # === F&B Organ ===
-      - id: "fnb_organ"
-        description: "Manages all culinary, dietary, inventory, and kitchen automation."
+      # =============================================================
+      #  USER EXPERIENCE & INTERACTION ORGAN
+      # =============================================================
+      - id: "user_experience_organ"
+        description: "User dialog, mood inference, preference management."
         agents:
-          - specialization: "CIS"  # culinary_innovation_scout
+          - specialization: "USER_LIAISON"
+            count: 2
+          - specialization: "MOOD_INFERENCE_AGENT"
             count: 1
-          - specialization: "RKO"  # robotic_kitchen_orchestrator
+          - specialization: "SCHEDULE_ORACLE"
+            count: 1
+          - specialization: "PREFERENCE_MODEL"
             count: 1
 
-      # === Engineering & Operations Organ ===
-      - id: "engineering_organ"
-        description: "Manages building health, IoT sensors, and maintenance."
+      # =============================================================
+      #  ENVIRONMENT UNDERSTANDING ORGAN
+      # =============================================================
+      - id: "environment_intelligence_organ"
+        description: "World modeling, predictions, anomalies, emergency detection."
         agents:
-          - specialization: "BHM"  # building_health_monitor
-            count: 1
-          - specialization: "RMD"  # robotic_maintenance_dispatcher
-            count: 1
-            
-      # === Meta-System Organ (Utility, Learning, etc.) ===
-      - id: "meta_system_organ"
-        description: "Handles system-level learning, crisis response, and observation."
-        agents:
-          - specialization: "IRS"  # incident_resolution_specialist
-            count: 1
-          - specialization: "ULA"  # utility_learning_agent
-            count: 1
-          - specialization: "OBS"  # observer_agent
-            count: 1
-          - specialization: "GENERALIST" # General-purpose agents
+          - specialization: "ENVIRONMENT_MODEL"
             count: 2
+          - specialization: "ANOMALY_DETECTOR"
+            count: 1
+          - specialization: "FORECASTER"
+            count: 1
+          - specialization: "SAFETY_MONITOR"
+            count: 1
+
+      # =============================================================
+      #  DEVICE & ROBOT ORCHESTRATION ORGAN
+      # =============================================================
+      - id: "orchestration_organ"
+        description: "Device control, robot task coordination, energy optimization."
+        agents:
+          - specialization: "DEVICE_ORCHESTRATOR"
+            count: 2
+          - specialization: "ROBOT_COORDINATOR"
+            count: 2
+          - specialization: "HVAC_CONTROLLER"
+            count: 1
+          - specialization: "LIGHTING_CONTROLLER"
+            count: 1
+          - specialization: "ENERGY_MANAGER"
+            count: 1
+          - specialization: "CLEANING_MANAGER"
+            count: 1
+          - specialization: "SECURITY_DRONE_MANAGER"
+            count: 1
+          - specialization: "MAINTENANCE_MANAGER"
+            count: 1
+
+      # =============================================================
+      #  ROBOT EXECUTION ORGAN (PHYSICAL ACTUATION)
+      # =============================================================
+      - id: "robot_execution_organ"
+        description: "Autonomous physical robots: movement, cleaning, delivery."
+        agents:
+          - specialization: "CLEANING_ROBOT"
+            count: 2
+          - specialization: "DELIVERY_ROBOT"
+            count: 1
+          - specialization: "SECURITY_DRONE"
+            count: 1
+          - specialization: "INSPECTION_ROBOT"
+            count: 1
+
+      # =============================================================
+      #  VERIFICATION & FEEDBACK ORGAN
+      # =============================================================
+      - id: "verification_organ"
+        description: "Real-world verification, QA, feedback integration."
+        agents:
+          - specialization: "ENVIRONMENT_VERIFIER"
+            count: 2
+          - specialization: "RESULT_VALIDATOR"
+            count: 1
+          - specialization: "FEEDBACK_INTEGRATOR"
+            count: 1
+
+      # =============================================================
+      #  LEARNING & ADAPTATION ORGAN
+      # =============================================================
+      - id: "learning_organ"
+        description: "Continuous adaptation, strategy optimization, self-correction."
+        agents:
+          - specialization: "CRITIC"
+            count: 1
+          - specialization: "ADAPTIVE_LEARNER"
+            count: 1
+          - specialization: "FAILURE_ANALYZER"
+            count: 1
+          - specialization: "PLAN_REFINER"
+            count: 1
+          - specialization: "OBSERVER"
+            count: 1

@@ -20,7 +20,7 @@ Refactored to inherit from BaseAgent.
 """
 
 import os
-import ray
+import ray  # pyright: ignore[reportMissingImports]
 import numpy as np
 import time
 import asyncio

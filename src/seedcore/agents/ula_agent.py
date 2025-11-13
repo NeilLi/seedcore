@@ -25,7 +25,6 @@ from typing import Any, Dict, List, Optional
 from .base import BaseAgent
 from .roles.specialization import Specialization
 from .roles.rbac import authorize_tool
-from .roles.routing import AgentAdvertisement  # only for type hints/docs
 
 logger = logging.getLogger(__name__)
 

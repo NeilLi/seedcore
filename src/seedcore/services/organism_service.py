@@ -23,7 +23,9 @@ sys.path.insert(0, '/app/src')
 
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.organs.organism_manager import OrganismManager
+from seedcore.organs.organism_core import OrganismCore
 from seedcore.models import TaskPayload
+from seedcore.agents.roles.specialization import Specialization
 from seedcore.models.organism import (
     BulkResolveRequest,
     BulkResolveResponse,
@@ -71,6 +73,7 @@ class OrganismService:
 
         self.logger.info("🚀 Creating OrganismService instance...")
         self.organism_manager = OrganismManager()
+        self.organism_core = OrganismCore()
         self._initialized = False
         self._init_task = None
         self._init_lock = asyncio.Lock()
@@ -116,7 +119,7 @@ class OrganismService:
             "endpoints": {
                 "health": "/health",
                 "status": "/status",
-                "handle_task": "/handle-task",
+                "route_task": "/route-task",
                 "get_organism_status": "/organism-status",
                 "get_organism_summary": "/organism-summary",
                 "initialize": "/initialize",
@@ -154,55 +157,81 @@ class OrganismService:
 
     # --- Core Task Handling Endpoint ---
 
-    @app.post("/handle-task", response_model=OrganismResponse)
-    async def handle_task(self, request: OrganismRequest):
+    @app.post("/route-task", response_model=OrganismResponse)
+    async def route_task(self, request: Dict[str, Any]):
         """
-        Handle incoming tasks through the organism manager.
-        This is the main endpoint that replaces the plain Ray actor task handling.
+        route incoming tasks using TaskPayload as the canonical structure.
+        Incoming JSON may be directly a TaskPayload or any compatible dict.
         """
-        task_id = request.task_id or getattr(request, "id", "unknown")
-        self.logger.info(f"[OrganismService] 🎯 Received task {task_id} via HTTP endpoint")
-        task_type = request.type or "general_query"
-        self.logger.info(f"[OrganismService] 📋 Task details: type={task_type}, domain={request.domain}")
+
+        task_id = request.get("task_id") or request.get("id") or "unknown"
+        task_type = request.get("type") or "general_query"
+
+        self.logger.info(f"[OrganismService] 🎯 Received task {task_id}")
+        self.logger.info(f"[OrganismService] 📋 task_type={task_type}, domain={request.get('domain')}")
 
         try:
-            self.logger.info("[OrganismService] 🔧 Checking organism initialization status...")
             if not self._initialized:
-                self.logger.error(f"[OrganismService] ❌ Organism not initialized for task {task_id}")
                 return OrganismResponse(
                     success=False,
                     result={},
                     error="Organism not initialized",
-                    task_type=request.type,
+                    task_type=task_type,
                 )
 
-            # Convert OrganismRequest -> dict without app_state for manager
-            task_data = request.model_dump(exclude={"app_state"})
-            transient_app_state = request.app_state or {}
-            self.logger.info(f"[OrganismService] 🔄 Converted request to task payload for {task_id}")
+            # Try to interpret body as TaskPayload
+            try:
+                task_payload = TaskPayload.from_db(request)
+            except Exception:
+                self.logger.warning(
+                    f"[OrganismService] Falling back to direct TaskPayload construction for {task_id}"
+                )
+                task_payload = TaskPayload(
+                    task_id=str(task_id),
+                    type=request.get("type") or "unknown_task",
+                    params=request.get("params") or {},
+                    description=request.get("description") or "",
+                    domain=request.get("domain"),
+                    drift_score=float(request.get("drift_score") or 0.0),
+                    required_specialization=request.get("required_specialization")
+                )
 
-            # Handle the task through the organism manager
-            self.logger.info(f"[OrganismService] 🚀 Calling organism_manager.handle_incoming_task for {task_id}")
-            result = await self.organism_manager.handle_incoming_task(
-                task_data,
-                app_state=transient_app_state,
+            # Resolve specialization
+            spec_str = task_payload.required_specialization
+            try:
+                specialization = Specialization(spec_str) if spec_str else Specialization.GENERALIST
+            except Exception:
+                self.logger.warning(
+                    f"[OrganismService] Invalid specialization '{spec_str}', defaulting to GENERALIST"
+                )
+                specialization = Specialization.GENERALIST
+
+            # Execute via organism core
+            self.logger.info(
+                f"[OrganismService] 🚀 Routing task {task_id} to {specialization.value}"
             )
-            self.logger.info(f"[OrganismService] ✅ Organism manager completed for {task_id}: success={result.get('success')}")
 
-            # API response structure: {"success": ..., "result": { manager_fields... }}
+            result = await self.organism_core.route_task(
+                specialization=specialization,
+                payload=task_payload,
+                metadata=request.get("metadata") or {}
+            )
+
+            has_error = "error" in result
             return OrganismResponse(
-                success=result.get("success", True),
+                success=not has_error,
                 result=result,
-                task_type=request.type,
+                task_type=task_type,
+                error=result.get("error") if has_error else None,
             )
 
         except Exception as e:
-            self.logger.exception(f"[OrganismService] ❌ Unhandled error processing task {task_id}: {e}")
+            self.logger.exception(f"[OrganismService] ❌ Error in task {task_id}: {e}")
             return OrganismResponse(
                 success=False,
                 result={},
                 error=str(e),
-                task_type=request.type,
+                task_type=task_type,
             )
 
     # --- Organism Management Endpoints ---
@@ -279,7 +308,8 @@ class OrganismService:
             if self._initialized:
                 return {"success": True, "message": "Organism already initialized"}
 
-            await self.organism_manager.initialize_organism()
+            # await self.organism_manager.initialize_organism()
+            await self.organism_core.initialize_organism()
             self._initialized = True
             return {"success": True, "message": "Organism initialized successfully"}
         except Exception as e:
@@ -618,18 +648,6 @@ class OrganismService:
             if not self._initialized:
                 return {"success": False, "error": "Organism not initialized"}
             return await self.organism_manager.set_memory_thresholds(thresholds)
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    # --- Direct Method Access for Backward Compatibility ---
-
-    async def handle_incoming_task(self, task: Dict[str, Any], app_state: Dict[str, Any] | None = None) -> Dict[str, Any]:
-        """Direct Serve-handle method for backward compatibility."""
-        try:
-            if not self._initialized:
-                return {"success": False, "error": "Organism not initialized"}
-
-            return await self.organism_manager.handle_incoming_task(task, app_state)
         except Exception as e:
             return {"success": False, "error": str(e)}
 

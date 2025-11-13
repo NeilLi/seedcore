@@ -13,18 +13,14 @@
 # limitations under the License.
 
 """
-Dispatcher implementations for SeedCore.
+Persistence layer for task management in SeedCore dispatchers.
 """
 
-# Dispatchers
-# from .queue_dispatcher import Dispatcher, Reaper
-from .dispatcher_actor import Dispatcher
-from .reaper_actor import Reaper
-from .graph_dispatcher import GraphDispatcher
+from .interfaces import TaskRepositoryProtocol
+from .task_repository import TaskRepository
 
 __all__ = [
-    'Dispatcher',
-    'Reaper', 
-    'GraphDispatcher',
+    'TaskRepository',
+    'TaskRepositoryProtocol',
 ]
 

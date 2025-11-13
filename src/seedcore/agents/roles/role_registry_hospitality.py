@@ -1,6 +1,6 @@
-# agents/roles/role_registry_defaults.py
+# agents/roles/role_registry_hospitality.py
 """
-Default RoleRegistry for the futuristic hotel scenario.
+Hospitality RoleRegistry for the futuristic hotel scenario.
 
 Each RoleProfile encodes:
 - default_skills: baseline skill priors (0..1)
@@ -15,11 +15,38 @@ You can extend or override these profiles at startup by composing registries.
 from __future__ import annotations
 
 from typing import Dict
+from enum import Enum
+
 from .specialization import (
-    Specialization,
     RoleProfile,
     RoleRegistry,
 )
+
+class HospitalitySpecialization(str, Enum):
+    """Agent specialization taxonomy."""
+    GENERALIST = "generalist"
+
+    # Guest Relations Organ
+    GEA = "guest_empathy_agent"
+    PEA = "proactive_experience_agent"
+    RCD = "robotic_concierge_dispatcher"
+
+    # Security Organ
+    AAC = "asset_access_controller"
+    DSS = "digital_security_sentinel"
+
+    # Food & Beverage Organ
+    CIS = "culinary_innovation_scout"
+    RKO = "robotic_kitchen_orchestrator"
+
+    # Engineering & Operations Organ
+    BHM = "building_health_monitor"
+    RMD = "robotic_maintenance_dispatcher"
+
+    # Meta-System & Learning Roles
+    IRS = "incident_resolution_specialist"
+    ULA = "utility_learning_agent"
+    OBS = "observer_agent"
 
 # --- Tool name conventions (examples) ---
 # Use consistent, namespaced tool identifiers across your ToolManager.
@@ -90,12 +117,12 @@ def _merge_policies(*dicts: Dict[str, float]) -> Dict[str, float]:
     return merged
 
 
-def build_default_role_registry() -> RoleRegistry:
+def build_hospitality_role_registry() -> RoleRegistry:
     reg = RoleRegistry()
 
     # --- Generalist ---
     reg.register(RoleProfile(
-        name=Specialization.GENERALIST,
+        name=HospitalitySpecialization.GENERALIST,
         default_skills={
             "analysis": 0.6,
             "planning": 0.6,
@@ -111,7 +138,7 @@ def build_default_role_registry() -> RoleRegistry:
 
     # --- Guest Empathy Agent (GEA) ---
     reg.register(RoleProfile(
-        name=Specialization.GEA,
+        name=HospitalitySpecialization.GEA,
         default_skills={
             "empathy": 0.9,
             "service_recovery": 0.8,
@@ -129,7 +156,7 @@ def build_default_role_registry() -> RoleRegistry:
 
     # --- Proactive Experience Agent (PEA) ---
     reg.register(RoleProfile(
-        name=Specialization.PEA,
+        name=HospitalitySpecialization.PEA,
         default_skills={
             "anomaly_detection": 0.85,
             "proactive_planning": 0.8,
@@ -143,7 +170,7 @@ def build_default_role_registry() -> RoleRegistry:
 
     # --- Robotic Concierge Dispatcher (RCD) ---
     reg.register(RoleProfile(
-        name=Specialization.RCD,
+        name=HospitalitySpecialization.RCD,
         default_skills={
             "dispatch_planning": 0.8,
             "route_optimization": 0.8,
@@ -157,7 +184,7 @@ def build_default_role_registry() -> RoleRegistry:
 
     # --- Asset & Access Controller (AAC) ---
     reg.register(RoleProfile(
-        name=Specialization.AAC,
+        name=HospitalitySpecialization.AAC,
         default_skills={
             "key_management": 0.85,
             "access_policy": 0.85,
@@ -171,7 +198,7 @@ def build_default_role_registry() -> RoleRegistry:
 
     # --- Digital Security Sentinel (DSS) ---
     reg.register(RoleProfile(
-        name=Specialization.DSS,
+        name=HospitalitySpecialization.DSS,
         default_skills={
             "intrusion_detection": 0.9,
             "policy_auditing": 0.85,
@@ -185,7 +212,7 @@ def build_default_role_registry() -> RoleRegistry:
 
     # --- Culinary Innovation Scout (CIS) ---
     reg.register(RoleProfile(
-        name=Specialization.CIS,
+        name=HospitalitySpecialization.CIS,
         default_skills={
             "allergen_safety": 0.9,
             "vendor_scouting": 0.8,
@@ -199,7 +226,7 @@ def build_default_role_registry() -> RoleRegistry:
 
     # --- Robotic Kitchen Orchestrator (RKO) ---
     reg.register(RoleProfile(
-        name=Specialization.RKO,
+        name=HospitalitySpecialization.RKO,
         default_skills={
             "recipe_compilation": 0.85,
             "allergen_isolation": 0.9,
@@ -213,7 +240,7 @@ def build_default_role_registry() -> RoleRegistry:
 
     # --- Building Health Monitor (BHM) ---
     reg.register(RoleProfile(
-        name=Specialization.BHM,
+        name=HospitalitySpecialization.BHM,
         default_skills={
             "fault_forecasting": 0.9,
             "hvac_diagnostics": 0.85,
@@ -227,7 +254,7 @@ def build_default_role_registry() -> RoleRegistry:
 
     # --- Robotic Maintenance Dispatcher (RMD) ---
     reg.register(RoleProfile(
-        name=Specialization.RMD,
+        name=HospitalitySpecialization.RMD,
         default_skills={
             "dispatch_optimization": 0.85,
             "spare_parts_matching": 0.8,
@@ -241,7 +268,7 @@ def build_default_role_registry() -> RoleRegistry:
 
     # --- Incident Resolution Specialist (IRS) ---
     reg.register(RoleProfile(
-        name=Specialization.IRS,
+        name=HospitalitySpecialization.IRS,
         default_skills={
             "cross_organ_coordination": 0.9,
             "crisis_playbooks": 0.9,
@@ -261,7 +288,7 @@ def build_default_role_registry() -> RoleRegistry:
 
     # --- Utility & Learning Agent (ULA) ---
     reg.register(RoleProfile(
-        name=Specialization.ULA,
+        name=HospitalitySpecialization.ULA,
         default_skills={
             "meta_rl_tuning": 0.85,
             "consolidation_selection": 0.85,
@@ -276,5 +303,5 @@ def build_default_role_registry() -> RoleRegistry:
     return reg
 
 
-# Export a ready-to-use default registry
-DEFAULT_ROLE_REGISTRY: RoleRegistry = build_default_role_registry()
+# Export a ready-to-use hospitality registry
+HOSPITALITY_ROLE_REGISTRY: RoleRegistry = build_hospitality_role_registry()
