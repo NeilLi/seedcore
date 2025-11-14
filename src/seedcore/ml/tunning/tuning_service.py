@@ -7,24 +7,23 @@ specifically for XGBoost models in the SeedCore platform.
 
 from __future__ import annotations
 
-import ray
-import requests
 import logging
 import time
 import os
 import json
 import shutil
 from pathlib import Path
-from ..utils.ray_utils import ensure_ray_initialized
-from typing import Dict, Any, Optional, List, Tuple, Union
-from ray import tune
-from ray.tune.schedulers import ASHAScheduler
-from ray.tune.search.basic_variant import BasicVariantGenerator
+from typing import Dict, Any, Optional, List, Tuple
+import ray  # pyright: ignore[reportMissingImports]
+from ray import tune  # pyright: ignore[reportMissingImports]
+from ray.tune.schedulers import ASHAScheduler  # pyright: ignore[reportMissingImports]
+from ray.tune.search.basic_variant import BasicVariantGenerator  # pyright: ignore[reportMissingImports]
+
+from ...utils.ray_utils import ensure_ray_initialized
 
 from .tuning_config import get_search_space, get_tune_config
-from .models.xgboost_service import get_xgboost_service, XGBoostConfig, TrainingConfig
-from ..memory.flashbulb_client import FlashbulbClient
-from ..predicates.gpu_guard import GPUGuard
+from ...memory.flashbulb_client import FlashbulbClient
+from ...predicates.gpu_guard import GPUGuard
 
 try:
     import pandas as pd  # type: ignore

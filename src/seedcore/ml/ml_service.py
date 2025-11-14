@@ -12,32 +12,26 @@ from __future__ import annotations
 
 import os
 import time
-import json
 import math
 import uuid
 import asyncio
-import logging
 import threading
 import concurrent.futures
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
-import ray
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from ray import serve
+import ray  # pyright: ignore[reportMissingImports]
+from fastapi import BackgroundTasks, FastAPI, HTTPException  # pyright: ignore[reportMissingImports]
+from ray import serve  # pyright: ignore[reportMissingImports]
 
-from seedcore.utils.ray_utils import get_serve_urls
 
 # ---------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------
-from seedcore.logging_setup import ensure_serve_logger
+from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
-logger = ensure_serve_logger("seedcore.ml", level="DEBUG")
-
-logger.info("✅ ML ServeApp logger initialized and active")
-
+setup_logging(app_name="seedcore.ml_service.driver")
+logger = ensure_serve_logger("seedcore.ml_service", level="DEBUG")
 
 # Small pool for any ad-hoc CPU work (kept for parity; most heavy work uses asyncio.to_thread)
 thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
@@ -104,6 +98,12 @@ def sanitize_json(data: Any) -> Any:
 # FastAPI app (ingressed by Serve)
 # ---------------------------------------------------------------------
 ml_app = FastAPI()
+
+# Service state for startup initialization
+_service_state = {
+    "drift_detector": None,
+    "warmup_task": None,
+}
 
 # Global status actor handle (init in MLService.__init__)
 status_actor = None
@@ -190,6 +190,12 @@ async def root():
                     "list_jobs": "/xgboost/tune/jobs",
                 },
                 "refresh_model": "/xgboost/refresh_model",
+                "promote": "/xgboost/promote",
+                "distillation": {
+                    "distill_episode": "/xgboost/distill/episode",
+                    "train_distilled": "/xgboost/train_distilled",
+                },
+                "system_regime": "/xgboost/system_regime",
             },
         },
     }
@@ -197,7 +203,7 @@ async def root():
 @ml_app.get("/health")
 async def health_check():
     try:
-        import psutil
+        import psutil  # pyright: ignore[reportMissingModuleSource]
         try:
             from seedcore.ml.models.xgboost_service import get_xgboost_service
             xgb_status = "available" if get_xgboost_service() else "unavailable"
@@ -895,7 +901,7 @@ async def delete_xgboost_model(request: Dict[str, Any]):
 @ml_app.post("/xgboost/tune")
 async def run_tuning_sweep(request: Dict[str, Any]):
     try:
-        from seedcore.ml.tuning_service import get_tuning_service
+        from seedcore.ml.tunning.tuning_service import get_tuning_service
         from seedcore.ml.models.xgboost_models import TuneRequest, TuneResponse
 
         tune_request = TuneRequest(**request)
@@ -929,7 +935,7 @@ def _run_tuning_job_task(status_actor_handle, job_id: str, request: Dict[str, An
     t.start()
 
     try:
-        from seedcore.ml.tuning_service import get_tuning_service
+        from seedcore.ml.tunning.tuning_service import get_tuning_service
         tuning_service = get_tuning_service()
         result = tuning_service.run_tuning_sweep(
             space_type=request.get("space_type", "default"),
@@ -980,28 +986,29 @@ async def list_tuning_jobs():
 PROMOTION_LTOT_CAP: float = float(os.getenv("SEEDCORE_PROMOTION_LTOT_CAP", "0.98"))
 E_GUARD: float = float(os.getenv("SEEDCORE_E_GUARD", "0.0"))  # require delta_E <= -E_GUARD
 
-def _get_seedcore_api_base() -> str:
-    base = os.getenv("SEEDCORE_API_ADDRESS", "localhost:8002")
-    if not base.startswith("http"):
-        base = f"http://{base}"
-    return base
 
-def _get_energy_meta() -> Dict[str, Any]:
+
+async def _get_energy_meta() -> Dict[str, Any]:
+    """Get energy metadata using EnergyServiceClient."""
     try:
-        base = _get_seedcore_api_base()
-        import requests
-        r = requests.get(f"{base}/energy/meta", timeout=3)
-        r.raise_for_status()
-        return r.json()
+        from seedcore.serve.energy_client import EnergyServiceClient
+        from seedcore.utils.ray_utils import SERVE_GATEWAY
+        base_url = f"{SERVE_GATEWAY}/ops/energy/meta"
+        client = EnergyServiceClient(base_url, timeout=3.0)
+        return await client.get_meta()
     except Exception as e:
         logger.error(f"Failed to fetch /energy/meta: {e}")
         raise HTTPException(status_code=502, detail=f"Energy meta unavailable: {e}")
 
-def _log_flywheel_event(payload: Dict[str, Any]) -> None:
+async def _log_flywheel_event(payload: Dict[str, Any]) -> None:
+    """Log flywheel event using EnergyServiceClient."""
     try:
-        base = _get_seedcore_api_base()
-        import requests
-        requests.post(f"{base}/energy/log", json=payload, timeout=2)
+        from seedcore.serve.energy_client import EnergyServiceClient
+        from seedcore.utils.ray_utils import SERVE_GATEWAY
+        
+        # Use SERVE_GATEWAY as base URL for energy service
+        client = EnergyServiceClient(base_url=SERVE_GATEWAY, timeout=2.0)
+        await client.post("/ops/energy/log", json=payload)
     except Exception as e:
         logger.warning(f"Failed to log flywheel event: {e}")
 
@@ -1014,7 +1021,7 @@ async def refresh_xgboost_model():
             raise HTTPException(status_code=503, detail="XGBoost service unavailable")
 
         try:
-            meta_before = _get_energy_meta()
+            meta_before = await _get_energy_meta()
             if meta_before.get("L_tot", 1.0) >= PROMOTION_LTOT_CAP:
                 return {"accepted": False, "reason": "System at/over Lipschitz cap (pre-flight)", "meta": meta_before}
         except HTTPException:
@@ -1025,7 +1032,7 @@ async def refresh_xgboost_model():
         if not ok:
             raise HTTPException(status_code=400, detail="Failed to refresh model")
 
-        meta_after = _get_energy_meta()
+        meta_after = await _get_energy_meta()
         if meta_after.get("L_tot", 1.0) >= PROMOTION_LTOT_CAP:
             if old_path:
                 try:
@@ -1034,7 +1041,7 @@ async def refresh_xgboost_model():
                     logger.error("Rollback failed after L_tot cap violation (refresh)")
             return {"accepted": False, "reason": "Post-refresh L_tot cap violated", "meta": meta_after}
 
-        _log_flywheel_event({"organ": "utility", "metric": "model_refresh", "model_path": svc.current_model_path, "success": True})
+        await _log_flywheel_event({"organ": "utility", "metric": "model_refresh", "model_path": svc.current_model_path, "success": True})
         return {"accepted": True, "message": "Model refreshed successfully", "current_model_path": svc.current_model_path}
 
     except Exception as e:
@@ -1057,7 +1064,7 @@ async def promote_xgboost_model(request: Dict[str, Any]):
         if not (delta_E <= -E_GUARD):
             return {"accepted": False, "reason": f"ΔE guard failed (delta_E={delta_E} must be ≤ {-E_GUARD})"}
 
-        meta_before = _get_energy_meta()
+        meta_before = await _get_energy_meta()
         if meta_before.get("L_tot", 1.0) >= PROMOTION_LTOT_CAP:
             return {"accepted": False, "reason": "System at/over Lipschitz cap (pre-flight)", "meta": meta_before}
 
@@ -1070,7 +1077,7 @@ async def promote_xgboost_model(request: Dict[str, Any]):
         if not ok:
             return {"accepted": False, "reason": "Failed to load candidate model"}
 
-        meta_after = _get_energy_meta()
+        meta_after = await _get_energy_meta()
         if meta_after.get("L_tot", 1.0) >= PROMOTION_LTOT_CAP:
             if old_path:
                 try:
@@ -1079,7 +1086,7 @@ async def promote_xgboost_model(request: Dict[str, Any]):
                     logger.error("Rollback failed after L_tot cap violation")
             return {"accepted": False, "reason": "Post-promotion L_tot cap violated", "meta": meta_after}
 
-        _log_flywheel_event(
+        await _log_flywheel_event(
             {
                 "organ": "utility",
                 "metric": "flywheel_result",
@@ -1098,61 +1105,179 @@ async def promote_xgboost_model(request: Dict[str, Any]):
         logger.error(f"Error during xgboost promotion: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@ml_app.post("/xgboost/distill/episode")
+async def distill_episode(request: Dict[str, Any]):
+    """
+    Accept a SystemEpisode, label it with LLM, and store a training sample
+    for XGBoost distillation.
+    """
+    try:
+        from seedcore.ml.distillation.system_episode import SystemEpisode, episode_to_features
+        from seedcore.ml.distillation.teacher_llm import label_episode_with_llm
+        from seedcore.ml.distillation.sample_store import append_sample  # new module
+
+        ep = SystemEpisode(**request)
+        features = episode_to_features(ep)
+        labels = await label_episode_with_llm(ep)
+
+        sample = {
+            "episode_id": ep.episode_id,
+            "features": features,
+            "regime_label": labels["regime_label"],
+            "action_label": labels["action_label"],
+            "confidence": labels["confidence"],
+            "start_ts": ep.start_ts,
+            "end_ts": ep.end_ts,
+        }
+
+        await append_sample(sample)  # implement this to store to disk/DB
+        return {"status": "success", "sample": sanitize_json(sample)}
+    except Exception as e:
+        logger.error(f"Error in distill_episode: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@ml_app.post("/xgboost/train_distilled")
+async def train_xgboost_distilled(request: Dict[str, Any]):
+    """
+    Train an XGBoost model using distilled system-episode samples
+    (features + LLM-provided labels).
+    """
+    try:
+        from seedcore.ml.models.xgboost_models import TrainModelResponse
+        from seedcore.ml.models.xgboost_service import get_xgboost_service
+        from seedcore.ml.distillation.sample_store import load_distillation_dataset
+
+        # Optional: allow specifying which label (regime vs action)
+        label_type = request.get("label_type", "regime_label")
+
+        X, y, feature_names = await asyncio.to_thread(
+            load_distillation_dataset, label_type
+        )
+
+        svc = get_xgboost_service()
+        if not svc:
+            raise HTTPException(status_code=503, detail="XGBoost service unavailable")
+
+        # You might extend svc.train_model to accept numpy arrays directly
+        result = await asyncio.to_thread(
+            svc.train_from_arrays,
+            X,
+            y,
+            feature_names,
+            request.get("name", f"distilled_{label_type}_{int(time.time())}")
+        )
+
+        return TrainModelResponse(**sanitize_json(result))
+    except Exception as e:
+        logger.error(f"Error in XGBoost distilled training: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@ml_app.post("/xgboost/system_regime")
+async def predict_system_regime(request: Dict[str, Any]):
+    """
+    Inference for system regime classification using distilled XGBoost model.
+    Expects features in the same format as episode_to_features output.
+    """
+    try:
+        from seedcore.ml.models.xgboost_service import get_xgboost_service
+
+        features = request.get("features")
+        if not features:
+            raise HTTPException(status_code=400, detail="features required")
+
+        svc = get_xgboost_service()
+        if not svc:
+            raise HTTPException(status_code=503, detail="XGBoost service unavailable")
+
+        matrix = [list(features.values())]  # single row
+        preds = await asyncio.to_thread(svc.predict, matrix)
+        pred_label_id = int(preds[0])
+
+        # Optional: map numeric label back to string regime
+        # e.g. via a small config or metadata in svc.model_metadata
+        regime = svc.decode_label(pred_label_id) if hasattr(svc, "decode_label") else pred_label_id
+
+        return {
+            "status": "success",
+            "regime": regime,
+            "raw_score": float(preds[0]),
+            "model_path": getattr(svc, "current_model_path", None),
+            "timestamp": time.time(),
+        }
+    except Exception as e:
+        logger.error(f"Error in system_regime prediction: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------------------------------------------------------------
 # Serve deployment that hosts ml_app
 # ---------------------------------------------------------------------
-@serve.deployment(
-    num_replicas=1,
-    max_ongoing_requests=32,
-    ray_actor_options={
-        "num_cpus": 0.1,
-        "num_gpus": 0,
-        "memory": 200_000_000,
-    },
-)
+@ml_app.on_event("startup")
+async def startup_event():
+    """
+    FastAPI startup event handler.
+    
+    This runs after __init__ and before the service accepts requests.
+    This is the correct place to run async initialization logic like warmup tasks.
+    """
+    logger.info("🚀 FastAPI startup event: Initializing ML service...")
+    
+    # Initialize status actor (synchronous Ray operations are fine here)
+    global status_actor
+    try:
+        ns = None
+        try:
+            ns = ray.get_runtime_context().namespace
+        except Exception:
+            ns = os.getenv("RAY_NAMESPACE", None)
+        try:
+            # Use explicit namespace (prefer SEEDCORE_NS)
+            ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+            status_actor = ray.get_actor("job_status_actor", namespace=ns)
+            logger.info(f"✅ Connected to existing status actor (ns={ns})")
+        except Exception:
+            status_actor = StatusActor.options(name="job_status_actor", lifetime="detached", namespace=ns).remote()
+            logger.info(f"✅ Created new status actor (ns={ns})")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize status actor: {e}")
+        status_actor = None
+    
+    # Initialize drift detector for warmup (lazy loading)
+    try:
+        from seedcore.ml.drift_detector import get_drift_detector
+        detector = get_drift_detector()
+        _service_state["drift_detector"] = detector
+        
+        # Schedule background warmup task (now in proper async context)
+        if detector:
+            logger.info("🔄 Scheduling drift detector background warmup...")
+            warmup_task = asyncio.create_task(detector.warmup())
+            _service_state["warmup_task"] = warmup_task
+            logger.info("✅ Drift detector warmup task scheduled")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not initialize drift detector for warmup: {e}")
+    
+    logger.info("✅ MLService startup event complete")
+
+@serve.deployment(name="MLService")
 @serve.ingress(ml_app)
 class MLService:
     """Ray Serve deployment for ML services (FastAPI ingress)."""
 
     def __init__(self):
-        logger.info("✅ MLService initializing")
-        global status_actor
-        try:
-            ns = None
-            try:
-                ns = ray.get_runtime_context().namespace
-            except Exception:
-                ns = os.getenv("RAY_NAMESPACE", None)
-            try:
-                # Use explicit namespace (prefer SEEDCORE_NS)
-                ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
-                status_actor = ray.get_actor("job_status_actor", namespace=ns)
-                logger.info(f"✅ Connected to existing status actor (ns={ns})")
-            except Exception:
-                status_actor = StatusActor.options(name="job_status_actor", lifetime="detached", namespace=ns).remote()
-                logger.info(f"✅ Created new status actor (ns={ns})")
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize status actor: {e}")
-            status_actor = None
-
+        """
+        Lightweight __init__ - heavy initialization moved to startup_event.
+        
+        This keeps startup fast and defers async operations to the proper
+        FastAPI lifecycle event handler.
+        """
+        logger.info("✅ MLService class initializing (lightweight)")
+        
+        # Initialize instance variables for lazy loading (if needed by endpoints)
         self._salience_scorer = None
         self._xgboost_service = None  # kept for possible future use
+        self._drift_detector = None  # Lazy initialization on first use
         
-        # Initialize drift detector (lazy initialization)
-        self._drift_detector = None
-        logger.info("✅ MLService initialized (drift detector will be loaded on first use)")
-        
-        logger.info("✅ MLService initialized")
-
-        # Schedule background warmup to reduce cold start latency
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            loop.create_task(self._warmup_drift_detector())
-            logger.info("🔄 Scheduled drift detector background warmup")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not schedule background warmup: {e}")
+        logger.info("✅ MLService class initialized (startup event will handle async init)")
 
     def _get_drift_detector(self):
         """Get drift detector with lazy initialization."""
@@ -1166,16 +1291,6 @@ class MLService:
                 return None
         return self._drift_detector
 
-    async def _warmup_drift_detector(self):
-        """Warm up the drift detector to avoid cold start latency."""
-        detector = self._get_drift_detector()
-        if detector:
-            try:
-                await detector.warmup()
-                logger.info("✅ Drift detector warmup completed")
-            except Exception as e:
-                logger.warning(f"⚠️ Drift detector warmup failed: {e}")
-
     def _get_salience_scorer(self):
         if self._salience_scorer is None:
             try:
@@ -1185,163 +1300,6 @@ class MLService:
                 logger.error(f"Failed to load salience scorer: {e}")
                 self._salience_scorer = None
         return self._salience_scorer
-
-
-# ---------------------------------------------------------------------
-# A second Serve app factory with convenience /ml_serve/xgb* endpoints
-# ---------------------------------------------------------------------
-def create_serve_app(args: Dict[str, Any]):
-    """Create a separate Serve deployment with a small FastAPI for XGBoost convenience endpoints."""
-    try:
-        fastapi_app = FastAPI()
-
-        @fastapi_app.get("/")
-        async def root():
-            return {"status": "ok", "message": "ml_serve is alive"}
-
-        @fastapi_app.get("/health")
-        async def health():
-            return {"status": "healthy", "service": "ml_serve"}
-
-        @fastapi_app.get("/xgb/models")
-        async def list_models():
-            try:
-                from seedcore.ml.models.xgboost_service import get_xgboost_service
-                svc = get_xgboost_service()
-                if not svc:
-                    return {"error": "XGBoost service unavailable"}
-                return {"models": await asyncio.to_thread(svc.list_models)}
-            except Exception as e:
-                logger.exception("list_models failed")
-                return {"error": f"{e}"}
-
-        @fastapi_app.get("/xgb/model_info")
-        async def model_info():
-            from seedcore.ml.models.xgboost_service import get_xgboost_service
-            svc = get_xgboost_service()
-            if not svc:
-                return {"error": "XGBoost service unavailable"}
-            return {"model_info": await asyncio.to_thread(svc.get_model_info)}
-
-        @fastapi_app.post("/xgb")
-        async def predict(request: Request):
-            """Flexible predict that accepts:
-               - {"features": [[...], ...]} or {"data": [[...], ...]}
-               - single list: {"features": [...]}
-               - dict row(s): {"data": [{"feature_0": ...}, ...]}
-            """
-            from seedcore.ml.models.xgboost_service import get_xgboost_service
-            svc = get_xgboost_service()
-            if not svc:
-                return {"error": "XGBoost service unavailable"}
-
-            body = await request.json()
-            raw = body.get("features") or body.get("data") or body
-
-            # Normalize to 2D float matrix
-            if isinstance(raw, dict):
-                rows = [raw]
-            else:
-                rows = raw
-
-            try:
-                if rows and isinstance(rows[0], dict):
-                    cols = (svc.model_metadata.get("feature_columns")
-                            or [f"feature_{i}" for i in range(len(rows[0]))])
-                    matrix = [[float(r.get(c, 0.0)) for c in cols] for r in rows]
-                else:
-                    # numeric vectors
-                    if rows and isinstance(rows[0], (int, float)):
-                        matrix = [rows]
-                    else:
-                        matrix = rows
-
-                pred = await asyncio.to_thread(svc.predict, matrix)
-                if isinstance(pred, np.ndarray):
-                    pred = pred.tolist()
-                return {"prediction": pred}
-            except Exception as e:
-                logger.exception("Prediction failed")
-                return {"error": f"Failed to make prediction: {e}"}
-
-        @fastapi_app.post("/xgb/load")
-        async def xgb_load(payload: dict):
-            from seedcore.ml.models.xgboost_service import get_xgboost_service
-            svc = get_xgboost_service()
-            if not svc:
-                return {"error": "XGBoost service unavailable"}
-            path = payload.get("path") or payload.get("model_path")
-            if not path:
-                return {"error": "Provide 'path' (or 'model_path') to model.xgb"}
-            ok = await asyncio.to_thread(svc.load_model, path)
-            return {"status": "success" if ok else "error", "path": path}
-
-        @fastapi_app.post("/xgb/refresh")
-        async def xgb_refresh():
-            from seedcore.ml.models.xgboost_service import get_xgboost_service
-            svc = get_xgboost_service()
-            if not svc:
-                return {"error": "XGBoost service unavailable"}
-            ok = await asyncio.to_thread(svc.refresh_model)
-            return {"status": "success" if ok else "error"}
-
-        @fastapi_app.post("/xgb/train_sample")
-        async def xgb_train_sample(payload: dict = {}):
-            from seedcore.ml.models.xgboost_service import get_xgboost_service
-            svc = get_xgboost_service()
-            if not svc:
-                return {"error": "XGBoost service unavailable"}
-
-            n = int(payload.get("n_samples", 5000))
-            f = int(payload.get("n_features", 20))
-            label = payload.get("label_column", "target")
-            name = payload.get("name") or f"quick_xgb_{int(time.time())}"
-
-            ds = await asyncio.to_thread(svc.create_sample_dataset, n, f)
-            result = await asyncio.to_thread(svc.train_model, ds, label, None, None, None, name)
-            ok = await asyncio.to_thread(svc.load_model, result["path"])
-            return {"trained": result, "loaded": ok}
-
-        @serve.deployment(route_prefix="/ml_serve")
-        @serve.ingress(fastapi_app)
-        class MLServeWrapper:
-            pass
-
-        logger.info("✅ Ray Serve deployment (wrapper) created successfully")
-        return MLServeWrapper.bind()
-    except Exception as e:
-        logger.error(f"Error creating Serve application: {e}")
-        raise
-
-
-# ---------------------------------------------------------------------
-# Salience client using ray_utils constants
-# ---------------------------------------------------------------------
-class SalienceServiceClient:
-    def __init__(self, base_url: str | None = None, base_path: str | None = None):
-        import httpx
-        urls = get_serve_urls(base_gateway=base_url, ml_base=base_path)
-        self.base_url = urls["gateway"]
-        self.salience_endpoint = urls["ml_salience"]
-        self.health_endpoint = urls["ml_health"]
-        self.client = httpx.Client(timeout=10.0)
-
-    def score_salience(self, features: List[Dict[str, Any]]) -> List[float]:
-        try:
-            resp = self.client.post(self.salience_endpoint, json={"features": features}, headers={"Content-Type": "application/json"})
-            if resp.status_code == 200:
-                return resp.json().get("scores", [])
-            raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
-        except Exception as e:
-            logger.error(f"Salience scoring failed: {e}")
-            return self._simple_fallback(features)
-
-    def _simple_fallback(self, features: List[Dict[str, Any]]) -> List[float]:
-        out = []
-        for f in features:
-            out.append(float(f.get("task_risk", 0.5)) * float(f.get("failure_severity", 0.5)))
-        return out
-
 
 # ---------------------------------------------------------------------
 # Entrypoint (optional)

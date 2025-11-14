@@ -101,6 +101,19 @@ class EnergyServiceClient(BaseServiceClient):
         # Path includes the /ops prefix from the gateway
         return await self.get("/ops/energy/metrics")
     
+    async def get_meta(self) -> Dict[str, Any]:
+        """
+        Get energy metadata (e.g., Lipschitz constant L_tot).
+        
+        This endpoint provides metadata about the energy system state.
+        
+        Returns:
+            A dictionary with metadata fields like L_tot, etc.
+        """
+        # Use the seedcore-api endpoint for energy meta
+        # This might be proxied through the gateway or accessed directly
+        return await self.get("/ops/energy/meta")
+    
     async def health(self) -> Dict[str, Any]:
         """
         Check the health of the EnergyService.

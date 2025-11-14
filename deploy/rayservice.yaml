@@ -21,8 +21,9 @@ spec:
           - name: MLService
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.2
+              num_cpus: 0.4
               num_gpus: 0
+              memory: 2147483648 # 2GB
               resources: {"head_node": 0.001}
 
       - name: cognitive
@@ -47,6 +48,18 @@ spec:
               num_cpus: 0.2
               num_gpus: 0
               resources: {"head_node": 0.001}
+      
+      - name: organism
+        import_path: entrypoints.organism_entrypoint:build_organism_app
+        route_prefix: /organism
+        deployments:
+          - name: OrganismService
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 0.3
+              num_gpus: 0
+              memory: 2147483648  # 2GB
+              resources: {"head_node": 0.001}
 
       - name: ops
         import_path: entrypoints.ops_entrypoint:build_ops_app
@@ -68,32 +81,20 @@ spec:
           - name: FactManager
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.1
+              num_cpus: 0.01
               memory: 1073741824    # 1GB
 
           - name: StateService
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.15
+              num_cpus: 0.1
               memory: 1073741824    # 1GB
 
           - name: EnergyService
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.15
+              num_cpus: 0.1
               memory: 1073741824    # 1GB
-
-      - name: organism
-        import_path: entrypoints.organism_entrypoint:build_organism_app
-        route_prefix: /organism
-        deployments:
-          - name: OrganismService
-            num_replicas: 1
-            ray_actor_options:
-              num_cpus: 0.3
-              num_gpus: 0
-              memory: 2147483648  # 2GB
-              resources: {"head_node": 0.001}
 
   # ===================================================================
   #  Ray Cluster Configuration
@@ -130,6 +131,8 @@ spec:
                       fieldPath: metadata.namespace
                 - name: SERVE_SERVICE
                   value: "stable"
+                - name: ENABLE_ML_SERVICE
+                  value: "true" # Set to "false" to disable ML service
                 - name: DGL_GRAPHBOLT_SKIP
                   value: "0"
                 - name: RAY_OVERRIDE_RESOURCES
@@ -163,8 +166,6 @@ spec:
                   value: "true"
                 - name: LOG_LEVEL
                   value: "INFO"
-                - name: LLM_PROVIDER
-                  value: "mlservice"
               ports:
                 - name: gcs
                   containerPort: 6379
@@ -286,8 +287,6 @@ spec:
                     value: "true"
                   - name: LOG_LEVEL
                     value: "INFO"
-                  - name: LLM_PROVIDER
-                    value: "mlservice"
                 resources:
                   requests:
                     cpu: "500m"

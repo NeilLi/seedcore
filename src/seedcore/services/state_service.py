@@ -200,16 +200,7 @@ async def get_all_agent_snapshots():
     }
 
 # --- Ray Serve Deployment ---
-
-@serve.deployment(
-    name="StateService",
-    num_replicas=1,
-    max_ongoing_requests=16,
-    ray_actor_options={
-        "num_cpus": 0.15,
-        "memory": 1073741824,  # 1GB
-    },
-)
+@serve.deployment(name="StateService")
 @serve.ingress(app)
 class StateService:
     """

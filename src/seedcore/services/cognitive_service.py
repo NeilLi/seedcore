@@ -816,15 +816,7 @@ class CognitiveResponse(BaseModel):
 # FastAPI app for ingress
 app = FastAPI(title="SeedCore Cognitive Service", version="2.0.0")
 
-@serve.deployment(
-    name="CognitiveService",
-    num_replicas=int(os.getenv("COG_SVC_REPLICAS", "1")),
-    max_ongoing_requests=32,
-    ray_actor_options={
-        "num_cpus": 0.2,
-        "resources": {"head_node": 0.001},
-    },
-)
+@serve.deployment(name="CognitiveService")
 @serve.ingress(app)
 class CognitiveService:
     def __init__(self):

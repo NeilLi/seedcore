@@ -420,13 +420,7 @@ class ASGIWrapper:
             raise RuntimeError(f"Unsupported scope type: {scope.get('type')}")
         await self.app(scope, receive, send)
 
-
-@serve.deployment(
-    name="Coordinator",
-    num_replicas=int(os.getenv("COORDINATOR_REPLICAS", "1")),
-    max_ongoing_requests=16,
-    ray_actor_options={"num_cpus": float(os.getenv("COORDINATOR_NUM_CPUS", "0.2"))},
-)
+@serve.deployment(name="Coordinator")
 class Coordinator:
     def __init__(self):
         setup_logging(app_name="seedcore.coordinator_service.replica")

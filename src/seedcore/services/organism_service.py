@@ -51,18 +51,7 @@ app = FastAPI(title="SeedCore Organism Service", version="1.0.0")
 # --------------------------------------------------------------------------
 # Ray Serve Deployment: Organism Manager as Serve App
 # --------------------------------------------------------------------------
-@serve.deployment(
-    name="OrganismService",
-    num_replicas=int(os.getenv("ORGANISM_REPLICAS", "1")),
-    max_ongoing_requests=int(os.getenv("ORGANISM_MAX_ONGOING_REQUESTS", "16")),
-    ray_actor_options={
-        "num_cpus": float(os.getenv("ORGANISM_NUM_CPUS", "0.2")),
-        "num_gpus": float(os.getenv("ORGANISM_NUM_GPUS", "0")),
-        "memory": int(os.getenv("ORGANISM_MEMORY", "2147483648")),  # 2GB default
-        # Pin replicas to the head node resource set by RAY_OVERRIDE_RESOURCES
-        "resources": {"head_node": 0.001},
-    },
-)
+@serve.deployment(name="OrganismService")
 @serve.ingress(app)
 class OrganismService:
     def __init__(self):

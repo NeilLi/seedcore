@@ -11,14 +11,16 @@ This service provides ML functionality including:
 - Predictive scaling
 
 This entrypoint is designed to be deployed by Ray Serve YAML configuration.
+Environment variables are configured in deploy/rayservice.yaml at the container level.
 """
 
 import os
 import sys
 import time
+from typing import Optional
 
 from ray import serve  # type: ignore[reportMissingImports]
-
+from fastapi import FastAPI  # type: ignore[reportMissingImports]
 
 # Add the project root to Python path
 sys.path.insert(0, '/app')
@@ -29,50 +31,62 @@ from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.utils.ray_utils import ensure_ray_initialized
 
 # Import the ML service components
-from seedcore.ml.serve_app import MLService
+from seedcore.ml.ml_service import MLService
 
 setup_logging(app_name="seedcore.ml_service.driver")
 logger = ensure_serve_logger("seedcore.ml_service", level="DEBUG")
 
 # --- Configuration ---
+# These defaults are used only for local testing via main()
+# When deployed via rayservice.yaml, env vars are set at container level
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
 
-def build_ml_service(args: dict = None):
+# --- No-op deployment for when ML service is disabled ---
+_noop_app = FastAPI()
+
+@serve.deployment(name="MLService")
+@serve.ingress(_noop_app)
+class MLServiceNoOp:
+    """No-op ML service deployment used when ENABLE_ML_SERVICE is false."""
+    
+    def __init__(self):
+        logger.warning("🚫 MLService is DISABLED (ENABLE_ML_SERVICE=false). Using no-op deployment.")
+    
+    @_noop_app.get("/")
+    async def root(self):
+        return {
+            "status": "disabled",
+            "service": "seedcore-ml",
+            "message": "ML service is disabled. Set ENABLE_ML_SERVICE=true to enable."
+        }
+    
+    @_noop_app.get("/health")
+    async def health(self):
+        return {"status": "disabled", "service": "seedcore-ml"}
+
+def build_ml_service(args: Optional[dict] = None):
     """
     Builder function for the ML service application.
     
-    This function returns a bound Serve application that can be deployed
-    via Ray Serve YAML configuration.
+    This function reads the ENABLE_ML_SERVICE environment variable to conditionally
+    build and return the MLService application or a no-op deployment.
     
     Args:
         args: Optional configuration arguments (unused in this implementation)
         
     Returns:
-        Bound Serve application
+        Bound Serve application (MLService if enabled, MLServiceNoOp if disabled)
     """
-    # Collect env vars from the *controller* process to inject into replicas
-    env_vars = {
-        "SEEDCORE_NS": os.getenv("SEEDCORE_NS", RAY_NS),
-        "RAY_NAMESPACE": os.getenv("RAY_NAMESPACE", RAY_NS),
-        "SERVE_GATEWAY": os.getenv("SERVE_GATEWAY", "http://seedcore-svc-stable-svc:8000"),
-        "METRICS_ENABLED": os.getenv("METRICS_ENABLED", "1"),
-        "MODEL_CACHE_DIR": os.getenv("MODEL_CACHE_DIR", "/app/models"),
-        "DRIFT_DETECTOR_MODEL": os.getenv("DRIFT_DETECTOR_MODEL", "all-MiniLM-L6-v2"),
-        "DRIFT_DETECTOR_DEVICE": os.getenv("DRIFT_DETECTOR_DEVICE", "cpu"),
-        "DRIFT_DETECTOR_MAX_TEXT_LENGTH": os.getenv("DRIFT_DETECTOR_MAX_TEXT_LENGTH", "512"),
-        "DRIFT_DETECTOR_ENABLE_FALLBACK": os.getenv("DRIFT_DETECTOR_ENABLE_FALLBACK", "true"),
-    }
+    # Read the environment variable switch (default to "false" for safety)
+    is_enabled = os.getenv("ENABLE_ML_SERVICE", "false").lower() in ("true", "1")
     
-    # Set environment variables for the replicas
-    for key, value in env_vars.items():
-        if value:
-            os.environ[key] = value
-    
-    logger.info(f"Building ML Service with environment variables: {list(env_vars.keys())}")
-    
-    # Return the bound deployment from the ML service
-    return MLService.bind()
+    if is_enabled:
+        logger.info("✅ ENABLE_ML_SERVICE is 'true'. Building MLService...")
+        return MLService.bind()
+    else:
+        logger.warning("🚫 ENABLE_ML_SERVICE is 'false' or not set. Building no-op MLService...")
+        return MLServiceNoOp.bind()
 
 def main():
     """Main entrypoint for running the ML service directly."""

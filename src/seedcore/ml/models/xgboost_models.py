@@ -4,9 +4,17 @@ Pydantic models for XGBoost API endpoints.
 This module defines the request and response models for the XGBoost service API.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator  # pyright: ignore[reportMissingImports]
 from typing import Dict, Any, List, Optional, Union
 from enum import Enum
+from datetime import datetime
+
+# Allowed evaluation metrics for XGBoost
+ALLOWED_METRICS = {
+    "logloss", "auc", "rmse", "mae", "error", "merror", "mlogloss",
+    "ndcg", "map", "poisson-nloglik", "gamma-nloglik", "cox-nloglik",
+    "gamma-deviance", "tweedie-nloglik", "aucpr"
+}
 
 class ModelObjective(str, Enum):
     """XGBoost objective functions."""
@@ -23,6 +31,18 @@ class TreeMethod(str, Enum):
     EXACT = "exact"
     APPROX = "approx"
 
+class SpaceType(str, Enum):
+    """Type of hyperparameter search space."""
+    DEFAULT = "default"
+    CONSERVATIVE = "conservative"
+    AGGRESSIVE = "aggressive"
+
+class ConfigType(str, Enum):
+    """Type of tuning configuration."""
+    DEFAULT = "default"
+    CONSERVATIVE = "conservative"
+    AGGRESSIVE = "aggressive"
+
 class XGBoostConfigRequest(BaseModel):
     """Request model for XGBoost configuration."""
     objective: ModelObjective = Field(default=ModelObjective.BINARY_LOGISTIC, description="XGBoost objective function")
@@ -32,6 +52,19 @@ class XGBoostConfigRequest(BaseModel):
     tree_method: TreeMethod = Field(default=TreeMethod.HIST, description="Tree construction method")
     num_boost_round: int = Field(default=50, ge=1, le=1000, description="Number of boosting rounds")
     early_stopping_rounds: int = Field(default=10, ge=1, le=100, description="Early stopping rounds")
+
+    @field_validator("eval_metric", mode="before")
+    @classmethod
+    def validate_metrics(cls, v):
+        """Validate that all evaluation metrics are supported by XGBoost."""
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, list):
+            raise ValueError("eval_metric must be a list of strings")
+        for metric in v:
+            if metric not in ALLOWED_METRICS:
+                raise ValueError(f"Unsupported eval_metric: {metric}. Allowed metrics: {sorted(ALLOWED_METRICS)}")
+        return v
 
 class TrainingConfigRequest(BaseModel):
     """Request model for training configuration."""
@@ -52,6 +85,20 @@ class TrainModelRequest(BaseModel):
     xgb_config: Optional[XGBoostConfigRequest] = Field(default=None, description="XGBoost hyperparameters")
     training_config: Optional[TrainingConfigRequest] = Field(default=None, description="Training configuration")
 
+    @model_validator(mode="after")
+    def validate_data_source(self):
+        """Enforce mutual exclusivity between use_sample_data and data_source."""
+        use_sample = self.use_sample_data
+        data_source = self.data_source
+
+        if not use_sample and not data_source:
+            raise ValueError("data_source is required unless use_sample_data=true")
+
+        if use_sample and data_source:
+            raise ValueError("Cannot set data_source when use_sample_data=true")
+
+        return self
+
 class PredictRequest(BaseModel):
     """Request model for making predictions."""
     features: List[Union[float, int]] = Field(description="Feature vector for prediction")
@@ -61,8 +108,16 @@ class BatchPredictRequest(BaseModel):
     """Request model for batch predictions."""
     data_source: str = Field(description="Path to data source for batch prediction")
     data_format: str = Field(default="auto", description="Data format")
-    feature_columns: List[str] = Field(description="List of feature column names")
+    feature_columns: List[str] = Field(min_length=1, description="List of feature column names")
     path: Optional[str] = Field(default=None, description="Path to specific model (optional)")
+
+    @field_validator("feature_columns")
+    @classmethod
+    def validate_unique_columns(cls, v):
+        """Ensure feature_columns are unique and non-empty."""
+        if len(v) != len(set(v)):
+            raise ValueError("feature_columns must be unique")
+        return v
 
 class LoadModelRequest(BaseModel):
     """Request model for loading a model."""
@@ -81,6 +136,7 @@ class TrainModelResponse(BaseModel):
     metrics: Dict[str, Any] = Field(description="Training metrics")
     config: Dict[str, Any] = Field(description="Training configuration used")
     message: Optional[str] = Field(default=None, description="Additional message")
+    timestamp: Optional[datetime] = Field(default_factory=datetime.now, description="Response timestamp")
 
 class PredictResponse(BaseModel):
     """Response model for predictions."""
@@ -88,6 +144,7 @@ class PredictResponse(BaseModel):
     prediction: Union[float, List[float]] = Field(description="Prediction result(s)")
     path: str = Field(description="Path to the model used")
     confidence: Optional[float] = Field(default=None, description="Prediction confidence (if applicable)")
+    timestamp: Optional[datetime] = Field(default_factory=datetime.now, description="Response timestamp")
 
 class BatchPredictResponse(BaseModel):
     """Response model for batch predictions."""
@@ -95,6 +152,7 @@ class BatchPredictResponse(BaseModel):
     predictions_path: str = Field(description="Path to predictions output")
     num_predictions: int = Field(description="Number of predictions made")
     path: str = Field(description="Path to the model used")
+    timestamp: Optional[datetime] = Field(default_factory=datetime.now, description="Response timestamp")
 
 class ModelInfoResponse(BaseModel):
     """Response model for model information."""
@@ -119,11 +177,12 @@ class ErrorResponse(BaseModel):
     status: str = Field(default="error", description="Error status")
     error: str = Field(description="Error message")
     details: Optional[Dict[str, Any]] = Field(default=None, description="Error details")
+    timestamp: Optional[datetime] = Field(default_factory=datetime.now, description="Error timestamp")
 
 class TuneRequest(BaseModel):
     """Request model for hyperparameter tuning."""
-    space_type: str = Field(default="default", description="Type of search space (default, conservative, aggressive)")
-    config_type: str = Field(default="default", description="Type of tuning config (default, conservative, aggressive)")
+    space_type: SpaceType = Field(default=SpaceType.DEFAULT, description="Type of search space (default, conservative, aggressive)")
+    config_type: ConfigType = Field(default=ConfigType.DEFAULT, description="Type of tuning config (default, conservative, aggressive)")
     custom_search_space: Optional[Dict[str, Any]] = Field(default=None, description="Custom search space (overrides space_type)")
     custom_tune_config: Optional[Dict[str, Any]] = Field(default=None, description="Custom tuning config (overrides config_type)")
     experiment_name: str = Field(default="xgboost_tuning", description="Name for the tuning experiment")
@@ -136,4 +195,5 @@ class TuneResponse(BaseModel):
     promotion: Optional[Dict[str, Any]] = Field(default=None, description="Model promotion information")
     total_trials: Optional[int] = Field(default=None, description="Total number of trials")
     experiment_path: Optional[str] = Field(default=None, description="Path to experiment results")
-    error: Optional[str] = Field(default=None, description="Error message if tuning failed") 
+    error: Optional[str] = Field(default=None, description="Error message if tuning failed")
+    timestamp: Optional[datetime] = Field(default_factory=datetime.now, description="Response timestamp") 

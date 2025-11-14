@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import time
 import logging
-import re
 import hashlib
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any, Tuple, Callable
@@ -38,15 +37,13 @@ from ..ops.eventizer.schemas.eventizer_models import (
     TextNormalizationResult,
     PatternCompilationResult,
     PIIAudit,
-    RedactMode,
     EntitySpan,
     PKGHint,
-    PKGEnv,
     PKGHelper
 )
 from ..ops.eventizer.utils.text_normalizer import TextNormalizer, SpanMap
-from ..ops.eventizer.utils.pattern_compiler import PatternCompiler, CompiledRegex
-from ..ops.eventizer.clients.pii_client import PIIClient, PIIConfig, RedactMode as PIIClientRedactMode
+from ..ops.eventizer.utils.pattern_compiler import PatternCompiler
+from ..ops.eventizer.clients.pii_client import PIIClient
 from ..ops.pkg.manager import get_global_pkg_manager
 
 logger = logging.getLogger(__name__)

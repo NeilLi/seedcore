@@ -136,9 +136,6 @@ class HealthResponse(BaseModel):
     error: Optional[str] = None
 
 
-# --- FastAPI App ---
-app = FastAPI(title="SeedCore Proactive Energy Service", version="2.0.0")
-
 # --- Service State ---
 class ServiceState:
     """Holds all state for the service, managed by FastAPI's lifespan."""
@@ -229,6 +226,9 @@ async def _background_sampler():
             await asyncio.sleep(5.0)
 
 # --- Lifespan Events (Startup and Shutdown) ---
+
+# --- FastAPI App ---
+app = FastAPI(title="SeedCore Proactive Energy Service", version="2.0.0")
 
 @app.on_event("startup")
 async def startup_event():
@@ -574,18 +574,7 @@ def _create_weights_for_state(H: np.ndarray, E_sel: Optional[np.ndarray] = None)
         beta_mem=state.default_weights.beta_mem
     )
 
-# --- Ray Serve Deployment ---
-
-@serve.deployment(
-    name="EnergyService",
-    num_replicas=1,
-    max_ongoing_requests=16,
-    ray_actor_options={
-        "num_cpus": 0.2,
-        "num_gpus": 0,
-        "memory": 1073741824,  # 1GB
-    },
-)
+@serve.deployment(name="EnergyService")
 @serve.ingress(app)
 class EnergyService:
     """

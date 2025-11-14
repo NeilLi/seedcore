@@ -8,14 +8,13 @@ Fact model with eventizer processing and PKG governance capabilities.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional, Sequence, Tuple, Union
 
-from sqlalchemy import select, delete, and_, or_, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete, and_, or_, text  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from ..models.fact import Fact
 from .eventizer_service import EventizerService
