@@ -1,45 +1,76 @@
 #!/usr/bin/env python3
 """
-Energy Service Client for SeedCore
+Energy Service Client for SeedCore (Proactive v2)
 
-This client provides a clean interface to the deployed energy service
-for energy management, control loops, and system optimization.
+This client provides a clean interface to the deployed proactive energy service.
+It fetches pre-computed metrics and can trigger on-demand
+computations or optimizations.
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
+from pydantic import BaseModel  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
+# --- Pydantic models for POST bodies ---
+# (These should match the models in energy_service.py)
+
+class EnergyRequestBody(BaseModel):
+    unified_state: Dict[str, Any]
+    weights: Optional[Dict[str, Any]] = None
+    include_gradients: bool = False
+
+class OptimizationRequestBody(BaseModel):
+    unified_state: Dict[str, Any]
+    task: Dict[str, Any]
+    weights: Optional[Dict[str, float]] = None
+    max_agents: Optional[int] = None
+
+class FlywheelResultRequestBody(BaseModel):
+    delta_e: float
+    breakdown: Optional[Dict[str, float]] = None
+    cost: Optional[float] = 0.0
+    scope: Optional[str] = "cluster"
+    scope_id: Optional[str] = "-"
+    p_fast: Optional[float] = 0.9
+    drift: Optional[float] = 0.0
+    beta_mem: Optional[float] = None
+
+class GradientRequestBody(BaseModel):
+    unified_state: Dict[str, Any]
+    weights: Optional[Dict[str, Any]] = None
+
+# ----------------------------------------
+
 class EnergyServiceClient(BaseServiceClient):
     """
-    Client for the deployed energy service that handles:
-    - Energy state management
-    - Control loop operations
-    - System optimization
-    - Energy monitoring
+    Client for the proactive EnergyService.
+
+    NOTE: This client does not manage control loops, policies, or
+    individual agent energy states. That logic now belongs to the
+    Coordinator, which uses this client to get its data.
     """
     
     def __init__(self, 
                  base_url: str = None, 
                  timeout: float = 8.0):
-        # Use centralized gateway discovery (energy service now under /ops)
+        
+        # We set the base_url to the *gateway*, not the /ops path
         if base_url is None:
             try:
                 from seedcore.utils.ray_utils import SERVE_GATEWAY
-                base_url = f"{SERVE_GATEWAY}/ops"
+                base_url = SERVE_GATEWAY  # e.g., "http://127.0.0.1:8000"
             except Exception:
-                base_url = "http://127.0.0.1:8000/ops"
+                base_url = "http://127.0.0.1:8000"
         
-        # Configure circuit breaker for energy service
         circuit_breaker = CircuitBreaker(
             failure_threshold=5,
             recovery_timeout=30.0,
-            expected_exception=(Exception,)  # Catch all exceptions
+            expected_exception=(Exception,)
         )
         
-        # Configure retry for energy service
         retry_config = RetryConfig(
             max_attempts=2,
             base_delay=1.0,
@@ -54,240 +85,163 @@ class EnergyServiceClient(BaseServiceClient):
             retry_config=retry_config
         )
     
-    # Energy State Management
-    async def get_energy_state(self, agent_id: str = None) -> Dict[str, Any]:
+    # --- Primary Methods (Proactive) ---
+    
+    async def get_metrics(self) -> Dict[str, Any]:
         """
-        Get energy state for an agent or system.
+        Get the current, pre-computed energy breakdown.
         
-        Args:
-            agent_id: Optional agent identifier
-            
-        Returns:
-            Energy state data
-        """
-        if agent_id:
-            return await self.get(f"/ops/state/{agent_id}")
-        else:
-            return await self.get("/ops/state")
-    
-    async def update_energy_state(self, agent_id: str, energy_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update energy state for an agent.
+        This is the main, fast-path endpoint that reads from the
+        EnergyService's internal ledger cache.
         
-        Args:
-            agent_id: Agent identifier
-            energy_data: Energy state data
-            
         Returns:
-            Update result
+            A dictionary of energy terms, e.g.:
+            { "pair": ..., "hyper": ..., "entropy": ..., "total": ... }
         """
-        return await self.post(f"/ops/state/{agent_id}", json=energy_data)
+        # Path includes the /ops prefix from the gateway
+        return await self.get("/ops/energy/metrics")
     
-    async def get_energy_history(self, agent_id: str, time_range: str = "1h") -> Dict[str, Any]:
+    async def health(self) -> Dict[str, Any]:
         """
-        Get energy history for an agent.
+        Check the health of the EnergyService.
         
-        Args:
-            agent_id: Agent identifier
-            time_range: Time range for history (1h, 24h, 7d)
-            
-        Returns:
-            Energy history data
+        This polls the OpsGateway, which in turn polls the
+        EnergyService's internal /health endpoint.
         """
-        params = {"time_range": time_range}
-        return await self.get(f"/history/{agent_id}", params=params)
-    
-    # Control Loop Operations
-    async def start_control_loop(self, loop_config: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Start a control loop.
-        
-        Args:
-            loop_config: Control loop configuration
-            
-        Returns:
-            Control loop start result
-        """
-        return await self.post("/control-loops/start", json=loop_config)
-    
-    async def stop_control_loop(self, loop_id: str) -> Dict[str, Any]:
-        """
-        Stop a control loop.
-        
-        Args:
-            loop_id: Control loop identifier
-            
-        Returns:
-            Control loop stop result
-        """
-        return await self.post(f"/control-loops/{loop_id}/stop")
-    
-    async def get_control_loop_status(self, loop_id: str = None) -> Dict[str, Any]:
-        """
-        Get control loop status.
-        
-        Args:
-            loop_id: Optional control loop identifier
-            
-        Returns:
-            Control loop status
-        """
-        if loop_id:
-            return await self.get(f"/control-loops/{loop_id}")
-        else:
-            return await self.get("/control-loops")
-    
-    async def update_control_loop_config(self, loop_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update control loop configuration.
-        
-        Args:
-            loop_id: Control loop identifier
-            config: New configuration
-            
-        Returns:
-            Update result
-        """
-        return await self.put(f"/control-loops/{loop_id}/config", json=config)
-    
-    # System Optimization
-    async def optimize_energy_allocation(self, constraints: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Optimize energy allocation across the system.
-        
-        Args:
-            constraints: Optional optimization constraints
-            
-        Returns:
-            Optimization result
-        """
-        request_data = constraints or {}
-        return await self.post("/optimize", json=request_data)
-    
-    async def get_optimization_recommendations(self, agent_id: str = None) -> Dict[str, Any]:
-        """
-        Get optimization recommendations.
-        
-        Args:
-            agent_id: Optional agent identifier
-            
-        Returns:
-            Optimization recommendations
-        """
-        if agent_id:
-            return await self.get(f"/recommendations/{agent_id}")
-        else:
-            return await self.get("/recommendations")
-    
-    async def apply_optimization(self, optimization_id: str) -> Dict[str, Any]:
-        """
-        Apply an optimization.
-        
-        Args:
-            optimization_id: Optimization identifier
-            
-        Returns:
-            Application result
-        """
-        return await self.post(f"/optimizations/{optimization_id}/apply")
-    
-    # Energy Monitoring
-    async def get_energy_metrics(self, time_range: str = "1h") -> Dict[str, Any]:
-        """
-        Get energy metrics.
-        
-        Args:
-            time_range: Time range for metrics
-            
-        Returns:
-            Energy metrics
-        """
-        params = {"time_range": time_range}
-        return await self.get("/metrics", params=params)
-    
-    async def get_energy_alerts(self) -> Dict[str, Any]:
-        """Get active energy alerts."""
-        return await self.get("/alerts")
-    
-    async def acknowledge_alert(self, alert_id: str) -> Dict[str, Any]:
-        """
-        Acknowledge an energy alert.
-        
-        Args:
-            alert_id: Alert identifier
-            
-        Returns:
-            Acknowledgment result
-        """
-        return await self.post(f"/alerts/{alert_id}/acknowledge")
-    
-    async def get_energy_thresholds(self) -> Dict[str, Any]:
-        """Get energy thresholds configuration."""
-        return await self.get("/thresholds")
-    
-    async def update_energy_thresholds(self, thresholds: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update energy thresholds.
-        
-        Args:
-            thresholds: New threshold values
-            
-        Returns:
-            Update result
-        """
-        return await self.put("/thresholds", json=thresholds)
-    
-    # Energy Policies
-    async def get_energy_policies(self) -> Dict[str, Any]:
-        """Get active energy policies."""
-        return await self.get("/policies")
-    
-    async def create_energy_policy(self, policy: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Create a new energy policy.
-        
-        Args:
-            policy: Policy configuration
-            
-        Returns:
-            Creation result
-        """
-        return await self.post("/policies", json=policy)
-    
-    async def update_energy_policy(self, policy_id: str, policy: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update an energy policy.
-        
-        Args:
-            policy_id: Policy identifier
-            policy: Updated policy configuration
-            
-        Returns:
-            Update result
-        """
-        return await self.put(f"/policies/{policy_id}", json=policy)
-    
-    async def delete_energy_policy(self, policy_id: str) -> Dict[str, Any]:
-        """
-        Delete an energy policy.
-        
-        Args:
-            policy_id: Policy identifier
-            
-        Returns:
-            Deletion result
-        """
-        return await self.delete(f"/policies/{policy_id}")
-    
-    # Service Information
-    async def get_service_info(self) -> Dict[str, Any]:
-        """Get energy service information."""
-        return await self.get("/info")
-    
+        return await self.get("/ops/energy/health")
+
     async def is_healthy(self) -> bool:
         """Check if the energy service is healthy."""
         try:
-            health = await self.health_check()
-            return health.get("status") == "healthy"
+            health_data = await self.health()
+            return health_data.get("status") == "healthy"
         except Exception:
             return False
+
+    # --- On-Demand / Passive Methods ---
+
+    async def compute_energy_from_state(self) -> Dict[str, Any]:
+        """
+        (On-Demand) Triggers the EnergyService to
+        fetch the *latest* state and compute energy *now*.
+        
+        This is slower than get_metrics() as it's not cached.
+        
+        Returns:
+            An EnergyResponse dictionary.
+        """
+        return await self.get("/ops/energy/compute-from-state")
+
+    async def compute_energy(
+        self, 
+        unified_state: Dict[str, Any], 
+        weights: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        (Passive) Compute energy by providing the unified state.
+        
+        Args:
+            unified_state: A full unified state dictionary.
+            weights: Optional custom energy weights.
+            
+        Returns:
+            An EnergyResponse dictionary.
+        """
+        request_data = EnergyRequestBody(
+            unified_state=unified_state,
+            weights=weights,
+            include_gradients=False
+        )
+        return await self.post("/ops/energy/compute", json=request_data.model_dump())
+        
+    async def get_gradient(
+        self, 
+        unified_state: Dict[str, Any], 
+        weights: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        (Passive) Compute energy and its gradients by providing the state.
+        
+        Args:
+            unified_state: A full unified state dictionary.
+            weights: Optional custom energy weights.
+            
+        Returns:
+            An EnergyResponse dictionary with a 'gradients' field.
+        """
+        request_data = EnergyRequestBody(
+            unified_state=unified_state,
+            weights=weights,
+            include_gradients=True
+        )
+        # Note: Assuming OpsGateway proxies a POST /energy/gradient
+        # If not, this can be combined with compute_energy
+        return await self.post("/ops/energy/compute", json=request_data.model_dump())
+
+    async def optimize_agents(
+        self, 
+        unified_state: Dict[str, Any], 
+        task: Dict[str, Any],
+        max_agents: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        (Passive) Get agent recommendations for a task,
+        given the current system state.
+        
+        Args:
+            unified_state: A full unified state dictionary.
+            task: A dictionary describing the task.
+            max_agents: Optional limit on agents to return.
+            
+        Returns:
+            An OptimizationResponse dictionary.
+        """
+        request_data = OptimizationRequestBody(
+            unified_state=unified_state,
+            task=task,
+            max_agents=max_agents
+        )
+        return await self.post("/ops/energy/optimize", json=request_data.model_dump())
+
+    # --- Flywheel Method ---
+    
+    async def post_flywheel_result(
+        self, 
+        delta_e: float, 
+        cost: float,
+        breakdown: Optional[Dict[str, float]] = None,
+        scope: Optional[str] = "cluster",
+        scope_id: Optional[str] = "-",
+        p_fast: Optional[float] = 0.9,
+        drift: Optional[float] = 0.0,
+        beta_mem: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """
+        Posts the result of an action (ΔE) back to the
+        EnergyService to update its ledger and adapt weights.
+        
+        Args:
+            delta_e: The change in energy from the action.
+            cost: The computed cost (e.g., tokens, time) of the action.
+            breakdown: Optional per-term energy breakdown.
+            scope: Optional scope identifier (default: "cluster").
+            scope_id: Optional scope ID (default: "-").
+            p_fast: Optional fast probability (default: 0.9).
+            drift: Optional drift value (default: 0.0).
+            beta_mem: Optional memory beta parameter.
+            
+        Returns:
+            A FlywheelResultResponse dictionary.
+        """
+        request_data = FlywheelResultRequestBody(
+            delta_e=delta_e,
+            cost=cost,
+            breakdown=breakdown,
+            scope=scope,
+            scope_id=scope_id,
+            p_fast=p_fast,
+            drift=drift,
+            beta_mem=beta_mem
+        )
+        # Assumes /ops/flywheel/result is proxied by OpsGateway
+        return await self.post("/ops/flywheel/result", json=request_data.model_dump())

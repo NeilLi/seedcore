@@ -1,31 +1,55 @@
 #!/usr/bin/env python3
 """
-Organism Service Client for SeedCore (Updated)
+OrganismCore Client for SeedCore (V2 Agent-Centric)
 
-This client provides a clean interface to the deployed organism service
-using the new base client architecture.
+This client provides a clean interface to the deployed OrganismCore.
+Its primary role is to submit tasks for execution via the
+'route_task' endpoint.
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
+
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
 
 logger = logging.getLogger(__name__)
 
+
+def get_organism_service_handle():
+    """
+    Get a Ray Serve deployment handle to OrganismService.
+    
+    This is a convenience function for services that need direct Ray handle access
+    (e.g., StateService's AgentAggregator which needs to call .remote() methods).
+    
+    Returns:
+        Ray Serve deployment handle to OrganismService
+    """
+    try:
+        from ray import serve  # pyright: ignore[reportMissingImports]
+        return serve.get_deployment_handle("OrganismService", app_name="organism")
+    except Exception as e:
+        logger.error(f"Failed to get OrganismService handle: {e}")
+        raise
+
 class OrganismServiceClient(BaseServiceClient):
     """
-    Client for the deployed organism service that handles:
-    - Task execution
-    - Organ management
-    - Decision making
-    - Task planning
-    - Organism status monitoring
+    Client for the deployed OrganismCore (v2) router.
+    
+    This client is responsible for:
+    - Executing tasks via the /route-task endpoint
+    - Monitoring the organism's high-level health
+    
+    NOTE: This client does NOT manage policy, routing rules, or
+    individual organ configurations. That logic is now handled
+    by the Coordinator and the State/Energy services.
     """
     
     def __init__(self, 
                  base_url: str = None, 
                  timeout: float = 10.0):
-        # Use centralized gateway discovery
+        
+        # This base URL is correct for a dedicated Organism app
         if base_url is None:
             try:
                 from seedcore.utils.ray_utils import SERVE_GATEWAY
@@ -33,14 +57,12 @@ class OrganismServiceClient(BaseServiceClient):
             except Exception:
                 base_url = "http://127.0.0.1:8000/organism"
         
-        # Configure circuit breaker for organism service
         circuit_breaker = CircuitBreaker(
             failure_threshold=5,
             recovery_timeout=30.0,
-            expected_exception=(Exception,)  # Catch all exceptions
+            expected_exception=(Exception,)
         )
         
-        # Configure retry for organism service
         retry_config = RetryConfig(
             max_attempts=2,
             base_delay=1.0,
@@ -55,16 +77,18 @@ class OrganismServiceClient(BaseServiceClient):
             retry_config=retry_config
         )
     
-    # Task Execution
-    async def execute_on_organ(self, 
-                             organ_name: str,
-                             task: Dict[str, Any],
-                             app_state: Dict[str, Any] = None) -> Dict[str, Any]:
+    # --- Primary Task Execution ---
+    
+    async def route_task(self, 
+                         task: Dict[str, Any],
+                         app_state: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Execute a task on a specific organ.
+        Submits a task to the OrganismCore for routing and execution.
+        
+        This is the main entry point for all work. The OrganismCore
+        will perform the single-hop routing to the correct agent.
         
         Args:
-            organ_name: Name of the organ
             task: Task to execute
             app_state: Optional application state
             
@@ -72,213 +96,56 @@ class OrganismServiceClient(BaseServiceClient):
             Task execution result
         """
         request_data = {
-            "organ_name": organ_name,
             "task": task,
             "app_state": app_state or {}
         }
-        return await self.post("/execute-on-organ", json=request_data)
-    
-    async def route_task(self, 
-                         task: Dict[str, Any],
-                         app_state: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Handle a task through the organism service.
-        
-        Args:
-            task: Task to handle
-            app_state: Optional application state
-            
-        Returns:
-            Task handling result
-        """
-        request_data = {
-            "task": task,
-            "app_state": app_state or {}
-        }
+        # This is the *only* execution endpoint
         return await self.post("/route-task", json=request_data)
     
-    # Decision Making
-    async def make_decision(self, 
-                          task: Dict[str, Any],
-                          app_state: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Make a decision through the organism service.
-        
-        Args:
-            task: Task for decision making
-            app_state: Optional application state
-            
-        Returns:
-            Decision result
-        """
-        request_data = {
-            "task": task,
-            "app_state": app_state or {}
-        }
-        return await self.post("/make-decision", json=request_data)
+    # --- High-Level Organism Monitoring ---
     
-    # Task Planning
-    async def plan_task(self, 
-                       task: Dict[str, Any],
-                       app_state: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Plan a task through the organism service.
-        
-        Args:
-            task: Task to plan
-            app_state: Optional application state
-            
-        Returns:
-            Task planning result
-        """
-        request_data = {
-            "task": task,
-            "app_state": app_state or {}
-        }
-        return await self.post("/plan", json=request_data)
-    
-    # Organ Management
-    async def get_organ_status(self, organ_name: str = None) -> Dict[str, Any]:
-        """
-        Get status of a specific organ or all organs.
-        
-        Args:
-            organ_name: Optional organ name
-            
-        Returns:
-            Organ status information
-        """
-        if organ_name:
-            return await self.get(f"/organs/{organ_name}")
-        else:
-            return await self.get("/organs")
-    
-    async def get_organ_capabilities(self, organ_name: str) -> Dict[str, Any]:
-        """
-        Get capabilities of a specific organ.
-        
-        Args:
-            organ_name: Name of the organ
-            
-        Returns:
-            Organ capabilities
-        """
-        return await self.get(f"/organs/{organ_name}/capabilities")
-    
-    async def update_organ_config(self, organ_name: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update configuration of a specific organ.
-        
-        Args:
-            organ_name: Name of the organ
-            config: New configuration
-            
-        Returns:
-            Update result
-        """
-        return await self.put(f"/organs/{organ_name}/config", json=config)
-    
-    # Organism Status
     async def get_organism_status(self) -> Dict[str, Any]:
-        """Get detailed status of all organs in the organism."""
+        """Get detailed status of all organ-registries in the organism."""
         return await self.get("/organism-status")
     
     async def get_organism_summary(self) -> Dict[str, Any]:
         """Get a summary of the organism's current state."""
         return await self.get("/organism-summary")
-    
-    async def get_organism_health(self) -> Dict[str, Any]:
-        """Get organism health status."""
-        return await self.get("/organism-health")
 
-    # --- Routing Methods ---
-    
-    async def resolve_route(self, task: dict, preferred_logical_id: Optional[str] = None) -> dict:
-        """Resolve a single task to its target organ."""
-        payload = {"task": task}
-        if preferred_logical_id:
-            payload["preferred_logical_id"] = preferred_logical_id
-        return await self.post("/resolve-route", json=payload)
-
-    async def resolve_routes(self, tasks: List[dict]) -> dict:
-        """Resolve multiple tasks to their target organs in one request."""
-        # Convert tasks to the expected format
-        task_items = []
-        for idx, task in enumerate(tasks):
-            task_items.append({
-                "index": idx,
-                "type": task.get("type", ""),
-                "domain": task.get("domain"),
-                "preferred_logical_id": task.get("preferred_logical_id")
-            })
-        
-        return await self.post("/resolve-routes", json={"tasks": task_items})
-
-    async def get_routing_rules(self) -> dict:
-        """Get current routing rules."""
-        return await self.get("/routing/rules")
-
-    async def update_routing_rules(self, rules: dict) -> dict:
-        """Update routing rules."""
-        return await self.put("/routing/rules", json=rules)
-
-    async def refresh_routing_cache(self) -> dict:
-        """Refresh routing cache (useful after epoch rotation)."""
-        return await self.post("/routing/refresh")
-    
-    # Organism Management
-    async def initialize_organism(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Initialize the organism.
-        
-        Args:
-            config: Optional initialization configuration
-            
-        Returns:
-            Initialization result
-        """
-        request_data = config or {}
-        return await self.post("/initialize", json=request_data)
-    
-    async def shutdown_organism(self) -> Dict[str, Any]:
-        """Shutdown the organism."""
-        return await self.post("/shutdown")
-    
-    async def restart_organism(self) -> Dict[str, Any]:
-        """Restart the organism."""
-        return await self.post("/restart")
-    
-    # Organism Monitoring
     async def get_organism_metrics(self) -> Dict[str, Any]:
         """Get organism performance metrics."""
         return await self.get("/metrics")
     
     async def get_organism_logs(self, log_level: str = "INFO", limit: int = 100) -> Dict[str, Any]:
-        """
-        Get organism logs.
-        
-        Args:
-            log_level: Log level filter
-            limit: Maximum number of log entries
-            
-        Returns:
-            Log entries
-        """
-        params = {
-            "level": log_level,
-            "limit": limit
-        }
+        """Get organism logs."""
+        params = {"level": log_level, "limit": limit}
         return await self.get("/logs", params=params)
-    
-    # Service Information
+
+    # --- Service Information & Lifecycle ---
+
     async def get_service_info(self) -> Dict[str, Any]:
         """Get organism service information."""
         return await self.get("/info")
+
+    async def health(self) -> Dict[str, Any]:
+        """Get organism health status."""
+        return await self.get("/health")
     
     async def is_healthy(self) -> bool:
         """Check if the organism service is healthy."""
         try:
-            health = await self.health_check()
-            return health.get("status") == "healthy"
+            # Note: We call our own .health() method, not .health_check()
+            health_data = await self.health() 
+            return health_data.get("status") == "healthy"
         except Exception:
             return False
+            
+    # --- Lifecycle (Optional - may be admin-only) ---
+    
+    async def initialize_organism(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Initialize the organism."""
+        return await self.post("/initialize", json=config or {})
+    
+    async def shutdown_organism(self) -> Dict[str, Any]:
+        """Shutdown the organism."""
+        return await self.post("/shutdown")

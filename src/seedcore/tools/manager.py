@@ -2,10 +2,13 @@
 #seedcore/tools/manager.py
 
 from __future__ import annotations
-from typing import Dict, Any, Optional, Protocol, List
+from typing import Dict, Any, Optional, Protocol, List, TYPE_CHECKING
 import asyncio
 import logging
 import time
+
+if TYPE_CHECKING:
+    from seedcore.agents.roles import SkillStoreProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +82,7 @@ class ToolManager:
         mw_manager: Optional[Any] = None,
         ltm_manager: Optional[Any] = None,
         rbac_provider: Optional[Any] = None,
+        skill_store: Optional["SkillStoreProtocol"] = None,
         enable_tracing: bool = True,
     ):
         self._tools: Dict[str, Tool] = {}
@@ -90,6 +94,9 @@ class ToolManager:
 
         # Optional RBAC gateway
         self.rbac_provider = rbac_provider
+
+        # Skill store for agent learning (micro-flywheel)
+        self.skill_store = skill_store
 
         # Execution tracing
         self.enable_tracing = enable_tracing
@@ -205,12 +212,45 @@ class ToolManager:
         
         This enables adaptive tool learning where tools teach agents
         how to use them better.
+        
+        This is the critical "push" mechanism of the agent-skill micro-flywheel:
+        tools produce learning → manager consumes learning → skill store updates agent.
         """
         logger.info(f"🧠 Tool reflection from {tool_name} for agent {agent_id}: {reflection}")
 
-        # TODO: integrate with agent skill store
-        # e.g., self.skill_store.update(agent_id, reflection)
-        # (This can be implemented when skill store is available)
+        # --- IMPLEMENTATION ---
+        if not self.skill_store or not agent_id:
+            return  # Cannot learn without a store or agent context
+
+        # Check for a single skill update
+        if "skill" in reflection and "delta" in reflection:
+            try:
+                skill = reflection["skill"]
+                delta = float(reflection["delta"])
+                # This is the flywheel's "push"
+                # Try update_skill_delta first (if implemented as extension)
+                if hasattr(self.skill_store, "update_skill_delta"):
+                    await self.skill_store.update_skill_delta(agent_id, skill, delta)
+                elif hasattr(self.skill_store, "apply_delta"):
+                    # Fallback to apply_delta if available
+                    await self.skill_store.apply_delta(agent_id, skill, delta)
+                else:
+                    # Standard SkillStoreProtocol pattern: load, update, save
+                    current_deltas = await self.skill_store.load(agent_id)
+                    if current_deltas is None:
+                        current_deltas = {}
+                    # Apply the delta (additive update)
+                    current_deltas[skill] = current_deltas.get(skill, 0.0) + delta
+                    # Save the updated deltas
+                    await self.skill_store.save(agent_id, current_deltas, metadata={
+                        "source": "tool_reflection",
+                        "tool": tool_name,
+                        "skill": skill,
+                        "delta": delta
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to apply skill delta from {tool_name}: {e}", exc_info=True)
+        # ----------------------
 
     # ============================================================
     # Introspection

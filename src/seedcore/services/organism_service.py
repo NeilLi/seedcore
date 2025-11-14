@@ -22,7 +22,6 @@ sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
 
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
-from seedcore.organs.organism_manager import OrganismManager
 from seedcore.organs.organism_core import OrganismCore
 from seedcore.models import TaskPayload
 from seedcore.agents.roles.specialization import Specialization
@@ -30,7 +29,6 @@ from seedcore.models.organism import (
     BulkResolveRequest,
     BulkResolveResponse,
     BulkResolveResult,
-    OrganismRequest,
     OrganismResponse,
     OrganismStatusResponse,
     ResolveRouteRequest,
@@ -72,7 +70,6 @@ class OrganismService:
         self.logger = ensure_serve_logger("seedcore.organism_service", level="DEBUG")
 
         self.logger.info("🚀 Creating OrganismService instance...")
-        self.organism_manager = OrganismManager()
         self.organism_core = OrganismCore()
         self._initialized = False
         self._init_task = None
@@ -87,7 +84,7 @@ class OrganismService:
             if self._initialized:
                 return
             try:
-                await self.organism_manager.initialize_organism()
+                await self.organism_core.initialize_organism()
                 self._initialized = True
                 self.logger.info("✅ Organism initialized (background)")
             except Exception:
@@ -140,8 +137,8 @@ class OrganismService:
                     error="Organism not initialized",
                 )
 
-            # Get organism status from the manager
-            org_status = await self.organism_manager.get_organism_status()
+            # Get organism status from the core
+            org_status = await self.organism_core.get_system_status()
 
             return OrganismStatusResponse(
                 status="healthy",
@@ -243,7 +240,7 @@ class OrganismService:
             if not self._initialized:
                 return {"error": "Organism not initialized"}
 
-            status = await self.organism_manager.get_organism_status()
+            status = await self.organism_core.get_system_status()
             return {"success": True, "status": status}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -255,8 +252,8 @@ class OrganismService:
             if not self._initialized:
                 return {"error": "Organism not initialized"}
 
-            # Get organism status from the manager (same as organism-status endpoint)
-            status = await self.organism_manager.get_organism_status()
+            # Get organism status from the core (same as organism-status endpoint)
+            status = await self.organism_core.get_system_status()
 
             # Create a summary by aggregating the status data
             summary: Dict[str, Any] = {
@@ -308,7 +305,6 @@ class OrganismService:
             if self._initialized:
                 return {"success": True, "message": "Organism already initialized"}
 
-            # await self.organism_manager.initialize_organism()
             await self.organism_core.initialize_organism()
             self._initialized = True
             return {"success": True, "message": "Organism initialized successfully"}
@@ -319,7 +315,7 @@ class OrganismService:
     async def ensure_janitor(self):
         """Ensure the Janitor actor exists in the configured namespace."""
         try:
-            await self.organism_manager._ensure_janitor_actor()
+            await self.organism_core._ensure_janitor_actor()
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -330,7 +326,8 @@ class OrganismService:
         try:
             ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
             handle = ray.get_actor("seedcore_janitor", namespace=ns)
-            pong = await self.organism_manager._async_ray_get(handle.ping.remote(), timeout=5.0)
+            # Use direct ray.get instead of _async_ray_get
+            pong = await asyncio.to_thread(ray.get, handle.ping.remote())
             return {"success": True, "ping": pong, "namespace": ns}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -347,7 +344,7 @@ class OrganismService:
             if not self._initialized:
                 return {"error": "Organism not initialized"}
 
-            self.organism_manager.shutdown_organism()
+            await self.organism_core.shutdown()
             self._initialized = False
             return {"success": True, "message": "Organism shutdown successfully"}
         except Exception as e:
@@ -418,7 +415,8 @@ class OrganismService:
                 getattr(task_payload, "priority", None),
                 organ_timeout_s,
             )
-            result = await self.organism_manager.execute_task_on_organ(organ_id, task_data)
+            # Use existing task_payload for OrganismCore
+            result = await self.organism_core.execute_task_on_organ(organ_id, task_payload, task_data.get("metadata"))
             duration = time.time() - start_time
             self.logger.info(
                 f"[execute-on-organ] ✅ completed organ_id={organ_id} success={result.get('success', True)} in {duration:.2f}s"
@@ -441,7 +439,9 @@ class OrganismService:
             if organ_timeout_s:
                 task["organ_timeout_s"] = organ_timeout_s
 
-            result = await self.organism_manager.execute_task_on_random_organ(task)
+            # Convert task to TaskPayload for OrganismCore
+            task_payload = TaskPayload.from_db(task) if not isinstance(task, TaskPayload) else task
+            result = await self.organism_core.execute_task_on_random_organ(task_payload, task.get("metadata"))
             return {"success": True, **result}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -472,10 +472,17 @@ class OrganismService:
             # Get current epoch (mock for now)
             current_epoch = "epoch-" + str(int(time.time()))
 
-            # Resolve using routing directory
-            logical_id, resolved_from = await self.organism_manager.routing.resolve(
-                task_type, domain, preferred_logical_id, current_epoch
-            )
+            # Resolve using specialization-based routing
+            # OrganismCore uses specialization → organ mapping instead of routing directory
+            try:
+                spec = Specialization(task_type.upper()) if task_type else Specialization.GENERALIST
+            except (KeyError, ValueError, AttributeError):
+                spec = Specialization.GENERALIST
+            
+            # Get organ from specialization mapping
+            spec_map = self.organism_core.map_specializations()
+            logical_id = spec_map.get(spec.name, "utility_organ_1")
+            resolved_from = "specialization"
 
             if not logical_id:
                 return {
@@ -487,10 +494,10 @@ class OrganismService:
 
             # Get instance info if available
             instance_id = None
-            if resolved_from in ["preferred", "domain", "task", "default"]:
-                instance = await self.organism_manager.routing._get_active_instance(logical_id, current_epoch)
-                if instance:
-                    instance_id = instance.get("instance_id")
+            if resolved_from in ["preferred", "domain", "task", "default", "specialization"]:
+                organ_status = await self.organism_core.get_organ_status(logical_id)
+                if organ_status and "instance_id" in organ_status:
+                    instance_id = organ_status.get("instance_id")
 
             duration = time.time() - start_time
             self.logger.info(
@@ -524,10 +531,16 @@ class OrganismService:
 
             for item in request.tasks:
                 try:
-                    # Resolve using routing directory
-                    logical_id, resolved_from = await self.organism_manager.routing.resolve(
-                        item.type, item.domain, item.preferred_logical_id, current_epoch
-                    )
+                    # Resolve using specialization-based routing
+                    try:
+                        spec = Specialization(item.type.upper()) if item.type else Specialization.GENERALIST
+                    except (KeyError, ValueError, AttributeError):
+                        spec = Specialization.GENERALIST
+                    
+                    # Get organ from specialization mapping
+                    spec_map = self.organism_core.map_specializations()
+                    logical_id = spec_map.get(spec.name, "utility_organ_1")
+                    resolved_from = "specialization"
 
                     if not logical_id:
                         results.append(BulkResolveResult(
@@ -541,13 +554,13 @@ class OrganismService:
                     cache_hit = False
                     cache_age_ms = None
 
-                    if resolved_from in ["preferred", "domain", "task", "default"]:
-                        instance = await self.organism_manager.routing._get_active_instance(logical_id, current_epoch)
-                        if instance:
-                            instance_id = instance.get("instance_id")
-                            # Check if this was a cache hit
-                            cache_hit = instance.get("cache_hit", False)
-                            cache_age_ms = instance.get("cache_age_ms")
+                    if resolved_from in ["preferred", "domain", "task", "default", "specialization"]:
+                        organ_status = await self.organism_core.get_organ_status(logical_id)
+                        if organ_status and "instance_id" in organ_status:
+                            instance_id = organ_status.get("instance_id")
+                            # Cache info not available in OrganismCore
+                            cache_hit = False
+                            cache_age_ms = None
                         else:
                             results.append(BulkResolveResult(
                                 index=item.index, key=item.key, status="no_active_instance",
@@ -582,7 +595,8 @@ class OrganismService:
             if not self._initialized:
                 return {"error": "Organism not initialized"}
 
-            return self.organism_manager.routing.get_rules()
+            # OrganismCore uses specialization → organ mapping instead of routing rules
+            return {"specialization_map": self.organism_core.map_specializations()}
         except Exception as e:
             return {"error": str(e)}
 
@@ -593,19 +607,10 @@ class OrganismService:
             if not self._initialized:
                 return {"error": "Organism not initialized"}
 
-            # Add/update rules
-            for rule in rules.get("add", []):
-                self.organism_manager.routing.set_rule(
-                    rule["task_type"], rule["logical_id"], rule.get("domain")
-                )
-
-            # Remove rules
-            for rule in rules.get("remove", []):
-                self.organism_manager.routing.remove_rule(
-                    rule["task_type"], rule.get("domain")
-                )
-
-            return {"success": True, "rules": self.organism_manager.routing.get_rules()}
+            # OrganismCore uses specialization → organ mapping instead of routing rules
+            # Routing is configured via organ configs, not runtime rules
+            # Return current mapping as "rules"
+            return {"success": True, "rules": {"specialization_map": self.organism_core.map_specializations()}}
         except Exception as e:
             return {"error": str(e)}
 
@@ -616,8 +621,8 @@ class OrganismService:
             if not self._initialized:
                 return {"error": "Organism not initialized"}
 
-            self.organism_manager.routing.clear_cache()
-            return {"success": True}
+            # OrganismCore doesn't use routing cache - routing is direct specialization → organ mapping
+            return {"success": True, "message": "Routing cache cleared (no-op in OrganismCore)"}
         except Exception as e:
             return {"error": str(e)}
 
@@ -630,46 +635,37 @@ class OrganismService:
             if not self._initialized:
                 return {"success": False, "error": "Organism not initialized"}
 
-            result = await self.organism_manager.evolve(proposal)
+            result = await self.organism_core.evolve(proposal)
 
-            # Compute acceptance (best-effort) based on delta_E_est vs cost
-            delta_E_est = result.get("delta_E_est")
+            # Compute acceptance (best-effort) based on delta_E_realized vs cost
+            delta_E_realized = result.get("delta_E_realized")
             cost = result.get("cost", 0.0)
-            accepted = bool(delta_E_est is not None and cost is not None and delta_E_est > cost)
+            accepted = bool(
+                delta_E_realized is not None
+                and cost is not None
+                and cost > 0
+                and delta_E_realized > cost
+            )
             result["accepted"] = accepted
             return result
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    @app.post("/memory/threshold")
-    async def set_memory_threshold(self, thresholds: Dict[str, float]):
-        """Set memory thresholds for the bandit/memory controller."""
-        try:
-            if not self._initialized:
-                return {"success": False, "error": "Organism not initialized"}
-            return await self.organism_manager.set_memory_thresholds(thresholds)
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+    # --- State Service Integration ---
 
-    async def make_decision(self, task: Dict[str, Any], app_state: Dict[str, Any] | None = None) -> Dict[str, Any]:
-        """Direct method access for decision making."""
-        try:
-            if not self._initialized:
-                return {"success": False, "error": "Organism not initialized"}
-
-            return await self.organism_manager.make_decision(task, app_state)
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    async def plan_task(self, task: Dict[str, Any], app_state: Dict[str, Any] | None = None) -> Dict[str, Any]:
-        """Direct method access for task planning."""
-        try:
-            if not self._initialized:
-                return {"success": False, "error": "Organism not initialized"}
-
-            return await self.organism_manager.plan_task(task, app_state)
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+    async def get_all_agent_handles(self) -> Dict[str, Any]:
+        """
+        Get all agent handles from all organs.
+        
+        This method is used by the StateService's AgentAggregator to poll all agents.
+        It delegates to the underlying OrganismCore.
+        
+        Returns:
+            Dict[str, Any]: Dictionary of agent_id -> agent_handle (Ray actor handle)
+        """
+        if not self._initialized:
+            return {}
+        return await self.organism_core.get_all_agent_handles()
 
 
 # Expose a bound app for optional importers (mirrors the original pattern)

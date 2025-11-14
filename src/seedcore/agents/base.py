@@ -54,7 +54,14 @@ from seedcore.logging_setup import ensure_serve_logger
 
 logger = ensure_serve_logger("seedcore.agents.base", level="DEBUG")
 
+# Ray import for actor decorator
+try:
+    import ray  # pyright: ignore[reportMissingImports]
+except ImportError:
+    ray = None  # type: ignore
 
+
+@ray.remote  # type: ignore
 class BaseAgent:
     """
     Production-ready base agent.
@@ -146,6 +153,8 @@ class BaseAgent:
         """
         Minimal async heartbeat used by feature extraction & health probes.
         Override if you have richer telemetry.
+        
+        **UPDATED**: Now includes 'learned_skills' for the StateService.
         """
         await asyncio.sleep(0)
         perf = self.state.to_performance_metrics()
@@ -153,10 +162,18 @@ class BaseAgent:
             pm = self._privmem.telemetry()
         except Exception:
             pm = None
+            
+        # --- CRITICAL ADDITION ---
+        # The StateService's aggregator *requires* this
+        # to build the SystemSpecializationVector.
+        agent_skills = self.skills.deltas if self.skills else {}
+        # -------------------------
+
         return {
             "status": "healthy",
             "performance_metrics": perf,
             "private_memory": pm,
+            "learned_skills": agent_skills,  # <-- ADDED
             "timestamp": time.time(),
         }
 

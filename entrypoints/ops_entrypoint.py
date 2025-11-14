@@ -14,10 +14,12 @@ OpsGateway that fans in/out to each service via Ray Serve handles.
 
 import os
 import sys
+import json
 from typing import Any, Dict
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request  # type: ignore[reportMissingImports]
 from ray import serve  # type: ignore[reportMissingImports]
+from starlette.requests import Request as StarletteRequest  # type: ignore[reportMissingImports]
 
 # Type hint for Ray Serve handles
 try:
@@ -32,6 +34,8 @@ sys.path.insert(0, '/app/src')
 
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.services.eventizer_service import EventizerService as EventizerServiceImpl
+from seedcore.services.state_service import state_app
+from seedcore.services.energy_service import energy_app
 
 setup_logging(app_name="seedcore.ops_service.driver")
 logger = ensure_serve_logger("seedcore.ops_service", level="DEBUG")
@@ -154,62 +158,6 @@ class FactManager:
             "initialized": self._initialized
         }
 
-
-# Lightweight wrappers for StateService and EnergyService
-# These do NOT use @serve.ingress to avoid FastAPI docs conflicts with OpsGateway
-
-@serve.deployment(route_prefix=None)
-class StateService:
-    """Lightweight state service wrapper - no FastAPI ingress to avoid docs conflicts."""
-    
-    def __init__(self) -> None:
-        self._initialized = True
-        logger.info("StateService wrapper initialized (lightweight, no ingress)")
-
-    async def __call__(self, request: Request) -> Dict[str, Any]:
-        """Health check endpoint."""
-        return {"status": "healthy", "service": "state"}
-
-    async def get_state(self, key: str = "unified") -> Dict[str, Any]:
-        """Get system state - placeholder implementation."""
-        return {
-            "key": key,
-            "state": {},
-            "timestamp": "placeholder",
-            "message": "Lightweight wrapper - implement state collection here"
-        }
-
-    async def health(self) -> Dict[str, Any]:
-        """Health check."""
-        return {"status": "healthy", "service": "state", "initialized": self._initialized}
-
-
-@serve.deployment(route_prefix=None)
-class EnergyService:
-    """Lightweight energy service wrapper - no FastAPI ingress to avoid docs conflicts."""
-    
-    def __init__(self) -> None:
-        self._initialized = True
-        logger.info("EnergyService wrapper initialized (lightweight, no ingress)")
-
-    async def __call__(self, request: Request) -> Dict[str, Any]:
-        """Health check endpoint."""
-        return {"status": "healthy", "service": "energy"}
-
-    async def compute_energy(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Compute energy - placeholder implementation."""
-        return {
-            "total_energy": 0.0,
-            "breakdown": {},
-            "timestamp": "placeholder",
-            "message": "Lightweight wrapper - implement energy calculation here"
-        }
-
-    async def health(self) -> Dict[str, Any]:
-        """Health check."""
-        return {"status": "healthy", "service": "energy", "initialized": self._initialized}
-
-
 # ---------- HTTP Gateway (single public ingress) ----------
 
 @serve.deployment
@@ -284,57 +232,251 @@ class OpsGateway:
             """Facts health check."""
             return await self.facts.health.remote()
 
-        # State endpoints
-        @router.get("/state")
-        async def state_get(key: str = "unified"):
-            """Get system state."""
+        # State endpoints (matching state_client.py interface)
+        # 
+        # ARCHITECTURE: Distillation Engine
+        # --------------------------------
+        # The StateService's AgentAggregator acts as a "distillation engine":
+        # - Raw Crude Oil: `_agent_snapshots` cache (multi-megabyte raw data)
+        # - Refined Jet Fuel: `_system_metrics` cache (small, pre-computed aggregates)
+        # 
+        # The distillation happens in `AgentAggregator._compute_system_metrics()`,
+        # which consumes `_agent_snapshots` and refines it into `_system_metrics`.
+        # The real consumer of `_agent_snapshots` is the aggregator itself.
+        
+        @router.get("/state/system-metrics")
+        async def state_system_metrics():
+            """
+            Get pre-computed system metrics from StateService.
+
+            HOT PATH - Refined Jet Fuel for Production
+
+            Returns the distilled, pre-computed aggregates optimized for real-time
+            routing decisions. This is what the Coordinator and Energy Service use
+            in production (O(1) lookup from cache).
+            """
             try:
-                result = await self.state.get_state.remote(key)
+                # Call FastAPI endpoint via handle - use Request object pattern
+                request_obj = StarletteRequest(
+                    scope={
+                        "type": "http",
+                        "method": "GET",
+                        "path": "/system-metrics",
+                        "headers": [],
+                        "query_string": b"",
+                        "path_params": {},
+                        "client": ("127.0.0.1", 0),
+                        "server": ("127.0.0.1", 8000),
+                    }
+                )
+                result = await self.state.__call__.remote(request_obj)
                 return result
             except Exception as e:
-                logger.error(f"State retrieval failed: {e}")
+                logger.error(f"State system metrics retrieval failed: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
-        @router.get("/state/agent/{agent_id}")
-        async def state_get_agent(agent_id: str):
-            """Get agent-specific state."""
+        @router.get("/state/agent-snapshots")
+        async def state_agent_snapshots():
+            """
+            Get full state snapshot for all agents from StateService.
+
+            COLD PATH - Raw Crude Oil for Debugging/Analysis
+
+            Returns the raw `_agent_snapshots` cache containing multi-megabyte
+            data for every agent. This is the "crude oil" that gets distilled
+            into `_system_metrics` by the AgentAggregator.
+
+            IMPORTANT:
+            - NOT for production use by Coordinator/Energy Service
+            - Real consumer is the AgentAggregator itself (via `_compute_system_metrics()`)
+            - At scale (millions of agents), this would be replaced by a data stream
+              to a data lake/warehouse for offline analysis
+            - Intended for debugging, development, and offline analysis only
+            """
             try:
-                result = await self.state.get_agent_state.remote(agent_id)
+                # Call FastAPI endpoint via handle - use Request object pattern
+                request_obj = StarletteRequest(
+                    scope={
+                        "type": "http",
+                        "method": "GET",
+                        "path": "/agent-snapshots",
+                        "headers": [],
+                        "query_string": b"",
+                        "path_params": {},
+                        "client": ("127.0.0.1", 0),
+                        "server": ("127.0.0.1", 8000),
+                    }
+                )
+                result = await self.state.__call__.remote(request_obj)
                 return result
             except Exception as e:
-                logger.error(f"Agent state retrieval failed: {e}")
+                logger.error(f"State agent snapshots retrieval failed: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @router.get("/state/health")
         async def state_health():
             """State health check."""
-            return await self.state.health.remote()
-
-        # Energy endpoints
-        @router.get("/energy/summary")
-        async def energy_summary():
-            """Get energy summary."""
             try:
-                result = await self.energy.get_energy_summary.remote()
+                # Call FastAPI endpoint via handle - use Request object pattern
+                request_obj = StarletteRequest(
+                    scope={
+                        "type": "http",
+                        "method": "GET",
+                        "path": "/health",
+                        "headers": [],
+                        "query_string": b"",
+                        "path_params": {},
+                        "client": ("127.0.0.1", 0),
+                        "server": ("127.0.0.1", 8000),
+                    }
+                )
+                result = await self.state.__call__.remote(request_obj)
                 return result
             except Exception as e:
-                logger.error(f"Energy summary retrieval failed: {e}")
+                logger.error(f"State health check failed: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        # Energy endpoints (matching energy_client.py interface)
         @router.get("/energy/metrics")
-        async def energy_metrics(window: str = "1h"):
-            """Get energy metrics."""
+        async def energy_metrics():
+            """Get current energy metrics from EnergyService ledger cache."""
             try:
-                result = await self.energy.get_energy_metrics.remote(window)
+                request_obj = StarletteRequest(
+                    scope={
+                        "type": "http",
+                        "method": "GET",
+                        "path": "/metrics",
+                        "headers": [],
+                        "query_string": b"",
+                        "path_params": {},
+                        "client": ("127.0.0.1", 0),
+                        "server": ("127.0.0.1", 8000),
+                    }
+                )
+                result = await self.energy.__call__.remote(request_obj)
                 return result
             except Exception as e:
                 logger.error(f"Energy metrics retrieval failed: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        @router.get("/energy/compute-from-state")
+        async def energy_compute_from_state():
+            """On-demand energy computation from latest state."""
+            try:
+                request_obj = StarletteRequest(
+                    scope={
+                        "type": "http",
+                        "method": "GET",
+                        "path": "/compute-energy-from-state",
+                        "headers": [],
+                        "query_string": b"",
+                        "path_params": {},
+                        "client": ("127.0.0.1", 0),
+                        "server": ("127.0.0.1", 8000),
+                    }
+                )
+                result = await self.energy.__call__.remote(request_obj)
+                return result
+            except Exception as e:
+                logger.error(f"Energy compute from state failed: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @router.post("/energy/compute")
+        async def energy_compute(payload: Dict[str, Any]):
+            """Compute energy from provided unified state."""
+            try:
+                body_bytes = json.dumps(payload).encode()
+                request_obj = StarletteRequest(
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/compute-energy",
+                        "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body_bytes)).encode())],
+                        "query_string": b"",
+                        "path_params": {},
+                        "client": ("127.0.0.1", 0),
+                        "server": ("127.0.0.1", 8000),
+                    }
+                )
+                # Attach JSON body
+                request_obj._body = body_bytes
+                result = await self.energy.__call__.remote(request_obj)
+                return result
+            except Exception as e:
+                logger.error(f"Energy computation failed: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @router.post("/energy/optimize")
+        async def energy_optimize(payload: Dict[str, Any]):
+            """Optimize agent selection for a task."""
+            try:
+                body_bytes = json.dumps(payload).encode()
+                request_obj = StarletteRequest(
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/optimize-agents",
+                        "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body_bytes)).encode())],
+                        "query_string": b"",
+                        "path_params": {},
+                        "client": ("127.0.0.1", 0),
+                        "server": ("127.0.0.1", 8000),
+                    }
+                )
+                # Attach JSON body
+                request_obj._body = body_bytes
+                result = await self.energy.__call__.remote(request_obj)
+                return result
+            except Exception as e:
+                logger.error(f"Energy optimization failed: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @router.post("/flywheel/result")
+        async def flywheel_result(payload: Dict[str, Any]):
+            """Post flywheel result to update ledger and adapt weights."""
+            try:
+                body_bytes = json.dumps(payload).encode()
+                request_obj = StarletteRequest(
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/flywheel/result",
+                        "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body_bytes)).encode())],
+                        "query_string": b"",
+                        "path_params": {},
+                        "client": ("127.0.0.1", 0),
+                        "server": ("127.0.0.1", 8000),
+                    }
+                )
+                # Attach JSON body
+                request_obj._body = body_bytes
+                result = await self.energy.__call__.remote(request_obj)
+                return result
+            except Exception as e:
+                logger.error(f"Flywheel result posting failed: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         @router.get("/energy/health")
         async def energy_health():
             """Energy health check."""
-            return await self.energy.health.remote()
+            try:
+                request_obj = StarletteRequest(
+                    scope={
+                        "type": "http",
+                        "method": "GET",
+                        "path": "/health",
+                        "headers": [],
+                        "query_string": b"",
+                        "path_params": {},
+                        "client": ("127.0.0.1", 0),
+                        "server": ("127.0.0.1", 8000),
+                    }
+                )
+                result = await self.energy.__call__.remote(request_obj)
+                return result
+            except Exception as e:
+                logger.error(f"Energy health check failed: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
 
         # Global health endpoint
         @router.get("/health")
@@ -344,8 +486,33 @@ class OpsGateway:
                 # Check all services
                 eventizer_health = await self.eventizer.health.remote()
                 facts_health = await self.facts.health.remote()
-                state_health = await self.state.health.remote()
-                energy_health = await self.energy.health.remote()
+                # State and Energy services use FastAPI, call via Request pattern
+                state_request = StarletteRequest(
+                    scope={
+                        "type": "http",
+                        "method": "GET",
+                        "path": "/health",
+                        "headers": [],
+                        "query_string": b"",
+                        "path_params": {},
+                        "client": ("127.0.0.1", 0),
+                        "server": ("127.0.0.1", 8000),
+                    }
+                )
+                energy_request = StarletteRequest(
+                    scope={
+                        "type": "http",
+                        "method": "GET",
+                        "path": "/health",
+                        "headers": [],
+                        "query_string": b"",
+                        "path_params": {},
+                        "client": ("127.0.0.1", 0),
+                        "server": ("127.0.0.1", 8000),
+                    }
+                )
+                state_health = await self.state.__call__.remote(state_request)
+                energy_health = await self.energy.__call__.remote(energy_request)
                 
                 return {
                     "status": "healthy",
@@ -392,15 +559,13 @@ def build_ops_app(args: dict = None) -> serve.Deployment:
     # Only OpsGateway has @serve.ingress(FastAPI()) to avoid docs conflicts
     eventizer = EventizerService.bind()
     facts = FactManager.bind()
-    state = StateService.bind()
-    energy = EnergyService.bind()
 
     # Wire gateway with handles - OpsGateway is the ONLY public ingress
     gateway = OpsGateway.bind(
         eventizer_handle=eventizer,
         facts_handle=facts,
-        state_handle=state,
-        energy_handle=energy,
+        state_handle=state_app,
+        energy_handle=energy_app,
     )
     
     logger.info("Ops application built successfully with single ingress (OpsGateway)")

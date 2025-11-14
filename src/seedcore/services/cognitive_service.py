@@ -1,22 +1,73 @@
 #!/usr/bin/env python3
 """
-Cognitive Service + Serve Deployment (merged)
+===============================================================================
+Cognitive Service + Ray Serve Deployment (Unified Module)
+===============================================================================
 
-This module merges the SeedCore cognitive integration layer with the
-Ray Serve + FastAPI deployment previously defined in `cognitive_services.py`,
-so projects that expect a single `cognitive_service.py` file keep working.
+This module implements SeedCore’s central Cognitive Service, combining:
 
-Exports:
-- CognitiveOrchestrator (integration layer) and helpers
-- CognitiveService (Serve deployment class)
-- cognitive_app (Serve bound app) and build_cognitive_app(args) builder
+    • Core cognitive orchestration logic
+    • Ray Serve deployment
+    • FastAPI routing
 
-Notes:
-- DSP patch import is kept at the very top of this module.
-- The Serve deployment uses a single /execute endpoint and health/info endpoints.
+It is designed to be consumed as a single `cognitive_service.py` module.
+
+-------------------------------------------------------------------------------
+Key Functionalities
+-------------------------------------------------------------------------------
+
+1. LLM Engine Adaptors
+   --------------------
+   • Defines the `LLMEngine` protocol to abstract different LLM providers.
+   • Provides concrete implementations:
+        - `OpenAIEngine`
+        - `MLServiceEngine` (httpx client with retries + error handling)
+        - `NimEngine` (OpenAI-compatible SDK)
+   • Includes `_DSPyEngineShim` to adapt any engine exposing `.generate()`
+     into a DSPy-compatible backend.
+   • A factory (`_make_engine`) selects the correct engine based on provider
+     configuration.
+
+2. Prompt Context Signature & API Layer
+   -------------------------------------
+   • The `/execute` FastAPI endpoint uses `CognitiveRequest` (Pydantic) as the
+     public API contract.
+   • Requests are converted into an internal `CognitiveContext` object
+     consumed by orchestration logic.
+   • `CognitiveOrchestrator` routes work based on `meta.decision_kind`
+       (e.g., FAST_PATH, COGNITIVE).
+   • Supports runtime overrides:
+        - `llm_provider_override`
+        - `llm_model_override`
+
+3. LLM Invocation & Orchestration
+   -------------------------------
+   • The `CognitiveOrchestrator` maintains multiple `CognitiveCore` instances,
+     one per `LLMProfile` (FAST, DEEP).
+   • `CognitiveService` (Serve layer) uses `asyncio.to_thread` to call the
+     synchronous `forward_cognitive_task()` method without blocking the event loop.
+   • The orchestrator’s planning (`core.forward`) uses a `ThreadPoolExecutor`
+     with per-profile timeouts to run blocking LLM calls.
+   • A `CircuitBreaker` protects the system from repeatedly calling a failing
+     LLM provider.
+
+-------------------------------------------------------------------------------
+Exports
+-------------------------------------------------------------------------------
+- CognitiveService      : Ray Serve deployment class (`@serve.deployment`)
+- cognitive_app         : Bound FastAPI application instance
+- CognitiveOrchestrator : Main orchestrator for cognitive execution
+- LLMEngine, OpenAIEngine, MLServiceEngine, NimEngine
+- CognitiveContext, CognitiveType, LLMProfile
+
+-------------------------------------------------------------------------------
+Notes
+-------------------------------------------------------------------------------
+- `dsp_patch` is imported at module load time to ensure DSPy hooks are applied
+  before any LLM engine initialization.
+-------------------------------------------------------------------------------
 """
 
-# Enable postponed evaluation of annotations throughout the module
 from __future__ import annotations
 # 0) Must be first: patch hooks
 try:

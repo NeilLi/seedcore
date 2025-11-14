@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import uuid
 import yaml  # pyright: ignore[reportMissingModuleSource]
 import random
@@ -47,6 +48,7 @@ from seedcore.agents.roles.skill_vector import SkillStoreProtocol
 from seedcore.agents.roles.generic_defaults import DEFAULT_ROLE_REGISTRY
 from seedcore.tools.manager import ToolManager
 from seedcore.serve.cognitive_client import CognitiveServiceClient
+from seedcore.serve.energy_client import EnergyServiceClient
 from seedcore.models import TaskPayload
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
@@ -161,7 +163,12 @@ class OrganismCore:
         self.skill_store: Optional[LTMSkillStoreAdapter] = None
         self.tool_manager: Optional[ToolManager] = None
         self.cognitive_client: Optional[CognitiveServiceClient] = None
+        self.energy_client: Optional[EnergyServiceClient] = None
         self.ltm_handle: Optional[Any] = None
+        
+        # Evolution guardrails
+        self._evolve_max_cost = float(os.getenv("EVOLVE_MAX_COST", "1e6"))
+        self._evolve_min_roi = float(os.getenv("EVOLVE_MIN_ROI", "0.2"))
 
         # Background tasks
         self._health_check_task: Optional[asyncio.Task] = None
@@ -193,6 +200,7 @@ class OrganismCore:
     async def initialize_organism(self):
         """
         Bootstraps:
+          0. Ensure Janitor actor (system maintenance service)
           1. LongTermMemoryManager Ray actor
           2. SkillStore adapter
           3. RoleRegistry
@@ -211,6 +219,11 @@ class OrganismCore:
             raise RuntimeError("Ray must be initialized before OrganismCore startup.")
 
         logger.info("🚀 Starting OrganismCore initialization...")
+
+        # --------------------------------------------------------------
+        # 0. Ensure Janitor actor (system maintenance service)
+        # --------------------------------------------------------------
+        await self._ensure_janitor_actor()
 
         # --------------------------------------------------------------
         # 1. Start distributed LongTermMemoryManager
@@ -250,14 +263,19 @@ class OrganismCore:
         )
 
         # --------------------------------------------------------------
-        # 4. ToolManager
+        # 4. ToolManager (with skill store for micro-flywheel)
         # --------------------------------------------------------------
-        self.tool_manager = ToolManager()
+        self.tool_manager = ToolManager(skill_store=self.skill_store)
 
         # --------------------------------------------------------------
         # 5. Cognitive service client
         # --------------------------------------------------------------
         self.cognitive_client = CognitiveServiceClient()
+        
+        # --------------------------------------------------------------
+        # 5.5. Energy service client (for evolution flywheel)
+        # --------------------------------------------------------------
+        self.energy_client = EnergyServiceClient()
 
         # --------------------------------------------------------------
         # 6. Spawn Organs
@@ -623,20 +641,35 @@ class OrganismCore:
     def list_organs(self) -> List[str]:
         return list(self.organs.keys())
 
-    def list_agents(self, organ_id: Optional[str] = None) -> List[str]:
+    async def list_agents(self, organ_id: Optional[str] = None) -> List[str]:
+        """
+        List all agent IDs from a specific organ or all organs.
+        
+        In v2 architecture:
+        - Organ = agent registry (lightweight container)
+        - This queries the registry for agent IDs (not handles)
+        
+        This method efficiently reuses get_all_agent_handles() when listing from all organs,
+        avoiding code duplication.
+        
+        Args:
+            organ_id: Optional organ ID to list agents from. If None, lists from all organs.
+            
+        Returns:
+            List[str]: List of agent IDs
+        """
         if organ_id:
+            # Query specific organ
             organ = self.organs.get(organ_id)
             if not organ:
                 return []
             ref = organ.list_agents.remote()
-            return ray.get(ref)
+            return await asyncio.to_thread(ray.get, ref)
         else:
-            all_agents = []
-            for organ in self.organs.values():
-                ref = organ.list_agents.remote()
-                agents = ray.get(ref)
-                all_agents.extend(agents)
-            return all_agents
+            # Reuse get_all_agent_handles() to avoid duplication
+            # Just extract the keys (agent IDs) from the handles dictionary
+            handles = await self.get_all_agent_handles()
+            return list(handles.keys())
 
     def map_specializations(self) -> Dict[str, str]:
         """
@@ -664,6 +697,49 @@ class OrganismCore:
         except Exception as e:
             return {"error": str(e)}
 
+    async def get_all_agent_handles(self) -> Dict[str, Any]:
+        """
+        Get all agent handles from all organs.
+        
+        In v2 architecture:
+        - Organ = agent registry (lightweight container)
+        - Agent = true execution endpoint (Ray actor handle)
+        
+        This method queries each organ registry to get its registered agent handles,
+        then aggregates them into a single dictionary.
+        
+        Returns:
+            Dict[str, Any]: Dictionary mapping agent_id -> agent_handle (Ray actor handle).
+                           These are the actual BaseAgent Ray actor handles that can
+                           be used to call .remote() methods like get_heartbeat().
+        
+        Example:
+            {
+                "organ1_research_0": <RayActorHandle>,
+                "organ1_research_1": <RayActorHandle>,
+                "organ2_critic_0": <RayActorHandle>,
+                ...
+            }
+        """
+        all_agent_handles: Dict[str, Any] = {}
+        
+        for organ_id, organ in self.organs.items():
+            try:
+                # Query the organ registry for its agent handles
+                # Organ.get_agent_handles() returns Dict[agent_id, agent_handle]
+                ref = organ.get_agent_handles.remote()
+                organ_agent_handles = await asyncio.to_thread(ray.get, ref)
+                
+                # Merge agent handles into the global dictionary
+                # Note: organ_agent_handles is already Dict[agent_id, agent_handle]
+                all_agent_handles.update(organ_agent_handles)
+            except Exception as e:
+                logger.warning(f"[get_all_agent_handles] Failed to get agent handles from organ {organ_id}: {e}")
+                continue
+        
+        logger.debug(f"[get_all_agent_handles] Returning {len(all_agent_handles)} agent handles from {len(self.organs)} organs")
+        return all_agent_handles
+
     async def get_organ_status(self, organ_id: str) -> Dict[str, Any]:
         organ = self.organs.get(organ_id)
         if not organ:
@@ -686,6 +762,310 @@ class OrganismCore:
             except Exception as e:
                 out["organs"][oid] = {"error": str(e)}
         return out
+
+    # =====================================================================
+    #  EVOLUTION API — AGENT WORKFORCE SCALING (v2)
+    # =====================================================================
+
+    async def evolve(self, proposal: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute AGENT WORKFORCE evolution operations (v2).
+        
+        This is the agent-centric evolution system. Instead of splitting/merging
+        organs (organ-centric), we scale up/down the agent workforce for a
+        given specialization.
+        
+        Proposal format:
+            {
+                "op": "scale_up" | "scale_down",
+                "target_specialization": "DeviceOrchestrator" | "Critic" | etc.,
+                "count": int  # Number of agents to add/remove
+            }
+        
+        Returns:
+            Dict with evolution result including energy measurements and flywheel feedback.
+        """
+        if not self._initialized:
+            return {"success": False, "error": "OrganismCore not initialized"}
+
+        op = proposal.get("op")
+        spec_name = proposal.get("target_specialization")
+        count = proposal.get("count", 1)
+
+        if not op or not spec_name:
+            return {"success": False, "error": "Missing 'op' or 'target_specialization'"}
+
+        if op not in ["scale_up", "scale_down"]:
+            return {"success": False, "error": f"Unknown operation: {op}. Must be 'scale_up' or 'scale_down'"}
+
+        if count <= 0:
+            return {"success": False, "error": "count must be positive"}
+
+        # --- 1. GET ENERGY BEFORE (Proactive Way) ---
+        E_before = 0.0
+        try:
+            if self.energy_client:
+                E_before_metrics = await self.energy_client.get_metrics()
+                E_before = E_before_metrics.get("total", 0.0)
+        except Exception as e:
+            logger.warning(f"[evolve] Failed to get energy before: {e}")
+
+        # --- 2. CHECK GUARDRAILS ---
+        estimated_cost = self._estimate_agent_spinup_cost(op, count, spec_name)
+        if estimated_cost > self._evolve_max_cost:
+            return {
+                "success": False,
+                "error": f"Estimated cost {estimated_cost} exceeds max {self._evolve_max_cost}",
+            }
+
+        try:
+            # --- 3. EXECUTE v2 OPERATION ---
+            if op == "scale_up":
+                result = await self._execute_scale_up(spec_name, count)
+            elif op == "scale_down":
+                result = await self._execute_scale_down(spec_name, count)
+            else:
+                return {"success": False, "error": f"Unknown op: {op}"}
+
+            if not result.get("success", False):
+                return result
+
+            # --- 4. GET ENERGY AFTER ---
+            # Wait a moment for system to stabilize
+            await asyncio.sleep(2.0)
+            E_after = 0.0
+            try:
+                if self.energy_client:
+                    E_after_metrics = await self.energy_client.get_metrics()
+                    E_after = E_after_metrics.get("total", 0.0)
+            except Exception as e:
+                logger.warning(f"[evolve] Failed to get energy after: {e}")
+
+            delta_E = E_after - E_before
+
+            # --- 5. CHECK ROI GUARDRAIL ---
+            roi = None
+            if delta_E is not None and estimated_cost > 0:
+                roi = delta_E / estimated_cost
+                if roi < self._evolve_min_roi:
+                    logger.warning(
+                        f"[evolve] Evolution ROI {roi} below minimum {self._evolve_min_roi}"
+                    )
+                    # Continue execution but log the warning
+
+            # --- 6. LOG TO FLYWHEEL ---
+            # This is the feedback loop!
+            try:
+                if self.energy_client:
+                    await self.energy_client.post_flywheel_result(
+                        delta_e=delta_E,
+                        cost=estimated_cost,
+                        breakdown={"total": delta_E},
+                    )
+            except Exception as e:
+                logger.warning(f"[evolve] Failed to post flywheel result: {e}")
+
+            return {
+                "success": True,
+                "op": op,
+                "specialization": spec_name,
+                "delta_E_realized": delta_E,
+                "cost": estimated_cost,
+                "roi": roi,
+                "result": result.get("result", {}),
+            }
+
+        except Exception as e:
+            logger.error(f"[evolve] Evolution operation {op} failed: {e}", exc_info=True)
+            # Log failure to flywheel
+            try:
+                if self.energy_client:
+                    await self.energy_client.post_flywheel_result(
+                        delta_e=0.0,  # No change
+                        cost=estimated_cost,
+                        breakdown={"error": 1.0},
+                    )
+            except Exception:
+                pass
+            return {"success": False, "error": str(e)}
+
+    def _estimate_agent_spinup_cost(self, op: str, count: int, spec_name: str) -> float:
+        """
+        Estimate the cost of scaling agents.
+        
+        This is a simple cost model. In production, you might want to:
+        - Factor in agent specialization complexity
+        - Consider current system load
+        - Use historical data
+        """
+        base_cost_per_agent = 100.0  # Base cost for spinning up/down an agent
+        
+        # Scale up is more expensive (creating resources)
+        # Scale down is cheaper (releasing resources)
+        multiplier = 1.0 if op == "scale_up" else 0.5
+        
+        return base_cost_per_agent * count * multiplier
+
+    def _get_organ_for_specialization(self, spec_name: str) -> Optional[ray.actor.ActorHandle]:
+        """
+        Get the organ handle for a given specialization name.
+        
+        Args:
+            spec_name: Specialization name (e.g., "DeviceOrchestrator")
+            
+        Returns:
+            Ray actor handle for the organ, or None if not found
+        """
+        try:
+            spec = Specialization[spec_name.upper()]
+        except KeyError:
+            logger.error(f"[evolve] Invalid specialization: {spec_name}")
+            return None
+
+        organ_id = self.specialization_to_organ.get(spec)
+        if not organ_id:
+            logger.error(f"[evolve] No organ found for specialization {spec_name}")
+            return None
+
+        organ = self.organs.get(organ_id)
+        if not organ:
+            logger.error(f"[evolve] Organ {organ_id} not found in active organs")
+            return None
+
+        return organ
+
+    async def _execute_scale_up(self, spec_name: str, count: int) -> Dict[str, Any]:
+        """
+        (v2) Creates new agent actors and registers them with their organ.
+        
+        Args:
+            spec_name: Specialization name (e.g., "DeviceOrchestrator")
+            count: Number of agents to create
+            
+        Returns:
+            Dict with success status and created agent IDs
+        """
+        logger.info(f"[evolve] Scaling up {spec_name} by {count} agents...")
+
+        # 1. Get the 'Organ' (registry) for this specialization
+        organ = self._get_organ_for_specialization(spec_name)
+        if not organ:
+            return {"success": False, "error": f"No organ found for {spec_name}"}
+
+        try:
+            spec = Specialization[spec_name.upper()]
+        except KeyError:
+            return {"success": False, "error": f"Invalid specialization: {spec_name}"}
+
+        # Get organ_id for agent naming
+        organ_id = self.specialization_to_organ.get(spec)
+        if not organ_id:
+            return {"success": False, "error": f"No organ_id found for {spec_name}"}
+
+        # 2. Loop and create new agent actors
+        new_agent_ids = []
+        for i in range(count):
+            # Generate unique agent ID
+            agent_id = f"{organ_id}_{spec.name.lower()}_{int(time.time())}_{i}"
+
+            try:
+                # Create agent via organ
+                ref = organ.create_agent.remote(
+                    agent_id=agent_id,
+                    specialization=spec,
+                    organ_id=organ_id,
+                    name=agent_id,
+                    num_cpus=0.1,
+                    lifetime="detached",
+                )
+
+                await asyncio.to_thread(ray.get, ref)
+                self.agent_to_organ_map[agent_id] = organ_id
+                new_agent_ids.append(agent_id)
+                logger.info(f"[evolve] Created agent {agent_id}")
+
+            except Exception as e:
+                logger.error(f"[evolve] Failed to create agent {agent_id}: {e}", exc_info=True)
+                # Continue with other agents even if one fails
+
+        if not new_agent_ids:
+            return {"success": False, "error": "Failed to create any agents"}
+
+        logger.info(f"[evolve] Successfully scaled up {spec_name}: created {len(new_agent_ids)} agents")
+        return {"success": True, "result": {"created_agents": new_agent_ids, "count": len(new_agent_ids)}}
+
+    async def _execute_scale_down(self, spec_name: str, count: int) -> Dict[str, Any]:
+        """
+        (v2) Removes agent actors from their organ and cleans up.
+        
+        Args:
+            spec_name: Specialization name (e.g., "DeviceOrchestrator")
+            count: Number of agents to remove
+            
+        Returns:
+            Dict with success status and removed agent IDs
+        """
+        logger.info(f"[evolve] Scaling down {spec_name} by {count} agents...")
+
+        # 1. Get the 'Organ' (registry) for this specialization
+        organ = self._get_organ_for_specialization(spec_name)
+        if not organ:
+            return {"success": False, "error": f"No organ found for {spec_name}"}
+
+        # 2. Get list of agents for this specialization
+        try:
+            # Get all agents from the organ
+            agents_ref = organ.get_agent_handles.remote()
+            all_agents = await asyncio.to_thread(ray.get, agents_ref)
+            
+            # Filter agents by specialization (we need to check each agent's specialization)
+            # For now, we'll get agents from the organ and pick randomly
+            # In a more sophisticated implementation, you might want to:
+            # - Select agents based on load/health
+            # - Prefer removing idle agents
+            agent_ids = list(all_agents.keys())
+            
+            if len(agent_ids) < count:
+                logger.warning(
+                    f"[evolve] Only {len(agent_ids)} agents available, requested {count}"
+                )
+                count = len(agent_ids)
+
+            if count == 0:
+                return {"success": False, "error": "No agents available to remove"}
+
+            # Select agents to remove (simple: take first N)
+            agents_to_remove = agent_ids[:count]
+
+        except Exception as e:
+            logger.error(f"[evolve] Failed to get agents from organ: {e}", exc_info=True)
+            return {"success": False, "error": f"Failed to get agents: {e}"}
+
+        # 3. Remove agents
+        removed_agent_ids = []
+        for agent_id in agents_to_remove:
+            try:
+                # Remove from organ registry
+                ref = organ.remove_agent.remote(agent_id)
+                removed = await asyncio.to_thread(ray.get, ref)
+                
+                if removed:
+                    # Remove from global map
+                    self.agent_to_organ_map.pop(agent_id, None)
+                    removed_agent_ids.append(agent_id)
+                    logger.info(f"[evolve] Removed agent {agent_id}")
+                else:
+                    logger.warning(f"[evolve] Agent {agent_id} not found in organ")
+
+            except Exception as e:
+                logger.error(f"[evolve] Failed to remove agent {agent_id}: {e}", exc_info=True)
+                # Continue with other agents even if one fails
+
+        if not removed_agent_ids:
+            return {"success": False, "error": "Failed to remove any agents"}
+
+        logger.info(f"[evolve] Successfully scaled down {spec_name}: removed {len(removed_agent_ids)} agents")
+        return {"success": True, "result": {"removed_agents": removed_agent_ids, "count": len(removed_agent_ids)}}
 
     # =====================================================================
     #  HEALTH LOOP & RECONCILIATION LOOP
@@ -811,7 +1191,7 @@ class OrganismCore:
 
         # Look up config
         cfg = None
-        for oc in self.config.organs:
+        for oc in self.organ_configs:
             if oc["id"] == organ_id:
                 cfg = oc
                 break
@@ -833,7 +1213,7 @@ class OrganismCore:
         organ_name = f"organ-{organ_id}".lower()
         try:
             new_organ = Organ.options(
-                name=organ_name, namespace=self.ray_namespace
+                name=organ_name, namespace=AGENT_NAMESPACE
             ).remote(
                 organ_id=organ_id,
                 role_registry=self.role_registry,
@@ -850,12 +1230,23 @@ class OrganismCore:
 
         # Respawn agents
         for agent_def in cfg.get("agents", []):
-            spec = Specialization.from_label(agent_def["specialization"])
+            try:
+                spec = Specialization[agent_def["specialization"].upper()]
+            except KeyError:
+                logger.error(f"Invalid specialization '{agent_def['specialization']}' in config for organ {organ_id}")
+                continue
             count = agent_def.get("count", 1)
             for _ in range(count):
                 agent_id = str(uuid.uuid4())
                 try:
-                    ref = new_organ.create_agent.remote(agent_id, spec)
+                    ref = new_organ.create_agent.remote(
+                        agent_id=agent_id,
+                        specialization=spec,
+                        organ_id=organ_id,
+                        name=agent_id,
+                        num_cpus=0.1,
+                        lifetime="detached"
+                    )
                     await asyncio.to_thread(ray.get, ref)
                     self.agent_to_organ_map[agent_id] = organ_id
                 except Exception as e:
@@ -864,6 +1255,62 @@ class OrganismCore:
                     )
 
         logger.info(f"[OrganismCore] Organ `{organ_id}` fully rebuilt")
+
+    # =====================================================================
+    #  SYSTEM INITIALIZATION HELPERS
+    # =====================================================================
+
+    async def _ensure_janitor_actor(self):
+        """
+        Ensure the detached Janitor actor exists in the expected namespace.
+        
+        The Janitor is a system-wide maintenance service responsible for cleaning
+        up dead actors and maintaining cluster health. This method ensures it's
+        running before the organism starts processing tasks.
+        
+        This is idempotent - if the janitor already exists, it will be reused.
+        """
+        try:
+            if not ray.is_initialized():
+                logger.debug("[OrganismCore] Ray not initialized, skipping janitor check")
+                return
+            
+            namespace = AGENT_NAMESPACE
+            
+            try:
+                # Fast path: already exists
+                jan = await asyncio.to_thread(
+                    ray.get_actor, "seedcore_janitor", namespace=namespace
+                )
+                logger.debug(f"[OrganismCore] Janitor actor already running in {namespace}")
+                return
+            except Exception:
+                logger.info(f"[OrganismCore] Launching janitor in namespace {namespace}")
+
+            # Create or reuse
+            from seedcore.maintenance.janitor import Janitor
+            try:
+                Janitor.options(
+                    name="seedcore_janitor",
+                    namespace=namespace,
+                    lifetime="detached",
+                    num_cpus=0,
+                ).remote(namespace)
+                
+                # Verify it is reachable
+                jan = await asyncio.to_thread(
+                    ray.get_actor, "seedcore_janitor", namespace=namespace
+                )
+                try:
+                    pong_ref = jan.ping.remote()
+                    pong = await asyncio.to_thread(ray.get, pong_ref)
+                    logger.info(f"✅ Janitor actor launched in {namespace} (ping={pong})")
+                except Exception:
+                    logger.info(f"✅ Janitor actor launched in {namespace} (ping skipped)")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to launch janitor actor: {e}")
+        except Exception as e:
+            logger.debug(f"[OrganismCore] Ensure janitor skipped: {e}")
 
     # =====================================================================
     #  SHUTDOWN LOGIC
@@ -883,17 +1330,17 @@ class OrganismCore:
         self._shutdown_event.set()
 
         # Wait for health & reconcile tasks to stop
-        if self._health_task:
-            self._health_task.cancel()
+        if self._health_check_task:
+            self._health_check_task.cancel()
             try:
-                await self._health_task
+                await self._health_check_task
             except Exception:
                 pass
 
-        if self._reconcile_task:
-            self._reconcile_task.cancel()
+        if self._recon_task:
+            self._recon_task.cancel()
             try:
-                await self._reconcile_task
+                await self._recon_task
             except Exception:
                 pass
 
@@ -909,11 +1356,12 @@ class OrganismCore:
                 )
 
         # Close LTM
-        try:
-            logger.info("[OrganismCore] Closing LTM actor")
-            await self.ltm.close.remote()
-        except Exception as e:
-            logger.error(f"[OrganismCore] Failed to close LTM: {e}")
+        if self.ltm_handle:
+            try:
+                logger.info("[OrganismCore] Closing LTM actor")
+                await asyncio.to_thread(ray.get, self.ltm_handle.close.remote())
+            except Exception as e:
+                logger.error(f"[OrganismCore] Failed to close LTM: {e}")
 
         logger.info("[OrganismCore] Shutdown complete")
 

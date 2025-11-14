@@ -2,15 +2,17 @@
 # ... (license) ...
 
 """
-Organ Actor (replaces legacy Tier0MemoryManager)
+Organ Actor (v2 - Lightweight Registry)
 
 This class acts as an 'Organ' within the Organism. It is a stateful
-Ray actor spawned by the OrganismManager and is responsible for:
+Ray actor spawned by the OrganismCore and is responsible for:
 
-- Spawning and managing a pool of specialized WorkerAgents (BaseAgents).
+- Spawning and managing a pool of specialized BaseAgent actors.
 - Injecting shared resources (Tools, Registries, SkillStore) into its agents.
-- Collecting advertisements (heartbeats) from its agents.
-- Performing Level 2 (intra-organ) routing to select the best agent for a task.
+- Responding to calls from the OrganismCore (e.g., get_agent_handles).
+
+THIS ACTOR IS PASSIVE. It does not run its own loops for polling or routing.
+That logic is centralized in the OrganismCore and StateService.
 """
 
 from __future__ import annotations
@@ -18,570 +20,291 @@ from __future__ import annotations
 import os
 import ray  # pyright: ignore[reportMissingImports]
 import asyncio
-import uuid
 import random
-import signal
-import contextlib
-from typing import Dict, Any, Optional, TYPE_CHECKING
+import time
+from typing import Dict, Any, Optional, List, TYPE_CHECKING, Tuple
 
 # --- Core SeedCore Imports ---
-from ..utils.ray_utils import get_ray_node_ip
-from ..models import TaskPayload
-from ..agents.roles import (
-    Specialization,
-    RoleRegistry,
-    SkillStoreProtocol,
-    Router,  # The Level 2 (intra-organ) router
-    AgentAdvertisement
-)
-from ..logging_setup import setup_logging, ensure_serve_logger
-setup_logging(app_name="seedcore.Organ")
+from ..logging_setup import ensure_serve_logger
 
 if TYPE_CHECKING:
-    from ..agents.worker_agent import WorkerAgent # The new BaseAgent actor
+    from ..agents.roles import (
+        Specialization,
+        RoleRegistry,
+        SkillStoreProtocol
+    )
     from ..tools.manager import ToolManager
-    # Note: MwManager and LongTermMemoryManager are removed
-    from ..graph.agent_repository import AgentGraphRepository
+    from ..serve.cognitive_client import CognitiveServiceClient
 
 logger = ensure_serve_logger("seedcore.Organ", level="DEBUG")
 
 # Target namespace for agent actors
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
-# Configurable heartbeat parameters
-HB_BASE = float(os.getenv("RUNTIME_HB_BASE_S", "3.0"))     # 3s
-HB_JITTER = float(os.getenv("RUNTIME_HB_JITTER_S", "2.0")) # +[0..2]s
-HB_BACKOFF_MAX = float(os.getenv("RUNTIME_HB_BACKOFF_S", "10.0"))
-
-# Non-blocking ray.get helper
-async def _aget(obj_ref, timeout: float = 2.0):
-    loop = asyncio.get_running_loop()
-    # Use a threadpool to call blocking ray.get
-    return await loop.run_in_executor(None, lambda: ray.get(obj_ref, timeout=timeout))
-
-async def _call_actor_method(
-    actor_handle: Any,
-    method_name: str,
-    *args,
-    timeout: Optional[float] = None,
-    **kwargs,
-) -> Any:
-    """Helper to invoke a Ray actor method."""
-    method = getattr(actor_handle, method_name, None)
-    if method is None:
-        raise AttributeError(f"{actor_handle!r} has no attribute '{method_name}'")
-    
-    remote_call = method.remote(*args, **kwargs)
-    return await _aget(remote_call, timeout=timeout or 30.0)
-
 
 @ray.remote
 class Organ:
     """
-    Stateful Ray-based Organ actor (the new Tier0MemoryManager).
+    A Ray actor that serves as a simple agent registry and health tracker.
     
-    This organ acts as a specialized container for a pool of agents,
-    implementing the "swarm-of-swarms" model.
+    This class implements all the `.remote()` methods that the
+    OrganismCore needs to manage its pool of agents.
     """
     
     def __init__(
         self,
         organ_id: str,
-        organ_type: str, # For logging/grouping, e.g., "GuestRelations"
-        serve_route: Optional[str] = None, # For runtime registry
-        *,
-        # --- Injected Dependencies from OrganismManager ---
-        # Note: No direct memory managers are injected here.
+        # --- Injected Dependencies from OrganismCore ---
         role_registry: "RoleRegistry",
         skill_store: "SkillStoreProtocol",
         tool_manager: "ToolManager",
-        cognitive_base_url: Optional[str] = None
+        cognitive_client: "CognitiveServiceClient",
     ):
         self.organ_id = organ_id
-        self.organ_type = organ_type
-        self.serve_route = serve_route
-        self.agents: Dict[str, "WorkerAgent"] = {} # agent_id -> Ray actor handle
-
-        # --- Store Injected Shared Resources ---
+        
+        # Injected global singletons
         self.role_registry = role_registry
         self.skill_store = skill_store
         self.tool_manager = tool_manager
-        self.cognitive_base_url = cognitive_base_url
+        # We store the *client*, not just the URL, for consistency
+        self.cognitive_client = cognitive_client 
 
-        # --- Internal Level 2 Router ---
-        self.router = Router(registry=self.role_registry)
+        # Agent registry: { agent_id -> ActorHandle }
+        self.agents: Dict[str, ray.actor.ActorHandle] = {}
+        # Agent metadata: { agent_id -> AgentInfo }
+        self.agent_info: Dict[str, Dict[str, Any]] = {}
         
-        # Internal state
-        self._ping_failures: Dict[str, int] = {}
-        self.instance_id = uuid.uuid4().hex
-        self._started = False
-        self._closing = asyncio.Event()
+        logger.info(f"✅ Organ actor {self.organ_id} created.")
 
-        # Background tasks
-        self._hb_task: Optional[asyncio.Task] = None # For this organ's heartbeat
-        self._ad_task: Optional[asyncio.Task] = None # For collecting agent ads
+    async def health_check(self) -> bool:
+        """Called by OrganismCore on startup."""
+        await asyncio.sleep(0)  # Be async
+        return True
+        
+    async def ping(self) -> bool:
+        """Lightweight liveness check for OrganismCore's health loop."""
+        await asyncio.sleep(0)  # Be async
+        return True
 
-        # Database dependencies (lazy)
-        self._repo: Optional["AgentGraphRepository"] = None
-        self._session_factory = None
-        try:
-            from seedcore.database import get_async_pg_session_factory
-            self._session_factory = get_async_pg_session_factory()
-        except Exception as exc:
-            logger.warning(f"[{self.organ_id}] DB session factory unavailable: {exc}")
-
-        logger.info(f"✅ Organ actor {self.organ_id} (Type: {self.organ_type}) initialized.")
-
-
-    # ------------------------------------------------------------------
-    # Agent Lifecycle (Called by OrganismManager)
-    # ------------------------------------------------------------------
-
-    def create_agent(
+    # ==========================================================
+    # Agent Lifecycle (Called by OrganismCore)
+    # ==========================================================
+    
+    async def create_agent(
         self,
         agent_id: str,
-        specialization: Specialization,
-        organ_id: str, # Passed for verification
-        *,
-        name: Optional[str] = None,
-        lifetime: Optional[str] = None,
-        num_cpus: Optional[float] = None,
-        num_gpus: Optional[float] = None,
-        resources: Optional[Dict[str, float]] = None,
-    ) -> str:
+        specialization: "Specialization",
+        organ_id: str,  # Passed for verification
+        **agent_actor_options
+    ) -> None:
         """
-        Create a new WorkerAgent actor (idempotent).
-        This is called by the OrganismManager.
+        Creates, registers, and stores a new BaseAgent actor.
+        This is called by OrganismCore's `_create_agents_from_config` or `evolve`.
         """
         # Ensure we import the agent class *inside* the Ray actor
-        from ..agents.worker_agent import WorkerAgent
+        from ..agents.base import BaseAgent
 
         if agent_id in self.agents:
             logger.warning(f"[{self.organ_id}] Agent {agent_id} already exists.")
-            return agent_id
-            
+            return
+
         if self.organ_id != organ_id:
              logger.error(f"Organ ID mismatch! Expected {self.organ_id}, got {organ_id}")
              raise ValueError("Organ ID mismatch")
 
         try:
-            options_kwargs: Dict[str, Any] = {}
-            effective_name = name or agent_id
-            options_kwargs["name"] = effective_name
-            options_kwargs["lifetime"] = lifetime or "detached"
-            if num_cpus is not None:
-                options_kwargs["num_cpus"] = num_cpus
-            if num_gpus is not None:
-                options_kwargs["num_gpus"] = num_gpus
-            if resources:
-                options_kwargs["resources"] = resources
-            options_kwargs["namespace"] = AGENT_NAMESPACE
-            options_kwargs["get_if_exists"] = True # Re-attach if already exists
-
-            logger.info(f"🚀 [{self.organ_id}] Creating/getting agent '{effective_name}'...")
+            logger.info(f"🚀 [{self.organ_id}] Creating agent '{agent_id}'...")
             
-            # Create fresh actor, injecting all dependencies
-            handle = WorkerAgent.options(**options_kwargs).remote(
+            # Get cognitive base URL from client
+            cognitive_base_url = None
+            if hasattr(self.cognitive_client, "get_base_url"):
+                cognitive_base_url = self.cognitive_client.get_base_url()
+            elif hasattr(self.cognitive_client, "base_url"):
+                cognitive_base_url = self.cognitive_client.base_url
+            
+            # Create fresh actor directly from BaseAgent, injecting all dependencies
+            handle = BaseAgent.options(
+                namespace=AGENT_NAMESPACE,
+                get_if_exists=True,  # Re-attach if name already exists
+                **agent_actor_options
+            ).remote(
                 agent_id=agent_id,
+                tool_manager=self.tool_manager,
                 specialization=specialization,
-                # Pass all the shared resources
                 role_registry=self.role_registry,
                 skill_store=self.skill_store,
-                tool_manager=self.tool_manager,
-                cognitive_base_url=self.cognitive_base_url,
+                cognitive_base_url=cognitive_base_url,
                 organ_id=self.organ_id
             )
 
+            # Store the handle and metadata
             self.agents[agent_id] = handle
-            
-            # Immediately fetch and register its advertisement
-            try:
-                ad_dict = ray.get(handle.advertise_capabilities.remote())
-                ad_obj = AgentAdvertisement(**ad_dict)
-                self.router.register(ad_obj)
-            except Exception as e:
-                logger.warning(f"Failed to get initial advertisement for {agent_id}: {e}")
-
-            logger.info(f"✅ [{self.organ_id}] Created agent: {agent_id} (Spec: {specialization.value})")
-            return agent_id
-
+            self.agent_info[agent_id] = {
+                "agent_id": agent_id,
+                "specialization": specialization.name,
+                "created_at": time.time(),
+                "status": "initializing",
+            }
+            logger.info(f"✅ [{self.organ_id}] Registered agent {agent_id}.")
         except Exception as e:
-            logger.error(f"Failed to create agent {agent_id} in {self.organ_id}: {e}", exc_info=True)
+            logger.error(f"[{self.organ_id}] Failed to create agent {agent_id}: {e}")
             raise
 
-    def remove_agent(self, agent_id: str) -> bool:
-        """Removes an agent from this organ and its router."""
+    async def remove_agent(self, agent_id: str) -> bool:
+        """
+        Removes an agent from the registry and terminates it.
+        This is called by OrganismCore's `evolve` (scale_down).
+        """
         logger.info(f"[{self.organ_id}] Removing agent {agent_id}...")
-        self.router.remove(agent_id)
-        if agent_id in self.agents:
-            # We don't kill the agent, just de-register it.
-            # The OrganismManager is responsible for killing the actor.
-            del self.agents[agent_id]
-            return True
-        return False
-
-    def get_agent_handles(self) -> Dict[str, 'WorkerAgent']:
-        """Returns all agent handles in this organ."""
-        return self.agents.copy()
-
-    # ------------------------------------------------------------------
-    # Task Execution (Called by OrganismManager)
-    # ------------------------------------------------------------------
-
-    async def execute_task_on_best_agent(
-        self, 
-        task: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Asynchronously executes a task on the most suitable agent *within this organ*.
-        This is the main Level 2 (intra-organ) routing logic.
-        """
-        task_obj: TaskPayload
-        try:
-            task_obj = TaskPayload.from_db(task)
-        except Exception as e:
-            logger.error(f"[{self.organ_id}] Failed to parse TaskPayload: {e}")
-            return {"success": False, "error": f"Invalid task payload: {e}"}
-
-        logger.info(f"[{self.organ_id}] Routing task {task_obj.task_id} (Spec: {task_obj.required_specialization})...")
-
-        if not self.agents:
-            logger.error(f"[{self.organ_id}] No agents available for task {task_obj.task_id}")
-            return {"success": False, "error": "No agents available in organ"}
+        self.agent_info.pop(agent_id, None)
+        agent_handle = self.agents.pop(agent_id, None)
         
-        try:
-            # 1. Use the internal router to select the best agent
-            best_ad = self.router.select_best(
-                required_role=Specialization(task_obj.required_specialization) if task_obj.required_specialization else None,
-                required_tags=task_obj.params.get("routing", {}).get("required_tags"), # Legacy
-                desired_skills=task_obj.desired_skills
-            )
+        if agent_handle:
+            try:
+                # Asynchronously terminate the actor
+                ray.kill(agent_handle, no_restart=True)
+                logger.info(f"[{self.organ_id}] Terminated agent {agent_id}.")
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to kill agent {agent_id}: {e}")
+                # Still return True because it's gone from the registry
+                return True
+        return False  # Agent was not found in the registry
+
+    async def respawn_agent(self, agent_id: str) -> None:
+        """
+        Recreates a dead agent with its previous info.
+        This is called by OrganismCore's `_reconciliation_loop`.
+        """
+        info = self.agent_info.get(agent_id, {})
+        if not info:
+            raise ValueError(f"Cannot respawn {agent_id}: no info retained.")
             
-            if not best_ad:
-                logger.warning(f"[{self.organ_id}] No suitable agent found for task {task_obj.task_id}. Trying random.")
-                agent_handle = random.choice(list(self.agents.values()))
-                agent_id = await _call_actor_method(agent_handle, "get_id")
-            else:
-                agent_id = best_ad.agent_id
-                agent_handle = self.agents.get(agent_id)
-                if not agent_handle:
-                     logger.error(f"Router selected agent {agent_id} but it's not in the handle list.")
-                     return {"success": False, "error": f"Agent {agent_id} not found after routing"}
+        spec_name = info.get("specialization", "GENERALIST")
+        spec = Specialization[spec_name.upper()]
+        
+        # Re-run creation logic
+        await self.create_agent(
+            agent_id=agent_id,
+            specialization=spec,
+            organ_id=self.organ_id,
+            name=agent_id,  # Re-use original name
+            num_cpus=0.1,
+            lifetime="detached"
+        )
+        
+    # ==========================================================
+    # Introspection (Called by OrganismCore & StateService)
+    # ==========================================================
+    
+    async def get_agent_handle(self, agent_id: str) -> Optional[ray.actor.ActorHandle]:
+        """Returns the handle for a specific agent."""
+        return self.agents.get(agent_id)
 
-            logger.info(f"[{self.organ_id}] Task {task_obj.task_id} routed to agent {agent_id}")
+    async def get_agent_handles(self) -> Dict[str, ray.actor.ActorHandle]:
+        """
+        Returns all agent handles managed by this organ.
+        This is the main method used by OrganismCore to poll for the StateService.
+        """
+        return self.agents.copy()
+        
+    async def list_agents(self) -> List[str]:
+        """Returns all agent IDs managed by this organ."""
+        return list(self.agents.keys())
+        
+    async def get_agent_info(self, agent_id: str) -> Dict[str, Any]:
+        """Returns the metadata for a specific agent."""
+        return self.agent_info.get(agent_id, {"error": "not_found"})
 
-            # 2. Dispatch the task to the selected agent
-            # We pass the full task dictionary
-            result = await _call_actor_method(
-                agent_handle, 
-                "execute_task", 
-                task, # Pass the original dict, BaseAgent will re-parse it
-                timeout=120.0
-            )
-            
-            logger.info(f"✅ [{self.organ_id}] Task {task_obj.task_id} executed by {agent_id}")
-            return result
-            
-        except Exception as e:
-            logger.error(f"[{self.organ_id}] Task execution failed for {task_obj.task_id}: {e}", exc_info=True)
-            return {"success": False, "error": str(e)}
+    async def get_status(self) -> Dict[str, Any]:
+        """
+        Returns the health status of this organ and all its agents.
+        (Called by OrganismCore's health loop)
+        """
+        # This is now a lightweight check.
+        # The OrganismCore's health loop is responsible for
+        # checking the Organ, and the StateService's aggregator
+        # is responsible for checking all Agents.
+        agent_statuses = {}
 
-    # ------------------------------------------------------------------
-    # Status & Heartbeat
-    # ------------------------------------------------------------------
-
-    def get_status(self) -> Dict[str, Any]:
-        """Returns the current status of the organ."""
+        for agent_id in self.agents.keys():
+            # We report agents as "alive" if they're registered.
+            # The StateService aggregator will do actual health checking via heartbeats.
+            # OrganismCore's health loop uses the "alive" flag to detect unhealthy agents.
+            agent_statuses[agent_id] = {
+                "status": "registered",
+                "alive": True  # Registered agents are assumed alive until proven otherwise
+            }
+                
         return {
             "organ_id": self.organ_id,
-            "organ_type": self.organ_type,
-            "instance_id": str(self.instance_id),
+            "status": "healthy",
             "agent_count": len(self.agents),
-            "agent_ids": list(self.agents.keys()),
-            "specializations": list(self.router.get_specializations()),
-            "status": "healthy"
+            "agents": agent_statuses,
         }
 
-    def ping(self) -> str:
-        """Health check method to verify the organ is responsive."""
-        return "pong"
+    # ==========================================================
+    # Routing (Called by OrganismCore)
+    # ==========================================================
 
-    async def start(self) -> Dict[str, Any]:
-        """Register in runtime registry and start background loops."""
-        if self._started:
-            return {"status": "alive", "instance_id": self.instance_id, "logical_id": self.organ_id}
-        
-        logger.info(f"[{self.organ_id}] Starting...")
-        
-        # Start this Organ's own heartbeat loop
-        self._hb_task = asyncio.create_task(self._heartbeat_loop())
-        
-        # Start the advertisement collection loop for child agents
-        self._ad_task = asyncio.create_task(self._collect_advertisements_loop())
-        
-        # Try to handle SIGTERM to mark dead early
-        try:
-            loop = asyncio.get_running_loop()
-            loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.create_task(self.close()))
-        except Exception:
-            pass  # Not available in all contexts
-        
-        self._started = True
-        logger.info(f"✅ [{self.organ_id}] Started background loops.")
-        return {"status": "alive", "instance_id": self.instance_id, "logical_id": self.organ_id}
-
-    async def _heartbeat_loop(self):
-        """
-        Robust, production-grade heartbeat loop for Organ actors.
-
-        Features:
-        - Retries DB/repo initialization until ready.
-        - Registers instance exactly once.
-        - Clean cancellation semantics.
-        - Exponential backoff with circuit breaker.
-        - Reliable Ray node IP resolution.
-        - Deterministic heartbeat intervals.
-        """
-
-        # --- Phase 1: Ensure DB & Repo Availability ---
-        repo = None
-        failures = 0
-        MAX_INIT_FAILURES = 100  # ~5 minutes total before long sleep
-        INIT_RETRY_DELAY = 3.0
-
-        # Resolve real node IP (Ray-safe, with robust fallbacks)
-        node_ip = get_ray_node_ip()
-        logger.debug(f"[{self.organ_id}] Resolved node IP: {node_ip}")
-
-        while not self._closing.is_set():
-            try:
-                repo = await self._repo_lazy()
-                if repo and self._session_factory:
-                    break
-
-                failures += 1
-                logger.warning(
-                    f"[{self.organ_id}] Waiting for DB/Repo availability "
-                    f"(failure {failures}/{MAX_INIT_FAILURES})"
-                )
-
-                if failures >= MAX_INIT_FAILURES:
-                    logger.error(
-                        f"[{self.organ_id}] Too many DB init failures. "
-                        "Entering degraded idle mode for 5 minutes."
-                    )
-                    await asyncio.sleep(300)
-                    failures = 0  # reset counter
-                    continue
-
-                await asyncio.sleep(INIT_RETRY_DELAY)
-
-            except asyncio.CancelledError:
-                # Actor is shutting down
-                return
-            except Exception as e:
-                failures += 1
-                logger.error(
-                    f"[{self.organ_id}] DB initialization error: {e}, retrying...",
-                    exc_info=True
-                )
-                await asyncio.sleep(INIT_RETRY_DELAY)
-
-        if self._closing.is_set():
-            return
-
-        logger.info(f"[{self.organ_id}] DB/Repo ready. Starting heartbeat loop.")
-
-        # --- Phase 2: Register the Organ once ---
-        registered = False
-        REG_FAILURE_LIMIT = 20  # before entering degraded sleep
-        failures = 0
-
-        while not self._closing.is_set() and not registered:
-            try:
-                if not self._session_factory:
-                    raise RuntimeError("Session factory not available")
-                async with self._session_factory() as session:
-                    async with session.begin():
-                        # Fetch cluster epoch
-                        cluster_epoch = await repo.get_current_cluster_epoch(session)
-
-                        # Register this Organ instance
-                        await repo.register_instance(
-                            session=session,
-                            instance_id=self.instance_id,
-                            logical_id=self.organ_id,
-                            cluster_epoch=cluster_epoch,
-                            actor_name=self.organ_id,
-                            serve_route=self.serve_route,
-                            node_id=os.getenv("RAY_NODE_ID", ""),
-                            ip_address=node_ip,
-                            pid=os.getpid(),
-                        )
-
-                logger.info(f"[{self.organ_id}] Registered instance in registry.")
-                registered = True
-
-            except asyncio.CancelledError:
-                return
-            except Exception as e:
-                failures += 1
-                logger.warning(
-                    f"[{self.organ_id}] Registration failed ({failures}/{REG_FAILURE_LIMIT}): {e}"
-                )
-                if failures >= REG_FAILURE_LIMIT:
-                    logger.error(
-                        f"[{self.organ_id}] Too many registration failures. "
-                        "Sleeping for 5 minutes before retry."
-                    )
-                    await asyncio.sleep(300)
-                    failures = 0
-                    continue
-
-                await asyncio.sleep(3)
-
-        if self._closing.is_set():
-            return
-
-        logger.info(f"[{self.organ_id}] Registration complete. Entering heartbeat mode.")
-
-        # --- Phase 3: Steady-State Heartbeat Loop ---
-        backoff = 0.5
-        failures = 0
-        MAX_HB_FAILURES = 50  # ~5 mins at 5s interval
-
-        while not self._closing.is_set():
-            try:
-                if not self._session_factory:
-                    raise RuntimeError("Session factory not available")
-                async with self._session_factory() as session:
-                    async with session.begin():
-                        # Status "alive"
-                        await repo.set_instance_status(session, self.instance_id, "alive")
-
-                        # Heartbeat
-                        await repo.beat(session, self.instance_id)
-
-                # Reset backoff on success
-                backoff = 0.5
-                failures = 0
-
-            except asyncio.CancelledError:
-                return
-            except Exception as e:
-                failures += 1
-                logger.warning(
-                    f"❌ [{self.organ_id}] Heartbeat failure "
-                    f"({failures}/{MAX_HB_FAILURES}): {e}, backoff={backoff}s"
-                )
-
-                if failures >= MAX_HB_FAILURES:
-                    logger.error(
-                        f"[{self.organ_id}] Too many heartbeat failures. "
-                        "Entering degraded idle mode for 5 minutes."
-                    )
-                    await asyncio.sleep(300)
-                    failures = 0
-                    backoff = 0.5
-                    continue
-
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, HB_BACKOFF_MAX)
-                continue
-
-            # --- Normal heartbeat delay ---
-            delay = HB_BASE + random.random() * HB_JITTER
-            try:
-                await asyncio.wait_for(self._closing.wait(), timeout=delay)
-            except asyncio.TimeoutError:
-                pass  # normal loop
-
-    async def _collect_advertisements_loop(self, interval: int = 10):
-        """Periodically collects advertisements from all child agents."""
-        while not self._closing.is_set():
-            await asyncio.sleep(interval)
-            if not self._closing.is_set():
-                try:
-                    await self.collect_advertisements()
-                except Exception as e:
-                    logger.warning(f"[{self.organ_id}] Ad collection loop error: {e}")
-
-    async def collect_advertisements(self) -> Dict[str, Any]:
-        """
-        Collects advertisements from all agents and registers them with the internal router.
-        """
+    async def pick_random_agent(self) -> Tuple[Optional[str], Optional[ray.actor.ActorHandle]]:
+        """Returns a random agent_id and handle from this organ."""
         if not self.agents:
-            return {"status": "no_agents", "collected": 0}
+            return None, None
+        try:
+            agent_id = random.choice(list(self.agents.keys()))
+            return agent_id, self.agents[agent_id]
+        except Exception:
+            return None, None  # Race condition if dict empty
 
-        agent_items = list(self.agents.items())
-        tasks = [
-            _call_actor_method(handle, "advertise_capabilities", timeout=2.0)
-            for _, handle in agent_items
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    async def pick_agent_by_specialization(self, spec_name: str) -> Tuple[Optional[str], Optional[ray.actor.ActorHandle]]:
+        """
+        Finds an agent matching the specialization.
+        This is a simple, non-load-balanced lookup.
+        """
+        for agent_id, info in self.agent_info.items():
+            if info.get("specialization") == spec_name:
+                handle = self.agents.get(agent_id)
+                if handle:
+                    return agent_id, handle
+        
+        # Fallback if no specific agent matches
+        return await self.pick_random_agent()
 
-        successes = 0
-        failed_agents = []
-        async with self.router.get_lock(): # Lock the router for batch update
-            for (agent_id, handle), res in zip(agent_items, results):
-                if isinstance(res, Exception):
-                    logger.debug(f"[{self.organ_id}] Failed ad from {agent_id}: {res}")
-                    self._ping_failures[agent_id] = self._ping_failures.get(agent_id, 0) + 1
-                    if self._ping_failures[agent_id] >= 3:
-                        failed_agents.append(agent_id)
-                    continue
-                
-                self._ping_failures[agent_id] = 0
-                try:
-                    ad_obj = AgentAdvertisement(**res)
-                    self.router.register(ad_obj)
-                    successes += 1
-                except Exception as e:
-                    logger.warning(f"Failed to parse ad from {agent_id}: {e}")
-        
-        # Prune failed agents
-        for agent_id in failed_agents:
-            logger.warning(f"[{self.organ_id}] Removing agent {agent_id} after 3 ping failures.")
-            self.router.remove(agent_id)
-            self.agents.pop(agent_id, None)
+    # ==========================================================
+    # Shutdown
+    # ==========================================================
 
-        logger.info(f"[{self.organ_id}] Collected {successes}/{len(agent_items)} agent advertisements.")
-        return {"collected": successes, "failed": len(agent_items) - successes}
+    async def shutdown(self) -> None:
+        """
+        Terminates all agents owned by this organ.
+        Called by OrganismCore's shutdown.
+        """
+        logger.info(f"[{self.organ_id}] Shutting down, terminating {len(self.agents)} agents...")
+        agent_ids = list(self.agents.keys())
+        tasks = []
 
-    async def close(self) -> Dict[str, Any]:
-        """Stop heartbeats and mark dead in runtime registry."""
-        if self._closing.is_set():
-            return {"status": "dead", "instance_id": self.instance_id}
+        for agent_id in agent_ids:
+            tasks.append(self.remove_agent(agent_id))
         
-        logger.info(f"🛑 [{self.organ_id}] Closing...")
-        self._closing.set()
-        
-        # Cancel and await background tasks
-        if self._hb_task:
-            self._hb_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._hb_task
-        if self._ad_task:
-            self._ad_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._ad_task
-        
-        # Mark dead in registry
-        repo = await self._repo_lazy()
-        with contextlib.suppress(Exception):
-            if repo and self._session_factory:
-                async with self._session_factory() as session:
-                    async with session.begin():
-                        await repo.set_instance_status(session, self.instance_id, "dead")
-        
-        logger.info(f"✅ [{self.organ_id}] Marked dead.")
-        return {"status": "dead", "instance_id": self.instance_id}
+        await asyncio.gather(*tasks)
+        logger.info(f"[{self.organ_id}] Shutdown complete.")
 
-    async def _repo_lazy(self):
-        if self._repo is None:
-            try:
-                from seedcore.graph.agent_repository import AgentGraphRepository
-                self._repo = AgentGraphRepository()
-            except Exception:
-                logger.debug("AgentGraphRepository not available.")
-        return self._repo
+    # ==========================================================
+    # REMOVED METHODS (Logic moved to other services)
+    # ==========================================================
+    
+    # - execute_task_on_best_agent: REMOVED
+    #   (Routing logic is now in OrganismCore, which calls agents directly)
+    
+    # - _heartbeat_loop: REMOVED
+    #   (OrganismCore's health loop is responsible for polling organs)
+    
+    # - _collect_advertisements_loop: REMOVED
+    #   (StateService's ProactiveAgentAggregator is responsible for polling agents)
+    
+    # - _repo_lazy: REMOVED
+    #   (Organs no longer register themselves in the database)
+    
+    # - start: REMOVED
+    #   (No background loops to start)

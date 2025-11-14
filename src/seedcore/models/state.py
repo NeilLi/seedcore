@@ -132,6 +132,7 @@ class AgentSnapshot:
     c: float                            # optional capacity/credit
     mem_util: float                     # optional memory util proxy
     lifecycle: str
+    learned_skills: Dict[str, float] = field(default_factory=dict)  # Agent's learned skill levels
 
     def __post_init__(self):
         self.h = _as_f32(self.h)
