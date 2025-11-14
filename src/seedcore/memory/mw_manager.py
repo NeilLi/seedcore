@@ -34,9 +34,7 @@ import bisect
 import json
 import zlib
 import base64
-from collections import OrderedDict
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 
 # Lazy import for Ray - only imported when functions are called
@@ -47,7 +45,7 @@ from ..utils.ray_utils import ensure_ray_initialized
 # -------------------------
 # Memory configuration
 # -------------------------
-from ..config.mem_config import CONFIG, get_memory_config
+from ..config.mem_config import CONFIG
 
 try:
     # Sharded miss tracker implementation

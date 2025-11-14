@@ -1,13 +1,20 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence
+import inspect
 import json
+import logging
+import os
 from sqlalchemy import text
 
 
-MAX_PROTO_PLAN_BYTES = 256 * 1024
+MAX_PROTO_PLAN_BYTES = int(os.getenv("MAX_PROTO_PLAN_BYTES", str(256 * 1024)))
+
+logger = logging.getLogger(__name__)
 
 
 class TaskRouterTelemetryDAO:
+    """Lightweight helper for persisting router telemetry snapshots."""
+
     def __init__(self, table_name: str = "task_router_telemetry") -> None:
         self._table_name = table_name
 
@@ -42,8 +49,88 @@ class TaskRouterTelemetryDAO:
         )
 
 
+
 class TaskOutboxDAO:
+    """DAO for managing coordinator outbox events (enqueue, list, delete, backoff).
+
+    Implements the Outbox Pattern to ensure reliable, decoupled communication
+    between the coordinator and downstream task processors.
+
+    Lifecycle:
+      1. enqueue_nim_task_embed() — write event to outbox
+      2. list_pending_nim_task_embeds() — read pending events
+      3. delete() — remove processed event
+      4. backoff() — defer retry for failed event
+    """
+
     _TABLE_NAME = "task_outbox"
+
+    async def enqueue_nim_task_embed(
+        self,
+        session,
+        *,
+        task_id: str,
+        reason: str = "coordinator",
+        dedupe_key: Optional[str] = None,
+    ) -> bool:
+        """Insert a 'nim_task_embed' event into the outbox.
+
+        Args:
+            session: Active database session.
+            task_id: The UUID of the related task.
+            reason: Origin or cause of the enqueue (default: 'coordinator').
+            dedupe_key: Optional key for idempotent insert.
+
+        Returns:
+            True if the event was inserted, False if skipped due to deduplication.
+        """
+        payload = {"reason": reason, "task_id": task_id}
+        encoded_payload = json.dumps(payload, sort_keys=True)
+
+        if len(encoded_payload.encode("utf-8")) > MAX_PROTO_PLAN_BYTES:
+            logger.warning(
+                "[Coordinator] Outbox payload for %s exceeded %s bytes; truncating.",
+                task_id,
+                MAX_PROTO_PLAN_BYTES,
+            )
+            encoded_payload = json.dumps(
+                {"reason": reason, "task_id": task_id, "_truncated": True},
+                sort_keys=True,
+            )
+
+        stmt = text(
+            """
+            INSERT INTO task_outbox (task_id, event_type, payload, dedupe_key)
+            VALUES (CAST(:task_id AS uuid), :event_type, CAST(:payload AS jsonb), :dedupe_key)
+            ON CONFLICT (dedupe_key) DO NOTHING
+            """
+        )
+
+        result = await session.execute(
+            stmt,
+            {
+                "task_id": task_id,
+                "event_type": "nim_task_embed",
+                "payload": encoded_payload,
+                "dedupe_key": dedupe_key,
+            },
+        )
+
+        rowcount = getattr(result, "rowcount", None)
+        if isinstance(rowcount, (int, float)):
+            inserted = rowcount > 0
+        elif hasattr(result, "fetchone"):
+            try:
+                inserted = bool(result.fetchone())
+            except Exception:  # pragma: no cover - defensive for mocks only
+                inserted = False
+        else:
+            inserted = False
+        if inserted:
+            logger.debug(f"[Coordinator] Enqueued nim_task_embed for {task_id}")
+        else:
+            logger.debug(f"[Coordinator] Skipped duplicate nim_task_embed for {task_id}")
+        return inserted
 
     async def enqueue_embed_task(
         self,
@@ -53,63 +140,117 @@ class TaskOutboxDAO:
         reason: str = "coordinator",
         dedupe_key: Optional[str] = None,
     ) -> bool:
-        payload = {"reason": reason, "task_id": task_id}
-        encoded_payload = json.dumps(payload, sort_keys=True)
-        if len(encoded_payload.encode("utf-8")) > MAX_PROTO_PLAN_BYTES:
-            encoded_payload = json.dumps(
-                {"reason": reason, "task_id": task_id, "_truncated": True},
-                sort_keys=True,
-            )
-        stmt = text(
-            """
-            INSERT INTO task_outbox (task_id, event_type, payload, dedupe_key)
-            VALUES (CAST(:task_id AS uuid), :event_type, CAST(:payload AS jsonb), :dedupe_key)
-            ON CONFLICT (dedupe_key) DO NOTHING
-            """
+        """Backward-compatible alias for legacy enqueue method."""
+        return await self.enqueue_nim_task_embed(
+            session,
+            task_id=task_id,
+            reason=reason,
+            dedupe_key=dedupe_key,
         )
-        result = await session.execute(
-            stmt,
-            {
-                "task_id": task_id,
-                "event_type": "embed_task",
-                "payload": encoded_payload,
-                "dedupe_key": dedupe_key,
-            },
-        )
-        return bool(getattr(result, "rowcount", 0))
 
-    async def list_pending_embed_tasks(self, session, limit: int = 100) -> List[Any]:
-        """List pending embed_task events from the outbox."""
+    async def list_pending_nim_task_embeds(self, session, limit: int = 100) -> List[Any]:
+        """Retrieve pending 'nim_task_embed' events awaiting processing."""
         stmt = text(
             f"""
             SELECT id, task_id, payload, attempts
             FROM {self._TABLE_NAME}
-            WHERE event_type = 'embed_task'
+            WHERE event_type = 'nim_task_embed'
             ORDER BY id
             LIMIT :limit
             """
         )
         result = await session.execute(stmt, {"limit": limit})
         rows = result.fetchall()
-        
-        # Convert to simple objects with attributes
+
         class Row:
+            """Simple DTO wrapper for pending outbox entries."""
+
             def __init__(self, id_val, task_id, payload, attempts):
                 self.id = id_val
                 self.task_id = task_id
                 self.payload = payload
                 self.attempts = attempts or 0
-                self.reason = "outbox"  # Default reason
-        
+                self.reason = payload.get("reason", "outbox") if isinstance(payload, dict) else "outbox"
+
         return [Row(row.id, row.task_id, row.payload, row.attempts) for row in rows]
 
-    async def delete(self, session, id_val: Any) -> None:
-        """Delete a row from the outbox by ID."""
-        stmt = text(f"DELETE FROM {self._TABLE_NAME} WHERE id = :id")
-        await session.execute(stmt, {"id": id_val})
+    async def claim_pending_nim_task_embeds(
+        self, session, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Claim pending 'nim_task_embed' events for processing with FOR UPDATE SKIP LOCKED.
+        
+        This method uses row-level locking to ensure concurrent-safe processing:
+        - FOR UPDATE SKIP LOCKED prevents multiple workers from processing the same event
+        - Returns events that are ready to be processed (not locked by other workers)
+        
+        Args:
+            session: Active database session (must be in a transaction).
+            limit: Maximum number of events to claim.
+            
+        Returns:
+            List of dictionaries with 'id' and 'payload' keys.
+        """
+        stmt = text(
+            f"""
+            WITH cte AS (
+              SELECT id, payload
+                FROM {self._TABLE_NAME}
+               WHERE event_type = 'nim_task_embed'
+            ORDER BY id
+               FOR UPDATE SKIP LOCKED
+               LIMIT :limit
+            )
+            SELECT id, payload FROM cte
+            """
+        )
+        result = await session.execute(stmt, {"limit": limit})
 
-    async def backoff(self, session, id_val: Any) -> None:
-        """Increment attempts and schedule retry for a row."""
+        rows: List[Any] = []
+        try:
+            mappings_fn = getattr(result, "mappings", None)
+            if callable(mappings_fn):
+                mapped = mappings_fn()
+                all_fn = getattr(mapped, "all", None)
+                if callable(all_fn):
+                    maybe_rows = all_fn()
+                    if isinstance(maybe_rows, list):
+                        rows = maybe_rows
+        except Exception:
+            rows = []
+
+        if not rows:
+            fetchall = getattr(result, "fetchall", None)
+            if callable(fetchall):
+                maybe_rows = fetchall()
+                rows = await maybe_rows if inspect.isawaitable(maybe_rows) else maybe_rows
+        return [{"id": row["id"], "payload": row["payload"]} for row in rows]
+
+    async def delete(
+        self,
+        session,
+        id_val: Any | None = None,
+        *,
+        event_id: Any | None = None,
+    ) -> None:
+        """Delete a processed event from the outbox."""
+        target_id = id_val if id_val is not None else event_id
+        if target_id is None:
+            raise ValueError("delete() requires id_val or event_id")
+        stmt = text(f"DELETE FROM {self._TABLE_NAME} WHERE id = :id")
+        await session.execute(stmt, {"id": target_id})
+        logger.debug(f"[Coordinator] Deleted outbox event {target_id}")
+
+    async def backoff(
+        self,
+        session,
+        id_val: Any | None = None,
+        *,
+        event_id: Any | None = None,
+    ) -> None:
+        """Increment retry attempts and defer event availability using backoff strategy."""
+        target_id = id_val if id_val is not None else event_id
+        if target_id is None:
+            raise ValueError("backoff() requires id_val or event_id")
         stmt = text(
             f"""
             UPDATE {self._TABLE_NAME}
@@ -118,10 +259,13 @@ class TaskOutboxDAO:
             WHERE id = :id
             """
         )
-        await session.execute(stmt, {"id": id_val})
+        await session.execute(stmt, {"id": target_id})
+        logger.warning(f"[Coordinator] Backed off event {target_id} for retry.")
 
 
 class TaskProtoPlanDAO:
+    """DAO for persisting proto-plan payloads for downstream workers."""
+
     _TABLE_NAME = "task_proto_plan"
 
     async def upsert(
@@ -137,9 +281,20 @@ class TaskProtoPlanDAO:
         truncated = False
         if len(encoded) > MAX_PROTO_PLAN_BYTES:
             truncated = True
+            logger.warning(
+                "[Coordinator] Proto-plan for %s exceeded %s bytes (got %s); truncating",
+                task_id,
+                MAX_PROTO_PLAN_BYTES,
+                len(encoded),
+            )
             preview = encoded[: MAX_PROTO_PLAN_BYTES - 128].decode("utf-8", "ignore")
-            proto_plan = {"_truncated": True, "size_bytes": len(encoded), "preview": preview}
+            proto_plan = {
+                "_truncated": True,
+                "size_bytes": len(encoded),
+                "preview": preview,
+            }
             serialized = json.dumps(proto_plan, sort_keys=True)
+
         stmt = text(
             """
             INSERT INTO task_proto_plan (task_id, route, proto_plan)
@@ -147,12 +302,66 @@ class TaskProtoPlanDAO:
             ON CONFLICT (task_id) DO UPDATE
             SET route = EXCLUDED.route,
                 proto_plan = EXCLUDED.proto_plan
+            RETURNING id
             """
         )
-        await session.execute(
+        result = await session.execute(
             stmt,
-            {"task_id": task_id, "route": route, "proto_plan": serialized},
+            {
+                "task_id": task_id,
+                "route": route,
+                "proto_plan": serialized,
+            },
         )
-        return {"truncated": truncated}
+        row = None
+        if hasattr(result, "fetchone"):
+            maybe_row = result.fetchone()
+            row = await maybe_row if inspect.isawaitable(maybe_row) else maybe_row
+
+        response: Dict[str, Any] = {"truncated": truncated}
+        if row is not None:
+            if isinstance(row, dict):
+                id_value = row.get("id")
+            else:
+                id_value = getattr(row, "id", None)
+            if isinstance(id_value, (int, str)):
+                response["id"] = id_value
+        return response
+
+    async def get_by_task_id(
+        self, session, *, task_id: str
+    ) -> Optional[Dict[str, Any]]:
+        stmt = text(
+            """
+            SELECT id, task_id, route, proto_plan
+              FROM task_proto_plan
+             WHERE task_id = CAST(:task_id AS uuid)
+            """
+        )
+        result = await session.execute(stmt, {"task_id": task_id})
+
+        row = None
+        fetchone = getattr(result, "fetchone", None)
+        if callable(fetchone):
+            maybe_row = fetchone()
+            row = await maybe_row if inspect.isawaitable(maybe_row) else maybe_row
+
+        if not row:
+            return None
+
+        # Support both dict-like and object-style rows
+        get = row.get if isinstance(row, dict) else lambda k, default=None: getattr(row, k, default)
+        proto_plan_raw = get("proto_plan")
+        try:
+            proto_plan = json.loads(proto_plan_raw) if isinstance(proto_plan_raw, str) else proto_plan_raw
+        except (TypeError, json.JSONDecodeError):
+            proto_plan = proto_plan_raw
+
+        return {
+            "id": get("id"),
+            "task_id": get("task_id"),
+            "route": get("route"),
+            "proto_plan": proto_plan,
+        }
 
 

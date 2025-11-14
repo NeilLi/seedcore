@@ -19,55 +19,55 @@ spec:
       serviceAccountName: seedcore-service-account
       restartPolicy: Never
       containers:
-      - name: bootstrap-organism
-        image: seedcore:latest
-        imagePullPolicy: IfNotPresent
-        command: ["python", "/app/bootstraps/bootstrap_entry.py"]
-        #volumeMounts:
-        #- name: project-src
-        #  mountPath: /app
-        env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        - name: SERVE_SERVICE
-          value: "stable"
-        # Tell the entrypoint to only init the organism and exit
-        - name: BOOTSTRAP_MODE
-          value: "organism"
-        - name: EXIT_AFTER_BOOTSTRAP
-          value: "true"
+        - name: bootstrap-organism
+          image: seedcore:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/app/bootstraps/bootstrap_entry.py"]
+          volumeMounts:
+            - name: project-src
+              mountPath: /app
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVE_SERVICE
+              value: "stable"
+            # Tell the entrypoint to only init the organism and exit
+            - name: BOOTSTRAP_MODE
+              value: "organism"
+            - name: EXIT_AFTER_BOOTSTRAP
+              value: "true"
 
-        # Ray connectivity
-        - name: RAY_ADDRESS
-          value: "ray://seedcore-svc-head-svc:10001"
-        - name: RAY_NAMESPACE
-          value: "seedcore-dev"
-        - name: SEEDCORE_NS
-          value: "seedcore-dev"
-        - name: RUNNING_IN_CLUSTER
-          value: "1"
+            # Ray connectivity
+            - name: RAY_ADDRESS
+              value: "ray://seedcore-svc-head-svc:10001"
+            - name: RAY_NAMESPACE
+              value: "seedcore-dev"
+            - name: SEEDCORE_NS
+              value: "seedcore-dev"
+            - name: RUNNING_IN_CLUSTER
+              value: "1"
 
-        # DB DSN (not strictly needed for organism init, but harmless)
-        - name: SEEDCORE_PG_DSN
-          value: "postgresql://postgres:postgres@postgresql.seedcore-dev.svc.cluster.local:5432/seedcore"
+            # DB DSN (not strictly needed for organism init, but harmless)
+            - name: SEEDCORE_PG_DSN
+              value: "postgresql://postgres:postgres@postgresql.seedcore-dev.svc.cluster.local:5432/seedcore"
 
-        # HTTP fallback for init_organism.py
-        - name: SERVE_BASE_URL
-          value: "http://seedcore-svc-stable-svc.seedcore-dev.svc.cluster.local:8000"
-        - name: ORGANISM_URL
-          value: "http://seedcore-svc-stable-svc.seedcore-dev.svc.cluster.local:8000/organism"
+            # HTTP fallback for init_organism.py
+            - name: SERVE_BASE_URL
+              value: "http://seedcore-svc-stable-svc.seedcore-dev.svc.cluster.local:8000"
+            - name: ORGANISM_URL
+              value: "http://seedcore-svc-stable-svc.seedcore-dev.svc.cluster.local:8000/organism"
 
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "512Mi"
-          limits:
-            cpu: "200m"
-            memory: "1Gi"
-      #volumes:
-      #- name: project-src
-      #  hostPath:
-      #    path: /project
-      #    type: Directory
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+            limits:
+              cpu: "200m"
+              memory: "1Gi"
+      volumes:
+        - name: project-src
+          hostPath:
+            path: /project
+            type: Directory

@@ -23,14 +23,13 @@ This module provides:
 import os
 import uuid
 import socket
-import asyncio
 import logging
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .organs.base import Organ
 
-from sqlalchemy import text
+from sqlalchemy import text  # pyright: ignore[reportMissingImports]
 from .database import get_async_pg_session_factory
 
 logger = logging.getLogger(__name__)

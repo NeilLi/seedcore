@@ -317,8 +317,9 @@ if str(_project_root) not in sys.path:
 # Import the new centralized result schema for validation (optional)
 try:
     from src.seedcore.models.result_schema import (
-        TaskResult, ResultKind, from_legacy_result
+        TaskResult, from_legacy_result
     )
+    from src.seedcore.models.cognitive import DecisionKind
     HAS_RESULT_SCHEMA = True
 except ImportError:
     HAS_RESULT_SCHEMA = False

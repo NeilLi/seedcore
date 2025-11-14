@@ -28,6 +28,7 @@ keywords = ["cognitive-architecture", "multi-agent-system", "energy-based-ai", "
 dependencies = [
     # Core API
     "fastapi==0.104.1",
+    "starlette<0.37.0",
     "uvicorn[standard]==0.24.0",
     "pydantic-settings==2.1.0",
     "pydantic==2.5.0",

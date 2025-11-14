@@ -110,7 +110,7 @@ def _is_result_success(r: dict) -> bool:
         
         # Check for result kind
         if "kind" in r:
-            return r["kind"] in ["fast_path", "escalated", "cognitive"]
+            return r["kind"] in ["fast", "planner", "hgnn"]
     
     return False
 

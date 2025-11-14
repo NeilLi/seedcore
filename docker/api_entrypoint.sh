@@ -35,7 +35,7 @@ python /app/logging_config.py
 
 # Import DSP patch to prevent file logging issues
 echo "🔧 Importing DSP patch..."
-cd /app && python -c "import dsp_patch" 2>/dev/null || echo "⚠️  DSP patch import failed, continuing..."
+cd /app && python -c "from seedcore.cognitive import dsp_patch" 2>/dev/null || echo "⚠️  DSP patch import failed, continuing..."
 
 # Start the API server
 echo "🌐 Starting uvicorn server..."

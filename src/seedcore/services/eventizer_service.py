@@ -42,13 +42,12 @@ from ..ops.eventizer.schemas.eventizer_models import (
     EntitySpan,
     PKGHint,
     PKGEnv,
-    PKGSnapshot,
     PKGHelper
 )
 from ..ops.eventizer.utils.text_normalizer import TextNormalizer, SpanMap
 from ..ops.eventizer.utils.pattern_compiler import PatternCompiler, CompiledRegex
 from ..ops.eventizer.clients.pii_client import PIIClient, PIIConfig, RedactMode as PIIClientRedactMode
-from ..ops.eventizer.clients.pkg_client import PKGClient, get_active_snapshot
+from ..ops.pkg.manager import get_global_pkg_manager
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +106,6 @@ class EventizerService:
         self._text_normalizer: Optional[TextNormalizer] = None
         self._pattern_compiler: Optional[PatternCompiler] = None
         self._pii_client: Optional[PIIClient] = None
-        self._pkg_client: Optional[PKGClient] = None
-        self._active_snapshot: Optional[PKGSnapshot] = None
         self._ml_fallback_hook = ml_fallback_hook
         self._metrics = metrics_sink
 
@@ -148,19 +145,22 @@ class EventizerService:
             self._pii_client = PIIClient(self.config.pii_redaction_entities)
             await self._pii_client.initialize()
 
-        # PKG client
+        # PKG is now managed by the global PKGManager
+        # No need for local initialization here
         if self.config.pkg_validation_enabled:
-            self._pkg_client = PKGClient(self.config.pkg_environment)
-            try:
-                self._active_snapshot = await self._pkg_client.get_active_snapshot()
-                if self._active_snapshot:
-                    logger.info(f"PKG active snapshot loaded: {self._active_snapshot.version}")
-                elif self.config.pkg_require_active_snapshot:
-                    logger.warning("PKG validation enabled but no active snapshot found")
-            except Exception as e:
-                logger.error(f"Failed to load PKG active snapshot: {e}")
+            pkg_manager = get_global_pkg_manager()
+            if pkg_manager is None:
                 if self.config.pkg_require_active_snapshot:
-                    raise
+                    raise RuntimeError("PKG validation enabled but global PKG manager not initialized")
+                else:
+                    logger.warning("PKG validation enabled but global PKG manager not initialized")
+            else:
+                evaluator = pkg_manager.get_active_evaluator()
+                if evaluator is None:
+                    if self.config.pkg_require_active_snapshot:
+                        raise RuntimeError("PKG validation enabled but no active snapshot available")
+                    else:
+                        logger.warning("PKG validation enabled but no active snapshot available")
 
         # Load patterns/dicts from config
         await self._load_patterns()
@@ -271,10 +271,55 @@ class EventizerService:
 
             # 6) PKG policy evaluation and hint generation
             pkg_hint: Optional[PKGHint] = None
-            if self._pkg_client and self._active_snapshot:
+            if self.config.pkg_validation_enabled:
                 try:
-                    pkg_hint = await self._evaluate_pkg_policies(tags, attrs, request)
-                    log.append(f"pkg:evaluated={len(pkg_hint.subtasks) if pkg_hint else 0}")
+                    pkg_manager = get_global_pkg_manager()
+                    if pkg_manager is not None:
+                        evaluator = pkg_manager.get_active_evaluator()
+                        if evaluator is not None:
+                            # Build task_facts for PKG evaluation
+                            task_facts = {
+                                "tags": [tag.value for tag in tags.event_types] + tags.keywords + tags.entities,
+                                "signals": {},
+                                "context": {
+                                    "domain": request.domain,
+                                    "task_type": request.task_type,
+                                    "priority": tags.priority,
+                                    "urgency": tags.urgency
+                                }
+                            }
+                            
+                            # Evaluate using PKG evaluator
+                            pkg_result = evaluator.evaluate(task_facts)
+                            
+                            # Convert PKG result to PKGHint format
+                            # This is a simplified conversion - adjust based on actual PKG output format
+                            if pkg_result.get("subtasks"):
+                                # Create provenance from PKG rules
+                                provenance = []
+                                for rule in pkg_result.get("rules", []):
+                                    prov = PKGHelper.create_rule_provenance(
+                                        rule_id=rule.get("rule_id", "unknown"),
+                                        snapshot_version=evaluator.version,
+                                        reason="PKG policy evaluation",
+                                        snapshot_id=None,  # Would need to get from manager metadata
+                                        weight=rule.get("weight", 1.0),
+                                        rule_priority=rule.get("priority", 0)
+                                    )
+                                    provenance.append(prov)
+                                
+                                # Create PKG hint from snapshot metadata
+                                metadata = pkg_manager.get_metadata()
+                                if metadata.get("loaded"):
+                                    pkg_hint = PKGHelper.create_pkg_hint_from_snapshot(
+                                        snapshot=None,  # Would need to construct from metadata
+                                        provenance=provenance,
+                                        deployment_target="router",
+                                        deployment_region="global",
+                                        deployment_percent=100
+                                    )
+                            
+                            log.append(f"pkg:evaluated={len(pkg_result.get('subtasks', []))}")
                 except Exception as e:
                     logger.warning(f"PKG policy evaluation failed: {e}")
                     warnings.append(f"pkg_evaluation_failed:{e}")
@@ -831,77 +876,14 @@ class EventizerService:
         except Exception as e:
             logger.warning("ML fallback hook error: %s", e)
 
-    async def _evaluate_pkg_policies(
-        self, 
-        tags: EventTags, 
-        attrs: EventAttributes, 
-        request: EventizerRequest
-    ) -> Optional[PKGHint]:
-        """
-        Evaluate PKG policies based on extracted tags and attributes.
-        Returns PKG hint with subtasks and provenance if policies match.
-        """
-        if not self._pkg_client or not self._active_snapshot:
+    def _get_pkg_deployment_info(self) -> Optional[Dict[str, Any]]:
+        """Get PKG deployment information from global PKG manager."""
+        pkg_manager = get_global_pkg_manager()
+        if pkg_manager is None:
             return None
-
-        try:
-            # TODO: Implement actual policy evaluation logic
-            # For now, create a basic PKG hint based on event types
-            subtasks = []
-            provenance = []
-            
-            # Simple policy: if we have high priority events, suggest specific subtasks
-            if tags.priority >= 7:
-                if EventType.EMERGENCY in tags.event_types:
-                    subtask = PKGHelper.create_rule_provenance(
-                        rule_id="emergency_response_rule",
-                        snapshot_version=self._active_snapshot.version,
-                        reason="Emergency event detected",
-                        snapshot_id=self._active_snapshot.id,
-                        weight=1.0,
-                        rule_priority=10
-                    )
-                    provenance.append(subtask)
-                    
-                elif EventType.SECURITY in tags.event_types:
-                    subtask = PKGHelper.create_rule_provenance(
-                        rule_id="security_alert_rule",
-                        snapshot_version=self._active_snapshot.version,
-                        reason="Security event detected",
-                        snapshot_id=self._active_snapshot.id,
-                        weight=0.9,
-                        rule_priority=8
-                    )
-                    provenance.append(subtask)
-
-            # Create PKG hint
-            if provenance:
-                pkg_hint = PKGHelper.create_pkg_hint_from_snapshot(
-                    snapshot=self._active_snapshot,
-                    provenance=provenance,
-                    deployment_target="router",
-                    deployment_region="global",
-                    deployment_percent=100
-                )
-                return pkg_hint
-
-        except Exception as e:
-            logger.error(f"PKG policy evaluation error: {e}")
-            
-        return None
-
-    def _get_pkg_deployment_info(self) -> Dict[str, Any]:
-        """Get PKG deployment information for metadata."""
-        if not self._active_snapshot:
-            return {}
-            
-        return {
-            "snapshot_version": self._active_snapshot.version,
-            "environment": self._active_snapshot.env.value,
-            "checksum": self._active_snapshot.checksum,
-            "is_active": self._active_snapshot.is_active,
-            "created_at": self._active_snapshot.created_at.isoformat()
-        }
+        
+        metadata = pkg_manager.get_metadata()
+        return metadata if metadata.get("loaded") else None
 
     async def _load_patterns(self) -> None:
         """Load patterns from configuration files."""

@@ -15,10 +15,12 @@
 """
 Tier 0 (Ma): Per-Agent Memory Implementation
 Ray actor-based stateful agents with private memory and performance tracking.
+
+Refactored to inherit from BaseAgent.
 """
 
 import os
-import ray
+import ray  # pyright: ignore[reportMissingImports]
 import numpy as np
 import time
 import asyncio
@@ -26,23 +28,39 @@ import json
 import random
 import ast
 import operator
-import uuid
 import hashlib
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
-from dataclasses import dataclass, field
-import logging
+from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING, Union
+from dataclasses import dataclass
+
+# --- REFACTOR: Import all new BaseAgent components ---
+from .base import BaseAgent
+from .roles import (
+    Specialization,
+    RoleRegistry,
+    DEFAULT_ROLE_REGISTRY,
+    SkillStoreProtocol,
+    NullSkillStore,
+)
+from .checkpoint import CheckpointStoreFactory, CheckpointStore
+from ..memory.flashbulb_client import FlashbulbClient
+from ..serve.cognitive_client import CognitiveServiceClient
+from ..models.cognitive import CognitiveType, DecisionKind
+from ..models import TaskPayload
+
+# --- End REFACTOR ---
 
 if TYPE_CHECKING:
     from ..memory.mw_manager import MwManager
     from ..memory.long_term_memory import LongTermMemoryManager
+    from ..tools.manager import ToolManager
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-logger.propagate = True
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
-    logger.addHandler(handler)
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.agents.ray_agent", level="DEBUG")
+
+REQUEST_TIMEOUT_S = 5.0
+MAX_TEXT_LEN = 4096
+MAX_IN_FLIGHT_SALIENCE = 20
 
 # Safe arithmetic evaluator to replace unsafe eval()
 _ALLOWED_OPS = {
@@ -57,11 +75,13 @@ _ALLOWED_OPS = {
     ast.UAdd: operator.pos,
 }
 
+
 def _safe_eval_arith(expr: str) -> float:
     """
     Evaluate simple arithmetic safely via AST (no names, no calls).
     Supports + - * / // % ** and unary +/- on numbers.
     """
+
     def _eval(node):
         if isinstance(node, ast.Num):  # py<3.8
             return node.n
@@ -71,181 +91,248 @@ def _safe_eval_arith(expr: str) -> float:
             raise ValueError("Only numeric constants allowed")
         if isinstance(node, ast.BinOp):
             op = _ALLOWED_OPS.get(type(node.op))
-            if not op: raise ValueError("Operator not allowed")
+            if not op:
+                raise ValueError("Operator not allowed")
             return op(_eval(node.left), _eval(node.right))
         if isinstance(node, ast.UnaryOp):
             op = _ALLOWED_OPS.get(type(node.op))
-            if not op: raise ValueError("Unary operator not allowed")
+            if not op:
+                raise ValueError("Unary operator not allowed")
             return op(_eval(node.operand))
         raise ValueError("Unsupported expression")
+
     tree = ast.parse(expr, mode="eval")
     return float(_eval(tree.body))
 
-# NEW: Import the FlashbulbClient
-from ..memory.flashbulb_client import FlashbulbClient
-
-# NEW: Import the Cognitive Service Client
-from ..serve.cognitive_client import CognitiveServiceClient
-
-# --- Import Enhanced Memory Managers ---
-# Note: Actual imports are done inside methods to avoid circular dependencies
-# TYPE_CHECKING imports are used for type hints only
-
-# === COA §6/§8: agent-private memory vector h_i ∈ R^128 ===
-from .private_memory import AgentPrivateMemory, PeerEvent
-from .checkpoint_store import CheckpointStoreFactory, CheckpointStore, NullStore
 
 @dataclass
-class AgentState:
-    """Holds the local state for an agent."""
+class LegacyAgentState:
+    """Holds legacy state parts (h, p) for backward compatibility."""
+
     h: Any  # Embedding (kept JSON-safe as Python list)
     p: Dict[str, float]  # Role probabilities
-    c: float = 0.5  # Capability
-    mem_util: float = 0.0  # Memory Utility
+
 
 @ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
-class RayAgent:
+class RayAgent(BaseAgent):
     """
     Stateful Ray actor for Tier 0 per-agent memory (Ma).
-    
-    Each agent maintains:
-    - 128-dimensional state vector (h)
-    - Performance metrics and capability score
-    - Task history and quality scores
-    - Memory interaction tracking
-    - Memory managers for Mw and Mlt access
-    """
-    
-    def __init__(self, agent_id: str,
-                 mw_manager: Optional["MwManager"] = None,
-                 ltm_manager: Optional["LongTermMemoryManager"] = None,
-                 initial_role_probs: Optional[Dict[str, float]] = None,
-                 organ_id: Optional[str] = None,
-                 checkpoint_cfg: Optional[Dict[str, Any]] = None,
-                 cognitive_base_url: Optional[str] = None):
-        # 1. Agent Identity and State
-        self.agent_id = agent_id
-        self.instance_id = uuid.uuid4().hex  # Use UUID for instance_id
-        self.organ_id = organ_id or "_"  # Set organ_id properly
 
-        # Dispatcher-facing identity branding
-        self.agent_role = "cognitive_runtime"
-        
-        # 2. Initialize AgentState with COA specifications
-        self.state = AgentState(
-            h=[0.0] * 128,  # JSON-safe list; managed by AgentPrivateMemory
-            p=initial_role_probs or {'E': 0.9, 'S': 0.1, 'O': 0.0},
-            c=0.5,  # Initial capability
-            mem_util=0.0  # Initial memory utility
+    This class inherits from BaseAgent to get modern state management,
+    RBAC, and salience, but maintains its legacy methods and memory
+    I/O for backward compatibility.
+    """
+
+    def __init__(
+        self,
+        agent_id: str,
+        *,
+        specialization: Specialization = Specialization.GENERALIST,
+        role_registry: Optional[RoleRegistry] = None,
+        skill_store: Optional[SkillStoreProtocol] = None,
+        tool_manager: Optional["ToolManager"] = None,
+        cognitive_base_url: Optional[str] = None,
+        organ_id: Optional[str] = None,
+        mw_manager: Optional["MwManager"] = None,
+        ltm_manager: Optional["LongTermMemoryManager"] = None,
+        checkpoint_cfg: Optional[Dict[str, Any]] = None,
+        initial_role_probs: Optional[Dict[str, float]] = None,
+        **legacy_kwargs: Any,
+    ):
+        if legacy_kwargs:
+            logger.debug(
+                "RayAgent %s received legacy kwargs: %s", agent_id, legacy_kwargs
+            )
+
+        super().__init__(
+            agent_id=agent_id,
+            tool_manager=tool_manager,
+            specialization=specialization,
+            role_registry=role_registry or DEFAULT_ROLE_REGISTRY,
+            skill_store=skill_store or NullSkillStore(),
+            cognitive_base_url=cognitive_base_url,
+            initial_capability=0.5,
+            initial_mem_util=0.0,
+            organ_id=organ_id,
         )
-        
-        # 3. Backward compatibility - keep old attributes
-        # Keep a separate numpy copy for legacy paths that expect ndarray
-        self.state_embedding = np.array(self.state.h, dtype=np.float32)
-        self.role_probs = self.state.p
-        
-        # 4. Performance Tracking Metrics
-        self.tasks_processed = 0
-        self.successful_tasks = 0
-        self.quality_scores: List[float] = []
+
+        # Legacy state shim (embedding + role probabilities)
+        self._legacy_state = LegacyAgentState(
+            h=[0.0] * 128,
+            p=initial_role_probs or {"E": 0.9, "S": 0.1, "O": 0.0},
+        )
+
+        # Legacy metrics / history surfaces
+        self._legacy_quality_scores: List[float] = []
+        self._legacy_successful_tasks: int = 0
         self.task_history: List[Dict[str, Any]] = []
-        
-        # 5. Capability Score (c_i) with EWMA smoothing
-        self.capability_score: float = 0.5  # Initial capability
-        self.smoothing_factor: float = 0.1   # η_c smoothing parameter
-        
-        # 6. Memory Utilization (mem_util) for lifecycle transitions
-        self.mem_util: float = 0.0
-        
-        # 7. Memory Interaction Tracking (from original Agent)
+        self.smoothing_factor: float = 0.1
+
+        # Legacy counters (some duplicated in AgentState for telemetry)
         self.memory_writes: int = 0
         self.memory_hits_on_writes: int = 0
         self.salient_events_logged: int = 0
         self.total_compression_gain: float = 0.0
-        
-        # 8. Local Skill Deltas (per-agent scratch memory)
-        self.skill_deltas: Dict[str, float] = {}
-        
-        # 9. Peer Stats (local tracking of interactions)
+
+        # Legacy peer / lifecycle trackers
         self.peer_interactions: Dict[str, int] = {}
-        
-        # 10. Timestamps for tracking
         self.created_at = time.time()
-        self.last_heartbeat = time.time()
-        
-        # 11. Energy State Tracking (NEW)
+        self.last_heartbeat = self.created_at
         self.energy_state: Dict[str, float] = {}
         self.lifecycle_state: str = "Employed"
         self.idle_ticks: int = 0
         self.max_idle: int = 1000
         self._archived: bool = False
-        
-        # --- Store Injected Memory Managers ---
+
+        # Working/long-term memory managers (lazy init when not injected)
         self.mw_manager = mw_manager
         self.mlt_manager = ltm_manager
 
-        # Lazily construct memory manager clients inside the actor if not injected
         if self.mw_manager is None:
             try:
-                from ..memory.mw_manager import MwManager  # lazy import to avoid circular deps
+                from ..memory.mw_manager import (
+                    MwManager,
+                )  # lazy import to avoid circular deps
+
                 self.mw_manager = MwManager(organ_id=self.agent_id)
-                logger.info(f"✅ {self.agent_id}: MwManager created in-actor")
-            except Exception as e:
-                logger.warning(f"⚠️ {self.agent_id}: failed to create MwManager in-actor: {e}")
+                logger.info("✅ %s: MwManager created in-actor", self.agent_id)
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.warning(
+                    "⚠️ %s: failed to create MwManager in-actor: %s", self.agent_id, exc
+                )
 
         if self.mlt_manager is None:
             try:
-                from ..memory.long_term_memory import LongTermMemoryManager  # lazy import
+                from ..memory.long_term_memory import LongTermMemoryManager
+
                 self.mlt_manager = LongTermMemoryManager()
-                # Best-effort async initialization (does not block actor startup)
                 try:
                     loop = asyncio.get_event_loop()
                     loop.create_task(self.mlt_manager.initialize())
-                except Exception as ie:
-                    logger.debug(f"LTM async initialize scheduling failed: {ie}")
-                logger.info(f"✅ {self.agent_id}: LongTermMemoryManager created in-actor")
-            except Exception as e:
-                logger.warning(f"⚠️ {self.agent_id}: failed to create LongTermMemoryManager in-actor: {e}")
+                except Exception as inner_exc:
+                    logger.debug(
+                        "LTM async initialize scheduling failed: %s", inner_exc
+                    )
+                logger.info(
+                    "✅ %s: LongTermMemoryManager created in-actor", self.agent_id
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning(
+                    "⚠️ %s: failed to create LongTermMemoryManager in-actor: %s",
+                    self.agent_id,
+                    exc,
+                )
+
         self.mfb_client = None
-        
-        # --- Initialize cognitive service client ---
+
+        # Legacy cognitive client handles (BaseAgent already tracks ML client)
         self._cog = None
         self._cog_available = False
-        self._cog_base_url = cognitive_base_url
-        
-        # --- Track in-flight cognitive requests to prevent duplicates ---
-        self._cog_inflight: Dict[str, asyncio.Task] = {}  # key: request_key (task_id or desc+profile), value: task
-        self._cog_inflight_lock = asyncio.Lock()  # Lock for accessing _cog_inflight dict
 
-        # --- Initialize private memory (lifetime-only persistence) ---
-        self._privmem = AgentPrivateMemory(agent_id=self.agent_id, alpha=0.1)
-        # Optional checkpoint store (disabled by default)
+        # Track in-flight cognitive requests to prevent duplicates
+        self._cog_inflight: Dict[str, asyncio.Task] = {}
+        self._cog_inflight_lock = asyncio.Lock()
+
+        # Checkpointing uses BaseAgent._privmem
         self._ckpt_cfg = checkpoint_cfg or {"enabled": False}
-        self._ckpt_store: CheckpointStore = CheckpointStoreFactory.from_config(self._ckpt_cfg)
+        self._ckpt_store: CheckpointStore = CheckpointStoreFactory.from_config(
+            self._ckpt_cfg
+        )
         self._ckpt_key = f"{self.organ_id}/{self.agent_id}"
         self._maybe_restore()
-        
-        # Initialize memory managers asynchronously to avoid hanging
+
         try:
-            # Only initialize basic components, defer complex initialization
-            logger.info(f"✅ RayAgent {self.agent_id} created with basic state")
-            
-            # Initialize memory managers later if needed
+            logger.info(
+                "✅ RayAgent %s created with BaseAgent core state", self.agent_id
+            )
             self._initialize_memory_managers()
-            
-            # Initialize cognitive systems
             self._initialize_cognitive_systems()
-            
-            # Initialize optional registry reporting
             self._initialize_registry_reporting()
-            
-        except Exception as e:
-            logger.warning(f"⚠️ RayAgent {self.agent_id} created with limited functionality: {e}")
+        except Exception as exc:  # pragma: no cover
+            logger.warning(
+                "⚠️ RayAgent %s created with limited functionality: %s",
+                self.agent_id,
+                exc,
+            )
 
         logger.info(
-            f"✅ RayAgent {self.agent_id} ({self.agent_role}) is online. Cognitive available={self._cog_available}"
+            "✅ RayAgent %s (%s) is online. Cog=%s, ML=%s",
+            self.agent_id,
+            self.specialization.value,
+            self._cog_available,
+            self._ml_client is not None,
         )
-    
+
+    # ============================================================================
+    # Backward compatibility shims
+    # ============================================================================
+
+    @property
+    def agent_role(self) -> str:
+        """Shim for legacy agent_role attribute."""
+        return self.specialization.value
+
+    @property
+    def state_embedding(self) -> np.ndarray:
+        """Legacy accessor that returns the private memory vector as ndarray."""
+        return self._privmem.get_vector()
+
+    @state_embedding.setter
+    def state_embedding(self, value: np.ndarray) -> None:
+        if value.shape != (128,):
+            raise ValueError(f"Invalid embedding shape: {value.shape}, expected (128,)")
+        self._privmem.set_vector(value.astype(np.float32, copy=True))
+        self._legacy_state.h = value.astype(float).tolist()
+
+    @property
+    def role_probs(self) -> Dict[str, float]:
+        """Legacy role probability dict."""
+        return self._legacy_state.p
+
+    @role_probs.setter
+    def role_probs(self, new_probs: Dict[str, float]) -> None:
+        self._legacy_state.p = dict(new_probs)
+
+    @property
+    def capability_score(self) -> float:
+        return float(self.state.c)
+
+    @capability_score.setter
+    def capability_score(self, value: float) -> None:
+        self.state.c = float(value)
+
+    @property
+    def mem_util(self) -> float:
+        return float(self.state.mem_util)
+
+    @mem_util.setter
+    def mem_util(self, value: float) -> None:
+        self.state.mem_util = float(value)
+
+    @property
+    def tasks_processed(self) -> int:
+        return int(self.state.tasks_processed)
+
+    @tasks_processed.setter
+    def tasks_processed(self, value: int) -> None:
+        self.state.tasks_processed = int(value)
+
+    @property
+    def successful_tasks(self) -> int:
+        return int(self._legacy_successful_tasks)
+
+    @successful_tasks.setter
+    def successful_tasks(self, value: int) -> None:
+        self._legacy_successful_tasks = int(value)
+
+    @property
+    def quality_scores(self) -> List[float]:
+        return self._legacy_quality_scores
+
+    @property
+    def skill_deltas(self) -> Dict[str, float]:
+        return self.skills.deltas
+
     def _initialize_memory_managers(self):
         """
         Verifies injected memory managers and initializes FlashbulbClient.
@@ -254,20 +341,22 @@ class RayAgent:
             logger.info(f"✅ Agent {self.agent_id} attached to MwManager")
         else:
             logger.warning(f"⚠️ Agent {self.agent_id} has no MwManager")
-        
+
         if self.mlt_manager:
             logger.info(f"✅ Agent {self.agent_id} attached to LongTermMemoryManager")
         else:
             logger.warning(f"⚠️ Agent {self.agent_id} has no LongTermMemoryManager")
-        
+
         # Initialize Flashbulb Client
         try:
             self.mfb_client = FlashbulbClient()
             logger.info(f"✅ Agent {self.agent_id} initialized with FlashbulbClient")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize FlashbulbClient for {self.agent_id}: {e}")
+            logger.warning(
+                f"⚠️ Failed to initialize FlashbulbClient for {self.agent_id}: {e}"
+            )
             self.mfb_client = None
-    
+
     def _initialize_cognitive_systems(self):
         """
         Wire this agent to the centralized CognitiveService.
@@ -294,23 +383,31 @@ class RayAgent:
         if os.getenv("ENABLE_RUNTIME_REGISTRY", "true").lower() in ("1", "true", "yes"):
             try:
                 from ..registry import RegistryClient
+
                 # Get actor name if available (Ray actors can have names)
-                actor_name = getattr(self, '_name', None) or self.agent_id
+                actor_name = getattr(self, "_name", None) or self.agent_id
                 self._registry = RegistryClient(
                     logical_id=self.agent_id,
                     actor_name=actor_name,
                     serve_route=None,
-                    cluster_epoch=os.getenv("CLUSTER_EPOCH")  # optional
+                    cluster_epoch=os.getenv("CLUSTER_EPOCH"),  # optional
                 )
-                logger.info(f"✅ Agent {self.agent_id} initialized with registry reporting")
+                logger.info(
+                    f"✅ Agent {self.agent_id} initialized with registry reporting"
+                )
             except Exception as e:
                 logger.debug(f"Registry reporting disabled for {self.agent_id}: {e}")
                 self._registry = None
-    
+
     def _normalize_cog_resp(self, resp: dict) -> dict:
         """Normalize cognitive service response to consistent format."""
         if not isinstance(resp, dict):
-            return {"success": False, "payload": {}, "meta": {}, "error": "Invalid response"}
+            return {
+                "success": False,
+                "payload": {},
+                "meta": {},
+                "error": "Invalid response",
+            }
         payload = resp.get("result") or resp.get("payload") or {}
         meta = resp.get("metadata") or resp.get("meta") or {}
         return {
@@ -342,20 +439,30 @@ class RayAgent:
             logger.debug(f"[{self.agent_id}] Mw L0 put failed for {key}: {e}")
             return False
 
-    def _mw_put_json_global(self, kind: str, scope: str, item_id: str, obj: Dict[str, Any], ttl_s: int = 600) -> bool:
+    def _mw_put_json_global(
+        self, kind: str, scope: str, item_id: str, obj: Dict[str, Any], ttl_s: int = 600
+    ) -> bool:
         """Write-through L0/L1/L2 using normalized global key; compressed when large."""
         if not self.mw_manager:
             return False
         try:
             # Ensure payload is JSON-serializable
-            payload = obj if isinstance(obj, (dict, list, str, int, float, bool, type(None))) else str(obj)
+            payload = (
+                obj
+                if isinstance(obj, (dict, list, str, int, float, bool, type(None)))
+                else str(obj)
+            )
             # Use typed API to avoid double-prefixing
-            self.mw_manager.set_global_item_typed(kind, scope, item_id, payload, ttl_s=ttl_s)
+            self.mw_manager.set_global_item_typed(
+                kind, scope, item_id, payload, ttl_s=ttl_s
+            )
             self.memory_writes += 1
             self._mw_puts = getattr(self, "_mw_puts", 0) + 1
             return True
         except Exception as e:
-            logger.debug(f"[{self.agent_id}] Mw global put failed for {kind}:{scope}:{item_id}: {e}")
+            logger.debug(
+                f"[{self.agent_id}] Mw global put failed for {kind}:{scope}:{item_id}: {e}"
+            )
             return False
 
     # --- Simple Mw → Mlt workflow helper ---
@@ -397,7 +504,9 @@ class RayAgent:
         if not self.mw_manager:
             return
         try:
-            self.mw_manager.cache_task(task_row)   # derives TTL from status/lease/run_after
+            self.mw_manager.cache_task(
+                task_row
+            )  # derives TTL from status/lease/run_after
         except Exception as e:
             logger.debug(f"[{self.agent_id}] cache_task failed: {e}")
 
@@ -428,7 +537,9 @@ class RayAgent:
             logger.debug(f"[{self.agent_id}] get_task_cached failed: {e}")
             return None
 
-    async def _promote_to_mlt(self, key: str, obj: Dict[str, Any], compression: bool = True) -> bool:
+    async def _promote_to_mlt(
+        self, key: str, obj: Dict[str, Any], compression: bool = True
+    ) -> bool:
         """
         Asynchronously promote an object to Mlt by creating a Holon.
         """
@@ -438,37 +549,43 @@ class RayAgent:
             payload = obj
             if compression and isinstance(obj, dict):
                 # Simple "compression": drop large fields
-                pruned = {k: v for k, v in obj.items() if k not in ("raw", "tokens", "trace", "result")}
+                pruned = {
+                    k: v
+                    for k, v in obj.items()
+                    if k not in ("raw", "tokens", "trace", "result")
+                }
                 if "raw" in obj:
                     pruned["raw_size"] = len(str(obj["raw"]))
                 if "result" in obj:
                     pruned["result_preview"] = str(obj["result"])[:200]
                 payload = pruned
-                self.total_compression_gain += max(0.0, len(str(obj)) - len(str(pruned)))
-            
+                self.total_compression_gain += max(
+                    0.0, len(str(obj)) - len(str(pruned))
+                )
+
             # Create a placeholder embedding
             text_to_embed = json.dumps(payload, sort_keys=True)
             hash_bytes = hashlib.md5(text_to_embed.encode()).digest()
             vec = np.frombuffer(hash_bytes, dtype=np.uint8).astype(np.float32)
-            vec = np.pad(vec, (0, 768 - len(vec)), mode='constant')
+            vec = np.pad(vec, (0, 768 - len(vec)), mode="constant")
             embedding = vec / (np.linalg.norm(vec) + 1e-6)
-            
+
             # Build the holon dict for the LTM manager
             holon_data = {
-                'vector': {
-                    'id': key,  # Use the task artifact key as the UUID
-                    'embedding': embedding,
-                    'meta': payload
+                "vector": {
+                    "id": key,  # Use the task artifact key as the UUID
+                    "embedding": embedding,
+                    "meta": payload,
                 },
-                'graph': {  # Link the artifact to this agent
-                    'src_uuid': key,
-                    'rel': 'GENERATED_BY',
-                    'dst_uuid': self.agent_id
-                }
+                "graph": {  # Link the artifact to this agent
+                    "src_uuid": key,
+                    "rel": "GENERATED_BY",
+                    "dst_uuid": self.agent_id,
+                },
             }
-            
+
             success = await self.mlt_manager.insert_holon_async(holon_data)
-            
+
             if success:
                 self._mlt_promotions = getattr(self, "_mlt_promotions", 0) + 1
                 return True
@@ -482,10 +599,14 @@ class RayAgent:
         try:
             norm = float(np.linalg.norm(self.state_embedding))
         except Exception:
-            norm = float(np.linalg.norm(np.array(self.state.h, dtype=np.float32)))
+            norm = float(
+                np.linalg.norm(np.array(self._legacy_state.h, dtype=np.float32))
+            )
         return norm + float(self.capability_score) + 0.1 * float(self.mem_util)
 
-    def build_memory_fragments(self, *, anomalies=None, reason=None, decision=None) -> List[Dict[str, Any]]:
+    def build_memory_fragments(
+        self, *, anomalies=None, reason=None, decision=None
+    ) -> List[Dict[str, Any]]:
         """
         Return canonical fragments for best-effort synthesis. Pure data; no I/O.
         """
@@ -497,27 +618,31 @@ class RayAgent:
         if decision is not None:
             frags.append({"decision": decision})
         # include a tiny local context snapshot
-        frags.append({"agent_snapshot": {
-            "agent_id": self.agent_id,
-            "capability": self.capability_score,
-            "mem_util": self.mem_util,
-            "h_norm": float(np.linalg.norm(self.state_embedding)),
-            "ts": time.time(),
-        }})
+        frags.append(
+            {
+                "agent_snapshot": {
+                    "agent_id": self.agent_id,
+                    "capability": self.capability_score,
+                    "mem_util": self.mem_util,
+                    "h_norm": float(np.linalg.norm(self.state_embedding)),
+                    "ts": time.time(),
+                }
+            }
+        )
         return frags
-    
+
     def get_id(self) -> str:
         """Returns the agent's ID."""
         return self.agent_id
-    
+
     def get_state_embedding(self) -> np.ndarray:
         """Returns the current state embedding vector."""
         return self.state_embedding.copy()
-    
+
     def update_energy_state(self, energy_data: Dict[str, float]):
         """Updates the agent's knowledge of its energy contribution."""
         self.energy_state = energy_data.copy()
-        
+
     def get_energy_state(self) -> Dict[str, float]:
         """Returns the current energy state."""
         return self.energy_state.copy()
@@ -525,12 +650,12 @@ class RayAgent:
     def ping(self) -> Dict[str, Any]:
         """Cheap liveness RPC used by Tier-0 to detect/prune dead handles."""
         return {"id": self.agent_id, "ts": time.time()}
-    
+
     def get_status(self) -> Dict[str, Any]:
         """Returns comprehensive status information for the agent."""
         current_time = time.time()
         uptime = current_time - self.created_at
-        
+
         return {
             "agent_id": self.agent_id,
             "agent_role": getattr(self, "agent_role", "unknown"),
@@ -543,7 +668,9 @@ class RayAgent:
             "memory_utilization": round(self.mem_util, 3),
             "tasks_processed": self.tasks_processed,
             "successful_tasks": self.successful_tasks,
-            "success_rate": round(self.successful_tasks / max(self.tasks_processed, 1), 3),
+            "success_rate": round(
+                self.successful_tasks / max(self.tasks_processed, 1), 3
+            ),
             "role_probabilities": self.role_probs.copy(),
             "energy_state": self.energy_state.copy(),
             "memory_writes": self.memory_writes,
@@ -555,170 +682,209 @@ class RayAgent:
             "created_at": self.created_at,
             # Cognitive binding surface
             "cognitive_available": self._cog_available,
-            "cognitive_bound_url": getattr(self._cog, "base_url", None) if self._cog else None,
+            "cognitive_bound_url": getattr(self._cog, "base_url", None)
+            if self._cog
+            else None,
         }
-    
+
     def update_role_probs(self, new_role_probs: Dict[str, float]):
         """Updates the agent's role probabilities."""
         # Validate that probabilities sum to 1.0
         total_prob = sum(new_role_probs.values())
         if abs(total_prob - 1.0) > 1e-6:
-            logger.warning(f"Role probabilities don't sum to 1.0 (sum={total_prob}), normalizing")
+            logger.warning(
+                f"Role probabilities don't sum to 1.0 (sum={total_prob}), normalizing"
+            )
             # Normalize
             for role in new_role_probs:
                 new_role_probs[role] /= total_prob
-        
+
         self.role_probs = new_role_probs.copy()
-        self.state.p = new_role_probs.copy()  # Update AgentState
-        logger.debug(f"Agent {self.agent_id} role probabilities updated: {self.role_probs}")
-    
+        logger.debug(
+            f"Agent {self.agent_id} role probabilities updated: {self.role_probs}"
+        )
+
     def update_local_metrics(self, success: float, quality: float, mem_hits: int):
         """
         Update capability and memory utility using EWMA after a task.
         """
-        # Update Capability (c) using EWMA
-        self.state.c = (1 - 0.1) * self.state.c + 0.1 * (0.6 * success + 0.4 * quality)
-        
-        # Update Memory Utility (mem_util) using EWMA
-        self.state.mem_util = (1 - 0.1) * self.state.mem_util + 0.1 * mem_hits
-        
-        # Update backward compatibility attributes
-        self.capability_score = self.state.c
-        self.mem_util = self.state.mem_util
-        
-        logger.debug(f"Agent {self.agent_id} metrics updated - capability: {self.state.c:.3f}, mem_util: {self.state.mem_util:.3f}")
-    
+        alpha = 0.1
+        new_cap = (1 - alpha) * self.capability_score + alpha * (
+            0.6 * float(success) + 0.4 * float(quality)
+        )
+        new_mem = (1 - alpha) * self.mem_util + alpha * float(mem_hits)
+
+        self.capability_score = new_cap
+        self.mem_util = max(0.0, min(1.0, new_mem))
+
+        logger.debug(
+            "Agent %s metrics updated - capability: %.3f, mem_util: %.3f",
+            self.agent_id,
+            self.capability_score,
+            self.mem_util,
+        )
+
     def get_energy_proxy(self) -> Dict[str, float]:
         """
         Returns the agent's expected contribution to energy terms.
         This is a lightweight local estimate.
         """
         return {
-            'capability': self.state.c,
-            'entropy_contribution': -sum(p * np.log2(p + 1e-9) for p in self.state.p.values()),
-            'mem_util': self.state.mem_util,
-            'state_norm': np.linalg.norm(self.state.h)
+            "capability": self.capability_score,
+            "entropy_contribution": -sum(
+                p * np.log2(p + 1e-9) for p in self.role_probs.values()
+            ),
+            "mem_util": self.mem_util,
+            "state_norm": np.linalg.norm(self._legacy_state.h),
         }
-    
+
     def update_state_embedding(self, new_embedding: np.ndarray):
         """Updates the state embedding vector."""
-        if new_embedding.shape == (128,):
-            self.state_embedding = new_embedding.copy()
-            logger.debug(f"Agent {self.agent_id} state embedding updated")
-        else:
-            logger.warning(f"Invalid embedding shape: {new_embedding.shape}, expected (128,)")
-    
-    def update_performance(self, success: bool, quality: float, task_metadata: Optional[Dict] = None):
+        try:
+            self.state_embedding = new_embedding
+            logger.debug("Agent %s state embedding updated", self.agent_id)
+        except ValueError as exc:
+            logger.warning("Invalid embedding shape for %s: %s", self.agent_id, exc)
+
+    def update_performance(
+        self, success: bool, quality: float, task_metadata: Optional[Dict] = None
+    ):
         """
         Updates the agent's performance metrics after a task.
-        
+
         Args:
             success: Whether the task was successful
             quality: Quality score (0.0 to 1.0)
             task_metadata: Optional metadata about the task
         """
-        self.tasks_processed += 1
+        self._legacy_quality_scores.append(quality)
+        if len(self._legacy_quality_scores) > 20:
+            self._legacy_quality_scores.pop(0)
+
         if success:
-            self.successful_tasks += 1
-        
-        self.quality_scores.append(quality)
-        # Keep only the last 20 scores for rolling average
-        if len(self.quality_scores) > 20:
-            self.quality_scores.pop(0)
-        
-        # Store task in history
+            self._legacy_successful_tasks += 1
+
         task_record = {
             "timestamp": time.time(),
             "success": success,
             "quality": quality,
-            "metadata": task_metadata or {}
+            "metadata": task_metadata or {},
         }
         self.task_history.append(task_record)
-        
-        # Keep only last 100 tasks in history
         if len(self.task_history) > 100:
             self.task_history.pop(0)
-        
-        # Calculate current success rate and average quality
-        success_rate = (self.successful_tasks / self.tasks_processed) if self.tasks_processed > 0 else 0
-        avg_quality = sum(self.quality_scores) / len(self.quality_scores) if self.quality_scores else 0
-        
-        # Update capability score using EWMA formula
-        w_s = 0.6  # Weight for success rate
-        w_q = 0.4  # Weight for quality
-        current_performance = (w_s * success_rate) + (w_q * avg_quality)
-        
-        self.capability_score = (
-            (1 - self.smoothing_factor) * self.capability_score + 
-            self.smoothing_factor * current_performance
+
+        self.state.record_task_outcome(
+            success=success,
+            quality=quality,
+            salience=(task_metadata or {}).get("salience"),
+            duration_s=(task_metadata or {}).get("duration_s"),
         )
-        
-        # Update state for backward compatibility
-        self.state.capability_score = self.capability_score
-        
-        # Update memory utility if memory stats are provided
-        if task_metadata and 'memory_stats' in task_metadata:
-            from .lifecycle import update_agent_metrics
-            mem_stats = task_metadata['memory_stats']
-            update_agent_metrics(self.state, success, quality, mem_stats)
-            self.mem_util = self.state.mem_util
-        
-        # Update task record with capability and memory utility
-        task_record['capability_score'] = self.capability_score
-        task_record['mem_util'] = self.mem_util
-        
-        logger.info(f"📈 Agent {self.agent_id} performance updated: Capability={self.capability_score:.3f}, MemUtil={self.mem_util:.3f}")
-    
-    async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+
+        if task_metadata and "memory_stats" in task_metadata:
+            mem_hits = task_metadata["memory_stats"].get("hits", 0)
+            self.update_local_metrics(float(success), quality, mem_hits)
+
+        task_record["capability_score"] = self.capability_score
+        task_record["mem_util"] = self.mem_util
+
+        logger.info(
+            "📈 Agent %s performance updated: Capability=%.3f, MemUtil=%.3f",
+            self.agent_id,
+            self.capability_score,
+            self.mem_util,
+        )
+
+    async def execute_task(self, task_data: Union[TaskPayload, Dict[str, Any]]) -> Dict[str, Any]:
         """
         Execute a task and update performance metrics with energy tracking.
-        
+
         Args:
             task_data: Task information and payload
-            
+
         Returns:
             Task execution result with performance metrics
         """
+        payload, normalized_task = self._normalize_task_payload(task_data)
+
         logger.info(
-            f"🤖 {self.agent_id} execute_task({task_data.get('task_id','?')}) type={task_data.get('type')} "
-            f"agent_role={getattr(self, 'agent_role', 'unknown')} cog={self._cog_available}"
+            "🤖 %s execute_task(%s) type=%s agent_role=%s cog=%s",
+            self.agent_id,
+            payload.task_id or "?",
+            payload.type,
+            getattr(self, "agent_role", "unknown"),
+            self._cog_available,
         )
-        
+
         # Capture energy before task execution
         E_before = self._energy_slice()
-        
+
         # --- TASK EXECUTION LOGIC ---
-        task_type = task_data.get('type', 'unknown')
-        task_description = task_data.get('description', '')
-        
+        task_type = payload.type or normalized_task.get("type", "unknown")
+        task_description = payload.description or normalized_task.get("description", "")
+
         # Handle specific task types with real implementations
-        if task_type == 'general_query':
-            result = await self._handle_general_query(task_description, task_data)
+        if task_type == "general_query":
+            result = await self._handle_general_query(task_description, normalized_task)
         else:
             # Fallback to simulation for other task types
-            result = self._simulate_task_execution(task_data)
-        
+            result = self._simulate_task_execution(normalized_task)
+
         # Update memory utilization based on task complexity
-        task_complexity = task_data.get('complexity', 0.5)
+        task_complexity = normalized_task.get("complexity", 0.5)
         self.mem_util = min(1.0, self.mem_util + task_complexity * 0.1)
-        
+
         # Update memory interaction tracking
         self.memory_writes += 1
         if random.random() < 0.3:  # 30% chance of being read by others
             self.memory_hits_on_writes += 1
-        
+
         # Update local metrics using the new energy-aware method
-        self.update_local_metrics(result.get('success', False), result.get('quality', 0.5), result.get('mem_hits', 0))
-        
+        self.update_local_metrics(
+            result.get("success", False),
+            result.get("quality", 0.5),
+            result.get("mem_hits", 0),
+        )
+
+        success_flag = bool(result.get("success", False))
+        quality_score = float(result.get("quality", 0.5))
+        salience_score = result.get("salience_score")
+        duration_s = result.get("duration_s")
+
+        self._legacy_quality_scores.append(quality_score)
+        if len(self._legacy_quality_scores) > 20:
+            self._legacy_quality_scores.pop(0)
+
+        if success_flag:
+            self._legacy_successful_tasks += 1
+
+        task_record = {
+            "timestamp": time.time(),
+            "task_id": payload.task_id,
+            "success": success_flag,
+            "quality": quality_score,
+            "metadata": normalized_task,
+        }
+        self.task_history.append(task_record)
+        if len(self.task_history) > 100:
+            self.task_history.pop(0)
+
+        self.state.record_task_outcome(
+            success=success_flag,
+            quality=quality_score,
+            salience=salience_score,
+            duration_s=duration_s,
+        )
+
         # Calculate energy after task execution
         E_after = self._energy_slice()
         delta_e = E_after - E_before
         result["delta_e_realized"] = delta_e
         result["E_before"] = E_before
         result["E_after"] = E_after
-        
+
         # --- Mw/Mlt write path and promotion ---
-        artifact_key = f"task:{task_data.get('task_id','unknown')}"
+        artifact_key = f"task:{payload.task_id or 'unknown'}"
         artifact = {
             "agent_id": self.agent_id,
             "type": task_type,
@@ -730,7 +896,9 @@ class RayAgent:
         # Use new normalized helpers
         self._mw_put_json_local(artifact_key, artifact)  # L0 for immediate local use
         # Also cache globally for cross-agent reuse
-        self._mw_put_json_global("task_artifact", "global", artifact_key, artifact, ttl_s=600)
+        self._mw_put_json_global(
+            "task_artifact", "global", artifact_key, artifact, ttl_s=600
+        )
 
         # simple policy: promote successes with quality>=0.8, or failures with salience >= 0.7 (if present)
         should_promote = artifact["success"] and artifact["quality"] >= 0.8
@@ -739,208 +907,77 @@ class RayAgent:
             should_promote = should_promote or (not artifact["success"] and sal >= 0.7)
         if should_promote:
             await self._promote_to_mlt(artifact_key, artifact, compression=True)
-        
+
         return result
 
-    async def _handle_general_query(self, description: str, task_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_general_query(
+        self, description: str, task_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
-        Handle general_query tasks with real implementations.
+        Handle all general_query tasks by routing them to the Cognitive Service.
 
-        1. Fast-path local handlers (time/date/status/math).
-        2. Otherwise call cognitive service:
-           - "fast" profile for normal queries
-           - "deep" profile for high-complexity queries
-        3. Fall back to stub ONLY if cognitive fails.
+        1. Determines the required profile (fast/deep) based on task heuristics.
+        2. Calls the central cognitive service (via unified execute endpoint).
+        3. Normalizes the response or handles errors.
 
-        Returns a dict shaped for upstream callers.
+        All logic, including for simple queries (time, math), is deferred
+        to the CognitiveCore, which will use the appropriate signature.
         """
+
+        # --- Helper functions (no change) ---
+        def _extract_formatted(payload: Dict[str, Any]) -> str:
+            formatted = payload.get("formatted_response")
+            if not formatted:
+                steps = payload.get("solution_steps")
+                if isinstance(steps, list) and steps:
+                    first_step = steps[0]
+                    if isinstance(first_step, dict):
+                        formatted = first_step.get("description")
+            if not formatted:
+                formatted = f"Cognitive analysis: {description}"
+            return formatted
+
+        def _normalize_cog_v2_response(
+            cog_response: Dict[str, Any],
+        ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+            if not isinstance(cog_response, dict):
+                return None
+            if not cog_response.get("success"):
+                return None
+            payload = cog_response.get("result") or cog_response.get("payload")
+            if not isinstance(payload, dict):
+                return None
+            metadata = cog_response.get("metadata") or cog_response.get("meta") or {}
+            return payload, metadata
+
+        # --- Main execution path ---
         try:
             description_lower = description.lower()
 
-            # --- 1. Time-related queries ---------------------------------------
-            if any(word in description_lower for word in ['time', 'what time', 'current time', 'utc', 'gmt']):
-                import datetime
-                utc_time = datetime.datetime.utcnow()
-                local_time = datetime.datetime.now()
-
-                result = {
-                    "query_type": "time_query",
-                    "utc_time": utc_time.isoformat(),
-                    "local_time": local_time.isoformat(),
-                    "timezone": "UTC",
-                    "formatted": f"Current UTC time: {utc_time.strftime('%Y-%m-%d %H:%M:%S')} UTC",
-                    "description": description,
-                }
-
-                logger.info(f"✅ Agent {self.agent_id} handled time query: {result['formatted']}")
-                return {
-                    "agent_id": self.agent_id,
-                    "task_processed": True,
-                    "success": True,
-                    "quality": 1.0,
-                    "capability_score": self.capability_score,
-                    "mem_util": self.mem_util,
-                    "result": result,
-                    "mem_hits": 1,
-                    "used_cognitive_service": False,
-                    "cognitive_profile": "builtin/time",
-                }
-
-            # --- 2. Date-related queries ---------------------------------------
-            if any(word in description_lower for word in ['date', 'today', 'what date', 'current date']):
-                import datetime
-                today = datetime.datetime.now()
-
-                result = {
-                    "query_type": "date_query",
-                    "current_date": today.strftime('%Y-%m-%d'),
-                    "day_of_week": today.strftime('%A'),
-                    "formatted": f"Today is {today.strftime('%A, %B %d, %Y')}",
-                    "description": description,
-                }
-
-                logger.info(f"✅ Agent {self.agent_id} handled date query: {result['formatted']}")
-                return {
-                    "agent_id": self.agent_id,
-                    "task_processed": True,
-                    "success": True,
-                    "quality": 1.0,
-                    "capability_score": self.capability_score,
-                    "mem_util": self.mem_util,
-                    "result": result,
-                    "mem_hits": 1,
-                    "used_cognitive_service": False,
-                    "cognitive_profile": "builtin/date",
-                }
-
-            # --- 3. System status / health queries -----------------------------
-            if any(word in description_lower for word in ['status', 'health', 'system', 'how are you', 'are you working']):
-                result = {
-                    "query_type": "system_status",
-                    "agent_status": "healthy" if self._cog_available else "degraded",
-                    "agent_id": self.agent_id,
-                    "agent_role": getattr(self, "agent_role", "unknown"),
-                    "cognitive_available": self._cog_available,
-                    "capability_score": self.capability_score,
-                    "memory_utilization": self.mem_util,
-                    "formatted": (
-                        f"Agent {self.agent_id} ({getattr(self, 'agent_role', 'unknown')}) is "
-                        f"{'healthy' if self._cog_available else 'degraded'}."
-                    ),
-                    "description": description,
-                }
-
-                logger.info(f"✅ Agent {self.agent_id} handled system status query")
-                return {
-                    "agent_id": self.agent_id,
-                    "task_processed": True,
-                    "success": True,
-                    "quality": 1.0,
-                    "capability_score": self.capability_score,
-                    "mem_util": self.mem_util,
-                    "result": result,
-                    "mem_hits": 1,
-                    "used_cognitive_service": False,
-                    "cognitive_profile": "builtin/status",
-                }
-
-            # --- 4. Math queries -----------------------------------------------
-            if any(word in description_lower for word in ['calculate', 'math', 'compute', 'what is', 'solve']):
-                try:
-                    import re
-
-                    math_pattern = r'(\d+\s*[\+\-\*\/]\s*\d+)'
-                    matches = re.findall(math_pattern, description)
-
-                    if matches:
-                        expression = matches[0]
-                        try:
-                            value = _safe_eval_arith(expression)
-                            result = {
-                                "query_type": "math_query",
-                                "expression": expression,
-                                "result": value,
-                                "formatted": f"The result of {expression} is {value}",
-                                "description": description,
-                            }
-                        except Exception as e:
-                            result = {
-                                "query_type": "math_query",
-                                "error": f"Failed to evaluate expression: {str(e)}",
-                                "formatted": (
-                                    f"I couldn't evaluate the expression '{expression}': {str(e)}"
-                                ),
-                                "description": description,
-                            }
-                    else:
-                        result = {
-                            "query_type": "math_query",
-                            "error": "No mathematical expression found in query",
-                            "formatted": (
-                                "I couldn't find a mathematical expression to evaluate in your query."
-                            ),
-                            "description": description,
-                        }
-
-                    logger.info(f"✅ Agent {self.agent_id} handled math query: {result.get('formatted', '')}")
-                    return {
-                        "agent_id": self.agent_id,
-                        "task_processed": True,
-                        "success": True,
-                        "quality": 0.9,
-                        "capability_score": self.capability_score,
-                        "mem_util": self.mem_util,
-                        "result": result,
-                        "mem_hits": 1,
-                        "used_cognitive_service": False,
-                        "cognitive_profile": "builtin/math",
-                    }
-
-                except Exception as e:
-                    result = {
-                        "query_type": "math_query",
-                        "error": f"Failed to evaluate mathematical expression: {str(e)}",
-                        "formatted": (
-                            "I encountered an error while trying to evaluate the mathematical expression."
-                        ),
-                        "description": description,
-                    }
-
-                    logger.warning(f"⚠️ Agent {self.agent_id} failed math query: {e}")
-                    return {
-                        "agent_id": self.agent_id,
-                        "task_processed": True,
-                        "success": False,
-                        "quality": 0.0,
-                        "capability_score": self.capability_score,
-                        "mem_util": self.mem_util,
-                        "result": result,
-                        "mem_hits": 1,
-                        "used_cognitive_service": False,
-                        "cognitive_profile": "builtin/math",
-                    }
-
-            # --- 5. Everything else: LLM path ----------------------------------
-            # At this point: it's not simple time/date/status/math.
-            # We are going to invoke cognitive service.
+            # --- 1. Unified Cognitive Service Path ---
+            # All local fast-paths (time, date, status, math) have been removed.
+            # We now determine the profile and call the cognitive service for ALL queries.
 
             params = task_data.get("params", {}) or {}
             needs_ml_fallback = params.get("needs_ml_fallback", False)
 
-            # Optional confidence struct
             if isinstance(params.get("confidence"), dict):
                 confidence = params["confidence"].get("overall_confidence", 1.0)
             else:
-                confidence = 1.0
+                confidence = (
+                    params.get("confidence", 1.0)
+                    if isinstance(params.get("confidence"), (int, float))
+                    else 1.0
+                )
 
             criticality = params.get("criticality", task_data.get("criticality", 0.5))
             drift_score = task_data.get("drift_score", 0.0)
 
-            # Check if cognitive_profile is explicitly set in params
+            # Heuristic for determining profile remains the same.
+            # Simple queries ("what is the time?") will correctly be profiled as "fast".
             explicit_profile = params.get("cognitive_profile")
             if explicit_profile in ("fast", "deep"):
                 profile = explicit_profile
-                # Calculate is_complex for logging purposes only
                 is_complex = (
                     needs_ml_fallback
                     or confidence < 0.5
@@ -950,9 +987,17 @@ class RayAgent:
                     or any(
                         word in description_lower
                         for word in [
-                            'complex', 'analysis', 'decompose', 'plan',
-                            'strategy', 'reasoning', 'root cause', 'diagnose',
-                            'mitigation', 'architecture', 'design a plan'
+                            "complex",
+                            "analysis",
+                            "decompose",
+                            "plan",
+                            "strategy",
+                            "reasoning",
+                            "root cause",
+                            "diagnose",
+                            "mitigation",
+                            "architecture",
+                            "design a plan",
                         ]
                     )
                     or task_data.get("force_decomposition")
@@ -962,8 +1007,6 @@ class RayAgent:
                     f"(heuristic would suggest: {'deep' if is_complex else 'fast'})"
                 )
             else:
-                # Fall back to heuristic calculation if no explicit profile
-                # Heuristic "is this high complexity / high stakes?"
                 is_complex = (
                     needs_ml_fallback
                     or confidence < 0.5
@@ -973,20 +1016,29 @@ class RayAgent:
                     or any(
                         word in description_lower
                         for word in [
-                            'complex', 'analysis', 'decompose', 'plan',
-                            'strategy', 'reasoning', 'root cause', 'diagnose',
-                            'mitigation', 'architecture', 'design a plan'
+                            "complex",
+                            "analysis",
+                            "decompose",
+                            "plan",
+                            "strategy",
+                            "reasoning",
+                            "root cause",
+                            "diagnose",
+                            "mitigation",
+                            "architecture",
+                            "design a plan",
                         ]
                     )
                     or task_data.get("force_decomposition")
                 )
-
-                # Decide which cognitive profile to use:
-                #  - "deep" (OpenAI/high-depth) for complex/high-stakes
-                #  - "fast" (default provider) for normal Q&A / explanation
                 profile = "deep" if is_complex else "fast"
 
-            # If cognition is not available, do NOT pretend success.
+            # Map the profile to the DecisionKind the CognitiveCore expects
+            decision_kind = (
+                DecisionKind.COGNITIVE if profile == "deep" else DecisionKind.FAST_PATH
+            )
+
+            # Check for cognitive service availability
             if not self._cog_available or not self._cog:
                 degraded_blob = {
                     "query_type": "cognitive_query_unserved",
@@ -1008,176 +1060,159 @@ class RayAgent:
                     "result": degraded_blob,
                     "mem_hits": 0,
                     "used_cognitive_service": False,
-                    "cognitive_profile": None,
+                    "cognitive_profile": profile,
                 }
 
-            # We have cognition; attempt call.
-            if self._cog:
-                # Best-effort task_id extraction for deduplication key
-                task_id = task_data.get("task_id") or task_data.get("id")
-                # Create request key for deduplication (prefer task_id, fallback to description+profile)
-                request_key = task_id if task_id else f"{description[:100]}:{profile}"
-                
-                # Check if there's already an in-flight request for this key
-                async with self._cog_inflight_lock:
-                    if request_key in self._cog_inflight:
-                        existing_task = self._cog_inflight[request_key]
-                        if not existing_task.done():
-                            logger.info(
-                                f"🔄 Agent {self.agent_id} deduplicating cognitive request for {request_key[:50]}... "
-                                f"(waiting for existing call to complete)"
-                            )
-                            try:
-                                # Wait for the existing request to complete
-                                existing_cog_response = await existing_task
-                                # Normalize the response like we would for a fresh call
-                                existing_norm = self._normalize_cog_resp(existing_cog_response)
-                                if existing_norm.get("success") and existing_norm.get("payload"):
-                                    # Build the same result structure as a fresh call would
-                                    existing_payload = existing_norm["payload"]
-                                    existing_result = {
-                                        "query_type": (
-                                            "complex_cognitive_query" if is_complex else "fast_cognitive_query"
-                                        ),
-                                        "query": description,
-                                        "thought_process": existing_payload.get("thought_process", ""),
-                                        "plan": existing_payload.get("step_by_step_plan", ""),
-                                        "formatted": (
-                                            existing_payload.get("formatted_response")
-                                            or existing_payload.get("answer")
-                                            or f"Cognitive analysis: {description}"
-                                        ),
-                                        "description": description,
-                                        "meta": existing_norm.get("meta", {}),
-                                        "profile_used": profile,
-                                    }
-                                    logger.info(
-                                        f"✅ Agent {self.agent_id} reused result from in-flight cognitive request (deduplicated)"
-                                    )
-                                    return {
-                                        "agent_id": self.agent_id,
-                                        "task_processed": True,
-                                        "success": True,
-                                        "quality": 0.9 if is_complex else 0.8,
-                                        "capability_score": self.capability_score,
-                                        "mem_util": self.mem_util,
-                                        "result": existing_result,
-                                        "mem_hits": 1,
-                                        "used_cognitive_service": True,
-                                        "cognitive_profile": profile,
-                                    }
-                                # If existing failed, fall through to make a new call
-                                logger.debug(f"Previous in-flight request failed, making new call")
-                            except Exception as e:
-                                logger.debug(f"Error waiting for in-flight request: {e}, making new call")
-                            # Clean up the failed task
-                            self._cog_inflight.pop(request_key, None)
-                
-                try:
-                    logger.info(
-                        f"🧠 Agent {self.agent_id} using cognitive service (profile={profile}, complex={is_complex})"
-                    )
+            # --- In-flight request deduplication (no change) ---
+            task_id = task_data.get("task_id") or task_data.get("id")
+            request_key = task_id if task_id else f"{description[:100]}:{profile}"
 
-                    # NOTE: plan() is async. We stay async here.
-                    # Debug outgoing payload to diagnose any 4xx validation issues on the cognitive service
-                    try:
-                        dbg_payload = {
-                            "agent_id": self.agent_id,
-                            "task_description": str(description or ""),
-                            "current_capabilities": self._summarize_agent_capabilities(),
-                            "available_tools": {},
-                            "profile": profile,
-                            # Note: no routing signals used for decision; include none or only as opaque meta if desired
-                        }
-                        # Log the full payload being sent
-                        logger.info("[CognitivePayload_Outgoing] %s", json.dumps(dbg_payload, default=str))
-                    except Exception:
-                        # Do not block execution on debug logging failures
-                        pass
-
-                    # Create the cognitive request as a task so we can track it
-                    async def _cog_call():
-                        return await self._cog.plan(
-                            agent_id=self.agent_id,
-                            task_description=str(description or ""),
-                            current_capabilities=self._summarize_agent_capabilities(),
-                            available_tools=None,
-                            profile=profile,  # "fast" | "deep"
-                        )
-                    
-                    # Register the task as in-flight
-                    cog_task = asyncio.create_task(_cog_call())
-                    async with self._cog_inflight_lock:
-                        self._cog_inflight[request_key] = cog_task
-                    
-                    try:
-                        cog_response = await cog_task
-                    finally:
-                        # Clean up the in-flight tracking
-                        async with self._cog_inflight_lock:
-                            self._cog_inflight.pop(request_key, None)
-
-                    norm = self._normalize_cog_resp(cog_response)
-
-                    # norm structure expected:
-                    # {
-                    #   "success": bool,
-                    #   "payload": {...},
-                    #   "meta": {...}
-                    # }
-                    if norm.get("success") and norm.get("payload"):
-                        payload = norm["payload"]
-
-                        result = {
-                            "query_type": (
-                                "complex_cognitive_query" if is_complex else "fast_cognitive_query"
-                            ),
-                            "query": description,
-                            "thought_process": payload.get("thought_process", ""),
-                            "plan": payload.get("step_by_step_plan", ""),
-                            "formatted": (
-                                payload.get("formatted_response")
-                                or payload.get("answer")
-                                or f"Cognitive analysis: {description}"
-                            ),
-                            "description": description,
-                            "meta": norm.get("meta", {}),
-                            "profile_used": profile,
-                        }
-
+            async with self._cog_inflight_lock:
+                if request_key in self._cog_inflight:
+                    existing_task = self._cog_inflight[request_key]
+                    if not existing_task.done():
                         logger.info(
-                            f"✅ Agent {self.agent_id} cognitive service "
-                            f"completed with profile={profile}"
+                            f"🔄 Agent {self.agent_id} deduplicating cognitive request for {request_key[:50]}... "
+                            f"(waiting for existing call to complete)"
                         )
+                        try:
+                            existing_response = await existing_task
+                            normalized = _normalize_cog_v2_response(existing_response)
+                            if normalized:
+                                payload, metadata = normalized
+                                result = {
+                                    "query_type": (
+                                        "complex_cognitive_query"
+                                        if profile == "deep"
+                                        else "fast_cognitive_query"
+                                    ),
+                                    "query": description,
+                                    "thought_process": payload.get("thought", ""),
+                                    "plan": payload.get("solution_steps", []),
+                                    "formatted": _extract_formatted(payload),
+                                    "description": description,
+                                    "meta": metadata,
+                                    "profile_used": profile,
+                                }
+                                logger.info(
+                                    f"✅ Agent {self.agent_id} reused result from in-flight cognitive request (deduplicated)"
+                                )
+                                return {
+                                    "agent_id": self.agent_id,
+                                    "task_processed": True,
+                                    "success": True,
+                                    "quality": 0.9 if profile == "deep" else 0.8,
+                                    "capability_score": self.capability_score,
+                                    "mem_util": self.mem_util,
+                                    "result": result,
+                                    "mem_hits": 1,
+                                    "used_cognitive_service": True,
+                                    "cognitive_profile": profile,
+                                }
+                        except Exception as e:
+                            logger.debug(
+                                f"Error waiting for in-flight request: {e}, making new call"
+                            )
+                        finally:
+                            self._cog_inflight.pop(request_key, None)
 
-                        return {
-                            "agent_id": self.agent_id,
-                            "task_processed": True,
-                            "success": True,
-                            "quality": 0.9 if is_complex else 0.8,
-                            "capability_score": self.capability_score,
-                            "mem_util": self.mem_util,
-                            "result": result,
-                            "mem_hits": 1,
-                            "used_cognitive_service": True,
-                            "cognitive_profile": profile,
-                        }
-
-                    else:
-                        logger.warning(
-                            "⚠️ Agent %s cognitive service returned unusable response "
-                            "(profile=%s), falling back",
-                            self.agent_id,
-                            profile,
-                        )
-
-                except Exception as e:
-                    import traceback
-                    logger.warning(
-                        f"⚠️ Agent {self.agent_id} cognitive service call failed (profile={profile}): {e}"
+            # --- Cognitive Service Call (no change) ---
+            try:
+                logger.info(
+                    f"🧠 Agent {self.agent_id} using cognitive service (decision_kind={decision_kind.value}, complex={profile == 'deep'})"
+                )
+                try:
+                    dbg_payload = {
+                        "agent_id": self.agent_id,
+                        "problem_statement": str(description or ""),
+                        "decision_kind": decision_kind.value,
+                        "profile": profile,
+                    }
+                    logger.info(
+                        "[CognitivePayload_Outgoing] %s",
+                        json.dumps(dbg_payload, default=str),
                     )
-                    logger.debug("Traceback:\n%s", traceback.format_exc())
-            # On cognitive failure or unusable response, do not pretend success; return explicit failure
+                except Exception:
+                    pass
+
+                # This closure matches the ProblemSolvingSignature inputs
+                async def _cog_call():
+                    input_data = {
+                        "problem_statement": str(description or ""),
+                        "constraints": params.get("constraints") or {},
+                        "available_tools": params.get("available_tools") or {},
+                    }
+                    meta = {
+                        "task_id": task_id,
+                        "requested_profile": profile,
+                        "agent_capabilities": self._summarize_agent_capabilities(),
+                    }
+                    return await self._cog.execute_async(
+                        agent_id=self.agent_id,
+                        cog_type=CognitiveType.PROBLEM_SOLVING,  # This maps to ProblemSolvingSignature
+                        decision_kind=decision_kind,
+                        input_data=input_data,
+                        meta=meta,
+                    )
+
+                cog_task = asyncio.create_task(_cog_call())
+                async with self._cog_inflight_lock:
+                    self._cog_inflight[request_key] = cog_task
+
+                try:
+                    cog_response = await cog_task
+                finally:
+                    async with self._cog_inflight_lock:
+                        self._cog_inflight.pop(request_key, None)
+
+                normalized = _normalize_cog_v2_response(cog_response)
+                if normalized:
+                    payload, metadata = normalized
+                    result = {
+                        "query_type": (
+                            "complex_cognitive_query"
+                            if profile == "deep"
+                            else "fast_cognitive_query"
+                        ),
+                        "query": description,
+                        "thought_process": payload.get("thought", ""),
+                        "plan": payload.get("solution_steps", []),
+                        "formatted": _extract_formatted(payload),
+                        "description": description,
+                        "meta": metadata,
+                        "profile_used": profile,
+                    }
+                    logger.info(
+                        f"✅ Agent {self.agent_id} cognitive service completed with profile={profile}"
+                    )
+                    return {
+                        "agent_id": self.agent_id,
+                        "task_processed": True,
+                        "success": True,
+                        "quality": 0.9 if profile == "deep" else 0.8,
+                        "capability_score": self.capability_score,
+                        "mem_util": self.mem_util,
+                        "result": result,
+                        "mem_hits": 1,
+                        "used_cognitive_service": True,
+                        "cognitive_profile": profile,
+                    }
+
+                logger.warning(
+                    "⚠️ Agent %s cognitive service returned unusable response (profile=%s), falling back",
+                    self.agent_id,
+                    profile,
+                )
+
+            except Exception as e:
+                import traceback
+
+                logger.warning(
+                    f"⚠️ Agent {self.agent_id} cognitive service call failed (profile={profile}): {e}"
+                )
+                logger.debug("Traceback:\n%s", traceback.format_exc())
+
+            # --- Fallback Error (no change) ---
             err_blob = {
                 "query_type": "cognitive_query_failed",
                 "description": description,
@@ -1198,7 +1233,10 @@ class RayAgent:
             }
 
         except Exception as e:
-            logger.error(f"❌ Agent {self.agent_id} failed to handle general query: {e}")
+            # --- Outer Catch-All (no change) ---
+            logger.error(
+                f"❌ Agent {self.agent_id} failed to handle general query: {e}"
+            )
             return {
                 "agent_id": self.agent_id,
                 "task_processed": True,
@@ -1224,14 +1262,14 @@ class RayAgent:
         This maintains backward compatibility for other task types.
         """
         import random
-        
+
         # Simulate task execution with some randomness
         success = random.choice([True, False])
         quality = random.uniform(0.5, 1.0)
-        
+
         # Simulate memory hits for energy tracking
         mem_hits = random.randint(0, 5)
-        
+
         return {
             "agent_id": self.agent_id,
             "task_processed": True,
@@ -1239,9 +1277,9 @@ class RayAgent:
             "quality": quality,
             "capability_score": self.capability_score,
             "mem_util": self.mem_util,
-            "mem_hits": mem_hits
+            "mem_hits": mem_hits,
         }
-    
+
     # === Telemetry surfaces for Tier-0 / Meta-learning ===
     def get_private_memory_vector(self) -> List[float]:
         return self._privmem.get_vector().tolist()
@@ -1251,17 +1289,19 @@ class RayAgent:
 
     def reset_private_memory(self) -> bool:
         self._privmem.reset()
-        self.state.h[:] = 0.0
+        self._legacy_state.h = [0.0] * 128
         return True
 
     def _export_tier0_summary(self) -> Dict[str, Any]:
         return {
             "agent_id": self.agent_id,
-            "embedding": self.state.h,
+            "embedding": self._privmem.get_vector_list(),
             "capability_score": self.capability_score,
             "mem_util": self.mem_util,
             "tasks_processed": self.tasks_processed,
-            "success_rate": (self.successful_tasks / self.tasks_processed) if self.tasks_processed else 0.0,
+            "success_rate": (self.successful_tasks / self.tasks_processed)
+            if self.tasks_processed
+            else 0.0,
             "skill_deltas": self.skill_deltas,
             "peer_interactions": self.peer_interactions,
         }
@@ -1272,24 +1312,26 @@ class RayAgent:
         """
         try:
             summary = self._export_tier0_summary()
-            
+
             # Promote the summary to LTM using our async method
             summary_key = f"agent_summary:{self.agent_id}:{int(time.time())}"
             await self._promote_to_mlt(summary_key, summary, compression=False)
-            
+
             if self.mw_manager and hasattr(self.mw_manager, "evict_agent"):
                 self.mw_manager.evict_agent(self.agent_id)  # Assuming fire-and-forget
-            
+
             if self.mw_manager and hasattr(self.mw_manager, "clear"):
                 try:
                     self.mw_manager.clear()
                     logger.debug(f"[{self.agent_id}] Cleared L0 cache on archive")
                 except Exception as e:
                     logger.debug(f"[{self.agent_id}] Failed to clear L0 cache: {e}")
-            
+
             if self.mfb_client and hasattr(self.mfb_client, "log_incident"):
-                self.mfb_client.log_incident({"archive": True, "summary": summary}, salience=0.3)
-            
+                self.mfb_client.log_incident(
+                    {"archive": True, "summary": summary}, salience=0.3
+                )
+
             self._archived = True
             self.lifecycle_state = "Archived"
             return True
@@ -1304,8 +1346,8 @@ class RayAgent:
                 blob = self._ckpt_store.load(self._ckpt_key)
                 if blob:
                     self._privmem.load(blob)
-                    self.state.h = self._privmem.get_vector_list()
-                    self.state_embedding = np.array(self.state.h, dtype=np.float32)
+                    vec = self._privmem.get_vector_list()
+                    self._legacy_state.h = list(vec)
         except Exception as e:
             logger.warning(f"[{self.agent_id}] restore failed: {e}")
 
@@ -1315,43 +1357,68 @@ class RayAgent:
                 self._ckpt_store.save(self._ckpt_key, self._privmem.dump())
         except Exception as e:
             logger.warning(f"[{self.agent_id}] checkpoint failed: {e}")
-    
+
     def update_skill_delta(self, skill_name: str, delta: float):
         """
         Update local skill delta (per-agent scratch memory).
-        
+
         Args:
             skill_name: Name of the skill
             delta: Change in skill level
         """
-        self.skill_deltas[skill_name] = self.skill_deltas.get(skill_name, 0.0) + delta
-        logger.debug(f"Agent {self.agent_id} skill delta updated: {skill_name} += {delta}")
-    
+        try:
+            new_val = self.skills.bump(skill_name, delta, clamp_delta=False)
+            logger.debug(
+                "Agent %s skill delta updated: %s -> %.3f",
+                self.agent_id,
+                skill_name,
+                new_val,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to update skill delta for %s on %s: %s",
+                skill_name,
+                self.agent_id,
+                exc,
+            )
+
     def record_peer_interaction(self, peer_id: str):
         """
         Record interaction with another agent.
-        
+
         Args:
             peer_id: ID of the peer agent
         """
         self.peer_interactions[peer_id] = self.peer_interactions.get(peer_id, 0) + 1
         logger.debug(f"Agent {self.agent_id} recorded interaction with {peer_id}")
-    
+
     async def get_heartbeat(self) -> Dict[str, Any]:
         """
         Gathers the agent's current state and performance into a heartbeat.
-        This will be serialized to JSON for the meta-controller.
-        
-        Returns:
-            Dictionary containing agent state and metrics
+        This merges BaseAgent telemetry with legacy fields expected by Tier-0.
         """
-        success_rate = (self.successful_tasks / self.tasks_processed) if self.tasks_processed > 0 else 0
+        base_heartbeat = await super().get_heartbeat()
+
+        success_rate = (
+            (self.successful_tasks / self.tasks_processed)
+            if self.tasks_processed > 0
+            else 0.0
+        )
         current_quality = self.quality_scores[-1] if self.quality_scores else 0.0
-        
-        heartbeat_data = {
+
+        legacy_memory_metrics = {
+            "memory_writes": self.memory_writes,
+            "memory_hits_on_writes": self.memory_hits_on_writes,
+            "salient_events_logged": self.salient_events_logged,
+            "total_compression_gain": self.total_compression_gain,
+            "mw_puts": getattr(self, "_mw_puts", 0),
+            "mlt_promotions": getattr(self, "_mlt_promotions", 0),
+        }
+
+        legacy_payload = {
             "timestamp": time.time(),
             "agent_id": self.agent_id,
-            "state_embedding_h": self.state_embedding.tolist(),  # Convert numpy array for JSON
+            "state_embedding_h": self.state_embedding.tolist(),
             "role_probs": self.role_probs,
             "performance_metrics": {
                 "success_rate": success_rate,
@@ -1359,20 +1426,15 @@ class RayAgent:
                 "capability_score_c": self.capability_score,
                 "mem_util": self.mem_util,
                 "tasks_processed": self.tasks_processed,
-                "successful_tasks": self.successful_tasks
+                "successful_tasks": self.successful_tasks,
             },
-            "memory_metrics": {
-                "memory_writes": self.memory_writes,
-                "memory_hits_on_writes": self.memory_hits_on_writes,
-                "salient_events_logged": self.salient_events_logged,
-                "total_compression_gain": self.total_compression_gain,
-                "mw_puts": getattr(self, "_mw_puts", 0),
-                "mlt_promotions": getattr(self, "_mlt_promotions", 0),
-            },
+            "memory_metrics": legacy_memory_metrics,
             "local_state": {
                 "skill_deltas": self.skill_deltas,
                 "peer_interactions": self.peer_interactions,
-                "recent_quality_scores": self.quality_scores[-5:] if self.quality_scores else []
+                "recent_quality_scores": self.quality_scores[-5:]
+                if self.quality_scores
+                else [],
             },
             "lifecycle": {
                 "state": self.lifecycle_state,
@@ -1384,43 +1446,47 @@ class RayAgent:
                 "idle_ticks": self.idle_ticks,
                 "archived": self._archived,
             },
-            "energy_state": self.energy_state,  # Add energy state to heartbeat
-            "memory_metrics": {
-                "memory_writes": self.memory_writes,
-                "memory_hits_on_writes": self.memory_hits_on_writes,
-                "salient_events_logged": self.salient_events_logged,
-            }
+            "energy_state": self.energy_state,
         }
-        
-        # Add Mw telemetry if available
+
+        merged = {**base_heartbeat, **legacy_payload}
+
+        perf = dict(base_heartbeat.get("performance_metrics", {}))
+        perf.update(legacy_payload["performance_metrics"])
+        merged["performance_metrics"] = perf
+
+        mem_metrics = dict(base_heartbeat.get("memory_metrics", {}))
+        mem_metrics.update(legacy_memory_metrics)
+        merged["memory_metrics"] = mem_metrics
+
         if self.mw_manager:
             try:
                 tele = self.mw_manager.get_telemetry()
-                heartbeat_data["memory_metrics"].update({
-                    "mw_hit_ratio": tele.get("hit_ratio", 0),
-                    "mw_l0_hits": tele.get("l0_hits", 0),
-                    "mw_l1_hits": tele.get("l1_hits", 0),
-                    "mw_l2_hits": tele.get("l2_hits", 0),
-                    "mw_task_cache_hits": tele.get("task_cache_hits", 0),
-                    "mw_task_cache_misses": tele.get("task_cache_misses", 0),
-                    "mw_task_evictions": tele.get("task_evictions", 0),
-                    "mw_negative_cache_hits": tele.get("negative_cache_hits", 0),
-                })
-                
-                # Add hot items every 10th heartbeat (low rate)
+                mem_metrics.update(
+                    {
+                        "mw_hit_ratio": tele.get("hit_ratio", 0),
+                        "mw_l0_hits": tele.get("l0_hits", 0),
+                        "mw_l1_hits": tele.get("l1_hits", 0),
+                        "mw_l2_hits": tele.get("l2_hits", 0),
+                        "mw_task_cache_hits": tele.get("task_cache_hits", 0),
+                        "mw_task_cache_misses": tele.get("task_cache_misses", 0),
+                        "mw_task_evictions": tele.get("task_evictions", 0),
+                        "mw_negative_cache_hits": tele.get("negative_cache_hits", 0),
+                    }
+                )
+
                 if self.tasks_processed % 10 == 0 and random.random() < 0.05:
                     try:
-                        # Use async hot item fetch
                         hot = await self.mw_manager.get_hot_items_async(top_n=5)
-                        heartbeat_data["memory_metrics"]["mw_hot_items"] = hot
+                        mem_metrics["mw_hot_items"] = hot
                     except Exception:
                         pass
-            except Exception as e:
-                logger.debug(f"[{self.agent_id}] Failed to get Mw telemetry: {e}")
-        
+            except Exception as exc:
+                logger.debug("[%s] Failed to get Mw telemetry: %s", self.agent_id, exc)
+
         self.last_heartbeat = time.time()
-        return heartbeat_data
-    
+        return merged
+
     def on_task_row_loaded(self, task_row: Dict[str, Any]) -> None:
         """Hook called when a task row is loaded from database."""
         self.cache_task_row(task_row)
@@ -1434,30 +1500,49 @@ class RayAgent:
     def get_summary_stats(self) -> Dict[str, Any]:
         """
         Get a summary of agent statistics for monitoring.
-        
+
         Returns:
             Dictionary with key performance indicators
         """
+        try:
+            ad = self.advertise_capabilities()
+        except Exception as exc:
+            logger.debug("advertise_capabilities failed for %s: %s", self.agent_id, exc)
+            ad = {
+                "agent_id": self.agent_id,
+                "capability": self.capability_score,
+                "mem_util": self.mem_util,
+                "quality_avg": self.state.rolling_quality_avg() or 0.0,
+            }
+
+        success_rate = (
+            (self.successful_tasks / self.tasks_processed)
+            if self.tasks_processed > 0
+            else 0.0
+        )
+
         return {
-            "agent_id": self.agent_id,
-            "capability_score": self.capability_score,
-            "mem_util": self.mem_util,
+            "agent_id": ad.get("agent_id", self.agent_id),
+            "capability_score": ad.get("capability", self.capability_score),
+            "mem_util": ad.get("mem_util", self.mem_util),
             "tasks_processed": self.tasks_processed,
-            "success_rate": (self.successful_tasks / self.tasks_processed) if self.tasks_processed > 0 else 0,
-            "avg_quality": sum(self.quality_scores) / len(self.quality_scores) if self.quality_scores else 0,
+            "success_rate": success_rate,
+            "avg_quality": ad.get(
+                "quality_avg", self.state.rolling_quality_avg() or 0.0
+            ),
             "memory_writes": self.memory_writes,
-            "peer_interactions_count": len(self.peer_interactions)
+            "peer_interactions_count": len(self.peer_interactions),
         }
-    
+
     # --- NEW: Knowledge Finding Method for Scenario 1 ---
     async def find_knowledge(self, fact_id: str) -> Optional[Dict[str, Any]]:
         """
         Attempts to find a piece of knowledge, implementing the Mw -> Mlt escalation.
         This is an async method that uses non-blocking calls with negative caching and single-flight guards.
-        
+
         Args:
             fact_id: The ID of the fact to find
-            
+
         Returns:
             Optional[Dict[str, Any]]: The found knowledge or None if not found
         """
@@ -1475,19 +1560,33 @@ class RayAgent:
 
         # Try to acquire single-flight sentinel atomically
         sentinel_key = f"_inflight:fact:global:{fact_id}"
-        sentinel_acquired = await self.mw_manager.try_set_inflight(sentinel_key, ttl_s=5)
+        sentinel_acquired = await self.mw_manager.try_set_inflight(
+            sentinel_key, ttl_s=5
+        )
         if not sentinel_acquired:
-            logger.info(f"[{self.agent_id}] Another worker is fetching {fact_id}, waiting briefly...")
+            logger.info(
+                f"[{self.agent_id}] Another worker is fetching {fact_id}, waiting briefly..."
+            )
             # Wait briefly for the other worker to complete
             await asyncio.sleep(0.05)  # Brief backoff
             # Try to get the result that might have been cached
-            cached_data = await self.mw_manager.get_item_typed_async("fact", "global", fact_id)
+            cached_data = await self.mw_manager.get_item_typed_async(
+                "fact", "global", fact_id
+            )
             if cached_data:
-                logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' after waiting (cache hit).")
+                logger.info(
+                    f"[{self.agent_id}] ✅ Found '{fact_id}' after waiting (cache hit)."
+                )
                 try:
-                    return json.loads(cached_data) if isinstance(cached_data, str) else cached_data
+                    return (
+                        json.loads(cached_data)
+                        if isinstance(cached_data, str)
+                        else cached_data
+                    )
                 except json.JSONDecodeError:
-                    logger.warning(f"[{self.agent_id}] ⚠️ Failed to parse cached data as JSON")
+                    logger.warning(
+                        f"[{self.agent_id}] ⚠️ Failed to parse cached data as JSON"
+                    )
                     return {"raw_data": cached_data}
             return None
 
@@ -1495,43 +1594,63 @@ class RayAgent:
             # 1. Query Working Memory (Mw) first using typed key format
             logger.info(f"[{self.agent_id}] 📋 Querying Working Memory (Mw)...")
             try:
-                cached_data = await self.mw_manager.get_item_typed_async("fact", "global", fact_id)
-                
+                cached_data = await self.mw_manager.get_item_typed_async(
+                    "fact", "global", fact_id
+                )
+
                 if cached_data:
-                    logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mw (cache hit).")
+                    logger.info(
+                        f"[{self.agent_id}] ✅ Found '{fact_id}' in Mw (cache hit)."
+                    )
                     try:
-                        return json.loads(cached_data) if isinstance(cached_data, str) else cached_data
+                        return (
+                            json.loads(cached_data)
+                            if isinstance(cached_data, str)
+                            else cached_data
+                        )
                     except json.JSONDecodeError:
-                        logger.warning(f"[{self.agent_id}] ⚠️ Failed to parse cached data as JSON")
+                        logger.warning(
+                            f"[{self.agent_id}] ⚠️ Failed to parse cached data as JSON"
+                        )
                         return {"raw_data": cached_data}
             except Exception as e:
                 logger.error(f"[{self.agent_id}] ❌ Error querying Mw: {e}")
 
             # 2. On a miss, escalate to Long-Term Memory (Mlt)
-            logger.info(f"[{self.agent_id}] ⚠️ '{fact_id}' not in Mw (cache miss). Escalating to Mlt...")
-            
+            logger.info(
+                f"[{self.agent_id}] ⚠️ '{fact_id}' not in Mw (cache miss). Escalating to Mlt..."
+            )
+
             # --- ASYNC FIX ---
             long_term_data = await self.mlt_manager.query_holon_by_id_async(fact_id)
-            
+
             if long_term_data:
                 logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mlt.")
-                
+
                 # 3. Cache the retrieved data back into Mw
                 logger.info(f"[{self.agent_id}] 💾 Caching '{fact_id}' back to Mw...")
                 try:
-                    self.mw_manager.set_global_item_typed("fact", "global", fact_id, long_term_data, ttl_s=900)
+                    self.mw_manager.set_global_item_typed(
+                        "fact", "global", fact_id, long_term_data, ttl_s=900
+                    )
                 except Exception as e:
                     logger.error(f"[{self.agent_id}] ❌ Failed to cache to Mw: {e}")
-                
+
                 return long_term_data
             else:
                 # On total miss: write negative cache
-                logger.info(f"[{self.agent_id}] ❌ '{fact_id}' not found in Mlt. Setting negative cache.")
+                logger.info(
+                    f"[{self.agent_id}] ❌ '{fact_id}' not found in Mlt. Setting negative cache."
+                )
                 try:
-                    self.mw_manager.set_negative_cache("fact", "global", fact_id, ttl_s=30)
+                    self.mw_manager.set_negative_cache(
+                        "fact", "global", fact_id, ttl_s=30
+                    )
                 except Exception as e:
-                    logger.error(f"[{self.agent_id}] ❌ Failed to set negative cache: {e}")
-                
+                    logger.error(
+                        f"[{self.agent_id}] ❌ Failed to set negative cache: {e}"
+                    )
+
                 return None
         except Exception as e:
             logger.error(f"[{self.agent_id}] ❌ Error querying Mlt: {e}")
@@ -1543,57 +1662,69 @@ class RayAgent:
                 await self.mw_manager.del_global_key(sentinel_key)
             except Exception:
                 pass
-        
-        logger.warning(f"[{self.agent_id}] 🚨 Could not find '{fact_id}' in any memory tier.")
+
+        logger.warning(
+            f"[{self.agent_id}] 🚨 Could not find '{fact_id}' in any memory tier."
+        )
         return None
 
-    async def execute_collaborative_task(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_collaborative_task(
+        self, task_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Simulates executing a collaborative task that may require finding knowledge.
         This method implements the core logic for Scenario 1.
-        
+
         Args:
             task_info: Dictionary containing task information including required_fact
-            
+
         Returns:
             Dict[str, Any]: Task execution result with success status and details
         """
-        task_name = task_info.get('name', 'Unknown Task')
-        required_fact = task_info.get('required_fact')
-        
-        logger.info(f"[{self.agent_id}] 🚀 Starting collaborative task '{task_name}'...")
-        
+        task_name = task_info.get("name", "Unknown Task")
+        required_fact = task_info.get("required_fact")
+
+        logger.info(
+            f"[{self.agent_id}] 🚀 Starting collaborative task '{task_name}'..."
+        )
+
         # Capture energy before task execution
         E_before = self._energy_slice()
-        
+
         knowledge = None
         if required_fact:
             logger.info(f"[{self.agent_id}] 📚 Task requires fact: {required_fact}")
             knowledge = await self.find_knowledge(required_fact)  # No await needed
-        
+
         # Determine task success based on knowledge availability
         if required_fact and not knowledge:
             success = False
             quality = 0.1
-            logger.error(f"[{self.agent_id}] 🚨 Task failed: could not find required fact '{required_fact}'.")
+            logger.error(
+                f"[{self.agent_id}] 🚨 Task failed: could not find required fact '{required_fact}'."
+            )
         else:
             success = True
             quality = 0.9 if knowledge else 0.7  # Higher quality if knowledge was found
             logger.info(f"[{self.agent_id}] ✅ Task completed successfully.")
             if knowledge:
-                logger.info(f"[{self.agent_id}] 📖 Used knowledge: {knowledge.get('content', 'Unknown content')}")
-        
+                logger.info(
+                    f"[{self.agent_id}] 📖 Used knowledge: {knowledge.get('content', 'Unknown content')}"
+                )
+
         # 4. Update internal performance metrics (Ma)
-        self.update_performance(success=success, quality=quality, task_metadata=task_info)
-        
+        self.update_performance(
+            success=success, quality=quality, task_metadata=task_info
+        )
+
         # Update memory utilization based on task complexity
-        task_complexity = task_info.get('complexity', 0.5)
+        task_complexity = task_info.get("complexity", 0.5)
         self.mem_util = min(1.0, self.mem_util + task_complexity * 0.1)
-        
+
         # Calculate energy after task execution
         E_after = self._energy_slice()
         delta_e = E_after - E_before
-        
+
         result = {
             "agent_id": self.agent_id,
             "task_name": task_name,
@@ -1603,12 +1734,12 @@ class RayAgent:
             "capability_score": self.capability_score,
             "mem_util": self.mem_util,
             "knowledge_found": knowledge is not None,
-            "knowledge_content": knowledge.get('content', None) if knowledge else None,
+            "knowledge_content": knowledge.get("content", None) if knowledge else None,
             "delta_e_realized": delta_e,
             "E_before": E_before,
-            "E_after": E_after
+            "E_after": E_after,
         }
-        
+
         # --- Mw/Mlt write path and promotion ---
         artifact_key = f"task:{task_info.get('task_id', task_name)}"
         artifact = {
@@ -1617,139 +1748,20 @@ class RayAgent:
             "ts": time.time(),
             "required_fact": required_fact,
             "knowledge_found": knowledge is not None,
-            "knowledge_content": knowledge.get('content') if knowledge else None,
+            "knowledge_content": knowledge.get("content") if knowledge else None,
             "success": success,
             "quality": quality,
         }
         # Use new normalized helpers
         self._mw_put_json_local(artifact_key, artifact)  # L0 for immediate local use
-        self._mw_put_json_global("collab_task", "global", artifact_key, artifact, ttl_s=900)
+        self._mw_put_json_global(
+            "collab_task", "global", artifact_key, artifact, ttl_s=900
+        )
         if success and quality >= 0.8:
             await self._promote_to_mlt(artifact_key, artifact, compression=True)
-        
+
         return result
 
-    def execute_high_stakes_task(self, task_info: dict) -> dict:
-        """
-        Simulates a high-stakes task that fails, potentially triggering a
-        flashbulb memory incident.
-        """
-        logger.info(f"[{self.agent_id}] Attempting high-stakes task: {task_info.get('name')}")
-        
-        # --- 1. Simulate an unexpected failure ---
-        success = False
-        error_context = {"reason": "External API timeout", "code": 504}
-        logger.warning(f"[{self.agent_id}] Task failed! Reason: {error_context['reason']}")
-        
-        # --- 2. Calculate Salience Score using ML Service ---
-        salience_score = self._calculate_ml_salience_score(task_info, error_context)
-        logger.info(f"[{self.agent_id}] Calculated ML salience score: {salience_score:.2f}")
-
-        # --- 3. Trigger Flashbulb Logging if threshold is met ---
-        SALIENCE_THRESHOLD = 0.7  # Changed from 7.0 to 0.7
-        incident_logged = False
-        
-        if salience_score >= SALIENCE_THRESHOLD:
-            logger.warning(f"[{self.agent_id}] Salience threshold met! Logging to Flashbulb Memory (Mfb)...")
-            
-            if self.mfb_client:
-                # Prepare the full event data payload
-                incident_data = {
-                    "agent_state": self.get_heartbeat(), # Capture agent's full state (Ma)
-                    "failed_task": task_info,
-                    "error_context": error_context
-                }
-                
-                # Log the incident using the client
-                incident_logged = self.mfb_client.log_incident(incident_data, salience_score)
-                
-                if incident_logged:
-                    logger.info(f"[{self.agent_id}] ✅ Incident successfully logged to Flashbulb Memory")
-                    
-                    # Also drop a compact pointer in Mw with a short TTL
-                    if self.mw_manager:
-                        try:
-                            ptr_key = f"incident:{task_info.get('id', 'unknown')}"
-                            self.mw_manager.set_global_item_typed("incident", "global", ptr_key, 
-                                                                {"mfb_id": incident_logged}, ttl_s=1800)
-                            logger.debug(f"[{self.agent_id}] Incident pointer cached in Mw")
-                        except Exception as e:
-                            logger.debug(f"[{self.agent_id}] Failed to cache incident pointer: {e}")
-                else:
-                    logger.error(f"[{self.agent_id}] ❌ Failed to log incident to Flashbulb Memory")
-            else:
-                logger.error(f"[{self.agent_id}] ❌ FlashbulbClient not available")
-        
-        # Update agent's internal performance metrics
-        self.update_performance(success=False, quality=0.0, task_metadata=task_info)
-        
-        return {
-            "agent_id": self.agent_id,
-            "success": success,
-            "salience_score": salience_score,
-            "incident_logged": incident_logged,
-            "error_context": error_context
-        }
-    
-    def _calculate_ml_salience_score(self, task_info: dict, error_context: dict) -> float:
-        """Calculate salience score using ML service with circuit breaker pattern."""
-        try:
-            # Import the salience service client
-            from src.seedcore.ml.serve_app import SalienceServiceClient
-            
-            # Initialize client (will be created once and reused)
-            if not hasattr(self, '_salience_client'):
-                self._salience_client = SalienceServiceClient()
-            
-            # Prepare features for ML model
-            features = self._extract_salience_features(task_info, error_context)
-            
-            # Score using ML service
-            scores = self._salience_client.score_salience([features])
-            
-            if scores and len(scores) > 0:
-                return scores[0]
-            else:
-                logger.warning(f"[{self.agent_id}] No scores returned from ML service, using fallback")
-                return self._fallback_salience_scorer([features])[0]
-                
-        except Exception as e:
-            logger.error(f"[{self.agent_id}] Error in ML salience scoring: {e}, using fallback")
-            return self._fallback_salience_scorer([self._extract_salience_features(task_info, error_context)])[0]
-    
-    def _extract_salience_features(self, task_info: dict, error_context: dict) -> dict:
-        """Extract features for salience scoring from task and error context."""
-        # Get current system state
-        heartbeat = self.get_heartbeat()
-        performance_metrics = heartbeat.get('performance_metrics', {})
-        
-        # Extract features for ML model
-        features = {
-            # Task-related features
-            'task_risk': task_info.get('risk', 0.5),
-            'failure_severity': 1.0,  # High severity for task failures
-            'task_complexity': task_info.get('complexity', 0.5),
-            'user_impact': task_info.get('user_impact', 0.5),
-            'business_criticality': task_info.get('business_criticality', 0.5),
-            
-            # Agent-related features
-            'agent_capability': performance_metrics.get('capability_score_c', 0.5),
-            'agent_memory_util': performance_metrics.get('mem_util', 0.0),
-            
-            # System-related features (from energy state)
-            'system_load': self._get_system_load(),
-            'memory_usage': self._get_memory_usage(),
-            'cpu_usage': self._get_cpu_usage(),
-            'response_time': self._get_response_time(),
-            'error_rate': self._get_error_rate(),
-            
-            # Error context features
-            'error_code': error_context.get('code', 500),
-            'error_type': self._classify_error_type(error_context.get('reason', ''))
-        }
-        
-        return features
-    
     def _get_system_load(self) -> float:
         """Get current system load from energy state."""
         try:
@@ -1759,28 +1771,28 @@ class RayAgent:
             return min(total_energy / 10.0, 1.0)  # Normalize to 0-1 range
         except:
             return 0.5
-    
+
     def _get_memory_usage(self) -> float:
         """Get current memory usage."""
         try:
             return self.mem_util
         except:
             return 0.5
-    
+
     def _get_cpu_usage(self) -> float:
         """Get current CPU usage estimate."""
         try:
             # Estimate CPU usage based on agent activity
-            tasks_processed = getattr(self, 'tasks_processed', 0)
+            tasks_processed = getattr(self, "tasks_processed", 0)
             return min(tasks_processed / 100.0, 1.0)
         except:
             return 0.5
-    
+
     def _get_response_time(self) -> float:
         """Get current response time estimate."""
         try:
             # Estimate response time based on recent performance
-            quality_scores = getattr(self, 'quality_scores', [])
+            quality_scores = getattr(self, "quality_scores", [])
             if quality_scores:
                 avg_quality = sum(quality_scores) / len(quality_scores)
                 # Lower quality = higher response time
@@ -1788,71 +1800,77 @@ class RayAgent:
             return 1.0
         except:
             return 1.0
-    
+
     def _get_error_rate(self) -> float:
         """Get current error rate."""
         try:
-            tasks_processed = getattr(self, 'tasks_processed', 0)
-            successful_tasks = getattr(self, 'successful_tasks', 0)
+            tasks_processed = getattr(self, "tasks_processed", 0)
+            successful_tasks = getattr(self, "successful_tasks", 0)
             if tasks_processed > 0:
                 return (tasks_processed - successful_tasks) / tasks_processed
             return 0.0
         except:
             return 0.0
-    
+
     def _classify_error_type(self, error_reason: str) -> float:
         """Classify error type for feature extraction."""
         error_reason_lower = error_reason.lower()
-        
-        if 'timeout' in error_reason_lower:
+
+        if "timeout" in error_reason_lower:
             return 0.8  # High severity for timeouts
-        elif 'connection' in error_reason_lower:
+        elif "connection" in error_reason_lower:
             return 0.7  # Medium-high for connection issues
-        elif 'permission' in error_reason_lower:
+        elif "permission" in error_reason_lower:
             return 0.6  # Medium for permission issues
-        elif 'validation' in error_reason_lower:
+        elif "validation" in error_reason_lower:
             return 0.4  # Lower for validation errors
         else:
             return 0.5  # Default severity
-    
+
     def _fallback_salience_scorer(self, features_list: List[dict]) -> List[float]:
         """Fallback salience scorer when ML service is unavailable."""
         scores = []
         for features in features_list:
             # Simple heuristic-based scoring (original method)
-            task_risk = features.get('task_risk', 0.5)
-            failure_severity = features.get('failure_severity', 0.5)
+            task_risk = features.get("task_risk", 0.5)
+            failure_severity = features.get("failure_severity", 0.5)
             score = task_risk * failure_severity
-            
+
             # Add some context from other features
-            agent_capability = features.get('agent_capability', 0.5)
-            system_load = features.get('system_load', 0.5)
-            
+            agent_capability = features.get("agent_capability", 0.5)
+            system_load = features.get("system_load", 0.5)
+
             # Adjust score based on agent capability and system load
-            score *= (1.0 + (1.0 - agent_capability) * 0.2)  # Higher score for lower capability
-            score *= (1.0 + system_load * 0.1)  # Higher score under high load
-            
+            score *= (
+                1.0 + (1.0 - agent_capability) * 0.2
+            )  # Higher score for lower capability
+            score *= 1.0 + system_load * 0.1  # Higher score under high load
+
             scores.append(max(0.0, min(1.0, score)))
-        
+
         return scores
-    
+
     async def start_heartbeat_loop(self, interval_seconds: int = 10):
         """
         Starts a loop to periodically emit heartbeats.
         This runs as a background task within the actor.
-        
+
         Args:
             interval_seconds: Interval between heartbeats
         """
-        logger.info(f"❤️ Agent {self.agent_id} starting heartbeat loop every {interval_seconds}s")
-        
+        logger.info(
+            f"❤️ Agent {self.agent_id} starting heartbeat loop every {interval_seconds}s"
+        )
+
         while True:
             try:
                 heartbeat = await self.get_heartbeat()
                 # In a real system, you would publish this to Redis Pub/Sub
                 # or send it to a central telemetry service
-                logger.info(f"HEARTBEAT from {self.agent_id}: capability={heartbeat['performance_metrics']['capability_score_c']:.3f}")
-                
+                logger.info(
+                    f"HEARTBEAT from {self.agent_id}: capability={heartbeat['performance_metrics']['capability_score_c']:.3f}"
+                )
+
                 # Light-touch hot-item prewarming with rate limiting
                 if self.mw_manager and random.random() < 0.1:
                     # Reset rate limit counter every minute
@@ -1860,20 +1878,26 @@ class RayAgent:
                     if now - self._prewarm_reset_time > 60:
                         self._prewarm_count = 0
                         self._prewarm_reset_time = now
-                    
+
                     # Check rate limit
                     if self._prewarm_count < self._max_prewarm_per_minute:
                         try:
-                            hot_items = await self.mw_manager.get_hot_items_async(top_n=5)
+                            hot_items = await self.mw_manager.get_hot_items_async(
+                                top_n=5
+                            )
                             for item_id, _cnt in hot_items:
                                 # Touch into L0 via get_item_async (promotes if present in L1/L2)
                                 _ = await self.mw_manager.get_item_async(item_id)
                                 self._prewarm_count += 1
                             if hot_items:
-                                logger.debug(f"[{self.agent_id}] Pre-warmed {len(hot_items)} hot items")
+                                logger.debug(
+                                    f"[{self.agent_id}] Pre-warmed {len(hot_items)} hot items"
+                                )
                         except Exception as e:
-                            logger.debug(f"[{self.agent_id}] Hot-item prewarming failed: {e}")
-                
+                            logger.debug(
+                                f"[{self.agent_id}] Hot-item prewarming failed: {e}"
+                            )
+
                 # Log cache telemetry every 10th heartbeat
                 if self.mw_manager and self.tasks_processed % 10 == 0:
                     try:
@@ -1881,7 +1905,7 @@ class RayAgent:
                         logger.info(f"[{self.agent_id}] Cache telemetry: {telemetry}")
                     except Exception as e:
                         logger.debug(f"[{self.agent_id}] Telemetry logging failed: {e}")
-                
+
                 await asyncio.sleep(interval_seconds)
             except Exception as e:
                 logger.error(f"Error in heartbeat loop for {self.agent_id}: {e}")
@@ -1917,10 +1941,10 @@ class RayAgent:
         """Start the agent with all background services."""
         # Start the existing heartbeat loop
         await self.start_heartbeat_loop()
-        
+
         # Start registry reporting if enabled
         await self._start_registry_reporting()
-    
+
     def reset_metrics(self):
         """Reset all performance metrics (for testing/debugging)."""
         self.tasks_processed = 0
@@ -1929,30 +1953,34 @@ class RayAgent:
         self.task_history.clear()
         self.capability_score = 0.5
         self.mem_util = 0.0
+        try:
+            self.state.reset_rolling()
+        except Exception:
+            pass
         self.memory_writes = 0
         self.memory_hits_on_writes = 0
         self.salient_events_logged = 0
         self.total_compression_gain = 0.0
         self.skill_deltas.clear()
         self.peer_interactions.clear()
-        
+
         # Rate limiting for prewarm
         self._prewarm_count = 0
         self._prewarm_reset_time = time.time()
         self._max_prewarm_per_minute = 10
         logger.info(f"🔄 Agent {self.agent_id} metrics reset")
-    
+
     # =============================================================================
     # Cognitive Reasoning Methods
     # =============================================================================
-    
+
     async def reason_about_failure(self, incident_id: str) -> Dict[str, Any]:
         """
         Analyze agent failures using cognitive reasoning.
-        
+
         Args:
             incident_id: ID of the incident to analyze
-            
+
         Returns:
             Dictionary containing analysis results
         """
@@ -1966,7 +1994,7 @@ class RayAgent:
             incident_context_dict = self.mfb_client.get_incident(incident_id)
             if not incident_context_dict:
                 return {"success": False, "reason": "Incident not found."}
-            
+
             # Call cognitive service via HTTP client
             resp = await self._cog.reason_about_failure(
                 agent_id=self.agent_id,
@@ -1975,15 +2003,17 @@ class RayAgent:
             )
             norm = self._normalize_cog_resp(resp)
             payload = norm["payload"]
-            
+
             # Calculate energy cost for reasoning
             reg_delta = 0.01 * len(str(payload.get("thought", "")))
-            
+
             # Update energy state
             current_energy = self.get_energy_state()
-            current_energy["cognitive_cost"] = current_energy.get("cognitive_cost", 0.0) + reg_delta
+            current_energy["cognitive_cost"] = (
+                current_energy.get("cognitive_cost", 0.0) + reg_delta
+            )
             self.update_energy_state(current_energy)
-            
+
             return {
                 "success": True,
                 "agent_id": self.agent_id,
@@ -1995,71 +2025,26 @@ class RayAgent:
                 "meta": norm["meta"],
                 "error": norm["error"],
             }
-            
+
         except Exception as e:
             logger.error(f"Error in failure reasoning for agent {self.agent_id}: {e}")
             return {
                 "success": False,
                 "agent_id": self.agent_id,
                 "incident_id": incident_id,
-                "error": str(e)
+                "error": str(e),
             }
-    
-    async def plan_complex_task(self, task_description: str, available_resources: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Plan complex tasks using cognitive reasoning.
-        
-        Args:
-            task_description: Description of the task to plan
-            available_resources: Available resources and constraints
-            
-        Returns:
-            Dictionary containing task plan
-        """
-        if not self._cog:
-            return {"success": False, "reason": "Cognitive service not available."}
 
-        try:
-            # Call cognitive service via HTTP client using plan() method
-            # Note: plan() expects current_capabilities as a string (summarized format)
-            resp = await self._cog.plan(
-                agent_id=self.agent_id,
-                task_description=task_description,
-                current_capabilities=self._summarize_agent_capabilities(),  # Convert dict to string format
-                available_tools=available_resources or {},
-                profile="deep"  # LLM profile only
-            )
-            norm = self._normalize_cog_resp(resp)
-            payload = norm["payload"]
-            
-            return {
-                "success": True,
-                "agent_id": self.agent_id,
-                "task_description": task_description,
-                "step_by_step_plan": payload.get("step_by_step_plan", ""),
-                "estimated_complexity": payload.get("estimated_complexity", ""),
-                "risk_assessment": payload.get("risk_assessment", ""),
-                "meta": norm["meta"],
-                "error": norm["error"],
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in task planning for agent {self.agent_id}: {e}")
-            return {
-                "success": False,
-                "agent_id": self.agent_id,
-                "task_description": task_description,
-                "error": str(e)
-            }
-    
-    async def make_decision(self, decision_context: Dict[str, Any], historical_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def make_decision(
+        self, decision_context: Dict[str, Any], historical_data: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """
         Make decisions using cognitive reasoning.
-        
+
         Args:
             decision_context: Context for the decision
             historical_data: Historical data to inform the decision
-            
+
         Returns:
             Dictionary containing decision results
         """
@@ -2072,11 +2057,11 @@ class RayAgent:
                 agent_id=self.agent_id,
                 decision_context=decision_context,
                 historical_data=historical_data or {},
-                knowledge_context=self._get_memory_context()
+                knowledge_context=self._get_memory_context(),
             )
             norm = self._normalize_cog_resp(resp)
             payload = norm["payload"]
-            
+
             return {
                 "success": True,
                 "agent_id": self.agent_id,
@@ -2085,25 +2070,23 @@ class RayAgent:
                 "confidence": payload.get("confidence", 0.0),
                 "meta": norm["meta"],
                 "error": norm["error"],
-                "alternative_options": payload.get("alternative_options", "")
+                "alternative_options": payload.get("alternative_options", ""),
             }
-            
+
         except Exception as e:
             logger.error(f"Error in decision making for agent {self.agent_id}: {e}")
-            return {
-                "success": False,
-                "agent_id": self.agent_id,
-                "error": str(e)
-            }
-    
-    async def synthesize_memory(self, memory_fragments: List[Dict[str, Any]], synthesis_goal: str) -> Dict[str, Any]:
+            return {"success": False, "agent_id": self.agent_id, "error": str(e)}
+
+    async def synthesize_memory(
+        self, memory_fragments: List[Dict[str, Any]], synthesis_goal: str
+    ) -> Dict[str, Any]:
         """
         Synthesize information from multiple memory sources.
-        
+
         Args:
             memory_fragments: List of memory fragments to synthesize
             synthesis_goal: Goal of the synthesis
-            
+
         Returns:
             Dictionary containing synthesis results
         """
@@ -2115,11 +2098,11 @@ class RayAgent:
             resp = await self._cog.synthesize_memory(
                 agent_id=self.agent_id,
                 memory_fragments=memory_fragments,
-                synthesis_goal=synthesis_goal
+                synthesis_goal=synthesis_goal,
             )
             norm = self._normalize_cog_resp(resp)
             payload = norm["payload"]
-            
+
             return {
                 "success": True,
                 "agent_id": self.agent_id,
@@ -2129,22 +2112,20 @@ class RayAgent:
                 "meta": norm["meta"],
                 "error": norm["error"],
             }
-            
+
         except Exception as e:
             logger.error(f"Error in memory synthesis for agent {self.agent_id}: {e}")
-            return {
-                "success": False,
-                "agent_id": self.agent_id,
-                "error": str(e)
-            }
-    
-    async def assess_capabilities(self, target_capabilities: Dict[str, Any] = None) -> Dict[str, Any]:
+            return {"success": False, "agent_id": self.agent_id, "error": str(e)}
+
+    async def assess_capabilities(
+        self, target_capabilities: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """
         Assess agent capabilities and suggest improvements.
-        
+
         Args:
             target_capabilities: Target capabilities to assess against
-            
+
         Returns:
             Dictionary containing assessment results
         """
@@ -2157,11 +2138,11 @@ class RayAgent:
                 agent_id=self.agent_id,
                 performance_data=self._get_performance_data(),
                 current_capabilities=self._get_agent_capabilities(),
-                target_capabilities=target_capabilities or {}
+                target_capabilities=target_capabilities or {},
             )
             norm = self._normalize_cog_resp(resp)
             payload = norm["payload"]
-            
+
             return {
                 "success": True,
                 "agent_id": self.agent_id,
@@ -2171,19 +2152,17 @@ class RayAgent:
                 "meta": norm["meta"],
                 "error": norm["error"],
             }
-            
+
         except Exception as e:
-            logger.error(f"Error in capability assessment for agent {self.agent_id}: {e}")
-            return {
-                "success": False,
-                "agent_id": self.agent_id,
-                "error": str(e)
-            }
-    
+            logger.error(
+                f"Error in capability assessment for agent {self.agent_id}: {e}"
+            )
+            return {"success": False, "agent_id": self.agent_id, "error": str(e)}
+
     # =============================================================================
     # Helper Methods for Cognitive Context
     # =============================================================================
-    
+
     def _get_memory_context(self) -> Dict[str, Any]:
         """Get memory context for cognitive tasks."""
         return {
@@ -2191,9 +2170,9 @@ class RayAgent:
             "memory_writes": self.memory_writes,
             "memory_hits": self.memory_hits_on_writes,
             "compression_gain": self.total_compression_gain,
-            "skill_deltas": self.skill_deltas.copy()
+            "skill_deltas": self.skill_deltas.copy(),
         }
-    
+
     def _get_lifecycle_context(self) -> Dict[str, Any]:
         """Get lifecycle context for cognitive tasks."""
         return {
@@ -2203,9 +2182,9 @@ class RayAgent:
             "capability_score": self.capability_score,
             "role_probabilities": self.role_probs.copy(),
             "tasks_processed": self.tasks_processed,
-            "successful_tasks": self.successful_tasks
+            "successful_tasks": self.successful_tasks,
         }
-    
+
     def _get_agent_capabilities(self) -> Dict[str, Any]:
         """Get current agent capabilities."""
         return {
@@ -2215,8 +2194,10 @@ class RayAgent:
             "performance_history": {
                 "tasks_processed": self.tasks_processed,
                 "successful_tasks": self.successful_tasks,
-                "avg_quality": sum(self.quality_scores) / len(self.quality_scores) if self.quality_scores else 0.0
-            }
+                "avg_quality": sum(self.quality_scores) / len(self.quality_scores)
+                if self.quality_scores
+                else 0.0,
+            },
         }
 
     def _summarize_agent_capabilities(self) -> str:
@@ -2232,7 +2213,7 @@ class RayAgent:
         for key, value in caps.items():
             lines.append(f"- {key}: {value}")
         return "\n".join(lines)
-    
+
     def _get_performance_data(self) -> Dict[str, Any]:
         """Get performance data for capability assessment."""
         return {
@@ -2241,5 +2222,5 @@ class RayAgent:
             "quality_scores": self.quality_scores.copy(),
             "capability_score": self.capability_score,
             "memory_utilization": self.mem_util,
-            "peer_interactions": self.peer_interactions.copy()
-        } 
+            "peer_interactions": self.peer_interactions.copy(),
+        }

@@ -9,24 +9,17 @@ the Coordinator service from src.seedcore.services.coordinator_service.
 
 import os
 import sys
-import logging
-from typing import Dict, Any
-
-import ray
-from ray import serve
 
 # Add the project root to Python path
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
 
-from seedcore.logging_setup import setup_logging
-setup_logging(app_name="seedcore.coordinator")
-logger = logging.getLogger("seedcore.coordinator")
-
-from seedcore.utils.ray_utils import ensure_ray_initialized
-
-# Import the Coordinator service
 from seedcore.services.coordinator_service import coordinator_deployment
+
+from seedcore.logging_setup import ensure_serve_logger, setup_logging
+
+setup_logging(app_name="seedcore.coordinator_service.driver")
+logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
 
 # --- Configuration ---
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
@@ -46,10 +39,12 @@ def build_coordinator(args: dict = None):
         "SERVE_GATEWAY": os.getenv("SERVE_GATEWAY", "http://seedcore-svc-stable-svc:8000"),
         "SEEDCORE_API_URL": os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002"),
         "SEEDCORE_API_TIMEOUT": os.getenv("SEEDCORE_API_TIMEOUT", "5.0"),
-        "ORCH_HTTP_TIMEOUT": os.getenv("ORCH_HTTP_TIMEOUT", "15"),
-        "ML_SERVICE_TIMEOUT": os.getenv("ML_SERVICE_TIMEOUT", "10"),
-        "COGNITIVE_SERVICE_TIMEOUT": os.getenv("COGNITIVE_SERVICE_TIMEOUT", "20"),
-        "ORGANISM_SERVICE_TIMEOUT": os.getenv("ORGANISM_SERVICE_TIMEOUT", "8"),
+        "ORCH_HTTP_TIMEOUT": os.getenv("ORCH_HTTP_TIMEOUT", "10.0"),
+        "ML_SERVICE_TIMEOUT": os.getenv("ML_SERVICE_TIMEOUT", "8.0"),
+        "COGNITIVE_SERVICE_TIMEOUT": os.getenv("COGNITIVE_SERVICE_TIMEOUT", "15.0"),
+        "ORGANISM_SERVICE_TIMEOUT": os.getenv("ORGANISM_SERVICE_TIMEOUT", "5.0"),
+        "SERVE_CALL_TIMEOUT_S": os.getenv("SERVE_CALL_TIMEOUT_S", "120"),
+        "REDIS_URL": os.getenv("REDIS_URL", "redis://localhost:6379"),
         # Circuit breaker timeouts
         "CB_ML_TIMEOUT_S": os.getenv("CB_ML_TIMEOUT_S", "5.0"),
         "CB_COG_TIMEOUT_S": os.getenv("CB_COG_TIMEOUT_S", "8.0"),
@@ -75,5 +70,5 @@ def build_coordinator(args: dict = None):
 if __name__ == "__main__":
     # This allows the entrypoint to be run directly for testing
     from src.seedcore.services.coordinator_service import app
-    import uvicorn
+    import uvicorn  # type: ignore[reportMissingImports]
     uvicorn.run(app, host="0.0.0.0", port=8000)

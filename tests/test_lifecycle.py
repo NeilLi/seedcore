@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from seedcore.agents.base import Agent
+from seedcore.agents.base import BaseAgent
 from seedcore.agents.lifecycle import evaluate_lifecycle
+from seedcore.tools.manager import ToolManager
 
 def test_lifecycle_call():
-    a = Agent('a1', capability=0.8, mem_util=0.6)
+    a = BaseAgent('a1', tool_manager=ToolManager(), initial_capability=0.8, initial_mem_util=0.6)
+    a.capability = 0.8
+    a.mem_util = 0.6
     evaluate_lifecycle(a)  # should not raise

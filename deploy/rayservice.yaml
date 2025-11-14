@@ -6,7 +6,7 @@ metadata:
 spec:
   # ===================================================================
   #  Serve Configuration
-  # ===================================================================  
+  # ===================================================================
   serveConfigV2: |
     http_options:
       host: 0.0.0.0
@@ -87,7 +87,7 @@ spec:
         import_path: entrypoints.organism_entrypoint:build_organism_app
         route_prefix: /organism
         deployments:
-          - name: OrganismManager
+          - name: OrganismService
             num_replicas: 1
             ray_actor_options:
               num_cpus: 0.3
@@ -118,190 +118,215 @@ spec:
       template:
         spec:
           containers:
-          - name: ray-head
-            image: seedcore:latest
-            imagePullPolicy: IfNotPresent
-            envFrom:
-            - secretRef: { name: seedcore-env-secret }
-            env:
-            - name: POD_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-            - name: SERVE_SERVICE
-              value: "stable"
-            - name: DGL_GRAPHBOLT_SKIP
-              value: "0"
-            - name: RAY_OVERRIDE_RESOURCES
-              value: '{"head_node": 1}'
-            - name: RAY_NAMESPACE
-              value: "seedcore-dev"
-            - name: SEEDCORE_NS
-              value: "seedcore-dev"
-            - name: XGB_STORAGE_PATH
-              value: "/app/data/models"
-            # ✅ Routing environment variables for coordinator access
-            - name: OCPS_DRIFT_THRESHOLD
-              value: "0.5"
-            - name: COGNITIVE_TIMEOUT_S
-              value: "8.0"
-            - name: COGNITIVE_MAX_INFLIGHT
-              value: "64"
-            - name: FAST_PATH_LATENCY_SLO_MS
-              value: "1000"
-            - name: MAX_PLAN_STEPS
-              value: "16"
-            - name: DSP_LOG_TO_FILE
-              value: "false"
-            - name: DSP_LOG_TO_STDOUT
-              value: "true"
-            - name: DSP_LOG_PATH
-              value: "/tmp/azure_openai_usage.log"
-            - name: LOG_TO_FILE
-              value: "false"
-            - name: LOG_TO_STDOUT
-              value: "true"
-            - name: LOG_LEVEL
-              value: "INFO"
-            - name: LLM_PROVIDER
-              value: "mlservice"
-            ports:
-              - name: gcs
-                containerPort: 6379
-              - name: dashboard
-                containerPort: 8265
-              - name: client
-                containerPort: 10001
-              # ✅ FIX: Updated the containerPort to match the new httpOptions port.
-              - name: serve
-                containerPort: 8000
-              - name: metrics
-                containerPort: 8080
-            resources:
-              requests:
-                cpu: "500m"
-                memory: "4Gi"
-              limits:
-                cpu: "2"
-                memory: "8Gi"
-            volumeMounts:
-              - name: xgb-model-storage
-                mountPath: /app/data
-              #- name: project-src
-              #  mountPath: /app
-            # Probes are good practice for production readiness.
-            startupProbe:
-              exec:
-                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
-              periodSeconds: 5
-              timeoutSeconds: 3
-              failureThreshold: 72
-            readinessProbe:
-              exec:
-                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
-              periodSeconds: 5
-              timeoutSeconds: 2
-              failureThreshold: 3
-            livenessProbe:
-              exec:
-                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
-              periodSeconds: 5
-              timeoutSeconds: 2
-              failureThreshold: 120
+            - name: ray-head
+              image: seedcore:latest
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - secretRef: { name: seedcore-env-secret }
+              env:
+                - name: POD_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: SERVE_SERVICE
+                  value: "stable"
+                - name: DGL_GRAPHBOLT_SKIP
+                  value: "0"
+                - name: RAY_OVERRIDE_RESOURCES
+                  value: '{"head_node": 1}'
+                - name: RAY_NAMESPACE
+                  value: "seedcore-dev"
+                - name: SEEDCORE_NS
+                  value: "seedcore-dev"
+                - name: XGB_STORAGE_PATH
+                  value: "/app/data/models"
+                # ✅ Routing environment variables for coordinator access
+                - name: OCPS_DRIFT_THRESHOLD
+                  value: "0.5"
+                - name: COGNITIVE_TIMEOUT_S
+                  value: "8.0"
+                - name: COGNITIVE_MAX_INFLIGHT
+                  value: "64"
+                - name: FAST_PATH_LATENCY_SLO_MS
+                  value: "1000"
+                - name: MAX_PLAN_STEPS
+                  value: "16"
+                - name: DSP_LOG_TO_FILE
+                  value: "false"
+                - name: DSP_LOG_TO_STDOUT
+                  value: "true"
+                - name: DSP_LOG_PATH
+                  value: "/tmp/azure_openai_usage.log"
+                - name: LOG_TO_FILE
+                  value: "false"
+                - name: LOG_TO_STDOUT
+                  value: "true"
+                - name: LOG_LEVEL
+                  value: "INFO"
+                - name: LLM_PROVIDER
+                  value: "mlservice"
+              ports:
+                - name: gcs
+                  containerPort: 6379
+                - name: dashboard
+                  containerPort: 8265
+                - name: client
+                  containerPort: 10001
+                # ✅ FIX: Updated the containerPort to match the new httpOptions port.
+                - name: serve
+                  containerPort: 8000
+                - name: metrics
+                  containerPort: 8080
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "4Gi"
+                limits:
+                  cpu: "2"
+                  memory: "8Gi"
+              volumeMounts:
+                - name: xgb-model-storage
+                  mountPath: /app/data
+                - name: project-src
+                  mountPath: /app
+              # Probes are good practice for production readiness.
+              startupProbe:
+                exec:
+                  command:
+                    [
+                      "bash",
+                      "-lc",
+                      "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
+                    ]
+                periodSeconds: 5
+                timeoutSeconds: 3
+                failureThreshold: 72
+              readinessProbe:
+                exec:
+                  command:
+                    [
+                      "bash",
+                      "-lc",
+                      "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
+                    ]
+                periodSeconds: 5
+                timeoutSeconds: 2
+                failureThreshold: 3
+              livenessProbe:
+                exec:
+                  command:
+                    [
+                      "bash",
+                      "-lc",
+                      "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
+                    ]
+                periodSeconds: 5
+                timeoutSeconds: 2
+                failureThreshold: 120
           volumes:
             - name: xgb-model-storage
               persistentVolumeClaim:
                 claimName: xgb-pvc
-            #- name: project-src
-            #  hostPath:
-            #    path: /project
-            #    type: Directory
+            - name: project-src
+              hostPath:
+                path: /project
+                type: Directory
 
     # -------------------------------------------------------------------
     #  Worker Node Specification
     # -------------------------------------------------------------------
     workerGroupSpecs:
-    - groupName: small
-      replicas: 1
-      rayStartParams:
-        num-cpus: "2"
-      template:
-        spec:
-          containers:
-          - name: ray-worker
-            image: seedcore:latest
-            imagePullPolicy: IfNotPresent
-            envFrom:
-            - secretRef: { name: seedcore-env-secret }
-            env:
-            - name: POD_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-            - name: SERVE_SERVICE
-              value: "stable"
-            - name: DGL_GRAPHBOLT_SKIP
-              value: "0"
-            - name: RAY_NAMESPACE
-              value: "seedcore-dev"
-            - name: SEEDCORE_NS
-              value: "seedcore-dev"
-            - name: XGB_STORAGE_PATH
-              value: "/app/data/models"
-            # ✅ Routing environment variables for coordinator access
-            - name: OCPS_DRIFT_THRESHOLD
-              value: "0.5"
-            - name: COGNITIVE_TIMEOUT_S
-              value: "8.0"
-            - name: COGNITIVE_MAX_INFLIGHT
-              value: "64"
-            - name: FAST_PATH_LATENCY_SLO_MS
-              value: "1000"
-            - name: MAX_PLAN_STEPS
-              value: "16"
-            - name: DSP_LOG_TO_FILE
-              value: "false"
-            - name: DSP_LOG_TO_STDOUT
-              value: "true"
-            - name: DSP_LOG_PATH
-              value: "/tmp/azure_openai_usage.log"
-            - name: LOG_TO_FILE
-              value: "false"
-            - name: LOG_TO_STDOUT
-              value: "true"
-            - name: LOG_LEVEL
-              value: "INFO"
-            - name: LLM_PROVIDER
-              value: "mlservice"
-            resources:
-              requests:
-                cpu: "500m"
-                memory: "4Gi"
-              limits:
-                cpu: "2"
-                memory: "8Gi"
-            volumeMounts:
+      - groupName: small
+        replicas: 1
+        rayStartParams:
+          num-cpus: "2"
+        template:
+          spec:
+            containers:
+              - name: ray-worker
+                image: seedcore:latest
+                imagePullPolicy: IfNotPresent
+                envFrom:
+                  - secretRef: { name: seedcore-env-secret }
+                env:
+                  - name: POD_NAMESPACE
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.namespace
+                  - name: SERVE_SERVICE
+                    value: "stable"
+                  - name: DGL_GRAPHBOLT_SKIP
+                    value: "0"
+                  - name: RAY_NAMESPACE
+                    value: "seedcore-dev"
+                  - name: SEEDCORE_NS
+                    value: "seedcore-dev"
+                  - name: XGB_STORAGE_PATH
+                    value: "/app/data/models"
+                  # ✅ Routing environment variables for coordinator access
+                  - name: OCPS_DRIFT_THRESHOLD
+                    value: "0.5"
+                  - name: COGNITIVE_TIMEOUT_S
+                    value: "8.0"
+                  - name: COGNITIVE_MAX_INFLIGHT
+                    value: "64"
+                  - name: FAST_PATH_LATENCY_SLO_MS
+                    value: "1000"
+                  - name: MAX_PLAN_STEPS
+                    value: "16"
+                  - name: DSP_LOG_TO_FILE
+                    value: "false"
+                  - name: DSP_LOG_TO_STDOUT
+                    value: "true"
+                  - name: DSP_LOG_PATH
+                    value: "/tmp/azure_openai_usage.log"
+                  - name: LOG_TO_FILE
+                    value: "false"
+                  - name: LOG_TO_STDOUT
+                    value: "true"
+                  - name: LOG_LEVEL
+                    value: "INFO"
+                  - name: LLM_PROVIDER
+                    value: "mlservice"
+                resources:
+                  requests:
+                    cpu: "500m"
+                    memory: "4Gi"
+                  limits:
+                    cpu: "2"
+                    memory: "8Gi"
+                volumeMounts:
+                  - name: xgb-model-storage
+                    mountPath: /app/data
+                  - name: project-src
+                    mountPath: /app
+                readinessProbe:
+                  exec:
+                    command:
+                      [
+                        "bash",
+                        "-lc",
+                        "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
+                      ]
+                  periodSeconds: 5
+                  timeoutSeconds: 2
+                  failureThreshold: 3
+                livenessProbe:
+                  exec:
+                    command:
+                      [
+                        "bash",
+                        "-lc",
+                        "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
+                      ]
+                  periodSeconds: 5
+                  timeoutSeconds: 2
+                  failureThreshold: 120
+            volumes:
               - name: xgb-model-storage
-                mountPath: /app/data
-              #- name: project-src
-              #  mountPath: /app
-            readinessProbe:
-              exec:
-                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
-              periodSeconds: 5
-              timeoutSeconds: 2
-              failureThreshold: 3
-            livenessProbe:
-              exec:
-                command: ["bash", "-lc", "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success"]
-              periodSeconds: 5
-              timeoutSeconds: 2
-              failureThreshold: 120
-          volumes:
-            - name: xgb-model-storage
-              persistentVolumeClaim:
-                claimName: xgb-pvc
-            #- name: project-src
-            #  hostPath:
-            #    path: /project
-            #    type: Directory
+                persistentVolumeClaim:
+                  claimName: xgb-pvc
+              - name: project-src
+                hostPath:
+                  path: /project
+                  type: Directory

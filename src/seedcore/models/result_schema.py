@@ -10,7 +10,8 @@ import ast
 from typing import Any, Dict, List, Optional, Union, Literal
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator, model_validator
-from enum import Enum
+
+from .cognitive import DecisionKind
 
 # Flexible JSON value type that supports lists, dicts, and scalars
 JSONValue = Union[None, bool, int, float, str, Dict[str, Any], List[Any]]
@@ -28,14 +29,6 @@ def _maybe_parse_str(value: Any) -> Any:
             except Exception:
                 return value
     return value
-
-
-class ResultKind(str, Enum):
-    """Type of result processing path."""
-    FAST_PATH = "fast_path"
-    ESCALATED = "escalated"
-    COGNITIVE = "cognitive"
-    ERROR = "error"
 
 
 class TaskStep(BaseModel):
@@ -108,7 +101,7 @@ class ErrorResult(BaseModel):
 
 class TaskResult(BaseModel):
     """Unified envelope for all task results."""
-    kind: ResultKind = Field(..., description="Type of result processing path")
+    kind: DecisionKind = Field(..., description="Type of result processing path")
     success: bool = Field(..., description="Whether the overall task succeeded")
     payload: Union[FastPathResult, EscalatedResult, CognitiveResult, ErrorResult] = Field(
         ..., description="The actual result payload"
@@ -123,7 +116,7 @@ class TaskResult(BaseModel):
     @model_validator(mode="after")
     def _sync_success(self):
         """Compute success for escalated results based on step successes."""
-        if self.kind == ResultKind.ESCALATED and isinstance(self.payload, EscalatedResult):
+        if self.kind == DecisionKind.ESCALATED and isinstance(self.payload, EscalatedResult):
             self.success = all(step.success for step in self.payload.solution_steps)
         return self
 
@@ -136,7 +129,25 @@ def create_fast_path_result(
     processing_time_ms: Optional[float] = None,
     **metadata
 ) -> TaskResult:
-    """Create a fast path result."""
+    """
+    Create a fast path result for Coordinator routing.
+    
+    CoordinatorHttpRouter checks kind == DecisionKind.FAST_PATH.value ("fast")
+    and then delegates task_data to OrganismRouter for execution.
+    
+    The organ_id indicates the target organ where the task should be routed.
+    This result is returned as a routing decision; actual execution happens downstream.
+    
+    Args:
+        routed_to: Organ that processed the task (e.g., "random", "hotel_ops", "organism")
+        organ_id: ID of the organ that handled the task (e.g., "random", "hotel_ops")
+        result: Result payload (typically {"status": "routed"} for routing decisions)
+        processing_time_ms: Optional processing time in milliseconds
+        **metadata: Additional metadata (decision, surprise, proto_plan, etc.)
+    
+    Returns:
+        TaskResult with kind=DecisionKind.FAST_PATH suitable for router delegation
+    """
     fast_path = FastPathResult(
         routed_to=routed_to,
         organ_id=organ_id,
@@ -146,7 +157,7 @@ def create_fast_path_result(
     )
     
     return TaskResult(
-        kind=ResultKind.FAST_PATH,
+        kind=DecisionKind.FAST_PATH,
         success=True,
         payload=fast_path,
         metadata={"path": "direct_routing"}
@@ -170,7 +181,7 @@ def create_escalated_result(
     )
     
     return TaskResult(
-        kind=ResultKind.ESCALATED,
+        kind=DecisionKind.ESCALATED,
         success=True,
         payload=escalated,
         metadata={
@@ -188,7 +199,33 @@ def create_cognitive_result(
     confidence_score: Optional[float] = None,
     **metadata
 ) -> TaskResult:
-    """Create a cognitive reasoning result."""
+    """
+    Create a cognitive reasoning result for Coordinator routing.
+    
+    CoordinatorHttpRouter checks kind == DecisionKind.COGNITIVE.value ("cognitive")
+    and then delegates to CognitiveRouter with both task_data and execute_result.
+    
+    CognitiveRouter extracts proto_plan from:
+      - prior_result["payload"]["result"]["proto_plan"] (primary)
+      - prior_result["payload"]["metadata"]["proto_plan"] (fallback)
+      - task_data["proto_plan"] (fallback)
+    
+    The result field should contain {"proto_plan": <proto_plan_dict>} to seed
+    the cognitive planner with Coordinator's initial analysis.
+    
+    Args:
+        agent_id: Agent ID for cognitive processing (e.g., "planner")
+        task_type: Actual task type being processed (e.g., "ping", "general_query", "execute",
+                   "fact_search", "unknown_task", etc.). Should NOT be routing metadata like
+                   "planner" or "fast" - those are routing decisions, not task types.
+        result: Result payload containing proto_plan and other hints
+                Expected shape: {"proto_plan": {...}, ...}
+        confidence_score: Optional confidence score
+        **metadata: Additional metadata (decision, surprise, etc.)
+    
+    Returns:
+        TaskResult with kind=DecisionKind.COGNITIVE suitable for router escalation
+    """
     cognitive = CognitiveResult(
         agent_id=agent_id,
         task_type=task_type,
@@ -198,7 +235,7 @@ def create_cognitive_result(
     )
     
     return TaskResult(
-        kind=ResultKind.COGNITIVE,
+        kind=DecisionKind.COGNITIVE,
         success=True,
         payload=cognitive,
         metadata={"path": "cognitive_reasoning"}
@@ -220,7 +257,7 @@ def create_error_result(
     )
     
     return TaskResult(
-        kind=ResultKind.ERROR,
+        kind=DecisionKind.ERROR,
         success=False,
         payload=error_result,
         metadata={"path": "error_handling"}

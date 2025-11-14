@@ -4,11 +4,14 @@ from typing import Any, Dict, List, Optional
 import uuid
 
 
+# ---------- API models ----------
+# Task model is now imported from centralized models
+
 class AnomalyTriageRequest(BaseModel):
     agent_id: str
     series: List[float] = []
     context: Dict[str, Any] = {}
-
+    # Note: drift_score is now computed dynamically via ML service
 
 class AnomalyTriageResponse(BaseModel):
     agent_id: str
@@ -19,7 +22,6 @@ class AnomalyTriageResponse(BaseModel):
     p_fast: float
     escalated: bool
     tuning_job: Optional[Dict[str, Any]] = None
-
 
 class TuneCallbackRequest(BaseModel):
     job_id: str

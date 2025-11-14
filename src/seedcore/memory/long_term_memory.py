@@ -16,7 +16,7 @@ class LongTermMemoryManager:
         start_time = time.time()
         
         self.pg_store = PgVectorStore(
-            os.getenv("PG_DSN", "postgresql://postgres:CHANGE_ME@postgresql:5432/postgres"),
+            os.getenv("PG_DSN", "postgresql://postgres:password@postgresql:5432/seedcore"),
             pool_size=10
         )
         

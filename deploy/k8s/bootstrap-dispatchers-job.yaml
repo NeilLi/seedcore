@@ -19,81 +19,81 @@ spec:
       serviceAccountName: seedcore-service-account
       restartPolicy: Never
       containers:
-      - name: bootstrap-dispatchers
-        image: seedcore:latest
-        imagePullPolicy: IfNotPresent
-        command: ["python", "/app/bootstraps/bootstrap_entry.py"]
-        #volumeMounts:
-        #- name: project-src
-        #  mountPath: /app
-        env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        - name: SERVE_SERVICE
-          value: "stable"
-        # Tell the entrypoint to only init dispatchers and exit
-        - name: BOOTSTRAP_MODE
-          value: "dispatchers"
-        - name: EXIT_AFTER_BOOTSTRAP
-          value: "true"
+        - name: bootstrap-dispatchers
+          image: seedcore:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/app/bootstraps/bootstrap_entry.py"]
+          volumeMounts:
+            - name: project-src
+              mountPath: /app
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVE_SERVICE
+              value: "stable"
+            # Tell the entrypoint to only init dispatchers and exit
+            - name: BOOTSTRAP_MODE
+              value: "dispatchers"
+            - name: EXIT_AFTER_BOOTSTRAP
+              value: "true"
 
-        # Dispatcher bring-up options
-        - name: FORCE_REPLACE_DISPATCHERS
-          value: "true"
-        - name: DISPATCHER_COUNT          # init_dispatchers.py also accepts SEEDCORE_DISPATCHERS
-          value: "2"
-        - name: SEEDCORE_GRAPH_DISPATCHERS
-          value: "1"
-        - name: DGLBACKEND
-          value: "pytorch"
+            # Dispatcher bring-up options
+            - name: FORCE_REPLACE_DISPATCHERS
+              value: "true"
+            - name: DISPATCHER_COUNT # init_dispatchers.py also accepts SEEDCORE_DISPATCHERS
+              value: "2"
+            - name: SEEDCORE_GRAPH_DISPATCHERS
+              value: "1"
+            - name: DGLBACKEND
+              value: "pytorch"
 
-        # Ray connectivity
-        - name: RAY_ADDRESS
-          value: "ray://seedcore-svc-head-svc:10001"
-        - name: RAY_NAMESPACE
-          value: "seedcore-dev"
-        - name: SEEDCORE_NS
-          value: "seedcore-dev"
-        - name: RUNNING_IN_CLUSTER
-          value: "1"
+            # Ray connectivity
+            - name: RAY_ADDRESS
+              value: "ray://seedcore-svc-head-svc:10001"
+            - name: RAY_NAMESPACE
+              value: "seedcore-dev"
+            - name: SEEDCORE_NS
+              value: "seedcore-dev"
+            - name: RUNNING_IN_CLUSTER
+              value: "1"
 
-        # Database for dispatchers/reaper/graph-dispatchers
-        - name: SEEDCORE_PG_DSN
-          value: "postgresql://postgres:postgres@postgresql.seedcore-dev.svc.cluster.local:5432/seedcore"
+            # Database for dispatchers/reaper/graph-dispatchers
+            - name: SEEDCORE_PG_DSN
+              value: "postgresql://postgres:postgres@postgresql.seedcore-dev.svc.cluster.local:5432/seedcore"
 
-        # Optional tuning passed into actors
-        - name: OCPS_DRIFT_THRESHOLD
-          value: "0.5"
-        - name: COGNITIVE_TIMEOUT_S
-          value: "8.0"
-        - name: COGNITIVE_MAX_INFLIGHT
-          value: "64"
-        - name: FAST_PATH_LATENCY_SLO_MS
-          value: "1000"
-        - name: MAX_PLAN_STEPS
-          value: "16"
+            # Optional tuning passed into actors
+            - name: OCPS_DRIFT_THRESHOLD
+              value: "0.5"
+            - name: COGNITIVE_TIMEOUT_S
+              value: "8.0"
+            - name: COGNITIVE_MAX_INFLIGHT
+              value: "64"
+            - name: FAST_PATH_LATENCY_SLO_MS
+              value: "1000"
+            - name: MAX_PLAN_STEPS
+              value: "16"
 
-        # NIM Retrieval configuration (Migration 017)
-        - name: NIM_RETRIEVAL_MODEL
-          value: "nvidia/nv-embedqa-e5-v5"
-        - name: NIM_RETRIEVAL_BASE_URL
-          value: "http://af3a6a34f659a409584db07209d82853-1298671438.us-east-1.elb.amazonaws.com/v1"
-        - name: NIM_RETRIEVAL_API_KEY
-          value: "none"
-        - name: NIM_RETRIEVAL_PROVIDER
-          value: "nim"
+            # NIM Retrieval configuration (Migration 017)
+            - name: NIM_RETRIEVAL_MODEL
+              value: "nvidia/nv-embedqa-e5-v5"
+            - name: NIM_RETRIEVAL_BASE_URL
+              value: "http://af3a6a34f659a409584db07209d82853-1298671438.us-east-1.elb.amazonaws.com/v1"
+            - name: NIM_RETRIEVAL_API_KEY
+              value: "none"
+            - name: NIM_RETRIEVAL_PROVIDER
+              value: "nim"
 
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "512Mi"
-          limits:
-            cpu: "200m"
-            memory: "1Gi"
-      #volumes:
-      #- name: project-src
-      #  hostPath:
-      #    path: /project
-      #    type: Directory
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+            limits:
+              cpu: "200m"
+              memory: "1Gi"
+      volumes:
+        - name: project-src
+          hostPath:
+            path: /project
+            type: Directory

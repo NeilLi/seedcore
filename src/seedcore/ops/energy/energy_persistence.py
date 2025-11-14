@@ -5,7 +5,7 @@ import json
 import logging
 
 # Reuse the existing CheckpointStore pattern (MySQL-backed by default)
-from ...agents.checkpoint_store import CheckpointStoreFactory, CheckpointStore
+from ...agents.checkpoint import CheckpointStoreFactory, CheckpointStore
 
 log = logging.getLogger(__name__)
 

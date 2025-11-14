@@ -2,10 +2,20 @@
 
 import os
 import math
+import time
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Set, Callable, TypedDict, NotRequired
-from dataclasses import dataclass
+import httpx  # pyright: ignore[reportMissingImports]
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Set, Callable, TypedDict
+
+try:  # Python 3.11+
+    from typing import NotRequired  # type: ignore[attr-defined]
+except ImportError:  # Python < 3.11
+    from typing_extensions import NotRequired  # type: ignore[assignment]
+from seedcore.serve.base_client import BaseServiceClient
+from seedcore.models.cognitive import DecisionKind
+
+# Import feature extraction functions and shared types
+from ._features import compute_all_features, OCPSState  # Import from _features to avoid circular dependency
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +53,7 @@ class SurpriseSignals(TypedDict, total=False):
     kappa: float
     criticality: float
 
-@dataclass(slots=True)
-class OCPSState:
-    """Immutable state snapshot of OCPS valve."""
-    S_t: float
-    h: float
-    h_clr: float
-    flag_on: bool
-    drift_score: float
-    mapping: str
+# OCPSState is now imported from _features.py to avoid circular dependencies
 
 
 def _clip01(x: float) -> float:
@@ -134,11 +136,40 @@ def _parse_weights(env_var: str, default=(0.25, 0.20, 0.15, 0.20, 0.10, 0.10)):
 class SurpriseComputer:
     """Computes surprise scores for routing decisions."""
     
-    def __init__(self, weights=None, tau_fast=0.35, tau_plan=0.60):
+    def __init__(
+        self,
+        weights=None,
+        tau_fast=0.35,
+        tau_plan=0.60,
+        normalize_mode: str = "simple"
+    ):
+        """
+        Initialize SurpriseComputer.
+        
+        Args:
+            weights: Optional tuple of 6 weights for x1-x6 features
+            tau_fast: Fast path threshold (default: 0.35)
+            tau_plan: Planner threshold (default: 0.60)
+            normalize_mode: Normalization mode for features - "simple" (clamp) or "softmax" (probabilistic)
+        """
         weights = weights or _parse_weights("SURPRISE_WEIGHTS")
         self.w_hat = _normalize_weights(weights)
         self.tau_fast = _env_float("SURPRISE_TAU_FAST", tau_fast)
         self.tau_plan = _env_float("SURPRISE_TAU_PLAN", tau_plan)
+        
+        # Parse normalize_mode from environment or use provided value
+        env_mode = os.getenv("SURPRISE_NORMALIZE_MODE", "").lower()
+        if env_mode in ("simple", "softmax"):
+            self.normalize_mode = env_mode
+            if normalize_mode != "simple" and normalize_mode != env_mode:
+                logger.info(f"Overriding normalize_mode via env: {normalize_mode} -> {env_mode}")
+        else:
+            self.normalize_mode = normalize_mode
+        
+        # Validate normalize_mode
+        if self.normalize_mode not in ("simple", "softmax"):
+            logger.warning(f"Invalid normalize_mode '{self.normalize_mode}', using 'simple'")
+            self.normalize_mode = "simple"
         
         # Validate weight count matches component count
         if len(self.w_hat) != 6:
@@ -153,114 +184,22 @@ class SurpriseComputer:
         # Check for missing critical signals
         _require_keys(signals, ["mw_hit", "ocps"], "SurpriseComputer.compute")
         
-        def x1(mw_hit):
-            if mw_hit is None:
-                logger.debug("Missing mw_hit signal, using default 0.5")
-                return 0.5
-            try:
-                return _clip01(1.0 - float(mw_hit))
-            except Exception as e:
-                logger.debug("Invalid mw_hit value %r: %s", mw_hit, e)
-                return 0.5
-
-        def x2(ocps, drift_minmax):
-            try:
-                St = float(ocps.get("S_t"))
-                h = float(ocps.get("h"))
-                hclr = float(ocps.get("h_clr", h / 2.0))
-                flag = bool(ocps.get("flag_on", ocps.get("drift_flag", False)))
-                
-                # Validate OCPS parameters
-                h, hclr = _validate_ocps_params(h, hclr)
-                
-                if not flag:
-                    score = _clip01(St / h)
-                    state = OCPSState(S_t=St, h=h, h_clr=hclr, flag_on=flag, drift_score=score, mapping="ocps")
-                    return score, state
-                else:
-                    score = _clip01((St - hclr) / (h - hclr))
-                    state = OCPSState(S_t=St, h=h, h_clr=hclr, flag_on=flag, drift_score=score, mapping="ocps")
-                    return score, state
-            except ValueError as e:
-                logger.warning("OCPS parameter validation failed: %s", e)
-                return 0.5, OCPSState(S_t=0, h=1, h_clr=0, flag_on=False, drift_score=0.5, mapping="validation_error")
-            except Exception as e:
-                logger.debug("OCPS computation failed: %s", e)
-                if not drift_minmax:
-                    return 0.5, OCPSState(S_t=0, h=1, h_clr=0, flag_on=False, drift_score=0.5, mapping="minmax_fallback")
-                drift = ocps.get("drift")
-                if drift is None:
-                    return 0.5, OCPSState(S_t=0, h=1, h_clr=0, flag_on=False, drift_score=0.5, mapping="minmax_fallback")
-                p10, p90 = drift_minmax
-                if p90 <= p10:
-                    return 0.5, OCPSState(S_t=0, h=1, h_clr=0, flag_on=False, drift_score=0.5, mapping="minmax_fallback")
-                try:
-                    score = _clip01((float(drift) - p10) / (p90 - p10))
-                    return score, OCPSState(S_t=0, h=1, h_clr=0, flag_on=False, drift_score=score, mapping="minmax_fallback")
-                except Exception:
-                    return 0.5, OCPSState(S_t=0, h=1, h_clr=0, flag_on=False, drift_score=0.5, mapping="minmax_fallback")
-
-        def x3(ood_dist, ood_to01):
-            if ood_dist is None:
-                logger.debug("Missing ood_dist signal, using default 0.5")
-                return 0.5
-            if ood_to01 is None:
-                return _clip01(float(ood_dist) / 10.0)
-            try:
-                return _clip01(float(ood_to01(float(ood_dist))))
-            except Exception as e:
-                logger.debug("OOD computation failed: %s", e)
-                return 0.5
-
-        def x4(graph_delta, mu_delta):
-            if graph_delta is None or mu_delta is None or mu_delta <= 0:
-                logger.debug("Missing or invalid graph signals, using default 0.5")
-                return 0.5
-            try:
-                return _clip01(float(graph_delta) / float(mu_delta))
-            except Exception as e:
-                logger.debug("Graph delta computation failed: %s", e)
-                return 0.5
-
-        def x5(dep_probs):
-            try:
-                return _normalized_entropy(dep_probs or [])
-            except Exception as e:
-                logger.debug("Dependency entropy computation failed: %s", e)
-                return 0.5
-
-        def x6(est_runtime, SLO, kappa, criticality):
-            c = _clip01(criticality if criticality is not None else 0.5)
-            if est_runtime is None or SLO is None:
-                logger.debug("Missing runtime/SLO signals, using default 0.5")
-                r = 0.5
-            else:
-                k = float(kappa) if (kappa and kappa > 0) else 0.8
-                r = _clip01(float(est_runtime) / max(EPS, float(SLO) * k))
-            return 0.5 * (r + c)
-
-        # Compute component scores
-        x2_result = x2(signals.get("ocps", {}), signals.get("drift_minmax"))
-        x2_score, ocps_state = x2_result
+        # Compute all features using extracted feature functions
+        xs, ocps_state = compute_all_features(signals, normalize_mode=self.normalize_mode)
         
-        xs = (
-            x1(signals.get("mw_hit")),
-            x2_score,
-            x3(signals.get("ood_dist"), signals.get("ood_to01")),
-            x4(signals.get("graph_delta"), signals.get("mu_delta")),
-            x5(signals.get("dep_probs")),
-            x6(signals.get("est_runtime"), signals.get("SLO"), signals.get("kappa"), signals.get("criticality")),
+        # Compute weighted surprise score
+        S = _clip01(sum(w * x for w, x in zip(self.w_hat, xs)))
+        decision_kind = (
+            DecisionKind.FAST_PATH.value
+            if S < self.tau_fast
+            else DecisionKind.COGNITIVE.value
+            if S < self.tau_plan
+            else DecisionKind.ESCALATED.value
         )
         
-        # Ensure all components are clamped
-        xs = tuple(_clip01(x) for x in xs)
-        
-        S = _clip01(sum(w * x for w, x in zip(self.w_hat, xs)))
-        decision = ("fast" if S < self.tau_fast else "planner" if S < self.tau_plan else "hgnn")
-        
-        # Structured logging for decision points
-        logger.info("Surprise computation: S=%.3f, decision=%s, thresholds=(fast=%.3f, plan=%.3f)", 
-                   S, decision, self.tau_fast, self.tau_plan)
+        # Structured logging for decision_kind points
+        logger.info("Surprise computation: S=%.3f, decision_kind=%s, thresholds=(fast=%.3f, plan=%.3f), mode=%s", 
+                   S, decision_kind, self.tau_fast, self.tau_plan, self.normalize_mode)
         logger.debug("Component scores: x1=%.3f, x2=%.3f, x3=%.3f, x4=%.3f, x5=%.3f, x6=%.3f", *xs)
         logger.debug("OCPS state: S_t=%.3f, h=%.3f, h_clr=%.3f, flag_on=%s, mapping=%s",
                     ocps_state.S_t, ocps_state.h, ocps_state.h_clr, ocps_state.flag_on, ocps_state.mapping)
@@ -269,7 +208,8 @@ class SurpriseComputer:
             "S": S, 
             "x": xs, 
             "weights": self.w_hat, 
-            "decision": decision, 
+            "decision_kind": decision_kind,
+            "normalize_mode": self.normalize_mode,
             "ocps": {
                 "S_t": ocps_state.S_t,
                 "h": ocps_state.h,
@@ -358,11 +298,18 @@ class OCPSValve:
         )
 
 
-def _decide_route_with_hysteresis(S: float, last_decision: Optional[str] = None,
-                                 fast_enter: float = 0.35, fast_exit: float = 0.38,
-                                 plan_enter: float = 0.60, plan_exit: float = 0.57) -> str:
+def _decide_route_with_hysteresis(
+    S: float,
+    last_decision: Optional[str] = None,
+    fast_enter: float = 0.35,
+    fast_exit: float = 0.38,
+    plan_enter: float = 0.60,
+    plan_exit: float = 0.57
+) -> str:
     """
-    Route decision with hysteresis to prevent flapping around thresholds.
+    Route decision_kind with hysteresis between fast, planner, and HGNN.
+    
+    Includes optional error fallback for invalid input.
     
     Hysteresis prevents rapid oscillation between routing decisions by using
     different thresholds for entering vs exiting each path:
@@ -373,36 +320,37 @@ def _decide_route_with_hysteresis(S: float, last_decision: Optional[str] = None,
     
     Args:
         S: Surprise score [0, 1]
-        last_decision: Previous decision (for hysteresis)
+        last_decision: Previous decision_kind (for hysteresis)
         fast_enter: Threshold to enter fast path (default: 0.35)
         fast_exit: Threshold to exit fast path (default: 0.38, higher for hysteresis)
         plan_enter: Threshold to enter planner path (default: 0.60)
         plan_exit: Threshold to exit planner path (default: 0.57, lower for hysteresis)
     
     Returns:
-        Decision: 'fast', 'planner', or 'hgnn'
+        decision_kind: 'fast', 'planner', 'hgnn', or 'error' (for invalid input)
     """
-    if last_decision == "fast":
-        if S >= fast_exit:
-            # Allow re-evaluation if we've crossed the exit threshold
-            pass
-        else:
-            return "fast"
-    
-    if last_decision == "hgnn":
-        if S <= plan_exit:
-            # Allow re-evaluation if we've crossed the exit threshold
-            pass
-        else:
-            return "hgnn"
-    
-    # Fresh decision based on current score
+    try:
+        # Clamp to [0, 1] to avoid nonsense inputs
+        S = max(0.0, min(1.0, float(S)))
+    except Exception:
+        return DecisionKind.ERROR.value
+
+    fast_value = DecisionKind.FAST_PATH.value
+    planner_value = DecisionKind.COGNITIVE.value
+    hgnn_value = DecisionKind.ESCALATED.value
+
+    if last_decision == fast_value and S < fast_exit:
+        return fast_value
+    if last_decision == hgnn_value and S > plan_exit:
+        return hgnn_value
+
+    # Fresh decision_kind
     if S < fast_enter:
-        return "fast"
+        return fast_value
     elif S < plan_enter:
-        return "planner"
+        return planner_value
     else:
-        return "hgnn"
+        return hgnn_value
 
 
 def build_proto_subtasks(tags: Set[str], x6: float, criticality: float, force: bool = False) -> Dict[str, Any]:
@@ -544,7 +492,7 @@ def compute_surprise_score(signals: Dict[str, Any]) -> Dict[str, Any]:
         signals: Dictionary of signals for surprise computation
         
     Returns:
-        Dictionary with surprise score, decision, and metadata
+        Dictionary with surprise score, decision_kind, and metadata
     """
     computer = SurpriseComputer()
     return computer.compute(signals)
@@ -573,18 +521,18 @@ def decide_route_with_hysteresis(
     plan_exit: float = 0.57
 ) -> str:
     """
-    Make routing decision with hysteresis to prevent flapping.
+    Make routing decision_kind with hysteresis to prevent flapping.
     
     Args:
         surprise_score: Current surprise score
-        last_decision: Previous routing decision
+        last_decision: Previous routing decision_kind
         fast_enter: Threshold to enter fast path
         fast_exit: Threshold to exit fast path
         plan_enter: Threshold to enter planner path
         plan_exit: Threshold to exit planner path
         
     Returns:
-        Routing decision: 'fast', 'planner', or 'hgnn'
+        Routing decision_kind: 'fast', 'planner', or 'hgnn'
     """
     return _decide_route_with_hysteresis(
         surprise_score, last_decision, fast_enter, fast_exit, plan_enter, plan_exit
@@ -612,144 +560,143 @@ def generate_proto_subtasks(
     return build_proto_subtasks(tags, x6, criticality, force)
 
 
-def compute_fallback_drift_score_or_ml(task: Dict[str, Any], ml_client: Optional[Any] = None) -> float:
+async def compute_drift_score(
+    task: Dict[str, Any],
+    ml_client: Optional[BaseServiceClient] = None,
+    metrics: Optional[Any] = None,
+) -> float:
     """
-    Compute drift score using ML client if available, otherwise fallback.
+    Compute drift score using the ML service drift detector.
+    
+    This function:
+    1. Calls the ML service /drift/score endpoint
+    2. Extracts drift score from the response
+    3. Falls back to a default value if the service is unavailable
+    4. Tracks performance and error metrics for monitoring
     
     Args:
-        task: Task dictionary
-        ml_client: Optional ML client for drift scoring (must implement .score(task)->float)
+        task: Task dictionary with task metadata
+        ml_client: Optional ML service client (BaseServiceClient with compute_drift_score method)
+        metrics: Optional metrics tracker for drift computation events
         
     Returns:
-        Drift score (0.0 to 1.0)
+        Drift score suitable for OCPSValve integration (0.0 to 1.0)
     """
-    if ml_client is not None:
-        try:
-            # Check if ML client has the expected interface
-            if not hasattr(ml_client, 'score'):
-                logger.warning("ML client missing 'score' method, using fallback")
-                return compute_fallback_drift_score(task)
-            
-            # Call ML client
-            score = float(ml_client.score(task))
-            score = _clip01(score)  # Ensure valid range
-            
-            # Check for placeholder values that might indicate incomplete implementation
-            if os.getenv("ALLOW_PLACEHOLDER", "false").lower() not in ("true", "1", "yes"):
-                if abs(score - 0.3) < 1e-6:  # Detect common placeholder value
-                    logger.warning("Detected placeholder ML score (0.3), using fallback instead")
-                    return compute_fallback_drift_score(task)
-            
-            logger.debug("ML drift score: %.3f", score)
-            return score
-            
-        except Exception as e:
-            logger.warning("ML drift scoring failed, using fallback: %s", e)
+    start_time = time.time()
+    task_id = task.get("id", "unknown")
     
-    # Fallback to heuristic-based scoring
-    return compute_fallback_drift_score(task)
+    if ml_client is None:
+        logger.debug(f"[DriftDetector] Task {task_id}: No ML client available, using fallback")
+        return compute_fallback_drift_score(task)
+    
+    try:
+        # Build comprehensive text payload for drift detection
+        # Combine description, domain, params, and type for better featurization
+        description = task.get("description", "")
+        domain = task.get("domain", "")
+        task_type = task.get("type", "unknown")
+        params = task.get("params", {})
+        
+        # Build rich text context for drift detection
+        text_parts = []
+        if description:
+            text_parts.append(f"Description: {description}")
+        if domain:
+            text_parts.append(f"Domain: {domain}")
+        if task_type:
+            text_parts.append(f"Type: {task_type}")
+        if params:
+            # Convert params to readable text (limit length to avoid huge payloads)
+            param_text = ", ".join([f"{k}={v}" for k, v in list(params.items())[:10]])
+            text_parts.append(f"Parameters: {param_text}")
+        
+        # Fallback to task type if no other text available
+        text_payload = " ".join(text_parts) if text_parts else f"Task type: {task_type}"
+        
+        # Log the text payload for debugging
+        logger.info(f"[DriftDetector] Task {task_id}: Text payload: '{text_payload[:100]}{'...' if len(text_payload) > 100 else ''}'")
+        
+        # Prepare request for drift scoring
+        drift_request = {
+            "task": task,
+            "text": text_payload
+        }
+        
+        logger.debug(f"[DriftDetector] Task {task_id}: Calling ML service at {ml_client.base_url}/drift/score")
+        logger.debug(f"[DriftDetector] Task {task_id}: Request payload: {drift_request}")
+        
+        # Call ML service drift detector
+        if hasattr(ml_client, 'compute_drift_score'):
+            response = await ml_client.compute_drift_score(
+                task=drift_request["task"],
+                text=drift_request["text"]
+            )
+        else:
+            # Fallback if method doesn't exist
+            logger.warning("[DriftDetector] ML client missing compute_drift_score method, using fallback")
+            return compute_fallback_drift_score(task)
+        
+        logger.debug(f"[DriftDetector] Task {task_id}: ML service response: {response}")
+        
+        processing_time = (time.time() - start_time) * 1000
+        
+        if response.get("status") == "success":
+            drift_score = response.get("drift_score", 0.0)
+            ml_processing_time = response.get("processing_time_ms", 0.0)
+            
+            # Ensure drift score is in valid range
+            drift_score = _clip01(float(drift_score))
+            
+            # Log performance metrics
+            logger.debug(f"[DriftDetector] Task {task_id}: score={drift_score:.4f}, "
+                       f"total_time={processing_time:.2f}ms, ml_time={ml_processing_time:.2f}ms")
+            
+            # Track metrics for monitoring
+            if metrics:
+                drift_mode = response.get('drift_mode', 'unknown')
+                metrics.record_drift_computation("success", drift_mode, processing_time / 1000.0, drift_score)
+            
+            return drift_score
+        else:
+            error_msg = response.get('error', 'Unknown error')
+            logger.warning(f"[DriftDetector] Task {task_id}: ML service returned error: {error_msg}")
+            if metrics:
+                processing_time = (time.time() - start_time) * 1000
+                metrics.record_drift_computation("ml_error", "unknown", processing_time / 1000.0, 0.0)
+            return compute_fallback_drift_score(task)
+            
+    except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+        processing_time = (time.time() - start_time) * 1000
+        error_msg = str(e) if str(e) else f"{type(e).__name__}"
+        logger.warning(f"[DriftDetector] Task {task_id}: ML service timeout after {processing_time:.2f}ms: {error_msg}, using fallback")
+        
+        # Track timeout metrics
+        if metrics:
+            metrics.record_drift_computation("timeout", "unknown", processing_time / 1000.0, 0.0)
+        
+        # Fallback: use a simple heuristic based on task properties
+        fallback_score = compute_fallback_drift_score(task)
+        logger.info(f"[DriftDetector] Task {task_id}: Using fallback score {fallback_score:.4f}")
+        return fallback_score
+        
+    except Exception as e:
+        processing_time = (time.time() - start_time) * 1000
+        error_msg = str(e) if str(e) else f"{type(e).__name__}"
+        logger.warning(f"[DriftDetector] Task {task_id}: Failed to compute drift score: {error_msg}, using fallback")
+        logger.debug(f"[DriftDetector] Task {task_id}: Exception details: {type(e).__name__}: {error_msg}")
+        
+        # Track error metrics
+        if metrics:
+            metrics.record_drift_computation("error", "unknown", processing_time / 1000.0, 0.0)
+        
+        # Fallback: use a simple heuristic based on task properties
+        fallback_score = compute_fallback_drift_score(task)
+        logger.info(f"[DriftDetector] Task {task_id}: Using fallback score {fallback_score:.4f}")
+        return fallback_score
 
 
 # ============================================================================
 # PKG (Policy Graph Kernel) Support
 # ============================================================================
-
-DEFAULT_WASM_PATH = "/opt/pkg/policy_rules.wasm"
-
-
-def load_pkg_wasm(
-    wasm_path: str,
-    snapshot: Optional[str] = None,
-    *,
-    log: Optional[logging.Logger] = None,
-) -> Optional[Dict[str, Any]]:
-    """Load PKG WASM metadata from disk.
-
-    Args:
-        wasm_path: Path to the WASM binary file on disk.
-        snapshot: Optional snapshot identifier associated with the binary.
-        log: Logger used for diagnostic messages.  Falls back to the
-            module logger if not supplied.
-
-    Returns:
-        Dictionary describing the WASM artefact (enabled, loaded, version,
-        path, size, error).  The dictionary mirrors the legacy structure
-        previously returned directly from the coordinator service.
-    """
-    logger = log or logger
-    try:
-        wasm_file = Path(wasm_path)
-        if not wasm_file.exists():
-            logger.warning("PKG WASM file not found: %s", wasm_path)
-            return {
-                "enabled": True,
-                "loaded": False,
-                "version": snapshot,
-                "path": wasm_path,
-                "error": "file_not_found",
-            }
-
-        file_size = wasm_file.stat().st_size
-        logger.info(
-            "PKG WASM loaded: %s (%s bytes), version=%s",
-            wasm_path,
-            file_size,
-            snapshot,
-        )
-        return {
-            "enabled": True,
-            "loaded": True,
-            "version": snapshot or "unknown",
-            "path": str(wasm_path),
-            "size_bytes": file_size,
-            "error": None,
-        }
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.error("Failed to load PKG WASM: %s", exc)
-        return {
-            "enabled": True,
-            "loaded": False,
-            "version": snapshot,
-            "path": wasm_path,
-            "error": str(exc),
-        }
-
-
-def initialize_pkg_metadata(
-    *,
-    enabled: Optional[bool] = None,
-    enabled_env: str = "COORDINATOR_PKG_ENABLED",
-    wasm_path_env: str = "PKG_WASM_PATH",
-    snapshot_env: str = "PKG_SNAPSHOT_VERSION",
-    default_wasm_path: str = DEFAULT_WASM_PATH,
-    log: Optional[logging.Logger] = None,
-) -> Dict[str, Any]:
-    """Initialise PKG metadata based on environment configuration."""
-    logger = log or logger
-
-    if enabled is None:
-        enabled = os.getenv(enabled_env, "0") == "1"
-
-    if not enabled:
-        logger.info("PKG evaluation disabled (%s=0)", enabled_env)
-        return {"enabled": False, "loaded": False, "version": None, "error": None}
-
-    wasm_path = os.getenv(wasm_path_env, default_wasm_path)
-    snapshot_version = os.getenv(snapshot_env)
-
-    metadata = load_pkg_wasm(wasm_path, snapshot=snapshot_version, log=logger) or {}
-    metadata.setdefault("enabled", True)
-    metadata.setdefault("loaded", False)
-    metadata.setdefault("version", snapshot_version)
-    metadata.setdefault("path", wasm_path)
-    metadata.setdefault("error", None)
-
-    if metadata.get("loaded"):
-        logger.info("✅ PKG enabled: %s at %s", metadata.get("version"), wasm_path)
-    else:
-        logger.warning(
-            "⚠️ PKG enabled but not loaded: %s",
-            metadata.get("error", "unknown"),
-        )
-
-    return metadata
+# NOTE: PKG functionality has been moved to the centralized ops/pkg module.
+# Use get_global_pkg_manager() from seedcore.ops.pkg.manager instead.

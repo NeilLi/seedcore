@@ -295,7 +295,7 @@ class DSpyCognitiveClient:
 
     async def plan(self, agent_id: str, task_description: str, current_capabilities: Mapping[str, Any], available_tools: Mapping[str, Any], *, timeout_s: Optional[float] = None) -> JSONDict:
         handle = self._get_handle()
-        return await self._rpc_call(handle, "plan_task", agent_id, task_description, dict(current_capabilities), dict(available_tools), timeout_s=timeout_s)
+        return await self._rpc_call(handle, "plan", agent_id, task_description, dict(current_capabilities), dict(available_tools), timeout_s=timeout_s)
 
     async def decide(self, agent_id: str, decision_context: Mapping[str, Any], historical_data: Optional[Mapping[str, Any]] = None, *, timeout_s: Optional[float] = None) -> JSONDict:
         handle = self._get_handle()

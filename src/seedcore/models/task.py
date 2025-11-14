@@ -19,10 +19,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.types import Enum as SQLAlchemyEnum
 
-
 class Base(DeclarativeBase):
-    pass
+    """Declarative base for ORM models."""
 
+    pass
 
 class TaskStatus(enum.Enum):
     CREATED = "created"
@@ -33,8 +33,31 @@ class TaskStatus(enum.Enum):
     CANCELLED = "cancelled"
     RETRY = "retry"
 
+class TaskType(enum.Enum):
+    """Canonical task types for routing and dispatch."""
+
+    # Graph tasks (GraphDispatcher)
+    GRAPH_EMBED = "graph_embed"
+    GRAPH_RAG_QUERY = "graph_rag_query"
+    GRAPH_EMBED_V2 = "graph_embed_v2"
+    GRAPH_RAG_QUERY_V2 = "graph_rag_query_v2"
+    GRAPH_FACT_EMBED = "graph_fact_embed"
+    GRAPH_FACT_QUERY = "graph_fact_query"
+    NIM_TASK_EMBED = "nim_task_embed"
+    GRAPH_SYNC_NODES = "graph_sync_nodes"
+
+    # General tasks (QueueDispatcher)
+    PING = "ping"
+    GENERAL_QUERY = "general_query"
+    TEST_QUERY = "test_query"
+    FACT_SEARCH = "fact_search"
+    EXECUTE = "execute"
+    UNKNOWN_TASK = "unknown_task"
+    HEALTH_CHECK = "health_check"
 
 class Task(Base):
+    """Unified task schema with routing and execution metadata stored in JSONB."""
+
     __tablename__ = "tasks"
 
     # --- Identifiers ---
@@ -69,12 +92,15 @@ class Task(Base):
         JSONB,
         nullable=False,
         default=dict,
-        comment="Input parameters including fast_eventizer outputs (JSONB)",
+        comment=(
+            "Input parameters including fast_eventizer outputs "
+            "and Router inbox fields under params.routing"
+        ),
     )
     result: Mapped[Optional[Dict[str, Any]]] = mapped_column(
         JSONB,
         nullable=True,
-        comment="Unified TaskResult schema (JSONB)",
+        comment="Unified TaskResult schema (JSONB, includes result.meta.*)",
     )
     error: Mapped[Optional[str]] = mapped_column(
         Text,
@@ -87,8 +113,8 @@ class Task(Base):
         SQLAlchemyEnum(
             TaskStatus,
             values_callable=lambda e: [m.value for m in e],
-            native_enum=False,             # stores strings; safer for migrations
-            name="taskstatus_enum",        # explicit name for Alembic diffs
+            native_enum=False,
+            name="taskstatus_enum",
         ),
         nullable=False,
         default=TaskStatus.CREATED,
@@ -140,21 +166,21 @@ class Task(Base):
     # --- Table-level constraints & indexes ---
     __table_args__ = (
         CheckConstraint("attempts >= 0", name="ck_tasks_attempts_nonneg"),
-        # Scheduling hot-path: pick runnable tasks quickly
         Index("ix_tasks_status_runafter", "status", "run_after"),
         Index("ix_tasks_created_at_desc", "created_at"),
         Index("ix_tasks_type", "type"),
         Index("ix_tasks_domain", "domain"),
-        # JSONB GIN index: enable filtering into params (e.g., confidence, tags)
         Index("ix_tasks_params_gin", "params", postgresql_using="gin"),
-        # Optional: also index result if you query it often
-        # Index("ix_tasks_result_gin", "result", postgresql_using="gin"),
+        # Optional JSONB path indexes defined in migration 007_task_schema_enhancements.sql:
+        #   ix_tasks_params_routing_spec
+        #   ix_tasks_params_routing_priority
+        #   ix_tasks_params_routing_deadline
     )
 
     # --- Helpers ---
 
     def short_id(self, length: int = 8) -> str:
-        """Human-friendly short ID used in UIs/CLI."""
+        """Human-friendly short ID used in logs and UI."""
         return str(self.id).split("-")[0][:length]
 
     def queue(self, after: Optional[datetime] = None) -> None:
@@ -163,29 +189,34 @@ class Task(Base):
         self.run_after = after
 
     def mark_running(self, worker_id: Optional[str] = None) -> None:
+        """Transition task to RUNNING state."""
         self.status = TaskStatus.RUNNING
         self.locked_by = worker_id
-        self.locked_at = func.now()  # server-side timestamp
+        self.locked_at = func.now()
 
     def mark_completed(self, result: Dict[str, Any]) -> None:
+        """Mark task as successfully completed."""
         self.status = TaskStatus.COMPLETED
         self.result = result
         self.error = None
 
     def mark_failed(self, error: str, result: Optional[Dict[str, Any]] = None) -> None:
+        """Mark task as failed."""
         self.status = TaskStatus.FAILED
         self.error = error
         if result is not None:
             self.result = result
 
     def mark_cancelled(self) -> None:
+        """Mark task as cancelled."""
         self.status = TaskStatus.CANCELLED
 
     def bump_attempts(self) -> None:
+        """Increment attempt counter safely."""
         self.attempts = (self.attempts or 0) + 1
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize to a dict with enum values flattened."""
+        """Serialize to dict, flattening enums."""
         out: Dict[str, Any] = {}
         state = self.__dict__
         for col in self.__table__.columns:

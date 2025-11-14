@@ -28,8 +28,17 @@ import uuid
 import random
 import signal
 import logging
-import ray
-from typing import List, Any, TYPE_CHECKING, Dict, Optional
+from typing import Any, TYPE_CHECKING, Dict, Optional, Union
+
+import ray  # pyright: ignore[reportMissingImports]
+
+from seedcore.models import TaskPayload
+from ..agents.roles import (
+    RoleRegistry,
+    DEFAULT_ROLE_REGISTRY,
+    SkillStoreProtocol,
+    NullSkillStore,
+)
 
 if TYPE_CHECKING:
     from ..agents.ray_agent import RayAgent
@@ -50,11 +59,23 @@ class Organ:
     reflecting the "swarm-of-swarms" model central to the COA framework.
     """
     
-    def __init__(self, organ_id: str, organ_type: str, serve_route: Optional[str] = None):
+    def __init__(
+        self,
+        organ_id: str,
+        organ_type: str,
+        serve_route: Optional[str] = None,
+        *,
+        role_registry: Optional[RoleRegistry] = None,
+        skill_store: Optional[SkillStoreProtocol] = None,
+    ):
         self.organ_id = organ_id
         self.organ_type = organ_type
         self.serve_route = serve_route
         self.agents: Dict[str, 'RayAgent'] = {}
+
+        # Role/skill context shared with registered agents (if applicable)
+        self.role_registry: RoleRegistry = role_registry or DEFAULT_ROLE_REGISTRY
+        self.skill_store: SkillStoreProtocol = skill_store or NullSkillStore()
 
         # Runtime registry fields
         self.instance_id = uuid.uuid4().hex
@@ -184,7 +205,51 @@ class Organ:
         """Returns the number of agents in this organ."""
         return len(self.agents)
 
-    def select_agent(self, task) -> 'RayAgent':
+    def _prepare_task_dict(self, task: Union[TaskPayload, Dict[str, Any]]) -> Dict[str, Any]:
+        """Normalize incoming task payloads and preserve any extra fields."""
+        extra_fields: Dict[str, Any] = {}
+
+        if isinstance(task, TaskPayload):
+            payload = task
+            task_dict = payload.model_dump()
+        elif isinstance(task, dict):
+            raw_task = dict(task)
+            try:
+                payload = TaskPayload.from_db(raw_task)
+            except Exception as exc:
+                logger.debug(
+                    "Organ %s: TaskPayload.from_db fallback due to %s; building direct payload",
+                    self.organ_id,
+                    exc,
+                )
+                fallback_id = raw_task.get("task_id") or raw_task.get("id") or uuid.uuid4().hex
+                payload = TaskPayload(
+                    task_id=str(fallback_id),
+                    type=raw_task.get("type") or "unknown_task",
+                    params=raw_task.get("params") or {},
+                    description=raw_task.get("description") or "",
+                    domain=raw_task.get("domain"),
+                    drift_score=float(raw_task.get("drift_score") or 0.0),
+                )
+            task_dict = payload.model_dump()
+            extra_fields = {k: v for k, v in raw_task.items() if k not in task_dict}
+        else:
+            raise TypeError(f"Unsupported task payload type: {type(task)}")
+
+        task_id = payload.task_id or uuid.uuid4().hex
+        if not payload.task_id or payload.task_id in ("", "None"):
+            payload = payload.copy(update={"task_id": task_id})
+            task_dict = payload.model_dump()
+
+        for key, value in extra_fields.items():
+            if key not in task_dict:
+                task_dict[key] = value
+
+        task_dict.setdefault("id", task_id)
+        task_dict.setdefault("task_id", task_id)
+        return task_dict
+
+    def select_agent(self, task: Union[TaskPayload, Dict[str, Any]]) -> 'RayAgent':
         """
         Selects an agent within the organ for a task.
         TODO: Implement the full energy-aware scoring proxy here.
@@ -196,11 +261,12 @@ class Organ:
         agent_id = random.choice(list(self.agents.keys()))
         return self.agents[agent_id]
 
-    async def run_task(self, task):
+    async def run_task(self, task: Union[TaskPayload, Dict[str, Any]]):
         """Selects an agent and executes a task, returning the result."""
-        agent = self.select_agent(task)
+        task_dict = self._prepare_task_dict(task)
+        agent = self.select_agent(task_dict)
         # Use .remote() to call the Ray actor method
-        result_ref = agent.execute_task.remote(task)
+        result_ref = agent.execute_task.remote(task_dict)
         return await result_ref
 
     def get_status(self) -> Dict[str, Any]:

@@ -31,6 +31,7 @@ ENV_SERVE_GATEWAY   = "SERVE_GATEWAY"    # explicit override
 ENV_RAY_ADDRESS     = "RAY_ADDRESS"      # canonical source set by Ray
 ENV_SERVE_BASE      = "SERVE_BASE_PATH"  # default "/ml"
 ENV_COG_BASE        = "COG_BASE_PATH"    # default "/cognitive"
+ENV_ORG_BASE        = "ORG_BASE_PATH"    # default "/organism"
 ENV_SERVE_SERVICE   = "SERVE_SERVICE"    # "stable" (default) or "serve"
 ENV_POD_NAMESPACE   = "POD_NAMESPACE"    # set via Downward API when possible
 
@@ -128,6 +129,66 @@ def _resolve_ok(host: str, timeout_s: float = 0.4) -> bool:
     finally:
         socket.setdefaulttimeout(old)
 
+def get_ray_node_ip() -> str:
+    """
+    Robustly resolve the Ray node IP address where the current process/actor is running.
+    
+    Uses a multi-tier fallback strategy:
+    1. ray.util.get_node_ip_address() - Most reliable, gets actual node IP
+    2. Extract from RAY_ADDRESS env var - May be head node IP, but better than nothing
+    3. Socket-based hostname resolution - Last resort for local development
+    4. "unknown" - Final fallback
+    
+    Returns:
+        str: The resolved IP address or "unknown" if all methods fail
+    """
+    # Method 1: Ray's native API (most reliable for actors running on Ray nodes)
+    try:
+        from ray.util import get_node_ip_address
+        node_ip = get_node_ip_address()
+        if node_ip and node_ip not in ("127.0.0.1", "localhost", "0.0.0.0"):
+            _log.debug("Resolved Ray node IP via ray.util.get_node_ip_address(): %s", node_ip)
+            return node_ip
+    except Exception as e:
+        _log.debug("ray.util.get_node_ip_address() failed: %s", e)
+    
+    # Method 2: Extract from RAY_ADDRESS (may be head node, not this node)
+    try:
+        ra = os.getenv(ENV_RAY_ADDRESS)
+        if ra:
+            host = _host_from_ray_address(ra)
+            if host and host not in ("127.0.0.1", "localhost", "0.0.0.0"):
+                _log.debug("Resolved node IP from RAY_ADDRESS: %s", host)
+                return host
+    except Exception as e:
+        _log.debug("Failed to extract IP from RAY_ADDRESS: %s", e)
+    
+    # Method 3: Socket-based resolution (for local development)
+    try:
+        hostname = socket.gethostname()
+        resolved_ip = socket.gethostbyname(hostname)
+        if resolved_ip and resolved_ip not in ("127.0.0.1", "127.0.1.1", "0.0.0.0"):
+            _log.debug("Resolved node IP via socket.gethostbyname(%s): %s", hostname, resolved_ip)
+            return resolved_ip
+    except Exception as e:
+        _log.debug("Socket-based IP resolution failed: %s", e)
+    
+    # Method 4: Try to get primary interface IP (Linux/Mac)
+    try:
+        # Connect to a dummy address to determine primary interface
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        if local_ip and local_ip not in ("127.0.0.1", "0.0.0.0"):
+            _log.debug("Resolved node IP via primary interface: %s", local_ip)
+            return local_ip
+    except Exception as e:
+        _log.debug("Primary interface IP resolution failed: %s", e)
+    
+    _log.warning("All IP resolution methods failed, using 'unknown'")
+    return "unknown"
+
 # -------------------------------
 # Gateway & paths
 # -------------------------------
@@ -197,24 +258,28 @@ def _derive_serve_gateway() -> str:
     _log.info("Derived SERVE gateway (cluster-aware fallback): %s", gw)
     return gw
 
-def _derive_base_paths() -> Tuple[str, str]:
+def _derive_base_paths() -> Tuple[str, str, str]:
     ml  = (os.getenv(ENV_SERVE_BASE) or "/ml").strip() or "/ml"
     cog = (os.getenv(ENV_COG_BASE) or "/cognitive").strip() or "/cognitive"
+    org = (os.getenv(ENV_ORG_BASE) or "/organism").strip() or "/organism"
     if not ml.startswith("/"):
         ml = "/" + ml
     if not cog.startswith("/"):
         cog = "/" + cog
-    return ml.rstrip("/"), cog.rstrip("/")
+    if not org.startswith("/"):
+        org = "/" + org
+    return ml.rstrip("/"), cog.rstrip("/"), org.rstrip("/")
 
 # Compute once (fast, side-effect free). Keep helpers to rebuild on-demand if env changes.
 _SERVE_GATEWAY: str
 _ML_BASE: str
 _COG_BASE: str
+_ORG_BASE: str
 
 def _recompute_globals() -> None:
-    global _SERVE_GATEWAY, _ML_BASE, _COG_BASE
+    global _SERVE_GATEWAY, _ML_BASE, _COG_BASE, _ORG_BASE
     _SERVE_GATEWAY = _derive_serve_gateway().rstrip("/")
-    _ML_BASE, _COG_BASE = _derive_base_paths()
+    _ML_BASE, _COG_BASE, _ORG_BASE = _derive_base_paths()
 
 # initialize at import
 _recompute_globals()
@@ -223,6 +288,7 @@ _recompute_globals()
 SERVE_GATEWAY: str = _SERVE_GATEWAY
 ML: str  = f"{SERVE_GATEWAY}{_ML_BASE}"
 COG: str = f"{SERVE_GATEWAY}{_COG_BASE}"
+ORG: str = f"{SERVE_GATEWAY}{_ORG_BASE}"
 
 def get_serve_urls(
     base_gateway: Optional[str] = None,

@@ -90,6 +90,16 @@ CREATE INDEX IF NOT EXISTS ix_tasks_domain ON tasks (domain);
 -- Create GIN index for params JSONB column (enables filtering into params)
 CREATE INDEX IF NOT EXISTS ix_tasks_params_gin ON tasks USING gin (params);
 
+-- Optional: Create targeted JSONB path indexes to accelerate routing filters
+CREATE INDEX IF NOT EXISTS ix_tasks_params_routing_spec ON tasks
+USING gin ((params -> 'routing' ->> 'required_specialization'));
+
+CREATE INDEX IF NOT EXISTS ix_tasks_params_routing_priority ON tasks
+USING gin ((params #> '{routing,hints,priority}'));
+
+CREATE INDEX IF NOT EXISTS ix_tasks_params_routing_deadline ON tasks
+USING gin ((params #> '{routing,hints,deadline_at}'));
+
 -- Optional: Create GIN index for result JSONB column (commented out as per model)
 -- CREATE INDEX IF NOT EXISTS ix_tasks_result_gin ON tasks USING gin (result);
 
