@@ -9,6 +9,7 @@ import time
 
 if TYPE_CHECKING:
     from seedcore.agents.roles import SkillStoreProtocol
+    from seedcore.serve.mcp_client import MCPServiceClient
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +67,13 @@ class ToolManager:
     """
     Enhanced tool manager for SeedCore v2.
 
+    Acts as a unified router for both internal (Python) tools
+    and external (MCP service) tools.
+
     New capabilities:
       • Namespaced tool registry (iot.read, memory.mw.read, memory.ltm.query, robot.move, train.skill)
       • Special memory-backed tools (MwManager + LongTermMemoryManager)
+      • External MCP tools integration (internet.fetch, fs.read, etc.)
       • Call observability + metrics + tracing
       • Tool suggestions for agent learning
       • RBAC hooks (optional)
@@ -84,9 +89,14 @@ class ToolManager:
         rbac_provider: Optional[Any] = None,
         skill_store: Optional["SkillStoreProtocol"] = None,
         enable_tracing: bool = True,
+        mcp_client: Optional["MCPServiceClient"] = None,
     ):
+        # Internal tools registry (IoT, robotics, etc.)
         self._tools: Dict[str, Tool] = {}
         self._lock = asyncio.Lock()
+
+        # External MCP service client (for internet.fetch, fs.read, etc.)
+        self._mcp_client = mcp_client
 
         # Memory integrations
         self.mw_manager = mw_manager
@@ -106,7 +116,10 @@ class ToolManager:
         self._fail_count: Dict[str, int] = {}
         self._latency_hist: Dict[str, List[float]] = {}
 
-        logger.info("🔧 ToolManager ready with memory integration")
+        if mcp_client:
+            logger.info("🔧 ToolManager ready with memory integration and MCP client")
+        else:
+            logger.info("🔧 ToolManager ready with memory integration")
 
     # ============================================================
     # Registration
@@ -124,17 +137,67 @@ class ToolManager:
             self._tools[name] = tool
             logger.info(f"Tool registered: {name}")
 
-    async def unregister(self, name: str) -> None:
-        """Safely unregister a tool."""
+    def register_internal(self, tool: Tool) -> None:
+        """
+        Registers an internal tool (IoT, robotics) that adheres to the Tool protocol.
+        
+        This is a synchronous convenience method that extracts the tool name
+        from the schema and registers it.
+        
+        Args:
+            tool: A tool instance implementing the Tool protocol.
+        """
+        try:
+            schema = tool.schema()
+            tool_name = schema.get("name")
+            
+            if not tool_name:
+                logger.error("Failed to register tool: schema missing 'name'.")
+                return
+
+            # Direct dict access (synchronous) - tools dict is thread-safe for reads
+            # but we're doing a write here. In practice, this is fine for initialization.
+            if tool_name in self._tools:
+                logger.warning(f"Overwriting tool in registry: {tool_name}")
+            
+            self._tools[tool_name] = tool
+            logger.debug(f"Registered internal tool: {tool_name}")
+            
+        except Exception as e:
+            logger.error(f"Failed to register tool: {e}", exc_info=True)
+
+    async def unregister(self, name: str) -> bool:
+        """
+        Safely unregister a tool.
+        
+        Args:
+            name: Tool name to unregister
+            
+        Returns:
+            True if tool was removed, False if it didn't exist
+        """
         async with self._lock:
             if name in self._tools:
                 del self._tools[name]
                 logger.info(f"Tool removed: {name}")
+                return True
             else:
                 logger.warning(f"Attempted to unregister non-existent tool: {name}")
+                return False
 
     async def has(self, name: str) -> bool:
-        """Check if a tool is registered (async-safe)."""
+        """
+        Check if an internal tool is registered.
+        
+        Note: This only checks internal tools. External MCP tools are handled
+        dynamically by execute() when needed.
+        
+        Args:
+            name: Tool name to check
+            
+        Returns:
+            True if tool is registered internally, False otherwise
+        """
         async with self._lock:
             return name in self._tools
 
@@ -146,44 +209,79 @@ class ToolManager:
         """
         Execute a tool with robust error handling, RBAC, and metrics.
         
+        Automatically routes to internal tools first, then falls back to
+        external MCP service if the tool is not found internally.
+        
         Args:
-            name: Tool name (e.g., "iot.read", "memory.mw.read")
+            name: Tool name (e.g., "iot.read", "memory.mw.read", "internet.fetch")
             args: Tool arguments as a dictionary
             agent_id: Optional agent identifier for RBAC and tracing
         
         Raises:
             ToolError: If the tool is not found, RBAC denied, or fails during execution.
         """
-        tool = self._tools.get(name)  # No lock needed for a simple read
+        logger.debug(f"ToolManager executing: {name}")
         
-        if tool is None:
-            raise ToolError(tool_name=name, reason="tool_not_found")
-
-        # Optional RBAC check
+        # Optional RBAC check (before execution) - using EAFP pattern
         if self.rbac_provider:
             try:
-                # Assume rbac_provider has an async 'allowed' method
-                if hasattr(self.rbac_provider, 'allowed'):
-                    allowed = await self.rbac_provider.allowed(agent_id, name)
-                    if not allowed:
-                        raise ToolError(tool_name=name, reason="rbac_denied")
+                allowed = await self.rbac_provider.allowed(agent_id, name)
+                if not allowed:
+                    raise ToolError(tool_name=name, reason="rbac_denied")
             except AttributeError:
-                # Fallback: if rbac_provider doesn't have 'allowed', skip RBAC
+                # RBAC provider doesn't have 'allowed' method, skip RBAC
                 logger.debug("RBAC provider missing 'allowed' method, skipping RBAC check")
+            except Exception:
+                # Other RBAC errors are logged but don't block execution
+                logger.debug("RBAC check failed, skipping", exc_info=True)
 
         start = time.perf_counter()
+        execution_failed = False
 
         try:
-            # Pass args as kwargs for easier Pydantic-like validation
-            result = await tool.execute(**args)
+            # --- 1. Check Internal Tools First ---
+            tool = self._tools.get(name)  # No lock needed for a simple read
+            
+            if tool is not None:
+                # Internal tool found - execute it
+                result = await tool.execute(**args)
+            else:
+                # --- 2. Not internal? Try External MCP ---
+                if not self._mcp_client:
+                    raise ToolError(tool_name=name, reason="tool_not_found")
+                
+                # Forward to MCP service
+                logger.debug(f"Routing tool '{name}' to MCP service")
+                response = await self._mcp_client.call_tool_async(
+                    tool_name=name,
+                    arguments=args
+                )
+                
+                # Check for a JSON-RPC level error
+                if "error" in response and response["error"]:
+                    err = response["error"]
+                    error_msg = err.get("message", "Unknown error")
+                    raise ToolError(tool_name=name, reason=f"External tool failed: {error_msg}")
+                
+                # Return the actual result, not the full JSON-RPC response
+                result = response.get("result")
+                
+        except ToolError:
+            # Mark as failed and re-raise
+            execution_failed = True
+            raise
         except asyncio.TimeoutError:
+            execution_failed = True
             logger.warning(f"Tool execution timed out: {name}")
-            self._fail_count[name] = self._fail_count.get(name, 0) + 1
             raise ToolError(tool_name=name, reason="timeout")
         except Exception as e:
+            execution_failed = True
             logger.error(f"Tool '{name}' failed for agent {agent_id}: {e}", exc_info=True)
-            self._fail_count[name] = self._fail_count.get(name, 0) + 1
             raise ToolError(tool_name=name, reason=str(e), original_exc=e)
+        finally:
+            # Centralized failure counting
+            if execution_failed:
+                self._fail_count[name] = self._fail_count.get(name, 0) + 1
 
         # Metrics
         elapsed = time.perf_counter() - start
@@ -223,10 +321,12 @@ class ToolManager:
             return  # Cannot learn without a store or agent context
 
         # Check for a single skill update
-        if "skill" in reflection and "delta" in reflection:
+        skill = reflection.get("skill")
+        delta = reflection.get("delta")
+        
+        if skill and delta is not None:
             try:
-                skill = reflection["skill"]
-                delta = float(reflection["delta"])
+                delta = float(delta)
                 # This is the flywheel's "push"
                 # Try update_skill_delta first (if implemented as extension)
                 if hasattr(self.skill_store, "update_skill_delta"):
@@ -256,31 +356,68 @@ class ToolManager:
     # Introspection
     # ============================================================
 
-    async def list_tools(self) -> List[Dict[str, Any]]:
+    async def list_tools(self) -> Dict[str, Dict[str, Any]]:
         """
-        Return a manifest of all registered tools and their schemas.
+        Returns a merged dictionary of all available tools, both internal and external.
+        
+        Returns:
+            Dictionary mapping tool names to their schemas.
+            Internal tools take precedence over external tools in case of conflicts.
         """
+        # 1. Get all internal tool schemas
+        all_schemas: Dict[str, Dict[str, Any]] = {}
+        
         async with self._lock:
             # Copy items to avoid modification during iteration
             tools = list(self._tools.values())
-            
-        manifest = []
+        
         for tool in tools:
             try:
-                manifest.append(tool.schema())
+                schema = tool.schema()
+                name = schema.get("name")
+                if name:
+                    all_schemas[name] = schema
             except Exception as e:
                 logger.warning(f"Failed to get schema for tool: {e}")
-        return manifest
+
+        # 2. Get all external tool schemas from the MCP service
+        if self._mcp_client:
+            try:
+                mcp_response = await self._mcp_client.list_tools_async()
+                
+                # The MCP spec returns tools in a list under the "tools" key
+                external_tools_list = mcp_response.get("tools", [])
+                
+                for tool_schema in external_tools_list:
+                    name = tool_schema.get("name")
+                    if name and name not in all_schemas:
+                        all_schemas[name] = tool_schema
+                    elif name:
+                        logger.warning(
+                            f"External tool '{name}' conflicts with internal tool. "
+                            "Internal tool takes precedence."
+                        )
+                        
+            except Exception as e:
+                logger.error(f"Failed to fetch external tools from MCP service: {e}")
+                # We can still return the internal tools
+        
+        return all_schemas
 
     async def get_tool_schema(self, name: str) -> Optional[Dict[str, Any]]:
-        """Get the schema for a single tool."""
-        tool = self._tools.get(name)
-        if tool:
-            try:
-                return tool.schema()
-            except Exception as e:
-                logger.warning(f"Failed to get schema for tool {name}: {e}")
-        return None
+        """
+        Get the schema for a single tool (internal or external).
+        
+        This delegates to list_tools() to get unified tool schemas.
+        
+        Args:
+            name: Tool name to get schema for
+            
+        Returns:
+            Tool schema if found, None otherwise
+        """
+        all_tools = await self.list_tools()
+        return all_tools.get(name)
 
     def stats(self) -> Dict[str, Any]:
         """
