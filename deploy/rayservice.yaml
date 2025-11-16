@@ -96,6 +96,16 @@ spec:
               num_cpus: 0.1
               memory: 1073741824    # 1GB
 
+        - name: mcp
+          import_path: entrypoints.mcp_entrypoint:build_mcp_app
+          route_prefix: /mcp
+          deployments:
+            - name: MCPService
+              num_replicas: 1
+              ray_actor_options:
+                num_cpus: 0.1
+                memory: 1073741824 #1Gi
+
   # ===================================================================
   #  Ray Cluster Configuration
   # ===================================================================
