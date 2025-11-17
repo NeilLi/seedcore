@@ -56,6 +56,8 @@ from seedcore.organs.organ import Organ  # ← NEW ORGAN CLASS
 
 # Long-term memory backend (Ray actor)
 from seedcore.memory.long_term_memory import LongTermMemoryManager
+# --- Import stateful dependencies ---
+from seedcore.memory.mw_manager import MwManager
 
 setup_logging(app_name="seedcore.OrganismCore")
 logger = ensure_serve_logger("seedcore.OrganismCore", level="DEBUG")
@@ -165,6 +167,13 @@ class OrganismCore:
         self.cognitive_client: Optional[CognitiveServiceClient] = None
         self.energy_client: Optional[EnergyServiceClient] = None
         self.ltm_handle: Optional[Any] = None
+        
+        # --- Stateful dependencies for RayAgent ---
+        self.mw_manager: Optional[MwManager] = None
+        self.checkpoint_cfg: Dict[str, Any] = {
+            "enabled": True,
+            "path": os.getenv("CHECKPOINT_PATH", "/app/checkpoints")
+        }
         
         # Evolution guardrails
         self._evolve_max_cost = float(os.getenv("EVOLVE_MAX_COST", "1e6"))
@@ -278,6 +287,17 @@ class OrganismCore:
         self.energy_client = EnergyServiceClient()
 
         # --------------------------------------------------------------
+        # 5.6. Initialize stateful MwManager
+        # --------------------------------------------------------------
+        logger.info("🔌 Initializing stateful MwManager...")
+        try:
+            self.mw_manager = MwManager(organ_id="organism_core_mw")
+            logger.info("✅ MwManager initialized.")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize MwManager: {e}")
+            self.mw_manager = None
+
+        # --------------------------------------------------------------
         # 6. Spawn Organs
         # --------------------------------------------------------------
         await self._create_organs_from_config()
@@ -318,6 +338,7 @@ class OrganismCore:
             logger.info(f"  ➕ Creating Organ actor: {organ_id}")
 
             try:
+                # --- Pass all dependencies to the Organ actor ---
                 organ = Organ.options(
                     name=organ_id,
                     namespace=AGENT_NAMESPACE,
@@ -327,10 +348,15 @@ class OrganismCore:
                     num_cpus=0.1,
                 ).remote(
                     organ_id=organ_id,
+                    # Stateless dependencies
                     role_registry=self.role_registry,
                     skill_store=self.skill_store,
                     tool_manager=self.tool_manager,
                     cognitive_client=self.cognitive_client,
+                    # Stateful dependencies
+                    mw_manager=self.mw_manager,
+                    ltm_manager=self.ltm_handle,
+                    checkpoint_cfg=self.checkpoint_cfg,
                 )
 
                 # Sanity check
@@ -374,6 +400,9 @@ class OrganismCore:
             for block in agent_defs:
                 spec_str = block["specialization"]
                 count = int(block.get("count", 1))
+                
+                # --- Read agent class from config (default to BaseAgent) ---
+                agent_class_name = block.get("class", "BaseAgent")
 
                 try:
                     spec = Specialization[spec_str.upper()]
@@ -391,10 +420,12 @@ class OrganismCore:
                 for i in range(count):
                     agent_id = f"{organ_id}_{spec.name.lower()}_{i}"
 
+                    # --- Tell the Organ which class to create ---
                     ref = organ.create_agent.remote(
                         agent_id=agent_id,
                         specialization=spec,
                         organ_id=organ_id,
+                        agent_class_name=agent_class_name,
                         name=agent_id,
                         num_cpus=0.1,
                         lifetime="detached",
@@ -969,11 +1000,12 @@ class OrganismCore:
             agent_id = f"{organ_id}_{spec.name.lower()}_{int(time.time())}_{i}"
 
             try:
-                # Create agent via organ
+                # Create agent via organ (default to BaseAgent for evolution)
                 ref = organ.create_agent.remote(
                     agent_id=agent_id,
                     specialization=spec,
                     organ_id=organ_id,
+                    agent_class_name="BaseAgent",  # Default for evolution-created agents
                     name=agent_id,
                     num_cpus=0.1,
                     lifetime="detached",
@@ -1216,10 +1248,15 @@ class OrganismCore:
                 name=organ_name, namespace=AGENT_NAMESPACE
             ).remote(
                 organ_id=organ_id,
+                # Stateless dependencies
                 role_registry=self.role_registry,
                 skill_store=self.skill_store,
                 tool_manager=self.tool_manager,
                 cognitive_client=self.cognitive_client,
+                # Stateful dependencies
+                mw_manager=self.mw_manager,
+                ltm_manager=self.ltm_handle,
+                checkpoint_cfg=self.checkpoint_cfg,
             )
         except Exception as e:
             logger.error(f"[OrganismCore] Failed to recreate organ: {e}")
@@ -1239,10 +1276,13 @@ class OrganismCore:
             for _ in range(count):
                 agent_id = str(uuid.uuid4())
                 try:
+                    # Get agent class from config if available, default to BaseAgent
+                    agent_class_name = agent_def.get("class", "BaseAgent")
                     ref = new_organ.create_agent.remote(
                         agent_id=agent_id,
                         specialization=spec,
                         organ_id=organ_id,
+                        agent_class_name=agent_class_name,
                         name=agent_id,
                         num_cpus=0.1,
                         lifetime="detached"

@@ -2,17 +2,23 @@
 # ... (license) ...
 
 """
-Organ Actor (v2 - Lightweight Registry)
+Organ Actor (v2 - Lightweight Registry for Multiple Agent Types)
 
 This class acts as an 'Organ' within the Organism. It is a stateful
 Ray actor spawned by the OrganismCore and is responsible for:
 
-- Spawning and managing a pool of specialized BaseAgent actors.
-- Injecting shared resources (Tools, Registries, SkillStore) into its agents.
+- Spawning and managing a pool of agent actors (BaseAgent by default).
+- Injecting shared resources (Tools, Memory Managers, Checkpointing) into its agents.
 - Responding to calls from the OrganismCore (e.g., get_agent_handles).
 
 THIS ACTOR IS PASSIVE. It does not run its own loops for polling or routing.
 That logic is centralized in the OrganismCore and StateService.
+
+The Organ supports multiple agent types:
+- BaseAgent (default): Stateless, generic executor
+- RayAgent: Stateful wrapper with memory (Mw/Mlt) and checkpointing
+- ObserverAgent: Proactive cache warmer
+- UtilityLearningAgent: System observer and tuner
 """
 
 from __future__ import annotations
@@ -35,6 +41,9 @@ if TYPE_CHECKING:
     )
     from ..tools.manager import ToolManager
     from ..serve.cognitive_client import CognitiveServiceClient
+    # --- Add imports for stateful dependencies ---
+    from ..memory.mw_manager import MwManager
+    from ..memory.long_term_memory import LongTermMemoryManager
 
 logger = ensure_serve_logger("seedcore.Organ", level="DEBUG")
 
@@ -59,6 +68,10 @@ class Organ:
         skill_store: "SkillStoreProtocol",
         tool_manager: "ToolManager",
         cognitive_client: "CognitiveServiceClient",
+        # --- Optional stateful dependencies (for RayAgent) ---
+        mw_manager: Optional["MwManager"] = None,
+        ltm_manager: Optional["LongTermMemoryManager"] = None,
+        checkpoint_cfg: Optional[Dict[str, Any]] = None,
     ):
         self.organ_id = organ_id
         
@@ -68,6 +81,11 @@ class Organ:
         self.tool_manager = tool_manager
         # We store the *client*, not just the URL, for consistency
         self.cognitive_client = cognitive_client 
+
+        # --- Store stateful dependencies to pass to agents ---
+        self.mw_manager = mw_manager
+        self.ltm_manager = ltm_manager
+        self.checkpoint_cfg = checkpoint_cfg or {"enabled": False}
 
         # Agent registry: { agent_id -> ActorHandle }
         self.agents: Dict[str, ray.actor.ActorHandle] = {}
@@ -95,15 +113,23 @@ class Organ:
         agent_id: str,
         specialization: "Specialization",
         organ_id: str,  # Passed for verification
+        agent_class_name: str = "BaseAgent",
         **agent_actor_options
     ) -> None:
         """
-        Creates, registers, and stores a new BaseAgent actor.
-        This is called by OrganismCore's `_create_agents_from_config` or `evolve`.
+        Creates, registers, and stores a new BaseAgent or RayAgent actor.
+        
+        Args:
+            agent_id: Unique identifier for the agent
+            specialization: Agent specialization (GEA, AAC, etc.)
+            organ_id: ID of the organ (for verification)
+            agent_class_name: Type of agent to create. Options:
+                - "BaseAgent" (default): Stateless, generic executor
+                - "RayAgent": Stateful wrapper with memory and checkpointing
+                - "ObserverAgent": Proactive cache warmer
+                - "UtilityLearningAgent": System observer and tuner
+            **agent_actor_options: Ray actor options (name, num_cpus, lifetime, etc.)
         """
-        # Ensure we import the agent class *inside* the Ray actor
-        from ..agents.base import BaseAgent
-
         if agent_id in self.agents:
             logger.warning(f"[{self.organ_id}] Agent {agent_id} already exists.")
             return
@@ -113,39 +139,83 @@ class Organ:
              raise ValueError("Organ ID mismatch")
 
         try:
-            logger.info(f"🚀 [{self.organ_id}] Creating agent '{agent_id}'...")
+            logger.info(f"🚀 [{self.organ_id}] Creating {agent_class_name} '{agent_id}'...")
             
-            # Get cognitive base URL from client
-            cognitive_base_url = None
-            if hasattr(self.cognitive_client, "get_base_url"):
-                cognitive_base_url = self.cognitive_client.get_base_url()
-            elif hasattr(self.cognitive_client, "base_url"):
-                cognitive_base_url = self.cognitive_client.base_url
-            
-            # Create fresh actor directly from BaseAgent, injecting all dependencies
-            handle = BaseAgent.options(
+            # --- Dynamically choose agent class and params ---
+            if agent_class_name == "RayAgent":
+                from ..agents.ray_agent import RayAgent as AgentToCreate
+                
+                # Parameters for the STATEFUL RayAgent
+                agent_params = {
+                    "agent_id": agent_id,
+                    "tool_manager": self.tool_manager,
+                    "specialization": specialization,
+                    "role_registry": self.role_registry,
+                    "skill_store": self.skill_store,
+                    "cognitive_client": self.cognitive_client,
+                    "organ_id": self.organ_id,
+                    "mw_manager": self.mw_manager,
+                    "ltm_manager": self.ltm_manager,
+                    "checkpoint_cfg": self.checkpoint_cfg
+                }
+            elif agent_class_name == "ObserverAgent":
+                from ..agents.observer_agent import ObserverAgent as AgentToCreate
+                
+                # Parameters for ObserverAgent (extends BaseAgent)
+                agent_params = {
+                    "agent_id": agent_id,
+                    "tool_manager": self.tool_manager,
+                    "specialization": specialization,
+                    "role_registry": self.role_registry,
+                    "skill_store": self.skill_store,
+                    "cognitive_client": self.cognitive_client,
+                    "organ_id": self.organ_id
+                }
+            elif agent_class_name == "UtilityLearningAgent":
+                from ..agents.ula_agent import UtilityLearningAgent as AgentToCreate
+                
+                # Parameters for UtilityLearningAgent (extends BaseAgent)
+                agent_params = {
+                    "agent_id": agent_id,
+                    "tool_manager": self.tool_manager,
+                    "specialization": specialization,
+                    "role_registry": self.role_registry,
+                    "skill_store": self.skill_store,
+                    "cognitive_client": self.cognitive_client,
+                    "organ_id": self.organ_id
+                }
+            else:
+                # Default to BaseAgent
+                from ..agents.base import BaseAgent as AgentToCreate
+                
+                # Parameters for the STATELESS BaseAgent
+                agent_params = {
+                    "agent_id": agent_id,
+                    "tool_manager": self.tool_manager,
+                    "specialization": specialization,
+                    "role_registry": self.role_registry,
+                    "skill_store": self.skill_store,
+                    "cognitive_client": self.cognitive_client,
+                    "organ_id": self.organ_id
+                }
+
+            # Create the agent actor
+            handle = AgentToCreate.options(
                 namespace=AGENT_NAMESPACE,
                 get_if_exists=True,  # Re-attach if name already exists
                 **agent_actor_options
-            ).remote(
-                agent_id=agent_id,
-                tool_manager=self.tool_manager,
-                specialization=specialization,
-                role_registry=self.role_registry,
-                skill_store=self.skill_store,
-                cognitive_base_url=cognitive_base_url,
-                organ_id=self.organ_id
-            )
+            ).remote(**agent_params)
 
             # Store the handle and metadata
             self.agents[agent_id] = handle
             self.agent_info[agent_id] = {
                 "agent_id": agent_id,
                 "specialization": specialization.name,
+                "class": agent_class_name,  # Track which class was created
                 "created_at": time.time(),
                 "status": "initializing",
             }
-            logger.info(f"✅ [{self.organ_id}] Registered agent {agent_id}.")
+            logger.info(f"✅ [{self.organ_id}] Registered agent {agent_id} (class: {agent_class_name}).")
         except Exception as e:
             logger.error(f"[{self.organ_id}] Failed to create agent {agent_id}: {e}")
             raise
@@ -182,12 +252,14 @@ class Organ:
             
         spec_name = info.get("specialization", "GENERALIST")
         spec = Specialization[spec_name.upper()]
+        agent_class_name = info.get("class", "BaseAgent")  # Get the class
         
-        # Re-run creation logic
+        # Re-run creation logic with preserved agent class
         await self.create_agent(
             agent_id=agent_id,
             specialization=spec,
             organ_id=self.organ_id,
+            agent_class_name=agent_class_name,  # Pass the class
             name=agent_id,  # Re-use original name
             num_cpus=0.1,
             lifetime="detached"

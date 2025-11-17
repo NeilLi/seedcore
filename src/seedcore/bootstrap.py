@@ -12,7 +12,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Optional
 
 # Lazy import for Ray - only imported when functions are called
 # This prevents Ray initialization when the module is imported

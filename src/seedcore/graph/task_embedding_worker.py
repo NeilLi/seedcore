@@ -159,7 +159,7 @@ async def task_embedding_worker(app_state: Any) -> None:
                     text(
                         """
                         SELECT content_sha256
-                          FROM graph_embeddings
+                          FROM graph_embeddings_128
                          WHERE node_id = :nid
                            AND label = :label
                         """
@@ -289,7 +289,7 @@ async def task_embedding_backfill_loop(app_state: Any) -> None:
                     text(
                         """
                         SELECT task_id::text
-                          FROM tasks_missing_embeddings
+                          FROM tasks_missing_embeddings_128
                          LIMIT :limit
                         """
                     ),
@@ -306,7 +306,7 @@ async def task_embedding_backfill_loop(app_state: Any) -> None:
                     text(
                         """
                         SELECT DISTINCT task_id::text
-                          FROM task_embeddings_stale
+                          FROM task_embeddings_stale_128
                          LIMIT :limit
                         """
                     ),

@@ -21,23 +21,18 @@ from collections import defaultdict
 import numpy as np
 import ray  # pyright: ignore[reportMissingImports]
 
-# --- Model Update ---
-# We must update AgentSnapshot to include the agent's learned skills,
-# which is the most critical piece of data for the Coordinator.
+# --- Model Import ---
+# AgentSnapshot is a dataclass from models.state that includes:
+# - h: np.ndarray  # State embedding (128-dim)
+# - p: Dict[str, float]  # Role probabilities (E/S/O)
+# - c: float  # Capability score
+# - mem_util: float  # Memory utilization
+# - lifecycle: str  # Lifecycle state
+# - learned_skills: Dict[str, float]  # Agent's skill levels (deltas)
+# - load: float  # Operational activity load
+# - timestamp: float  # When snapshot was taken
+# - schema_version: str  # Schema version for compatibility
 from ...models.state import AgentSnapshot
-# A pydantic model like this is assumed:
-#
-# class AgentSnapshot(BaseModel):
-#     h: np.ndarray  # State embedding
-#     p: Dict[str, float]  # Role probabilities
-#     c: float  # Capability score
-#     mem_util: float  # Memory utilization
-#     lifecycle: str  # Lifecycle state
-#     learned_skills: Dict[str, float]  # NEW: Agent's skill levels
-#
-#     class Config:
-#         arbitrary_types_allowed = True
-# --- End Model Update ---
 
 
 logger = logging.getLogger(__name__)
@@ -130,34 +125,40 @@ class AgentAggregator:
                     await asyncio.sleep(self.poll_interval)
                     continue
 
-                # 2. Batch-collect heartbeats from all agents
+                # 2. Batch-collect snapshots from all agents
+                # Use get_snapshot() which directly returns AgentSnapshot (the bridge method)
                 ordered_ids = list(agent_handles.keys())
                 ordered_handles = list(agent_handles.values())
 
-                heartbeat_refs = [h.get_heartbeat.remote() for h in ordered_handles]
-                heartbeats = await self._async_ray_get(heartbeat_refs)
+                snapshot_refs = [h.get_snapshot.remote() for h in ordered_handles]
+                snapshots = await self._async_ray_get(snapshot_refs)
 
-                # 3. Process heartbeats into new snapshots
+                # 3. Process snapshots into new_snapshots dict
                 new_snapshots: Dict[str, AgentSnapshot] = {}
                 for i, agent_id in enumerate(ordered_ids):
                     try:
-                        hb = (
-                            heartbeats[i]
-                            if i < len(heartbeats) and heartbeats[i]
-                            else {}
+                        snapshot = (
+                            snapshots[i]
+                            if i < len(snapshots) and snapshots[i] is not None
+                            else None
                         )
-                        if not hb:
+                        if snapshot is None:
                             logger.debug(
-                                f"Agent {agent_id} returned empty heartbeat (likely unhealthy)."
+                                f"Agent {agent_id} returned None snapshot (likely unhealthy)."
                             )
                             continue  # Skip unhealthy/non-responsive agent
 
-                        new_snapshots[agent_id] = self._build_agent_snapshot(
-                            agent_id, hb
-                        )
+                        # Validate it's an AgentSnapshot
+                        if not isinstance(snapshot, AgentSnapshot):
+                            logger.warning(
+                                f"Agent {agent_id} returned invalid snapshot type: {type(snapshot)}"
+                            )
+                            continue
+
+                        new_snapshots[agent_id] = snapshot
                     except Exception as e:
                         logger.warning(
-                            f"Failed to process heartbeat for agent {agent_id}: {e}"
+                            f"Failed to process snapshot for agent {agent_id}: {e}"
                         )
                         continue
 
@@ -226,48 +227,7 @@ class AgentAggregator:
         """Get the timestamp of the last successful poll."""
         return self._last_update_time
 
-    # --- Helper Functions (Updated) ---
-
-    def _build_agent_snapshot(
-        self, agent_id: str, heartbeat: Dict[str, Any]
-    ) -> AgentSnapshot:
-        """
-        Build an AgentSnapshot from a heartbeat.
-
-        **CRITICAL**: This now *must* extract 'learned_skills'.
-        """
-        # Extract state embedding (h vector)
-        state_embedding = heartbeat.get(
-            "state_embedding_h", heartbeat.get("state_embedding", [])
-        )
-        h_vector = (
-            np.array(state_embedding, dtype=np.float32)
-            if state_embedding
-            else np.zeros(128, dtype=np.float32)
-        )
-
-        # Extract role probabilities (p vector)
-        role_probs = heartbeat.get("role_probs", {})
-
-        # Extract performance metrics
-        perf_metrics = heartbeat.get("performance_metrics", {})
-        capability = float(perf_metrics.get("capability_score_c", 0.0))
-        mem_util = float(perf_metrics.get("mem_util", 0.0))
-
-        # Extract lifecycle state
-        lifecycle = heartbeat.get("lifecycle", {}).get("state", "Employed")
-
-        # **NEW & CRITICAL** Extract learned skills for the Coordinator
-        learned_skills = heartbeat.get("learned_skills", {})
-
-        return AgentSnapshot(
-            h=h_vector,
-            p=role_probs,
-            c=capability,
-            mem_util=mem_util,
-            lifecycle=str(lifecycle),
-            learned_skills=learned_skills,  # Add this to the snapshot
-        )
+    # --- Helper Functions ---
 
     async def _async_ray_get(self, refs) -> Any:
         """

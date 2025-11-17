@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
+import time
 
 ROLE_KEYS: Tuple[str, str, str] = ("E", "S", "O")
 
@@ -133,6 +134,9 @@ class AgentSnapshot:
     mem_util: float                     # optional memory util proxy
     lifecycle: str
     learned_skills: Dict[str, float] = field(default_factory=dict)  # Agent's learned skill levels
+    load: float = 0.0                   # Operational activity load (for RL signals, scheduling)
+    timestamp: float = field(default_factory=time.time)  # When snapshot was taken
+    schema_version: str = "v1"          # Schema version for backward compatibility
 
     def __post_init__(self):
         self.h = _as_f32(self.h)

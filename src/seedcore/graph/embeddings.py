@@ -3,7 +3,7 @@
 Ray-based NIM Retrieval Embedder.
 
 Uses NVIDIA's NIM Retrieval model (e.g., nv-embedqa-e5-v5) deployed remotely on EKS
-to compute embeddings for graph nodes, and upserts them into pgvector (graph_embeddings).
+to compute embeddings for graph nodes, and upserts them into pgvector (graph_embeddings_1024 for 1024d).
 
 Env Vars:
   NIM_RETRIEVAL_MODEL=nvidia/nv-embedqa-e5-v5
@@ -18,44 +18,25 @@ from __future__ import annotations
 import os
 import json
 import time
-import logging
-import sys
 from typing import Dict, List, Optional
 
-import ray
-from ray.util import log_once
-import requests
-import sqlalchemy as sa
-from sqlalchemy import text
+import ray  # pyright: ignore[reportMissingImports]
+import requests  # pyright: ignore[reportMissingModuleSource]
+import sqlalchemy as sa  # pyright: ignore[reportMissingImports]
+from sqlalchemy import text  # pyright: ignore[reportMissingImports]
 
 # --- [ SOLUTION ] ---
 # Move logger setup BEFORE importing libraries that might hijack logging (DGL, torch, GraphLoader)
 
-from seedcore.logging_setup import ensure_serve_logger
-
-def get_seedcore_logger(name: str, level="DEBUG"):
-    logger = ensure_serve_logger(name, level=level)
-    
-    # HACK: Remove the faulty `if not logger.handlers:` check.
-    # This ensures your stdout handler is ALWAYS added, even if
-    # a library (like torch) has already added a stderr handler.
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
-        "%H:%M:%S"))
-    logger.addHandler(handler)
-        
-    logger.propagate = True
-    if log_once(f"logger-init-{name}"):
-        logger.info(f"[Logger Initialized] {name}")
-    return logger
-
-# Create the logger instance *before* the bad imports.
-logger = get_seedcore_logger("seedcore.graph.embeddings")
-
 # Now it is safe to import libraries that hijack logging.
 from .loader import GraphLoader
 from .gnn_models import SAGE
+
+from seedcore.logging_setup import ensure_serve_logger
+
+# Create the logger instance *before* the bad imports.
+logger = ensure_serve_logger("seedcore.graph.embeddings")
+
 
 # --- [ END SOLUTION ] ---
 
@@ -245,6 +226,19 @@ class NimRetrievalEmbedder:
                 logger.warning("NimRetrievalEmbedder.embed_texts: vector count mismatch (%d received vs %d requested)", 
                               len(vectors), len(items))
             
+            # Verify embedding dimension (nv-embedqa-e5-v5 produces 1024d embeddings)
+            if vectors:
+                actual_dim = len(vectors[0])
+                expected_dim = 1024
+                if actual_dim != expected_dim:
+                    logger.warning(
+                        "NimRetrievalEmbedder.embed_texts: unexpected embedding dimension %d (expected %d for nv-embedqa-e5-v5). "
+                        "This may indicate a model configuration issue.",
+                        actual_dim, expected_dim
+                    )
+                else:
+                    logger.debug("NimRetrievalEmbedder.embed_texts: verified embedding dimension %d (correct for nv-embedqa-e5-v5)", actual_dim)
+            
             result = {nid: vec for nid, vec in zip(items.keys(), vectors)}
             logger.debug("NimRetrievalEmbedder.embed_texts: completed %d embeddings in %.2fms", 
                         len(result), elapsed_ms)
@@ -270,16 +264,45 @@ def upsert_embeddings(
     props_map: Optional[Dict[int, Optional[dict]]] = None,
     model_map: Optional[Dict[int, Optional[str]]] = None,
     content_hash_map: Optional[Dict[int, Optional[str]]] = None,
+    dimension: Optional[int] = None,
 ) -> int:
     """
-    Upsert embeddings into pgvector table `graph_embeddings`.
+    Upsert embeddings into pgvector table.
+    
+    Args:
+        emb_map: Dictionary mapping node_id to embedding vector
+        label_map: Optional dictionary mapping node_id to label
+        props_map: Optional dictionary mapping node_id to properties JSON
+        model_map: Optional dictionary mapping node_id to model name
+        content_hash_map: Optional dictionary mapping node_id to content SHA256 hash
+        dimension: Vector dimension (128 or 1024). If None, auto-detects from first vector.
+                  Defaults to 1024 for NIM Retrieval embeddings.
+    
+    Returns:
+        Number of rows upserted
     """
     if not emb_map:
         return 0
 
+    # Auto-detect dimension from first vector if not specified
+    if dimension is None:
+        first_vec = next(iter(emb_map.values()))
+        dimension = len(first_vec)
+        logger.debug(f"Auto-detected embedding dimension: {dimension}")
+    
+    # Determine which table to use based on dimension
+    if dimension == 128:
+        table_name = "graph_embeddings_128"
+    elif dimension == 1024:
+        table_name = "graph_embeddings_1024"
+    else:
+        raise ValueError(f"Unsupported embedding dimension: {dimension}. Must be 128 or 1024.")
+
     engine = sa.create_engine(PG_DSN, future=True, echo=DB_ECHO)
     rows = []
     for nid, vec in emb_map.items():
+        if len(vec) != dimension:
+            raise ValueError(f"Vector dimension mismatch: expected {dimension}, got {len(vec)} for node_id={nid}")
         props_value = json.dumps(props_map[nid]) if props_map and nid in props_map else None
         # Convert list to JSON array string for pgvector CAST(:vec AS vector)
         vec_str = json.dumps(vec)
@@ -292,8 +315,8 @@ def upsert_embeddings(
             "content_sha256": (content_hash_map or {}).get(nid),
         })
 
-    sql = text("""
-        INSERT INTO graph_embeddings (node_id, label, emb, props, model, content_sha256)
+    sql = text(f"""
+        INSERT INTO {table_name} (node_id, label, emb, props, model, content_sha256)
         VALUES (
             :nid,
             :label,
@@ -304,9 +327,9 @@ def upsert_embeddings(
         )
         ON CONFLICT (node_id, label) DO UPDATE
             SET emb = EXCLUDED.emb,
-                props = COALESCE(EXCLUDED.props, graph_embeddings.props),
-                model = COALESCE(EXCLUDED.model, graph_embeddings.model),
-                content_sha256 = COALESCE(EXCLUDED.content_sha256, graph_embeddings.content_sha256),
+                props = COALESCE(EXCLUDED.props, {table_name}.props),
+                model = COALESCE(EXCLUDED.model, {table_name}.model),
+                content_sha256 = COALESCE(EXCLUDED.content_sha256, {table_name}.content_sha256),
                 updated_at = NOW()
     """)
 
@@ -345,7 +368,7 @@ if __name__ == "__main__":
     print(json.dumps(embeddings, indent=2)[:400], "...")
 
     if embeddings:
-        total = ray.get(upsert_embeddings.remote(embeddings))
-        print(f"Upserted {total} rows into graph_embeddings.")
+        total = ray.get(upsert_embeddings.remote(embeddings, dimension=1024))
+        print(f"Upserted {total} rows into graph_embeddings_1024.")
     else:
         print("No embeddings returned.")

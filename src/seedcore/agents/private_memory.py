@@ -12,6 +12,10 @@ Integration:
 - F uses AgentState.to_performance_metrics() — no duplicate EWMA inside.
 - S uses RoleProfile.materialize_skills(SkillVector.deltas) → stable skill dict → hashed projection.
 - Convenience: update_from_agent(BaseAgent, ...) wires the common inputs.
+- T (task embeddings): Should use 128d embeddings from graph_embeddings_128 table or 
+  task_embeddings_primary_128 view. This module produces 128d output vectors, so 128d input 
+  embeddings are expected. If 1024d embeddings are passed, they will be projected but may 
+  lose information.
 
 Persistence:
 - Process memory only; no disk I/O. dump()/load() are optional JSON-safe helpers.
@@ -31,6 +35,9 @@ import numpy as np
 from .state import AgentState
 from .base import BaseAgent
 from .roles import RoleProfile, SkillVector
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.agents.private_memory", level="DEBUG")
 
 # === Capacity & defaults ===
 D_TOTAL = 128
@@ -232,6 +239,9 @@ class AgentPrivateMemory:
         Update T/S/P using provided signals and rebuild h.
 
         - T: RP-EMA of task_embed (if provided).
+          NOTE: task_embed should be 128d (from graph_embeddings_128 or task_embeddings_primary_128).
+          This module produces 128d output vectors, so it expects 128d input embeddings.
+          If 1024d embeddings are passed, they will be projected but may lose information.
         - S: materialize & hash skills from (role_profile, skill_vector).
         - P: update CMS & top-k from peer events.
         - F: always rebuilt from agent_state metrics.
@@ -246,6 +256,22 @@ class AgentPrivateMemory:
         # ---- T: task block ----
         if task_embed is not None:
             e = np.asarray(task_embed, dtype=np.float32).reshape(-1)
+            
+            # Warn if 1024d embedding is passed (should use 128d from graph_embeddings_128)
+            if e.size == 1024:
+                logger.warning(
+                    "AgentPrivateMemory.update_after_task: Received 1024d task embedding "
+                    "(expected 128d from graph_embeddings_128). "
+                    "This will be projected but may lose information. "
+                    "Ensure task embeddings are fetched from task_embeddings_primary_128 view."
+                )
+            elif e.size != 128 and e.size not in (64, 80, 96, 112, 128):  # Common 128d variants
+                logger.debug(
+                    "AgentPrivateMemory.update_after_task: Task embedding dimension %d "
+                    "(expected ~128d from graph_embeddings_128). Will project to %dd.",
+                    e.size, MAX_T
+                )
+            
             self._ensure_task_proj(e.shape[0])
             z = e @ self._task_proj  # (MAX_T,)
             self._task_ema = (1.0 - self.alpha) * self._task_ema + self.alpha * z
@@ -296,7 +322,10 @@ class AgentPrivateMemory:
         latency_s: Optional[float] = None,
     ) -> np.ndarray:
         """
-        Convenience wrapper using BaseAgent’s state/roles/skills.
+        Convenience wrapper using BaseAgent's state/roles/skills.
+        
+        NOTE: task_embed should be 128d (from graph_embeddings_128 or task_embeddings_primary_128).
+        This ensures compatibility with the 128d private memory vector output.
         """
         return self.update_after_task(
             task_embed=task_embed,
@@ -352,24 +381,49 @@ class AgentPrivateMemory:
         return v / n
 
     def _rebuild_h(self, agent_state: Optional[AgentState]) -> None:
+        """
+        Rebuild the 128-dim vector h from T/S/P/F blocks.
+        
+        CRITICAL: This MUST always produce exactly D_TOTAL (128) dimensions.
+        BaseAgent._get_current_embedding() relies on this for consistency.
+        """
         T = self._norm(self._task_ema[: self.dT])
         S = self._norm(self._skills_vector()[: self.dS])
         P = self._norm(self._peer_cms.table.reshape(-1)[: self.dP])
         F = self._norm(self._feat_block(agent_state))
-        self.h = np.concatenate([T, S, P, F]).astype(np.float32)
+        
+        # Ensure the concatenated vector is exactly D_TOTAL dimensions
+        h_concatenated = np.concatenate([T, S, P, F]).astype(np.float32)
+        
+        # Safety check: must be exactly 128 dimensions
+        if h_concatenated.size != D_TOTAL:
+            logger.warning(
+                f"AgentPrivateMemory._rebuild_h: Expected {D_TOTAL} dims, got {h_concatenated.size}. "
+                f"Allocation: dT={self.dT}, dS={self.dS}, dP={self.dP}, D_FEAT={D_FEAT}, sum={self.dT + self.dS + self.dP + D_FEAT}"
+            )
+            # Force to 128 by padding or truncating
+            if h_concatenated.size < D_TOTAL:
+                h_concatenated = np.pad(h_concatenated, (0, D_TOTAL - h_concatenated.size), mode='constant')
+            else:
+                h_concatenated = h_concatenated[:D_TOTAL]
+        
+        self.h = h_concatenated
 
     # ------------------------ S materialization ----------------------------------
 
     def _materialize_skills(self, role_profile: RoleProfile, skill_vector: SkillVector) -> np.ndarray:
         """
         Deterministic 1-D list of skills in fixed order for hashing.
-        Order: sorted skill names; values clamped 0..1 from role_profile.materialize_skills().
+        Order: sorted skill names; values already clamped 0..1 by role_profile.materialize_skills().
+        
+        NOTE: No redundant clamping needed - RoleProfile.materialize_skills() already clamps to [0,1].
         """
         mat = role_profile.materialize_skills(skill_vector.deltas)
         if not mat:
             return np.zeros(1, dtype=np.float32)
         keys = sorted(mat.keys())
-        vals = np.array([float(min(1.0, max(0.0, mat[k]))) for k in keys], dtype=np.float32)
+        # RoleProfile.materialize_skills() already clamps to [0,1], so no need to clamp again
+        vals = np.array([float(mat[k]) for k in keys], dtype=np.float32)
         return vals
 
     # ------------------------ realloc --------------------------------------------
@@ -386,6 +440,20 @@ class AgentPrivateMemory:
         self.__init__(self.agent_id, self.alpha)
 
     def get_vector(self) -> np.ndarray:
+        """
+        Return the 128-dim private memory vector.
+        
+        CRITICAL: This MUST always return exactly 128 dimensions.
+        BaseAgent._get_current_embedding() relies on this for consistency.
+        """
+        # Ensure h is always exactly D_TOTAL dimensions
+        if self.h.size != D_TOTAL:
+            logger.warning(
+                f"AgentPrivateMemory.get_vector: h has {self.h.size} dims, expected {D_TOTAL}. "
+                "Rebuilding h to ensure consistency."
+            )
+            self._rebuild_h(None)  # Rebuild with current state
+        
         return self.h.copy()
 
     def get_vector_list(self) -> List[float]:

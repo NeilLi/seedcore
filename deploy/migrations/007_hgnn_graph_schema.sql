@@ -1,20 +1,51 @@
--- 007_hgnn_graph_schema.sql
--- Purpose: Add a comprehensive two-layer HGNN schema (Task layer + Agent/Organ layer),
---          cross-layer edges, numeric node-id mapping for DGL, and integration with
---          existing task + embedding infrastructure.
+-- Combined HGNN Schema Migration
+-- Purpose: Creates the complete two-layer HGNN schema, node mappers,
+--          graph-aware task creators, and monitoring views.
 
 BEGIN;
 
 -- 0) Safety notes (idempotency)
 --    All CREATEs use IF NOT EXISTS. No destructive changes.
 
--- 1) Canonical node-id mapping (lets DGL use BIGINT while business tables keep UUID/TEXT)
+-- 1) Monitoring View (from graph_tasks migration)
+COMMENT ON COLUMN tasks.type IS 'Type/category of the task (e.g., graph_embed, graph_rag_query)';
+
+CREATE OR REPLACE VIEW graph_tasks AS
+SELECT
+    id,
+    type,
+    status,
+    attempts,
+    locked_by,
+    locked_at,
+    run_after,
+    params,
+    result,
+    error,
+    created_at,
+    updated_at,
+    CASE
+        WHEN status = 'completed' THEN '✅'
+        WHEN status = 'running' THEN '🔄'
+        WHEN status = 'queued' THEN '⏳'
+        WHEN status = 'failed' THEN '❌'
+        ELSE '❓'
+    END as status_emoji
+FROM tasks
+WHERE type IN ('graph_embed', 'graph_rag_query')
+ORDER BY updated_at DESC;
+
+COMMENT ON VIEW graph_tasks IS 'View for monitoring graph-related tasks';
+COMMENT ON COLUMN graph_tasks.status_emoji IS 'Visual status indicator';
+
+
+-- 2) Canonical node-id mapping (for DGL)
 CREATE TABLE IF NOT EXISTS graph_node_map (
     node_id      BIGSERIAL PRIMARY KEY,
     node_type    TEXT NOT NULL,                 -- e.g., 'task','agent','organ','artifact','capability','memory_cell'
     ext_table    TEXT NOT NULL,                 -- e.g., 'tasks','agent_registry','organ_registry', etc.
-    ext_uuid     UUID NULL,                     -- for UUID-based rows (e.g., tasks)
-    ext_text_id  TEXT NULL,                     -- for TEXT-based ids (e.g., organ_id/agent_id)
+    ext_uuid     UUID NULL,
+    ext_text_id  TEXT NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (node_type, ext_table, ext_uuid),
@@ -33,7 +64,7 @@ CREATE TRIGGER trg_graph_node_map_updated_at
 BEFORE UPDATE ON graph_node_map
 FOR EACH ROW EXECUTE FUNCTION update_graph_node_map_updated_at();
 
--- Convenience upsert helpers to ensure node-ids exist
+-- Convenience upsert helpers
 CREATE OR REPLACE FUNCTION ensure_task_node(p_task_id UUID)
 RETURNS BIGINT AS $$
 DECLARE
@@ -81,7 +112,7 @@ BEGIN
   RETURN nid;
 END; $$ LANGUAGE plpgsql;
 
--- 2) Minimal registries for Agents/Organs (keys are TEXT in runtime; keep TEXT in DB too)
+-- 3) Minimal registries for Agents/Organs
 CREATE TABLE IF NOT EXISTS agent_registry (
   agent_id    TEXT PRIMARY KEY,
   display_name TEXT NULL,
@@ -93,7 +124,7 @@ CREATE TABLE IF NOT EXISTS agent_registry (
 CREATE TABLE IF NOT EXISTS organ_registry (
   organ_id    TEXT PRIMARY KEY,
   agent_id    TEXT NULL REFERENCES agent_registry(agent_id) ON UPDATE CASCADE ON DELETE SET NULL,
-  kind        TEXT NULL,    -- e.g., 'utility','actuator','retriever', etc.
+  kind        TEXT NULL,
   props       JSONB NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -116,11 +147,11 @@ CREATE TRIGGER trg_organ_registry_updated_at
 BEFORE UPDATE ON organ_registry
 FOR EACH ROW EXECUTE FUNCTION update_timestamps();
 
--- 3) HGNN: Task-layer resource tables (artifact, capability, memory_cell)
+-- 4) HGNN: Task-layer resource tables
 CREATE TABLE IF NOT EXISTS artifact (
   artifact_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   uri         TEXT NOT NULL,
-  kind        TEXT NULL,         -- e.g., 'file','s3','vector','blob'
+  kind        TEXT NULL,
   props       JSONB NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -128,15 +159,15 @@ CREATE TABLE IF NOT EXISTS artifact (
 
 CREATE TABLE IF NOT EXISTS capability (
   capability_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name          TEXT UNIQUE NOT NULL,  -- e.g., 'summarize','embed','plan-route'
+  name          TEXT UNIQUE NOT NULL,
   props         JSONB NULL,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS memory_cell (
   memory_cell_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  scope          TEXT NOT NULL,       -- e.g., 'agent','organ','global'
+  scope          TEXT NOT NULL,
   mkey           TEXT NOT NULL,
   version        INTEGER NOT NULL DEFAULT 1,
   props          JSONB NULL,
@@ -145,8 +176,7 @@ CREATE TABLE IF NOT EXISTS memory_cell (
   UNIQUE(scope, mkey, version)
 );
 
--- 4) HGNN: Task-layer edges (as discussed in your paper)
--- ("task","depends_on","task")
+-- 5) HGNN: Task-layer edges
 CREATE TABLE IF NOT EXISTS task_depends_on_task (
   id BIGSERIAL PRIMARY KEY,
   src_task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -155,7 +185,6 @@ CREATE TABLE IF NOT EXISTS task_depends_on_task (
   UNIQUE (src_task_id, dst_task_id)
 );
 
--- ("task","produces","artifact")
 CREATE TABLE IF NOT EXISTS task_produces_artifact (
   id BIGSERIAL PRIMARY KEY,
   task_id     UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -164,7 +193,6 @@ CREATE TABLE IF NOT EXISTS task_produces_artifact (
   UNIQUE (task_id, artifact_id)
 );
 
--- ("task","uses","capability")
 CREATE TABLE IF NOT EXISTS task_uses_capability (
   id BIGSERIAL PRIMARY KEY,
   task_id       UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -173,7 +201,6 @@ CREATE TABLE IF NOT EXISTS task_uses_capability (
   UNIQUE (task_id, capability_id)
 );
 
--- ("task","reads","memory_cell")
 CREATE TABLE IF NOT EXISTS task_reads_memory (
   id BIGSERIAL PRIMARY KEY,
   task_id        UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -182,7 +209,6 @@ CREATE TABLE IF NOT EXISTS task_reads_memory (
   UNIQUE (task_id, memory_cell_id)
 );
 
--- ("task","writes","memory_cell")
 CREATE TABLE IF NOT EXISTS task_writes_memory (
   id BIGSERIAL PRIMARY KEY,
   task_id        UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -191,8 +217,7 @@ CREATE TABLE IF NOT EXISTS task_writes_memory (
   UNIQUE (task_id, memory_cell_id)
 );
 
--- 5) Agent-layer capability binding (optional but useful)
--- ("organ","provides","capability"); ("agent","owns","memory_cell")
+-- 6) Agent-layer capability binding
 CREATE TABLE IF NOT EXISTS organ_provides_capability (
   id BIGSERIAL PRIMARY KEY,
   organ_id      TEXT NOT NULL REFERENCES organ_registry(organ_id) ON DELETE CASCADE,
@@ -209,8 +234,7 @@ CREATE TABLE IF NOT EXISTS agent_owns_memory_cell (
   UNIQUE (agent_id, memory_cell_id)
 );
 
--- 6) Cross-layer edges (the ones you asked to double-confirm)
--- ("task","executed_by","organ"), ("task","owned_by","agent")
+-- 7) Cross-layer edges
 CREATE TABLE IF NOT EXISTS task_executed_by_organ (
   id BIGSERIAL PRIMARY KEY,
   task_id  UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -227,7 +251,7 @@ CREATE TABLE IF NOT EXISTS task_owned_by_agent (
   UNIQUE (task_id, agent_id)
 );
 
--- 7) Indexes tuned for common traversals
+-- 8) Indexes
 CREATE INDEX IF NOT EXISTS idx_task_dep_src ON task_depends_on_task(src_task_id);
 CREATE INDEX IF NOT EXISTS idx_task_dep_dst ON task_depends_on_task(dst_task_id);
 CREATE INDEX IF NOT EXISTS idx_task_prod_task ON task_produces_artifact(task_id);
@@ -239,27 +263,42 @@ CREATE INDEX IF NOT EXISTS idx_task_owned_task ON task_owned_by_agent(task_id);
 CREATE INDEX IF NOT EXISTS idx_organ_cap_organ ON organ_provides_capability(organ_id);
 CREATE INDEX IF NOT EXISTS idx_agent_mem_agent ON agent_owns_memory_cell(agent_id);
 
--- 8) Binding to existing graph_embeddings table (kept as-is)
--- We expose a view that ties 'task' nodes to the BIGINT node_id used by graph_embeddings.
--- (Your graph_embeddings table already exists with node_id BIGINT + vector index.)
--- NOTE: populate graph_node_map for tasks to use this view.
-CREATE OR REPLACE VIEW task_embeddings AS
+-- 9) Binding to separate graph_embeddings tables (128d and 1024d)
+CREATE OR REPLACE VIEW task_embeddings_128 AS
 SELECT
   t.id              AS task_id,
   m.node_id         AS node_id,
   e.emb             AS emb,
   e.label,
   e.props,
+  e.model,
+  e.content_sha256,
   e.created_at,
   e.updated_at
 FROM tasks t
 JOIN graph_node_map m
   ON m.node_type='task' AND m.ext_table='tasks' AND m.ext_uuid=t.id
-JOIN graph_embeddings e
+LEFT JOIN graph_embeddings_128 e
   ON e.node_id = m.node_id;
 
--- 9) Unified edge view for DGL ingest (numeric node ids + typed edge label)
---    This “flattens” heterogenous edges into (src_nid, dst_nid, edge_type).
+CREATE OR REPLACE VIEW task_embeddings_1024 AS
+SELECT
+  t.id              AS task_id,
+  m.node_id         AS node_id,
+  e.emb             AS emb,
+  e.label,
+  e.props,
+  e.model,
+  e.content_sha256,
+  e.created_at,
+  e.updated_at
+FROM tasks t
+JOIN graph_node_map m
+  ON m.node_type='task' AND m.ext_table='tasks' AND m.ext_uuid=t.id
+LEFT JOIN graph_embeddings_1024 e
+  ON e.node_id = m.node_id;
+
+-- 10) Unified edge view for DGL ingest
 CREATE OR REPLACE VIEW hgnn_edges AS
     -- task -> task (depends_on)
     SELECT
@@ -315,8 +354,7 @@ UNION ALL
     FROM task_owned_by_agent o
 ;
 
--- 10) Backfill helpers (optional)
--- Map existing tasks to node ids (run once if you want immediate availability in views)
+-- 11) Backfill helpers (optional)
 CREATE OR REPLACE FUNCTION backfill_task_nodes()
 RETURNS INTEGER AS $$
 DECLARE
@@ -332,9 +370,9 @@ BEGIN
   RETURN c;
 END; $$ LANGUAGE plpgsql;
 
--- 11) Overloaded graph task creators (v2) that can attach cross-layer edges
---     (keeps your old functions intact; these add optional agent/organ wiring)
-CREATE OR REPLACE FUNCTION create_graph_embed_task_v2(
+-- 12) Graph task creators (FINAL VERSION)
+--     These now attach cross-layer edges for agent/organ
+CREATE OR REPLACE FUNCTION create_graph_embed_task(
     start_node_ids INTEGER[],
     k_hops INTEGER DEFAULT 2,
     description TEXT DEFAULT NULL,
@@ -374,9 +412,10 @@ BEGIN
 
     PERFORM ensure_task_node(task_id);
     RETURN task_id;
-END; $$ LANGUAGE plpgsql;
+END;
+$$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION create_graph_rag_task_v2(
+CREATE OR REPLACE FUNCTION create_graph_rag_task(
     start_node_ids INTEGER[],
     k_hops INTEGER DEFAULT 2,
     top_k INTEGER DEFAULT 10,
@@ -416,17 +455,40 @@ BEGIN
 
     PERFORM ensure_task_node(task_id);
     RETURN task_id;
-END; $$ LANGUAGE plpgsql;
+END;
+$$ LANGUAGE plpgsql;
 
--- 12) Comments to tie back to your execution/runtime
+-- 13) Comments
+COMMENT ON FUNCTION create_graph_embed_task IS 'Helper function to create graph embedding tasks, optionally linking them to an agent/organ';
+COMMENT ON FUNCTION create_graph_rag_task IS 'Helper function to create graph RAG query tasks, optionally linking them to an agent/organ';
 COMMENT ON VIEW hgnn_edges IS 'Flattened hetero-graph edges (numeric src/dst + type) for DGL export';
-COMMENT ON VIEW task_embeddings IS 'Convenience join: tasks ↔ graph_node_map ↔ graph_embeddings';
+COMMENT ON VIEW task_embeddings_128 IS 'Convenience join: tasks ↔ graph_node_map ↔ graph_embeddings_128 (128d embeddings)';
+COMMENT ON VIEW task_embeddings_1024 IS 'Convenience join: tasks ↔ graph_node_map ↔ graph_embeddings_1024 (1024d embeddings)';
 
--- Optional: tiny check
+-- 14) Example usage
+/*
+-- Example 1: Embed 2-hop neighborhood, owned by an agent
+SELECT create_graph_embed_task(
+    ARRAY[123],
+    2,
+    'Embed neighborhood around user node 123',
+    'agent_xyz_123',  -- p_agent_id
+    'organ_processing_A' -- p_organ_id
+);
+
+-- Example 2: RAG query, no owner
+SELECT create_graph_rag_task(
+    ARRAY[123, 456],
+    2,
+    15,
+    'Find similar nodes to users 123 and 456 for RAG augmentation'
+);
+*/
+
+-- 15) Final sanity notice
 DO $$
 BEGIN
-  RAISE NOTICE 'HGNN graph schema migration applied';
+  RAISE NOTICE '✅ Combined HGNN graph schema migration applied';
 END$$;
 
 COMMIT;
-

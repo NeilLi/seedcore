@@ -87,6 +87,7 @@ class Specialization(str, Enum):
     # -------------------------------------------------------------
     GENERALIST = "generalist"
     OBSERVER = "observer"
+    UTILITY = "utility"
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,57 @@ class RoleProfile:
     def has_tool(self, tool: str) -> bool:
         return tool in self.allowed_tools
 
+    def to_p_dict(self) -> Dict[str, float]:
+        """
+        Convert RoleProfile to a role probability dictionary with keys E, S, O.
+        This is a bridge method that converts the specialization-based profile
+        into the E/S/O probability format required by AgentSnapshot.
+        
+        NOTE: The actual mapping logic is centralized in RoleRegistry.specialization_to_p_dict()
+        to avoid drift. This method delegates to the registry if available, otherwise
+        uses a fallback heuristic.
+        
+        Returns:
+            Dict[str, float]: Dictionary with keys "E", "S", "O" and their probabilities.
+        """
+        # If we have access to a registry, use it (centralized logic)
+        # Otherwise, fall back to heuristic (for backward compatibility)
+        # In practice, BaseAgent should use role_registry.specialization_to_p_dict() directly
+        from seedcore.models.state import ROLE_KEYS
+        
+        # Fallback heuristic (same as before, but ideally this should be in RoleRegistry)
+        spec_name = self.name.value.lower()
+        
+        execution_keywords = ["execution", "robot", "device", "orchestrator", "controller", 
+                             "manager", "coordinator", "drone", "actuator"]
+        synthesis_keywords = ["planner", "synthesizer", "critic", "analyzer", "refiner",
+                             "learner", "model", "preference", "liaison"]
+        observation_keywords = ["observer", "monitor", "detector", "forecaster", "verifier",
+                               "validator", "inference", "oracle"]
+        
+        e_score = sum(1.0 for kw in execution_keywords if kw in spec_name)
+        s_score = sum(1.0 for kw in synthesis_keywords if kw in spec_name)
+        o_score = sum(1.0 for kw in observation_keywords if kw in spec_name)
+        
+        if e_score == 0 and s_score == 0 and o_score == 0:
+            e_score, s_score, o_score = 1.0, 1.0, 1.0
+        
+        total = e_score + s_score + o_score
+        p_dict = {
+            "E": float(e_score / total),
+            "S": float(s_score / total),
+            "O": float(o_score / total),
+        }
+        
+        result = {key: p_dict.get(key, 0.0) for key in ROLE_KEYS}
+        total = sum(result.values())
+        if total > 0:
+            result = {key: val / total for key, val in result.items()}
+        else:
+            result = {key: 1.0 / len(ROLE_KEYS) for key in ROLE_KEYS}
+        
+        return result
+
     def to_context(
         self,
         agent_id: str,
@@ -161,12 +213,74 @@ class RoleRegistry:
     - update(spec, **fields): shallow update to an existing profile
     - all_profiles(): iterate over all RoleProfile
     - to_json(): export registry to JSON (for debugging/telemetry)
+    - specialization_to_p_dict(spec): centralized E/S/O mapping
     """
     def __init__(self, profiles: Optional[Iterable[RoleProfile]] = None) -> None:
         self._profiles: Dict[Specialization, RoleProfile] = {}
         if profiles:
             for p in profiles:
                 self.register(p)
+    
+    def specialization_to_p_dict(self, spec: Specialization) -> Dict[str, float]:
+        """
+        Centralized mapping from Specialization to E/S/O role probabilities.
+        This is the canonical source of truth for role probability mapping,
+        avoiding drift and ensuring consistency across the system.
+        
+        Args:
+            spec: The specialization enum
+            
+        Returns:
+            Dict[str, float]: Dictionary with keys "E", "S", "O" and their probabilities.
+        """
+        from seedcore.models.state import ROLE_KEYS
+        
+        # Use the RoleProfile's to_p_dict() if available
+        profile = self.get_safe(spec)
+        if profile:
+            return profile.to_p_dict()
+        
+        # Fallback: heuristic mapping based on specialization name
+        spec_name = spec.value.lower()
+        
+        # Execution-oriented specializations (high E)
+        execution_keywords = ["execution", "robot", "device", "orchestrator", "controller", 
+                             "manager", "coordinator", "drone", "actuator"]
+        # Synthesis-oriented specializations (high S)
+        synthesis_keywords = ["planner", "synthesizer", "critic", "analyzer", "refiner",
+                             "learner", "model", "preference", "liaison"]
+        # Observation-oriented specializations (high O)
+        observation_keywords = ["observer", "monitor", "detector", "forecaster", "verifier",
+                               "validator", "inference", "oracle"]
+        
+        # Determine base probabilities
+        e_score = sum(1.0 for kw in execution_keywords if kw in spec_name)
+        s_score = sum(1.0 for kw in synthesis_keywords if kw in spec_name)
+        o_score = sum(1.0 for kw in observation_keywords if kw in spec_name)
+        
+        # If no matches, use balanced distribution
+        if e_score == 0 and s_score == 0 and o_score == 0:
+            e_score, s_score, o_score = 1.0, 1.0, 1.0
+        
+        # Normalize to probabilities
+        total = e_score + s_score + o_score
+        p_dict = {
+            "E": float(e_score / total),
+            "S": float(s_score / total),
+            "O": float(o_score / total),
+        }
+        
+        # Ensure all ROLE_KEYS are present
+        result = {key: p_dict.get(key, 0.0) for key in ROLE_KEYS}
+        
+        # Normalize again to ensure sum = 1.0
+        total = sum(result.values())
+        if total > 0:
+            result = {key: val / total for key, val in result.items()}
+        else:
+            result = {key: 1.0 / len(ROLE_KEYS) for key in ROLE_KEYS}
+        
+        return result
 
     def get(self, spec: Specialization) -> RoleProfile:
         if spec not in self._profiles:

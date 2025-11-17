@@ -20,9 +20,16 @@ Resource-conscious defaults:
 """
 
 from __future__ import annotations
-import argparse, asyncio, json, os, sys, time, uuid, statistics
+import argparse
+import asyncio
+import json
+import os
+import sys
+import time
+import uuid
+import statistics
 from typing import Any, Dict, List, Optional, Tuple
-import httpx
+import httpx  # pyright: ignore[reportMissingImports]
 
 # ---------- Env helpers ----------
 def env_float(k: str, default: float) -> float:
@@ -34,7 +41,7 @@ def env_float(k: str, default: float) -> float:
 def env_str(k: str, default: str) -> str:
     return os.getenv(k, default)
 
-DEFAULT_ORCH_URL = env_str("ORCH_URL", "http://127.0.0.1:8000/orchestrator")
+DEFAULT_ORCH_URL = env_str("ORCH_URL", "http://127.0.0.1:8000/pipeline")
 
 # Presets tuned for resource usage
 PRESETS = {

@@ -15,6 +15,8 @@ Key components:
 from .manager import Tool, ToolError, ToolManager
 from . import memory_tools
 from . import training_tools
+from . import calculator_tool
+from . import query_tools
 
 __all__ = [
     "Tool",
@@ -22,5 +24,7 @@ __all__ = [
     "ToolManager",
     "memory_tools",
     "training_tools",
+    "calculator_tool",
+    "query_tools",
 ]
 

@@ -104,6 +104,10 @@ class SkillVector:
         """
         Combine defaults and deltas, clamping into [0, 1].
         Unknown skills in deltas are added directly (clamped).
+        
+        NOTE: This method duplicates RoleProfile.materialize_skills() logic.
+        Prefer using RoleProfile.materialize_skills(self.deltas) for consistency.
+        This method is kept for cases where RoleProfile is not available.
         """
         out: Dict[str, float] = {}
         for k, base in defaults.items():
@@ -167,12 +171,31 @@ class SkillVector:
 
     # ---- Introspection / Serialization --------------------------------------------
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {"deltas": dict(self.deltas), "last_updated": self.last_updated}
+    def to_dict(self) -> Dict[str, float]:
+        """
+        Return just the deltas dictionary (skill name -> delta value).
+        This is the unified representation for AgentSnapshot.learned_skills.
+        
+        Returns:
+            Dict[str, float]: Dictionary mapping skill names to their delta values.
+        """
+        return dict(self.deltas)
 
     @classmethod
-    def from_dict(cls, payload: Dict[str, Any]) -> "SkillVector":
-        return cls(deltas=dict(payload.get("deltas", {})), last_updated=float(payload.get("last_updated", time.time())))
+    def from_dict(cls, payload: Dict[str, float]) -> "SkillVector":
+        """
+        Restore SkillVector from a dictionary.
+        
+        Expected format: {"skill_name": delta_value, ...} (direct deltas dict)
+        Optional: {"skill_name": delta_value, ..., "last_updated": timestamp}
+        """
+        # Extract last_updated if present, otherwise use current time
+        last_updated = float(payload.get("last_updated", time.time()))
+        
+        # The rest of the payload should be skill deltas (exclude last_updated)
+        deltas = {k: float(v) for k, v in payload.items() if k != "last_updated"}
+        
+        return cls(deltas=deltas, last_updated=last_updated)
 
     def to_json(self, indent: Optional[int] = None) -> str:
         return json.dumps(self.to_dict(), indent=indent)
@@ -186,5 +209,9 @@ class SkillVector:
     def export_for_cog(self, defaults: Dict[str, float]) -> Dict[str, float]:
         """
         Convenience for cognition/ML payloads.
+        
+        NOTE: This uses SkillVector.materialize() which duplicates RoleProfile.materialize_skills().
+        In most cases, you should use RoleProfile.materialize_skills(self.deltas) instead.
+        This method is kept for cases where RoleProfile is not available.
         """
         return self.materialize(defaults)

@@ -1,68 +1,72 @@
 --
--- NOTE: this migration is intentionally idempotent and stages the changes in
---       the same order you would use for a low-downtime rollout:
---         1. Ensure metadata columns + indexes exist.
---         2. Backfill/lock label semantics.
---         3. Switch uniqueness enforcement to (node_id, label).
---         4. Publish helper views for observability.
---
+-- NOTE: This migration creates views for the separate embedding tables (128d and 1024d).
+-- If an old graph_embeddings table exists, it will be migrated to graph_embeddings_128.
 -- Safe to run multiple times.
-
--- Ensure the table exists before altering.
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name = 'graph_embeddings'
-    ) THEN
-        RAISE NOTICE 'graph_embeddings table does not exist – skipping upgrade.';
-        RETURN;
-    END IF;
-END;
-$$;
+--
 
 -- We rely on digest() to compute SHA256 hashes in helper views.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- Drop legacy primary key on node_id only.
-ALTER TABLE graph_embeddings
-    DROP CONSTRAINT IF EXISTS graph_embeddings_pkey;
+-- ============================================================================
+-- Migrate from old graph_embeddings table if it exists
+-- ============================================================================
 
--- Backfill NULL/blank labels before making the column NOT NULL.
-UPDATE graph_embeddings
-   SET label = 'default'
- WHERE label IS NULL OR btrim(label) = '';
+DO $$
+BEGIN
+    -- Check if old graph_embeddings table exists
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'graph_embeddings'
+    ) THEN
+        -- Ensure graph_embeddings_128 table exists (should exist from migration 002)
+        IF EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'graph_embeddings_128'
+        ) THEN
+            -- Migrate data from old table to graph_embeddings_128
+            INSERT INTO graph_embeddings_128 (node_id, label, props, emb, model, content_sha256, created_at, updated_at)
+            SELECT 
+                node_id,
+                COALESCE(NULLIF(btrim(label), ''), 'default') AS label,
+                props,
+                emb,
+                model,
+                content_sha256,
+                created_at,
+                updated_at
+            FROM graph_embeddings
+            WHERE NOT EXISTS (
+                SELECT 1 FROM graph_embeddings_128 ge128
+                WHERE ge128.node_id = graph_embeddings.node_id
+                AND ge128.label = COALESCE(NULLIF(btrim(graph_embeddings.label), ''), 'default')
+            )
+            ON CONFLICT DO NOTHING;
 
--- Ensure a deterministic default label and prevent NULLs going forward.
-ALTER TABLE graph_embeddings
-    ALTER COLUMN label SET DEFAULT 'default';
-ALTER TABLE graph_embeddings
-    ALTER COLUMN label SET NOT NULL;
+            RAISE NOTICE '✅ Migrated data from graph_embeddings to graph_embeddings_128';
+        END IF;
 
--- Add metadata columns for embedding provenance / freshness.
-ALTER TABLE graph_embeddings
-    ADD COLUMN IF NOT EXISTS model TEXT,
-    ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
+        -- Drop old table and its dependencies
+        DROP INDEX IF EXISTS idx_graph_embeddings_emb;
+        DROP INDEX IF EXISTS idx_graph_embeddings_node;
+        DROP INDEX IF EXISTS idx_graph_embeddings_label;
+        DROP INDEX IF EXISTS uq_graph_embeddings_node_label;
+        DROP TRIGGER IF EXISTS trg_graph_embeddings_updated_at ON graph_embeddings;
+        DROP FUNCTION IF EXISTS update_graph_embeddings_updated_at();
+        DROP TABLE IF EXISTS graph_embeddings;
+        
+        RAISE NOTICE '✅ Dropped old graph_embeddings table';
+    ELSE
+        RAISE NOTICE 'ℹ️  No old graph_embeddings table found - using new separate tables';
+    END IF;
+END;
+$$;
 
--- Enforce uniqueness on (node_id, label) and keep it even after promoting to
--- the primary key for clarity and query planning hints.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_graph_embeddings_node_label
-    ON graph_embeddings (node_id, label);
+-- ============================================================================
+-- Create views for 128d embeddings
+-- ============================================================================
 
--- Promote (node_id, label) to the new primary key (after the unique index is
--- in place so ON CONFLICT targets work during the transition).
-ALTER TABLE graph_embeddings
-    ADD CONSTRAINT graph_embeddings_pkey PRIMARY KEY (node_id, label);
-
--- Add supporting indexes for common query paths.
-CREATE INDEX IF NOT EXISTS idx_graph_embeddings_node
-    ON graph_embeddings (node_id);
-
-CREATE INDEX IF NOT EXISTS idx_graph_embeddings_label
-    ON graph_embeddings (label);
-
--- Helper view: tasks missing primary task embeddings.
-CREATE OR REPLACE VIEW tasks_missing_embeddings AS
+-- Helper view: tasks missing primary task embeddings (128d)
+CREATE OR REPLACE VIEW tasks_missing_embeddings_128 AS
 SELECT t.id AS task_id,
        m.node_id
   FROM tasks t
@@ -70,13 +74,13 @@ SELECT t.id AS task_id,
     ON m.node_type = 'task'
    AND m.ext_table = 'tasks'
    AND m.ext_uuid = t.id
-  LEFT JOIN graph_embeddings e
+  LEFT JOIN graph_embeddings_128 e
     ON e.node_id = m.node_id
    AND e.label = 'task.primary'
  WHERE e.node_id IS NULL;
 
--- Optional narrower convenience view for the primary task embedding label.
-CREATE OR REPLACE VIEW task_embeddings_primary AS
+-- Convenience view for the primary task embedding label (128d)
+CREATE OR REPLACE VIEW task_embeddings_primary_128 AS
 SELECT t.id         AS task_id,
        m.node_id    AS node_id,
        e.emb        AS emb,
@@ -90,14 +94,12 @@ SELECT t.id         AS task_id,
     ON m.node_type = 'task'
    AND m.ext_table = 'tasks'
    AND m.ext_uuid = t.id
-  JOIN graph_embeddings e
+  JOIN graph_embeddings_128 e
     ON e.node_id = m.node_id
    AND e.label = 'task.primary';
 
--- Helper view: detect embeddings whose stored hash no longer matches the
--- current task content (allows targeted refreshes). The 16000 character limit
--- mirrors TASK_EMBED_TEXT_MAX_CHARS in the application worker.
-CREATE OR REPLACE VIEW task_embeddings_stale AS
+-- Helper view: detect stale embeddings (128d)
+CREATE OR REPLACE VIEW task_embeddings_stale_128 AS
 SELECT t.id AS task_id,
        m.node_id AS node_id,
        e.label,
@@ -125,7 +127,95 @@ SELECT t.id AS task_id,
     ON m.node_type = 'task'
    AND m.ext_table = 'tasks'
    AND m.ext_uuid = t.id
-  JOIN graph_embeddings e
+  JOIN graph_embeddings_128 e
+    ON e.node_id = m.node_id
+WHERE e.label = 'task.primary'
+   AND e.content_sha256 IS DISTINCT FROM encode(
+           digest(
+               convert_to(
+                   left(
+                       concat_ws(
+                           '\n',
+                           NULLIF(btrim(t.description), ''),
+                           NULLIF(btrim(t.type), ''),
+                           NULLIF(btrim(jsonb_pretty(t.params)), '')
+                       ),
+                       16000
+                   ),
+                   'UTF8'
+               ),
+               'sha256'
+           ),
+           'hex'
+       );
+
+-- ============================================================================
+-- Create views for 1024d embeddings
+-- ============================================================================
+
+-- Helper view: tasks missing primary task embeddings (1024d)
+CREATE OR REPLACE VIEW tasks_missing_embeddings_1024 AS
+SELECT t.id AS task_id,
+       m.node_id
+  FROM tasks t
+  JOIN graph_node_map m
+    ON m.node_type = 'task'
+   AND m.ext_table = 'tasks'
+   AND m.ext_uuid = t.id
+  LEFT JOIN graph_embeddings_1024 e
+    ON e.node_id = m.node_id
+   AND e.label = 'task.primary'
+ WHERE e.node_id IS NULL;
+
+-- Convenience view for the primary task embedding label (1024d)
+CREATE OR REPLACE VIEW task_embeddings_primary_1024 AS
+SELECT t.id         AS task_id,
+       m.node_id    AS node_id,
+       e.emb        AS emb,
+       e.model      AS model,
+       e.props      AS props,
+       e.content_sha256,
+       e.created_at,
+       e.updated_at
+  FROM tasks t
+  JOIN graph_node_map m
+    ON m.node_type = 'task'
+   AND m.ext_table = 'tasks'
+   AND m.ext_uuid = t.id
+  JOIN graph_embeddings_1024 e
+    ON e.node_id = m.node_id
+   AND e.label = 'task.primary';
+
+-- Helper view: detect stale embeddings (1024d)
+CREATE OR REPLACE VIEW task_embeddings_stale_1024 AS
+SELECT t.id AS task_id,
+       m.node_id AS node_id,
+       e.label,
+       e.content_sha256 AS stored_sha256,
+       encode(
+           digest(
+               convert_to(
+                   left(
+                       concat_ws(
+                           '\n',
+                           NULLIF(btrim(t.description), ''),
+                           NULLIF(btrim(t.type), ''),
+                           NULLIF(btrim(jsonb_pretty(t.params)), '')
+                       ),
+                       16000
+                   ),
+                   'UTF8'
+               ),
+               'sha256'
+           ),
+           'hex'
+       ) AS current_sha256
+  FROM tasks t
+  JOIN graph_node_map m
+    ON m.node_type = 'task'
+   AND m.ext_table = 'tasks'
+   AND m.ext_uuid = t.id
+  JOIN graph_embeddings_1024 e
     ON e.node_id = m.node_id
 WHERE e.label = 'task.primary'
    AND e.content_sha256 IS DISTINCT FROM encode(

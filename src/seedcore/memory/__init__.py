@@ -61,14 +61,9 @@ except ImportError:
 
 # Consolidation functions (if available)
 try:
-    from .consolidation import consolidate_batch, consolidation_worker, vq_vae_compress
+    from .flashbulb_client import FlashbulbClient
 except ImportError:
-    try:
-        from .consolidation_logic import consolidate_batch
-    except ImportError:
-        consolidate_batch = None  # type: ignore
-    consolidation_worker = None  # type: ignore
-    vq_vae_compress = None  # type: ignore
+    FlashbulbClient = None  # type: ignore
 
 __all__ = [
     # Core classes
@@ -90,8 +85,6 @@ __all__ = [
     # Shard classes
     "SharedCacheShard",
     "MwStoreShard",
-    # Consolidation
-    "consolidate_batch",
-    "consolidation_worker",
-    "vq_vae_compress",
+    # FlashbulbClient
+    "FlashbulbClient"
 ]

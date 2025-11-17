@@ -4,15 +4,15 @@
 
 This document summarizes the current state of database migrations for SeedCore, providing a comprehensive view of the schema evolution and helping plan future feature development.
 
-**Total Migrations**: 12  
-**Last Updated**: Migration 012  
-**Database System**: PostgreSQL with extensions (vector, pgvector)
+**Total Migrations**: 15  
+**Last Updated**: Migration 018  
+**Database System**: PostgreSQL with extensions (vector, pgvector, pgcrypto)
 
 ---
 
 ## Migration Timeline
 
-### Phase 1: Core Task Management (001-006)
+### Phase 1: Core Task Management (001-002)
 
 #### 001_create_tasks_table.sql
 **Purpose**: Foundation for Coordinator + Dispatcher system  
@@ -20,78 +20,39 @@ This document summarizes the current state of database migrations for SeedCore, 
 - `tasks` table with UUID primary key
 - `taskstatus` enum (created, queued, running, completed, failed, cancelled, retry)
 - Core columns: status, attempts, locked_by, locked_at, run_after, type, domain, drift_score
+- Lease columns: owner_id, lease_expires_at, last_heartbeat
 - JSONB columns: params, result
-- Indexes for performance (status, type, domain, claim queries)
+- Indexes for performance (status, type, domain, routing, lease tracking)
+- Routing-specific JSONB path indexes for filtering
+- `graph_tasks` view for monitoring graph-related tasks
+- Helper functions: `create_graph_embed_task()`, `create_graph_rag_task()` (with optional agent/organ parameters)
+- `cleanup_stale_running_tasks()` function for emergency recovery
 - Auto-update trigger for `updated_at`
 
 **Dependencies**: None  
 **Used By**: All subsequent task-related migrations
 
+**Note**: This migration consolidates functionality from previous migrations 003-006, including:
+- Graph task types and helper functions
+- Task lease columns and stale task recovery
+- Task schema enhancements and routing indexes
+
 ---
 
 #### 002_graph_embeddings.sql
-**Purpose**: Enable vector similarity search for graph nodes  
+**Purpose**: Enable vector similarity search with separate dimension tables  
 **Key Components**:
-- Requires `vector` extension
-- `graph_embeddings` table with VECTOR(128) embeddings
-- IVFFlat index for ANN search
+- Requires `vector` and `pgcrypto` extensions
+- `graph_embeddings_128` table with VECTOR(128) embeddings
+- `graph_embeddings_1024` table with VECTOR(1024) embeddings
+- IVFFlat indexes for ANN search on both tables
 - node_id as BIGINT (DGL-compatible)
 - Supports labels and properties as JSONB
+- Migration logic from old `graph_embeddings` table (if exists)
+- Triggers for auto-updating `updated_at` timestamps
 
 **Dependencies**: PostgreSQL vector extension  
-**Used By**: 007 (HGNN integration)
-
----
-
-#### 003_graph_task_types.sql
-**Purpose**: Add graph-specific task types and helper functions  
-**Key Components**:
-- `graph_tasks` view for monitoring
-- `create_graph_embed_task()` function - creates graph embedding tasks
-- `create_graph_rag_task()` function - creates RAG query tasks
-- Status emoji indicators for UI/monitoring
-
-**Dependencies**: 001  
-**Used By**: 004, 005
-
----
-
-#### 004_fix_taskstatus_enum.sql
-**Purpose**: Ensure enum consistency (fix uppercase/lowercase issues)  
-**Key Components**:
-- Idempotent enum creation/modification
-- Data migration for any uppercase values
-- Updated helper functions with correct enum values
-- Enhanced `graph_tasks` view with all status emojis
-
-**Dependencies**: 001, 003  
-**Used By**: 005
-
----
-
-#### 005_consolidate_task_schema.sql
-**Purpose**: Comprehensive schema consolidation and validation  
-**Key Components**:
-- Ensures all required columns exist (locked_by, locked_at, run_after, attempts, drift_score)
-- Recreates all indexes for consistency
-- Updates helper functions with drift_score support
-- Schema verification with detailed notices
-
-**Dependencies**: 001-004  
-**Used By**: 006
-
----
-
-#### 006_add_task_lease_columns.sql
-**Purpose**: Enable stale task recovery and heartbeat tracking  
-**Key Components**:
-- New columns: `owner_id`, `lease_expires_at`, `last_heartbeat`
-- Indexes for lease tracking and stale detection
-- `cleanup_stale_running_tasks()` function for emergency recovery
-- Composite indexes for owner-based queries
-
-**Dependencies**: 005  
-**Used By**: Task leasing systems
+**Used By**: 007 (HGNN integration), 017 (task embedding support)
 
 ---
 
@@ -131,15 +92,16 @@ This document summarizes the current state of database migrations for SeedCore, 
 - `task_owned_by_agent` - Task ownership
 
 **Views**:
-- `task_embeddings` - Join tasks with embeddings
+- `task_embeddings_128` - Join tasks with 128d embeddings via graph_node_map
+- `task_embeddings_1024` - Join tasks with 1024d embeddings via graph_node_map
 - `hgnn_edges` - Flattened heterogeneous edges for DGL export
 
 **Enhanced Task Functions**:
-- `create_graph_embed_task_v2()` - With agent/organ binding
-- `create_graph_rag_task_v2()` - With agent/organ binding
+- `create_graph_embed_task()` - With optional agent/organ binding parameters
+- `create_graph_rag_task()` - With optional agent/organ binding parameters
 - `backfill_task_nodes()` - Populate node map
 
-**Dependencies**: 001-006, 002 (graph_embeddings)  
+**Dependencies**: 001, 002 (graph_embeddings)  
 **Used By**: 008, 010
 
 ---
@@ -252,6 +214,98 @@ This document summarizes the current state of database migrations for SeedCore, 
 
 ---
 
+### Phase 4: PKG (Package) System (013-016)
+
+#### 013_pkg_core.sql
+**Purpose**: PKG core catalog system for package snapshots and policy rules  
+**Key Components**:
+- `pkg_snapshots` - Package snapshots with environment tracking
+- `pkg_subtask_types` - Subtask type definitions
+- `pkg_policy_rules` - Policy rules for governance
+- `pkg_rule_conditions` - Rule conditions with operators
+- `pkg_rule_emissions` - Rule emissions/outputs
+- `pkg_snapshot_artifacts` - Artifacts associated with snapshots
+- Enums: `pkg_env`, `pkg_engine`, `pkg_condition_type`, `pkg_operator`, `pkg_relation`, `pkg_artifact_type`
+
+**Dependencies**: None  
+**Used By**: 014, 015, 016
+
+---
+
+#### 014_pkg_ops.sql
+**Purpose**: PKG operations and deployment tracking  
+**Key Components**:
+- `pkg_deployments` - Deployment tracking
+- `pkg_facts` - PKG-related facts
+- `pkg_validation_fixtures` - Validation test fixtures
+- `pkg_validation_runs` - Validation run results
+- `pkg_promotions` - Snapshot promotion tracking
+- `pkg_device_versions` - Device version tracking
+
+**Dependencies**: 013  
+**Used By**: 015, 016
+
+---
+
+#### 015_pkg_views_functions.sql
+**Purpose**: PKG views and helper functions  
+**Key Components**:
+- `pkg_active_artifact` view - Active artifact per environment
+- `pkg_rules_expanded` view - Rules with expanded conditions and emissions
+- `pkg_deployment_coverage` view - Deployment coverage tracking
+- `pkg_check_integrity()` - Integrity validation function
+- `pkg_active_snapshot_id()` - Get active snapshot ID
+- `pkg_promote_snapshot()` - Promote snapshot function
+
+**Dependencies**: 013, 014  
+**Used By**: 016
+
+---
+
+#### 016_fact_pkg_integration.sql
+**Purpose**: Integrate facts system with PKG for temporal facts and policy governance  
+**Key Components**:
+- Enhanced `facts` table with PKG integration fields
+- Temporal fact support with validity periods
+- Policy governance integration
+- Eventizer support for fact processing
+- `active_temporal_facts` view for efficient temporal queries
+- Helper functions: `get_facts_by_subject()`, `cleanup_expired_facts()`, `get_fact_statistics()`
+
+**Dependencies**: 009, 013, 014, 015  
+**Used By**: Fact-aware task processing with PKG governance
+
+---
+
+### Phase 5: Task Embedding & Outbox (017-018)
+
+#### 017_task_embedding_support.sql
+**Purpose**: Support for task embeddings with separate 128d and 1024d tables  
+**Key Components**:
+- Views: `task_embeddings_primary_128`, `task_embeddings_primary_1024`
+- Views: `task_embeddings_stale_128`, `task_embeddings_stale_1024`
+- Views: `tasks_missing_embeddings_128`, `tasks_missing_embeddings_1024`
+- Backfill functions for populating embeddings
+- Integration with `graph_node_map` for node ID mapping
+
+**Dependencies**: 001, 002, 007  
+**Used By**: Task embedding workflows
+
+---
+
+#### 018_task_outbox_hardening.sql
+**Purpose**: Enhance task outbox pattern with availability tracking  
+**Key Components**:
+- `available_at` column for task availability scheduling
+- Enhanced `attempts` tracking
+- Indexes for outbox queries
+- Improved task scheduling support
+
+**Dependencies**: 001  
+**Used By**: Task outbox pattern implementations
+
+---
+
 ## Schema Architecture Summary
 
 ### Core Node Types
@@ -299,10 +353,21 @@ This document summarizes the current state of database migrations for SeedCore, 
 | View | Purpose | Dependencies |
 |------|---------|--------------|
 | graph_tasks | Monitor graph task types | tasks |
-| task_embeddings | Join tasks with embeddings | tasks + graph_node_map + graph_embeddings |
+| task_embeddings_128 | Join tasks with 128d embeddings | tasks + graph_node_map + graph_embeddings_128 |
+| task_embeddings_1024 | Join tasks with 1024d embeddings | tasks + graph_node_map + graph_embeddings_1024 |
+| task_embeddings_primary_128 | Primary 128d embeddings for tasks | tasks + graph_node_map + graph_embeddings_128 |
+| task_embeddings_primary_1024 | Primary 1024d embeddings for tasks | tasks + graph_node_map + graph_embeddings_1024 |
+| task_embeddings_stale_128 | Stale 128d embeddings | tasks + graph_node_map + graph_embeddings_128 |
+| task_embeddings_stale_1024 | Stale 1024d embeddings | tasks + graph_node_map + graph_embeddings_1024 |
+| tasks_missing_embeddings_128 | Tasks missing 128d embeddings | tasks + graph_node_map + graph_embeddings_128 |
+| tasks_missing_embeddings_1024 | Tasks missing 1024d embeddings | tasks + graph_node_map + graph_embeddings_1024 |
 | hgnn_edges | Flattened edges for DGL | All edge tables + node mapping |
 | active_instances | Current alive instances | registry_instance + cluster_metadata |
 | active_instance | Best instance per logical_id | registry_instance + cluster_metadata |
+| active_temporal_facts | Active temporal facts | facts |
+| pkg_active_artifact | Active PKG artifact per env | pkg_snapshots + pkg_snapshot_artifacts |
+| pkg_rules_expanded | PKG rules with conditions/emissions | pkg_policy_rules + pkg_rule_conditions + pkg_rule_emissions |
+| pkg_deployment_coverage | PKG deployment coverage | pkg_deployments |
 
 ---
 
@@ -310,6 +375,7 @@ This document summarizes the current state of database migrations for SeedCore, 
 
 ### Required Extensions
 - `vector` (pgvector) - Vector similarity search
+- `pgcrypto` - UUID generation and cryptographic functions
 - Advisory locks - Epoch management coordination
 
 ### Index Types Used
@@ -320,37 +386,45 @@ This document summarizes the current state of database migrations for SeedCore, 
 ### Advanced Features
 - JSONB for flexible metadata
 - Array types for tags
-- Vector embeddings (128 dimensions)
+- Vector embeddings (128 and 1024 dimensions)
 - Full-text search (tsvector)
 - Triggers for auto-timestamp updates
-- Enum types for type safety
+- Enum types for type safety (taskstatus, InstanceStatus, PKG enums)
 - Views for common queries
 - Foreign key constraints with CASCADE/RESTRICT
 - Composite indexes for complex queries
+- Partial indexes with WHERE clauses
 - Advisory locks for distributed coordination
+- Temporal fact support with validity periods
 
 ---
 
 ## Dependency Graph
 
 ```
-001 (tasks)
-├── 002 (graph_embeddings)
-│   └── 007 (HGNN)
-├── 003 (graph task types)
-│   └── 004 (enum fixes)
-│       └── 005 (consolidation)
-│           └── 006 (lease columns)
-│               └── 007 (HGNN schema)
-│                   ├── 008 (agent layer)
-│                   │   └── 010 (fact integration)
-│                   └── 010 (fact integration)
-
+001 (tasks - consolidated)
+├── 002 (graph_embeddings - separate 128d/1024d tables)
+│   ├── 007 (HGNN schema)
+│   │   ├── 008 (agent layer)
+│   │   │   └── 010 (fact integration)
+│   │   └── 010 (fact integration)
+│   └── 017 (task embedding support)
+│
 009 (facts)
 └── 010 (fact integration)
+    └── 016 (fact PKG integration)
 
 011 (runtime registry)
 └── 012 (runtime functions)
+
+013 (PKG core)
+├── 014 (PKG ops)
+│   └── 015 (PKG views/functions)
+│       └── 016 (fact PKG integration)
+└── 015 (PKG views/functions)
+
+018 (task outbox hardening)
+└── 001 (tasks)
 ```
 
 ---
@@ -426,62 +500,62 @@ This document summarizes the current state of database migrations for SeedCore, 
 
 ---
 
-## Schema Statistics (as of Migration 012)
+## Schema Statistics (as of Migration 018)
 
 | Category | Count | Notes |
 |----------|-------|-------|
-| Tables | 25 | Including dimension tables |
-| Views | 4 | Monitoring and DGL export |
-| Functions | 20+ | Helpers, lifecycle, cleanup |
-| Triggers | 10+ | Auto-update timestamps |
-| Indexes | 50+ | B-tree, GIN, IVFFlat |
-| Enum Types | 2 | taskstatus, InstanceStatus |
+| Tables | 35+ | Including dimension tables, PKG tables, edge tables |
+| Views | 15+ | Monitoring, DGL export, PKG views, embedding views |
+| Functions | 30+ | Helpers, lifecycle, cleanup, PKG functions, fact functions |
+| Triggers | 15+ | Auto-update timestamps |
+| Indexes | 80+ | B-tree, GIN, IVFFlat, composite, partial |
+| Enum Types | 8+ | taskstatus, InstanceStatus, PKG enums (env, engine, condition_type, operator, relation, artifact_type) |
 | Edge Tables | 16 | HGNN relationships |
 
 ---
 
-## Next Migration Planning (013+)
+## Next Migration Planning (019+)
 
 ### Potential Future Migrations
 
-#### 013: Task Priority & Scheduling Enhancement
+#### 019: Task Priority & Scheduling Enhancement
 - Add priority levels (critical, high, normal, low)
 - Scheduling constraints (time windows, resource requirements)
 - Task pools/queues for different dispatcher types
 
-#### 014: Observability & Metrics
+#### 020: Observability & Metrics
 - Task execution metrics (duration, resource usage)
 - Agent performance tracking
 - Fact quality scores
 - Embedding quality metrics
 
-#### 015: Workflow Templates
+#### 021: Workflow Templates
 - Predefined task workflows
 - Workflow versioning
 - Workflow execution tracking
 
-#### 016: Resource Management
+#### 022: Resource Management
 - Resource capacity tracking
 - Resource reservation
 - Resource usage accounting
 
-#### 017: Advanced Fact Features
+#### 023: Advanced Fact Features
 - Fact versioning
 - Fact conflicts and resolution
 - Fact sources and provenance chains
 - Fact confidence scores
 
-#### 018: Agent Capabilities Enhancement
+#### 024: Agent Capabilities Enhancement
 - Capability requirements (min versions)
 - Capability discovery
 - Dynamic capability registration
 
-#### 019: Audit & Compliance
+#### 025: Audit & Compliance
 - Audit log table
 - Change tracking
 - Compliance policy enforcement
 
-#### 020: Multi-tenancy Support
+#### 026: Multi-tenancy Support
 - Tenant isolation
 - Tenant-scoped resources
 - Tenant quotas and limits
@@ -503,7 +577,7 @@ done
 
 ### Single Migration
 ```bash
-psql -h localhost -U seedcore -d seedcore_db -f 012_runtime_registry_functions.sql
+psql -h localhost -U seedcore -d seedcore_db -f 018_task_outbox_hardening.sql
 ```
 
 ### Verification Queries
@@ -536,8 +610,8 @@ SELECT node_type, COUNT(*) FROM graph_node_map GROUP BY node_type;
 
 ---
 
-*Last Updated: October 15, 2025*  
-*Migration Version: 012*
+*Last Updated: December 2024*  
+*Migration Version: 018*
 
 
 

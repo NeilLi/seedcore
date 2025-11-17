@@ -312,7 +312,7 @@ def api_ask(prompt: str, agent_id: str | None = None, organ_id: str | None = Non
         print("🧠 Graph-aware task creation...")
         # For now, we'll create a regular task but with enhanced context
         # In a full implementation, this would call a new API endpoint
-        # that uses create_graph_rag_task_v2 or similar
+        # that uses create_graph_rag_task with agent/organ parameters
         payload = {
             "description": prompt,
             "type": "graph_rag_task",
@@ -508,21 +508,21 @@ def db_create_graph_task_v2(kind: str, start_csv: str, k: int, desc: str, agent_
         with _db() as con, con.cursor() as cur:
             if kind == "embed":
                 cur.execute("""
-                  SELECT create_graph_embed_task_v2(%s,%s,%s,%s,%s) AS id
+                  SELECT create_graph_embed_task(%s,%s,%s,%s,%s) AS id
                 """, (arr, k, desc, agent_id, organ_id))
             elif kind == "rag":
                 topk = topk or 10
                 cur.execute("""
-                  SELECT create_graph_rag_task_v2(%s,%s,%s,%s,%s,%s) AS id
+                  SELECT create_graph_rag_task(%s,%s,%s,%s,%s,%s) AS id
                 """, (arr, k, topk, desc, agent_id, organ_id))
             else:
                 print("❌ kind must be 'embed' or 'rag'")
                 return
             tid = cur.fetchone()["id"]
             con.commit()
-            print(f"🚀 created task {tid} via *_v2 (with cross-layer wiring)")
+            print(f"🚀 created task {tid} (with cross-layer wiring)")
     except Exception as e:
-        print(f"❌ create_graph_{kind}_task_v2 failed: {e}")
+        print(f"❌ create_graph_{kind}_task failed: {e}")
 
 
 # ───────────────────────────── CLI ─────────────────────────────

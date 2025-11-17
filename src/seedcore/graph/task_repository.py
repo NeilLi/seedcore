@@ -163,7 +163,7 @@ class GraphTaskSqlRepository:
 
             stmt = text(
                 """
-                SELECT create_graph_embed_task_v2(:start_ids, :k_hops, :description, :agent_id, :organ_id) AS id
+                SELECT create_graph_embed_task(:start_ids, :k_hops, :description, :agent_id, :organ_id) AS id
                 """
             )
             result = await session.execute(
@@ -235,7 +235,7 @@ class GraphTaskSqlRepository:
 
             stmt = text(
                 """
-                SELECT create_graph_rag_task_v2(:start_ids, :k_hops, :top_k, :description, :agent_id, :organ_id) AS id
+                SELECT create_graph_rag_task(:start_ids, :k_hops, :top_k, :description, :agent_id, :organ_id) AS id
                 """
             )
             result = await session.execute(

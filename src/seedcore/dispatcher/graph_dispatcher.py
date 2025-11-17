@@ -6,39 +6,24 @@ from seedcore.graph import GraphEmbedder, NimRetrievalEmbedder, upsert_embedding
 import os
 import json
 import time
-import logging
 import threading
 import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
-import ray
-import sqlalchemy as sa
-from sqlalchemy import text
+import ray  # pyright: ignore[reportMissingImports]
+import sqlalchemy as sa  # pyright: ignore[reportMissingImports]
+from sqlalchemy import text  # pyright: ignore[reportMissingImports]
 
-from ray.util import log_once
-import logging, sys
-from seedcore.logging_setup import ensure_serve_logger
+from seedcore.models.task import TaskType
 
-def get_seedcore_logger(name: str, level="DEBUG"):
-    logger = ensure_serve_logger(name, level=level)
-    if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
-            "%H:%M:%S"))
-        logger.addHandler(handler)
-    logger.propagate = True
-    if log_once(f"logger-init-{name}"):
-        logger.info(f"[Logger Initialized] {name}")
-    return logger
+from seedcore.logging_setup import setup_logging, ensure_serve_logger
+setup_logging(app_name="seedcore.dispatcher.driver")
+logger = ensure_serve_logger("seedcore.dispatcher", level="DEBUG")
 
-# Usage
-logger = get_seedcore_logger("seedcore.dispatchers")
 
 PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 NIM_MODEL = os.getenv("NIM_RETRIEVAL_MODEL", "nvidia/nv-embedqa-e5-v5")
-
 
 # ---- tunables / env knobs ----
 EMBED_TIMEOUT_S       = float(os.getenv("GRAPH_EMBED_TIMEOUT_S", "600"))
@@ -54,35 +39,17 @@ EMBED_BATCH_CHUNK     = int(os.getenv("GRAPH_EMBED_BATCH_CHUNK", "0"))  # 0 = di
 LOG_DSN               = os.getenv("GRAPH_LOG_DSN", "masked").lower()    # "plain" to print full DSN (not recommended)
 STRICT_JSON_RESULT    = os.getenv("GRAPH_STRICT_JSON_RESULT", "true").lower() in ("1","true","yes")
 
-# supported task types (legacy + HGNN-aware)
+# supported task types (legacy + HGNN-aware) - derived from TaskType enum
 GRAPH_TASK_TYPES = (
-    "graph_embed",
-    "graph_rag_query",
-    # HGNN-aware v2 that accept UUID/text IDs and map via graph_node_map:
-    "graph_embed_v2",
-    "graph_rag_query_v2",
-    # facts system support (Migration 009):
-    "graph_fact_embed",
-    "graph_fact_query",
-    # NIM retrieval embedding (Migration 017):
-    "nim_task_embed",
-    # maintenance / mapping:
-    "graph_sync_nodes",
+    TaskType.GRAPH_EMBED.value,
+    TaskType.GRAPH_RAG_QUERY.value,
+    TaskType.GRAPH_EMBED_V2.value,
+    TaskType.GRAPH_RAG_QUERY_V2.value,
+    TaskType.GRAPH_FACT_EMBED.value,
+    TaskType.GRAPH_FACT_QUERY.value,
+    TaskType.NIM_TASK_EMBED.value,
+    TaskType.GRAPH_SYNC_NODES.value,
 )
-
-def _redact_dsn(dsn: str) -> str:
-    if LOG_DSN == "plain":
-        return dsn
-    try:
-        if "@" in dsn and "://" in dsn and ":" in dsn.split("://", 1)[1]:
-            head, tail = dsn.split("://", 1)
-            userpass, hostpart = tail.split("@", 1)
-            if ":" in userpass:
-                user, _ = userpass.split(":", 1)
-                return f"{head}://{user}:****@{hostpart}"
-    except Exception:
-        pass
-    return "***"
 
 @ray.remote
 class GraphDispatcher:
@@ -93,9 +60,10 @@ class GraphDispatcher:
         - graph_embed:        params {"start_ids":[int,...], "k":2}
         - graph_rag_query:    params {"start_ids":[int,...], "k":2, "topk":10}
 
-      HGNN-aware:
-        - graph_embed_v2:     params may include any of:
+      HGNN-aware (graph_embed/graph_rag_query with optional agent/organ):
+        - graph_embed:        params may include any of:
                                 {"start_node_ids":[int,...]}                       # as before
+                                {"start_ids":[int,...]}                            # legacy alias
                                 {"start_task_ids":[uuid,...]}                       # task UUIDs -> ensure_task_node()
                                 {"start_agent_ids":[text,...]}                      # agent ids  -> ensure_agent_node()
                                 {"start_organ_ids":[text,...]}                      # organ ids  -> ensure_organ_node()
@@ -108,7 +76,7 @@ class GraphDispatcher:
                                 {"start_service_ids":[text,...]}                    # service names -> ensure_service_node() (Migration 008)
                                 {"start_skill_ids":[text,...]}                      # skill names -> ensure_skill_node() (Migration 008)
                               plus {"k":2}
-        - graph_rag_query_v2: same inputs as graph_embed_v2 + {"topk":10}
+        - graph_rag_query:     same inputs as graph_embed + {"topk":10}
 
       NIM Retrieval (Migration 017):
         - nim_task_embed:     params {"start_task_ids":[uuid,...]}                  # task UUIDs -> fetch from Postgres, embed with NIM
@@ -134,8 +102,6 @@ class GraphDispatcher:
         }
         self._embedder_name = f"{name}_embedder"
 
-        # --- DB engine ---
-        logger.info("📊 GraphDispatcher '%s' DB engine: %s", self.name, _redact_dsn(self.dsn))
         self.engine = sa.create_engine(
             self.dsn,
             future=True,
@@ -571,7 +537,16 @@ class GraphDispatcher:
 
     def set_log_level(self, level: str = "INFO") -> bool:
         try:
-            logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+            # Map level names to logging constants
+            level_map = {
+                "DEBUG": 10,
+                "INFO": 20,
+                "WARNING": 30,
+                "ERROR": 40,
+                "CRITICAL": 50
+            }
+            log_level = level_map.get(level.upper(), 20)  # Default to INFO (20)
+            logger.setLevel(log_level)
             return True
         except Exception:
             return False
@@ -722,7 +697,7 @@ class GraphDispatcher:
         logger.info("🔄 Processing task id=%s type=%s", tid_str, ttype)
 
         # start a heartbeat ticker for long work
-        hb_ev = self._start_heartbeat(tid_str)
+        self._start_heartbeat(tid_str)
 
         try:
             params = json.loads(task["params"])
@@ -774,14 +749,15 @@ class GraphDispatcher:
                     for nid in emb_map.keys()
                 }
 
-                # 6. Upsert embeddings into Postgres
+                # 6. Upsert embeddings into Postgres (NIM produces 1024d embeddings)
                 logger.debug("💾 Task %s: upserting %d NIM embeddings", tid_str, len(emb_map))
                 n = ray.get(upsert_embeddings.remote(
                     emb_map, 
                     content_hash_map=content_hash_map,
                     model_map={nid: NIM_MODEL for nid in emb_map.keys()},
                     # Use the "task.primary" label from your migration
-                    label_map={nid: "task.primary" for nid in emb_map.keys()}
+                    label_map={nid: "task.primary" for nid in emb_map.keys()},
+                    dimension=1024  # NIM Retrieval produces 1024d embeddings
                 ), timeout=UPSERT_TIMEOUT_S)
                 
                 result = {
@@ -795,7 +771,7 @@ class GraphDispatcher:
                 self._complete(tid, result=result)
                 return
 
-            if ttype in ("graph_embed", "graph_embed_v2"):
+            if ttype in ("graph_embed", "graph_embed_v2"):  # graph_embed_v2 kept for backward compatibility
                 logger.debug("🎯 Task %s: graph_embed operation (k from params)", tid_str)
                 # resolve node ids (legacy: start_ids; v2: map UUID/text ids)
                 node_ids, debug = self._resolve_start_node_ids(params)
@@ -823,7 +799,7 @@ class GraphDispatcher:
                     logger.debug("✅ Task %s: embeddings computed, %d embeddings", tid_str, len(emb_map or {}))
 
                 logger.debug("💾 Task %s: upserting %d embeddings", tid_str, len(emb_map or {}))
-                n = ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
+                n = ray.get(upsert_embeddings.remote(emb_map, dimension=128), timeout=UPSERT_TIMEOUT_S)  # GraphEmbedder produces 128d embeddings
                 logger.debug("💾 Task %s: upserted %d embeddings", tid_str, n)
 
                 # richer result with node meta (optional)
@@ -846,7 +822,7 @@ class GraphDispatcher:
                 self._complete(tid, result=result)
                 return
 
-            if ttype in ("graph_rag_query", "graph_rag_query_v2"):
+            if ttype in ("graph_rag_query", "graph_rag_query_v2"):  # graph_rag_query_v2 kept for backward compatibility
                 import numpy as np
 
                 logger.info("🔍 Task %s: graph_rag_query operation", tid_str)
@@ -863,7 +839,7 @@ class GraphDispatcher:
                 if not emb_map:
                     logger.warning("⚠️ Task %s: compute_embeddings returned empty result for node_ids=%s", tid_str, node_ids[:20])
                 logger.debug("💾 Task %s: ensuring seed embeddings are persisted", tid_str)
-                ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
+                ray.get(upsert_embeddings.remote(emb_map, dimension=128), timeout=UPSERT_TIMEOUT_S)  # GraphEmbedder produces 128d embeddings
 
                 vecs = list(emb_map.values())
                 centroid = np.asarray(vecs, dtype="float32").mean(0).tolist() if vecs else None
@@ -877,13 +853,13 @@ class GraphDispatcher:
                 if centroid:
                     centroid_json = json.dumps(centroid)
                     centroid_vec_literal = "[" + ",".join(f"{x:.6f}" for x in centroid) + "]"
-                    logger.debug("🔎 Task %s: querying graph_embeddings for topk=%d neighbors", tid_str, topk)
+                    logger.debug("🔎 Task %s: querying graph_embeddings_128 for topk=%d neighbors", tid_str, topk)
                     try:
                         with self.engine.begin() as conn:
                             rows = conn.execute(
                                 text("""
                                   SELECT node_id, emb <-> (CAST(:c AS jsonb)::vector) AS dist
-                                    FROM graph_embeddings
+                                    FROM graph_embeddings_128
                                 ORDER BY emb <-> (CAST(:c AS jsonb)::vector)
                                    LIMIT :k
                                 """),
@@ -897,7 +873,7 @@ class GraphDispatcher:
                             rows = conn.execute(
                                 text("""
                                   SELECT node_id, emb <-> (:c)::vector AS dist
-                                    FROM graph_embeddings
+                                    FROM graph_embeddings_128
                                 ORDER BY emb <-> (:c)::vector
                                    LIMIT :k
                                 """),
@@ -954,7 +930,7 @@ class GraphDispatcher:
                         logger.debug("✅ Task %s: fact embeddings computed, %d embeddings", tid_str, len(emb_map or {}))
 
                     logger.debug("💾 Task %s: upserting %d fact embeddings", tid_str, len(emb_map or {}))
-                    n = ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
+                    n = ray.get(upsert_embeddings.remote(emb_map, dimension=128), timeout=UPSERT_TIMEOUT_S)  # GraphEmbedder produces 128d embeddings
                     logger.debug("💾 Task %s: upserted %d fact embeddings", tid_str, n)
 
                     meta_nodes = self._fetch_node_meta(list(emb_map.keys()))
@@ -988,7 +964,7 @@ class GraphDispatcher:
                     if not emb_map:
                         logger.warning("⚠️ Task %s: compute_embeddings returned empty result for fact node_ids=%s", tid_str, node_ids[:20])
                     logger.debug("💾 Task %s: ensuring fact seed embeddings are persisted", tid_str)
-                    ray.get(upsert_embeddings.remote(emb_map), timeout=UPSERT_TIMEOUT_S)
+                    ray.get(upsert_embeddings.remote(emb_map, dimension=128), timeout=UPSERT_TIMEOUT_S)  # GraphEmbedder produces 128d embeddings
 
                     vecs = list(emb_map.values())
                     centroid = np.asarray(vecs, dtype="float32").mean(0).tolist() if vecs else None
@@ -1003,13 +979,13 @@ class GraphDispatcher:
                     if centroid:
                         centroid_json = json.dumps(centroid)
                         centroid_vec_literal = "[" + ",".join(f"{x:.6f}" for x in centroid) + "]"
-                        logger.debug("🔎 Task %s: querying graph_embeddings for topk=%d fact neighbors", tid_str, topk)
+                        logger.debug("🔎 Task %s: querying graph_embeddings_128 for topk=%d fact neighbors", tid_str, topk)
                         try:
                             with self.engine.begin() as conn:
                                 rows = conn.execute(
                                     text("""
                                       SELECT node_id, emb <-> (CAST(:c AS jsonb)::vector) AS dist
-                                        FROM graph_embeddings
+                                        FROM graph_embeddings_128
                                     ORDER BY emb <-> (CAST(:c AS jsonb)::vector)
                                        LIMIT :k
                                     """),
@@ -1023,7 +999,7 @@ class GraphDispatcher:
                                 rows = conn.execute(
                                     text("""
                                       SELECT node_id, emb <-> (:c)::vector AS dist
-                                        FROM graph_embeddings
+                                        FROM graph_embeddings_128
                                     ORDER BY emb <-> (:c)::vector
                                        LIMIT :k
                                     """),

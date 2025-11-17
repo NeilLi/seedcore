@@ -12,14 +12,10 @@ DB_PASS="${DB_PASS:-postgres}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 MIGRATION_001="${SCRIPT_DIR}/migrations/001_create_tasks_table.sql"
 MIGRATION_002="${SCRIPT_DIR}/migrations/002_graph_embeddings.sql"
-MIGRATION_003="${SCRIPT_DIR}/migrations/003_graph_task_types.sql"
-MIGRATION_004="${SCRIPT_DIR}/migrations/004_fix_taskstatus_enum.sql"
-MIGRATION_005="${SCRIPT_DIR}/migrations/005_consolidate_task_schema.sql"
-MIGRATION_006="${SCRIPT_DIR}/migrations/006_add_task_lease_columns.sql"
 MIGRATION_007="${SCRIPT_DIR}/migrations/007_hgnn_graph_schema.sql"
 # HGNN base graph schema (task layer)
 MIGRATION_008="${SCRIPT_DIR}/migrations/008_hgnn_agent_layer.sql"
-# NEW: HGNN agent/organ layer extensions
+# HGNN agent/organ layer extensions
 MIGRATION_009="${SCRIPT_DIR}/migrations/009_create_facts_table.sql"
 MIGRATION_010="${SCRIPT_DIR}/migrations/010_task_fact_integration.sql"
 MIGRATION_011="${SCRIPT_DIR}/migrations/011_add_runtime_registry.sql"
@@ -30,15 +26,13 @@ MIGRATION_015="${SCRIPT_DIR}/migrations/015_pkg_views_functions.sql"
 MIGRATION_016="${SCRIPT_DIR}/migrations/016_fact_pkg_integration.sql"
 MIGRATION_017="${SCRIPT_DIR}/migrations/017_task_embedding_support.sql"
 MIGRATION_018="${SCRIPT_DIR}/migrations/018_task_outbox_hardening.sql"
-MIGRATION_019="${SCRIPT_DIR}/migrations/019_update_embeddings_to_1024d.sql"
 
 # Check if all migration files exist
 for migration in \
-  "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" \
-  "$MIGRATION_005" "$MIGRATION_006" "$MIGRATION_007" "$MIGRATION_008" \
-  "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" "$MIGRATION_012" \
-  "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" "$MIGRATION_016" \
-  "$MIGRATION_017" "$MIGRATION_018" "$MIGRATION_019"
+  "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_007" \
+  "$MIGRATION_008" "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" \
+  "$MIGRATION_012" "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" \
+  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_018"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -49,25 +43,20 @@ done
 echo "🔧 Namespace: $NAMESPACE"
 echo "🔧 Database:  $DB_NAME (user: $DB_USER)"
 echo "🔧 Migrations:"
-echo "   - 001: $MIGRATION_001"
-echo "   - 002: $MIGRATION_002"
-echo "   - 003: $MIGRATION_003"
-echo "   - 004: $MIGRATION_004"
-echo "   - 005: $MIGRATION_005 (NEW: Consolidated task schema)"
-echo "   - 006: $MIGRATION_006"
-echo "   - 007: $MIGRATION_007 (HGNN base graph schema)"
-echo "   - 008: $MIGRATION_008 (NEW: HGNN agent/organ layer + relations)"
-echo "   - 009: $MIGRATION_009 (Create facts table)"
-echo "   - 010: $MIGRATION_010 (NEW: Task-Fact integration + view update)"
-echo "   - 011: $MIGRATION_011 (NEW: Runtime registry tables & views)"
-echo "   - 012: $MIGRATION_012 (NEW: Runtime registry functions)"
-echo "   - 013: $MIGRATION_013 (NEW: PKG core catalog - snapshots, rules, conditions, emissions, artifacts)"
-echo "   - 014: $MIGRATION_014 (NEW: PKG operations - deployments, temporal facts, validation, promotions, device coverage)"
-echo "   - 015: $MIGRATION_015 (NEW: PKG views and helper functions)"
-echo "   - 016: $MIGRATION_016 (NEW: Fact model PKG integration - temporal facts, policy governance, eventizer support)"
-echo "   - 017: $MIGRATION_017 (NEW: Task embedding support: views/functions/backfill)"
-echo "   - 018: $MIGRATION_018 (NEW: Task outbox hardening: available_at, attempts, index)"
-echo "   - 019: $MIGRATION_019 (NEW: Update graph embeddings from 128-d to 1024-d vectors for NIM Retrieval)"
+echo "   - 001: Create tasks table (includes lease columns, routing indexes, cleanup functions, graph_tasks view, helper functions)"
+echo "   - 002: Create separate embedding tables (graph_embeddings_128 and graph_embeddings_1024) + migration from old table"
+echo "   - 007: HGNN base graph schema (task layer)"
+echo "   - 008: HGNN agent/organ layer + relations"
+echo "   - 009: Create facts table"
+echo "   - 010: Task-Fact integration + view update"
+echo "   - 011: Runtime registry tables & views"
+echo "   - 012: Runtime registry functions"
+echo "   - 013: PKG core catalog (snapshots, rules, conditions, emissions, artifacts)"
+echo "   - 014: PKG operations (deployments, temporal facts, validation, promotions, device coverage)"
+echo "   - 015: PKG views and helper functions"
+echo "   - 016: Fact model PKG integration (temporal facts, policy governance, eventizer support)"
+echo "   - 017: Task embedding support (views/functions/backfill for separate 128d/1024d tables)"
+echo "   - 018: Task outbox hardening (available_at, attempts, index)"
 
 find_pg_pod() {
   local sel pod
@@ -142,29 +131,9 @@ kubectl -n "$NAMESPACE" cp "$MIGRATION_001" "$POSTGRES_POD:/tmp/001_create_tasks
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/001_create_tasks_table.sql"
 
 # Migration 002
-echo "⚙️  Running migration 002: Create graph embeddings table..."
+echo "⚙️  Running migration 002: Create separate embedding tables (graph_embeddings_128 and graph_embeddings_1024) + migrate from old table..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_002" "$POSTGRES_POD:/tmp/002_graph_embeddings.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/002_graph_embeddings.sql"
-
-# Migration 003
-echo "⚙️  Running migration 003: Add graph task types and helper functions..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_003" "$POSTGRES_POD:/tmp/003_graph_task_types.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/003_graph_task_types.sql"
-
-# Migration 004
-echo "⚙️  Running migration 004: Fix taskstatus enum to match code expectations..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_004" "$POSTGRES_POD:/tmp/004_fix_taskstatus_enum.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/004_fix_taskstatus_enum.sql"
-
-# Migration 005
-echo "⚙️  Running migration 005: Consolidate and fix task schema (CRITICAL FIX)..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_005" "$POSTGRES_POD:/tmp/005_consolidate_task_schema.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/005_consolidate_task_schema.sql"
-
-# Migration 006
-echo "⚙️  Running migration 006: Add task lease columns for stale task recovery..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_006" "$POSTGRES_POD:/tmp/006_add_task_lease_columns.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/006_add_task_lease_columns.sql"
 
 # Migration 007
 echo "⚙️  Running migration 007: HGNN base graph schema..."
@@ -221,15 +190,10 @@ echo "⚙️  Running migration 017: Task embedding support (views/functions/bac
 kubectl -n "$NAMESPACE" cp "$MIGRATION_017" "$POSTGRES_POD:/tmp/017_task_embedding_support.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/017_task_embedding_support.sql"
 
-# Migration 018 (NEW - Task Outbox Hardening)
+# Migration 018 (Task Outbox Hardening)
 echo "⚙️  Running migration 018: Task outbox hardening (available_at, attempts, index)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_018" "$POSTGRES_POD:/tmp/018_task_outbox_hardening.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/018_task_outbox_hardening.sql"
-
-# Migration 019 (NEW - Update Embeddings to 1024-d)
-echo "⚙️  Running migration 019: Update graph embeddings from 128-d to 1024-d vectors..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_019" "$POSTGRES_POD:/tmp/019_update_embeddings_to_1024d.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/019_update_embeddings_to_1024d.sql"
 
 # 6) Verify schema
 echo "✅ Verifying schema..."
@@ -243,13 +207,17 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 echo "📊 Tasks table structure:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ tasks"
 
-echo "📊 Graph embeddings table structure:"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ graph_embeddings"
+echo "📊 Graph embeddings 128d table structure:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ graph_embeddings_128"
 
-echo "📊 Verifying graph embeddings vector dimension (should be 1024):"
+echo "📊 Graph embeddings 1024d table structure:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ graph_embeddings_1024"
+
+echo "📊 Verifying graph embeddings vector dimensions:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -c "
     SELECT 
+      'graph_embeddings_128' AS table_name,
       a.attname AS column_name,
       CASE 
         WHEN t.typname = 'vector' AND a.atttypmod > 0 THEN (a.atttypmod - 4)::text || '-dimensional'
@@ -257,7 +225,19 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
       END AS type_info
     FROM pg_attribute a
     JOIN pg_type t ON a.atttypid = t.oid
-    WHERE a.attrelid = 'graph_embeddings'::regclass
+    WHERE a.attrelid = 'graph_embeddings_128'::regclass
+      AND a.attname = 'emb'
+    UNION ALL
+    SELECT 
+      'graph_embeddings_1024' AS table_name,
+      a.attname AS column_name,
+      CASE 
+        WHEN t.typname = 'vector' AND a.atttypmod > 0 THEN (a.atttypmod - 4)::text || '-dimensional'
+        ELSE t.typname
+      END AS type_info
+    FROM pg_attribute a
+    JOIN pg_type t ON a.atttypid = t.oid
+    WHERE a.attrelid = 'graph_embeddings_1024'::regclass
       AND a.attname = 'emb';
   "
 
@@ -288,13 +268,16 @@ done
 
 echo "📊 HGNN views:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ hgnn_edges"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_embeddings_primary"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_embeddings_stale"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ tasks_missing_embeddings"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_embeddings_primary_128"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_embeddings_primary_1024"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_embeddings_stale_128"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_embeddings_stale_1024"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ tasks_missing_embeddings_128"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ tasks_missing_embeddings_1024"
 
 echo "📊 Key HGNN functions:"
 for fn in ensure_task_node ensure_agent_node ensure_organ_node ensure_fact_node backfill_task_nodes \
-          create_graph_embed_task_v2 create_graph_rag_task_v2
+          create_graph_embed_task create_graph_rag_task
 do
   kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
     psql -U "$DB_USER" -d "$DB_NAME" -c "\df+ $fn" || true
@@ -390,14 +373,17 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT unnest(enum_range(NULL::taskstatus)) as enum_value;"
 
 echo "🎉 SeedCore database setup complete!"
-echo "✅ Created tables: tasks, holons, graph_embeddings, facts"
+echo "✅ Created tables: tasks (with lease columns, routing indexes, cleanup functions),"
+echo "   holons, graph_embeddings_128, graph_embeddings_1024, facts"
 echo "✅ Created graph schema (HGNN): graph_node_map, agent_registry, organ_registry,"
 echo "   artifact, capability, memory_cell, edge tables (task_*), organ_provides_capability, agent_owns_memory_cell"
-echo "✅ Created views: graph_tasks, task_embeddings_primary, task_embeddings_stale, tasks_missing_embeddings, hgnn_edges"
-echo "✅ Helper functions: create_graph_embed_task, create_graph_rag_task, *_v2 variants with agent/organ,"
-echo "   ensure_*_node, backfill_task_nodes"
-echo "✅ Fixed taskstatus enum to use consistent lowercase values"
-echo "✅ Consolidated task schema + added task lease columns"
+echo "✅ Created views: graph_tasks, task_embeddings_primary_128, task_embeddings_primary_1024,"
+echo "   task_embeddings_stale_128, task_embeddings_stale_1024, tasks_missing_embeddings_128,"
+echo "   tasks_missing_embeddings_1024, hgnn_edges"
+echo "✅ Helper functions: create_graph_embed_task, create_graph_rag_task (with optional agent/organ parameters),"
+echo "   ensure_*_node, backfill_task_nodes, cleanup_stale_running_tasks"
+echo "✅ Task schema includes: taskstatus enum (lowercase), lease columns (owner_id, lease_expires_at,"
+echo "   last_heartbeat), routing indexes, and consolidated schema"
 echo "✅ Created PKG schema: pkg_snapshots, pkg_policy_rules, pkg_rule_conditions, pkg_rule_emissions,"
 echo "   pkg_snapshot_artifacts, pkg_deployments, pkg_facts, pkg_validation_*, pkg_promotions, pkg_device_versions"
 echo "✅ Created PKG views: pkg_active_artifact, pkg_rules_expanded, pkg_deployment_coverage"
@@ -406,7 +392,8 @@ echo "✅ Created PKG enums: pkg_env, pkg_engine, pkg_condition_type, pkg_operat
 echo "✅ Enhanced facts table with PKG integration: temporal facts, policy governance, eventizer support"
 echo "✅ Created fact helper functions: get_facts_by_subject, cleanup_expired_facts, get_fact_statistics"
 echo "✅ Created active_temporal_facts view for efficient temporal fact queries"
-echo "✅ Updated graph_embeddings to 1024-dimensional vectors for NIM Retrieval (nv-embedqa-e5-v5)"
+echo "✅ Created separate embedding tables: graph_embeddings_128 (128d) and graph_embeddings_1024 (1024d)"
+echo "✅ Migration from old graph_embeddings table handled in migration 002 (if old table existed)"
 echo "✅ Enabled extensions: pgcrypto, vector"
 echo "👉 DSN: postgresql://${DB_USER}:${DB_PASS}@postgresql:5432/${DB_NAME}"
 echo ""
@@ -414,8 +401,8 @@ echo "📋 Quick start examples:"
 echo "   -- Create a graph embedding task (legacy):"
 echo "   SELECT create_graph_embed_task(ARRAY[123], 2, 'Embed neighborhood around node 123');"
 echo ""
-echo "   -- Create a graph embedding task and wire ownership/executor (HGNN v2):"
-echo "   SELECT create_graph_embed_task_v2(ARRAY[123], 2, 'Embed with ownership', 'agent_main', 'utility_organ_1');"
+echo "   -- Create a graph embedding task and wire ownership/executor (with agent/organ):"
+echo "   SELECT create_graph_embed_task(ARRAY[123], 2, 'Embed with ownership', 'agent_main', 'utility_organ_1');"
 echo ""
 echo "   -- Ensure tasks are mapped to numeric node ids:"
 echo "   SELECT backfill_task_nodes();"
@@ -423,8 +410,11 @@ echo ""
 echo "   -- Explore edges for DGL ingest:"
 echo "   SELECT * FROM hgnn_edges LIMIT 20;"
 echo ""
-echo '   -- Pull task embeddings joined to numeric node ids:'
-echo "   SELECT task_id, node_id, emb[1:8] AS emb_head FROM task_embeddings_primary LIMIT 5;"
+echo '   -- Pull task embeddings joined to numeric node ids (128d):'
+echo "   SELECT task_id, node_id, emb[1:8] AS emb_head FROM task_embeddings_primary_128 LIMIT 5;"
+echo ""
+echo '   -- Pull task embeddings joined to numeric node ids (1024d):'
+echo "   SELECT task_id, node_id, emb[1:8] AS emb_head FROM task_embeddings_primary_1024 LIMIT 5;"
 echo ""
 echo "   -- Monitor graph tasks:"
 echo "   SELECT * FROM graph_tasks ORDER BY updated_at DESC LIMIT 10;"

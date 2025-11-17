@@ -35,20 +35,23 @@ from .roles import (
     build_advertisement,
 )
 from .state import AgentState
-
-if TYPE_CHECKING:
-    from seedcore.tools.manager import ToolManager
 from .private_memory import AgentPrivateMemory, PeerEvent
 
 if TYPE_CHECKING:
     import numpy as np
+    from seedcore.models.state import AgentSnapshot
+    from seedcore.tools.manager import ToolManager
+    from seedcore.serve.cognitive_client import CognitiveServiceClient
+    from seedcore.serve.mcp_client import MCPServiceClient
 
 # ---- Cognition / ML ------------------------------------------------------------
 
 try:
     from seedcore.serve.ml_client import MLServiceClient  # your async client
+    from seedcore.utils.ray_utils import ML  # ML service base URL
 except Exception:  # pragma: no cover
     MLServiceClient = None  # type: ignore
+    ML = "http://127.0.0.1:8000/ml"  # fallback
 
 from seedcore.logging_setup import ensure_serve_logger
 
@@ -59,6 +62,18 @@ try:
     import ray  # pyright: ignore[reportMissingImports]
 except ImportError:
     ray = None  # type: ignore
+
+# Runtime numpy import (moved from inside methods for performance)
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore
+
+# Optimize dateutil import for _iso_to_ts
+try:
+    from dateutil import parser as dt_parser
+except ImportError:
+    dt_parser = None  # type: ignore
 
 
 @ray.remote  # type: ignore
@@ -89,7 +104,8 @@ class BaseAgent:
         specialization: Specialization = Specialization.GENERALIST,
         role_registry: Optional[RoleRegistry] = None,
         skill_store: Optional[SkillStoreProtocol] = None,
-        cognitive_base_url: Optional[str] = None,
+        cognitive_client: Optional["CognitiveServiceClient"] = None,
+        mcp_client: Optional["MCPServiceClient"] = None,
         initial_capability: float = 0.5,
         initial_mem_util: float = 0.0,
         organ_id: Optional[str] = None,
@@ -105,15 +121,23 @@ class BaseAgent:
         self.role_profile: RoleProfile = self._role_registry.get(self.specialization)
 
         # Tool surface
-        from seedcore.tools.manager import ToolManager  # local import to avoid cycles
-
         if tool_manager is None:
             logger.warning(
                 "BaseAgent %s started without ToolManager; creating dedicated instance. "
                 "Prefer injecting a shared ToolManager.",
                 agent_id,
             )
-        self.tools: ToolManager = tool_manager or ToolManager()
+            # Lazy import to avoid circular dependencies
+            from seedcore.tools.manager import ToolManager as _ToolManager
+            # Internal-only tools by default, no MCP unless explicitly supplied
+            tool_manager = _ToolManager()
+        self.tools: ToolManager = tool_manager
+
+        # Store mcp_client separately for higher-level logic
+        # Only inject MCP into ToolManager if explicitly provided (opt-in)
+        self.mcp_client = mcp_client
+        if mcp_client and getattr(tool_manager, "_mcp_client", None) is None:
+            tool_manager._mcp_client = mcp_client
 
         # Skills (deltas) + optional persistence
         self.skills: SkillVector = SkillVector()
@@ -125,6 +149,41 @@ class BaseAgent:
             c=float(initial_capability),
             mem_util=float(initial_mem_util),
         )
+        
+        # Initialize state.p with role probabilities from RoleProfile
+        # This ensures state.p exists for role smoothing in update_state()
+        self.state.p = self.role_profile.to_p_dict()
+
+        # --- State required by AgentSnapshot (theoretical state model) ---
+        # h: The agent's internal state embedding (numpy array)
+        # This is the "live" version of AgentSnapshot.h
+        # NOTE: _get_current_embedding() prioritizes privmem.h, so this is a fallback/override
+        if np is None:
+            raise ImportError("numpy is required for BaseAgent")
+        
+        # Initialize h from state.h if available (for consistency)
+        if hasattr(self.state, "h") and self.state.h:
+            try:
+                self.h = self._force_128d(np.asarray(self.state.h, dtype=np.float32))
+            except Exception:
+                self.h = np.zeros(128, dtype=np.float32)
+        else:
+            self.h = np.zeros(128, dtype=np.float32)
+        
+        # lifecycle: The agent's current status
+        # This is the "live" version of AgentSnapshot.lifecycle
+        self.lifecycle: str = "initializing"
+        
+        # load: Operational activity load (for RL signals, scheduling, resource allocation)
+        # Incremented on task start, decremented on task completion
+        # Protected against overflow and negative values
+        self.load: float = 0.0
+        self._load_max: float = 10000.0  # Fail-safe overflow protection
+        
+        # Role update throttling (to prevent destabilization from frequent role changes)
+        self._last_role_update_time: float = 0.0
+        self._role_update_min_interval: float = 5.0  # Minimum seconds between role updates
+        self._role_smoothing_alpha: float = 0.3  # EMA smoothing factor for role changes
 
         # Agent-private vector memory (F/S/P blocks)
         self._privmem = AgentPrivateMemory(agent_id=self.agent_id, alpha=0.1)
@@ -133,17 +192,206 @@ class BaseAgent:
         self._rbac = RbacEnforcer()
 
         # Cognition / ML
-        self._cog_base_url = cognitive_base_url
+        self.cognitive_client = cognitive_client
         self._ml_client = None
         self._ml_client_lock = asyncio.Lock()
         self._salience_sema = asyncio.Semaphore(self.MAX_IN_FLIGHT_SALIENCE)
 
+        # Heartbeat tracking
+        self.last_heartbeat: Optional[float] = None
+
+        # Set lifecycle to active after initialization
+        self.lifecycle = "active"
+        
         logger.info(
-            "✅ BaseAgent %s (%s) online. org=%s",
+            "✅ BaseAgent %s (%s) online. org=%s, mcp=%s",
             self.agent_id,
             self.specialization.value,
             self.organ_id,
+            "yes" if mcp_client else "no",
         )
+
+    # ============================================================================
+    # State Snapshotting (Bridge to Theoretical State Model)
+    # ============================================================================
+
+    def _force_128d(self, arr) -> "np.ndarray":
+        """
+        Centralized helper to ensure numpy arrays are exactly 128-dimensional.
+        Handles all shape edge cases: scalars, 1D, multi-dimensional, wrong sizes.
+        """
+        if np is None:
+            raise ImportError("numpy is required")
+        
+        arr = np.asarray(arr, dtype=np.float32)
+        
+        # Handle scalar or 0-dim
+        if arr.ndim == 0:
+            arr = np.zeros(128, dtype=np.float32)
+        # Handle multi-dimensional arrays (flatten first)
+        elif arr.ndim > 1:
+            arr = arr.flatten()
+        
+        # Now arr is guaranteed to be 1D
+        if arr.size == 0:
+            arr = np.zeros(128, dtype=np.float32)
+        elif arr.size < 128:
+            arr = np.pad(arr, (0, 128 - arr.size), mode='constant')
+        elif arr.size > 128:
+            arr = arr[:128]
+        
+        return arr.astype(np.float32, copy=False)
+
+    async def _get_current_embedding(self) -> "np.ndarray":
+        """
+        Get the agent's current state embedding (h vector).
+        
+        Priority order:
+        1. Use privmem.get_vector() if available (most up-to-date, includes task/skill/peer/feat blocks)
+        2. Fall back to self.h (maintained separately for compatibility)
+        
+        This avoids duplication - privmem is the source of truth for the agent's
+        internal state embedding, while self.h can be updated by the controller.
+        """
+        if np is None:
+            raise ImportError("numpy is required")
+        
+        # Priority 1: Use privmem embedding if available (most comprehensive)
+        if hasattr(self._privmem, "get_vector"):
+            try:
+                privmem_h = self._privmem.get_vector()
+                if privmem_h is not None and privmem_h.size > 0:
+                    return self._force_128d(privmem_h)
+            except Exception:
+                # Fall through to self.h if privmem fails
+                pass
+        
+        # Priority 2: Fall back to self.h (can be updated by controller)
+        self.h = self._force_128d(self.h)
+        return self.h
+
+    async def get_snapshot(self) -> "AgentSnapshot":
+        """
+        Gathers the agent's live state and formats it into the theoretical 
+        AgentSnapshot dataclass. This is the "bridge" method that connects
+        the production actor to the theoretical state model.
+        
+        Returns:
+            AgentSnapshot: The agent's current state in the format expected
+                          by UnifiedState and the energy calculator.
+        """
+        # Import here to avoid circular dependencies
+        from seedcore.models.state import AgentSnapshot
+        
+        # 1. Get embedding (h)
+        current_h = await self._get_current_embedding()
+        
+        # 2. Get role probabilities (p) - convert RoleProfile to E/S/O dict
+        # Use centralized mapping from RoleRegistry if available
+        if hasattr(self._role_registry, "specialization_to_p_dict"):
+            p_dict = self._role_registry.specialization_to_p_dict(self.specialization)
+        else:
+            # Fallback to RoleProfile method
+            p_dict = self.role_profile.to_p_dict()
+        
+        # 3. Get learned skills - convert SkillVector to simple dict
+        skills_dict = self.skills.to_dict()
+        
+        # 4. Get mem_util (already in self.state.mem_util)
+        # 5. Get capacity (c) - already in self.state.c
+        # 6. Get lifecycle - already in self.lifecycle
+        # 7. Get load - operational activity load
+        # 8. Get timestamp - when this snapshot was taken
+        
+        # Assemble the snapshot
+        return AgentSnapshot(
+            h=current_h,
+            p=p_dict,
+            c=self.state.c,
+            mem_util=self.state.mem_util,
+            lifecycle=self.lifecycle,
+            learned_skills=skills_dict,
+            load=self.load,
+            timestamp=time.time(),
+        )
+
+    async def update_state(
+        self,
+        new_h: Optional["np.ndarray"] = None,
+        new_p_dict: Optional[Dict[str, float]] = None,
+    ) -> None:
+        """
+        Receives updates from the system-level controller and updates the 
+        agent's live state. This implements the "feedback loop" where the
+        theoretical state model (s_{t+1}) is fed back into the production actor.
+        
+        Args:
+            new_h: Optional new state embedding to update self.h
+            new_p_dict: Optional new role probabilities dict (E/S/O) to update role_profile
+        """
+        if new_h is not None:
+            # Update the agent's internal state embedding
+            self.h = self._force_128d(new_h)
+            # Also update AgentState.h for compatibility
+            self.state.h = self.h.tolist()
+
+        if new_p_dict is not None:
+            # Throttle role updates to prevent destabilization
+            current_time = time.time()
+            time_since_last_update = current_time - self._last_role_update_time
+            
+            if time_since_last_update < self._role_update_min_interval:
+                logger.debug(
+                    f"Agent {self.agent_id} role update throttled "
+                    f"(last update {time_since_last_update:.2f}s ago, min interval {self._role_update_min_interval}s)"
+                )
+                # Still update, but with smoothing
+                should_smooth = True
+            else:
+                should_smooth = False
+                self._last_role_update_time = current_time
+            
+            # Validate that it's a valid E/S/O dict
+            from seedcore.models.state import ROLE_KEYS
+            validated_p = {}
+            for key in ROLE_KEYS:
+                validated_p[key] = float(new_p_dict.get(key, 0.0))
+            # Normalize to ensure it's a valid probability distribution
+            total = sum(validated_p.values())
+            if total > 0:
+                validated_p = {k: v / total for k, v in validated_p.items()}
+            else:
+                # Default uniform distribution
+                validated_p = {k: 1.0 / len(ROLE_KEYS) for k in ROLE_KEYS}
+            
+            # Apply smoothing if throttled (exponential moving average)
+            if should_smooth and hasattr(self.state, 'p') and self.state.p:
+                current_p = self.state.p.copy()
+                # Smooth each role probability
+                for key in ROLE_KEYS:
+                    old_val = float(current_p.get(key, 1.0 / len(ROLE_KEYS)))
+                    new_val = float(validated_p.get(key, 1.0 / len(ROLE_KEYS)))
+                    # EMA: smoothed = alpha * new + (1 - alpha) * old
+                    validated_p[key] = (
+                        self._role_smoothing_alpha * new_val +
+                        (1.0 - self._role_smoothing_alpha) * old_val
+                    )
+                    # Enforce minimum floor to prevent roles from vanishing
+                    validated_p[key] = max(validated_p[key], 0.001)
+                # Renormalize after smoothing
+                total = sum(validated_p.values())
+                if total > 0:
+                    validated_p = {k: v / total for k, v in validated_p.items()}
+            
+            # Update AgentState.p for compatibility
+            self.state.p = validated_p.copy()
+            
+            # Note: We don't change the specialization or role_profile here,
+            # as that would require reconstructing the RoleProfile from the p_dict.
+            # The role_profile remains tied to the specialization, but the
+            # actual role probabilities used in calculations come from self.state.p.
+            
+        logger.debug(f"Agent {self.agent_id} state updated.")
 
     # ============================================================================
     # Heartbeat & Context
@@ -181,6 +429,11 @@ class BaseAgent:
         """
         Canonical context dict passed to cognition/ML.
         Includes specialization, materialized skills, and basic KPIs.
+        
+        NOTE: This uses role_profile (static specialization-based) for RBAC/routing.
+        For dynamic role probabilities updated by the controller, use self.state.p.
+        The role_profile represents the agent's "long-term class" while state.p
+        represents "short-term behavioral adaptation" from the system controller.
         """
         mat_skills = self.role_profile.materialize_skills(self.skills.deltas)
         pm = self.state.to_performance_metrics()
@@ -193,6 +446,10 @@ class BaseAgent:
             }
         except Exception:
             pm_summary = None
+        
+        # Include both role_profile (for RBAC/routing) and state.p (for behavioral context)
+        effective_p = self.state.p if hasattr(self.state, 'p') and self.state.p else self.role_profile.to_p_dict()
+        
         return {
             "agent_id": self.agent_id,
             "organ_id": self.organ_id,
@@ -202,6 +459,7 @@ class BaseAgent:
             "mem_util": pm["mem_util"],
             "routing_tags": sorted(self.role_profile.routing_tags),
             "safety": dict(self.role_profile.safety_policies),
+            "role_probs": effective_p,  # Include dynamic role probabilities
             "privmem": pm_summary,
         }
 
@@ -280,13 +538,23 @@ class BaseAgent:
 
     async def _get_ml_client(self):
         """
-        Async-safe lazy init of MLServiceClient. You can inject or subclass to customize.
+        Async-safe lazy init of MLServiceClient.
+        
+        Uses the ML base URL derived from ray_utils (SERVE_GATEWAY + /ml),
+        which is independent of the cognitive client (/cognitive).
+        ML and Cognitive share the gateway but have different base paths.
         """
         if self._ml_client is not None or MLServiceClient is None:
             return self._ml_client
         async with self._ml_client_lock:
             if self._ml_client is None and MLServiceClient is not None:
-                self._ml_client = MLServiceClient(base_url=self._cog_base_url)
+                # ML and Cognitive share the gateway, but have different base paths.
+                # ray_utils.ML already encodes SERVE_GATEWAY + ML base path.
+                client = MLServiceClient(base_url=ML)
+                # Handle async constructors (some HTTP clients use async __init__)
+                if inspect.isawaitable(client):
+                    client = await client
+                self._ml_client = client
         return self._ml_client
 
     async def _extract_salience_features(self, task_info: Dict[str, Any], error_context: Dict[str, Any]) -> Dict[str, Any]:
@@ -376,15 +644,14 @@ class BaseAgent:
             except Exception as e:
                 logger.error("[%s] ML salience error: %s. Fallback.", self.agent_id, e, exc_info=True)
 
-        # Fallback path
+        # Fallback path (run directly, no executor needed - already protected by semaphore)
         if features is None:
             try:
                 features = await self._extract_salience_features(task_info, error_context)
             except Exception:
                 features = {}
-        loop = asyncio.get_running_loop()
         try:
-            val = await loop.run_in_executor(None, lambda: self._fallback_salience_scorer([features])[0])
+            val = self._fallback_salience_scorer([features])[0]
             return max(0.0, min(1.0, float(val)))
         except Exception as e:
             logger.error("[%s] Fallback scorer failed: %s. Default=0.5", self.agent_id, e)
@@ -454,6 +721,9 @@ class BaseAgent:
         skill_fit = self._score_skill_match(mat_skills, tv.desired_skills)
 
         # --- 2) Tool execution ---------------------------------------------------
+        # Increment load counter (for activity tracking)
+        self.load = min(self.load + 1.0, self._load_max)
+        
         results: List[Dict[str, Any]] = []
         tool_errors: List[Dict[str, Any]] = []
 
@@ -506,6 +776,8 @@ class BaseAgent:
             tool_timeout = float(args.pop("_timeout_s", default_tool_timeout_s))
             try:
                 output = await asyncio.wait_for(tool_manager.execute(tool_name, args), timeout=tool_timeout)
+                # Ensure output is JSON-serializable (handle numpy arrays, etc.)
+                output = self._make_json_safe(output)
                 results.append({"tool": tool_name, "ok": True, "output": output})
             except asyncio.TimeoutError:
                 tool_errors.append({"tool": tool_name, "error": "timeout"})
@@ -548,6 +820,14 @@ class BaseAgent:
         except Exception:
             pass
 
+        # Decrement load counter (task completed)
+        # Protected against negative and overflow
+        self.load = max(0.0, min(self.load - 1.0, self._load_max))
+        # Fail-safe: reset if somehow overflowed
+        if self.load > self._load_max:
+            logger.warning(f"Agent {self.agent_id} load overflow detected, resetting")
+            self.load = 0.0
+        
         # --- 5) Result envelope ---------------------------------------------------
         result = {
             "agent_id": self.agent_id,
@@ -582,11 +862,22 @@ class BaseAgent:
         """Baseline quality estimate based on tool success ratio."""
         n = len(results) + len(errors)
         if n == 0:
-            return 0.0
+            # No tool calls means no failures occurred - quality is perfect
+            return 1.0
         return max(0.0, min(1.0, len(results) / n))
 
     async def _maybe_salience(self, tv, results, errors) -> float:
-        """Optional salience scoring via ML service."""
+        """
+        Optional salience scoring via ML service.
+        
+        NOTE: Salience is only computed for active agents. Suspended/degraded
+        agents should not escalate tasks.
+        """
+        # Only compute salience for active agents
+        if self.lifecycle != "active":
+            logger.debug(f"Agent {self.agent_id} lifecycle={self.lifecycle}, skipping salience")
+            return 0.0
+        
         try:
             ctx_reason = "task_error" if errors else "task_ok"
             return await self._calculate_ml_salience_score(
@@ -775,14 +1066,62 @@ class BaseAgent:
         try:
             if isinstance(created_at, str):
                 tv.created_at_ts = self._iso_to_ts(created_at)
-            elif created_at:
-                ts_method = getattr(created_at, "timestamp", None)
-                if callable(ts_method):
-                    tv.created_at_ts = ts_method()
+            elif isinstance(created_at, (time.struct_time,)):
+                # Handle time.struct_time
+                from datetime import datetime
+                tv.created_at_ts = datetime.fromtimestamp(time.mktime(created_at)).timestamp()
+            elif hasattr(created_at, "timestamp") and callable(getattr(created_at, "timestamp", None)):
+                # Only datetime/date objects have timestamp() method
+                from datetime import datetime, date
+                if isinstance(created_at, (datetime, date)):
+                    ts_method = getattr(created_at, "timestamp", None)
+                    if callable(ts_method):
+                        tv.created_at_ts = ts_method()
         except Exception:
             tv.created_at_ts = None
 
         return tv
+
+    def _make_json_safe(self, obj: Any) -> Any:
+        """
+        Convert non-serializable objects (numpy arrays, etc.) to JSON-safe primitives.
+        This prevents serialization errors when tool outputs contain numpy arrays or other
+        non-standard types.
+        
+        Blacklists internal attributes that may contain unserializable objects (coroutines,
+        locks, Ray refs, etc.).
+        """
+        if np is not None:
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, np.generic):
+                return obj.item()
+            elif isinstance(obj, (np.integer, np.floating)):
+                return float(obj)
+        
+        if isinstance(obj, dict):
+            return {k: self._make_json_safe(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self._make_json_safe(item) for item in obj]
+        elif hasattr(obj, '__dict__'):
+            # Blacklist internal attributes that may be unserializable
+            blacklist = {
+                '__weakref__', '__slots__', '_rbac', '_privmem', '_ml_client',
+                '_ml_client_lock', '_salience_sema', '_role_registry', 'tools'
+            }
+            # Only serialize public attributes (not starting with _)
+            safe_dict = {}
+            for key, value in obj.__dict__.items():
+                if key not in blacklist and not (key.startswith('_') and key not in {'_ToolManager'}):
+                    try:
+                        safe_dict[key] = self._make_json_safe(value)
+                    except Exception:
+                        # Skip attributes that can't be serialized
+                        continue
+            return safe_dict if safe_dict else str(obj)
+        else:
+            # For primitives (str, int, float, bool, None), return as-is
+            return obj
 
     def _now_monotonic(self) -> float:
         return time.perf_counter()
@@ -799,18 +1138,22 @@ class BaseAgent:
         return datetime.now(timezone.utc).isoformat()
 
     def _iso_to_ts(self, iso: str) -> Optional[float]:
+        """
+        Convert ISO format string to timestamp.
+        Uses dateutil parser if available, falls back to datetime.fromisoformat.
+        """
+        if dt_parser is not None:
+            try:
+                return dt_parser.isoparse(iso).timestamp()
+            except Exception:
+                pass
+        
+        # Fallback to datetime.fromisoformat
         try:
             from datetime import datetime
-            from dateutil import parser
-
-            return parser.isoparse(iso).timestamp()
+            return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
         except Exception:
-            try:
-                from datetime import datetime
-
-                return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
-            except Exception:
-                return None
+            return None
 
     def _is_past_iso(self, iso: str) -> bool:
         ts = self._iso_to_ts(iso)
@@ -831,9 +1174,10 @@ class BaseAgent:
         task_embed = task_info.get("embedding")
         if isinstance(task_embed, list):
             try:
-                import numpy as np
-
-                task_embed = np.asarray(task_embed, dtype=np.float32)
+                if np is None:
+                    task_embed = None
+                else:
+                    task_embed = np.asarray(task_embed, dtype=np.float32)
             except Exception:
                 task_embed = None
 
@@ -925,7 +1269,7 @@ class BaseAgent:
             return "authorization"
         if "network" in r or "connection" in r:
             return "network"
-        if "validation" in r or "schema" in r:
+        if "validation" in r or "schema" in r or "not found" in r:
             return "validation"
         return "runtime"
 
@@ -980,6 +1324,8 @@ class BaseAgent:
         """
         Deterministic local scorer for resilience. Replace with your heuristic/XGBoost.
         Very simple baseline: weighted sum of a few risk features, clamped to [0,1].
+        
+        Now includes agent capability: low-capability agents escalate more often.
         """
         out: list[float] = []
         for f in feature_batches:
@@ -988,7 +1334,12 @@ class BaseAgent:
             imp = float(f.get("user_impact", 0.5))
             crit = float(f.get("business_criticality", 0.5))
             sys = 0.25 * float(f.get("system_load", 0.0)) + 0.25 * float(f.get("error_rate", 0.0))
-            score = 0.35 * risk + 0.25 * sev + 0.2 * imp + 0.15 * crit + 0.05 * sys
+            
+            # Factor in agent capability: low capability increases salience
+            agent_capability = float(f.get("agent_capability", self.state.c))
+            capability_penalty = 0.1 * (1.0 - agent_capability)  # 0.0 to 0.1
+            
+            score = 0.30 * risk + 0.25 * sev + 0.2 * imp + 0.15 * crit + 0.05 * sys + capability_penalty
             score = max(0.0, min(1.0, score))
             out.append(score)
         return out

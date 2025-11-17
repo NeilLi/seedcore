@@ -2,7 +2,7 @@
 #seedcore/tools/manager.py
 
 from __future__ import annotations
-from typing import Dict, Any, Optional, Protocol, List, TYPE_CHECKING
+from typing import Dict, Any, Optional, Protocol, List, TYPE_CHECKING, Callable
 import asyncio
 import logging
 import time
@@ -10,6 +10,9 @@ import time
 if TYPE_CHECKING:
     from seedcore.agents.roles import SkillStoreProtocol
     from seedcore.serve.mcp_client import MCPServiceClient
+    from seedcore.serve.cognitive_client import CognitiveServiceClient
+    from seedcore.memory.mw_manager import MwManager
+    from seedcore.memory.long_term_memory import LongTermMemoryManager
 
 logger = logging.getLogger(__name__)
 
@@ -18,33 +21,10 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 class Tool(Protocol):
-    """
-    Protocol for an executable tool.
-
-    Tools must be async and expose a schema for observability.
-    """
     async def execute(self, **kwargs: Any) -> Any:
-        """Execute the tool's core logic with provided arguments."""
         ...
 
     def schema(self) -> Dict[str, Any]:
-        """
-        Return an OpenAPI-like schema of the tool's arguments.
-        
-        Example:
-            return {
-                "name": "iot.read",
-                "description": "Reads the state from an IoT device.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "device_id": {"type": "string", "description": "The ID of the device to read."},
-                        "sensor": {"type": "string", "description": "The specific sensor to query."},
-                    },
-                    "required": ["device_id"],
-                }
-            }
-        """
         ...
 
 # ============================================================
@@ -52,7 +32,6 @@ class Tool(Protocol):
 # ============================================================
 
 class ToolError(Exception):
-    """Custom exception for tool execution failures."""
     def __init__(self, tool_name: str, reason: str, original_exc: Optional[Exception] = None):
         self.tool_name = tool_name
         self.reason = reason
@@ -60,242 +39,277 @@ class ToolError(Exception):
         super().__init__(f"ToolError({tool_name}): {reason}")
 
 # ============================================================
-# Enhanced ToolManager
+# Enhanced ToolManager (v2.1)
 # ============================================================
 
 class ToolManager:
     """
-    Enhanced tool manager for SeedCore v2.
+    Core unified tool router for SeedCore v2.1.
 
-    Acts as a unified router for both internal (Python) tools
-    and external (MCP service) tools.
-
-    New capabilities:
-      • Namespaced tool registry (iot.read, memory.mw.read, memory.ltm.query, robot.move, train.skill)
-      • Special memory-backed tools (MwManager + LongTermMemoryManager)
-      • External MCP tools integration (internet.fetch, fs.read, etc.)
-      • Call observability + metrics + tracing
-      • Tool suggestions for agent learning
-      • RBAC hooks (optional)
-      • Async-safe dynamic registration
-      • Self-improving tools (reflection-based feedback)
+    Execution priority:
+    1. Internal registered Python tools (including query tools from query_tools.py:
+       general_query, knowledge.find, task.collaborative, cognitive.*)
+    2. Memory: MW tools (memory.mw.*)
+    3. Memory: LTM tools (memory.ltm.*)
+    4. Cognitive service tools (cog.* or reason.*)
+    5. External MCP service tools
+    
+    Query tools are registered via register_query_tools() and handled as internal tools.
+    They provide high-level abstractions for general queries, knowledge finding, and
+    collaborative task execution.
+    
+    Thread Safety:
+    This class is designed to be shared across multiple agents concurrently. All shared
+    state (tool registry, metrics) is protected by asyncio.Lock() to ensure thread-safe
+    access. The ToolManager instance can be safely passed to multiple agents running
+    in parallel (e.g., via Ray actors).
+    
+    Concurrency Model:
+    - Tool registry operations (_tools dict): Protected by _lock
+    - Metrics updates (_call_count, _fail_count, _latency_hist): Protected by _metrics_lock
+    - Separate locks reduce contention between tool lookups and metrics updates
     """
 
     def __init__(
         self,
         *,
-        mw_manager: Optional[Any] = None,
-        ltm_manager: Optional[Any] = None,
+        mw_manager: Optional["MwManager"] = None,
+        ltm_manager: Optional["LongTermMemoryManager"] = None,
         rbac_provider: Optional[Any] = None,
         skill_store: Optional["SkillStoreProtocol"] = None,
         enable_tracing: bool = True,
         mcp_client: Optional["MCPServiceClient"] = None,
+        cognitive_client: Optional["CognitiveServiceClient"] = None,
     ):
-        # Internal tools registry (IoT, robotics, etc.)
+
+        # Internal tool registry
         self._tools: Dict[str, Tool] = {}
-        self._lock = asyncio.Lock()
+        self._lock = asyncio.Lock()  # Lock for tool registry operations
+        
+        # Separate lock for metrics to reduce contention
+        # Metrics are updated frequently during execution, so we use a separate lock
+        self._metrics_lock = asyncio.Lock()
 
-        # External MCP service client (for internet.fetch, fs.read, etc.)
-        self._mcp_client = mcp_client
-
-        # Memory integrations
+        # Service dependencies
         self.mw_manager = mw_manager
         self.ltm_manager = ltm_manager
+        self._mcp_client = mcp_client
+        self.cognitive_client = cognitive_client
 
-        # Optional RBAC gateway
         self.rbac_provider = rbac_provider
-
-        # Skill store for agent learning (micro-flywheel)
         self.skill_store = skill_store
-
-        # Execution tracing
         self.enable_tracing = enable_tracing
-        
-        # Metrics
+
+        # Metrics (thread-safe access required for concurrent agent execution)
         self._call_count: Dict[str, int] = {}
         self._fail_count: Dict[str, int] = {}
         self._latency_hist: Dict[str, List[float]] = {}
+        self._last_error: Dict[str, str] = {}  # Track last error per tool for debugging
 
-        if mcp_client:
-            logger.info("🔧 ToolManager ready with memory integration and MCP client")
-        else:
-            logger.info("🔧 ToolManager ready with memory integration")
+        logger.info("🔧 ToolManager initialized (v2.1+)")
 
     # ============================================================
-    # Registration
+    # Registration APIs
     # ============================================================
 
     async def register(self, name: str, tool: Tool) -> None:
-        """
-        Register a namespaced tool (e.g., iot.read, robot.move).
-        
-        This method is async-safe.
-        """
         async with self._lock:
             if name in self._tools:
-                logger.warning(f"Tool overwritten: {name}")
+                logger.warning(f"⚠️ Tool overwritten: {name}")
             self._tools[name] = tool
-            logger.info(f"Tool registered: {name}")
+        logger.info(f"Tool registered: {name}")
 
-    def register_internal(self, tool: Tool) -> None:
+    async def register_internal(self, tool: Tool) -> None:
         """
-        Registers an internal tool (IoT, robotics) that adheres to the Tool protocol.
+        Register an internal tool (thread-safe).
         
-        This is a synchronous convenience method that extracts the tool name
-        from the schema and registers it.
-        
-        Args:
-            tool: A tool instance implementing the Tool protocol.
+        Note: Changed to async to use proper locking. Callers should await this.
         """
-        try:
-            schema = tool.schema()
-            tool_name = schema.get("name")
-            
-            if not tool_name:
-                logger.error("Failed to register tool: schema missing 'name'.")
-                return
+        schema = tool.schema()
+        name = schema.get("name")
+        if not name:
+            logger.error("Tool schema missing 'name' field.")
+            return
+        async with self._lock:
+            if name in self._tools:
+                logger.warning(f"⚠️ Overwriting internal tool: {name}")
+            self._tools[name] = tool
+        logger.debug(f"Registered internal tool: {name}")
 
-            # Direct dict access (synchronous) - tools dict is thread-safe for reads
-            # but we're doing a write here. In practice, this is fine for initialization.
-            if tool_name in self._tools:
-                logger.warning(f"Overwriting tool in registry: {tool_name}")
-            
-            self._tools[tool_name] = tool
-            logger.debug(f"Registered internal tool: {tool_name}")
-            
-        except Exception as e:
-            logger.error(f"Failed to register tool: {e}", exc_info=True)
+    async def register_namespace(self, prefix: str, builder: Callable[[], Tool]):
+        """
+        Helper: register all tools from a namespace automatically.
+        Tools must expose schema with name starting with prefix.
+        """
+        tool = builder()
+        schema = tool.schema()
+        name = schema.get("name")
+        if not name or not name.startswith(prefix):
+            raise ValueError(f"Invalid namespace tool: expected prefix '{prefix}', got '{name}'")
+        await self.register(name, tool)
 
     async def unregister(self, name: str) -> bool:
-        """
-        Safely unregister a tool.
-        
-        Args:
-            name: Tool name to unregister
-            
-        Returns:
-            True if tool was removed, False if it didn't exist
-        """
         async with self._lock:
             if name in self._tools:
                 del self._tools[name]
-                logger.info(f"Tool removed: {name}")
                 return True
-            else:
-                logger.warning(f"Attempted to unregister non-existent tool: {name}")
-                return False
+            return False
 
     async def has(self, name: str) -> bool:
-        """
-        Check if an internal tool is registered.
-        
-        Note: This only checks internal tools. External MCP tools are handled
-        dynamically by execute() when needed.
-        
-        Args:
-            name: Tool name to check
-            
-        Returns:
-            True if tool is registered internally, False otherwise
-        """
         async with self._lock:
             return name in self._tools
 
     # ============================================================
-    # Execution
+    # Memory Tool Routing
+    # ============================================================
+
+    async def _execute_mw(self, name: str, args: Dict[str, Any], agent_id: str):
+        if not self.mw_manager:
+            raise ToolError(name, "MW manager not configured")
+        try:
+            method = name.split(".", 2)[-1]
+            handler = getattr(self.mw_manager, method, None)
+            if not handler:
+                raise ToolError(name, f"Unknown MW method '{method}'")
+            return await handler(**args)
+        except Exception as e:
+            raise ToolError(name, "MW execute failed", e)
+
+    async def _execute_ltm(self, name: str, args: Dict[str, Any], agent_id: str):
+        if not self.ltm_manager:
+            raise ToolError(name, "LTM manager not configured")
+        try:
+            method = name.split(".", 2)[-1]
+            handler = getattr(self.ltm_manager, method, None)
+            if not handler:
+                raise ToolError(name, f"Unknown LTM method '{method}'")
+            return await handler(**args)
+        except Exception as e:
+            raise ToolError(name, "LTM execute failed", e)
+
+    # ============================================================
+    # Cognitive routing
+    # ============================================================
+
+    async def call_cognitive(self, method: str, **kwargs):
+        if not self.cognitive_client:
+            raise ToolError(method, "No cognitive client available")
+        try:
+            func = getattr(self.cognitive_client, method)
+            return await func(**kwargs)
+        except Exception as e:
+            raise ToolError(method, "Cognitive service failed", e)
+
+    # ============================================================
+    # Execution Pipeline
     # ============================================================
 
     async def execute(self, name: str, args: Dict[str, Any], agent_id: Optional[str] = None) -> Any:
         """
-        Execute a tool with robust error handling, RBAC, and metrics.
-        
-        Automatically routes to internal tools first, then falls back to
-        external MCP service if the tool is not found internally.
-        
-        Args:
-            name: Tool name (e.g., "iot.read", "memory.mw.read", "internet.fetch")
-            args: Tool arguments as a dictionary
-            agent_id: Optional agent identifier for RBAC and tracing
-        
-        Raises:
-            ToolError: If the tool is not found, RBAC denied, or fails during execution.
+        Full routing logic:
+        1. Internal tools (including query tools: general_query, knowledge.find, task.collaborative, cognitive.*)
+        2. Memory MW (memory.mw.*)
+        3. Memory LTM (memory.ltm.*)
+        4. Cognitive service (cog.*, reason.*)
+        5. External MCP
         """
-        logger.debug(f"ToolManager executing: {name}")
+
+        # Detect query tool patterns for better logging
+        is_query_tool = (
+            name in ("general_query", "knowledge.find", "task.collaborative")
+            or name.startswith("cognitive.")
+        )
         
-        # Optional RBAC check (before execution) - using EAFP pattern
+        logger.debug(f"ToolManager executing: {name}{' [query tool]' if is_query_tool else ''}")
+        start = time.perf_counter()
+        failed = False
+
+        # RBAC (optional)
         if self.rbac_provider:
             try:
                 allowed = await self.rbac_provider.allowed(agent_id, name)
                 if not allowed:
-                    raise ToolError(tool_name=name, reason="rbac_denied")
-            except AttributeError:
-                # RBAC provider doesn't have 'allowed' method, skip RBAC
-                logger.debug("RBAC provider missing 'allowed' method, skipping RBAC check")
+                    raise ToolError(name, "rbac_denied")
             except Exception:
-                # Other RBAC errors are logged but don't block execution
-                logger.debug("RBAC check failed, skipping", exc_info=True)
-
-        start = time.perf_counter()
-        execution_failed = False
+                logger.debug("RBAC check skipped or failed")
 
         try:
-            # --- 1. Check Internal Tools First ---
-            tool = self._tools.get(name)  # No lock needed for a simple read
+            # 1. Internal tools (includes all query tools registered via register_query_tools)
+            # Query tools are registered as internal tools with names like:
+            # - general_query
+            # - knowledge.find
+            # - task.collaborative
+            # - cognitive.reason_about_failure
+            # - cognitive.make_decision
+            # - cognitive.synthesize_memory
+            # - cognitive.assess_capabilities
+            # Thread-safe read: acquire lock briefly to get tool reference
+            # Note: Tool could theoretically be unregistered between this check and execution,
+            # but this is acceptable behavior - we execute if the tool exists at the start of execution.
+            # For stricter guarantees, we could use a refcount system, but that adds complexity.
+            async with self._lock:
+                tool = self._tools.get(name)
             
-            if tool is not None:
-                # Internal tool found - execute it
-                result = await tool.execute(**args)
-            else:
-                # --- 2. Not internal? Try External MCP ---
-                if not self._mcp_client:
-                    raise ToolError(tool_name=name, reason="tool_not_found")
-                
-                # Forward to MCP service
-                logger.debug(f"Routing tool '{name}' to MCP service")
-                response = await self._mcp_client.call_tool_async(
-                    tool_name=name,
-                    arguments=args
-                )
-                
-                # Check for a JSON-RPC level error
-                if "error" in response and response["error"]:
-                    err = response["error"]
-                    error_msg = err.get("message", "Unknown error")
-                    raise ToolError(tool_name=name, reason=f"External tool failed: {error_msg}")
-                
-                # Return the actual result, not the full JSON-RPC response
-                result = response.get("result")
-                
-        except ToolError:
-            # Mark as failed and re-raise
-            execution_failed = True
-            raise
-        except asyncio.TimeoutError:
-            execution_failed = True
-            logger.warning(f"Tool execution timed out: {name}")
-            raise ToolError(tool_name=name, reason="timeout")
+            if tool:
+                if is_query_tool:
+                    logger.debug(f"Executing query tool: {name}")
+                return await tool.execute(**args)
+
+            # 2. MW tools
+            if name.startswith("memory.mw."):
+                return await self._execute_mw(name, args, agent_id)
+
+            # 3. LTM tools
+            if name.startswith("memory.ltm."):
+                return await self._execute_ltm(name, args, agent_id)
+
+            # 4. Cognitive service tools (direct cognitive service calls)
+            # Note: cognitive.* query tools are handled above as internal tools
+            # This handles direct cognitive service calls with cog.* or reason.* prefixes
+            if name.startswith("cog.") or name.startswith("reason."):
+                method = name.split(".", 1)[-1]
+                return await self.call_cognitive(method, **args)
+
+            # 5. External MCP fallback
+            if not self._mcp_client:
+                raise ToolError(name, "tool_not_found")
+
+            response = await self._mcp_client.call_tool_async(name, args)
+            if response.get("error"):
+                raise ToolError(name, response["error"]["message"])
+            return response.get("result")
+
         except Exception as e:
-            execution_failed = True
-            logger.error(f"Tool '{name}' failed for agent {agent_id}: {e}", exc_info=True)
-            raise ToolError(tool_name=name, reason=str(e), original_exc=e)
+            failed = True
+            error_msg = str(e)
+            if is_query_tool:
+                logger.warning(f"Query tool {name} failed: {e}", exc_info=True)
+            
+            # Store error message before re-raising
+            async with self._metrics_lock:
+                self._last_error[name] = error_msg
+            
+            if not isinstance(e, ToolError):
+                raise ToolError(name, error_msg, e)
+            raise
         finally:
-            # Centralized failure counting
-            if execution_failed:
-                self._fail_count[name] = self._fail_count.get(name, 0) + 1
+            elapsed = time.perf_counter() - start
+            # Thread-safe metrics update: protect concurrent access from multiple agents
+            async with self._metrics_lock:
+                self._call_count[name] = self._call_count.get(name, 0) + 1
+                if failed:
+                    self._fail_count[name] = self._fail_count.get(name, 0) + 1
+                # Limit latency history size to prevent unbounded growth
+                if name not in self._latency_hist:
+                    self._latency_hist[name] = []
+                self._latency_hist[name].append(elapsed)
+                # Keep only last 1000 samples per tool
+                if len(self._latency_hist[name]) > 1000:
+                    self._latency_hist[name] = self._latency_hist[name][-1000:]
 
-        # Metrics
-        elapsed = time.perf_counter() - start
-        self._call_count[name] = self._call_count.get(name, 0) + 1
-        self._latency_hist.setdefault(name, []).append(elapsed)
-
-        if self.enable_tracing:
-            logger.info(f"📡 Tool call: {name} by {agent_id} ({elapsed:.3f}s)")
-
-        # Tool may return "learning hints" via _reflection key
-        if isinstance(result, dict) and result.get("_reflection"):
-            await self._process_tool_reflection(agent_id, name, result["_reflection"])
-
-        return result
+            if self.enable_tracing:
+                tool_type = "query" if is_query_tool else "tool"
+                logger.info(f"📡 ToolManager {tool_type} call: {name} ({elapsed:.3f}s)")
 
     # ============================================================
     # Tool Reflection (Agents learn how to use tools better)
@@ -357,80 +371,58 @@ class ToolManager:
     # ============================================================
 
     async def list_tools(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Returns a merged dictionary of all available tools, both internal and external.
-        
-        Returns:
-            Dictionary mapping tool names to their schemas.
-            Internal tools take precedence over external tools in case of conflicts.
-        """
-        # 1. Get all internal tool schemas
-        all_schemas: Dict[str, Dict[str, Any]] = {}
-        
+        out: Dict[str, Dict[str, Any]] = {}
+
+        # Internal tools - thread-safe copy of tool list
         async with self._lock:
-            # Copy items to avoid modification during iteration
+            # Create a snapshot of tools to avoid holding lock during schema() calls
             tools = list(self._tools.values())
         
+        # Process tools outside the lock (schema() calls may be slow)
         for tool in tools:
             try:
                 schema = tool.schema()
                 name = schema.get("name")
                 if name:
-                    all_schemas[name] = schema
-            except Exception as e:
-                logger.warning(f"Failed to get schema for tool: {e}")
+                    out[name] = schema
+            except Exception:
+                continue
 
-        # 2. Get all external tool schemas from the MCP service
+        # External tools
         if self._mcp_client:
             try:
-                mcp_response = await self._mcp_client.list_tools_async()
-                
-                # The MCP spec returns tools in a list under the "tools" key
-                external_tools_list = mcp_response.get("tools", [])
-                
-                for tool_schema in external_tools_list:
-                    name = tool_schema.get("name")
-                    if name and name not in all_schemas:
-                        all_schemas[name] = tool_schema
-                    elif name:
-                        logger.warning(
-                            f"External tool '{name}' conflicts with internal tool. "
-                            "Internal tool takes precedence."
-                        )
-                        
+                resp = await self._mcp_client.list_tools_async()
+                for sch in resp.get("tools", []):
+                    name = sch.get("name")
+                    if name and name not in out:
+                        out[name] = sch
             except Exception as e:
-                logger.error(f"Failed to fetch external tools from MCP service: {e}")
-                # We can still return the internal tools
-        
-        return all_schemas
+                logger.error(f"Failed to fetch MCP tool list: {e}")
+
+        # Memory router virtual tools?
+        # Could list them here later.
+
+        return out
 
     async def get_tool_schema(self, name: str) -> Optional[Dict[str, Any]]:
-        """
-        Get the schema for a single tool (internal or external).
-        
-        This delegates to list_tools() to get unified tool schemas.
-        
-        Args:
-            name: Tool name to get schema for
-            
-        Returns:
-            Tool schema if found, None otherwise
-        """
-        all_tools = await self.list_tools()
-        return all_tools.get(name)
+        tools = await self.list_tools()
+        return tools.get(name)
 
-    def stats(self) -> Dict[str, Any]:
+    async def stats(self) -> Dict[str, Any]:
         """
-        Return execution metrics for observability.
+        Return execution metrics for observability (thread-safe).
         
         Returns:
-            Dictionary with call counts, failure counts, and latency histograms
+            Dictionary with call counts, failure counts, latency histograms, and last errors
         """
-        return {
-            "call_count": dict(self._call_count),
-            "fail_count": dict(self._fail_count),
-            "latency_ms": {
-                name: [x * 1000 for x in hist[-50:]]  # last 50 samples in milliseconds
-                for name, hist in self._latency_hist.items()
+        # Thread-safe read of metrics
+        async with self._metrics_lock:
+            return {
+                "call_count": dict(self._call_count),
+                "fail_count": dict(self._fail_count),
+                "last_error": dict(self._last_error),  # Last error per tool for debugging
+                "latency_ms": {
+                    name: [x * 1000 for x in hist[-50:]]  # last 50 samples in milliseconds
+                    for name, hist in self._latency_hist.items()
+                }
             }
-        }

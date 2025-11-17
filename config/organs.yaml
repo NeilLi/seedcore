@@ -1,16 +1,16 @@
 # Smart Habitat Organism Configuration (SeedCore v2)
 # ---------------------------------------------------
-# Defines organs (agent clusters) and the specializations they host.
-# Each organ is an autonomous subsystem in the Habitat AI Organism.
+# Defines the organs of the Habitat AI Organism.
+# Each organ represents an autonomous subsystem composed of specialized agent clusters.
 
 seedcore:
   organism:
-
     organs:
-
       # =============================================================
       #  META-CONTROL & GLOBAL REASONING ORGAN
       # =============================================================
+      # Oversees high-level planning, cross-organ coordination, and
+      # global reasoning. Acts as the organism’s executive cortex.
       - id: "meta_control_organ"
         description: "High-level planning, cross-organ routing, intent synthesis."
         agents:
@@ -26,6 +26,8 @@ seedcore:
       # =============================================================
       #  USER EXPERIENCE & INTERACTION ORGAN
       # =============================================================
+      # Handles user-facing intelligence: dialog, mood inference,
+      # personalization, and preference modeling.
       - id: "user_experience_organ"
         description: "User dialog, mood inference, preference management."
         agents:
@@ -41,6 +43,8 @@ seedcore:
       # =============================================================
       #  ENVIRONMENT UNDERSTANDING ORGAN
       # =============================================================
+      # Responsible for situational awareness, world modeling,
+      # anomaly detection, forecasting, and safety interpretation.
       - id: "environment_intelligence_organ"
         description: "World modeling, predictions, anomalies, emergency detection."
         agents:
@@ -56,6 +60,8 @@ seedcore:
       # =============================================================
       #  DEVICE & ROBOT ORCHESTRATION ORGAN
       # =============================================================
+      # Manages all device-level and robot-level coordination,
+      # including energy optimization and task assignment.
       - id: "orchestration_organ"
         description: "Device control, robot task coordination, energy optimization."
         agents:
@@ -79,6 +85,8 @@ seedcore:
       # =============================================================
       #  ROBOT EXECUTION ORGAN (PHYSICAL ACTUATION)
       # =============================================================
+      # Contains the physical actuation layer: robots, drones, and
+      # mobile units that execute tasks in the real environment.
       - id: "robot_execution_organ"
         description: "Autonomous physical robots: movement, cleaning, delivery."
         agents:
@@ -94,6 +102,8 @@ seedcore:
       # =============================================================
       #  VERIFICATION & FEEDBACK ORGAN
       # =============================================================
+      # Performs real-world validation, quality assurance, and
+      # integrates feedback signals back into the organism.
       - id: "verification_organ"
         description: "Real-world verification, QA, feedback integration."
         agents:
@@ -107,6 +117,8 @@ seedcore:
       # =============================================================
       #  LEARNING & ADAPTATION ORGAN
       # =============================================================
+      # Drives continuous improvement: learning from experience,
+      # analyzing failures, refining plans, and self-correcting.
       - id: "learning_organ"
         description: "Continuous adaptation, strategy optimization, self-correction."
         agents:
@@ -118,5 +130,21 @@ seedcore:
             count: 1
           - specialization: "PLAN_REFINER"
             count: 1
+
+      # =============================================================
+      #  SPECIALIST & PREDEVELOPED ORGAN
+      # =============================================================
+      # Hosts pre-built or prototype agents used for testing,
+      # debugging, and rapid insertion of new experimental roles.
+      - id: "specialist"
+        description: "Specialized agents for pre-development and experimentation."
+        agents:
           - specialization: "OBSERVER"
             count: 1
+            class: "ObserverAgent"
+          - specialization: "UTILITY"
+            count: 1
+            class: "UtilityLearningAgent"
+          - specialization: "GENERALIST"
+            count: 10
+            class: "RayAgent"

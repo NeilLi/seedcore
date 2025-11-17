@@ -1014,21 +1014,21 @@ def pg_create_graph_rag_task(conn, node_ids: list[int], hops: int, topk: int, de
         log.warning(f"create_graph_rag_task call failed: {e}")
     return tid
 
-def pg_create_graph_rag_task_v2(conn, node_ids: list[int], hops: int, topk: int, description: str, agent_id: str = None, organ_id: str = None) -> Optional[uuid.UUID]:
+def pg_create_graph_rag_task(conn, node_ids: list[int], hops: int, topk: int, description: str, agent_id: str = None, organ_id: str = None) -> Optional[uuid.UUID]:
     """Create graph RAG task with agent/organ integration (Migration 007+)."""
     tid = None
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT create_graph_rag_task_v2(%s::int[], %s::int, %s::int, %s, %s, %s);",
+            cur.execute("SELECT create_graph_rag_task(%s::int[], %s::int, %s::int, %s, %s, %s);",
                         (node_ids, hops, topk, description, agent_id, organ_id))
             row = cur.fetchone()
             if row and row[0]:
                 tid = row[0]
-                log.info(f"Created graph RAG task v2 with ID: {tid} (agent: {agent_id}, organ: {organ_id})")
+                log.info(f"Created graph RAG task with ID: {tid} (agent: {agent_id}, organ: {organ_id})")
             else:
-                log.warning("create_graph_rag_task_v2 returned no task ID")
+                log.warning("create_graph_rag_task returned no task ID")
     except Exception as e:
-        log.warning(f"create_graph_rag_task_v2 call failed: {e}")
+        log.warning(f"create_graph_rag_task call failed: {e}")
     return tid
 
 # ---- Database Schema Verification Functions ----
@@ -1187,13 +1187,16 @@ def verify_database_schema(conn):
         log.error(f"   ❌ Error checking task-fact integration tables: {e}")
         schema_ok = False
     
-    # Check Migration 017: Task embedding support
-    log.info("📋 Checking Migration 017: Task embedding support...")
-    embedding_views = ['tasks_missing_embeddings', 'task_embeddings_primary', 'task_embeddings_stale']
+    # Check Migrations 002, 017, 019: Task embedding support (separate 128d/1024d tables)
+    log.info("📋 Checking Migrations 002, 017, 019: Task embedding support (separate 128d/1024d tables)...")
+    embedding_views_128 = ['tasks_missing_embeddings_128', 'task_embeddings_primary_128', 'task_embeddings_stale_128', 'task_embeddings_128']
+    embedding_views_1024 = ['tasks_missing_embeddings_1024', 'task_embeddings_primary_1024', 'task_embeddings_stale_1024', 'task_embeddings_1024']
     
     try:
         with conn.cursor() as cur:
-            for view in embedding_views:
+            # Check 128d views
+            log.info("   Checking 128d embedding views...")
+            for view in embedding_views_128:
                 cur.execute("""
                     SELECT EXISTS (
                         SELECT FROM information_schema.views 
@@ -1206,25 +1209,110 @@ def verify_database_schema(conn):
                 else:
                     log.warning(f"   ⚠️ {view} view missing (may be optional)")
             
-            # Check graph_embeddings table has new columns
+            # Check 1024d views
+            log.info("   Checking 1024d embedding views...")
+            for view in embedding_views_1024:
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.views 
+                        WHERE table_name = %s
+                    )
+                """, (view,))
+                exists = cur.fetchone()[0]
+                if exists:
+                    log.info(f"   ✅ {view} view exists")
+                else:
+                    log.warning(f"   ⚠️ {view} view missing (may be optional)")
+            
+            # Check graph_embeddings_128 table structure
+            log.info("   Checking graph_embeddings_128 table...")
             cur.execute("""
                 SELECT column_name, data_type 
                 FROM information_schema.columns 
-                WHERE table_name = 'graph_embeddings'
-                AND column_name IN ('label', 'model', 'content_sha256')
+                WHERE table_name = 'graph_embeddings_128'
+                AND column_name IN ('label', 'props', 'emb', 'model', 'content_sha256', 'created_at', 'updated_at')
                 ORDER BY column_name
             """)
-            embedding_columns = cur.fetchall()
+            embedding_columns_128 = cur.fetchall()
             
-            expected_embedding_columns = ['content_sha256', 'label', 'model']
-            found_embedding_columns = [row[0] for row in embedding_columns]
+            expected_embedding_columns = ['content_sha256', 'created_at', 'emb', 'label', 'model', 'props', 'updated_at']
+            found_embedding_columns_128 = [row[0] for row in embedding_columns_128]
             
             for col in expected_embedding_columns:
-                if col in found_embedding_columns:
-                    log.info(f"   ✅ graph_embeddings.{col} column exists")
+                if col in found_embedding_columns_128:
+                    log.info(f"   ✅ graph_embeddings_128.{col} column exists")
                 else:
-                    log.error(f"   ❌ graph_embeddings.{col} column missing")
+                    log.error(f"   ❌ graph_embeddings_128.{col} column missing")
                     schema_ok = False
+            
+            # Verify vector dimension is 128
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_attribute a
+                    JOIN pg_type t ON a.atttypid = t.oid
+                    WHERE a.attrelid = 'graph_embeddings_128'::regclass
+                    AND a.attname = 'emb'
+                    AND t.typname = 'vector'
+                    AND (a.atttypmod - 4) / 4 = 128
+                )
+            """)
+            dim_128_ok = cur.fetchone()[0]
+            if dim_128_ok:
+                log.info("   ✅ graph_embeddings_128.emb is VECTOR(128)")
+            else:
+                log.error("   ❌ graph_embeddings_128.emb dimension incorrect or missing")
+                schema_ok = False
+            
+            # Check graph_embeddings_1024 table structure
+            log.info("   Checking graph_embeddings_1024 table...")
+            cur.execute("""
+                SELECT column_name, data_type 
+                FROM information_schema.columns 
+                WHERE table_name = 'graph_embeddings_1024'
+                AND column_name IN ('label', 'props', 'emb', 'model', 'content_sha256', 'created_at', 'updated_at')
+                ORDER BY column_name
+            """)
+            embedding_columns_1024 = cur.fetchall()
+            
+            found_embedding_columns_1024 = [row[0] for row in embedding_columns_1024]
+            
+            for col in expected_embedding_columns:
+                if col in found_embedding_columns_1024:
+                    log.info(f"   ✅ graph_embeddings_1024.{col} column exists")
+                else:
+                    log.error(f"   ❌ graph_embeddings_1024.{col} column missing")
+                    schema_ok = False
+            
+            # Verify vector dimension is 1024
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_attribute a
+                    JOIN pg_type t ON a.atttypid = t.oid
+                    WHERE a.attrelid = 'graph_embeddings_1024'::regclass
+                    AND a.attname = 'emb'
+                    AND t.typname = 'vector'
+                    AND (a.atttypmod - 4) / 4 = 1024
+                )
+            """)
+            dim_1024_ok = cur.fetchone()[0]
+            if dim_1024_ok:
+                log.info("   ✅ graph_embeddings_1024.emb is VECTOR(1024)")
+            else:
+                log.error("   ❌ graph_embeddings_1024.emb dimension incorrect or missing")
+                schema_ok = False
+            
+            # Verify old graph_embeddings table does NOT exist (migration 019 should have removed it)
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'graph_embeddings'
+                )
+            """)
+            old_table_exists = cur.fetchone()[0]
+            if old_table_exists:
+                log.warning("   ⚠️ Old graph_embeddings table still exists (migration 019 may be incomplete)")
+            else:
+                log.info("   ✅ Old graph_embeddings table removed (migration 019 successful)")
     except Exception as e:
         log.error(f"   ❌ Error checking task embedding support: {e}")
         schema_ok = False
@@ -1257,7 +1345,7 @@ def verify_database_schema(conn):
     functions = [
         'ensure_task_node', 'ensure_agent_node', 'ensure_organ_node',
         'ensure_fact_node', 'cleanup_stale_running_tasks',
-        'create_graph_rag_task_v2', 'backfill_task_nodes'
+        'create_graph_rag_task', 'backfill_task_nodes'
     ]
     
     try:
@@ -1318,10 +1406,20 @@ def verify_hgnn_graph_structure(conn):
             for edge_type, count in edge_types:
                 log.info(f"   {edge_type}: {count}")
             
-            # Check task_embeddings_primary view
-            cur.execute("SELECT COUNT(*) FROM task_embeddings_primary")
-            embedding_count = cur.fetchone()[0]
-            log.info(f"📊 Task embeddings: {embedding_count}")
+            # Check task_embeddings_primary views (128d and 1024d)
+            try:
+                cur.execute("SELECT COUNT(*) FROM task_embeddings_primary_128")
+                embedding_count_128 = cur.fetchone()[0]
+                log.info(f"📊 Task embeddings (128d): {embedding_count_128}")
+            except Exception as e:
+                log.warning(f"⚠️ Could not query task_embeddings_primary_128: {e}")
+            
+            try:
+                cur.execute("SELECT COUNT(*) FROM task_embeddings_primary_1024")
+                embedding_count_1024 = cur.fetchone()[0]
+                log.info(f"📊 Task embeddings (1024d): {embedding_count_1024}")
+            except Exception as e:
+                log.warning(f"⚠️ Could not query task_embeddings_primary_1024: {e}")
             
             log.info("✅ HGNN graph structure verification completed")
             return True
@@ -3099,7 +3197,7 @@ def scenario_hgnn_graph_task(conn) -> Optional[uuid.UUID]:
         return None
     try:
         # Create a graph RAG task v2 with agent/organ integration
-        task_id = pg_create_graph_rag_task_v2(
+        task_id = pg_create_graph_rag_task(
             conn, 
             node_ids=[123, 456], 
             hops=2, 
@@ -3120,22 +3218,23 @@ def scenario_hgnn_graph_task(conn) -> Optional[uuid.UUID]:
 
 def scenario_nim_task_embed(conn) -> Optional[uuid.UUID]:
     """
-    Test NIM task embedding (Migration 017).
+    Test NIM task embedding (Migrations 002, 017, 019).
     
     Creates a nim_task_embed task that will:
     1. Fetch task content from Postgres tasks table
-    2. Generate embeddings using NIM Retrieval service
-    3. Store embeddings in graph_embeddings with label='task.primary'
+    2. Generate embeddings using NIM Retrieval service (1024d)
+    3. Store embeddings in graph_embeddings_1024 with label='task.primary'
     4. Track content hashes for change detection
     
     This is an alternative to GraphEmbedder that doesn't require Neo4j.
+    Note: Uses graph_embeddings_1024 for 1024-dimensional embeddings (NIM Retrieval).
     """
     if not conn:
         return None
     
     try:
         # First, we need to get or create some tasks to embed
-        # Query for recent completed tasks that might need embeddings
+        # Query for recent completed tasks that might need embeddings (check 1024d table)
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT t.id, m.node_id
@@ -3143,7 +3242,7 @@ def scenario_nim_task_embed(conn) -> Optional[uuid.UUID]:
                 LEFT JOIN graph_node_map m ON m.node_type = 'task' 
                     AND m.ext_table = 'tasks' 
                     AND m.ext_uuid = t.id
-                LEFT JOIN graph_embeddings e ON e.node_id = m.node_id 
+                LEFT JOIN graph_embeddings_1024 e ON e.node_id = m.node_id 
                     AND e.label = 'task.primary'
                 WHERE e.node_id IS NULL
                 LIMIT 5
@@ -3419,7 +3518,7 @@ def test_routing_feature_flags(ray, coord):
         log.info(f"  ROUTING_REMOTE: {routing_remote}")
         
         # Test ROUTING_REMOTE_TYPES
-        routing_types = env("ROUTING_REMOTE_TYPES", "graph_embed,graph_rag_query,graph_embed_v2,graph_rag_query_v2")
+        routing_types = env("ROUTING_REMOTE_TYPES", "graph_embed,graph_rag_query")
         log.info(f"  ROUTING_REMOTE_TYPES: {routing_types}")
         
         # Test cache TTL settings

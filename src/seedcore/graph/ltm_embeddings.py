@@ -34,7 +34,7 @@ class LTMEmbedder:
       3) Refresh recent memory cells by recency window.
       4) (Optional) Summarize agent memory as centroids (returned to caller).
 
-    All embeddings are 128-d by default so they fit graph_embeddings.VECTOR(128).
+    All embeddings are 128-d by default so they fit graph_embeddings_128.VECTOR(128).
     """
 
     def __init__(self):
@@ -142,7 +142,7 @@ class LTMEmbedder:
         content_hash_map: Optional[Dict[int, Optional[str]]] = None,
     ) -> Dict[str, int | float]:
         """
-        Compute and upsert memory-fused TASK embeddings into graph_embeddings.
+        Compute and upsert memory-fused TASK embeddings into graph_embeddings_128 (128d).
         """
         mapping = self.embed_tasks_with_memory(start_task_ids, k=k)
         if not mapping:
@@ -160,20 +160,21 @@ class LTMEmbedder:
                 props_map=props_map,
                 model_map=model_map,
                 content_hash_map=content_hash_map,
+                dimension=128,  # LTM produces 128d embeddings
             )
         )
         return {"upserted": int(n), "t_ms": round((time.time() - t0) * 1000.0, 2)}
 
     def upsert_memory_embeddings(self, memory_cell_ids: List[int], k: int = 1) -> Dict[str, int | float]:
         """
-        Compute and upsert MEMORY_CELL embeddings into graph_embeddings.
+        Compute and upsert MEMORY_CELL embeddings into graph_embeddings_128 (128d).
         """
         mapping = self.embed_memory_cells(memory_cell_ids, k=k)
         if not mapping:
             return {"upserted": 0, "t_ms": 0.0}
 
         t0 = time.time()
-        n = ray.get(upsert_embeddings.remote(mapping))
+        n = ray.get(upsert_embeddings.remote(mapping, dimension=128))  # LTM produces 128d embeddings
         return {"upserted": int(n), "t_ms": round((time.time() - t0) * 1000.0, 2)}
 
     # ---------- maintenance workflows ----------
