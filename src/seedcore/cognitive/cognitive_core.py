@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 DSPy Cognitive Core v2 for SeedCore Agents.
 
@@ -18,30 +16,23 @@ Key Enhancements:
 
 Note: Coordinator decides fast vs escalate; Organism resolves/executes.
 """
-
-# Ensure DSP logging is patched before any DSP/DSPy import
-try:
-    from seedcore.cognitive import dsp_patch  # type: ignore
-except Exception:
-    pass
+from __future__ import annotations
 
 import asyncio
 import concurrent.futures
 import json
-import logging
 import hashlib
 import os
 import re
 import threading
 import time
-import uuid
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-import dspy
+import dspy  # pyright: ignore[reportMissingImports]
 
-from seedcore.logging_setup import setup_logging
+from seedcore.logging_setup import setup_logging, ensure_serve_logger
 from ..coordinator.utils import normalize_task_payloads
 
 try:
@@ -54,8 +45,26 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     SentenceTransformer = None  # type: ignore
 
+# Centralized result schema
+from ..models.result_schema import create_cognitive_result, create_error_result
+from ..models.fact import Fact
+from ..models.cognitive import DecisionKind, CognitiveType, CognitiveContext
+from .context_broker import (
+    ContextBroker,
+    RetrievalSufficiency,
+    _fact_to_context_dict,
+)
+from .signatures import (
+    AnalyzeFailureSignature,
+    CapabilityAssessmentSignature,
+    DecisionMakingSignature,
+    MemorySynthesisSignature,
+    ProblemSolvingSignature,
+    TaskPlanningSignature,
+)
+
 setup_logging("seedcore.CognitiveCore")
-logger = logging.getLogger("seedcore.CognitiveCore")
+logger = ensure_serve_logger("seedcore.CognitiveCore", level="DEBUG")
 
 
 class CachedResultFound(Exception):
@@ -83,27 +92,6 @@ except Exception:
     _MLT_AVAILABLE = False
 
 MLT_ENABLED = os.getenv("MLT_ENABLED", "1") in {"1", "true", "True"}
-
-# Centralized result schema
-from ..models.result_schema import create_cognitive_result, create_error_result
-from ..models.fact import Fact
-from ..models.cognitive import DecisionKind, CognitiveType, CognitiveContext
-from .context_broker import (
-    ContextBroker,
-    RetrievalSufficiency,
-    _fact_is_stale,
-    _fact_to_context_dict,
-)
-from .signatures import (
-    AnalyzeFailureSignature,
-    CapabilityAssessmentSignature,
-    DecisionMakingSignature,
-    MemorySynthesisSignature,
-    ProblemSolvingSignature,
-    TaskPlanningSignature,
-)
-
-
 
 
 # =============================================================================
@@ -164,8 +152,10 @@ class CognitiveCore(dspy.Module):
         # Create ContextBroker with Mw/Mlt search functions if none provided
         if context_broker is None:
             # Create lambda functions that will be bound to agent_id at call time
-            text_fn = lambda query, k: self._mw_first_text_search("", query, k)  # Will be overridden in process()
-            vec_fn = lambda query, k: self._mw_first_vector_search("", query, k)  # Will be overridden in process()
+            def text_fn(query, k):
+                return self._mw_first_text_search("", query, k)  # Will be overridden in process()
+            def vec_fn(query, k):
+                return self._mw_first_vector_search("", query, k)  # Will be overridden in process()
             self.context_broker = ContextBroker(text_fn, vec_fn, token_budget=1500, ocps_client=self.ocps_client)
         else:
             self.context_broker = context_broker
@@ -262,6 +252,8 @@ class CognitiveCore(dspy.Module):
     def process(self, context: CognitiveContext) -> Dict[str, Any]:
         """
         Pipeline router that selects the appropriate cognitive pathway based on decision kind.
+        
+        Extracts decision_kind from unified TaskPayload format: params.cognitive.decision_kind
         """
         task_id = self._extract_task_id(context.input_data)
         logger.debug(
@@ -269,9 +261,20 @@ class CognitiveCore(dspy.Module):
         )
 
         input_data = context.input_data or {}
-        meta = input_data.get("meta", {})
-
-        decision_kind_raw = meta.get("decision_kind")
+        
+        # Extract decision_kind from unified TaskPayload format: params.cognitive.decision_kind
+        params = input_data.get("params", {})
+        cognitive_section = params.get("cognitive", {})
+        
+        if not cognitive_section:
+            logger.warning(
+                f"Task {task_id}: Missing params.cognitive section. "
+                "Expected unified TaskPayload format with params.cognitive.decision_kind"
+            )
+            decision_kind_raw = None
+        else:
+            decision_kind_raw = cognitive_section.get("decision_kind")
+        
         decision_kind_value = (
             str(decision_kind_raw).strip().lower()
             if decision_kind_raw is not None
@@ -322,7 +325,9 @@ class CognitiveCore(dspy.Module):
 
             if decision_kind is DecisionKind.ESCALATED:
                 logger.debug(f"Task {task_id}: Running ESCALATED (HGNN context) pipeline.")
-                hgnn_embedding = input_data.get("hgnn_embedding")
+                # Extract HGNN data from params.hgnn (new format) or input_data.hgnn_embedding (legacy)
+                hgnn_section = params.get("hgnn", {})
+                hgnn_embedding = hgnn_section.get("hgnn_embedding") or input_data.get("hgnn_embedding")
                 knowledge_context = {
                     "facts": [],
                     "summary": "Context provided by external HGNN.",
@@ -944,10 +949,22 @@ class CognitiveCore(dspy.Module):
 
     def _extract_task_id(self, input_data: Dict[str, Any]) -> Optional[str]:
         """Best-effort extraction of a task id from input data for logging.
-
-        Tries common keys without enforcing schema changes.
+        
+        Supports unified TaskPayload format (task_id at top level) and legacy formats.
         """
-        for key in ("task_id", "id", "request_id", "job_id", "run_id"):
+        # Check top-level task_id first (TaskPayload format)
+        task_id = input_data.get("task_id")
+        if isinstance(task_id, (str, int)) and task_id is not None:
+            return str(task_id)
+        
+        # Check params.task_id (alternative TaskPayload location)
+        params = input_data.get("params", {})
+        task_id = params.get("task_id")
+        if isinstance(task_id, (str, int)) and task_id is not None:
+            return str(task_id)
+        
+        # Legacy fallback: check common keys
+        for key in ("id", "request_id", "job_id", "run_id"):
             value = input_data.get(key)
             if isinstance(value, (str, int)) and value is not None:
                 return str(value)
@@ -1243,8 +1260,10 @@ class CognitiveCore(dspy.Module):
 
     def _bind_broker(self, agent_id: str) -> ContextBroker:
         """Return a ContextBroker instance with Mw/Mlt bindings for the given agent."""
-        text_fn = lambda query, k: self._mw_first_text_search(agent_id, query, k)
-        vec_fn = lambda query, k: self._mw_first_vector_search(agent_id, query, k)
+        def text_fn(query, k):
+            return self._mw_first_text_search(agent_id, query, k)
+        def vec_fn(query, k):
+            return self._mw_first_vector_search(agent_id, query, k)
 
         base = self.context_broker
         if base is None:

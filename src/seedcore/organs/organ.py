@@ -344,6 +344,65 @@ class Organ:
         return await self.pick_random_agent()
 
     # ==========================================================
+    # High-Stakes Task Execution (Thin Wrapper - v2 Architecture)
+    # ==========================================================
+
+    async def execute_high_stakes(
+        self, agent_id: str, task_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Thin wrapper for executing a high-stakes task on a specific agent.
+        
+        In v2 architecture:
+        - HGNN/OrganismCore decides routing (which agent)
+        - Organ is passive registry only
+        - Organ does NOT select agents, retry, or manage lifecycle
+        - Organ simply executes on the agent_id provided by OrganismCore
+        
+        This matches the v2 SeedCore execution model:
+        HGNN → OrganismCore → Organ (thin wrapper) → Agent
+        
+        Args:
+            agent_id: Agent ID already selected by HGNN/OrganismCore
+            task_info: Task payload as dict
+            
+        Returns:
+            Dict with agent_id, result, or error
+        """
+        handle = self.agents.get(agent_id)
+        if not handle:
+            return {
+                "error": "unknown_agent",
+                "agent_id": agent_id,
+                "organ_id": self.organ_id,
+            }
+
+        try:
+            logger.debug(
+                f"[{self.organ_id}] Executing high-stakes task on agent {agent_id}"
+            )
+            ref = handle.execute_high_stakes_task.remote(task_info)
+            result = await asyncio.to_thread(ray.get, ref, timeout=300.0)  # 5 min timeout
+            
+            return {
+                "agent_id": agent_id,
+                "organ_id": self.organ_id,
+                "result": result,
+            }
+
+        except Exception as e:
+            logger.error(
+                f"[{self.organ_id}] High-stakes task failed on agent {agent_id}: {e}",
+                exc_info=True,
+            )
+            return {
+                "error": "agent_failure",
+                "reason": str(e),
+                "agent_id": agent_id,
+                "organ_id": self.organ_id,
+            }
+
+    # ==========================================================
     # Shutdown
     # ==========================================================
 

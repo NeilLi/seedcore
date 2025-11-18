@@ -21,6 +21,30 @@ This reference explains how `Task` rows and the in-memory `TaskPayload` model ca
 - Router decisions and execution metrics are recorded under `result.meta`, keeping result metadata versioned and queryable without schema churn.
 - No schema migration is required; model helpers already push structured envelopes into `params` and `result`.
 
+### Risk Envelope (`params.risk`)
+
+High-stakes task classification comes from upstream cognitive analysis (Fast Eventizer or LLM Evaluator). The risk envelope is stored under `params.risk` (separate from routing metadata):
+
+```json
+{
+  "risk": {
+    "is_high_stakes": true,
+    "score": 0.92,
+    "severity": 0.8,
+    "user_impact": 0.9,
+    "business_criticality": 0.85
+  }
+}
+```
+
+**Important:** High-stakes detection is **NOT** part of `params.routing` or routing hints. The `priority` field in routing hints is a soft hint for queue ordering and SLA, not a risk indicator.
+
+The router detects high-stakes tasks by checking:
+- `params.risk.is_high_stakes` (canonical source)
+- `metadata.risk.is_high_stakes` (fallback if passed via metadata)
+
+**Do NOT** use ad-hoc heuristics like `priority >= 8` or `task_info.high_stakes` - these are not part of the canonical TaskPayload contract.
+
 ### Router Inbox (`params.routing`)
 
 Populate the router-facing inputs as a structured subdocument:
@@ -156,13 +180,21 @@ USING GIN ((params #> '{routing,hints,deadline_at}'));
 
 CREATE INDEX ix_tasks_params_skill_empathy ON tasks
 USING GIN ((params #> '{routing,desired_skills,empathy}'));
+
+CREATE INDEX ix_tasks_params_risk_high_stakes ON tasks
+USING GIN ((params #> '{risk,is_high_stakes}'));
+
+CREATE INDEX ix_tasks_params_risk_score ON tasks
+USING GIN ((params #> '{risk,score}'));
 ```
 
 ### Workflow Summary
 
+- **Upstream Cognitive Stage** (Fast Eventizer/LLM Evaluator) analyzes task and writes risk envelope to `params.risk`.
 - Dispatcher constructs a `TaskPayload`, setting router fields on the model.
 - Serialization pushes router information into `params.routing`; no extra columns.
-- Router reads `params.routing`, writes decisions into `result.meta.routing_decision`.
+- Router reads `params.routing` for agent selection, reads `params.risk.is_high_stakes` for high-stakes routing.
+- Router writes decisions into `result.meta.routing_decision`.
 - Agents/Coordinator record execution metrics under `result.meta.exec`.
 
 ### When to Consider Columns

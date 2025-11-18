@@ -13,11 +13,12 @@ The CALLER (e.g., Coordinator) is responsible for setting the
 import os
 import logging
 import asyncio
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, Union
 from concurrent.futures import ThreadPoolExecutor
 
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
 from seedcore.models.cognitive import CognitiveType, DecisionKind
+from seedcore.models.task_payload import TaskPayload
 
 logger = logging.getLogger(__name__)
 
@@ -107,59 +108,72 @@ class CognitiveServiceClient(BaseServiceClient):
         agent_id: str,
         cog_type: Union[str, CognitiveType],
         decision_kind: DecisionKind,
-        input_data: Dict[str, Any],
-        meta: Optional[Dict[str, Any]] = None,
+        task: Union[TaskPayload, Dict[str, Any]],
         timeout: Optional[float] = None,
         llm_provider_override: Optional[str] = None,
         llm_model_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        The primary method for all cognitive requests.
-        It calls the single /execute endpoint.
+        Unified cognitive interface using TaskPayload schema.
+        
+        Ensures cognitive jobs consume exactly the same structured inputs
+        as the router/agents/organs.
 
         Args:
-            agent_id: The ID of the agent making the request.
-            cog_type: The *specific job* to perform (e.g., TASK_PLANNING).
-            decision_kind: The *workflow pipeline* to use (e.g., COGNITIVE).
-            input_data: The payload for the specific cog_type.
-            meta: Additional metadata.
-            timeout: Optional override for this specific call.
+            agent_id: The agent invoking the cognitive service.
+            cog_type: The specific cognitive operation (TASK_PLANNING, etc.).
+            decision_kind: The decision workflow pipeline.
+            task: A fully structured TaskPayload or raw dict compatible with it.
+            timeout: Optional override for this call.
             llm_provider_override: Optional LLM provider override.
             llm_model_override: Optional LLM model override.
 
         Returns:
-            The full response dictionary from the cognitive service.
+            dict: The full cognitive service response.
         """
         resolved_type = self._resolve_cog_type(cog_type)
 
-        # The caller is responsible for setting the decision_kind.
-        # It's merged into the meta object.
-        request_meta = dict(meta or {})
-        request_meta.setdefault("decision_kind", decision_kind.value)
+        # --- Normalize to TaskPayload ---
+        if isinstance(task, TaskPayload):
+            payload_dict = task.model_dump()
+        else:
+            payload_dict = dict(task or {})
 
-        # Build the V2 payload
-        payload: Dict[str, Any] = {
+        # Ensure params exists
+        params = dict(payload_dict.get("params") or {})
+        
+        # Inject cognitive metadata under a structured namespace
+        cognitive_section = dict(params.get("cognitive", {}))
+
+        cognitive_section.update({
             "agent_id": agent_id,
             "cog_type": resolved_type.value,
-            "input_data": dict(input_data or {}),
-            "meta": request_meta,
-        }
+            "decision_kind": decision_kind.value,
+        })
 
-        # Add optional overrides
+        # Optional overrides
         if llm_provider_override:
-            payload["llm_provider_override"] = (llm_provider_override or "").strip().lower()
+            cognitive_section["llm_provider_override"] = llm_provider_override.strip().lower()
         if llm_model_override:
-            payload["llm_model_override"] = llm_model_override
+            cognitive_section["llm_model_override"] = llm_model_override
 
+        params["cognitive"] = cognitive_section
+        payload_dict["params"] = params
+
+        # Timeout resolution
         effective_timeout = timeout if timeout is not None else self.timeout
-        
+
         logger.debug(
-            f"CognitiveClient executing: agent={agent_id}, "
-            f"cog_type={resolved_type.value}, decision_kind={decision_kind.value}"
+            f"[CognitiveClient] execute_async → agent={agent_id}, "
+            f"type={resolved_type.value}, pipeline={decision_kind.value}"
         )
-        
-        # Call the single, unified endpoint
-        return await self.post("/execute", json=payload, timeout=effective_timeout)
+
+        # Single unified endpoint
+        return await self.post(
+            "/execute",
+            json=payload_dict,
+            timeout=effective_timeout
+        )
 
     # ---------------------------
     # Service info / health
@@ -191,8 +205,7 @@ class CognitiveServiceClient(BaseServiceClient):
         agent_id: str,
         cog_type: Union[str, CognitiveType],
         decision_kind: DecisionKind,
-        input_data: Dict[str, Any],
-        meta: Optional[Dict[str, Any]] = None,
+        task: Union[TaskPayload, Dict[str, Any]],
         timeout: Optional[float] = None,
         llm_provider_override: Optional[str] = None,
         llm_model_override: Optional[str] = None,
@@ -212,8 +225,7 @@ class CognitiveServiceClient(BaseServiceClient):
                 agent_id=agent_id,
                 cog_type=cog_type,
                 decision_kind=decision_kind,
-                input_data=input_data,
-                meta=meta,
+                task=task,
                 timeout=timeout,
                 llm_provider_override=llm_provider_override,
                 llm_model_override=llm_model_override,

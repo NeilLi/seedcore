@@ -496,6 +496,38 @@ class OrganismCore:
             f"prefer_agent={prefer_agent_id} any_agent={ask_any_agent} any_organ={ask_any_organ}"
         )
 
+        # Convert TaskPayload to dict early for high-stakes detection
+        task_dict = (
+            payload.model_dump() if isinstance(payload, TaskPayload) else payload
+        )
+        
+        # Merge metadata into task_dict for high-stakes detection
+        if metadata:
+            task_dict = {**task_dict, **metadata}
+
+        # ------------------------------------------------------------
+        # 0. Detect high-stakes tasks (canonical SeedCore v2 approach)
+        # ------------------------------------------------------------
+        # High-stakes classification comes from upstream cognitive analysis
+        # stored in params.risk.is_high_stakes (NOT from routing hints or priority)
+        risk_info = task_dict.get("params", {}).get("risk", {}) or task_dict.get("risk", {})
+        meta_risk = (metadata or {}).get("risk", {})
+        
+        is_high_stakes = bool(
+            risk_info.get("is_high_stakes") or meta_risk.get("is_high_stakes")
+        )
+        
+        if is_high_stakes:
+            logger.info(
+                f"[OrganismCore.route_task] High-stakes task detected for specialization {specialization.name} "
+                f"(risk_score={risk_info.get('score', 'N/A')})"
+            )
+            return await self._route_high_stakes_task(
+                specialization=specialization,
+                task_info=task_dict,
+                ask_any_organ=ask_any_organ,
+            )
+
         # ------------------------------------------------------------
         # 1. Select target organ (agent registry lookup)
         # ------------------------------------------------------------
@@ -554,12 +586,8 @@ class OrganismCore:
                 f"[route_task] Dispatching → organ={organ_id}, agent={agent_id}"
             )
 
-            # Convert TaskPayload to dict for agent execution
-            task_dict = (
-                payload.model_dump() if isinstance(payload, TaskPayload) else payload
-            )
-
-            ref = agent_handle.execute_task.remote(task_dict, metadata or {})
+            # task_dict already includes metadata (merged earlier)
+            ref = agent_handle.execute_task.remote(task_dict)
             result = await asyncio.to_thread(ray.get, ref)
 
             return {
@@ -574,6 +602,126 @@ class OrganismCore:
                 "organ_id": organ_id,
                 "agent_id": agent_id,
                 "error": f"Execution failure: {e}",
+            }
+
+    # =====================================================================
+    #  HIGH-STAKES TASK ROUTING
+    # =====================================================================
+
+    async def _route_high_stakes_task(
+        self,
+        specialization: Specialization,
+        task_info: Dict[str, Any],
+        ask_any_organ: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Routes high-stakes tasks using v2 architecture.
+        
+        In v2:
+        - OrganismCore selects the agent (routing decision)
+        - Organ is passive registry (thin wrapper)
+        - Organ executes on the agent_id provided
+        
+        This matches: HGNN → OrganismCore (selects agent) → Organ (executes) → Agent
+        
+        Args:
+            specialization: Task specialization
+            task_info: Task payload as dict (already includes metadata)
+            ask_any_organ: Whether to route to any organ (for fallback)
+            
+        Returns:
+            Dict with organ_id, agent_id, result, or error
+        """
+        # Select target organ
+        try:
+            if ask_any_organ:
+                organ_id, organ = random.choice(list(self.organs.items()))
+            else:
+                organ_id = self.specialization_to_organ.get(specialization)
+                if not organ_id:
+                    return {
+                        "error": f"No organ registered for specialization {specialization.name}",
+                        "high_stakes": True,
+                    }
+                organ = self.organs.get(organ_id)
+                if not organ:
+                    return {
+                        "error": f"Organ '{organ_id}' unavailable",
+                        "high_stakes": True,
+                    }
+        except Exception as e:
+            logger.error(f"[_route_high_stakes_task] Organ selection failed: {e}")
+            return {
+                "error": f"Organ selection failure: {e}",
+                "high_stakes": True,
+            }
+
+        # Select agent (OrganismCore makes routing decision)
+        try:
+            pick_result_ref = organ.pick_agent_by_specialization.remote(
+                specialization.value
+            )
+            agent_id, agent_handle = await asyncio.to_thread(
+                ray.get, pick_result_ref
+            )
+
+            if not agent_id or not agent_handle:
+                return {
+                    "error": f"No agent available for specialization {specialization.name}",
+                    "organ_id": organ_id,
+                    "high_stakes": True,
+                }
+        except Exception as e:
+            logger.error(
+                f"[_route_high_stakes_task] Agent selection failed: {e}", exc_info=True
+            )
+            return {
+                "error": f"Agent selection failure: {e}",
+                "organ_id": organ_id,
+                "high_stakes": True,
+            }
+
+        # Route to organ's thin wrapper (pass agent_id)
+        try:
+            logger.info(
+                f"[OrganismCore] Routing high-stakes task to organ {organ_id}, agent {agent_id}"
+            )
+            
+            ref = organ.execute_high_stakes.remote(agent_id, task_info)
+            result = await asyncio.to_thread(ray.get, ref, timeout=300.0)  # 5 min timeout
+            
+            # Check for errors
+            if result.get("error"):
+                logger.error(
+                    f"[OrganismCore] High-stakes task failed: {result.get('error')} "
+                    f"(organ={organ_id}, agent={agent_id})"
+                )
+                return {
+                    "error": result.get("error"),
+                    "reason": result.get("reason"),
+                    "organ_id": organ_id,
+                    "agent_id": agent_id,
+                    "high_stakes": True,
+                }
+            
+            # Success
+            return {
+                "organ_id": result.get("organ_id", organ_id),
+                "agent_id": result.get("agent_id", agent_id),
+                "result": result.get("result"),
+                "high_stakes": True,
+            }
+            
+        except Exception as e:
+            logger.error(
+                f"[_route_high_stakes_task] High-stakes execution error: {e}",
+                exc_info=True,
+            )
+            return {
+                "error": f"High-stakes execution failure: {e}",
+                "organ_id": organ_id,
+                "agent_id": agent_id,
+                "high_stakes": True,
             }
 
     # =====================================================================
@@ -611,8 +759,12 @@ class OrganismCore:
             task_dict = (
                 payload.model_dump() if isinstance(payload, TaskPayload) else payload
             )
+            
+            # Merge metadata into task_dict if provided
+            if metadata:
+                task_dict = {**task_dict, **metadata}
 
-            ref = agent_handle.execute_task.remote(task_dict, metadata or {})
+            ref = agent_handle.execute_task.remote(task_dict)
             result = await asyncio.to_thread(ray.get, ref)
 
             return {
@@ -652,8 +804,12 @@ class OrganismCore:
             task_dict = (
                 payload.model_dump() if isinstance(payload, TaskPayload) else payload
             )
+            
+            # Merge metadata into task_dict if provided
+            if metadata:
+                task_dict = {**task_dict, **metadata}
 
-            ref = agent_handle.execute_task.remote(task_dict, metadata or {})
+            ref = agent_handle.execute_task.remote(task_dict)
             result = await asyncio.to_thread(ray.get, ref)
 
             return {

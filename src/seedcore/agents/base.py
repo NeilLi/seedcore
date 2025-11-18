@@ -5,12 +5,18 @@ Base Agent abstraction.
 This class wires together:
 - Specialization & skills (seedcore.agents.roles.*)
 - RBAC enforcement (tools & data scopes)
-- Salience scoring via MLServiceClient (seedcore.serve.ml_client)
-- Routing advertisement for the meta-controller
-- Minimal heartbeat & system metrics
+- Salience scoring via MLServiceClient (seedcore.serve.ml_client) - LOCAL scoring only
+- Routing advertisement for the meta-controller (passive, not routing decisions)
+- Minimal heartbeat & agent-local metrics (not system-wide)
 - Example async task handler showing salience-aware flow
 
-Replace stubs (_get_system_load, _fallback_salience_scorer, etc.) with real probes/heuristics.
+Architectural Principle: BaseAgent is a LOCAL REFLEX LAYER.
+It reacts to tasks, executes tool calls, computes local salience, and returns local intents.
+It does NOT perform global routing, cognitive reasoning, cross-agent coordination,
+recovery FSM, proactive planning, policy decisions, KG writes, emergent behavior,
+role selection, or democratized salience coordination.
+
+Replace stubs (_get_agent_load_estimate, _fallback_salience_scorer, etc.) with real probes/heuristics.
 """
 
 from __future__ import annotations
@@ -81,12 +87,33 @@ class BaseAgent:
     """
     Production-ready base agent.
 
-    Responsibilities:
+    Responsibilities (LOCAL ONLY):
       - Holds identity & light state (capability, mem_util)
       - Manages specialization and skills; passes them to cognition/ML
       - Enforces RBAC for tool/data access
-      - Computes salience (with ML + fallback)
-      - Advertises capabilities for routing
+      - Computes salience (with ML + fallback) - LOCAL scoring only
+      - Advertises capabilities for routing (passive advertisement, not routing decisions)
+      - Executes tasks locally with tool calls
+      - Returns local intents (not global escalation signals)
+
+    Architectural Boundaries - BaseAgent MUST NOT:
+      ❌ No global routing logic (routing decisions belong to meta-controller)
+      ❌ No cognitive reasoning (delegates to CognitiveServiceClient)
+      ❌ No cross-agent coordination (coordination belongs to meta-controller/HGNN)
+      ❌ No recovery FSM (recovery orchestration belongs to meta-controller)
+      ❌ No proactive planning (planning belongs to Cognitive Core/Organs)
+      ❌ No policy engine (policy enforcement is RBAC-only, policy decisions are upstream)
+      ❌ No knowledge graph writes (KG operations belong to Cognitive Core)
+      ❌ No emergent behavior scaffolding (emergence belongs to HGNN)
+      ❌ No role selection logic (role selection belongs to meta-controller)
+      ❌ No democratized salience coordination (coordination belongs to meta-controller)
+
+    BaseAgent is a LOCAL REFLEX LAYER:
+      - Reacts to incoming tasks
+      - Executes tool calls with RBAC
+      - Computes local salience scores
+      - Returns local intents for upstream interpretation
+      - Self-regulates via lifecycle (degraded mode under load)
 
     Extend this class for organ-specific behaviors (GEA, PEA, etc.).
     """
@@ -494,6 +521,10 @@ class BaseAgent:
     def advertise_capabilities(self) -> Dict[str, Any]:
         """
         Build a routing advertisement payload for the meta-controller.
+        
+        NOTE: This is PASSIVE advertisement only. BaseAgent does NOT make routing
+        decisions - it only advertises its current capabilities. The meta-controller
+        uses these advertisements to make routing decisions.
         """
         mat_skills = self.role_profile.materialize_skills(self.skills.deltas)
         ad = build_advertisement(
@@ -573,15 +604,21 @@ class BaseAgent:
         except Exception as e:
             logger.warning("[%s] Heartbeat error; defaults. %s", self.agent_id, e)
 
-        system_load = self._get_system_load()
-        memory_usage = self._get_memory_usage()
-        cpu_usage = self._get_cpu_usage()
-        response_time = self._get_response_time()
-        error_rate = self._get_error_rate()
+        # Agent-local metrics (not system-wide)
+        agent_load = self._get_agent_load_estimate()
+        agent_memory_usage = self._get_agent_memory_usage()
+        agent_cpu_usage = self._get_agent_cpu_usage()
+        agent_response_time = self._get_agent_response_time()
+        agent_error_rate = self._get_agent_error_rate()
 
+        # Extract risk value: prefer risk_score (canonical) then risk (fallback)
+        risk_val = task_info.get("risk_score")
+        if risk_val is None:
+            risk_val = task_info.get("risk", 0.5)
+        
         features = {
             # Task-related
-            "task_risk": float(task_info.get("risk", 0.5)),
+            "task_risk": float(risk_val),
             "failure_severity": 1.0,
             "task_complexity": float(task_info.get("complexity", 0.5)),
             "user_impact": float(task_info.get("user_impact", 0.5)),
@@ -589,12 +626,12 @@ class BaseAgent:
             # Agent-related
             "agent_capability": float(performance_metrics.get("capability_score_c", self.state.c)),
             "agent_memory_util": float(performance_metrics.get("mem_util", self.state.mem_util)),
-            # System-related
-            "system_load": float(system_load),
-            "memory_usage": float(memory_usage),
-            "cpu_usage": float(cpu_usage),
-            "response_time": float(response_time),
-            "error_rate": float(error_rate),
+            # Agent-local metrics (renamed from system metrics)
+            "agent_load": float(agent_load),
+            "agent_memory_usage": float(agent_memory_usage),
+            "agent_cpu_usage": float(agent_cpu_usage),
+            "agent_response_time": float(agent_response_time),
+            "agent_error_rate": float(agent_error_rate),
             # Error context
             "error_code": int(error_context.get("code", 500)),
             "error_type": self._classify_error_type(error_context.get("reason", "")),
@@ -611,8 +648,27 @@ class BaseAgent:
                 features = await self._extract_salience_features(task_info, error_context)
 
                 text_to_score = (error_context.get("reason") or "High-stakes task failure")[: self.MAX_TEXT_LEN]
-                role_ctx = self._role_context()
-                context_data = {**features, **role_ctx}
+                
+                # Trim context to essentials (avoid sending large skill vectors, blocks, norms, peers, etc.)
+                light_ctx = {
+                    "agent_capability": features.get("agent_capability", self.state.c),
+                    "mem_util": features.get("agent_memory_util", self.state.mem_util),
+                    "role": self.specialization.value,
+                }
+                
+                # Add task_embed_norm if available
+                task_embed = task_info.get("task_embed")
+                if task_embed is not None and np is not None:
+                    try:
+                        embed_arr = np.asarray(task_embed, dtype=np.float32)
+                        task_embed_norm = float(np.linalg.norm(embed_arr))
+                        light_ctx["task_embed_norm"] = task_embed_norm
+                    except Exception:
+                        light_ctx["task_embed_norm"] = 0.0
+                else:
+                    light_ctx["task_embed_norm"] = 0.0
+                
+                context_data = {**features, **light_ctx}
 
                 client = await self._get_ml_client()
                 if client is None:
@@ -878,12 +934,62 @@ class BaseAgent:
             logger.debug(f"Agent {self.agent_id} lifecycle={self.lifecycle}, skipping salience")
             return 0.0
         
+        # Skip salience for rejected tasks (no tool calls executed)
+        if not results and not errors:
+            logger.debug(f"Agent {self.agent_id} no tool calls executed, skipping salience")
+            return 0.0
+        
         try:
-            ctx_reason = "task_error" if errors else "task_ok"
-            return await self._calculate_ml_salience_score(
-                task_info={"task": tv.task_id, "prompt": tv.prompt},
-                error_context={"reason": ctx_reason, "detail": str(errors[:1])},
-            )
+            # Extract real error reason from first error if available
+            if errors:
+                first_error = errors[0]
+                reason = first_error.get("error", "unknown")
+                # Map common error patterns to semantic reasons
+                if "timeout" in str(reason).lower():
+                    reason = "timeout"
+                elif "rbac" in str(reason).lower() or "permission" in str(reason).lower():
+                    reason = "authorization_failure"
+                elif "validation" in str(reason).lower():
+                    reason = "validation_error"
+                else:
+                    reason = str(reason)
+            else:
+                reason = "ok"
+            
+            # Infer risk metadata from task context
+            risk = 1.0 if errors else 0.2
+            complexity = min(1.0, len(tv.tool_calls) / 5.0) if tv.tool_calls else 0.0
+            business_criticality = 1.0 if tv.priority > 5 else 0.3
+            user_impact = min(1.0, tv.priority / 10.0) if tv.priority else 0.5
+            
+            # Build comprehensive task_info
+            task_info = {
+                "task": tv.task_id,
+                "prompt": tv.prompt,
+                "risk": risk,
+                "complexity": complexity,
+                "business_criticality": business_criticality,
+                "user_impact": user_impact,
+                "task_embed": tv.embedding,  # Include embedding for task_embed_norm calculation
+            }
+            
+            # Build error_context with semantic reason
+            error_context = {
+                "reason": reason,
+                "code": self._map_reason_to_code(reason),
+            }
+            
+            salience = await self._calculate_ml_salience_score(task_info, error_context)
+            
+            # Load shedding: degrade lifecycle when overloaded
+            if salience > 0.85 and self.load > 5:
+                logger.warning(
+                    f"Agent {self.agent_id} high salience ({salience:.2f}) and high load ({self.load:.1f}), "
+                    "entering degraded mode"
+                )
+                self.lifecycle = "degraded"
+            
+            return salience
         except Exception:
             return 0.0
 
@@ -1230,29 +1336,40 @@ class BaseAgent:
     # ============================================================================
 
     def _decide_next_action(self, task_info: Dict[str, Any], salience: float) -> str:
+        """
+        Decide next action based on salience score.
+        Returns local intents only (not global escalation signals).
+        The meta-controller will interpret these local intents.
+        """
         if salience >= 0.85:
-            return "escalate_and_notify"
+            return "local_flag_high_risk"
         if salience >= 0.6:
-            return "priority_recovery"
-        return "standard_retry"
+            return "local_retry"
+        return "local_soft_fail"
 
     # ============================================================================
-    # System metric stubs (override with real probes)
+    # Agent-local metric stubs (override with real probes)
+    # These reflect local agent state, not system-wide metrics
     # ============================================================================
 
-    def _get_system_load(self) -> float:
-        return 0.2
+    def _get_agent_load_estimate(self) -> float:
+        """Agent-local load estimate (based on self.load)."""
+        return min(1.0, self.load / 10.0)  # Normalize load to [0, 1]
 
-    def _get_memory_usage(self) -> float:
+    def _get_agent_memory_usage(self) -> float:
+        """Agent-local memory usage."""
         return float(self.state.mem_util)
 
-    def _get_cpu_usage(self) -> float:
+    def _get_agent_cpu_usage(self) -> float:
+        """Agent-local CPU usage estimate (stub)."""
         return 0.2
 
-    def _get_response_time(self) -> float:
+    def _get_agent_response_time(self) -> float:
+        """Agent-local response time estimate (stub)."""
         return 0.05  # seconds
 
-    def _get_error_rate(self) -> float:
+    def _get_agent_error_rate(self) -> float:
+        """Agent-local error rate estimate (stub)."""
         return 0.01
 
     # ============================================================================
@@ -1272,6 +1389,24 @@ class BaseAgent:
         if "validation" in r or "schema" in r or "not found" in r:
             return "validation"
         return "runtime"
+
+    def _map_reason_to_code(self, reason: str) -> int:
+        """
+        Map semantic error reason to HTTP-style error code.
+        Used for ML salience scoring context.
+        """
+        if not reason or reason == "ok":
+            return 200
+        r = reason.lower()
+        if "timeout" in r:
+            return 504
+        if "authorization" in r or "permission" in r or "forbidden" in r or "unauthorized" in r:
+            return 403
+        if "validation" in r or "schema" in r or "not found" in r:
+            return 400
+        if "network" in r or "connection" in r:
+            return 503
+        return 500
 
     # ============================================================================
     # Compatibility shims for legacy state access
@@ -1325,7 +1460,9 @@ class BaseAgent:
         Deterministic local scorer for resilience. Replace with your heuristic/XGBoost.
         Very simple baseline: weighted sum of a few risk features, clamped to [0,1].
         
-        Now includes agent capability: low-capability agents escalate more often.
+        Includes agent capability: low-capability agents produce higher salience scores
+        (which may result in local_flag_high_risk intents, but BaseAgent does not escalate).
+        Also includes privmem allocation as a weak signal of memory saturation.
         """
         out: list[float] = []
         for f in feature_batches:
@@ -1333,13 +1470,22 @@ class BaseAgent:
             sev = float(f.get("failure_severity", 1.0))
             imp = float(f.get("user_impact", 0.5))
             crit = float(f.get("business_criticality", 0.5))
-            sys = 0.25 * float(f.get("system_load", 0.0)) + 0.25 * float(f.get("error_rate", 0.0))
+            agent_load = float(f.get("agent_load", 0.0))
+            agent_error_rate = float(f.get("agent_error_rate", 0.0))
+            sys = 0.25 * agent_load + 0.25 * agent_error_rate
             
-            # Factor in agent capability: low capability increases salience
+            # Factor in agent capability: low capability increases salience score
+            # (higher salience may lead to local_flag_high_risk intent, but BaseAgent does not escalate)
             agent_capability = float(f.get("agent_capability", self.state.c))
             capability_penalty = 0.1 * (1.0 - agent_capability)  # 0.0 to 0.1
             
-            score = 0.30 * risk + 0.25 * sev + 0.2 * imp + 0.15 * crit + 0.05 * sys + capability_penalty
+            # Add privmem allocation signal (weak signal for memory saturation)
+            try:
+                privmem_norm = self._privmem.telemetry().get("allocation") or 0.0
+            except Exception:
+                privmem_norm = 0.0
+            
+            score = 0.30 * risk + 0.25 * sev + 0.2 * imp + 0.15 * crit + 0.05 * sys + capability_penalty + 0.05 * privmem_norm
             score = max(0.0, min(1.0, score))
             out.append(score)
         return out

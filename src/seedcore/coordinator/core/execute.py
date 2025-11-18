@@ -21,7 +21,6 @@ from collections.abc import (
     Iterable as IterableABC,
     Mapping,
     Sequence,
-    Set,
 )
 from dataclasses import dataclass
 from typing import Any
@@ -125,7 +124,7 @@ async def route_and_execute(
             # Validation failed - missing required HGNN deps
             logger.warning("[route] HGNN validation failed: %s; returning routing metadata only", e)
             return routing_result["result"]
-
+            
     # Fast and planner paths: return routing result; downstream will execute
     return routing_result["result"]
 

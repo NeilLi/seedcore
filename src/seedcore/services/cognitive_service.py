@@ -90,7 +90,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol
 # 2) Third-party light deps (safe at import time)
 import httpx  # type: ignore[reportMissingImports]
 from fastapi import FastAPI  # type: ignore[reportMissingImports]
-from pydantic import BaseModel  # type: ignore[reportMissingImports]
+from pydantic import BaseModel, Field  # type: ignore[reportMissingImports]
 from ray import serve  # type: ignore[reportMissingImports]
 
 # 3) SeedCore internals (no heavy side effects)
@@ -98,6 +98,10 @@ from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from ..coordinator.utils import normalize_task_payloads
 from ..cognitive.cognitive_core import CognitiveCore, Fact
 from ..models.cognitive import CognitiveContext, CognitiveType, DecisionKind
+try:
+    from seedcore.utils.ray_utils import ML
+except Exception:
+    ML = None  # Fallback handled in _make_engine
 from ..models.result_schema import create_error_result
 
 if TYPE_CHECKING:
@@ -417,68 +421,129 @@ def _timeout(profile: LLMProfile, provider: str) -> int:
         return int(os.getenv("FAST_TIMEOUT_SECONDS", "5"))
     return int(os.getenv("DEEP_TIMEOUT_SECONDS", "20"))
 
-def _model_for(provider: str, profile: LLMProfile) -> str:
-    pr = provider.lower()
-    pf = profile.value
-    if pr == "openai":
-        return _first_non_empty(
-            os.getenv("OPENAI_MODEL_DEEP" if pf == "deep" else "OPENAI_MODEL_FAST"),
-            "gpt-4o" if pf == "deep" else "gpt-4o-mini",
-        )
-    if pr == "anthropic":
-        return _first_non_empty(
-            os.getenv("ANTHROPIC_MODEL_DEEP" if pf == "deep" else "ANTHROPIC_MODEL_FAST"),
-            "claude-3-5-sonnet" if pf == "deep" else "claude-3-5-haiku",
-        )
-    if pr == "google":
-        return _first_non_empty(
-            os.getenv("GOOGLE_MODEL_DEEP" if pf == "deep" else "GOOGLE_MODEL_FAST"),
-            "gemini-1.5-pro" if pf == "deep" else "gemini-1.5-flash",
-        )
-    if pr == "azure":
-        return _first_non_empty(
-            os.getenv("AZURE_OPENAI_MODEL_DEEP" if pf == "deep" else "AZURE_OPENAI_MODEL_FAST"),
-            "gpt-4o" if pf == "deep" else "gpt-4o-mini",
-        )
-    if pr == "nim":
-        return _first_non_empty(
-            os.getenv("NIM_LLM_MODEL"),
-            "meta/llama-3.1-8b-base",
-        )
-    if pr == "mlservice":
-        return _first_non_empty(
-            os.getenv("MLS_MODEL_DEEP" if pf == "deep" else "MLS_MODEL_FAST"),
-            "llama3-70b-instruct" if pf == "deep" else "llama3-8b-instruct-q4",
-        )
-    return "gpt-4o" if pf == "deep" else "gpt-4o-mini"
 
-def _make_engine(provider: str, profile: LLMProfile, model: str):
-    provider = provider.lower()
-    max_tokens = 2048 if profile is LLMProfile.DEEP else 1024
-    if provider == "openai":
-        return OpenAIEngine(model=model, max_tokens=max_tokens)
-    if provider == "mlservice":
-        base_url = os.getenv("MLS_BASE_URL")
-        if not base_url:
-            try:
-                from seedcore.utils.ray_utils import ML
-                base_url = str(ML)
-            except Exception:
-                base_url = "http://127.0.0.1:8000/ml"
-        return MLServiceEngine(model=model, max_tokens=max_tokens, temperature=0.7, base_url=base_url)
-    if provider == "nim":
-        return NimEngine(
+# ----------------------------------------------------------------------
+# CENTRAL PROVIDER REGISTRY
+# ----------------------------------------------------------------------
+
+PROVIDER_CONFIG = {
+    "openai": {
+        "env": {
+            "deep": "OPENAI_MODEL_DEEP",
+            "fast": "OPENAI_MODEL_FAST",
+        },
+        "defaults": {
+            "deep": "gpt-4o",
+            "fast": "gpt-4o-mini",
+        },
+        "engine": lambda model, profile: OpenAIEngine(
             model=model,
-            max_tokens=max_tokens,
+            max_tokens=2048 if profile is LLMProfile.DEEP else 1024
+        ),
+    },
+    "anthropic": {
+        "env": {
+            "deep": "ANTHROPIC_MODEL_DEEP",
+            "fast": "ANTHROPIC_MODEL_FAST",
+        },
+        "defaults": {
+            "deep": "claude-3-5-sonnet",
+            "fast": "claude-3-5-haiku",
+        },
+        "engine": lambda model, profile: OpenAIEngine(
+            model=model,
+            max_tokens=2048 if profile is LLMProfile.DEEP else 1024
+        ),
+    },
+    "google": {
+        "env": {
+            "deep": "GOOGLE_MODEL_DEEP",
+            "fast": "GOOGLE_MODEL_FAST",
+        },
+        "defaults": {
+            "deep": "gemini-1.5-pro",
+            "fast": "gemini-1.5-flash",
+        },
+        "engine": lambda model, profile: OpenAIEngine(
+            model=model,
+            max_tokens=2048 if profile is LLMProfile.DEEP else 1024
+        ),
+    },
+    "azure": {
+        "env": {
+            "deep": "AZURE_OPENAI_MODEL_DEEP",
+            "fast": "AZURE_OPENAI_MODEL_FAST",
+        },
+        "defaults": {
+            "deep": "gpt-4o",
+            "fast": "gpt-4o-mini",
+        },
+        "engine": lambda model, profile: OpenAIEngine(
+            model=model,
+            max_tokens=2048 if profile is LLMProfile.DEEP else 1024
+        ),
+    },
+    "nim": {
+        "env": {"deep": "NIM_LLM_MODEL", "fast": "NIM_LLM_MODEL"},
+        "defaults": {
+            "deep": "meta/llama-3.1-8b-base",
+            "fast": "meta/llama-3.1-8b-base",
+        },
+        "engine": lambda model, profile: NimEngine(
+            model=model,
             temperature=0.7,
+            max_tokens=2048 if profile is LLMProfile.DEEP else 1024,
             base_url=os.getenv("NIM_LLM_BASE_URL"),
             api_key=os.getenv("NIM_LLM_API_KEY", "none"),
             use_sdk=None,
-            timeout=_timeout(profile, provider),
-        )
-    if provider in ("anthropic", "google", "azure"):
-        return OpenAIEngine(model=model, max_tokens=max_tokens)  # placeholder
-    raise ValueError(f"Unsupported provider: {provider}")
+            timeout=_timeout(profile, "nim"),
+        ),
+    },
+    "mlservice": {
+        "env": {
+            "deep": "MLS_MODEL_DEEP",
+            "fast": "MLS_MODEL_FAST",
+        },
+        "defaults": {
+            "deep": "llama3-70b-instruct",
+            "fast": "llama3-8b-instruct-q4",
+        },
+        "engine": lambda model, profile: MLServiceEngine(
+            model=model,
+            max_tokens=2048 if profile is LLMProfile.DEEP else 1024,
+            temperature=0.7,
+            base_url=os.getenv("MLS_BASE_URL") or (str(ML).rstrip("/") if ML else "http://127.0.0.1:8000/ml"),
+        ),
+    },
+}
+
+
+def _model_for(provider: str, profile: LLMProfile) -> str:
+    """Get model name for provider and profile using centralized registry."""
+    pr = provider.lower()
+    pf = "deep" if profile is LLMProfile.DEEP else "fast"
+
+    config = PROVIDER_CONFIG.get(pr)
+    if not config:
+        # Universal fallback
+        return "gpt-4o" if pf == "deep" else "gpt-4o-mini"
+
+    # env override or default
+    env_key = config["env"].get(pf)
+    return _first_non_empty(
+        os.getenv(env_key) if env_key else None,
+        config["defaults"][pf],
+    ) or ("gpt-4o" if pf == "deep" else "gpt-4o-mini")
+
+
+def _make_engine(provider: str, profile: LLMProfile, model: str):
+    """Create engine instance for provider and profile using centralized registry."""
+    pr = provider.lower()
+    config = PROVIDER_CONFIG.get(pr)
+    if not config:
+        raise ValueError(f"Unsupported provider: {provider}")
+
+    return config["engine"](model, profile)
 
 
 class CognitiveOrchestrator:
@@ -798,13 +863,20 @@ RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
 
 # --- Request/Response Models ---
 class CognitiveRequest(BaseModel):
-    """Unified request model for the /execute endpoint."""
-    agent_id: str
-    cog_type: CognitiveType
-    input_data: Dict[str, Any]
-    meta: Dict[str, Any]  # Must contain 'decision_kind'
-    llm_provider_override: Optional[str] = None
-    llm_model_override: Optional[str] = None
+    """Unified request model for the /execute endpoint using TaskPayload schema.
+    
+    All requests must use the unified TaskPayload format with cognitive metadata
+    in params.cognitive namespace.
+    """
+    # TaskPayload format fields (required)
+    type: str
+    task_id: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+    description: str = ""
+    domain: Optional[str] = None
+    
+    class Config:
+        extra = "allow"  # Allow additional TaskPayload fields
 
 class CognitiveResponse(BaseModel):
     """Unified response model for the /execute endpoint."""
@@ -865,32 +937,66 @@ class CognitiveService:
     @app.post("/execute", response_model=CognitiveResponse)
     async def execute_cognitive_task(self, request: CognitiveRequest):
         start_time = time.time()
-        task_id = request.input_data.get("task_id", "N/A")
+        
+        # Extract from unified TaskPayload format
+        params = request.params or {}
+        cognitive_section = params.get("cognitive", {})
+        
+        if not cognitive_section:
+            raise ValueError(
+                "params.cognitive is required. Expected structure: "
+                "params.cognitive = {agent_id, cog_type, decision_kind, ...}"
+            )
+        
+        # Extract required fields from params.cognitive
+        agent_id = cognitive_section.get("agent_id")
+        if not agent_id:
+            raise ValueError("params.cognitive.agent_id is required")
+        
+        cog_type_str = cognitive_section.get("cog_type")
+        if not cog_type_str:
+            raise ValueError("params.cognitive.cog_type is required")
+        
         try:
-            input_data_raw = request.input_data or {}
-            meta_raw = request.meta or {}
-            input_data = normalize_task_payloads(dict(input_data_raw))
-            meta = normalize_task_payloads(dict(meta_raw))
-            input_data["meta"] = meta
-
-            if request.llm_provider_override:
-                input_data["llm_provider_override"] = request.llm_provider_override
-            if request.llm_model_override:
-                input_data["llm_model_override"] = request.llm_model_override
-
-            input_data = normalize_task_payloads(input_data)
-            meta = input_data.get("meta", meta)
-
+            cog_type = CognitiveType(cog_type_str)
+        except ValueError:
+            raise ValueError(f"Invalid cog_type '{cog_type_str}'. Must be a valid CognitiveType.")
+        
+        decision_kind_str = cognitive_section.get("decision_kind", DecisionKind.FAST_PATH.value)
+        
+        # Extract task_id
+        task_id = request.task_id
+        
+        # Build input_data from TaskPayload structure for CognitiveContext
+        # This preserves the full TaskPayload structure for cognitive_core to access
+        input_data = {
+            "task_id": task_id,
+            "type": request.type,
+            "description": request.description or "",
+            "domain": request.domain,
+            "params": params,  # Include full params for cognitive processing
+        }
+        
+        # Extract overrides from params.cognitive
+        llm_provider_override = cognitive_section.get("llm_provider_override")
+        llm_model_override = cognitive_section.get("llm_model_override")
+        
+        if llm_provider_override:
+            input_data["llm_provider_override"] = llm_provider_override
+        if llm_model_override:
+            input_data["llm_model_override"] = llm_model_override
+        
+        try:
             context = CognitiveContext(
-                agent_id=request.agent_id,
-                cog_type=request.cog_type,
+                agent_id=agent_id,
+                cog_type=cog_type,
                 input_data=input_data,
             )
 
-            decision_kind = meta.get("decision_kind", "unknown")
+            decision_kind = decision_kind_str
             self.logger.info(
-                f"/execute: Received task_id={task_id} for agent {request.agent_id}. "
-                f"cog_type={request.cog_type.value}, decision_kind={decision_kind}"
+                f"/execute: Received task_id={task_id} for agent {agent_id}. "
+                f"cog_type={cog_type.value}, decision_kind={decision_kind}"
             )
 
             result_dict = await asyncio.to_thread(
@@ -900,7 +1006,7 @@ class CognitiveService:
 
             processing_time = (time.time() - start_time) * 1000
             self.logger.info(
-                f"/execute: Completed task_id={task_id} for agent {request.agent_id} "
+                f"/execute: Completed task_id={task_id} for agent {agent_id} "
                 f"in {processing_time:.2f}ms. Success={result_dict.get('success')}"
             )
 

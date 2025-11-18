@@ -565,28 +565,92 @@ class CoordinatorHttpRouter(Router):
                 correlation_id = coordinator_corr
                 logger.debug(f"Using Coordinator-issued correlation_id: {correlation_id}")
 
-            # decision_kind = result.get("kind")
-            logger.info(
-                f"Task {task_id}: Coordinator chose fast_path; delegating."
-            )
-            try:
-                fast_router = RouterFactory.create_router(
-                    router_type="organism",
-                    config=self.config
+            # 2. Check decision_kind and route accordingly
+            decision_kind = result.get("kind")
+            
+            if decision_kind == DecisionKind.COGNITIVE:
+                # Handle cognitive execution in router layer
+                logger.info(
+                    f"[CoordinatorHttpRouter] Cognitive decision detected for task {task_id}; "
+                    "executing via CognitiveService"
                 )
-                fast_res = await fast_router.route_and_execute(
-                    task_data,
-                    correlation_id=correlation_id
+                
+                try:
+                    if not self.cognitive_client:
+                        logger.error(
+                            "[CoordinatorHttpRouter] cognitive_client is not initialized; "
+                            "cannot process cognitive execution"
+                        )
+                        result["warning"] = "CognitiveServiceClient unavailable"
+                        result["success"] = False
+                        result["error"] = "CognitiveServiceClient unavailable"
+                    else:
+                        # Use unified TaskPayload interface for cognitive execution
+                        # Coordinator has already determined this needs cognitive processing
+                        # Ensure correlation_id is in params if provided
+                        task_for_cognitive = task_payload
+                        if correlation_id:
+                            # Create a copy with correlation_id in params
+                            task_dict = task_payload.model_dump()
+                            params = dict(task_dict.get("params") or {})
+                            if "metadata" not in params:
+                                params["metadata"] = {}
+                            params["metadata"]["correlation_id"] = correlation_id
+                            task_dict["params"] = params
+                            task_for_cognitive = task_dict
+                        
+                        cog_res = await self.cognitive_client.execute_async(
+                            agent_id=result.get("agent_id") or f"planner_{task_id}",
+                            cog_type=CognitiveType.TASK_PLANNING,
+                            decision_kind=DecisionKind.COGNITIVE,
+                            task=task_for_cognitive,
+                        )
+                        
+                        # Wrap cognitive response into standard result format
+                        result = _wrap_cognitive_response(
+                            task_data=task_data,
+                            correlation_id=correlation_id,
+                            cog_res=cog_res,
+                        )
+                        
+                except Exception as exc:
+                    logger.warning(
+                        f"[CoordinatorHttpRouter] Cognitive execution failed for task {task_id}: {exc}",
+                        exc_info=True,
+                    )
+                    result.setdefault("warnings", []).append(f"Cognitive execution failed: {exc}")
+                    result["success"] = False
+                    result["error"] = str(exc)
+                    
+            elif decision_kind == DecisionKind.FAST_PATH.value:
+                # Delegate to OrganismRouter for fast/deep execution
+                logger.info(
+                    f"[CoordinatorHttpRouter] Task {task_id}: Coordinator chose {decision_kind}; delegating to OrganismRouter"
                 )
-                await fast_router.close()
-                result = fast_res
+                try:
+                    fast_router = RouterFactory.create_router(
+                        router_type="organism",
+                        config=self.config
+                    )
+                    fast_res = await fast_router.route_and_execute(
+                        task_data,
+                        correlation_id=correlation_id
+                    )
+                    await fast_router.close()
+                    result = fast_res
 
-            except Exception as handoff_err:
-                logger.warning(
-                    f"Fast-path or deep delegation failed for task {task_id}: {handoff_err}"
-                )
-                result.setdefault("warnings", []).append(
-                    f"Fast-path or deep delegation failed: {handoff_err}"
+                except Exception as handoff_err:
+                    logger.warning(
+                        f"[CoordinatorHttpRouter] Fast-path or deep delegation failed for task {task_id}: {handoff_err}"
+                    )
+                    result.setdefault("warnings", []).append(
+                        f"Fast-path or deep delegation failed: {handoff_err}"
+                    )
+            else:
+                # ESCALATED (HGNN), ERROR, or other: return coordinator result as-is
+                logger.debug(
+                    f"[CoordinatorHttpRouter] Task {task_id}: Coordinator returned {decision_kind}; "
+                    "returning result directly"
                 )
 
         except Exception as e:

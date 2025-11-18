@@ -253,22 +253,34 @@ class GeneralQueryTool:
             params = task_data.get("params", {}) or {}
 
             async def _cog_call():
-                input_data = {
+                # Construct TaskPayload-compatible dict from task_data
+                # Ensure description is in the task payload
+                task_dict = dict(task_data)
+                task_dict.setdefault("description", description or "")
+                task_dict.setdefault("type", task_data.get("type") or "general_query")
+                task_dict.setdefault("task_id", task_id or f"query_{hash(description)}")
+                
+                # Ensure params exists and includes query-specific data
+                task_params = dict(params)
+                if "constraints" not in task_params:
+                    task_params["constraints"] = {}
+                if "available_tools" not in task_params:
+                    task_params["available_tools"] = {}
+                
+                # Add query metadata to params
+                task_params["query"] = {
                     "problem_statement": str(description or ""),
-                    "constraints": params.get("constraints") or {},
-                    "available_tools": params.get("available_tools") or {},
-                }
-                meta = {
-                    "task_id": task_id,
                     "requested_profile": profile,
                     "agent_capabilities": self._get_agent_capabilities(),
                 }
+                
+                task_dict["params"] = task_params
+                
                 return await self._cog.execute_async(
                     agent_id=self.agent_id,
                     cog_type=CognitiveType.PROBLEM_SOLVING,
                     decision_kind=decision_kind,
-                    input_data=input_data,
-                    meta=meta,
+                    task=task_dict,
                 )
 
             cog_task = asyncio.create_task(_cog_call())

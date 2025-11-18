@@ -956,18 +956,14 @@ class Coordinator:
                 logger.warning(f"[HGNN] Health check failed: {e}")
                 return self._fallback_plan(self._convert_task_to_dict(task))
 
-            # --- Step 2: Prepare Cognitive request parameters ---
-
-            # Build the 'input_data' payload for the ProblemSolvingSignature
-            input_data = {
-                "problem_statement": task.description or str(task.model_dump()),
-                "task_id": task.id,
-                "constraints": getattr(task, "constraints", {}),
-                "available_tools": getattr(task, "available_tools", {}),
-            }
-
-            # Build the 'meta' payload for tracing and HGNN context
-            meta = {
+            # --- Step 2: Convert Task to TaskPayload for unified interface ---
+            # Use TaskPayload.from_db to construct from Task model
+            task_dict = self._convert_task_to_dict(task)
+            task_payload = TaskPayload.from_db(task_dict)
+            
+            # Inject HGNN-specific metadata into params
+            params = dict(task_payload.params or {})
+            hgnn_meta = {
                 "task_id": task.id,
                 # This is the "evolved meaning" from Stage 1 (HGNN)
                 "hgnn_embedding": task.features,
@@ -982,6 +978,12 @@ class Coordinator:
                     "skills": getattr(task, "start_skill_ids", []),
                 },
             }
+            params["hgnn"] = hgnn_meta
+            
+            # Update task_payload with enriched params
+            task_dict = task_payload.model_dump()
+            task_dict["params"] = params
+            task_for_cognitive = task_dict
 
             # --- Step 3: Call CognitiveCore via the new unified client ---
             # This is the single, blocking call that waits for the full plan.
@@ -990,8 +992,7 @@ class Coordinator:
                 agent_id=f"hgnn_planner_{task.id}",
                 cog_type=CognitiveType.PROBLEM_SOLVING,
                 decision_kind=DecisionKind.ESCALATED,
-                input_data=input_data,
-                meta=meta,
+                task=task_for_cognitive,
                 timeout=COG_TIMEOUT,
             )
 
