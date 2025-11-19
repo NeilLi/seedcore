@@ -771,7 +771,7 @@ class GraphDispatcher:
                 self._complete(tid, result=result)
                 return
 
-            if ttype in ("graph_embed", "graph_embed_v2"):  # graph_embed_v2 kept for backward compatibility
+            if ttype == "graph_embed":
                 logger.debug("🎯 Task %s: graph_embed operation (k from params)", tid_str)
                 # resolve node ids (legacy: start_ids; v2: map UUID/text ids)
                 node_ids, debug = self._resolve_start_node_ids(params)
@@ -822,7 +822,7 @@ class GraphDispatcher:
                 self._complete(tid, result=result)
                 return
 
-            if ttype in ("graph_rag_query", "graph_rag_query_v2"):  # graph_rag_query_v2 kept for backward compatibility
+            if ttype == "graph_rag_query":
                 import numpy as np
 
                 logger.info("🔍 Task %s: graph_rag_query operation", tid_str)

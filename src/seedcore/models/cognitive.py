@@ -25,8 +25,6 @@ class CognitiveType(Enum):
     # Graph tasks
     GRAPH_EMBED = "graph_embed"
     GRAPH_RAG_QUERY = "graph_rag_query"
-    GRAPH_EMBED_V2 = "graph_embed_v2"
-    GRAPH_RAG_QUERY_V2 = "graph_rag_query_v2"
     GRAPH_SYNC_NODES = "graph_sync_nodes"
 
     # Facts system

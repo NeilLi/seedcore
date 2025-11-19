@@ -584,10 +584,6 @@ def normalize_type(task_type: Optional[str]) -> str:
         "embed": "graph_embed",
         "graph_rag_query": "graph_rag_query",
         "rag_query": "graph_rag_query",
-        "graph_embed_v2": "graph_embed_v2",
-        "embed_v2": "graph_embed_v2",
-        "graph_rag_query_v2": "graph_rag_query_v2",
-        "rag_query_v2": "graph_rag_query_v2",
         
         # Resource management
         "artifact_manage": "artifact_manage",

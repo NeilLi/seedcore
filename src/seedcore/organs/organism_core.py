@@ -4,24 +4,32 @@
 #  Author: ChatGPT (with Ning)
 #
 #  Overview:
-#    This module implements the LEVEL-1 ROUTER for the entire distributed
-#    cognitive organism. It is the global control plane responsible for:
+#    Tier-1 OrganismCore: Registry + Execution Layer
 #
-#      • specialization → organ selection
-#      • organ → agent selection (via organ metadata tables)
-#      • direct agent-level execution (no organ-level RPCs)
-#      • global load distribution policies
-#      • connection to the distributed LongTermMemoryManager Ray actor
+#    This module implements the Tier-1 registry and execution layer for the
+#    distributed cognitive organism. It is responsible for:
 #
-#    In this v2 architecture:
-#      • Organ = agent registry + health tracker
-#      • Agent = true execution endpoint (task executor)
-#      • OrganismCore = the global router and orchestrator
+#      • Maintaining organ and agent registries
+#      • Direct agent-level execution (given organ_id + agent_id)
+#      • Health monitoring and reconciliation
+#      • Agent workforce evolution (scale up/down)
+#      • Connection to the distributed LongTermMemoryManager Ray actor
+#
+#    Architecture:
+#      • RoutingDirectory (Tier-0) = routing decisions and policy brain
+#      • OrganismCore (Tier-1) = registry + execution (no routing decisions)
+#      • Organ = agent registry + local supervision
+#      • Agent = actual executor
+#
+#    Routing flow:
+#      RoutingDirectory.route_and_execute() → makes routing decisions
+#      → calls OrganismCore.execute_on_agent(organ_id, agent_id, payload)
+#      → performs single-hop RPC to agent actor
 #
 #    This replaces the old Tier0 design and the older organ.execute_task
 #    execution model. All execution is now single-hop:
 #
-#        OrganismCore → agent_actor.execute_task(...)
+#        RoutingDirectory → OrganismCore → agent_actor.execute_task(...)
 #
 #    This improves latency, fault isolation, and makes routing explicit.
 #
@@ -34,7 +42,6 @@ import os
 import time
 import uuid
 import yaml  # pyright: ignore[reportMissingModuleSource]
-import random
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -52,7 +59,8 @@ from seedcore.serve.energy_client import EnergyServiceClient
 from seedcore.models import TaskPayload
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
-from seedcore.organs.organ import Organ  # ← NEW ORGAN CLASS
+from seedcore.organs.organ import Organ, AgentIDFactory  # ← NEW ORGAN CLASS
+from seedcore.organs.router import RoutingDirectory
 
 # Long-term memory backend (Ray actor)
 from seedcore.memory.long_term_memory import LongTermMemoryManager
@@ -120,24 +128,41 @@ class LTMSkillStoreAdapter(SkillStoreProtocol):
 
 
 # =====================================================================
-#  OrganismCore — LEVEL-1 ROUTER (Direct Agent Execution, v2 Architecture)
-#  Routes: specialization → organ → agent, then calls agent.execute_task()
-#  Organ = agent registry; Agent = executor; Core = global orchestrator.
+#  OrganismCore — Tier-1 Registry + Execution Layer (v2 Architecture)
+#  OrganismCore = registry + execution; RoutingDirectory = Tier-0 router
+#  Organ = agent registry; Agent = executor; Core = registry + execution
 # =====================================================================
 
 
 class OrganismCore:
     """
-    Manages:
-      - global RoleRegistry
-      - global ToolManager
-      - global CognitiveServiceClient
-      - global SkillStore (via LTM)
-      - Organ creation
-      - Agent creation
-      - Specialization → Organ routing
-      - Task dispatch
-      - Health checks + reconciliation
+    Tier-1 OrganismCore: Registry and Execution Layer
+    
+    Responsibilities:
+      1. Registry:
+         - Maintain organs
+         - Maintain agent registry
+         - Maintain agent handles
+      
+      2. Execution:
+         - Given (organ_id, agent_id, task_dict) → perform single-hop RPC
+         - Pure execution, NO routing logic
+      
+      3. Health / Evolution:
+         - Health checks
+         - Agent/organ reconciliation
+         - Evolution operations (scale up/down)
+      
+      4. Registry API for Router:
+         - get_all_agents()
+         - get_all_agent_skills()
+         - get_specialization_map()
+         - get_organ_health()
+    
+    Architecture:
+      - Router pulls data; OrganismCore never pushes routing logic
+      - Router makes routing decisions and calls execute_on_agent()
+      - OrganismCore is a pure registry + execution layer
     """
 
     def __init__(
@@ -151,10 +176,11 @@ class OrganismCore:
         self.organ_configs: List[Dict[str, Any]] = []
         self.organs: Dict[str, ray.actor.ActorHandle] = {}
 
-        # Specialization → organ routing table
+        # Specialization → organ mapping (for registry API only, NOT for routing decisions)
+        # This is maintained for get_specialization_map() registry API
         self.specialization_to_organ: Dict[Specialization, str] = {}
 
-        # Agent → organ (informational only)
+        # Agent → organ (informational only, for registry)
         self.agent_to_organ_map: Dict[str, str] = {}
 
         # Load config (YAML)
@@ -186,6 +212,9 @@ class OrganismCore:
         self._recon_interval = int(os.getenv("RECONCILE_INTERVAL_S", "20"))
         self._shutdown_event = asyncio.Event()
         self._reconcile_queue: List[tuple] = []
+        
+        # State service (lazy connection)
+        self._state_service: Optional[Any] = None
 
     # ------------------------------------------------------------------
     #  CONFIG LOADING
@@ -249,7 +278,7 @@ class OrganismCore:
             ).remote()
 
             # Async initialization inside actor
-            await asyncio.to_thread(ray.get, self.ltm_handle.initialize.remote())
+            await self._ray_await(self.ltm_handle.initialize.remote())
 
             logger.info("✅ LTM Manager ready.")
 
@@ -308,6 +337,20 @@ class OrganismCore:
         await self._create_agents_from_config()
 
         # --------------------------------------------------------------
+        # 7.5. Initialize Router with dependencies
+        # --------------------------------------------------------------
+        agent_id_factory = AgentIDFactory()
+        
+        self.router = RoutingDirectory(
+            agent_id_factory=agent_id_factory,
+            organism=self,
+            cognitive_client=self.cognitive_client,
+            role_registry=self.role_registry,
+            skill_store=self.skill_store,
+        )
+        logger.info("✅ Router initialized with OrganismCore dependencies")
+
+        # --------------------------------------------------------------
         # 8. Background tasks
         # --------------------------------------------------------------
         if _env_bool("ORGANISM_HEALTHCHECKS", True):
@@ -361,7 +404,7 @@ class OrganismCore:
 
                 # Sanity check
                 ok_ref = organ.health_check.remote()
-                ok = await asyncio.to_thread(ray.get, ok_ref)
+                ok = await self._ray_await(ok_ref)
                 if not ok:
                     raise RuntimeError(f"Organ {organ_id} failed health check.")
 
@@ -418,7 +461,7 @@ class OrganismCore:
 
                 # Spawn agents
                 for i in range(count):
-                    agent_id = f"{organ_id}_{spec.name.lower()}_{i}"
+                    agent_id = f"{organ_id}_{spec.value}_{i}"
 
                     # --- Tell the Organ which class to create ---
                     ref = organ.create_agent.remote(
@@ -431,7 +474,7 @@ class OrganismCore:
                         lifetime="detached",
                     )
 
-                    await asyncio.to_thread(ray.get, ref)
+                    await self._ray_await(ref)
                     self.agent_to_organ_map[agent_id] = organ_id
                     total += 1
 
@@ -441,154 +484,116 @@ class OrganismCore:
         )
 
     # =====================================================================
-    #  TASK ROUTING (LEVEL-1 ROUTER, DIRECT-TO-AGENT EXECUTION)
+    #  ASYNC RAY HELPER
+    # =====================================================================
+    
+    async def _ray_await(self, obj_ref, *, timeout: Optional[float] = None):
+        """
+        Helper to await Ray object references without blocking the event loop.
+        
+        Args:
+            obj_ref: Ray object reference
+            timeout: Optional timeout in seconds
+            
+        Returns:
+            The result from ray.get()
+        """
+        return await asyncio.to_thread(ray.get, obj_ref, timeout=timeout)
+
+    # =====================================================================
+    #  TASK EXECUTION (PURE EXECUTION, NO ROUTING DECISIONS)
     # =====================================================================
 
-    async def route_task(
+    def _is_high_stakes_from_payload(self, payload: TaskPayload | Dict[str, Any]) -> bool:
+        """
+        Inspect payload.params.risk and return is_high_stakes flag.
+        
+        NOTE: This is a fallback method. The primary source of truth for is_high_stakes
+        is the router's decision, which is embedded in payload.params._router_metadata.is_high_stakes.
+        This method is used only for backward compatibility when router metadata is not present.
+        
+        Architecture:
+        - Routing determines is_high_stakes during route_only()
+        - Router embeds it in payload.params._router_metadata.is_high_stakes
+        - Execution reads from router metadata (single source of truth)
+        - This ensures routing and execution are always consistent
+        """
+        if isinstance(payload, TaskPayload):
+            task_dict = payload.model_dump()
+        else:
+            task_dict = payload or {}
+        params = task_dict.get("params", {}) or {}
+        risk = params.get("risk", {}) or {}
+        return bool(risk.get("is_high_stakes", False))
+
+    async def execute_on_agent(
         self,
-        specialization: Specialization,
-        payload: TaskPayload,
-        metadata: Optional[Dict[str, Any]] = None,
-        *,
-        prefer_agent_id: Optional[str] = None,
-        ask_any_agent: bool = False,
-        ask_any_organ: bool = False,
+        organ_id: str,
+        agent_id: str,
+        payload: TaskPayload | Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        LEVEL-1 ROUTER (DIRECT AGENT EXECUTION)
-        --------------------------------------
-        The OrganismCore is the central router for the entire distributed
-        organism. It performs *selection only* — actual execution is done
-        directly on the chosen agent actor.
+        Execute task on a specific agent within an organ.
 
-        Routing pipeline:
+        - For normal tasks: call agent.execute_task(...)
+        - For high-stakes tasks: delegate to organ.execute_high_stakes(...),
+          which calls agent.execute_high_stakes_task(...).
 
-            1) Select the target organ
-                - by specialization → organ
-                - OR choose any organ (ask_any_organ)
-
-            2) Select the agent inside the organ
-                - explicitly via prefer_agent_id
-                - OR via specialization-based agent routing
-                - OR choose any agent (ask_any_agent)
-
-            3) Execute task *directly on the agent actor*
-                - no organ-level task execution
-                - single-hop RPC → lower latency, clearer architecture
-
+        No routing decisions here – only execution semantics.
+        
+        Args:
+            organ_id: Organ ID containing the agent
+            agent_id: Agent ID to execute the task on
+            payload: TaskPayload or dict to execute
+        
         Returns:
-            dict with:
-                {
-                    "organ_id": str,
-                    "agent_id": str,
-                    "result": Any or {"error": ...}
-                }
-
-        This is the recommended design for Ray-based agent systems because it
-        decouples:
-            - organ = agent registry, health supervisor
-            - agent = execution endpoint
-            - organism = global router
+            Dict with organ_id, agent_id, and result/error
         """
+        organ = self.organs.get(organ_id)
+        if not organ:
+            return {"error": f"Organ '{organ_id}' not found"}
 
-        logger.debug(
-            f"[OrganismCore.route_task] spec={specialization} "
-            f"prefer_agent={prefer_agent_id} any_agent={ask_any_agent} any_organ={ask_any_organ}"
-        )
-
-        # Convert TaskPayload to dict early for high-stakes detection
-        task_dict = (
-            payload.model_dump() if isinstance(payload, TaskPayload) else payload
-        )
-        
-        # Merge metadata into task_dict for high-stakes detection
-        if metadata:
-            task_dict = {**task_dict, **metadata}
-
-        # ------------------------------------------------------------
-        # 0. Detect high-stakes tasks (canonical SeedCore v2 approach)
-        # ------------------------------------------------------------
-        # High-stakes classification comes from upstream cognitive analysis
-        # stored in params.risk.is_high_stakes (NOT from routing hints or priority)
-        risk_info = task_dict.get("params", {}).get("risk", {}) or task_dict.get("risk", {})
-        meta_risk = (metadata or {}).get("risk", {})
-        
-        is_high_stakes = bool(
-            risk_info.get("is_high_stakes") or meta_risk.get("is_high_stakes")
-        )
-        
-        if is_high_stakes:
-            logger.info(
-                f"[OrganismCore.route_task] High-stakes task detected for specialization {specialization.name} "
-                f"(risk_score={risk_info.get('score', 'N/A')})"
-            )
-            return await self._route_high_stakes_task(
-                specialization=specialization,
-                task_info=task_dict,
-                ask_any_organ=ask_any_organ,
-            )
-
-        # ------------------------------------------------------------
-        # 1. Select target organ (agent registry lookup)
-        # ------------------------------------------------------------
         try:
-            if ask_any_organ:
-                organ_id, organ = random.choice(list(self.organs.items()))
+            # Normalize payload to dict for both paths
+            task_dict = (
+                payload.model_dump() if isinstance(payload, TaskPayload) else payload
+            ) or {}
+
+            # Get agent handle from organ registry
+            agent_handle_ref = organ.get_agent_handle.remote(agent_id)
+            agent_handle = await self._ray_await(agent_handle_ref)
+
+            if not agent_handle:
+                return {"error": f"Agent '{agent_id}' not found in organ '{organ_id}'"}
+
+            # Detect high-stakes from router's decision (single source of truth)
+            # Router determines is_high_stakes during routing and embeds it in payload
+            # This ensures execution honors routing's decision consistently
+            router_metadata = task_dict.get("params", {}).get("_router_metadata", {})
+            is_high_stakes = router_metadata.get("is_high_stakes", False)
+            
+            # Fallback: if router didn't set it, check payload risk (backward compatibility)
+            if not is_high_stakes:
+                is_high_stakes = self._is_high_stakes_from_payload(task_dict)
+
+            if is_high_stakes:
+                # 🔐 HIGH-STAKES EXECUTION PATH
+                # Call agent's execute_high_stakes_task() directly
+                if hasattr(agent_handle, "execute_high_stakes_task"):
+                    ref = agent_handle.execute_high_stakes_task.remote(task_dict)
+                else:
+                    # Fallback: use normal execution if agent doesn't support high-stakes
+                    logger.warning(
+                        f"[execute_on_agent] Agent {agent_id} doesn't support execute_high_stakes_task, "
+                        "falling back to execute_task"
+                    )
+                    ref = agent_handle.execute_task.remote(task_dict)
+                result = await self._ray_await(ref, timeout=300.0)  # 5 min timeout for high-stakes
             else:
-                organ_id = self.specialization_to_organ.get(specialization)
-                if not organ_id:
-                    return {
-                        "error": f"No organ registered for specialization {specialization.name}"
-                    }
-                organ = self.organs.get(organ_id)
-                if not organ:
-                    return {"error": f"Organ '{organ_id}' unavailable"}
-        except Exception as e:
-            logger.error(f"[route_task] Organ selection failed: {e}")
-            return {"error": f"Organ selection failure: {e}"}
-
-        # ------------------------------------------------------------
-        # 2. Select agent and get its actor handle from organ
-        # ------------------------------------------------------------
-        try:
-            if prefer_agent_id:
-                agent_id = prefer_agent_id
-                agent_handle_ref = organ.get_agent_handle.remote(agent_id)
-                agent_handle = await asyncio.to_thread(ray.get, agent_handle_ref)
-            elif ask_any_agent:
-                pick_result_ref = organ.pick_random_agent.remote()
-                agent_id, agent_handle = await asyncio.to_thread(
-                    ray.get, pick_result_ref
-                )
-            else:
-                pick_result_ref = organ.pick_agent_by_specialization.remote(
-                    specialization.value
-                )
-                agent_id, agent_handle = await asyncio.to_thread(
-                    ray.get, pick_result_ref
-                )
-
-            if not agent_id or not agent_handle:
-                return {
-                    "error": f"No agent available for specialization {specialization.name}"
-                }
-
-        except Exception as e:
-            logger.error(f"[route_task] Agent selection failed: {e}", exc_info=True)
-            return {"error": f"Agent selection failure: {e}"}
-
-        # ------------------------------------------------------------
-        # 3. Execute task directly on agent actor (single-hop RPC)
-        #    No organ-level delegation - direct agent execution
-        # ------------------------------------------------------------
-        try:
-            logger.debug(
-                f"[route_task] Dispatching → organ={organ_id}, agent={agent_id}"
-            )
-
-            # task_dict already includes metadata (merged earlier)
-            ref = agent_handle.execute_task.remote(task_dict)
-            result = await asyncio.to_thread(ray.get, ref)
+                # 🟢 NORMAL EXECUTION PATH
+                # Execute task directly on agent actor
+                ref = agent_handle.execute_task.remote(task_dict)
+                result = await self._ray_await(ref)
 
             return {
                 "organ_id": organ_id,
@@ -597,7 +602,7 @@ class OrganismCore:
             }
 
         except Exception as e:
-            logger.error(f"[route_task] Execution error: {e}", exc_info=True)
+            logger.error(f"[execute_on_agent] Error: {e}", exc_info=True)
             return {
                 "organ_id": organ_id,
                 "agent_id": agent_id,
@@ -605,221 +610,93 @@ class OrganismCore:
             }
 
     # =====================================================================
-    #  HIGH-STAKES TASK ROUTING
+    #  REGISTRY API FOR ROUTER (Router pulls data; OrganismCore never pushes routing logic)
     # =====================================================================
 
-    async def _route_high_stakes_task(
-        self,
-        specialization: Specialization,
-        task_info: Dict[str, Any],
-        ask_any_organ: bool = False,
-    ) -> Dict[str, Any]:
+    async def get_all_agents(self) -> Dict[str, Dict[str, Any]]:
         """
-        Routes high-stakes tasks using v2 architecture.
+        Get all agents with their metadata.
         
-        In v2:
-        - OrganismCore selects the agent (routing decision)
-        - Organ is passive registry (thin wrapper)
-        - Organ executes on the agent_id provided
+        Returns:
+            Dict mapping agent_id -> agent metadata dict
+        """
+        all_agents = {}
+        for organ_id, organ in self.organs.items():
+            try:
+                ref = organ.get_agent_handles.remote()
+                agent_handles = await self._ray_await(ref)
+                for agent_id in agent_handles.keys():
+                    agent_info = await self.get_agent_info(agent_id)
+                    if "error" not in agent_info:
+                        all_agents[agent_id] = {
+                            **agent_info,
+                            "organ_id": organ_id,
+                        }
+            except Exception as e:
+                logger.debug(f"[get_all_agents] Failed to get agents from organ {organ_id}: {e}")
+                continue
+        return all_agents
+
+    async def get_all_agent_skills(self) -> Dict[str, Optional[List[float]]]:
+        """
+        Get skill vectors for all agents.
         
-        This matches: HGNN → OrganismCore (selects agent) → Organ (executes) → Agent
+        Returns:
+            Dict mapping agent_id -> skill vector (or None if not available)
+        """
+        if not self.skill_store:
+            return {}
         
-        Args:
-            specialization: Task specialization
-            task_info: Task payload as dict (already includes metadata)
-            ask_any_organ: Whether to route to any organ (for fallback)
-            
+        all_agents = await self.get_all_agents()
+        skills = {}
+        for agent_id in all_agents.keys():
+            try:
+                skill_vector = await self.skill_store.get_skill_vector(agent_id)
+                skills[agent_id] = skill_vector
+            except Exception as e:
+                logger.debug(f"[get_all_agent_skills] Failed to get skills for {agent_id}: {e}")
+                skills[agent_id] = None
+        return skills
+
+    def get_specialization_map(self) -> Dict[str, str]:
+        """
+        Get specialization -> organ_id mapping.
+        
         Returns:
-            Dict with organ_id, agent_id, result, or error
+            Dict mapping specialization name -> organ_id
         """
-        # Select target organ
-        try:
-            if ask_any_organ:
-                organ_id, organ = random.choice(list(self.organs.items()))
-            else:
-                organ_id = self.specialization_to_organ.get(specialization)
-                if not organ_id:
-                    return {
-                        "error": f"No organ registered for specialization {specialization.name}",
-                        "high_stakes": True,
-                    }
-                organ = self.organs.get(organ_id)
-                if not organ:
-                    return {
-                        "error": f"Organ '{organ_id}' unavailable",
-                        "high_stakes": True,
-                    }
-        except Exception as e:
-            logger.error(f"[_route_high_stakes_task] Organ selection failed: {e}")
-            return {
-                "error": f"Organ selection failure: {e}",
-                "high_stakes": True,
-            }
-
-        # Select agent (OrganismCore makes routing decision)
-        try:
-            pick_result_ref = organ.pick_agent_by_specialization.remote(
-                specialization.value
-            )
-            agent_id, agent_handle = await asyncio.to_thread(
-                ray.get, pick_result_ref
-            )
-
-            if not agent_id or not agent_handle:
-                return {
-                    "error": f"No agent available for specialization {specialization.name}",
-                    "organ_id": organ_id,
-                    "high_stakes": True,
-                }
-        except Exception as e:
-            logger.error(
-                f"[_route_high_stakes_task] Agent selection failed: {e}", exc_info=True
-            )
-            return {
-                "error": f"Agent selection failure: {e}",
-                "organ_id": organ_id,
-                "high_stakes": True,
-            }
-
-        # Route to organ's thin wrapper (pass agent_id)
-        try:
-            logger.info(
-                f"[OrganismCore] Routing high-stakes task to organ {organ_id}, agent {agent_id}"
-            )
-            
-            ref = organ.execute_high_stakes.remote(agent_id, task_info)
-            result = await asyncio.to_thread(ray.get, ref, timeout=300.0)  # 5 min timeout
-            
-            # Check for errors
-            if result.get("error"):
-                logger.error(
-                    f"[OrganismCore] High-stakes task failed: {result.get('error')} "
-                    f"(organ={organ_id}, agent={agent_id})"
-                )
-                return {
-                    "error": result.get("error"),
-                    "reason": result.get("reason"),
-                    "organ_id": organ_id,
-                    "agent_id": agent_id,
-                    "high_stakes": True,
-                }
-            
-            # Success
-            return {
-                "organ_id": result.get("organ_id", organ_id),
-                "agent_id": result.get("agent_id", agent_id),
-                "result": result.get("result"),
-                "high_stakes": True,
-            }
-            
-        except Exception as e:
-            logger.error(
-                f"[_route_high_stakes_task] High-stakes execution error: {e}",
-                exc_info=True,
-            )
-            return {
-                "error": f"High-stakes execution failure: {e}",
-                "organ_id": organ_id,
-                "agent_id": agent_id,
-                "high_stakes": True,
-            }
-
-    # =====================================================================
-    #  ORGAN-LOCAL MANAGEMENT API
-    # =====================================================================
-
-    async def execute_task_on_organ(
-        self,
-        organ_id: str,
-        payload: TaskPayload,
-        metadata: Dict[str, Any] | None = None,
-    ) -> Dict[str, Any]:
+        return {
+            spec.name: organ_id 
+            for spec, organ_id in self.specialization_to_organ.items()
+        }
+    
+    def map_specializations(self) -> Dict[str, str]:
         """
-        Execute task on a specific organ using direct agent routing.
-
-        The organ acts as an agent registry - we query it for an agent handle,
-        then execute the task directly on the selected agent actor.
-
+        [DEPRECATED] Alias for get_specialization_map().
+        
+        Use get_specialization_map() instead for consistency.
+        
         Returns:
-            dict with organ_id, agent_id, and result/error.
+            Dict mapping specialization name -> organ_id
         """
-        organ = self.organs.get(organ_id)
-        if not organ:
-            return {"error": f"Organ '{organ_id}' not found"}
+        return self.get_specialization_map()
 
-        try:
-            # Pick a random agent from the organ
-            pick_result_ref = organ.pick_random_agent.remote()
-            agent_id, agent_handle = await asyncio.to_thread(ray.get, pick_result_ref)
-
-            if not agent_id or not agent_handle:
-                return {"error": f"No agents available in organ '{organ_id}'"}
-
-            # Convert TaskPayload to dict for agent execution
-            task_dict = (
-                payload.model_dump() if isinstance(payload, TaskPayload) else payload
-            )
-            
-            # Merge metadata into task_dict if provided
-            if metadata:
-                task_dict = {**task_dict, **metadata}
-
-            ref = agent_handle.execute_task.remote(task_dict)
-            result = await asyncio.to_thread(ray.get, ref)
-
-            return {
-                "organ_id": organ_id,
-                "agent_id": agent_id,
-                "result": result,
-            }
-        except Exception as e:
-            logger.error(f"[execute_task_on_organ] Error: {e}", exc_info=True)
-            return {"error": str(e)}
-
-    async def execute_task_on_random_organ(
-        self, payload: TaskPayload, metadata: Dict[str, Any] | None = None
-    ) -> Dict[str, Any]:
+    async def get_organ_health(self) -> Dict[str, Dict[str, Any]]:
         """
-        Execute task on a random organ using direct agent routing.
-
-        Selects a random organ, picks a random agent from it, then executes
-        the task directly on the agent actor.
-
+        Get health status for all organs.
+        
         Returns:
-            dict with organ_id, agent_id, and result/error.
+            Dict mapping organ_id -> health status dict
         """
-        if not self.organs:
-            return {"error": "No organs available"}
-
-        organ_id, organ = random.choice(list(self.organs.items()))
-        try:
-            # Pick a random agent from the organ
-            pick_result_ref = organ.pick_random_agent.remote()
-            agent_id, agent_handle = await asyncio.to_thread(ray.get, pick_result_ref)
-
-            if not agent_id or not agent_handle:
-                return {"error": f"No agents available in organ '{organ_id}'"}
-
-            # Convert TaskPayload to dict for agent execution
-            task_dict = (
-                payload.model_dump() if isinstance(payload, TaskPayload) else payload
-            )
-            
-            # Merge metadata into task_dict if provided
-            if metadata:
-                task_dict = {**task_dict, **metadata}
-
-            ref = agent_handle.execute_task.remote(task_dict)
-            result = await asyncio.to_thread(ray.get, ref)
-
-            return {
-                "organ_id": organ_id,
-                "agent_id": agent_id,
-                "result": result,
-            }
-        except Exception as e:
-            logger.error(f"[execute_task_on_random_organ] Error: {e}", exc_info=True)
-            return {"error": str(e)}
+        health = {}
+        for organ_id, organ in self.organs.items():
+            try:
+                ref = organ.get_status.remote()
+                status = await self._ray_await(ref)
+                health[organ_id] = status
+            except Exception as e:
+                health[organ_id] = {"error": str(e), "status": "unhealthy"}
+        return health
 
     # =====================================================================
     #  INTROSPECTION API — OBSERVE CLOSELY
@@ -851,20 +728,13 @@ class OrganismCore:
             if not organ:
                 return []
             ref = organ.list_agents.remote()
-            return await asyncio.to_thread(ray.get, ref)
+            return await self._ray_await(ref)
         else:
             # Reuse get_all_agent_handles() to avoid duplication
             # Just extract the keys (agent IDs) from the handles dictionary
             handles = await self.get_all_agent_handles()
             return list(handles.keys())
 
-    def map_specializations(self) -> Dict[str, str]:
-        """
-        { "RESEARCH": "research_organ", ... }
-        """
-        return {
-            spec.name: organ for spec, organ in self.specialization_to_organ.items()
-        }
 
     async def get_agent_info(self, agent_id: str) -> Dict[str, Any]:
         """
@@ -880,7 +750,7 @@ class OrganismCore:
 
         try:
             ref = organ.get_agent_info.remote(agent_id)
-            return await asyncio.to_thread(ray.get, ref)
+            return await self._ray_await(ref)
         except Exception as e:
             return {"error": str(e)}
 
@@ -915,7 +785,7 @@ class OrganismCore:
                 # Query the organ registry for its agent handles
                 # Organ.get_agent_handles() returns Dict[agent_id, agent_handle]
                 ref = organ.get_agent_handles.remote()
-                organ_agent_handles = await asyncio.to_thread(ray.get, ref)
+                organ_agent_handles = await self._ray_await(ref)
                 
                 # Merge agent handles into the global dictionary
                 # Note: organ_agent_handles is already Dict[agent_id, agent_handle]
@@ -933,7 +803,7 @@ class OrganismCore:
             return {"error": f"Organ '{organ_id}' does not exist"}
         try:
             ref = organ.get_status.remote()
-            return await asyncio.to_thread(ray.get, ref)
+            return await self._ray_await(ref)
         except Exception as e:
             return {"error": str(e)}
 
@@ -941,11 +811,11 @@ class OrganismCore:
         """
         Returns a complete map of organ and agent health.
         """
-        out = {"organs": {}, "specialization_map": self.map_specializations()}
+        out = {"organs": {}, "specialization_map": self.get_specialization_map()}
         for oid, organ in self.organs.items():
             try:
                 ref = organ.get_status.remote()
-                out["organs"][oid] = await asyncio.to_thread(ray.get, ref)
+                out["organs"][oid] = await self._ray_await(ref)
             except Exception as e:
                 out["organs"][oid] = {"error": str(e)}
         return out
@@ -1097,6 +967,10 @@ class OrganismCore:
         """
         Get the organ handle for a given specialization name.
         
+        ⚠️ NOTE: This method is used ONLY for evolution operations (scaling agents),
+        NOT for routing decisions. Evolution needs to know which organ contains
+        agents of a given specialization to scale them up/down.
+        
         Args:
             spec_name: Specialization name (e.g., "DeviceOrchestrator")
             
@@ -1109,6 +983,7 @@ class OrganismCore:
             logger.error(f"[evolve] Invalid specialization: {spec_name}")
             return None
 
+        # ⚠️ NOTE: Using specialization_to_organ for evolution (lifecycle), NOT routing
         organ_id = self.specialization_to_organ.get(spec)
         if not organ_id:
             logger.error(f"[evolve] No organ found for specialization {spec_name}")
@@ -1145,6 +1020,7 @@ class OrganismCore:
             return {"success": False, "error": f"Invalid specialization: {spec_name}"}
 
         # Get organ_id for agent naming
+        # ⚠️ NOTE: Using specialization_to_organ for evolution (lifecycle), NOT routing
         organ_id = self.specialization_to_organ.get(spec)
         if not organ_id:
             return {"success": False, "error": f"No organ_id found for {spec_name}"}
@@ -1153,7 +1029,7 @@ class OrganismCore:
         new_agent_ids = []
         for i in range(count):
             # Generate unique agent ID
-            agent_id = f"{organ_id}_{spec.name.lower()}_{int(time.time())}_{i}"
+            agent_id = f"{organ_id}_{spec.value}_{int(time.time())}_{i}"
 
             try:
                 # Create agent via organ (default to BaseAgent for evolution)
@@ -1167,7 +1043,7 @@ class OrganismCore:
                     lifetime="detached",
                 )
 
-                await asyncio.to_thread(ray.get, ref)
+                await self._ray_await(ref)
                 self.agent_to_organ_map[agent_id] = organ_id
                 new_agent_ids.append(agent_id)
                 logger.info(f"[evolve] Created agent {agent_id}")
@@ -1200,30 +1076,36 @@ class OrganismCore:
         if not organ:
             return {"success": False, "error": f"No organ found for {spec_name}"}
 
-        # 2. Get list of agents for this specialization
+        # 2. Get list of agents filtered by specialization
         try:
             # Get all agents from the organ
             agents_ref = organ.get_agent_handles.remote()
-            all_agents = await asyncio.to_thread(ray.get, agents_ref)
+            all_agents = await self._ray_await(agents_ref)
             
-            # Filter agents by specialization (we need to check each agent's specialization)
-            # For now, we'll get agents from the organ and pick randomly
-            # In a more sophisticated implementation, you might want to:
-            # - Select agents based on load/health
-            # - Prefer removing idle agents
-            agent_ids = list(all_agents.keys())
+            # Filter agents by specialization
+            # Get agent info for each agent to check specialization
+            agent_ids_by_spec = []
+            for agent_id in all_agents.keys():
+                try:
+                    info_ref = organ.get_agent_info.remote(agent_id)
+                    info = await self._ray_await(info_ref)
+                    if info.get("specialization") == spec_name:
+                        agent_ids_by_spec.append(agent_id)
+                except Exception as e:
+                    logger.debug(f"[evolve] Failed to get info for agent {agent_id}: {e}")
+                    continue
             
-            if len(agent_ids) < count:
+            if len(agent_ids_by_spec) < count:
                 logger.warning(
-                    f"[evolve] Only {len(agent_ids)} agents available, requested {count}"
+                    f"[evolve] Only {len(agent_ids_by_spec)} agents with specialization {spec_name} available, requested {count}"
                 )
-                count = len(agent_ids)
+                count = len(agent_ids_by_spec)
 
             if count == 0:
-                return {"success": False, "error": "No agents available to remove"}
+                return {"success": False, "error": f"No agents with specialization {spec_name} available to remove"}
 
             # Select agents to remove (simple: take first N)
-            agents_to_remove = agent_ids[:count]
+            agents_to_remove = agent_ids_by_spec[:count]
 
         except Exception as e:
             logger.error(f"[evolve] Failed to get agents from organ: {e}", exc_info=True)
@@ -1235,7 +1117,7 @@ class OrganismCore:
             try:
                 # Remove from organ registry
                 ref = organ.remove_agent.remote(agent_id)
-                removed = await asyncio.to_thread(ray.get, ref)
+                removed = await self._ray_await(ref)
                 
                 if removed:
                     # Remove from global map
@@ -1256,6 +1138,252 @@ class OrganismCore:
         return {"success": True, "result": {"removed_agents": removed_agent_ids, "count": len(removed_agent_ids)}}
 
     # =====================================================================
+    #  STATE AGGREGATION (Ported from OrganismManager)
+    # =====================================================================
+    
+    async def _get_state_service(self) -> Optional[Any]:
+        """
+        Get or connect to the state service (actor).
+        
+        NOTE: This method performs a blocking Ray call (ray.get_actor) but wraps it
+        in asyncio.to_thread to avoid blocking the event loop. The first call may
+        have some latency as it searches multiple namespaces.
+        """
+        if self._state_service is None:
+            try:
+                for namespace in ["seedcore-dev", "serve", AGENT_NAMESPACE, "default"]:
+                    try:
+                        # Use asyncio.to_thread to avoid blocking the event loop
+                        self._state_service = await asyncio.to_thread(
+                            ray.get_actor, "StateService", namespace=namespace
+                        )
+                        logger.info(f"✅ Connected to state service in namespace: {namespace}")
+                        break
+                    except Exception as e:
+                        logger.debug(f"StateService not in {namespace}: {e}")
+                        continue
+                if self._state_service is None:
+                    logger.warning("Failed to connect to state service in any namespace")
+            except Exception as e:
+                logger.warning(f"Failed to connect to state service: {e}")
+                self._state_service = None
+        return self._state_service
+    
+    async def get_unified_state(self, agent_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Get unified state for specified agents or all agents via StateService.
+        Returns a UnifiedState object if types are available, else a minimal dict.
+        """
+        if not self._initialized:
+            logger.warning("OrganismCore not initialized, returning empty state")
+            return {"agents": {}, "organs": {}, "system": {}, "memory": {}}
+        
+        state_service = await self._get_state_service()
+        if state_service is None:
+            logger.error("State service not available, returning empty state")
+            return {"agents": {}, "organs": {}, "system": {}, "memory": {}}
+        
+        try:
+            response_ref = state_service.get_unified_state.remote(
+                agent_ids=agent_ids,
+                include_organs=True,
+                include_system=True,
+                include_memory=True
+            )
+            response = await self._ray_await(response_ref)
+            
+            if not response.get("success"):
+                logger.error(f"State service failed: {response.get('error')}")
+                return {"agents": {}, "organs": {}, "system": {}, "memory": {}}
+            
+            return response.get("unified_state", {})
+        except Exception as e:
+            logger.error(f"Failed to get unified state from StateService: {e}")
+            return {"agents": {}, "organs": {}, "system": {}, "memory": {}}
+    
+    # =====================================================================
+    #  ORGAN-LEVEL EVOLUTION OPERATIONS (Ported from OrganismManager)
+    # =====================================================================
+    
+    async def evolve_organ(self, proposal: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        [EXPERIMENTAL] Execute organ-level evolution operations (split, merge, clone, retire).
+        
+        ⚠️ WARNING: This API is experimental and partially implemented. Only "merge" and
+        "retire" operations are fully functional. "split" and "clone" are not implemented
+        and will return errors.
+        
+        This is different from agent scaling - these operations mutate organs themselves.
+        
+        Proposal format:
+            {
+                "op": "split" | "merge" | "clone" | "retire",
+                "organ_id": str,
+                "params": dict  # Operation-specific parameters
+            }
+        """
+        logger.warning("[evolve_organ] Experimental API - use with caution")
+        
+        if not self._initialized:
+            return {"success": False, "error": "OrganismCore not initialized"}
+        
+        op = proposal.get("op")
+        organ_id = proposal.get("organ_id")
+        params = proposal.get("params", {})
+        
+        if not op or not organ_id:
+            return {"success": False, "error": "Missing required fields: op, organ_id"}
+        
+        # Reject unimplemented operations early
+        if op in ["split", "clone"]:
+            return {
+                "success": False,
+                "error": f"Operation '{op}' is not fully implemented. Only 'merge' and 'retire' are supported.",
+            }
+        
+        if organ_id not in self.organs:
+            return {"success": False, "error": f"Organ {organ_id} not found"}
+        
+        try:
+            if op == "split":
+                return await self._op_split(organ_id, params)
+            elif op == "merge":
+                return await self._op_merge(organ_id, params)
+            elif op == "clone":
+                return await self._op_clone(organ_id, params)
+            elif op == "retire":
+                return await self._op_retire(organ_id, params)
+            else:
+                return {"success": False, "error": f"Unknown operation: {op}"}
+        except Exception as e:
+            logger.error(f"Organ evolution operation {op} failed: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+    
+    async def _op_split(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Split an organ into k-1 new organs and repartition agents."""
+        k = params.get("k", 2)
+        if k < 2:
+            return {"success": False, "error": "k must be >= 2 for split operation"}
+        
+        try:
+            organ_handle = self.organs[organ_id]
+            # organ_status = await asyncio.to_thread(ray.get, organ_handle.get_status.remote())
+            # organ_type = organ_status.get("organ_type", "Unknown")  # Reserved for future use
+            
+            # Get current agents
+            agent_handles_ref = organ_handle.get_agent_handles.remote()
+            agent_handles = await self._ray_await(agent_handles_ref)
+            agent_ids = list(agent_handles.keys())
+            
+            if len(agent_ids) < k:
+                return {"success": False, "error": f"Not enough agents ({len(agent_ids)}) to split into {k} organs"}
+            
+            # Note: Organ split requires creating new organs, which needs organ config
+            # This is a simplified implementation - full version would create organs properly
+            logger.warning("Organ split requires organ creation logic - not fully implemented")
+            return {"success": False, "error": "Organ split requires organ creation logic - not fully implemented"}
+        except Exception as e:
+            logger.error(f"Split operation failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _op_merge(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge source organs into the target organ."""
+        src_organ_ids = params.get("src_organs", [])
+        if not src_organ_ids:
+            return {"success": False, "error": "No source organs specified"}
+        
+        try:
+            dst_organ_handle = self.organs[organ_id]
+            total_agents_moved = 0
+            
+            for src_organ_id in src_organ_ids:
+                if src_organ_id not in self.organs:
+                    logger.warning(f"Source organ {src_organ_id} not found, skipping")
+                    continue
+                
+                src_organ_handle = self.organs[src_organ_id]
+                agent_handles_ref = src_organ_handle.get_agent_handles.remote()
+                agent_handles = await self._ray_await(agent_handles_ref)
+                
+                # Move agents to destination
+                for agent_id, agent_handle in agent_handles.items():
+                    register_ref = dst_organ_handle.register_agent.remote(agent_id, agent_handle)
+                    await self._ray_await(register_ref)
+                    remove_ref = src_organ_handle.remove_agent.remote(agent_id)
+                    await self._ray_await(remove_ref)
+                    self.agent_to_organ_map[agent_id] = organ_id
+                    total_agents_moved += 1
+                
+                # Remove source organ from registry
+                del self.organs[src_organ_id]
+            
+            return {
+                "success": True,
+                "result": {
+                    "destination_organ": organ_id,
+                    "merged_organs": src_organ_ids,
+                    "agents_moved": total_agents_moved
+                }
+            }
+        except Exception as e:
+            logger.error(f"Merge operation failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _op_clone(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Clone an organ, optionally moving some agents to the new organ."""
+        # move_fraction = params.get("move_fraction", 0.0)  # Reserved for future use
+        
+        try:
+            # Verify organ exists
+            if organ_id not in self.organs:
+                return {"success": False, "error": f"Organ {organ_id} not found"}
+            
+            # Note: Organ clone requires creating new organs, which needs organ config
+            # This would require:
+            # 1. Getting organ config/type
+            # 2. Creating new organ with same config
+            # 3. Optionally moving agents
+            logger.warning("Organ clone requires organ creation logic - not fully implemented")
+            return {"success": False, "error": "Organ clone requires organ creation logic - not fully implemented"}
+        except Exception as e:
+            logger.error(f"Clone operation failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _op_retire(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Retire an organ, optionally migrating agents to another organ."""
+        migrate_to = params.get("migrate_to")
+        
+        try:
+            organ_handle = self.organs[organ_id]
+            agent_handles_ref = organ_handle.get_agent_handles.remote()
+            agent_handles = await self._ray_await(agent_handles_ref)
+            agents_migrated = 0
+            
+            # Migrate agents if specified
+            if migrate_to and migrate_to in self.organs:
+                dst_organ_handle = self.organs[migrate_to]
+                for agent_id, agent_handle in agent_handles.items():
+                    register_ref = dst_organ_handle.register_agent.remote(agent_id, agent_handle)
+                    await self._ray_await(register_ref)
+                    self.agent_to_organ_map[agent_id] = migrate_to
+                    agents_migrated += 1
+            
+            # Remove organ from registry
+            del self.organs[organ_id]
+            
+            return {
+                "success": True,
+                "result": {
+                    "retired_organ": organ_id,
+                    "agents_migrated": agents_migrated,
+                    "migrate_to": migrate_to
+                }
+            }
+        except Exception as e:
+            logger.error(f"Retire operation failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    # =====================================================================
     #  HEALTH LOOP & RECONCILIATION LOOP
     # =====================================================================
 
@@ -1270,9 +1398,16 @@ class OrganismCore:
             try:
                 for organ_id, organ in self.organs.items():
                     try:
-                        # Lightweight ping
+                        # Lightweight ping with timeout
                         alive_ref = organ.ping.remote()
-                        alive = await asyncio.to_thread(ray.get, alive_ref)
+                        try:
+                            alive = await self._ray_await(alive_ref, timeout=5.0)
+                        except Exception as e:
+                            logger.warning(
+                                f"[HealthLoop] Organ {organ_id} ping timeout/failure: {e}"
+                            )
+                            self._schedule_reconciliation(organ_id)
+                            continue
 
                         if not alive:
                             logger.warning(
@@ -1281,9 +1416,15 @@ class OrganismCore:
                             self._schedule_reconciliation(organ_id)
                             continue
 
-                        # Deep health including agent heartbeats
+                        # Deep health including agent heartbeats with timeout
                         status_ref = organ.get_status.remote()
-                        status = await asyncio.to_thread(ray.get, status_ref)
+                        try:
+                            status = await self._ray_await(status_ref, timeout=10.0)
+                        except Exception as e:
+                            logger.warning(
+                                f"[HealthLoop] Organ {organ_id} status check timeout/failure: {e}"
+                            )
+                            continue
 
                         unhealthy_agents = [
                             a
@@ -1349,7 +1490,7 @@ class OrganismCore:
                             )
                             try:
                                 ref = organ.respawn_agent.remote(agent_id)
-                                await asyncio.to_thread(ray.get, ref)
+                                await self._ray_await(ref)
                             except Exception as e:
                                 logger.error(
                                     f"[Reconcile] Failed to respawn agent {agent_id}: {e}",
@@ -1397,11 +1538,11 @@ class OrganismCore:
             except Exception:
                 pass
 
-        # Create new organ actor
-        organ_name = f"organ-{organ_id}".lower()
+        # Create new organ actor (use same name as initial creation for consistency)
         try:
             new_organ = Organ.options(
-                name=organ_name, namespace=AGENT_NAMESPACE
+                name=organ_id,  # Same as initial creation, not "organ-{organ_id}"
+                namespace=AGENT_NAMESPACE
             ).remote(
                 organ_id=organ_id,
                 # Stateless dependencies
@@ -1443,7 +1584,7 @@ class OrganismCore:
                         num_cpus=0.1,
                         lifetime="detached"
                     )
-                    await asyncio.to_thread(ray.get, ref)
+                    await self._ray_await(ref)
                     self.agent_to_organ_map[agent_id] = organ_id
                 except Exception as e:
                     logger.error(
@@ -1499,7 +1640,7 @@ class OrganismCore:
                 )
                 try:
                     pong_ref = jan.ping.remote()
-                    pong = await asyncio.to_thread(ray.get, pong_ref)
+                    pong = await self._ray_await(pong_ref)
                     logger.info(f"✅ Janitor actor launched in {namespace} (ping={pong})")
                 except Exception:
                     logger.info(f"✅ Janitor actor launched in {namespace} (ping skipped)")
@@ -1545,7 +1686,7 @@ class OrganismCore:
             try:
                 logger.info(f"[OrganismCore] Stopping organ {organ_id}")
                 ref = organ.shutdown.remote()
-                await asyncio.to_thread(ray.get, ref)
+                await self._ray_await(ref)
             except Exception as e:
                 logger.error(
                     f"[OrganismCore] Error shutting down organ {organ_id}: {e}"
@@ -1555,7 +1696,7 @@ class OrganismCore:
         if self.ltm_handle:
             try:
                 logger.info("[OrganismCore] Closing LTM actor")
-                await asyncio.to_thread(ray.get, self.ltm_handle.close.remote())
+                await self._ray_await(self.ltm_handle.close.remote())
             except Exception as e:
                 logger.error(f"[OrganismCore] Failed to close LTM: {e}")
 

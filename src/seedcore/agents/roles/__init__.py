@@ -19,6 +19,10 @@ from .specialization import (
     Specialization,
     RoleProfile,
     RoleRegistry,
+    AgentSpec,
+    OrganSpec,
+    GraphClient,
+    MockGraphClient,
 )
 from .generic_defaults import (
     DEFAULT_ROLE_REGISTRY,
@@ -54,6 +58,10 @@ __all__ = [
     "Specialization",
     "RoleProfile",
     "RoleRegistry",
+    "AgentSpec",
+    "OrganSpec",
+    "GraphClient",
+    "MockGraphClient",
     # generic defaults
     "DEFAULT_ROLE_REGISTRY",
     "build_default_role_registry",

@@ -88,7 +88,7 @@ RUN_LEASE_S    = int(os.getenv("TASK_LEASE_S", "600"))   # 10m default
 # --------- SQL (asyncpg-style $1 params) ----------
 # Exclude all graph task types handled by GraphDispatcher
 GRAPH_TASK_TYPES_EXCLUSION = (
-    'graph_embed', 'graph_rag_query', 'graph_embed_v2', 'graph_rag_query_v2',
+    'graph_embed', 'graph_rag_query',
     'graph_fact_embed', 'graph_fact_query', 'nim_task_embed', 'graph_sync_nodes'
 )
 CLAIM_BATCH_SQL = f"""

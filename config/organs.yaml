@@ -146,5 +146,5 @@ seedcore:
             count: 1
             class: "UtilityLearningAgent"
           - specialization: "GENERALIST"
-            count: 10
+            count: 2
             class: "RayAgent"

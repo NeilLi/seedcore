@@ -4,7 +4,7 @@ OrganismCore Client for SeedCore (V2 Agent-Centric)
 
 This client provides a clean interface to the deployed OrganismCore.
 Its primary role is to submit tasks for execution via the
-'route_task' endpoint.
+canonical routing APIs: route_only() and route_and_execute().
 """
 
 import logging
@@ -36,9 +36,13 @@ class OrganismServiceClient(BaseServiceClient):
     """
     Client for the deployed OrganismCore (v2) router.
     
-    This client is responsible for:
-    - Executing tasks via the /route-task endpoint
-    - Monitoring the organism's high-level health
+    This client provides access to the canonical routing APIs:
+    - route_only(): Pure routing decisions (returns RouterDecision)
+    - route_and_execute(): Routing + execution in one call
+    
+    It also provides monitoring and lifecycle management:
+    - Health checks and status monitoring
+    - Organism initialization and shutdown
     
     NOTE: This client does NOT manage policy, routing rules, or
     individual organ configurations. That logic is now handled
@@ -79,28 +83,59 @@ class OrganismServiceClient(BaseServiceClient):
     
     # --- Primary Task Execution ---
     
-    async def route_task(self, 
-                         task: Dict[str, Any],
-                         app_state: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def route_only(
+        self,
+        task: Dict[str, Any],
+        current_epoch: str = None
+    ) -> Dict[str, Any]:
         """
-        Submits a task to the OrganismCore for routing and execution.
+        Pure routing. Returns RouterDecision.
         
-        This is the main entry point for all work. The OrganismCore
-        will perform the single-hop routing to the correct agent.
+        This is the canonical API for Dispatcher, Coordinator,
+        and external IoT/human/robot services.
+        
+        Used when callers need routing decisions but not immediate execution.
         
         Args:
-            task: Task to execute
-            app_state: Optional application state
+            task: Task payload (TaskPayload-compatible dict)
+            current_epoch: Optional epoch for instance validation
             
         Returns:
-            Task execution result
+            RouterDecisionResponse with agent_id, organ_id, reason, is_high_stakes
         """
         request_data = {
             "task": task,
-            "app_state": app_state or {}
+            "current_epoch": current_epoch
         }
-        # This is the *only* execution endpoint
-        return await self.post("/route-task", json=request_data)
+        return await self.post("/route-only", json=request_data)
+    
+    async def route_and_execute(
+        self,
+        task: Dict[str, Any],
+        current_epoch: str = None
+    ) -> Dict[str, Any]:
+        """
+        Routing + execution convenience method.
+        
+        Calls:
+            1. route_only()
+            2. organism.execute_on_agent()
+        
+        Used by simple endpoints, cognitive client, demo workflows,
+        and basic actuator interactions (IoT, robots, external systems).
+        
+        Args:
+            task: Task payload (TaskPayload-compatible dict)
+            current_epoch: Optional epoch for instance validation
+            
+        Returns:
+            OrganismResponse with execution result and routing metadata
+        """
+        request_data = {
+            "task": task,
+            "current_epoch": current_epoch
+        }
+        return await self.post("/route-and-execute", json=request_data)
     
     # --- High-Level Organism Monitoring ---
     

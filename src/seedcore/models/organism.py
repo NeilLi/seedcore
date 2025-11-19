@@ -78,6 +78,26 @@ class BulkResolveResponse(BaseModel):
     results: List[BulkResolveResult]
 
 
+class RouterDecisionResponse(BaseModel):
+    """Router decision result containing agent and organ selection."""
+    agent_id: str
+    organ_id: str
+    reason: str
+    is_high_stakes: bool = False
+
+
+class RouteOnlyRequest(BaseModel):
+    """Request for route_only endpoint."""
+    task: Dict[str, Any]
+    current_epoch: Optional[str] = None
+
+
+class RouteAndExecuteRequest(BaseModel):
+    """Request for route_and_execute endpoint."""
+    task: Dict[str, Any]
+    current_epoch: Optional[str] = None
+
+
 __all__ = [
     "OrganismRequest",
     "OrganismResponse",
@@ -88,5 +108,8 @@ __all__ = [
     "BulkResolveRequest",
     "BulkResolveResult",
     "BulkResolveResponse",
+    "RouterDecisionResponse",
+    "RouteOnlyRequest",
+    "RouteAndExecuteRequest",
 ]
 

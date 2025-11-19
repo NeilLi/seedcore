@@ -33,27 +33,57 @@ class TaskStatus(enum.Enum):
     CANCELLED = "cancelled"
     RETRY = "retry"
 
-class TaskType(enum.Enum):
-    """Canonical task types for routing and dispatch."""
+class TaskType(str, enum.Enum):
+    """Canonical task types for routing and dispatch.
 
-    # Graph tasks (GraphDispatcher)
+    These types are what the RoutingDirectory / dispatchers
+    (GraphDispatcher, QueueDispatcher, etc.) should switch on.
+    """
+
+    # ==========================================================
+    # Graph / KG tasks (handled by GraphDispatcher)
+    # ==========================================================
     GRAPH_EMBED = "graph_embed"
-    GRAPH_RAG_QUERY = "graph_rag_query"
-    GRAPH_EMBED_V2 = "graph_embed_v2"
-    GRAPH_RAG_QUERY_V2 = "graph_rag_query_v2"
-    GRAPH_FACT_EMBED = "graph_fact_embed"
-    GRAPH_FACT_QUERY = "graph_fact_query"
-    NIM_TASK_EMBED = "nim_task_embed"
-    GRAPH_SYNC_NODES = "graph_sync_nodes"
+    # Embed graph nodes/entities (concepts, devices, users) into a vector space.
 
-    # General tasks (QueueDispatcher)
+    GRAPH_RAG_QUERY = "graph_rag_query"
+    # Hybrid RAG over graph + vector stores (structural hops + dense retrieval).
+
+    GRAPH_FACT_EMBED = "graph_fact_embed"
+    # Embed atomic facts/edges (triples, propositions) into vector space.
+
+    GRAPH_FACT_QUERY = "graph_fact_query"
+    # Logical / fact-level graph query (e.g., constraints over facts/edges).
+
+    NIM_TASK_EMBED = "nim_task_embed"
+    # Embed tasks into NIM / task-space embedding for meta-control / routing.
+
+    GRAPH_SYNC_NODES = "graph_sync_nodes"
+    # Sync external state (devices, rooms, users, configs) into graph nodes.
+
+    # ==========================================================
+    # General / queue-based tasks (handled by QueueDispatcher)
+    # ==========================================================
     PING = "ping"
-    GENERAL_QUERY = "general_query"
-    TEST_QUERY = "test_query"
-    FACT_SEARCH = "fact_search"
-    EXECUTE = "execute"
-    UNKNOWN_TASK = "unknown_task"
+    # Very cheap liveness / connectivity probe (no heavy work).
+
     HEALTH_CHECK = "health_check"
+    # Deeper component / system health check (may touch multiple subsystems).
+
+    GENERAL_QUERY = "general_query"
+    # Primary “ask the system a question” pathway (LLM + tools + memory).
+
+    TEST_QUERY = "test_query"
+    # Synthetic / integration / load-test query (non-user-facing).
+
+    FACT_SEARCH = "fact_search"
+    # Non-graph factual lookup (e.g., local store, config, or KV memory).
+
+    EXECUTE = "execute"
+    # Execute an action/plan/tool/agent step (downstream may route to actuator).
+
+    UNKNOWN_TASK = "unknown_task"
+    # Fallback when we cannot classify the task; should be rare in practice.
 
 class Task(Base):
     """Unified task schema with routing and execution metadata stored in JSONB."""

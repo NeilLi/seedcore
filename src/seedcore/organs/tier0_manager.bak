@@ -26,21 +26,20 @@ import uuid
 import asyncio
 import concurrent.futures
 from typing import Dict, List, Any, Optional, Union
-from ...utils.ray_utils import ensure_ray_initialized
+from ..utils.ray_utils import ensure_ray_initialized
 
-from ...agents.ray_agent import RayAgent
-from ...models import TaskPayload
-from ...agents.roles import RoleRegistry, DEFAULT_ROLE_REGISTRY, SkillStoreProtocol, NullSkillStore
-from ...ops.energy.optimizer import select_best_agent
-from .specs import GraphClient, AgentSpec
-from ...registry import list_active_instances
+from ..agents.ray_agent import RayAgent
+from ..models import TaskPayload
+from ..agents.roles import RoleRegistry, DEFAULT_ROLE_REGISTRY, SkillStoreProtocol, NullSkillStore
+from ..agents.roles.specialization import GraphClient, AgentSpec, Specialization
+from ..registry import list_active_instances
 # Avoid importing EnergyLedger at module import time to prevent circular imports.
 # We'll import it inside functions that need it.
 
 # --- Import New Memory Managers ---
 # These are the clients that will be passed to the agents
-from ...memory.mw_manager import MwManager
-from ...memory.long_term_memory import LongTermMemoryManager
+from ..memory.mw_manager import MwManager
+from ..memory.long_term_memory import LongTermMemoryManager
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 setup_logging(app_name="seedcore.Tier0MemoryManager")
@@ -61,6 +60,32 @@ async def _aget(obj_ref, timeout: float = 2.0):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_EXECUTOR, lambda: ray.get(obj_ref, timeout=timeout))
 
+
+class AgentIDFactory:
+    """
+    Factory for generating agent IDs based on organ_id and specialization.
+    
+    Tier0 doesn't need to know policy, format, or logic - it treats agent IDs
+    as opaque strings. OrganismCore provides this factory to enforce consistent
+    ID generation across the system.
+    """
+    
+    def new(self, organ_id: str, spec: Specialization) -> str:
+        """
+        Generate a new agent ID.
+        
+        Args:
+            organ_id: ID of the organ this agent belongs to
+            spec: Agent specialization
+            
+        Returns:
+            Generated agent ID string
+        """
+        # Use short UUID hex (12 chars) for readability, similar to ULID length
+        # Can be swapped for actual ULID library if needed
+        unique_id = uuid.uuid4().hex[:12]
+        return f"agent_{organ_id}_{spec.value}_{unique_id}"
+
 class Tier0MemoryManager:
     """
     Manages Tier 0 per-agent memory (Ma) using Ray actors.
@@ -79,6 +104,7 @@ class Tier0MemoryManager:
         *,
         role_registry: Optional[RoleRegistry] = None,
         skill_store: Optional[SkillStoreProtocol] = None,
+        agent_id_factory: Optional[AgentIDFactory] = None,
     ):
         """
         Initialize with memory manager clients.
@@ -86,6 +112,10 @@ class Tier0MemoryManager:
         Args:
             mw_manager: The MwManager (Tier 1) client instance.
             ltm_manager: The LongTermMemoryManager (Tier 2) client instance.
+            role_registry: Optional role registry (defaults to DEFAULT_ROLE_REGISTRY).
+            skill_store: Optional skill store (defaults to NullSkillStore).
+            agent_id_factory: Optional agent ID factory for generating agent IDs.
+                If None, Tier0 will continue to accept agent_id from outside (backward compatible).
         """
         self.agents: Dict[str, Any] = {}  # agent_id -> Ray actor handle
         self.heartbeats: Dict[str, Dict[str, Any]] = {}  # agent_id -> latest heartbeat
@@ -98,6 +128,7 @@ class Tier0MemoryManager:
         self.ltm_manager = ltm_manager
         self.role_registry = role_registry or DEFAULT_ROLE_REGISTRY
         self.skill_store = skill_store or NullSkillStore()
+        self.agent_id_factory = agent_id_factory  # Optional: injected by OrganismCore
         
         # Track transient ping failures to avoid pruning on single hiccup
         self._ping_failures: Dict[str, int] = {}
@@ -144,7 +175,17 @@ class Tier0MemoryManager:
             logger.debug(f"Env-driven attachment skipped: {e}")
     
     def _prepare_task_payload(self, task: Union[TaskPayload, Dict[str, Any]]) -> Dict[str, Any]:
-        """Normalize task payloads and preserve additional fields for agent execution."""
+        """
+        Normalize task payloads and preserve additional fields for agent execution.
+        
+        Universal handler that:
+        - Accepts dict + TaskPayload
+        - Normalizes fields
+        - Preserves additional fields
+        - Ensures an ID exists
+        - Standardizes task.type (from type or cog_type)
+        - Carries through decision_kind from meta
+        """
         extra_fields: Dict[str, Any] = {}
 
         if isinstance(task, TaskPayload):
@@ -184,6 +225,22 @@ class Tier0MemoryManager:
 
         task_dict.setdefault("id", task_id)
         task_dict.setdefault("task_id", task_id)
+        
+        # --- Universal TaskPayload schema adjustments ---
+        
+        # a) Standardize task.type: prefer type, fallback to cog_type
+        task_dict["type"] = task_dict.get("type") or task_dict.get("cog_type") or "unknown_task"
+        
+        # b) Carry-through decision_kind from meta (if present)
+        # Coordinator sets this before passing to Tier0
+        meta = task_dict.get("meta", {})
+        if isinstance(meta, dict) and "decision_kind" in meta:
+            task_dict["decision_kind"] = meta.get("decision_kind")
+        
+        # Also preserve cog_type if it exists (for backward compatibility)
+        if "cog_type" in task_dict and "cog_type" not in extra_fields:
+            task_dict["cog_type"] = task_dict.get("cog_type")
+        
         return task_dict
     
     def create_agent(
@@ -606,128 +663,6 @@ class Tier0MemoryManager:
             except Exception as e:
                 logger.debug(f"Ray cluster discovery failed: {e}")
     
-    async def execute_task_on_agent(self, agent_id: str, task_data: Union[TaskPayload, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """
-        Asynchronously execute a task on a specific agent.
-        
-        Args:
-            agent_id: Agent to execute the task on
-            task_data: Task information and payload
-            
-        Returns:
-            Task execution result or None if agent not found
-        """
-        agent = self.get_agent(agent_id)
-        if not agent:
-            logger.warning(f"Agent {agent_id} not found")
-            return None
-        
-        try:
-            prepared_task = self._prepare_task_payload(task_data)
-            # ENHANCEMENT: Use async _aget instead of blocking ray.get
-            result = await _aget(agent.execute_task.remote(prepared_task), timeout=120.0)
-            logger.info(f"✅ Task executed on agent {agent_id}")
-            return result
-        except Exception as e:
-            logger.error(f"Failed to execute task on agent {agent_id}: {e}")
-            return None
-    
-    async def execute_task_on_random_agent(self, task_data: Union[TaskPayload, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """
-        Asynchronously execute a task on a randomly selected agent.
-        
-        Args:
-            task_data: Task information and payload
-            
-        Returns:
-            Task execution result or None if no agents available
-        """
-        if not self.agents:
-            logger.warning("No agents available for task execution")
-            return None
-        
-        import random
-        agent_id = random.choice(list(self.agents.keys()))
-        # ENHANCEMENT: Await the async method
-        return await self.execute_task_on_agent(agent_id, task_data)
-    
-    async def execute_task_on_best_agent(self, task_data: Union[TaskPayload, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """
-        Asynchronously executes a task on the most suitable agent based on energy optimization.
-        
-        Args:
-            task_data: Task information and payload
-            
-        Returns:
-            Task execution result or None if no agents available
-        """
-        if not self.agents:
-            logger.warning("No agents available for task execution")
-            return None
-        
-        # Get all agent actor handles
-        agent_handles = list(self.agents.values())
-        
-        try:
-            prepared_task = self._prepare_task_payload(task_data)
-            # Use the new energy-aware selection
-            best_agent, predicted_delta_e = select_best_agent(agent_handles, prepared_task)
-            
-            if not best_agent:
-                logger.error("Could not select a best agent.")
-                return None
-            
-            # ENHANCEMENT: Use async _aget for execution and ID get
-            result_task = _aget(best_agent.execute_task.remote(prepared_task), timeout=120.0)
-            id_task = _aget(best_agent.get_id.remote())
-            
-            result, agent_id = await asyncio.gather(result_task, id_task)
-            
-            logger.info(f"✅ Energy-aware selection: Chose agent {agent_id} with predicted ΔE of {predicted_delta_e:.4f}")
-            return result
-            
-        except Exception as e:
-            logger.warning(f"Energy optimizer failed ({e}), falling back to random selection.")
-            # ENHANCEMENT: Await the async method
-            return await self.execute_task_on_random_agent(task_data)
-
-    # === COA §6: Local GNN-like selection within an organ (fast path Level 4) ===
-    async def execute_task_on_best_of(self, candidate_agent_ids: List[str], task_data: Union[TaskPayload, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """
-        Asynchronously execute a task on the best agent selected from a provided candidate set.
-        Supports OrganismManager's Level-4 local selection (COA §6.2).
-        """
-        handles = [self.agents[a] for a in candidate_agent_ids if a in self.agents]
-        if not handles:
-            logger.warning("No candidate agents available for constrained best-of selection")
-            return None
-        prepared_task = self._prepare_task_payload(task_data)
-        try:
-            best_agent, predicted_delta_e = select_best_agent(handles, prepared_task)
-            
-            # ENHANCEMENT: Use async _aget for execution and ID get
-            result_task = _aget(best_agent.execute_task.remote(prepared_task), timeout=120.0)
-            id_task = _aget(best_agent.get_id.remote())
-            
-            result, agent_id = await asyncio.gather(result_task, id_task)
-            logger.info(f"✅ Best-of selection: {agent_id} ΔE≈{predicted_delta_e:.4f}")
-            return result
-        except Exception as e:
-            logger.warning(f"Best-of optimizer failed ({e}); falling back to random within candidate set.")
-            import random
-            handle = random.choice(handles)
-            # ENHANCEMENT: Use async _aget
-            return await _aget(handle.execute_task.remote(prepared_task), timeout=120.0)
-
-    async def execute_task_on_organ_best(self, organ_id: str, task_data: Union[TaskPayload, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """
-        Convenience: select best agent among those belonging to an organ.
-        Assumes standard agent naming: f"{organ_id}_agent_{'{'}i{'}'}".
-        """
-        prefix = f"{organ_id}_agent_"
-        candidate_ids = [aid for aid in self.agents.keys() if aid.startswith(prefix)]
-        return await self.execute_task_on_best_of(candidate_ids, task_data)
-    
     async def collect_heartbeats(self) -> Dict[str, Dict[str, Any]]:
         """
         Collect heartbeats from all agents (non-blocking with timeouts).
@@ -1059,13 +994,6 @@ class Tier0MemoryManager:
             return False
         return True
 
-    async def execute_task_on_graph_best(self, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Execute task on best agent from graph-filtered candidates."""
-        ids = self._graph_filter_candidates(task_data)
-        if not ids:
-            logger.warning("No graph-qualified agents; falling back to global best")
-            return await self.execute_task_on_best_agent(task_data)
-        return await self.execute_task_on_best_of(ids, task_data)
 
 # --- Global Instance Management (ENHANCED) ---
 
@@ -1077,7 +1005,9 @@ _tier0_manager_instance: Optional[Tier0MemoryManager] = None
 
 async def initialize_global_tier0_manager(
     mw_manager: MwManager,
-    ltm_manager: LongTermMemoryManager
+    ltm_manager: LongTermMemoryManager,
+    *,
+    agent_id_factory: Optional[AgentIDFactory] = None,
 ) -> Tier0MemoryManager:
     """
     Creates and registers the global Tier0MemoryManager instance
@@ -1088,6 +1018,7 @@ async def initialize_global_tier0_manager(
     Args:
         mw_manager: The MwManager (Tier 1) client instance.
         ltm_manager: The LongTermMemoryManager (Tier 2) client instance.
+        agent_id_factory: Optional agent ID factory (typically provided by OrganismCore).
         
     Returns:
         The initialized Tier0MemoryManager instance.
@@ -1097,7 +1028,8 @@ async def initialize_global_tier0_manager(
         logger.info("Initializing global Tier0MemoryManager...")
         _tier0_manager_instance = Tier0MemoryManager(
             mw_manager=mw_manager,
-            ltm_manager=ltm_manager
+            ltm_manager=ltm_manager,
+            agent_id_factory=agent_id_factory,
         )
         # Perform initial discovery
         await _tier0_manager_instance.discover_and_refresh_agents()

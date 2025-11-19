@@ -45,6 +45,28 @@ The router detects high-stakes tasks by checking:
 
 **Do NOT** use ad-hoc heuristics like `priority >= 8` or `task_info.high_stakes` - these are not part of the canonical TaskPayload contract.
 
+### Interaction Mode (`params.interaction`)
+
+The interaction envelope controls how tasks are routed and executed, particularly for conversational or agent-tunneled workflows:
+
+```json
+{
+  "interaction": {
+    "mode": "agent_tunnel",  // or "one_shot", "coordinator_routed"
+    "conversation_id": "conv_123",
+    "assigned_agent_id": "agent_xyz"
+  }
+}
+```
+
+**Interaction Modes:**
+
+- `agent_tunnel`: Human ↔ Agent conversation with memory. Tasks are routed directly to the OrganismRouter, bypassing Coordinator for low-latency conversational flows. The assigned agent maintains conversation context.
+- `one_shot`: Single-turn task execution without conversation context.
+- `coordinator_routed`: Default mode. Tasks go through Coordinator for scoring and decision-making before routing.
+
+**Important:** When `mode == "agent_tunnel"`, the router bypasses Coordinator and routes directly to OrganismRouter for faster response times in conversational scenarios.
+
 ### Router Inbox (`params.routing`)
 
 Populate the router-facing inputs as a structured subdocument:

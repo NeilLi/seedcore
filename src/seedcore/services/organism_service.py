@@ -11,11 +11,11 @@ import os
 import time
 import asyncio
 import uuid
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 import ray  # type: ignore[reportMissingImports]
 from ray import serve  # type: ignore[reportMissingImports]
-from fastapi import FastAPI  # type: ignore[reportMissingImports]
+from fastapi import FastAPI, HTTPException, status  # type: ignore[reportMissingImports]
 # Ensure project roots are importable (mirrors original file behavior)
 import sys
 sys.path.insert(0, '/app')
@@ -24,15 +24,12 @@ sys.path.insert(0, '/app/src')
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.organs.organism_core import OrganismCore
 from seedcore.models import TaskPayload
-from seedcore.agents.roles.specialization import Specialization
 from seedcore.models.organism import (
-    BulkResolveRequest,
-    BulkResolveResponse,
-    BulkResolveResult,
     OrganismResponse,
     OrganismStatusResponse,
-    ResolveRouteRequest,
-    ResolveRouteResponse,
+    RouterDecisionResponse,
+    RouteOnlyRequest,
+    RouteAndExecuteRequest,
 )
 
 # Configure logging for driver process (script that invokes serve.run)
@@ -105,7 +102,8 @@ class OrganismService:
             "endpoints": {
                 "health": "/health",
                 "status": "/status",
-                "route_task": "/route-task",
+                "route_only": "/route-only",
+                "route_and_execute": "/route-and-execute",
                 "get_organism_status": "/organism-status",
                 "get_organism_summary": "/organism-summary",
                 "initialize": "/initialize",
@@ -139,85 +137,6 @@ class OrganismService:
                 status="unhealthy",
                 organism_initialized=self._initialized,
                 error=str(e),
-            )
-
-    # --- Core Task Handling Endpoint ---
-
-    @app.post("/route-task", response_model=OrganismResponse)
-    async def route_task(self, request: Dict[str, Any]):
-        """
-        route incoming tasks using TaskPayload as the canonical structure.
-        Incoming JSON may be directly a TaskPayload or any compatible dict.
-        """
-
-        task_id = request.get("task_id") or request.get("id") or "unknown"
-        task_type = request.get("type") or "general_query"
-
-        self.logger.info(f"[OrganismService] 🎯 Received task {task_id}")
-        self.logger.info(f"[OrganismService] 📋 task_type={task_type}, domain={request.get('domain')}")
-
-        try:
-            if not self._initialized:
-                return OrganismResponse(
-                    success=False,
-                    result={},
-                    error="Organism not initialized",
-                    task_type=task_type,
-                )
-
-            # Try to interpret body as TaskPayload
-            try:
-                task_payload = TaskPayload.from_db(request)
-            except Exception:
-                self.logger.warning(
-                    f"[OrganismService] Falling back to direct TaskPayload construction for {task_id}"
-                )
-                task_payload = TaskPayload(
-                    task_id=str(task_id),
-                    type=request.get("type") or "unknown_task",
-                    params=request.get("params") or {},
-                    description=request.get("description") or "",
-                    domain=request.get("domain"),
-                    drift_score=float(request.get("drift_score") or 0.0),
-                    required_specialization=request.get("required_specialization")
-                )
-
-            # Resolve specialization
-            spec_str = task_payload.required_specialization
-            try:
-                specialization = Specialization(spec_str) if spec_str else Specialization.GENERALIST
-            except Exception:
-                self.logger.warning(
-                    f"[OrganismService] Invalid specialization '{spec_str}', defaulting to GENERALIST"
-                )
-                specialization = Specialization.GENERALIST
-
-            # Execute via organism core
-            self.logger.info(
-                f"[OrganismService] 🚀 Routing task {task_id} to {specialization.value}"
-            )
-
-            result = await self.organism_core.route_task(
-                specialization=specialization,
-                payload=task_payload,
-                metadata=request.get("metadata") or {}
-            )
-
-            has_error = "error" in result
-            return OrganismResponse(
-                success=not has_error,
-                result=result,
-                task_type=task_type,
-                error=result.get("error") if has_error else None,
-            )
-
-        except Exception as e:
-            self.logger.exception(f"[OrganismService] ❌ Error in task {task_id}: {e}")
-            return OrganismResponse(
-                success=False,
-                result={},
-                error=str(e),
-                task_type=task_type,
             )
 
     # --- Organism Management Endpoints ---
@@ -404,8 +323,28 @@ class OrganismService:
                 getattr(task_payload, "priority", None),
                 organ_timeout_s,
             )
-            # Use existing task_payload for OrganismCore
-            result = await self.organism_core.execute_task_on_organ(organ_id, task_payload, task_data.get("metadata"))
+            # Use router to get agent_id, then execute
+            if not self._initialized or not getattr(self, "organism_core", None):
+                return {"success": False, "error": "OrganismCore not initialized"}
+            
+            router = getattr(self.organism_core, "router", None)
+            if router is None:
+                return {"success": False, "error": "Router not available"}
+            
+            # Route to get agent_id for the organ
+            # Set required_specialization to hint the router about the organ
+            task_payload.params = task_payload.params or {}
+            task_payload.params["preferred_organ_id"] = organ_id
+            
+            decision = await router.route_only(payload=task_payload, current_epoch=None)
+            
+            # Execute on the selected agent
+            result = await self.organism_core.execute_on_agent(
+                organ_id=decision.organ_id,
+                agent_id=decision.agent_id,
+                payload=task_payload,
+            )
+            
             duration = time.time() - start_time
             self.logger.info(
                 f"[execute-on-organ] ✅ completed organ_id={organ_id} success={result.get('success', True)} in {duration:.2f}s"
@@ -416,7 +355,7 @@ class OrganismService:
 
     @app.post("/execute-on-random")
     async def execute_on_random(self, request: Dict[str, Any]):
-        """Execute a task on a randomly selected organ."""
+        """Execute a task using router (deprecated endpoint - use /route-and-execute instead)."""
         try:
             if not self._initialized:
                 return {"success": False, "error": "Organism not initialized"}
@@ -428,192 +367,182 @@ class OrganismService:
             if organ_timeout_s:
                 task["organ_timeout_s"] = organ_timeout_s
 
-            # Convert task to TaskPayload for OrganismCore
+            # Convert task to TaskPayload
             task_payload = TaskPayload.from_db(task) if not isinstance(task, TaskPayload) else task
-            result = await self.organism_core.execute_task_on_random_organ(task_payload, task.get("metadata"))
+            
+            # Use router.route_and_execute() instead
+            router = getattr(self.organism_core, "router", None)
+            if router is None:
+                return {"success": False, "error": "Router not available"}
+            
+            result = await router.route_and_execute(payload=task_payload, current_epoch=None)
             return {"success": True, **result}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     # --- Routing Endpoints ---
 
-    @app.post("/resolve-route", response_model=ResolveRouteResponse)
-    async def resolve_route(self, request: ResolveRouteRequest):
-        """Resolve a single task to its target organ."""
+    @app.post("/route-only", response_model=RouterDecisionResponse)
+    async def route_only(self, request: RouteOnlyRequest):
+        """
+        Pure routing. Returns RouterDecision.
+        
+        Canonical API for Dispatcher, Coordinator, and external IoT/human/robot services.
+        Used when callers need routing decisions but not immediate execution.
+        """
         try:
-            start_time = time.time()
-            if not self._initialized:
-                return {
-                    "logical_id": "utility_organ_1",
-                    "resolved_from": "fallback",
-                    "epoch": "unknown",
-                    "error": "Organism not initialized",
-                }
-
-            task = request.task
-            task_type = task.get("type")
-            domain = task.get("domain")
-            preferred_logical_id = request.preferred_logical_id
-            self.logger.info(
-                f"[resolve-route] ▶️ task.type={task_type} domain={domain} preferred={preferred_logical_id}"
-            )
-
-            # Get current epoch (mock for now)
-            current_epoch = "epoch-" + str(int(time.time()))
-
-            # Resolve using specialization-based routing
-            # OrganismCore uses specialization → organ mapping instead of routing directory
-            try:
-                spec = Specialization(task_type.upper()) if task_type else Specialization.GENERALIST
-            except (KeyError, ValueError, AttributeError):
-                spec = Specialization.GENERALIST
+            # 1) Ensure organism + router exist and are initialized
+            # Note: router is created in OrganismCore.initialize_organism() (line 351),
+            # not in __init__(), so we must check both _initialized and router existence
+            if not self._initialized or not getattr(self, "organism_core", None):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="OrganismCore not initialized",
+                )
             
-            # Get organ from specialization mapping
-            spec_map = self.organism_core.map_specializations()
-            logical_id = spec_map.get(spec.name, "utility_organ_1")
-            resolved_from = "specialization"
-
-            if not logical_id:
-                return {
-                    "logical_id": "utility_organ_1",
-                    "resolved_from": "fallback",
-                    "epoch": current_epoch,
-                    "error": "No route found",
-                }
-
-            # Get instance info if available
-            instance_id = None
-            if resolved_from in ["preferred", "domain", "task", "default", "specialization"]:
-                organ_status = await self.organism_core.get_organ_status(logical_id)
-                if organ_status and "instance_id" in organ_status:
-                    instance_id = organ_status.get("instance_id")
-
-            duration = time.time() - start_time
-            self.logger.info(
-                f"[resolve-route] ✅ logical_id={logical_id} from={resolved_from} epoch={current_epoch} instance_id={instance_id} in {duration:.2f}s"
+            # Router is only created during initialize_organism(), so check it exists
+            router = getattr(self.organism_core, "router", None)
+            if router is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Router not available",
+                )
+            
+            # 2) Normalize task → TaskPayload
+            task_dict = request.task or {}
+            try:
+                task_payload = TaskPayload.from_db(task_dict)
+            except Exception:
+                self.logger.warning(
+                    "[route-only] Falling back to direct TaskPayload construction"
+                )
+                task_payload = TaskPayload(
+                    task_id=str(
+                        task_dict.get("task_id")
+                        or task_dict.get("id")
+                        or uuid.uuid4()
+                    ),
+                    type=task_dict.get("type") or "unknown_task",
+                    params=task_dict.get("params") or {},
+                    description=task_dict.get("description") or "",
+                    domain=task_dict.get("domain"),
+                    drift_score=float(task_dict.get("drift_score") or 0.0),
+                    required_specialization=task_dict.get("required_specialization"),
+                )
+            
+            # 3) Ask router for a decision
+            decision = await router.route_only(
+                payload=task_payload,
+                current_epoch=request.current_epoch,
             )
-            return {
-                "logical_id": logical_id,
-                "resolved_from": resolved_from,
-                "epoch": current_epoch,
-                "instance_id": instance_id,
-            }
+            
+            # 4) Map to API response model
+            return RouterDecisionResponse(
+                agent_id=decision.agent_id,
+                organ_id=decision.organ_id,
+                reason=decision.reason,
+                is_high_stakes=decision.is_high_stakes,
+            )
+        
+        except HTTPException:
+            # Pass through explicit HTTP errors
+            raise
         except Exception as e:
-            self.logger.error(f"Route resolution failed: {e}")
-            return {
-                "logical_id": "utility_organ_1",
-                "resolved_from": "fallback",
-                "epoch": "unknown",
-                "error": str(e),
-            }
+            self.logger.exception(f"[route-only] Error: {e}")
+            # Soft fallback if you really want a decision shape on error
+            return RouterDecisionResponse(
+                agent_id="",
+                organ_id="meta_control_organ",  # Reasonable fallback from config
+                reason="error",
+                is_high_stakes=False,
+            )
 
-    @app.post("/resolve-routes", response_model=BulkResolveResponse)
-    async def resolve_routes(self, request: BulkResolveRequest):
-        """Resolve multiple tasks to their target organs in one request."""
+    @app.post("/route-and-execute", response_model=OrganismResponse)
+    async def route_and_execute(self, request: RouteAndExecuteRequest):
+        """
+        Routing + execution convenience method.
+        
+        Calls:
+            1. route_only()
+            2. organism.execute_on_agent()
+        
+        Used by simple endpoints, cognitive client, demo workflows,
+        and basic actuator interactions (IoT, robots, external systems).
+        
+        This is a convenience API that combines routing and execution in one call.
+        For more control, use route_only() followed by execute_on_agent() separately.
+        """
         try:
-            if not self._initialized:
-                return {"epoch": "unknown", "results": []}
-
-            # Get current epoch (mock for now)
-            current_epoch = "epoch-" + str(int(time.time()))
-            results: List[BulkResolveResult] = []
-
-            for item in request.tasks:
-                try:
-                    # Resolve using specialization-based routing
-                    try:
-                        spec = Specialization(item.type.upper()) if item.type else Specialization.GENERALIST
-                    except (KeyError, ValueError, AttributeError):
-                        spec = Specialization.GENERALIST
-                    
-                    # Get organ from specialization mapping
-                    spec_map = self.organism_core.map_specializations()
-                    logical_id = spec_map.get(spec.name, "utility_organ_1")
-                    resolved_from = "specialization"
-
-                    if not logical_id:
-                        results.append(BulkResolveResult(
-                            index=item.index, key=item.key, status="unknown_type",
-                            epoch=current_epoch, error="No route found",
-                        ))
-                        continue
-
-                    # Get instance info if available
-                    instance_id = None
-                    cache_hit = False
-                    cache_age_ms = None
-
-                    if resolved_from in ["preferred", "domain", "task", "default", "specialization"]:
-                        organ_status = await self.organism_core.get_organ_status(logical_id)
-                        if organ_status and "instance_id" in organ_status:
-                            instance_id = organ_status.get("instance_id")
-                            # Cache info not available in OrganismCore
-                            cache_hit = False
-                            cache_age_ms = None
-                        else:
-                            results.append(BulkResolveResult(
-                                index=item.index, key=item.key, status="no_active_instance",
-                                logical_id=logical_id, epoch=current_epoch,
-                                error=f"No active instance for {logical_id}",
-                            ))
-                            continue
-
-                    results.append(BulkResolveResult(
-                        index=item.index, key=item.key, status="ok",
-                        logical_id=logical_id, resolved_from=resolved_from,
-                        epoch=current_epoch, instance_id=instance_id,
-                        cache_hit=cache_hit, cache_age_ms=cache_age_ms,
-                    ))
-
-                except Exception as e:
-                    results.append(BulkResolveResult(
-                        index=item.index, key=item.key, status="error",
-                        epoch=current_epoch, error=str(e),
-                    ))
-
-            return {"epoch": current_epoch, "results": results}
-
+            # 1) Ensure organism + router exist and are initialized
+            # Note: router is created in OrganismCore.initialize_organism() (line 351),
+            # not in __init__(), so we must check both _initialized and router existence
+            if not self._initialized or not getattr(self, "organism_core", None):
+                return OrganismResponse(
+                    success=False,
+                    result={},
+                    error="OrganismCore not initialized",
+                    task_type=None,
+                )
+            
+            # Router is only created during initialize_organism(), so check it exists
+            router = getattr(self.organism_core, "router", None)
+            if router is None:
+                return OrganismResponse(
+                    success=False,
+                    result={},
+                    error="Router not available",
+                    task_type=None,
+                )
+            
+            # 2) Normalize task → TaskPayload
+            task_dict = request.task or {}
+            task_id = task_dict.get("task_id") or task_dict.get("id") or "unknown"
+            task_type = task_dict.get("type") or "general_query"
+            
+            self.logger.info(f"[route-and-execute] 🎯 Received task {task_id}")
+            
+            try:
+                task_payload = TaskPayload.from_db(task_dict)
+            except Exception:
+                self.logger.warning(
+                    f"[route-and-execute] Falling back to direct TaskPayload construction for {task_id}"
+                )
+                task_payload = TaskPayload(
+                    task_id=str(task_id),
+                    type=task_type,
+                    params=task_dict.get("params") or {},
+                    description=task_dict.get("description") or "",
+                    domain=task_dict.get("domain"),
+                    drift_score=float(task_dict.get("drift_score") or 0.0),
+                    required_specialization=task_dict.get("required_specialization"),
+                )
+            
+            # 3) Call router.route_and_execute() which handles both routing and execution
+            result = await router.route_and_execute(
+                payload=task_payload,
+                current_epoch=request.current_epoch,
+            )
+            
+            # 4) Check for errors and wrap in response
+            has_error = "error" in result
+            return OrganismResponse(
+                success=not has_error,
+                result=result,
+                task_type=task_type,
+                error=result.get("error") if has_error else None,
+            )
+        
         except Exception as e:
-            self.logger.error(f"Bulk route resolution failed: {e}")
-            return {"epoch": "unknown", "results": []}
-
-    @app.get("/routing/rules")
-    async def get_routing_rules(self):
-        """Get current routing rules."""
-        try:
-            if not self._initialized:
-                return {"error": "Organism not initialized"}
-
-            # OrganismCore uses specialization → organ mapping instead of routing rules
-            return {"specialization_map": self.organism_core.map_specializations()}
-        except Exception as e:
-            return {"error": str(e)}
-
-    @app.put("/routing/rules")
-    async def update_routing_rules(self, rules: Dict[str, Any]):
-        """Update routing rules."""
-        try:
-            if not self._initialized:
-                return {"error": "Organism not initialized"}
-
-            # OrganismCore uses specialization → organ mapping instead of routing rules
-            # Routing is configured via organ configs, not runtime rules
-            # Return current mapping as "rules"
-            return {"success": True, "rules": {"specialization_map": self.organism_core.map_specializations()}}
-        except Exception as e:
-            return {"error": str(e)}
-
-    @app.post("/routing/refresh")
-    async def refresh_routing_cache(self):
-        """Refresh routing cache (useful after epoch rotation)."""
-        try:
-            if not self._initialized:
-                return {"error": "Organism not initialized"}
-
-            # OrganismCore doesn't use routing cache - routing is direct specialization → organ mapping
-            return {"success": True, "message": "Routing cache cleared (no-op in OrganismCore)"}
-        except Exception as e:
-            return {"error": str(e)}
+            task_dict = getattr(request, "task", {}) or {}
+            task_id = task_dict.get("task_id") or task_dict.get("id") or "unknown"
+            task_type = task_dict.get("type") or "general_query"
+            self.logger.exception(f"[route-and-execute] ❌ Error in task {task_id}: {e}")
+            return OrganismResponse(
+                success=False,
+                result={},
+                error=str(e),
+                task_type=task_type,
+            )
 
     # --- Evolution and Memory Endpoints ---
 

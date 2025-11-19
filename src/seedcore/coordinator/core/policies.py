@@ -430,7 +430,7 @@ def compute_fallback_drift_score(task: Dict[str, Any]) -> float:
             score += 0.1  # Execute tasks have moderate drift potential
         elif task_type in ("graph_fact_embed", "graph_fact_query"):
             score += 0.2  # Fact operations have moderate drift potential
-        elif task_type in ("graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2"):
+        elif task_type in ("graph_embed", "graph_rag_query"):
             score += 0.15  # Graph operations have moderate drift potential
         elif task_type in ("artifact_manage", "capability_manage", "memory_cell_manage"):
             score += 0.1  # Resource management has low drift potential

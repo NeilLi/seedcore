@@ -24,6 +24,7 @@ The Organ supports multiple agent types:
 from __future__ import annotations
 
 import os
+import uuid
 import ray  # pyright: ignore[reportMissingImports]
 import asyncio
 import random
@@ -33,12 +34,15 @@ from typing import Dict, Any, Optional, List, TYPE_CHECKING, Tuple
 # --- Core SeedCore Imports ---
 from ..logging_setup import ensure_serve_logger
 
+# Runtime imports for things used in code
+from ..agents.roles.specialization import Specialization  # ← needed at runtime
+
+# Type alias for readability (after ray import)
+AgentHandle = ray.actor.ActorHandle
+
 if TYPE_CHECKING:
-    from ..agents.roles import (
-        Specialization,
-        RoleRegistry,
-        SkillStoreProtocol
-    )
+    from ..agents.roles.specialization import RoleRegistry
+    from ..agents.roles.skill_vector import SkillStoreProtocol
     from ..tools.manager import ToolManager
     from ..serve.cognitive_client import CognitiveServiceClient
     # --- Add imports for stateful dependencies ---
@@ -49,6 +53,46 @@ logger = ensure_serve_logger("seedcore.Organ", level="DEBUG")
 
 # Target namespace for agent actors
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+
+
+class AgentIDFactory:
+    """
+    Factory for generating agent IDs based on organ_id and specialization.
+    
+    Provides consistent ID generation across the system. OrganismCore typically
+    uses this factory to generate IDs before calling Organ.create_agent().
+    
+    IMPORTANT: agent_id is a permanent, immutable identity. It includes organ_id
+    only as part of the creation context, but agent_id does NOT imply current organ
+    residence after migration. Agents can be transferred between organs via
+    register_agent() without changing their ID.
+    """
+    
+    def new(self, organ_id: str, spec: Specialization) -> str:
+        """
+        Generate a stable, unique agent ID.
+        
+        NOTE: agent_id is a permanent identity. It includes organ_id only
+        as part of the creation context, but agent_id does NOT imply
+        current organ residence after migration.
+        
+        Args:
+            organ_id: ID of the organ this agent belongs to (at creation time)
+            spec: Agent specialization
+            
+        Returns:
+            Generated agent ID string (format: agent_{organ_id}_{spec_safe}_{unique12})
+        """
+        # Use short UUID hex (12 chars) for readability, similar to ULID length
+        # Collision probability: 16^12 ≈ 2^48 space → extremely safe even at millions of agents
+        # Can be swapped for actual ULID library if time-sorted IDs are needed
+        unique_id = uuid.uuid4().hex[:12]
+        
+        # Normalize specialization value to be safe in Ray actor names
+        # Replace potentially unsafe characters: / . - → _
+        spec_safe = spec.value.replace("/", "_").replace(".", "_").replace("-", "_")
+        
+        return f"agent_{organ_id}_{spec_safe}_{unique_id}"
 
 
 @ray.remote
@@ -72,6 +116,8 @@ class Organ:
         mw_manager: Optional["MwManager"] = None,
         ltm_manager: Optional["LongTermMemoryManager"] = None,
         checkpoint_cfg: Optional[Dict[str, Any]] = None,
+        # --- Optional AgentIDFactory for ID generation ---
+        agent_id_factory: Optional[AgentIDFactory] = None,
     ):
         self.organ_id = organ_id
         
@@ -86,9 +132,14 @@ class Organ:
         self.mw_manager = mw_manager
         self.ltm_manager = ltm_manager
         self.checkpoint_cfg = checkpoint_cfg or {"enabled": False}
+        
+        # --- Optional AgentIDFactory for ID generation ---
+        # NOTE: Currently unused - OrganismCore generates IDs before calling create_agent().
+        # This is kept for future use cases where Organ might need to generate IDs dynamically.
+        self.agent_id_factory = agent_id_factory
 
         # Agent registry: { agent_id -> ActorHandle }
-        self.agents: Dict[str, ray.actor.ActorHandle] = {}
+        self.agents: Dict[str, AgentHandle] = {}
         # Agent metadata: { agent_id -> AgentInfo }
         self.agent_info: Dict[str, Dict[str, Any]] = {}
         
@@ -96,12 +147,16 @@ class Organ:
 
     async def health_check(self) -> bool:
         """Called by OrganismCore on startup."""
-        await asyncio.sleep(0)  # Be async
-        return True
+        # Check that shared dependencies are configured
+        return (
+            self.tool_manager is not None
+            and self.role_registry is not None
+            and self.skill_store is not None
+            and self.cognitive_client is not None
+        )
         
     async def ping(self) -> bool:
         """Lightweight liveness check for OrganismCore's health loop."""
-        await asyncio.sleep(0)  # Be async
         return True
 
     # ==========================================================
@@ -135,8 +190,8 @@ class Organ:
             return
 
         if self.organ_id != organ_id:
-             logger.error(f"Organ ID mismatch! Expected {self.organ_id}, got {organ_id}")
-             raise ValueError("Organ ID mismatch")
+            logger.error(f"Organ ID mismatch! Expected {self.organ_id}, got {organ_id}")
+            raise ValueError("Organ ID mismatch")
 
         try:
             logger.info(f"🚀 [{self.organ_id}] Creating {agent_class_name} '{agent_id}'...")
@@ -210,7 +265,8 @@ class Organ:
             self.agents[agent_id] = handle
             self.agent_info[agent_id] = {
                 "agent_id": agent_id,
-                "specialization": specialization.name,
+                "specialization": specialization.name,  # Store enum name for matching
+                "specialization_value": specialization.value,  # Also store value for compatibility
                 "class": agent_class_name,  # Track which class was created
                 "created_at": time.time(),
                 "status": "initializing",
@@ -265,15 +321,59 @@ class Organ:
             lifetime="detached"
         )
         
+        # Update status to indicate this is a respawned agent
+        if agent_id in self.agent_info:
+            self.agent_info[agent_id]["status"] = "respawned"
+
+    async def register_agent(
+        self,
+        agent_id: str,
+        handle: AgentHandle,
+        info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Register an existing agent handle into this organ.
+        
+        Used by OrganismCore during organ merge/retire operations to transfer
+        agents between organs without recreating them.
+        
+        Args:
+            agent_id: Unique identifier for the agent
+            handle: Ray actor handle for the existing agent
+            info: Optional metadata dict. If not provided, a minimal stub is created.
+        """
+        if agent_id in self.agents:
+            logger.warning(
+                f"[{self.organ_id}] Agent {agent_id} already exists, overwriting registration."
+            )
+        
+        self.agents[agent_id] = handle
+
+        # Preserve existing info if provided, otherwise create a stub.
+        existing = self.agent_info.get(agent_id, {})
+        info = info or existing or {
+            "agent_id": agent_id,
+            "specialization": "GENERALIST",
+            "specialization_value": "generalist",
+            "class": "BaseAgent",
+            "created_at": time.time(),
+            "status": "registered",
+        }
+        self.agent_info[agent_id] = info
+
+        logger.info(
+            f"[{self.organ_id}] Registered existing agent {agent_id} via register_agent()"
+        )
+        
     # ==========================================================
     # Introspection (Called by OrganismCore & StateService)
     # ==========================================================
     
-    async def get_agent_handle(self, agent_id: str) -> Optional[ray.actor.ActorHandle]:
+    async def get_agent_handle(self, agent_id: str) -> Optional[AgentHandle]:
         """Returns the handle for a specific agent."""
         return self.agents.get(agent_id)
 
-    async def get_agent_handles(self) -> Dict[str, ray.actor.ActorHandle]:
+    async def get_agent_handles(self) -> Dict[str, AgentHandle]:
         """
         Returns all agent handles managed by this organ.
         This is the main method used by OrganismCore to poll for the StateService.
@@ -292,34 +392,245 @@ class Organ:
         """
         Returns the health status of this organ and all its agents.
         (Called by OrganismCore's health loop)
+        
+        Actually pings agents to determine liveness, so OrganismCore's
+        reconciliation loop can detect and respawn dead agents.
         """
-        # This is now a lightweight check.
-        # The OrganismCore's health loop is responsible for
-        # checking the Organ, and the StateService's aggregator
-        # is responsible for checking all Agents.
         agent_statuses = {}
 
-        for agent_id in self.agents.keys():
-            # We report agents as "alive" if they're registered.
-            # The StateService aggregator will do actual health checking via heartbeats.
-            # OrganismCore's health loop uses the "alive" flag to detect unhealthy agents.
+        for agent_id, handle in self.agents.items():
+            alive = True
+            try:
+                # Try to ping the agent via get_heartbeat (most agents implement this)
+                if hasattr(handle, "get_heartbeat"):
+                    ref = handle.get_heartbeat.remote()
+                    # Small timeout to avoid hanging
+                    await asyncio.wait_for(
+                        asyncio.to_thread(ray.get, ref),
+                        timeout=2.0,
+                    )
+                else:
+                    # Fallback: try a lightweight ping if available
+                    # If Ray can't talk to the actor, an exception will be raised
+                    # This is a best-effort check
+                    try:
+                        # Try accessing actor metadata as a lightweight check
+                        _ = handle.__class__.__name__
+                    except Exception:
+                        alive = False
+            except Exception:
+                alive = False
+
             agent_statuses[agent_id] = {
-                "status": "registered",
-                "alive": True  # Registered agents are assumed alive until proven otherwise
+                "status": "registered" if alive else "unreachable",
+                "alive": alive,
             }
                 
         return {
             "organ_id": self.organ_id,
-            "status": "healthy",
+            "status": "healthy",  # organ-level; could down-rank if many agents are dead
             "agent_count": len(self.agents),
             "agents": agent_statuses,
         }
 
     # ==========================================================
+    # Telemetry & Stats (Per-Organ Agent Statistics)
+    # ==========================================================
+
+    async def collect_agent_stats(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Collect summary statistics from all agents in this organ.
+        
+        Returns:
+            Dictionary mapping agent_id -> stats dict (whatever agent.get_summary_stats() returns)
+        """
+        if not self.agents:
+            return {}
+
+        timeout = float(os.getenv("ORGAN_STATS_TIMEOUT", "2.5"))
+        items = list(self.agents.items())
+        stats: Dict[str, Dict[str, Any]] = {}
+
+        async def _get_stats(agent_id: str, handle: AgentHandle):
+            try:
+                ref = handle.get_summary_stats.remote()
+                res = await asyncio.wait_for(
+                    asyncio.to_thread(ray.get, ref),
+                    timeout=timeout,
+                )
+                stats[agent_id] = res
+            except Exception as e:
+                logger.debug(f"[{self.organ_id}] Stats error for {agent_id}: {e}")
+
+        tasks = [_get_stats(agent_id, handle) for agent_id, handle in items]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        logger.debug(f"[{self.organ_id}] ✅ Collected stats: {len(stats)}/{len(items)}")
+        
+        # Warn if we have agents but collected no stats
+        if len(items) > 0 and len(stats) == 0:
+            logger.warning(
+                f"[{self.organ_id}] No stats collected from {len(items)} agents - "
+                "agents may not support get_summary_stats() or may be unreachable"
+            )
+        
+        return stats
+
+    async def get_summary(self) -> Dict[str, Any]:
+        """
+        Compute a simple per-organ summary over agent stats.
+        
+        Returns:
+            Dictionary with organ-level aggregated statistics
+        """
+        stats = await self.collect_agent_stats()
+        if not stats:
+            return {
+                "organ_id": self.organ_id,
+                "agent_count": len(self.agents),
+                "status": "no_agents",
+            }
+
+        total_agents = len(stats)
+        total_tasks = sum(s.get("tasks_processed", 0) for s in stats.values())
+        avg_cap = (
+            sum(s.get("capability_score", 0.0) for s in stats.values()) / total_agents
+            if total_agents > 0 else 0.0
+        )
+        avg_mem = (
+            sum(s.get("mem_util", 0.0) for s in stats.values()) / total_agents
+            if total_agents > 0 else 0.0
+        )
+
+        # Calculate organ-level metrics
+        total_memory_writes = sum(s.get("memory_writes", 0) for s in stats.values())
+        total_peer_interactions = sum(
+            s.get("peer_interactions_count", 0) for s in stats.values()
+        )
+
+        return {
+            "organ_id": self.organ_id,
+            "agent_count": total_agents,
+            "total_tasks_processed": total_tasks,
+            "average_capability_score": avg_cap,
+            "average_memory_utilization": avg_mem,
+            "total_memory_writes": total_memory_writes,
+            "total_peer_interactions": total_peer_interactions,
+            "status": "active",
+        }
+
+    async def get_agent_private_memory(self, agent_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch private memory vector & telemetry for a single agent in this organ.
+        
+        Args:
+            agent_id: Agent identifier
+            
+        Returns:
+            Dictionary with 'h' (memory vector) and 'telemetry', or None if not found
+        """
+        handle = self.agents.get(agent_id)
+        if not handle:
+            logger.warning(
+                f"[{self.organ_id}] Agent {agent_id} not found for private memory fetch"
+            )
+            return None
+        try:
+            h_ref = handle.get_private_memory_vector.remote()
+            tel_ref = handle.get_private_memory_telemetry.remote()
+            # Fetch both concurrently to reduce latency (single RPC instead of two sequential)
+            h, tel = await asyncio.to_thread(lambda: ray.get(h_ref, tel_ref))
+            return {"h": h, "telemetry": tel}
+        except Exception:
+            # Legacy fallback
+            try:
+                state_ref = handle.get_state.remote()
+                state = await asyncio.to_thread(ray.get, state_ref)
+                return {"h": state.get("h")}
+            except Exception as e:
+                logger.error(
+                    f"[{self.organ_id}] Failed to get private memory for {agent_id}: {e}"
+                )
+                return None
+
+    async def fetch_agent_memory_with_cache(
+        self, agent_id: str, item_id: str
+    ) -> Optional[Any]:
+        """
+        Full cache → LTM fetch via the agent.
+        
+        Args:
+            agent_id: Agent identifier
+            item_id: Item identifier to fetch
+            
+        Returns:
+            Fetched data or None if not found
+        """
+        handle = self.agents.get(agent_id)
+        if not handle:
+            logger.warning(
+                f"[{self.organ_id}] Agent {agent_id} not found for memory fetch"
+            )
+            return None
+        try:
+            ref = handle.fetch_with_cache.remote(item_id)
+            data = await asyncio.to_thread(ray.get, ref)
+            return data
+        except Exception as e:
+            logger.error(
+                f"[{self.organ_id}] Failed to fetch memory via agent {agent_id}: {e}"
+            )
+            return None
+
+    async def reset_agent_metrics(self, agent_id: str) -> bool:
+        """
+        Reset metrics for a specific agent in this organ.
+        
+        Args:
+            agent_id: Agent identifier
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        handle = self.agents.get(agent_id)
+        if not handle:
+            return False
+        try:
+            ref = handle.reset_metrics.remote()
+            await asyncio.to_thread(ray.get, ref)
+            logger.info(f"[{self.organ_id}] 🔄 Reset metrics for agent {agent_id}")
+            return True
+        except Exception as e:
+            logger.error(
+                f"[{self.organ_id}] Failed to reset metrics for agent {agent_id}: {e}"
+            )
+            return False
+
+    def generate_agent_id(self, specialization: "Specialization") -> str:
+        """
+        Generate a new agent ID using AgentIDFactory if available.
+        
+        NOTE: Currently unused - OrganismCore generates IDs before calling create_agent(),
+        and respawn_agent() reuses the same agent_id. This method is kept for future
+        use cases where Organ might need to generate IDs dynamically.
+        
+        Args:
+            specialization: Agent specialization
+            
+        Returns:
+            Generated agent ID string
+        """
+        if self.agent_id_factory:
+            return self.agent_id_factory.new(self.organ_id, specialization)
+        # Fallback: simple ID generation if factory not available
+        unique_id = uuid.uuid4().hex[:12]
+        return f"agent_{self.organ_id}_{specialization.value}_{unique_id}"
+
+    # ==========================================================
     # Routing (Called by OrganismCore)
     # ==========================================================
 
-    async def pick_random_agent(self) -> Tuple[Optional[str], Optional[ray.actor.ActorHandle]]:
+    async def pick_random_agent(self) -> Tuple[Optional[str], Optional[AgentHandle]]:
         """Returns a random agent_id and handle from this organ."""
         if not self.agents:
             return None, None
@@ -329,78 +640,30 @@ class Organ:
         except Exception:
             return None, None  # Race condition if dict empty
 
-    async def pick_agent_by_specialization(self, spec_name: str) -> Tuple[Optional[str], Optional[ray.actor.ActorHandle]]:
+    async def pick_agent_by_specialization(self, spec_name: str) -> Tuple[Optional[str], Optional[AgentHandle]]:
         """
         Finds an agent matching the specialization.
+        
+        Accepts either enum name (e.g., "DEVICE_ORCHESTRATOR") or value (e.g., "device_orchestrator").
+        Matching is case-insensitive for robustness.
+        
         This is a simple, non-load-balanced lookup.
         """
+        spec_norm = spec_name.lower()
+        
+        # Try to match against stored specialization name (enum name)
         for agent_id, info in self.agent_info.items():
-            if info.get("specialization") == spec_name:
+            stored_name = info.get("specialization", "").lower()
+            stored_value = info.get("specialization_value", "").lower()
+            
+            # Match against either name or value (case-insensitive)
+            if stored_name == spec_norm or stored_value == spec_norm:
                 handle = self.agents.get(agent_id)
                 if handle:
                     return agent_id, handle
         
         # Fallback if no specific agent matches
         return await self.pick_random_agent()
-
-    # ==========================================================
-    # High-Stakes Task Execution (Thin Wrapper - v2 Architecture)
-    # ==========================================================
-
-    async def execute_high_stakes(
-        self, agent_id: str, task_info: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Thin wrapper for executing a high-stakes task on a specific agent.
-        
-        In v2 architecture:
-        - HGNN/OrganismCore decides routing (which agent)
-        - Organ is passive registry only
-        - Organ does NOT select agents, retry, or manage lifecycle
-        - Organ simply executes on the agent_id provided by OrganismCore
-        
-        This matches the v2 SeedCore execution model:
-        HGNN → OrganismCore → Organ (thin wrapper) → Agent
-        
-        Args:
-            agent_id: Agent ID already selected by HGNN/OrganismCore
-            task_info: Task payload as dict
-            
-        Returns:
-            Dict with agent_id, result, or error
-        """
-        handle = self.agents.get(agent_id)
-        if not handle:
-            return {
-                "error": "unknown_agent",
-                "agent_id": agent_id,
-                "organ_id": self.organ_id,
-            }
-
-        try:
-            logger.debug(
-                f"[{self.organ_id}] Executing high-stakes task on agent {agent_id}"
-            )
-            ref = handle.execute_high_stakes_task.remote(task_info)
-            result = await asyncio.to_thread(ray.get, ref, timeout=300.0)  # 5 min timeout
-            
-            return {
-                "agent_id": agent_id,
-                "organ_id": self.organ_id,
-                "result": result,
-            }
-
-        except Exception as e:
-            logger.error(
-                f"[{self.organ_id}] High-stakes task failed on agent {agent_id}: {e}",
-                exc_info=True,
-            )
-            return {
-                "error": "agent_failure",
-                "reason": str(e),
-                "agent_id": agent_id,
-                "organ_id": self.organ_id,
-            }
 
     # ==========================================================
     # Shutdown
@@ -421,21 +684,4 @@ class Organ:
         await asyncio.gather(*tasks)
         logger.info(f"[{self.organ_id}] Shutdown complete.")
 
-    # ==========================================================
-    # REMOVED METHODS (Logic moved to other services)
-    # ==========================================================
     
-    # - execute_task_on_best_agent: REMOVED
-    #   (Routing logic is now in OrganismCore, which calls agents directly)
-    
-    # - _heartbeat_loop: REMOVED
-    #   (OrganismCore's health loop is responsible for polling organs)
-    
-    # - _collect_advertisements_loop: REMOVED
-    #   (StateService's ProactiveAgentAggregator is responsible for polling agents)
-    
-    # - _repo_lazy: REMOVED
-    #   (Organs no longer register themselves in the database)
-    
-    # - start: REMOVED
-    #   (No background loops to start)

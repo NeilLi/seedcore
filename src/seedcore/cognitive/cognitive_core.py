@@ -180,8 +180,6 @@ class CognitiveCore(dspy.Module):
             # Graph task handlers (Migration 007+)
             CognitiveType.GRAPH_EMBED: self._handle_graph_embed,
             CognitiveType.GRAPH_RAG_QUERY: self._handle_graph_rag_query,
-            CognitiveType.GRAPH_EMBED_V2: self._handle_graph_embed_v2,
-            CognitiveType.GRAPH_RAG_QUERY_V2: self._handle_graph_rag_query_v2,
             CognitiveType.GRAPH_SYNC_NODES: self._handle_graph_sync_nodes,
             
             # Facts system handlers (Migration 009)
@@ -1403,18 +1401,6 @@ class CognitiveCore(dspy.Module):
         knowledge_context = kwargs.get("knowledge_context", "{}")
         return {"task": {"type": "graph_rag_query", "domain": self._norm_domain("graph"), "params": {"start_node_ids": start_node_ids, "k": k, "topk": topk, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
 
-    def _handle_graph_embed_v2(self, **kwargs) -> Dict[str, Any]:
-        start_node_ids = kwargs.get("start_node_ids", [])
-        k = kwargs.get("k", 2)
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "graph_embed_v2", "domain": self._norm_domain("graph"), "params": {"start_node_ids": start_node_ids, "k": k, "knowledge_context": knowledge_context}}, "confidence_score": 0.9}
-
-    def _handle_graph_rag_query_v2(self, **kwargs) -> Dict[str, Any]:
-        start_node_ids = kwargs.get("start_node_ids", [])
-        k = kwargs.get("k", 2)
-        topk = kwargs.get("topk", 10)
-        knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "graph_rag_query_v2", "domain": self._norm_domain("graph"), "params": {"start_node_ids": start_node_ids, "k": k, "topk": topk, "knowledge_context": knowledge_context}}, "confidence_score": 0.9}
 
     def _handle_graph_sync_nodes(self, **kwargs) -> Dict[str, Any]:
         node_ids = kwargs.get("node_ids", [])

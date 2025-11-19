@@ -290,14 +290,15 @@ class OrganismRouter(Router):
     Fast-path router that calls the Organism service directly.
 
     Flow:
-      1. /resolve-route        -> which organ handles this?
-      2. /execute-on-organ     -> run task on that organ
-      3. If execute_result.kind == DecisionKind.COGNITIVE ("cognitive"):
+      1. POST /route-and-execute (canonical endpoint)
+         -> Routes and executes task in one call
+      2. If execute_result.kind == DecisionKind.COGNITIVE ("cognitive"):
             Delegate to the centralized CognitiveService via the unified client.
          Else:
             Return execute_result directly.
 
     NOTE:
+    - Uses /route-and-execute endpoint (canonical routing+execution API)
     - If execute_result.kind == "fast": that's a normal success, return it.
     - If execute_result.kind == "hgnn": that should already be a fully
       decomposed HGNN-style plan (EscalatedResult). We DO NOT forward again.
@@ -358,7 +359,7 @@ class OrganismRouter(Router):
         """
         Unified entrypoint for routing + executing tasks through the OrganismService.
 
-        - Always POSTs to /route-task (canonical endpoint)
+        - Always POSTs to /route-and-execute (canonical endpoint)
         - Lets OrganismCore handle routing, agent selection, execution, escalation
         - Client does NOT need to know organism internals
         """
@@ -375,19 +376,20 @@ class OrganismRouter(Router):
             if correlation_id:
                 task_data["correlation_id"] = correlation_id
 
-            # 2. Call the single universal endpoint
+            # 2. Call the canonical routing+execution endpoint
             response = await self.client.post(
-                "/route-task",
-                json=task_data,
+                "/route-and-execute",
+                json={"task": task_data},
             )
 
             # Ensure response is dict
             if not isinstance(response, dict):
                 raise ValueError("OrganismService returned non-dict response")
 
-            # Pull out results
-            result = response.get("result", {}) if "result" in response else response
-
+            # Extract result from OrganismResponse format
+            # OrganismResponse: { success, result, error, task_type }
+            result = response.get("result", {})
+            
             # Add warnings if success=False
             if not response.get("success", True):
                 result.setdefault("error", response.get("error"))
@@ -548,6 +550,36 @@ class CoordinatorHttpRouter(Router):
             started_at = datetime.now(timezone.utc)
 
             task_id = task_payload.task_id
+            
+            # Check interaction mode - agent_tunnel bypasses Coordinator for direct routing
+            params = task_data.get("params", {})
+            interaction = params.get("interaction", {})
+            mode = interaction.get("mode")
+            
+            if mode == "agent_tunnel":
+                # Human ↔ Agent conversation with memory - bypass Coordinator for low latency
+                logger.info(
+                    f"[CoordinatorHttpRouter] Agent tunnel mode detected for task {task_id}; "
+                    "routing directly to OrganismRouter"
+                )
+                try:
+                    organism_router = RouterFactory.create_router(
+                        router_type="organism",
+                        config=self.config
+                    )
+                    result = await organism_router.route_and_execute(
+                        task_data,
+                        correlation_id=correlation_id
+                    )
+                    await organism_router.close()
+                    return result
+                except Exception as tunnel_err:
+                    logger.warning(
+                        f"[CoordinatorHttpRouter] Agent tunnel routing failed for task {task_id}: {tunnel_err}"
+                    )
+                    # Fall through to Coordinator routing as fallback
+                    logger.info(f"[CoordinatorHttpRouter] Falling back to Coordinator routing for task {task_id}")
+
             logger.info(f"Routing task via Coordinator HTTP: {task_id}")
 
             # 1. Ask Coordinator to process / decide

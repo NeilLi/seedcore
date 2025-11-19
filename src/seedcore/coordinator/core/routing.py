@@ -5,10 +5,9 @@ import asyncio
 import random
 import uuid
 import logging
-from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Callable, Tuple, NamedTuple
 
-from seedcore.serve.base_client import BaseServiceClient, CircuitBreaker, RetryConfig
+from seedcore.serve.base_client import BaseServiceClient
 
 logger = logging.getLogger(__name__)
 
@@ -213,41 +212,70 @@ async def bulk_resolve_routes_cached(
     if not to_resolve:
         return mapping, None  # all from cache
 
-    # 2) Remote bulk resolve
+    # 2) Remote bulk resolve - use individual /route-only calls
+    # Note: /resolve-routes endpoint was removed; using individual /route-only calls
     start_time = time.time()
-    new_epoch = None
+    new_epoch = None  # Epoch not available in RouterDecisionResponse
     try:
-        # Clamp bulk resolve timeout (allow more time for bulk operations)
+        # Clamp resolve timeout per call (allow more time for bulk operations)
         client_timeout = getattr(organism_client, "timeout", None)
         try:
             client_timeout = float(client_timeout) if client_timeout is not None else 0.1
         except (TypeError, ValueError):
             client_timeout = 0.1
-        bulk_timeout = min(0.1, max(0.01, client_timeout))  # 10-100ms window
-        resp = await organism_client.post(
-            "/resolve-routes",
-            json={"tasks": to_resolve},
-            headers=_corr_headers("organism", cid),
-            timeout=bulk_timeout
-        )
+        resolve_timeout = min(0.1, max(0.01, client_timeout))  # 10-100ms window per call
+        
+        # Create mapping from key to result by making individual calls
+        key_to_result = {}
+        for item in to_resolve:
+            try:
+                # Call /route-only for each task
+                payload = {
+                    "task": {
+                        "type": item["type"],
+                        "domain": item.get("domain"),
+                        "params": {}
+                    }
+                }
+                if item.get("preferred_logical_id"):
+                    payload["task"]["params"]["preferred_logical_id"] = item["preferred_logical_id"]
+                
+                resp = await organism_client.post(
+                    "/route-only",
+                    json=payload,
+                    headers=_corr_headers("organism", cid),
+                    timeout=resolve_timeout
+                )
+                
+                # Convert RouterDecisionResponse format to expected format
+                key = item["key"]
+                organ_id = resp.get("organ_id")
+                if organ_id:
+                    key_to_result[key] = {
+                        "key": key,
+                        "logical_id": organ_id,
+                        "status": "ok",
+                        "resolved_from": resp.get("reason", "unknown"),
+                    }
+                else:
+                    key_to_result[key] = {
+                        "key": key,
+                        "status": "error",
+                        "error": "No organ_id in response",
+                    }
+            except Exception as e:
+                logger.warning(f"[Coordinator] Failed to resolve route for {item.get('key')}: {e}")
+                key_to_result[item["key"]] = {
+                    "key": item["key"],
+                    "status": "error",
+                    "error": str(e),
+                }
         
         # Track bulk resolve metrics
         latency_ms = (time.time() - start_time) * 1000
         if metrics:
             metrics.increment_counter("bulk_resolve_items", value=len(to_resolve))
         logger.info(f"[Coordinator] Bulk resolve completed: {len(to_resolve)} items in {latency_ms:.1f}ms")
-        # resp: { epoch, results: [ {key, logical_id, status, ...}, ... ] }
-        new_epoch = resp.get("epoch")
-        if new_epoch and last_seen_epoch and new_epoch != last_seen_epoch:
-            # epoch rotated => flush stale cache
-            route_cache.clear()
-        
-        # Create mapping from key to result
-        key_to_result = {}
-        for r in resp.get("results", []):
-            key = r.get("key")
-            if key:
-                key_to_result[key] = r
 
         # Fan-out results to all indices with matching (type, domain)
         for item in to_resolve:
@@ -264,9 +292,9 @@ async def bulk_resolve_routes_cached(
                 # Backfill cache
                 route_cache.set((t, d), RouteEntry(
                     logical_id=logical_id,
-                    epoch=result.get("epoch", new_epoch or ""),
+                    epoch="",  # Epoch not available in RouterDecisionResponse
                     resolved_from=result.get("resolved_from", "bulk"),
-                    instance_id=result.get("instance_id"),
+                    instance_id=None,  # Instance ID not available in RouterDecisionResponse
                     cached_at=time.time()
                 ))
                 
@@ -388,12 +416,15 @@ async def resolve_route_cached_async(
                 fut.set_result(cached.logical_id)
             return cached.logical_id
 
-        # 3) Remote resolve (primary)
+        # 3) Remote resolve (primary) - use new /route-only endpoint
         start_time = time.time()
         try:
+            # Use new canonical /route-only endpoint
             payload = {"task": {"type": t, "domain": d, "params": {}}}
             if preferred_logical_id:
-                payload["preferred_logical_id"] = preferred_logical_id
+                # Note: preferred_logical_id not directly supported in route-only,
+                # but router will use it if available in task params
+                payload["task"]["params"]["preferred_logical_id"] = preferred_logical_id
 
             # Clamp resolve timeout to keep fast-path SLO (30-50ms budget).
             client_timeout = getattr(organism_client, "timeout", None)
@@ -402,18 +433,20 @@ async def resolve_route_cached_async(
             except (TypeError, ValueError):
                 client_timeout = 0.05
             resolve_timeout = min(0.05, max(0.005, client_timeout))  # 5-50ms window
+            
+            # Call new /route-only endpoint
             resp = await organism_client.post(
-                "/resolve-route", json=payload,
+                "/route-only", json=payload,
                 headers=_corr_headers("organism", cid or uuid.uuid4().hex),
                 timeout=resolve_timeout
             )
-            # Expected response: { logical_id, resolved_from, epoch, instance_id? }
-            # CONTRACT: logical_id is required for execution; instance_id is telemetry only
-            # Execution uses logical_id and Organism chooses healthy instance at call time
-            logical_id = resp["logical_id"] if "logical_id" in resp else resp.get("organ_id")
-            epoch = resp.get("epoch", "")
-            resolved_from = resp.get("resolved_from", "unknown")
-            instance_id = resp.get("instance_id")  # Telemetry only - don't pin instances
+            # New response format: { agent_id, organ_id, reason, is_high_stakes }
+            # Extract organ_id as logical_id for compatibility
+            logical_id = resp.get("organ_id") or resp.get("logical_id")
+            resolved_from = resp.get("reason", "unknown")
+            # Epoch and instance_id not in new response format, use defaults
+            epoch = ""  # Epoch not available in RouterDecisionResponse
+            instance_id = None  # Instance ID not available in RouterDecisionResponse
 
             # Track metrics
             latency_ms = (time.time() - start_time) * 1000
@@ -426,11 +459,8 @@ async def resolve_route_cached_async(
                              cached_at=time.time())
             route_cache.set(key, entry)
 
-            # Optional epoch-aware invalidation: if epoch changes suddenly, clear cache
-            if last_seen_epoch and epoch and epoch != last_seen_epoch:
-                # Epoch rotated; keep the new entry but clear older keys
-                route_cache.clear()
-            # Note: epoch should be tracked by caller (last_seen_epoch should be updated)
+            # Note: Epoch-aware invalidation disabled since RouterDecisionResponse doesn't include epoch
+            # Cache entries will be invalidated based on TTL or manual cache clearing
 
             logger.info(f"[Coordinator] Route resolved for ({t}, {d}): {logical_id} from={resolved_from} epoch={epoch} latency={latency_ms:.1f}ms")
             if is_leader and not fut.done():
@@ -484,7 +514,7 @@ def static_route_fallback(task_type: str, domain: Optional[str]) -> str:
         return "utility_organ_1"
     if t == "execute":
         return "actuator_organ_1"
-    if t in ["graph_embed", "graph_rag_query", "graph_embed_v2", "graph_rag_query_v2",
+    if t in ["graph_embed", "graph_rag_query",
             "graph_sync_nodes", "graph_fact_embed", "graph_fact_query"]:
         return "graph_dispatcher"
     return "utility_organ_1"  # Ultimate fallback
