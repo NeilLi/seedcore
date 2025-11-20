@@ -4,10 +4,17 @@ Coordinator Service Client for SeedCore
 
 This client provides a clean interface to the deployed coordinator service
 for task processing, anomaly triage, and system orchestration.
+
+The Coordinator Service now uses a unified interface:
+- All business operations go through `/route-and-execute`
+- Type-based routing: Uses TaskPayload.type to route internally
+  * type: "anomaly_triage" → Anomaly triage pipeline
+  * type: "ml_tune_callback" → ML tuning callback handler
+  * Other types → Standard routing & execution
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
 
 logger = logging.getLogger(__name__)
@@ -15,11 +22,13 @@ logger = logging.getLogger(__name__)
 class CoordinatorServiceClient(BaseServiceClient):
     """
     Client for the deployed coordinator service that handles:
-    - Task processing and routing
-    - Anomaly triage pipeline
+    - Task processing and routing (unified interface)
+    - Anomaly triage pipeline (via type-based routing)
     - System orchestration
-    - Energy management
-    - ML tuning coordination
+    - ML tuning coordination (via type-based routing)
+    
+    All business operations use the unified `/route-and-execute` endpoint
+    with type-based internal routing.
     """
     
     def __init__(self, 
@@ -56,62 +65,129 @@ class CoordinatorServiceClient(BaseServiceClient):
         )
     
     # Task Processing Methods
-    async def route_and_execute(self, task: Dict[str, Any]) -> Dict[str, Any]:
+    async def route_and_execute(self, task: Union[Dict[str, Any], Any]) -> Dict[str, Any]:
         """
-        Process a task through the coordinator.
+        Universal Interface: Process a task through the coordinator.
+        
+        This is the unified entrypoint for all Coordinator operations.
+        Uses TaskPayload.type to route internally:
+        - type: "anomaly_triage" → Anomaly triage pipeline
+        - type: "ml_tune_callback" → ML tuning callback handler
+        - Other types → Standard routing & execution
         
         Args:
-            task: Task dictionary with type, params, description, domain, drift_score
+            task: TaskPayload object or dict with:
+                - type: Task type (e.g., "anomaly_triage", "ml_tune_callback", "general_query")
+                - params: Task parameters (including agent_id, series, context for anomaly_triage)
+                - description: Task description
+                - domain: Optional domain
+                - correlation_id: Optional correlation ID
             
         Returns:
-            Task processing result
+            Task processing result (varies by type)
         """
+        # Handle TaskPayload objects
+        if hasattr(task, 'model_dump'):
+            task = task.model_dump()
+        elif hasattr(task, 'dict'):
+            task = task.dict()
+        
         return await self.post("/route-and-execute", json=task)
     
     async def submit_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Submit a task for processing.
+        Submit a task for processing (alias for route_and_execute).
+        
+        DEPRECATED: Use route_and_execute() directly for clarity.
+        This method is kept for backward compatibility.
         
         Args:
             task: Task dictionary
             
         Returns:
-            Task submission result
+            Task processing result
         """
-        return await self.post("/submit-task", json=task)
+        logger.warning("submit_task() is deprecated. Use route_and_execute() instead.")
+        return await self.route_and_execute(task)
     
-    # Anomaly Triage Pipeline
+    # Anomaly Triage Pipeline (via Unified Interface)
     async def anomaly_triage(self, 
-                           incident_data: Dict[str, Any], 
+                           agent_id: str,
+                           series: List[float] = None,
+                           context: Dict[str, Any] = None,
                            correlation_id: str = None) -> Dict[str, Any]:
         """
-        Process anomaly triage pipeline.
+        Process anomaly triage pipeline via unified interface.
+        
+        This method constructs a TaskPayload with type="anomaly_triage"
+        and routes it through the unified route_and_execute endpoint.
         
         Args:
-            incident_data: Incident data for triage
+            agent_id: Agent identifier
+            series: Time series data for anomaly detection (optional)
+            context: Additional context data (optional)
             correlation_id: Optional correlation ID
             
         Returns:
-            Triage result with recommendations
+            AnomalyTriageResponse with anomalies, reason, decision_kind, etc.
         """
-        request_data = {
-            "incident_data": incident_data,
-            "correlation_id": correlation_id
+        task_payload = {
+            "type": "anomaly_triage",
+            "params": {
+                "agent_id": agent_id,
+                "series": series or [],
+                "context": context or {},
+            },
+            "description": f"Anomaly triage for agent {agent_id}",
         }
-        return await self.post("/anomaly-triage", json=request_data)
+        
+        if correlation_id:
+            task_payload["correlation_id"] = correlation_id
+        
+        return await self.route_and_execute(task_payload)
     
-    # System Status and Health
-    async def get_system_status(self) -> Dict[str, Any]:
-        """Get overall system status."""
-        return await self.get("/status")
-    
+    # System Status and Health (Operational Endpoints)
     async def get_health_status(self) -> Dict[str, Any]:
-        """Get detailed health status of all services."""
+        """
+        Get detailed health status of coordinator service.
+        
+        Note: This is an operational endpoint (hidden from OpenAPI schema).
+        Used by Kubernetes liveness probes.
+        """
         return await self.get("/health")
     
     async def get_metrics(self) -> Dict[str, Any]:
-        """Get system metrics and performance data."""
+        """
+        Get system metrics and performance data.
+        
+        Note: This is an operational endpoint (hidden from OpenAPI schema).
+        Used by Prometheus for monitoring.
+        """
         return await self.get("/metrics")
+    
+    async def get_predicate_status(self) -> Dict[str, Any]:
+        """
+        Get predicate system status and GPU guard information.
+        
+        Note: This is an operational/admin endpoint (hidden from OpenAPI schema).
+        """
+        return await self.get("/predicates/status")
+    
+    async def get_predicate_config(self) -> Dict[str, Any]:
+        """
+        Get current predicate configuration.
+        
+        Note: This is an operational/admin endpoint (hidden from OpenAPI schema).
+        """
+        return await self.get("/predicates/config")
+    
+    async def reload_predicates(self) -> Dict[str, Any]:
+        """
+        Reload predicate configuration from file.
+        
+        Note: This is an operational/admin endpoint (hidden from OpenAPI schema).
+        """
+        return await self.post("/predicates/reload", json={})
     
     # Energy Management
     async def get_energy_state(self, agent_id: str) -> Dict[str, Any]:
@@ -139,79 +215,64 @@ class CoordinatorServiceClient(BaseServiceClient):
         """
         return await self.post(f"/ops/energy/{agent_id}", json=energy_data)
     
-    # ML Tuning Coordination
-    async def submit_ml_tuning_job(self, 
-                                 agent_id: str, 
-                                 tuning_config: Dict[str, Any]) -> Dict[str, Any]:
+    # ML Tuning Coordination (via Unified Interface)
+    async def ml_tuning_callback(self, 
+                                job_id: str,
+                                status: str = "completed",
+                                E_after: Optional[float] = None,
+                                gpu_seconds: Optional[float] = None,
+                                error: Optional[str] = None) -> Dict[str, Any]:
         """
-        Submit an ML tuning job.
+        Handle ML tuning job callback via unified interface.
         
-        Args:
-            agent_id: Agent identifier
-            tuning_config: Tuning configuration
-            
-        Returns:
-            Job submission result
-        """
-        request_data = {
-            "agent_id": agent_id,
-            "tuning_config": tuning_config
-        }
-        return await self.post("/ml/tune/submit", json=request_data)
-    
-    async def get_ml_tuning_status(self, job_id: str) -> Dict[str, Any]:
-        """
-        Get status of an ML tuning job.
+        This method constructs a TaskPayload with type="ml_tune_callback"
+        and routes it through the unified route_and_execute endpoint.
         
         Args:
             job_id: Job identifier
-            
-        Returns:
-            Job status information
-        """
-        return await self.get(f"/ml/tune/status/{job_id}")
-    
-    async def ml_tuning_callback(self, job_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle ML tuning job callback.
-        
-        Args:
-            job_id: Job identifier
-            result: Tuning result
+            status: Job status ("completed" or "failed")
+            E_after: Energy after tuning (optional)
+            gpu_seconds: GPU seconds used (optional)
+            error: Error message if failed (optional)
             
         Returns:
             Callback processing result
         """
-        request_data = {
-            "job_id": job_id,
-            "result": result
+        task_payload = {
+            "type": "ml_tune_callback",
+            "params": {
+                "job_id": job_id,
+                "status": status,
+            },
+            "description": f"ML tuning callback for job {job_id}",
         }
-        return await self.post("/ml/tune/callback", json=request_data)
-    
-    # Circuit Breaker Management
-    async def get_circuit_breaker_status(self) -> Dict[str, Any]:
-        """Get status of all circuit breakers."""
-        return await self.get("/circuit-breakers")
-    
-    async def reset_circuit_breaker(self, service_name: str) -> Dict[str, Any]:
-        """
-        Reset a circuit breaker.
         
-        Args:
-            service_name: Name of the service
-            
-        Returns:
-            Reset result
-        """
-        return await self.post(f"/circuit-breakers/{service_name}/reset")
+        if E_after is not None:
+            task_payload["params"]["E_after"] = E_after
+        if gpu_seconds is not None:
+            task_payload["params"]["gpu_seconds"] = gpu_seconds
+        if error is not None:
+            task_payload["params"]["error"] = error
+        
+        return await self.route_and_execute(task_payload)
     
-    # Service Information
-    async def get_service_info(self) -> Dict[str, Any]:
-        """Get coordinator service information."""
-        return await self.get("/info")
+    # Health Check
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        Health check endpoint (alias for get_health_status).
+        
+        Returns:
+            Health status dictionary
+        """
+        return await self.get_health_status()
     
     async def is_healthy(self) -> bool:
-        """Check if the coordinator service is healthy."""
+        """
+        Check if the coordinator service is healthy.
+        
+        Returns:
+            True if service is healthy, False otherwise
+        """
         try:
             health = await self.health_check()
             return health.get("status") == "healthy"

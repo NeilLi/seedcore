@@ -83,6 +83,7 @@ class RoutingDirectory:
         role_registry: Optional["RoleRegistry"] = None,
         skill_store: Optional["SkillStoreProtocol"] = None,
         config: Optional[Dict[str, Any]] = None,
+        redis_client: Optional[Any] = None,
     ):
         """
         Initialize RoutingDirectory with optional OrganismCore dependencies.
@@ -94,6 +95,7 @@ class RoutingDirectory:
             role_registry: Optional RoleRegistry (for specialization routing)
             skill_store: Optional SkillStoreProtocol (for skill-based routing)
             config: Optional config dict for scoring weights and routing behavior
+            redis_client: Optional Redis client for sticky session storage (agent affinity)
         """
         # Scoring configuration (tunable weights)
         self.config = {
@@ -123,6 +125,9 @@ class RoutingDirectory:
         self.cognitive_client = cognitive_client
         self.role_registry = role_registry
         self.skill_store = skill_store
+        
+        # Redis client for sticky session storage (agent affinity)
+        self.redis = redis_client
         
         # Runtime cache for active Ray actor handles (short TTL)
         # Stores: logical_id -> (ActorHandle, cached_timestamp)
@@ -568,6 +573,78 @@ class RoutingDirectory:
         )
         return best_lid
     
+    # --- Sticky Session Helpers ---
+    
+    async def _lookup_sticky_agent(self, conversation_id: str) -> Optional[str]:
+        """
+        Check if a conversation is already bound to a specific agent.
+        
+        Args:
+            conversation_id: The conversation identifier
+            
+        Returns:
+            Agent ID if found, None otherwise
+        """
+        if not self.redis:
+            return None
+            
+        key = f"sticky:conv:{conversation_id}"
+        try:
+            # Handle both async and sync Redis clients
+            if hasattr(self.redis, 'get'):
+                # Check if it's an async client (aioredis)
+                if asyncio.iscoroutinefunction(self.redis.get):
+                    agent_id = await self.redis.get(key)
+                else:
+                    # Sync Redis client
+                    agent_id = self.redis.get(key)
+                    
+                if agent_id:
+                    # Decode bytes if necessary
+                    if isinstance(agent_id, bytes):
+                        agent_id = agent_id.decode('utf-8')
+                    elif isinstance(agent_id, str):
+                        pass  # Already a string
+                    return str(agent_id)
+        except Exception as e:
+            logger.warning(f"[Router] Sticky lookup failed for {conversation_id}: {e}")
+            
+        return None
+
+    async def _bind_sticky_agent(self, conversation_id: str, agent_id: str, ttl: int = 3600):
+        """
+        Bind a conversation to an agent for a set duration (default 1 hour).
+        
+        This enables "sticky routing" - subsequent messages in the same conversation
+        will be routed to the same agent, preserving context locality and KV cache.
+        
+        Args:
+            conversation_id: The conversation identifier
+            agent_id: The agent ID to bind to
+            ttl: Time-to-live in seconds (default 3600 = 1 hour)
+        """
+        if not self.redis:
+            return
+            
+        key = f"sticky:conv:{conversation_id}"
+        try:
+            # Handle both async and sync Redis clients
+            if hasattr(self.redis, 'set'):
+                # Check if it's an async client (aioredis)
+                if asyncio.iscoroutinefunction(self.redis.set):
+                    await self.redis.set(key, agent_id, ex=ttl)
+                else:
+                    # Sync Redis client
+                    self.redis.set(key, agent_id, ex=ttl)
+                logger.debug(
+                    "[Router] Bound conversation %s to agent %s (TTL=%ds)",
+                    conversation_id,
+                    agent_id,
+                    ttl
+                )
+        except Exception as e:
+            logger.warning(f"[Router] Sticky bind failed for {conversation_id} -> {agent_id}: {e}")
+
     async def resolve(
         self, 
         task_type: str, 
@@ -765,38 +842,82 @@ class RoutingDirectory:
         organ_id = logical_id
         
         # Determine agent_id
-        # If organism is available, query the organ for available agents
+        # Check for Affinity (Sticky Routing) - Tier-1 Router Logic
         agent_id = None
-        if self.organism and hasattr(self.organism, 'organs'):
-            organ_handle = self.organism.organs.get(organ_id)
-            if organ_handle:
-                try:
-                    # Try to get an agent from the organ
-                    # Use specialization if available
-                    required_spec = routing_inputs.get("required_specialization")
-                    if required_spec:
-                        # Query organ for agent by specialization
-                        try:
-                            import ray  # type: ignore
-                            pick_result_ref = organ_handle.pick_agent_by_specialization.remote(required_spec)
-                            agent_id, _ = await asyncio.to_thread(ray.get, pick_result_ref)
-                        except ImportError:
-                            logger.debug("Ray not available, cannot query organ for agent")
-                    else:
-                        # Pick random agent from organ
-                        try:
-                            import ray  # type: ignore
-                            pick_result_ref = organ_handle.pick_random_agent.remote()
-                            agent_id, _ = await asyncio.to_thread(ray.get, pick_result_ref)
-                        except ImportError:
-                            logger.debug("Ray not available, cannot query organ for agent")
-                except Exception as e:
-                    logger.debug(f"Failed to query organ for agent: {e}")
+        interaction = params.get("interaction", {})
+        conv_id = interaction.get("conversation_id") if isinstance(interaction, dict) else None
+        assigned_agent = interaction.get("assigned_agent_id") if isinstance(interaction, dict) else None
         
-        # Fallback: generate agent_id if not found
+        # Priority 1: Explicit Assignment (Hard Override)
+        if assigned_agent:
+            agent_id = assigned_agent
+            logger.debug(
+                "[Router] Sticky routing: using assigned_agent_id=%s for conversation_id=%s",
+                assigned_agent,
+                conv_id or "unknown"
+            )
+        # Priority 2: Sticky Session (Soft Affinity)
+        elif conv_id and interaction.get("mode") == "agent_tunnel":
+            sticky_agent = await self._lookup_sticky_agent(conv_id)
+            if sticky_agent:
+                agent_id = sticky_agent
+                logger.debug(
+                    "[Router] Sticky Hit: Routing conversation %s -> agent %s", 
+                    conv_id, 
+                    sticky_agent
+                )
+            else:
+                logger.debug(
+                    "[Router] Sticky Miss: No existing agent for conversation %s", 
+                    conv_id
+                )
+        
+        # Priority 3: Normal Load Balancing / Selection
+        # If no sticky routing, proceed with normal agent selection
         if not agent_id:
-            # Use AgentIDFactory if available, otherwise generate simple ID
-            agent_id = self.new_agent_id(organ_id)
+            # If organism is available, query the organ for available agents
+            if self.organism and hasattr(self.organism, 'organs'):
+                organ_handle = self.organism.organs.get(organ_id)
+                if organ_handle:
+                    try:
+                        # Try to get an agent from the organ
+                        # Use specialization if available
+                        required_spec = routing_inputs.get("required_specialization")
+                        if required_spec:
+                            # Query organ for agent by specialization
+                            try:
+                                import ray  # type: ignore
+                                pick_result_ref = organ_handle.pick_agent_by_specialization.remote(required_spec)
+                                agent_id, _ = await asyncio.to_thread(ray.get, pick_result_ref)
+                            except ImportError:
+                                logger.debug("Ray not available, cannot query organ for agent")
+                        else:
+                            # Pick random agent from organ
+                            try:
+                                import ray  # type: ignore
+                                pick_result_ref = organ_handle.pick_random_agent.remote()
+                                agent_id, _ = await asyncio.to_thread(ray.get, pick_result_ref)
+                            except ImportError:
+                                logger.debug("Ray not available, cannot query organ for agent")
+                    except Exception as e:
+                        logger.debug(f"Failed to query organ for agent: {e}")
+            
+            # Fallback: generate agent_id if not found
+            if not agent_id:
+                # Use AgentIDFactory if available, otherwise generate simple ID
+                agent_id = self.new_agent_id(organ_id)
+        
+        # Priority 4: BINDING (The Missing Link)
+        # If this is a conversation, bind it for future turns.
+        # This ensures context locality - subsequent messages go to the same agent
+        # which preserves KV cache and avoids re-reading conversation history
+        if conv_id and agent_id and isinstance(interaction, dict) and interaction.get("mode") == "agent_tunnel":
+            # Fire and forget the bind to not block latency
+            # TTL of 3600 seconds (1 hour) handles cleanup automatically
+            # If user stops talking for an hour, stickiness expires and system can re-balance
+            asyncio.create_task(
+                self._bind_sticky_agent(conv_id, agent_id, ttl=3600)
+            )
         
         # Check if high-stakes
         is_high_stakes = routing_inputs.get("is_high_stakes", False)

@@ -523,35 +523,6 @@ def payload_to_task(payload: TaskPayload) -> Task:
     )
 
 
-def extract_agent_id(task_dict: Dict[str, Any]) -> Optional[str]:
-    """Extract agent ID from task dictionary."""
-    if not isinstance(task_dict, dict):
-        return None
-    
-    # Try top-level fields first
-    candidate = task_dict.get("agent_id") or task_dict.get("agent")
-    if isinstance(candidate, str) and candidate.strip():
-        return candidate.strip()
-
-    # Check in params
-    params = task_dict.get("params")
-    if isinstance(params, dict):
-        for key in ("agent_id", "agent", "owner_agent_id"):
-            value = params.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-
-    # Check in metadata
-    metadata = task_dict.get("metadata")
-    if isinstance(metadata, dict):
-        for key in ("agent_id", "agent"):
-            value = metadata.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    
-    return None
-
-
 def normalize_type(task_type: Optional[str]) -> str:
     """
     Normalize common type aliases to canonical names.

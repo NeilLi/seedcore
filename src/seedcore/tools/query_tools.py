@@ -6,7 +6,7 @@ These tools handle task-specific logic that was previously embedded in RayAgent.
 """
 
 from __future__ import annotations
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import logging
 import asyncio
 
@@ -154,28 +154,60 @@ class GeneralQueryTool:
         return "deep" if is_complex else "fast"
 
     async def execute(
-        self, description: str, task_data: Optional[Dict[str, Any]] = None
+        self, 
+        description: str, 
+        task_data: Optional[Dict[str, Any]] = None,
+        # NEW: Allow passing explicit conversation history
+        conversation_history: Optional[List[Dict[str, str]]] = None 
     ) -> Dict[str, Any]:
         """
-        Execute a general query.
+        Execute a general query or chat conversation.
 
         Args:
-            description: The query description
+            description: The query description or chat message
             task_data: Optional task metadata
+            conversation_history: Optional conversation history for chat mode
+                Format: [{"role": "user"|"assistant", "content": "..."}, ...]
 
         Returns:
             Query result dictionary
         """
         task_data = task_data or {}
-        profile = self._determine_profile(description, task_data)
-        decision_kind = (
-            DecisionKind.COGNITIVE if profile == "deep" else DecisionKind.FAST_PATH
+        params = task_data.get("params", {}) or {}
+
+        # 1. Detect Interaction Mode (Is this a chat or a query?)
+        # Check if the upstream router flagged this as an 'interaction'
+        interaction_mode = params.get("interaction", {}).get("mode")
+        is_conversational = (
+            interaction_mode == "agent_tunnel" 
+            or conversation_history is not None
+            or params.get("is_chat", False)
         )
+
+        # 2. Select Strategy based on Mode
+        if is_conversational:
+            # --- FAST PATH: Chat ---
+            profile = "fast"  # Chat is almost always fast/latency-sensitive
+            cog_type = CognitiveType.CHAT  # New Type
+            decision_kind = DecisionKind.FAST_PATH
+            
+            # Disable deep heuristics for chat unless explicitly requested
+            if params.get("force_deep_reasoning"):
+                profile = "deep"
+                decision_kind = DecisionKind.COGNITIVE
+        else:
+            # --- SLOW PATH: Problem Solving (Existing Logic) ---
+            profile = self._determine_profile(description, task_data)
+            cog_type = CognitiveType.PROBLEM_SOLVING
+            decision_kind = (
+                DecisionKind.COGNITIVE if profile == "deep" else DecisionKind.FAST_PATH
+            )
 
         # Check for cognitive service availability
         if not self._cog_available or not self._cog:
+            mode_label = "chat" if is_conversational else "query"
             logger.error(
-                f"🚫 {self.agent_id}: cognitive service unavailable. Can't run {profile} reasoning for query='{description[:80]}'"
+                f"🚫 {self.agent_id}: cognitive service unavailable. Can't run {mode_label} (profile={profile}) for '{description[:80]}'"
             )
             return {
                 "agent_id": self.agent_id,
@@ -183,11 +215,12 @@ class GeneralQueryTool:
                 "success": False,
                 "quality": 0.0,
                 "result": {
-                    "query_type": "cognitive_query_unserved",
+                    "query_type": "cognitive_query_unserved" if not is_conversational else "chat_unserved",
                     "degraded_mode": True,
                     "reason": "central cognitive service unavailable",
                     "description": description,
                     "intended_profile": profile,
+                    "mode": mode_label,
                 },
                 "mem_hits": 0,
                 "used_cognitive_service": False,
@@ -196,7 +229,12 @@ class GeneralQueryTool:
 
         # In-flight request deduplication
         task_id = task_data.get("task_id") or task_data.get("id")
-        request_key = task_id if task_id else f"{description[:100]}:{profile}"
+        # Include conversation history in key for chat mode to avoid deduplication across different contexts
+        if is_conversational and conversation_history:
+            history_hash = hash(str(conversation_history)) % 10000
+            request_key = task_id if task_id else f"chat:{description[:80]}:{history_hash}:{profile}"
+        else:
+            request_key = task_id if task_id else f"{description[:100]}:{profile}"
 
         async with self._cog_inflight_lock:
             if request_key in self._cog_inflight:
@@ -211,20 +249,33 @@ class GeneralQueryTool:
                         normalized = self._normalize_cog_v2_response(existing_response)
                         if normalized:
                             payload, metadata = normalized
-                            result = {
-                                "query_type": (
-                                    "complex_cognitive_query"
-                                    if profile == "deep"
-                                    else "fast_cognitive_query"
-                                ),
-                                "query": description,
-                                "thought_process": payload.get("thought", ""),
-                                "plan": payload.get("solution_steps", []),
-                                "formatted": self._extract_formatted(payload, description),
-                                "description": description,
-                                "meta": metadata,
-                                "profile_used": profile,
-                            }
+                            # Determine if this was a chat or query based on payload structure
+                            is_chat_response = "response" in payload and "message" not in payload.get("query_type", "")
+                            
+                            if is_chat_response:
+                                result = {
+                                    "query_type": "agent_chat",
+                                    "message": description,
+                                    "response": payload.get("response", ""),
+                                    "confidence": payload.get("confidence") or payload.get("confidence_score", 0.0),
+                                    "meta": metadata,
+                                    "profile_used": profile,
+                                }
+                            else:
+                                result = {
+                                    "query_type": (
+                                        "complex_cognitive_query"
+                                        if profile == "deep"
+                                        else "fast_cognitive_query"
+                                    ),
+                                    "query": description,
+                                    "thought_process": payload.get("thought", ""),
+                                    "plan": payload.get("solution_steps", []),
+                                    "formatted": self._extract_formatted(payload, description),
+                                    "description": description,
+                                    "meta": metadata,
+                                    "profile_used": profile,
+                                }
                             logger.info(
                                 f"✅ Agent {self.agent_id} reused result from in-flight cognitive request (deduplicated)"
                             )
@@ -247,38 +298,57 @@ class GeneralQueryTool:
 
         # Cognitive Service Call
         try:
+            mode_label = "chat" if is_conversational else "query"
             logger.info(
-                f"🧠 Agent {self.agent_id} using cognitive service (decision_kind={decision_kind.value}, complex={profile == 'deep'})"
+                f"🧠 Agent {self.agent_id} using cognitive service (mode={mode_label}, decision_kind={decision_kind.value}, profile={profile})"
             )
-            params = task_data.get("params", {}) or {}
 
             async def _cog_call():
                 # Construct TaskPayload-compatible dict from task_data
-                # Ensure description is in the task payload
                 task_dict = dict(task_data)
                 task_dict.setdefault("description", description or "")
-                task_dict.setdefault("type", task_data.get("type") or "general_query")
-                task_dict.setdefault("task_id", task_id or f"query_{hash(description)}")
+                task_dict.setdefault("type", task_data.get("type") or ("chat" if is_conversational else "general_query"))
+                task_dict.setdefault("task_id", task_id or f"{mode_label}_{hash(description)}")
                 
-                # Ensure params exists and includes query-specific data
+                # Prepare Params
                 task_params = dict(params)
-                if "constraints" not in task_params:
-                    task_params["constraints"] = {}
-                if "available_tools" not in task_params:
-                    task_params["available_tools"] = {}
                 
-                # Add query metadata to params
-                task_params["query"] = {
-                    "problem_statement": str(description or ""),
-                    "requested_profile": profile,
-                    "agent_capabilities": self._get_agent_capabilities(),
-                }
+                if is_conversational:
+                    # CHAT PAYLOAD: Focus on history and persona
+                    task_params["chat"] = {
+                        "message": description,
+                        "history": conversation_history or [],  # Pass the full context!
+                        "agent_persona": self._get_agent_capabilities(),
+                        "style": "concise_conversational"
+                    }
+                    # Hint to Core: Skip RAG for simple chat to save time
+                    # BUT: If deep reasoning is forced, we likely need RAG context
+                    # So only skip retrieval if NOT forcing deep reasoning
+                    if not params.get("force_rag") and not params.get("force_deep_reasoning"):
+                        task_dict["skip_retrieval"] = True
+                    
+                    # Also set message at top level for ChatSignature
+                    task_dict["message"] = description
+                    if conversation_history:
+                        task_dict["conversation_history"] = conversation_history
+                else:
+                    # SOLVER PAYLOAD: Focus on problem definition
+                    if "constraints" not in task_params:
+                        task_params["constraints"] = {}
+                    if "available_tools" not in task_params:
+                        task_params["available_tools"] = {}
+                    
+                    task_params["query"] = {
+                        "problem_statement": str(description or ""),
+                        "requested_profile": profile,
+                        "agent_capabilities": self._get_agent_capabilities(),
+                    }
                 
                 task_dict["params"] = task_params
                 
                 return await self._cog.execute_async(
                     agent_id=self.agent_id,
-                    cog_type=CognitiveType.PROBLEM_SOLVING,
+                    cog_type=cog_type,  # Uses CHAT or PROBLEM_SOLVING
                     decision_kind=decision_kind,
                     task=task_dict,
                 )
@@ -296,22 +366,38 @@ class GeneralQueryTool:
             normalized = self._normalize_cog_v2_response(cog_response)
             if normalized:
                 payload, metadata = normalized
-                result = {
-                    "query_type": (
-                        "complex_cognitive_query"
-                        if profile == "deep"
-                        else "fast_cognitive_query"
-                    ),
-                    "query": description,
-                    "thought_process": payload.get("thought", ""),
-                    "plan": payload.get("solution_steps", []),
-                    "formatted": self._extract_formatted(payload, description),
-                    "description": description,
-                    "meta": metadata,
-                    "profile_used": profile,
-                }
+                
+                # Handle chat vs query response formatting
+                if is_conversational:
+                    # CHAT RESPONSE: Extract response and confidence
+                    result = {
+                        "query_type": "agent_chat",
+                        "message": description,
+                        "response": payload.get("response", ""),
+                        "confidence": payload.get("confidence") or payload.get("confidence_score", 0.0),
+                        "conversation_history": conversation_history or [],
+                        "meta": metadata,
+                        "profile_used": profile,
+                    }
+                else:
+                    # QUERY RESPONSE: Extract thought process and plan
+                    result = {
+                        "query_type": (
+                            "complex_cognitive_query"
+                            if profile == "deep"
+                            else "fast_cognitive_query"
+                        ),
+                        "query": description,
+                        "thought_process": payload.get("thought", ""),
+                        "plan": payload.get("solution_steps", []),
+                        "formatted": self._extract_formatted(payload, description),
+                        "description": description,
+                        "meta": metadata,
+                        "profile_used": profile,
+                    }
+                
                 logger.info(
-                    f"✅ Agent {self.agent_id} cognitive service completed with profile={profile}"
+                    f"✅ Agent {self.agent_id} cognitive service completed (mode={mode_label}, profile={profile})"
                 )
                 return {
                     "agent_id": self.agent_id,
@@ -325,22 +411,23 @@ class GeneralQueryTool:
                 }
 
             logger.warning(
-                f"⚠️ Agent {self.agent_id} cognitive service returned unusable response (profile={profile}), falling back"
+                f"⚠️ Agent {self.agent_id} cognitive service returned unusable response (mode={mode_label}, profile={profile}), falling back"
             )
         except Exception as e:
             import traceback
 
             logger.warning(
-                f"⚠️ Agent {self.agent_id} cognitive service call failed (profile={profile}): {e}"
+                f"⚠️ Agent {self.agent_id} cognitive service call failed (mode={mode_label}, profile={profile}): {e}"
             )
             logger.debug("Traceback:\n%s", traceback.format_exc())
 
         # Fallback Error
         err_blob = {
-            "query_type": "cognitive_query_failed",
+            "query_type": "cognitive_query_failed" if not is_conversational else "chat_failed",
             "description": description,
             "intended_profile": profile,
             "error": "cognitive service failure or unusable response",
+            "mode": mode_label,
         }
         return {
             "agent_id": self.agent_id,
@@ -373,6 +460,7 @@ async def register_query_tools(
     mfb_client: Optional[Any] = None,
     in_flight_tracker: Optional[Dict[str, asyncio.Task]] = None,
     in_flight_lock: Optional[asyncio.Lock] = None,
+    cognitive_client: Optional[Any] = None,  # Optional explicit cognitive client override
 ) -> None:
     """
     Register all query tools with the ToolManager.
@@ -400,12 +488,17 @@ async def register_query_tools(
     mw_manager = tool_manager.mw_manager
     ltm_manager = tool_manager.ltm_manager
 
-    # Note: cognitive_client is different from mcp_client (MCP service vs Cognitive service)
-    # For now, we use mcp_client, but this may need to be updated if ToolManager
-    # should store cognitive_client separately. Since cognitive_client is agent-specific
-    # (from agent.cog.client), it may remain as a parameter.
-    # TODO: Consider adding cognitive_client to ToolManager if it should be shared
-    cognitive_client = tool_manager._mcp_client
+    # Use cognitive_client: explicit parameter > ToolManager.cognitive_client > None
+    # cognitive_client is different from mcp_client (Cognitive service vs MCP service)
+    # ToolManager stores cognitive_client separately from _mcp_client
+    if cognitive_client is None:
+        cognitive_client = getattr(tool_manager, "cognitive_client", None)
+    
+    if cognitive_client is None:
+        logger.warning(
+            f"⚠️ Agent {agent_id}: No cognitive_client available. "
+            "GeneralQueryTool will operate in degraded mode (no cognitive service calls)."
+        )
 
     # Register FindKnowledgeTool first (it's a dependency)
     find_knowledge_tool = FindKnowledgeTool(mw_manager, ltm_manager, agent_id)

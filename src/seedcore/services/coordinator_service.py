@@ -10,9 +10,10 @@ import asyncio
 import inspect
 import json
 import os
+import random
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -25,7 +26,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from ..ops.metrics import MetricsTracker
+    pass
 
 # ---------------------------------------------------------------------------
 # 2. Third-Party Imports
@@ -45,22 +46,19 @@ try:
 except ImportError:  # pragma: no cover
     TaskMetadataRepository = None  # type: ignore
 
-from ..coordinator.core.execute import (
-    ExecutionConfig,
-    HGNNConfig,
-    RouteConfig,
-    route_and_execute as execute_route_and_execute,
-)
 from ..coordinator.core.plan import persist_and_register_dependencies
 from ..coordinator.core.policies import (
-    SurpriseComputer,
     compute_drift_score,
     create_ocps_valve,
-    get_current_energy_state,
+    SurpriseComputer,
+)
+from ..coordinator.core.execute import (
+    route_and_execute as core_route_and_execute,
+    RouteConfig,
+    ExecutionConfig,
 )
 from ..coordinator.core.routing import (
     RouteCache,
-    bulk_resolve_routes_cached,
     resolve_route_cached_async,
     static_route_fallback,
 )
@@ -77,7 +75,6 @@ from ..coordinator.utils import (
     sync_task_identity,
     coerce_task_payload,
     # Extraction
-    extract_agent_id,
     extract_decision,
     extract_proto_plan,
     # Normalization
@@ -94,36 +91,51 @@ from ..serve.ml_client import MLServiceClient
 from ..serve.organism_client import OrganismServiceClient
 from ..utils.ray_utils import COG, ML, ORG  # Used for constants
 from ..database import get_async_pg_session_factory
-from ..logging_setup import ensure_serve_logger, setup_logging
 from ..models import Task, TaskPayload
 from ..models.cognitive import CognitiveType, DecisionKind
 from ..models.result_schema import create_error_result
+from ..ops.metrics import get_global_metrics_tracker
 from ..ops.eventizer.eventizer_features import (
     features_from_payload as default_features_from_payload,
 )
-from ..ops.eventizer.fact_dao import FactDAO
-from ..ops.metrics import get_global_metrics_tracker
 from ..ops.pkg.manager import get_global_pkg_manager
 
 
 # ---------------------------------------------------------------------------
-# 4. Constants
+# 4. Service-Level Setup
+# ---------------------------------------------------------------------------
+from ..logging_setup import ensure_serve_logger, setup_logging
+
+setup_logging(app_name="seedcore.coordinator_service.driver")
+logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
+
+# ---------------------------------------------------------------------------
+# 5. Constants
 # ---------------------------------------------------------------------------
 # NOTE: Default values here should match those defined in coordinator_entrypoint.py
 # The entrypoint sets these environment variables before importing this module,
 # but these defaults ensure consistent behavior if env vars are not set.
+#
+# Constants defined in coordinator_entrypoint.py env_vars dict:
+# - SEEDCORE_API_URL, SEEDCORE_API_TIMEOUT
+# - ORCH_HTTP_TIMEOUT, ML_SERVICE_TIMEOUT, COGNITIVE_SERVICE_TIMEOUT, ORGANISM_SERVICE_TIMEOUT
+# - SERVE_CALL_TIMEOUT_S
+# - TUNE_SPACE_TYPE, TUNE_CONFIG_TYPE, TUNE_EXPERIMENT_PREFIX
+#
+# Constants NOT in entrypoint (set via rayservice.yaml/env.example):
+# - REDIS_URL, FAST_PATH_LATENCY_SLO_MS, MAX_PLAN_STEPS, COGNITIVE_MAX_INFLIGHT, PREDICATES_CONFIG_PATH
 
 # --- Timeouts ---
-ORCH_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10.0"))
-ML_TIMEOUT = float(os.getenv("ML_SERVICE_TIMEOUT", "8.0"))
-COG_TIMEOUT = float(os.getenv("COGNITIVE_SERVICE_TIMEOUT", "15.0"))
-ORG_TIMEOUT = float(os.getenv("ORGANISM_SERVICE_TIMEOUT", "5.0"))
-SEEDCORE_API_TIMEOUT = float(os.getenv("SEEDCORE_API_TIMEOUT", "5.0"))
-CALL_TIMEOUT_S = int(os.getenv("SERVE_CALL_TIMEOUT_S", "120"))
+ORCH_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10.0"))  # Set in entrypoint
+ML_TIMEOUT = float(os.getenv("ML_SERVICE_TIMEOUT", "8.0"))  # Set in entrypoint
+COG_TIMEOUT = float(os.getenv("COGNITIVE_SERVICE_TIMEOUT", "15.0"))  # Set in entrypoint
+ORG_TIMEOUT = float(os.getenv("ORGANISM_SERVICE_TIMEOUT", "5.0"))  # Set in entrypoint
+SEEDCORE_API_TIMEOUT = float(os.getenv("SEEDCORE_API_TIMEOUT", "5.0"))  # Set in entrypoint
+CALL_TIMEOUT_S = int(os.getenv("SERVE_CALL_TIMEOUT_S", "120"))  # Set in entrypoint
 
 # --- Service URLs ---
-SEEDCORE_API_URL = os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+SEEDCORE_API_URL = os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002")  # Set in entrypoint
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")  # Set in rayservice.yaml/env.example
 
 # --- Ray Gateway URLs (derived from imported constants) ---
 ORG_URL = ORG    # Alias for clarity
@@ -132,29 +144,15 @@ COG_URL = COG  # Alias for clarity
 
 # --- Feature & Tuning Configuration ---
 # NOTE: Defaults should match coordinator_entrypoint.py env_vars dictionary
-FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
-MAX_PLAN_STEPS = int(os.getenv("MAX_PLAN_STEPS", "16"))
-COGNITIVE_MAX_INFLIGHT = int(os.getenv("COGNITIVE_MAX_INFLIGHT", "64"))
+FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))  # Set in rayservice.yaml/env.example
+MAX_PLAN_STEPS = int(os.getenv("MAX_PLAN_STEPS", "16"))  # Set in rayservice.yaml/env.example
+COGNITIVE_MAX_INFLIGHT = int(os.getenv("COGNITIVE_MAX_INFLIGHT", "64"))  # Set in rayservice.yaml/env.example
 PREDICATES_CONFIG_PATH = os.getenv(
     "PREDICATES_CONFIG_PATH", "/app/config/predicates.yaml"
-)
-TUNE_SPACE_TYPE = os.getenv("TUNE_SPACE_TYPE", "basic")
-TUNE_CONFIG_TYPE = os.getenv("TUNE_CONFIG_TYPE", "fast")
-TUNE_EXPERIMENT_PREFIX = os.getenv("TUNE_EXPERIMENT_PREFIX", "coordinator-tune")
-
-# ---------------------------------------------------------------------------
-# 5. Service-Level Setup
-# ---------------------------------------------------------------------------
-
-setup_logging(app_name="seedcore.coordinator_service.driver")
-setup_logging(app_name="seedcore.coordinator_service.driver")
-logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
-
-# Log derived gateway URLs for debugging
-logger.info("🔗 Coordinator using gateway URLs:")
-logger.info(f"   ML_URL: {ML_URL}")
-logger.info(f"   COG_URL: {COG_URL}")
-logger.info(f"   ORG_URL: {ORG_URL}")
+)  # Set in rayservice.yaml/env.example
+TUNE_SPACE_TYPE = os.getenv("TUNE_SPACE_TYPE", "basic")  # Set in entrypoint
+TUNE_CONFIG_TYPE = os.getenv("TUNE_CONFIG_TYPE", "fast")  # Set in entrypoint
+TUNE_EXPERIMENT_PREFIX = os.getenv("TUNE_EXPERIMENT_PREFIX", "coordinator-tune")  # Set in entrypoint
 
 # ---------------------------------------------------------------------------
 # 6. Helper Functions
@@ -206,219 +204,10 @@ def _corr_headers(target: str, cid: str) -> Dict[str, str]:
 # Coordination primitives (OCPS, Surprise, drift, energy) are now imported from coordinator.core.policies
 # Route cache structures are now imported from coordinator.core.routing
 
-
-# ---------- Config Builders (for dependency injection) ----------
-def build_route_config(
-    router: "CoordinatorCore",
-) -> RouteConfig:
-    """Build RouteConfig from CoordinatorCore instance."""
-    async def evaluate_pkg_func(
-        tags: Sequence[str],
-        signals: Mapping[str, Any],
-        context: Mapping[str, Any] | None,
-        timeout_s: int,
-    ) -> dict[str, Any]:
-        """PKG evaluation adapter."""
-        pkg_mgr = get_global_pkg_manager()
-        evaluator = pkg_mgr and pkg_mgr.get_active_evaluator()
-        if not evaluator:
-            raise RuntimeError("PKG evaluator not available")
-        
-        res = evaluator.evaluate({
-            "tags": list(tags),
-            "signals": signals,
-            "context": context or {},
-        })
-        if not isinstance(res, dict):
-            raise ValueError("Invalid PKG result type")
-        
-        return {
-            "tasks": res.get("subtasks", []),
-            "edges": res.get("dag", []),
-            "version": res.get("snapshot") or evaluator.version,
-        }
-    
-    return RouteConfig(
-        surprise_computer=router.surprise,
-        tau_fast_exit=router.tau_fast_exit,
-        tau_plan_exit=router.tau_plan_exit,
-        evaluate_pkg_func=evaluate_pkg_func,
-        ood_to01=router.ood_to01,
-        pkg_timeout_s=router.timeout_s,
-    )
-
-
-def build_execution_config(
-    coordinator: "Coordinator",
-    metrics: Any,
-    cid: str,
-) -> ExecutionConfig:
-    """Build ExecutionConfig from Coordinator instance."""
-    async def organism_execute(
-        organ_id: str,
-        task_dict: dict[str, Any],
-        timeout: float,
-        cid_local: str,
-    ) -> dict[str, Any]:
-        """Wrapper to call Coordinator's organism execution."""
-        payload = {
-            "organ_id": organ_id,
-            "task": task_dict,
-            "organ_timeout_s": timeout,
-        }
-        client = getattr(coordinator, "organism_client", None)
-        if client is None:
-            raise RuntimeError("OrganismServiceClient is not initialized on coordinator")
-        res = await client.post(
-            "/execute-on-organ",
-            json=payload,
-            headers=_corr_headers("organism", cid_local),
-            timeout=ORG_TIMEOUT,
-        )
-        res.setdefault("organ_id", organ_id)
-        return res
-    
-    return ExecutionConfig(
-        normalize_task_dict=coordinator._normalize_task_dict,
-        extract_agent_id=coordinator._extract_agent_id,
-        compute_drift_score=coordinator._compute_drift_score,
-        organism_execute=organism_execute,
-        graph_task_repo=coordinator.graph_task_repo,
-        ml_client=coordinator.ml_client,
-        predicate_router=coordinator.predicate_router,
-        metrics=metrics,
-        cid=cid,
-        resolve_route_cached=coordinator._resolve_route_cached,
-        static_route_fallback=coordinator._static_route_fallback,
-        normalize_type=coordinator._normalize,
-        normalize_domain=coordinator._norm_domain,
-    )
-
-
-def build_hgnn_config(
-    coordinator: "Coordinator",
-) -> Optional[HGNNConfig]:
-    """Build HGNNConfig from Coordinator instance if HGNN methods are available."""
-    if not getattr(coordinator, "_hgnn_decompose", None):
-        return None
-    
-    # Bind instance methods to create callables with correct signatures
-    async def hgnn_decompose(task: Any) -> list[dict[str, Any]]:
-        return await coordinator._hgnn_decompose(task)
-    
-    async def bulk_resolve_func(steps: list[dict[str, Any]], cid: str) -> dict[int, str]:
-        return await coordinator._bulk_resolve_routes_cached(steps, cid)
-    
-    async def persist_plan_func(task: Any, plan: list[dict[str, Any]], root_db_id: Any | None) -> None:
-        await coordinator._persist_plan_subtasks(task, plan, root_db_id=root_db_id)
-    
-    return HGNNConfig(
-        hgnn_decompose=hgnn_decompose,
-        bulk_resolve_func=bulk_resolve_func,
-        persist_plan_func=persist_plan_func,
-    )
-
-
-# ---------- CoordinatorCore: unified route_and_execute ----------
-class CoordinatorCore:
-    """
-    Hot-path router logic with Surprise Score S(T), PKG evaluation with timeouts,
-    and unified result schema suitable for persistence into tasks.result.
-    
-    Routing Contract:
-    - Computes 6-signal Surprise Score S(T) with OCPS-correct x₂ mapping
-    - Evaluates PKG with strict timeout; falls back to deterministic rules
-    - Returns unified result schema: {success, kind, payload}
-    - Supports hysteresis to prevent decision_kind flapping
-    
-    Environment Variables:
-    - SURPRISE_WEIGHTS: Comma-separated weights for x1..x6 (default: 0.25,0.20,0.15,0.20,0.10,0.10)
-    - SURPRISE_TAU_FAST: Fast path threshold (default: 0.35)
-    - SURPRISE_TAU_PLAN: Planner threshold (default: 0.60)
-    - SURPRISE_TAU_FAST_EXIT: Fast path exit threshold for hysteresis (default: 0.38)
-    - SURPRISE_TAU_PLAN_EXIT: Planner exit threshold for hysteresis (default: 0.57)
-    - SURPRISE_NORMALIZE_MODE: Feature normalization mode - "simple" (clamp) or "softmax" (probabilistic) (default: "simple")
-    - SERVE_CALL_TIMEOUT_S: PKG evaluation timeout (default: 2)
-    """
-    def __init__(
-        self,
-        ood_to01: Optional[Callable[[float], float]] = None,
-        surprise_weights: Optional[Sequence[float]] = None,
-        tau_fast: Optional[float] = None,
-        tau_plan: Optional[float] = None,
-        call_timeout_s: int = 2,
-        metrics_tracker: Optional["MetricsTracker"] = None,
-    ):
-        self.ood_to01 = ood_to01
-        self.timeout_s = int(os.getenv("SERVE_CALL_TIMEOUT_S", str(call_timeout_s)))
-        self.metrics = metrics_tracker
-        
-        # SurpriseComputer handles weight parsing internally from environment
-        # Parse thresholds with safe defaults
-        tau_fast_val = tau_fast or float(os.getenv("SURPRISE_TAU_FAST", "0.35"))
-        tau_plan_val = tau_plan or float(os.getenv("SURPRISE_TAU_PLAN", "0.60"))
-        
-        # Parse hysteresis thresholds
-        self.tau_fast_exit = float(os.getenv("SURPRISE_TAU_FAST_EXIT", str(tau_fast_val + 0.03)))
-        self.tau_plan_exit = float(os.getenv("SURPRISE_TAU_PLAN_EXIT", str(tau_plan_val - 0.03)))
-        
-        self.surprise = SurpriseComputer(weights=surprise_weights, tau_fast=tau_fast_val, tau_plan=tau_plan_val)
-        
-        # PKG is now managed by the global PKGManager
-        # No need for local initialization here
-
-    async def route_and_execute(
-        self,
-        task: "TaskPayload",
-        *,
-        fact_dao: Optional[FactDAO] = None,
-        eventizer_helper: Optional[Callable[[Any], Any]] = None,
-        coordinator_instance: Any,
-        correlation_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Adapter wrapper that wires coordinator dependencies into execute.py's
-        unified route_and_execute() function.
-        
-        This method only handles dependency binding - all orchestration logic
-        (routing decisions, PKG evaluation, execution flow) is handled by execute.py.
-        """
-        if not coordinator_instance:
-            raise ValueError("coordinator_instance is required")
-        
-        # Generate correlation ID
-        cid = correlation_id or str(uuid.uuid4())
-        
-        # Build configs using helper functions
-        routing_config = build_route_config(self)
-        execution_config = build_execution_config(coordinator_instance, self.metrics, cid)
-        hgnn_config = build_hgnn_config(coordinator_instance)
-        
-        # Delegate everything to core execute.py
-        return await execute_route_and_execute(
-            task=task,
-            fact_dao=fact_dao,
-            eventizer_helper=eventizer_helper or default_features_from_payload,
-            routing_config=routing_config,
-            execution_config=execution_config,
-            hgnn_config=hgnn_config,
-        )
-
 # ---------- FastAPI/Serve ----------
 # Note: route_prefix is already set in rayservice.yaml as /pipeline
 # So we use empty string here to avoid double prefixing
 router_prefix = ""
-
-class ASGIWrapper:
-    """Minimal ASGI adapter compatible with older Ray Serve versions."""
-
-    def __init__(self, app: FastAPI):
-        self.app = app
-
-    async def __call__(self, scope: dict[str, Any], receive: Callable[[], Awaitable[Any]], send: Callable[[dict[str, Any]], Awaitable[None]]):
-        if scope.get("type") != "http":
-            raise RuntimeError(f"Unsupported scope type: {scope.get('type')}")
-        await self.app(scope, receive, send)
 
 @serve.deployment(name="Coordinator")
 class Coordinator:
@@ -563,70 +352,121 @@ class Coordinator:
         self._background_tasks_started = False
         self._warmup_started = False
         
-        # Wire core router with configurable thresholds
-        try:
-            self.core = CoordinatorCore(metrics_tracker=self.metrics)
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize CoordinatorCore, using defaults: {e}")
-            self.core = CoordinatorCore(metrics_tracker=self.metrics)
+        # Initialize Policy Logic directly (formerly inside CoordinatorCore)
+        # Parse thresholds with safe defaults
+        tau_fast = float(os.getenv("SURPRISE_TAU_FAST", "0.35"))
+        tau_plan = float(os.getenv("SURPRISE_TAU_PLAN", "0.60"))
+        
+        # Initialize the Policy Engine
+        self.surprise_computer = SurpriseComputer(
+            weights=None,  # loads from env
+            tau_fast=tau_fast,
+            tau_plan=tau_plan
+        )
+        
+        # Hysteresis settings
+        self.tau_fast_exit = float(os.getenv("SURPRISE_TAU_FAST_EXIT", str(tau_fast + 0.03)))
+        self.tau_plan_exit = float(os.getenv("SURPRISE_TAU_PLAN_EXIT", str(tau_plan - 0.03)))
+        
+        # OOD mapping function (can be overridden)
+        self.ood_to01 = None  # Default to None, can be set if needed
+        self.timeout_s = int(os.getenv("SERVE_CALL_TIMEOUT_S", "2"))
 
         self._register_routes()
-        self.asgi_app = ASGIWrapper(self.app)
         logger.info("✅ Coordinator initialized")
 
     def _register_routes(self) -> None:
+        """
+        Minimalist Route Registration.
+        
+        One Business Endpoint + Mandatory Ops Endpoints.
+        
+        Business Endpoints (Public API):
+        - /route-and-execute: Unified entrypoint for all business logic
+          Uses TaskPayload.type to route internally:
+          * type: "anomaly_triage" → Anomaly triage pipeline
+          * type: "ml_tune_callback" → ML tuning callback handler
+          * Other types → Standard routing & execution
+        
+        Operational Endpoints (Hidden from Schema):
+        - /health: Kubernetes liveness probe
+        - /readyz: Kubernetes readiness probe
+        - /metrics: Prometheus metrics
+        - /predicates/*: Predicate system management (admin)
+        """
+        # --- 1. The ONE Business Endpoint ---
         self.app.add_api_route(
             f"{router_prefix}/route-and-execute",
             self.route_and_execute,
             methods=["POST"],
+            summary="Unified Entrypoint for Routing, Triage, and Callbacks",
+            description=(
+                "Universal interface for all Coordinator operations. "
+                "Uses TaskPayload.type to route internally:\n"
+                "- type: 'anomaly_triage' → Anomaly triage pipeline\n"
+                "- type: 'ml_tune_callback' → ML tuning callback handler\n"
+                "- Other types → Standard routing & execution"
+            ),
+            tags=["Execution"],
         )
+        
+        # --- 2. Mandatory Ops Endpoints (Keep these hidden but active!) ---
+        # Kubernetes needs these to know if your service is alive.
+        # If you remove them, your pod will crash loop.
         self.app.add_api_route(
             "/health",
             self.health,
             methods=["GET"],
-        )
-        self.app.add_api_route(
-            f"{router_prefix}/metrics",
-            self.get_metrics,
-            methods=["GET"],
+            include_in_schema=False,  # Hide from OpenAPI docs
         )
         self.app.add_api_route(
             "/readyz",
             self.ready,
             methods=["GET"],
+            include_in_schema=False,  # Hide from OpenAPI docs
         )
+        
+        # Prometheus needs this for graphs.
+        self.app.add_api_route(
+            f"{router_prefix}/metrics",
+            self.get_metrics,
+            methods=["GET"],
+            include_in_schema=False,  # Hide from OpenAPI docs
+        )
+        
+        # Predicate system management (admin endpoints)
         self.app.add_api_route(
             f"{router_prefix}/predicates/status",
             self.get_predicate_status,
             methods=["GET"],
+            include_in_schema=False,  # Hide from OpenAPI docs
         )
         self.app.add_api_route(
             f"{router_prefix}/predicates/config",
             self.get_predicate_config,
             methods=["GET"],
+            include_in_schema=False,  # Hide from OpenAPI docs
         )
         self.app.add_api_route(
             f"{router_prefix}/predicates/reload",
             self.reload_predicates,
             methods=["POST"],
-        )
-        self.app.add_api_route(
-            f"{router_prefix}/ml/tune/callback",
-            self.tune_callback,
-            methods=["POST"],
-        )
-        self.app.add_api_route(
-            f"{router_prefix}/anomaly-triage",
-            self.anomaly_triage,
-            methods=["POST"],
-            response_model=AnomalyTriageResponse,
+            include_in_schema=False,  # Hide from OpenAPI docs
         )
 
     async def __call__(self, request: Request):
+        """
+        ASGI callable for Ray Serve.
+        
+        FastAPI apps are natively ASGI-compatible, so we can call them directly
+        without a wrapper. This removes unnecessary overhead and enables full
+        ASGI feature support (e.g., WebSockets).
+        """
         send = getattr(request, "send", None) or getattr(request, "_send", None)
         if send is None:
             raise RuntimeError("Request object does not provide an ASGI send callable")
-        return await self.asgi_app(request.scope, request.receive, send)
+        # Direct call to FastAPI app (no wrapper needed)
+        await self.app(request.scope, request.receive, send)
 
     async def _ensure_background_tasks_started(self):
         """Ensure background tasks are started (called on first request)."""
@@ -678,7 +518,6 @@ class Coordinator:
         try:
             # Staggered warmup with jitter to prevent thundering herd
             # Each replica waits a random amount of time before warming up
-            import random
             base_delay = 2.0  # Base delay in seconds
             jitter = random.uniform(0, 3.0)  # Random jitter 0-3 seconds
             total_delay = base_delay + jitter
@@ -740,11 +579,6 @@ class Coordinator:
             self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "warmup_exception")
             # Don't fail startup if warmup fails - drift detection will use fallback
             logger.info("ℹ️ Drift detection will use fallback mode until ML service is available")
-
-    def _get_current_energy_state(self, agent_id: str) -> Optional[float]:
-        """Get current energy state for an agent."""
-        # Use the centralized energy state function from policies
-        return get_current_energy_state(agent_id)
 
     async def _task_outbox_flusher_loop(self) -> None:
         """Periodically flush task_outbox nim_task_embed events to the LTM worker with backoff.
@@ -834,50 +668,12 @@ class Coordinator:
         """Fallback routing using static rules when organism is unavailable."""
         return static_route_fallback(task_type, domain)
 
-    async def _resolve_route_cached(self, task_type: str, domain: Optional[str], *,
-                                   preferred_logical_id: Optional[str] = None,
-                                   cid: Optional[str] = None) -> str:
-        """Resolve route with caching and single-flight."""
-        logical_id = await resolve_route_cached_async(
-            task_type=task_type,
-            domain=domain,
-            route_cache=self.route_cache,
-            normalize_func=self._normalize,
-            static_route_fallback_func=self._static_route_fallback,
-            organism_client=self.organism_client,
-            routing_remote_enabled=self.routing_remote_enabled,
-            routing_remote_types=self.routing_remote_types,
-            preferred_logical_id=preferred_logical_id,
-            cid=cid,
-            metrics=self.metrics,
-            last_seen_epoch=self._last_seen_epoch,
-        )
-        # Update epoch if we got one from the response (handled internally in routing.py)
-        # For now, we track it via the cache entry, but we could enhance resolve_route_cached_async
-        # to return the epoch if needed
-        return logical_id
-
-    async def _bulk_resolve_routes_cached(self, steps: List[Dict[str, Any]], cid: str) -> Dict[int, str]:
+    async def _bulk_resolve_routes_cached(self, steps, cid):
         """
-        Given HGNN steps (each has step['task'] with type/domain),
-        return a mapping: { step_index -> logical_id }.
-        De-duplicates (type, domain) pairs to minimize network calls.
+        Coordinator no longer resolves microscopic routing.
+        Returns empty organ hints; organism decides actual routing.
         """
-        mapping, new_epoch = await bulk_resolve_routes_cached(
-            steps=steps,
-            cid=cid,
-            route_cache=self.route_cache,
-            normalize_func=self._normalize,
-            normalize_domain_func=self._norm_domain,
-            static_route_fallback_func=self._static_route_fallback,
-            organism_client=self.organism_client,
-            metrics=self.metrics,
-            last_seen_epoch=self._last_seen_epoch,
-        )
-        # Update epoch if we got a new one
-        if new_epoch:
-            self._last_seen_epoch = new_epoch
-        return mapping
+        return {idx: None for idx, _ in enumerate(steps)}
 
     def _persist_job_state(self, job_id: str, state: Dict[str, Any]):
         """Persist job state using safe storage."""
@@ -934,104 +730,7 @@ class Coordinator:
     def _sync_task_identity(self, task_like: Any, task_id: str) -> None:
         sync_task_identity(task_like, task_id)
 
-    def _extract_agent_id(self, task_dict: Dict[str, Any]) -> Optional[str]:
-        return extract_agent_id(task_dict)
 
-    async def _hgnn_decompose(self, task: Task) -> List[Dict[str, Any]]:
-        """
-        HGNN-based task decomposition using the unified CognitiveServiceClient.
-
-        This function handles the "ESCALATED" (hgnn) path. It calls the
-        CognitiveCore with the 'PROBLEM_SOLVING' cog_type to get a
-        multi-step plan (solution_steps) for decomposition.
-        """
-        try:
-            # --- Step 1: Cognitive service health check ---
-            # (This uses the new client's built-in health check)
-            try:
-                if not await self.cognitive_client.is_healthy():
-                    logger.warning("[HGNN] Cognitive service unavailable, using fallback")
-                    return self._fallback_plan(self._convert_task_to_dict(task))
-            except Exception as e:
-                logger.warning(f"[HGNN] Health check failed: {e}")
-                return self._fallback_plan(self._convert_task_to_dict(task))
-
-            # --- Step 2: Convert Task to TaskPayload for unified interface ---
-            # Use TaskPayload.from_db to construct from Task model
-            task_dict = self._convert_task_to_dict(task)
-            task_payload = TaskPayload.from_db(task_dict)
-            
-            # Inject HGNN-specific metadata into params
-            params = dict(task_payload.params or {})
-            hgnn_meta = {
-                "task_id": task.id,
-                # This is the "evolved meaning" from Stage 1 (HGNN)
-                "hgnn_embedding": task.features,
-                "history_ids": task.history_ids,
-                "start_nodes": {
-                    "facts": getattr(task, "start_fact_ids", []),
-                    "artifacts": getattr(task, "start_artifact_ids", []),
-                    "models": getattr(task, "start_model_ids", []),
-                    "capabilities": getattr(task, "start_capability_ids", []),
-                    "policies": getattr(task, "start_policy_ids", []),
-                    "services": getattr(task, "start_service_ids", []),
-                    "skills": getattr(task, "start_skill_ids", []),
-                },
-            }
-            params["hgnn"] = hgnn_meta
-            
-            # Update task_payload with enriched params
-            task_dict = task_payload.model_dump()
-            task_dict["params"] = params
-            task_for_cognitive = task_dict
-
-            # --- Step 3: Call CognitiveCore via the new unified client ---
-            # This is the single, blocking call that waits for the full plan.
-            # The old, complex logic for 'immediate' results is no longer needed.
-            response = await self.cognitive_client.execute_async(
-                agent_id=f"hgnn_planner_{task.id}",
-                cog_type=CognitiveType.PROBLEM_SOLVING,
-                decision_kind=DecisionKind.ESCALATED,
-                task=task_for_cognitive,
-                timeout=COG_TIMEOUT,
-            )
-
-            # --- Step 4: Handle Cognitive response ---
-            if not response.get("success"):
-                logger.warning(f"[HGNN] Cognitive service returned an error: {response.get('error')}")
-                return self._fallback_plan(self._convert_task_to_dict(task))
-
-            result = response.get("result", {})
-
-            # We only look for 'solution_steps', as this is now the
-            # canonical key guaranteed by the CognitiveCore and our signatures.
-            steps = result.get("solution_steps") or []
-            meta = result.get("meta", {})
-
-            logger.info(f"[HGNN] Received deep HGNN decomposition: {len(steps)} steps")
-
-            # --- Step 5: Handle Cognitive metadata ---
-            if meta:
-                # (Your existing metadata handling logic)
-                escalate_hint = meta.get("escalate_hint")
-                if escalate_hint and hasattr(self, "predicate_router") and self.predicate_router:
-                    self.predicate_router.update_signals(escalate_hint=escalate_hint)
-
-                confidence = meta.get("confidence")
-                if confidence is not None:
-                    logger.info(f"[HGNN] Cognitive plan confidence: {confidence:.2f}")
-
-            # --- Step 6: Validate or fallback ---
-            validated_plan = self._validate_or_fallback(steps, self._convert_task_to_dict(task))
-            if validated_plan:
-                return validated_plan
-
-            logger.warning("[HGNN] Validation failed or empty plan; using fallback")
-            return self._fallback_plan(self._convert_task_to_dict(task))
-
-        except Exception as e:
-            logger.warning(f"[HGNN] Decomposition failed: {e}", exc_info=True)
-            return self._fallback_plan(self._convert_task_to_dict(task))
 
     def _convert_task_to_dict(self, task) -> Dict[str, Any]:
         """Convert task object to dictionary, handling TaskPayload and other types."""
@@ -1100,51 +799,6 @@ class Coordinator:
         """Legacy alias retained for compatibility with older coordinator tests."""
         return self._get_graph_repository()
 
-    async def _dispatch_hgnn(self, payload: TaskPayload, proto_plan: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Dispatch HGNN steps to the graph repository, recording partial failures.
-
-        Returns metadata of successfully dispatched tasks. Unsupported steps are skipped.
-        """
-        repo = self._get_graph_sql_repository()
-        dispatched: list[dict[str, Any]] = []
-        status = "ok"
-
-        if repo is None:
-            if getattr(self.metrics, "record_dispatch", None):
-                self.metrics.record_dispatch("hgnn", "err")
-            return {"graph_dispatch": {"graph_tasks": dispatched}}
-
-        steps = proto_plan.get("tasks", []) if isinstance(proto_plan, dict) else []
-        supported_types = {
-            "graph_embed",
-            "graph_rag_query",
-            "graph_fact_embed",
-            "graph_fact_query",
-            "graph_sync_nodes",
-        }
-
-        for step in steps:
-            if not isinstance(step, dict):
-                continue
-            step_type = (step.get("type") or "").strip().lower()
-            if step_type not in supported_types:
-                continue
-
-            params = step.get("params", {}) if isinstance(step.get("params"), dict) else {}
-            try:
-                task_id = await repo.create_task_async(payload, step_type, params)
-                dispatched.append({
-                    "type": step_type,
-                    "task_id": str(task_id),
-                })
-            except Exception:
-                status = "err"
-
-        if getattr(self.metrics, "record_dispatch", None):
-            self.metrics.record_dispatch("hgnn", status if dispatched else "err")
-
-        return {"graph_dispatch": {"graph_tasks": dispatched}}
 
     async def _persist_plan_subtasks(
         self,
@@ -1215,7 +869,7 @@ class Coordinator:
                 metrics.record_proto_plan_upsert("err")
 
     # Removed _dispatch_route_followup, _dispatch_planner, _dispatch_hgnn, and _get_graph_sql_repository
-    # These are no longer needed - follow-up dispatch is handled by execute.py via HGNNConfig
+    # These are no longer needed - follow-up dispatch is handled by the Service layer
 
     def _resolve_session_factory(self, repo: Optional[Any] = None):
         session_factory = getattr(self, "_session_factory", None)
@@ -1405,15 +1059,239 @@ class Coordinator:
         """Backward-compatible wrapper around route_and_execute."""
         return await self.route_and_execute(payload)
 
+    # ------------------------------------------------------------------
+    # Config Builders (Absorbed from coordinator_core.py)
+    # ------------------------------------------------------------------
+    
+    def _build_route_config(self) -> RouteConfig:
+        """Build RouteConfig from Coordinator instance."""
+        async def evaluate_pkg_func(
+            tags: Sequence[str],
+            signals: Mapping[str, Any],
+            context: Mapping[str, Any] | None,
+            timeout_s: int,
+        ) -> dict[str, Any]:
+            """PKG evaluation adapter."""
+            pkg_mgr = get_global_pkg_manager()
+            evaluator = pkg_mgr and pkg_mgr.get_active_evaluator()
+            if not evaluator:
+                raise RuntimeError("PKG evaluator not available")
+            
+            res = evaluator.evaluate({
+                "tags": list(tags),
+                "signals": signals,
+                "context": context or {},
+            })
+            if not isinstance(res, dict):
+                raise ValueError("Invalid PKG result type")
+            
+            return {
+                "tasks": res.get("subtasks", []),
+                "edges": res.get("dag", []),
+                "version": res.get("snapshot") or evaluator.version,
+            }
+        
+        return RouteConfig(
+            surprise_computer=self.surprise_computer,
+            tau_fast_exit=self.tau_fast_exit,
+            tau_plan_exit=self.tau_plan_exit,
+            evaluate_pkg_func=evaluate_pkg_func,
+            ood_to01=self.ood_to01,
+            pkg_timeout_s=self.timeout_s,
+        )
+
+    def _build_execution_config(self, cid: str) -> ExecutionConfig:
+        """
+        Builds the dependency injection container for the execution core.
+        Now resides directly in the Service tier (Tier-0).
+        """
+        
+        # Helper for tracing headers
+        def _corr_headers(target: str, correlation_id: str) -> Dict[str, str]:
+            return {
+                "Content-Type": "application/json",
+                "X-Service": "coordinator",
+                "X-Source-Service": "coordinator",
+                "X-Target-Service": target,
+                "X-Correlation-ID": correlation_id,
+            }
+        
+        # 1. The Execution Adapter (The "Muscle")
+        async def organism_execute(
+            organ_id: str,
+            task_dict: dict[str, Any],
+            timeout: float,
+            cid_local: str,
+        ) -> dict[str, Any]:
+            """
+            Delegates execution to the Organism Service via the Unified Endpoint.
+            The Organism Router (Tier-1) makes the final agent selection.
+            """
+            
+            # Inject the Coordinator's "Fast Path" decision as a Hint, not a Command.
+            # If organ_id is specific (e.g. "search_organ"), we suggest it.
+            # If organ_id is generic ("organism"), we let the router decide entirely.
+            # Make a copy to avoid mutating the original dict
+            task_dict = dict(task_dict)
+            if organ_id and organ_id not in ("organism", "random"):
+                task_dict.setdefault("params", {})
+                task_dict["params"].setdefault("routing", {})
+                task_dict["params"]["routing"]["target_organ_hint"] = organ_id
+            
+            try:
+                # Call the Unified Endpoint (/route-and-execute)
+                # This handles internal routing + agent execution in one hop.
+                res = await self.organism_client.post(
+                    "/route-and-execute",
+                    json={"task": task_dict},
+                    headers=_corr_headers("organism", cid_local),
+                    timeout=timeout,
+                )
+                
+                # Normalization for Coordinator Logic
+                # The Coordinator expects a flat result or specific structure.
+                # We ensure 'organ_id' is present so we know where it ran.
+                if isinstance(res, dict):
+                    result_data = res.get("result", {})
+                    
+                    # Extract where it actually ran (Tier-1 Decision)
+                    executed_organ = (
+                        res.get("routing", {}).get("router_decision", {}).get("organ_id")
+                        or result_data.get("routing", {}).get("router_decision", {}).get("organ_id")
+                        or result_data.get("organ_id")
+                        or organ_id
+                    )
+                    
+                    # Back-fill top level for metric tracking
+                    res.setdefault("organ_id", executed_organ)
+                    
+                    # Back-fill result level for downstream consumers
+                    if isinstance(result_data, dict):
+                        result_data.setdefault("organ_id", executed_organ)
+
+                return res
+                
+            except Exception as e:
+                # Graceful Failure: Return error dict, don't crash the Coordinator
+                logger.error(f"[Coord] Organism call failed (hint={organ_id}): {e}")
+                return {
+                    "success": False,
+                    "error": f"Organism call failed: {str(e)}",
+                    "organ_id": organ_id,
+                    "result": {}
+                }
+        
+        # 2. The Routing Adapter (The "Map")
+        async def resolve_route_cached(
+            task_type: str,
+            domain: str | None,
+            preferred: str | None,
+            cid_local: str,
+        ) -> str | None:
+            """
+            Wrapper for the routing logic. 
+            Uses the Coordinator's local cache and Predicate rules.
+            """
+            return await resolve_route_cached_async(
+                task_type=task_type,
+                domain=domain,
+                route_cache=self.route_cache,
+                normalize_func=self._normalize,
+                static_route_fallback_func=self._static_route_fallback,
+                organism_client=self.organism_client,
+                routing_remote_enabled=self.routing_remote_enabled,
+                routing_remote_types=self.routing_remote_types,
+                preferred_logical_id=preferred,
+                cid=cid_local,
+                metrics=self.metrics,
+                last_seen_epoch=self._last_seen_epoch,
+            )
+        
+        # 3. Persistence Adapters
+        async def persist_proto_plan_func(
+            repo: Optional[Any],
+            task_id: str,
+            decision_kind: Optional[str],
+            proto_plan: Optional[Dict[str, Any]],
+        ) -> None:
+            """Adapter for persisting proto-plans."""
+            await self._persist_proto_plan(repo, task_id, decision_kind, proto_plan)
+        
+        async def record_router_telemetry_func(
+            repo: Optional[Any],
+            task_id: str,
+            route_result: Dict[str, Any],
+        ) -> None:
+            """Adapter for recording router telemetry."""
+            await self._record_router_telemetry(repo, task_id, route_result)
+        
+        # 4. Assemble Config
+        return ExecutionConfig(
+            normalize_task_dict=normalize_task_dict,  # Use the imported utils function
+            compute_drift_score=self._compute_drift_score,
+            organism_execute=organism_execute,
+            graph_task_repo=self.graph_task_repo,
+            ml_client=self.ml_client,
+            predicate_router=self.predicate_router,
+            metrics=self.metrics,
+            cid=cid,
+            resolve_route_cached=resolve_route_cached,
+            static_route_fallback=self._static_route_fallback,
+            normalize_type=self._normalize,
+            normalize_domain=self._norm_domain,
+            # New dependencies for decision execution
+            cognitive_client=self.cognitive_client,
+            persist_proto_plan_func=persist_proto_plan_func,
+            record_router_telemetry_func=record_router_telemetry_func,
+            resolve_session_factory_func=self._resolve_session_factory,
+            fast_path_latency_slo_ms=self.fast_path_latency_slo_ms,
+        )
+
     async def route_and_execute(self, payload: Union[TaskPayload, Dict[str, Any]]):
         """
-        HTTP endpoint for route-and-execute. Wraps core.route_and_execute.
-        Accepts flexible dict and ensures TaskPayload has a task_id.
+        Universal Interface: Unified entrypoint for all Coordinator operations.
+        
+        Uses TaskPayload.type to route internally:
+        - type: "anomaly_triage" → Anomaly triage pipeline
+        - type: "ml_tune_callback" → ML tuning callback handler  
+        - Other types → Standard routing & execution
+        
+        Responsibilities:
+        1. Ingest: Persist incoming task to DB (System of Record)
+        2. Route: Type-based internal routing to appropriate handler
+        3. Delegate: Forward to appropriate service (Cognitive/Organism) based on decision
         """
         await self._ensure_background_tasks_started()
         try:
+            # 1. Coerce & Extract Type
             task_obj, task_dict = coerce_task_payload(payload)
-
+            task_type = task_dict.get("type") or getattr(task_obj, "type", None) or "unknown_task"
+            
+            # 2. Type-Based Routing (Business Logic Polymorphism)
+            # Handle special business endpoints via type field
+            if task_type == "anomaly_triage":
+                # Convert to AnomalyTriageRequest format for compatibility
+                params = task_dict.get("params", {})
+                anomaly_payload = AnomalyTriageRequest(
+                    agent_id=params.get("agent_id") or task_dict.get("agent_id", "unknown"),
+                    series=params.get("series") or task_dict.get("series", []),
+                    context=params.get("context") or task_dict.get("context", {}),
+                )
+                return await self._handle_anomaly_triage(anomaly_payload)
+            
+            elif task_type == "ml_tune_callback":
+                # Convert to TuneCallbackRequest format for compatibility
+                params = task_dict.get("params", {})
+                callback_payload = TuneCallbackRequest(
+                    job_id=params.get("job_id") or task_dict.get("job_id", ""),
+                    status=params.get("status") or task_dict.get("status", "unknown"),
+                    E_after=params.get("E_after") or task_dict.get("E_after"),
+                    gpu_seconds=params.get("gpu_seconds") or task_dict.get("gpu_seconds"),
+                    error=params.get("error") or task_dict.get("error"),
+                )
+                return await self._handle_tune_callback(callback_payload)
+            
+            # 3. Standard Routing & Execution (Default Path)
             # Extract correlation_id from request if present
             correlation_id = None
             if isinstance(payload, dict):
@@ -1421,7 +1299,11 @@ class Coordinator:
             correlation_id = correlation_id or task_dict.get("correlation_id")
             if not correlation_id and hasattr(task_obj, "correlation_id"):
                 correlation_id = getattr(task_obj, "correlation_id", None)  # type: ignore[attr-defined]
+            if not correlation_id:
+                correlation_id = uuid.uuid4().hex
 
+            # 4. PERSISTENCE (Keep this! This is the "Inbox")
+            # We use a local session to save the incoming request.
             repo = self.graph_task_repo or self._get_graph_repository()
             self.graph_task_repo = repo
 
@@ -1455,40 +1337,21 @@ class Coordinator:
                 )
                 raise HTTPException(status_code=503, detail="Failed to persist task metadata") from persist_exc
 
-            res = await _maybe_call(
-                self.core.route_and_execute,
-                task_obj,
-                correlation_id=correlation_id,
-                coordinator_instance=self,
+            # 5. Core Logic (Stateless)
+            # Build configs and call execute.route_and_execute directly
+            # All decision handling, execution, and persistence is now handled inside core_route_and_execute
+            route_config = self._build_route_config()
+            exec_config = self._build_execution_config(correlation_id)
+            
+            result = await core_route_and_execute(
+                task=task_obj,
+                routing_config=route_config,
+                execution_config=exec_config,
+                eventizer_helper=default_features_from_payload,
             )
             
-            # Persist proto-plan if present
-            decision_kind = self._extract_decision(res)
-            proto_plan = self._extract_proto_plan(res)
-            if proto_plan:
-                try:
-                    await self._persist_proto_plan(
-                        repo,
-                        task_obj.task_id,
-                        decision_kind,
-                        proto_plan,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "[Coordinator] Failed to persist proto-plan for %s: %s",
-                        task_obj.task_id,
-                        exc,
-                    )
-            
-            try:
-                await self._record_router_telemetry(repo, task_obj.task_id, res)
-            except Exception as exc:  # pragma: no cover - defensive logging, main result already returned
-                logger.warning(
-                    "[Coordinator] Unexpected error while recording router telemetry for %s: %s",
-                    task_obj.task_id,
-                    exc,
-                )
-            return res
+            # Return the result (which may be from Cognitive Service, Organism Service, or routing decision)
+            return result
         except HTTPException:
             raise
         except Exception as e:
@@ -1497,10 +1360,18 @@ class Coordinator:
 
     async def health(self):
         """Health check endpoint with PKG status."""
+        pkg_enabled = False
+        try:
+            pkg_mgr = get_global_pkg_manager()
+            evaluator = pkg_mgr and pkg_mgr.get_active_evaluator()
+            pkg_enabled = evaluator is not None
+        except Exception:
+            pass
+        
         response = {
             "status": "healthy",
             "coordinator": True,
-            "pkg": self.core.pkg_metadata if hasattr(self.core, 'pkg_metadata') else {"enabled": False}
+            "pkg": {"enabled": pkg_enabled}
         }
         return response
     
@@ -1573,36 +1444,39 @@ class Coordinator:
             logger.error(f"❌ Failed to reload predicate config: {e}")
             return {"success": False, "error": str(e)}
     
-    async def tune_callback(self, payload: TuneCallbackRequest):
-        """Callback endpoint for ML tuning job completion."""
+    async def _handle_tune_callback(self, payload: TuneCallbackRequest):
+        """
+        Callback endpoint for ML tuning job completion.
+        
+        Note: Energy tracking (E_before, Delta E) is now handled by the ML Service.
+        The Coordinator only tracks job status and correlation metadata.
+        """
         try:
             job_id = payload.job_id
             logger.info(f"[Coordinator] Received tuning callback for job {job_id}: {payload.status}")
             
-            # Get persisted job state
+            # Get persisted job state (for correlation metadata only)
             job_state = self._get_job_state(job_id)
             if not job_state:
                 logger.warning(f"No job state found for {job_id}")
                 return {"success": False, "error": "Job state not found"}
             
-            # Calculate ΔE_realized
-            if payload.status == "completed" and payload.E_after is not None:
-                E_before = job_state.get("E_before")
-                if E_before is not None:
-                    deltaE = payload.E_after - E_before
-                    
-                    # Record metrics
-                    self.predicate_router.metrics.record_deltaE_realized(
-                        deltaE=deltaE,
-                        gpu_seconds=payload.gpu_seconds or 0.0
+            # Handle job completion/failure
+            if payload.status == "completed":
+                # ML Service handles Delta E calculation and metrics recording
+                # Coordinator only updates job status
+                self.predicate_router.update_gpu_job_status(job_id, "completed", success=True)
+                
+                # Record metrics if Delta E is provided by ML Service
+                if payload.E_after is not None:
+                    # Note: Delta E calculation is handled by ML Service
+                    # We can still record GPU seconds for monitoring
+                    logger.info(
+                        f"[Coordinator] Job {job_id} completed: "
+                        f"E_after={payload.E_after:.4f}, GPU_seconds={payload.gpu_seconds}"
                     )
-                    
-                    # Update GPU job status
-                    self.predicate_router.update_gpu_job_status(job_id, "completed", success=True)
-                    
-                    logger.info(f"[Coordinator] Job {job_id} completed: ΔE={deltaE:.4f}, GPU_seconds={payload.gpu_seconds}")
                 else:
-                    logger.warning(f"No E_before found for job {job_id}")
+                    logger.info(f"[Coordinator] Job {job_id} completed: GPU_seconds={payload.gpu_seconds}")
             else:
                 # Job failed
                 self.predicate_router.update_gpu_job_status(job_id, "failed", success=False)
@@ -1617,7 +1491,7 @@ class Coordinator:
             logger.error(f"❌ Error processing tuning callback: {e}")
             return {"success": False, "error": str(e)}
 
-    async def anomaly_triage(self, payload: AnomalyTriageRequest):
+    async def _handle_anomaly_triage(self, payload: AnomalyTriageRequest):
         """
         Anomaly triage pipeline:
           1) Detect anomalies (ML)
@@ -1755,16 +1629,20 @@ class Coordinator:
 
         if mutation_decision.action in {"submit_tuning", "submit_retrain"}:
             try:
-                current_energy = self._get_current_energy_state(agent_id)
+                # Submit tuning job - ML Service will handle energy tracking
+                # The ML Service (StatusActor) is responsible for recording E_before
+                # and calculating Delta E when the job completes
                 tuning_job = await self.ml_client.submit_tuning_job({
                     "space_type": TUNE_SPACE_TYPE,
                     "config_type": TUNE_CONFIG_TYPE,
                     "experiment_name": f"{TUNE_EXPERIMENT_PREFIX}-{agent_id}-{cid}",
-                    "callback_url": f"{SEEDCORE_API_URL}/pipeline/ml/tune/callback",
+                    "callback_url": f"{SEEDCORE_API_URL}/pipeline/route-and-execute",
+                    "agent_id": agent_id,  # Pass agent_id so ML Service can track energy
                 })
-                if tuning_job.get("job_id") and current_energy is not None:
+                if tuning_job.get("job_id"):
+                    # Persist minimal job state (agent_id, timestamp) for callback correlation
+                    # Energy tracking (E_before, Delta E) is handled by ML Service
                     self._persist_job_state(tuning_job["job_id"], {
-                        "E_before": current_energy,
                         "agent_id": agent_id,
                         "submitted_at": time.time(),
                         "job_type": mutation_decision.action.replace("submit_", ""),

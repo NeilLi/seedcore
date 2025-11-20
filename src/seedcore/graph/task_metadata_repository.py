@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError, DataError
@@ -194,6 +194,63 @@ class TaskMetadataRepository:
             )
             raise
 
+    async def get_task_context(
+        self,
+        session: AsyncSession,
+        task_id: Union[str, uuid.UUID],
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch task context (params, history, graph neighbors) for cognitive processing.
+
+        Used by CognitiveCore for server-side hydration.
+
+        Args:
+            session: The AsyncSession to use for database operations.
+            task_id: The UUID or string ID of the task to fetch.
+
+        Returns:
+            Dictionary containing task data and dependencies, or None if task not found.
+        """
+        tid = self._coerce_task_id(task_id)
+
+        try:
+            # 1. Fetch Core Task Data
+            task_obj = await session.get(Task, tid)
+            if not task_obj:
+                return None
+
+            result = {
+                "task_id": str(task_obj.id),
+                "type": task_obj.type,
+                "description": task_obj.description,
+                "params": task_obj.params,
+                "domain": task_obj.domain,
+                "drift_score": task_obj.drift_score
+            }
+
+            # 2. Fetch Dependency Graph (Optional but useful for Context)
+            # "What tasks does this task depend on?" (History/Prerequisites)
+            # Query: Find all tasks where this task (src_task_id) depends on them (dst_task_id)
+            stmt = text("""
+                SELECT t.id, t.type, t.description 
+                FROM tasks t
+                JOIN task_depends_on_task dep ON t.id = dep.dst_task_id
+                WHERE dep.src_task_id = :tid
+            """)
+            deps_result = await session.execute(stmt, {"tid": tid})
+            result["dependencies"] = [
+                {"id": str(row.id), "type": row.type, "description": row.description}
+                for row in deps_result
+            ]
+
+            return result
+
+        except SQLAlchemyError as e:
+            logger.error(f"Failed to fetch task context for {tid}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error while fetching task context for {tid}: {e}")
+            return None
+
     async def add_dependency(
         self,
         session: AsyncSession,
@@ -278,6 +335,68 @@ class TaskMetadataRepository:
             except (ValueError, TypeError):
                 logger.debug("Invalid task id %s, generating new UUID", value)
         return uuid.uuid4()
+
+    async def find_hgnn_neighbors(
+        self,
+        session: AsyncSession,
+        embedding: List[float],
+        k: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """
+        Converts an HGNN embedding into a list of semantic graph nodes.
+        Requires 'pgvector' extension in Postgres.
+
+        Args:
+            session: The AsyncSession to use for database operations.
+            embedding: The HGNN embedding vector (list of floats).
+            k: Number of nearest neighbors to return (default: 10).
+
+        Returns:
+            List of dictionaries containing node information and similarity scores.
+            Each dict has: id, type, description, similarity
+        """
+        # Determine table name based on embedding dimension
+        # Default to 128d table, but could be extended to support 1024d
+        dim = len(embedding)
+        if dim == 128:
+            table_name = "graph_embeddings_128"
+        elif dim == 1024:
+            table_name = "graph_embeddings_1024"
+        else:
+            # Fallback: try to use graph_embeddings_128 and let DB handle dimension mismatch
+            logger.warning(f"Unexpected embedding dimension {dim}, using graph_embeddings_128")
+            table_name = "graph_embeddings_128"
+
+        # Ensure embedding is string formatted for SQL (e.g. '[0.1, 0.2, ...]')
+        import json
+        embedding_str = json.dumps(embedding)
+
+        stmt = text(f"""
+            SELECT 
+                ge.node_id,
+                gnm.node_type as type,
+                ge.props->>'description' as description,
+                1 - (ge.emb <=> CAST(:vec AS vector)) as similarity
+            FROM {table_name} ge
+            LEFT JOIN graph_node_map gnm ON ge.node_id = gnm.node_id
+            ORDER BY ge.emb <=> CAST(:vec AS vector)
+            LIMIT :k
+        """)
+
+        try:
+            result = await session.execute(stmt, {"vec": embedding_str, "k": k})
+            neighbors = []
+            for row in result:
+                neighbors.append({
+                    "id": str(row.node_id),
+                    "type": row.type or "unknown",
+                    "description": row.description or "",
+                    "similarity": float(row.similarity) if row.similarity is not None else 0.0,
+                })
+            return neighbors
+        except Exception as e:
+            logger.error(f"Vector search failed: {e}")
+            return []
 
     @staticmethod
     def _coerce_float(value: Any) -> Optional[float]:

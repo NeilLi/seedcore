@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from sqlalchemy import (
+from sqlalchemy import (  # pyright: ignore[reportMissingImports]
     String,
     Text,
     DateTime,
@@ -15,9 +15,9 @@ from sqlalchemy import (
     Index,
     func,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
-from sqlalchemy.types import Enum as SQLAlchemyEnum
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column  # pyright: ignore[reportMissingImports]
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB  # pyright: ignore[reportMissingImports]
+from sqlalchemy.types import Enum as SQLAlchemyEnum  # pyright: ignore[reportMissingImports]
 
 class Base(DeclarativeBase):
     """Declarative base for ORM models."""
@@ -71,7 +71,11 @@ class TaskType(str, enum.Enum):
     # Deeper component / system health check (may touch multiple subsystems).
 
     GENERAL_QUERY = "general_query"
-    # Primary “ask the system a question” pathway (LLM + tools + memory).
+    # Primary "ask the system a question" pathway (LLM + tools + memory).
+
+    CHAT = "chat"
+    # Lightweight conversational path for agent-tunneled interactions.
+    # Uses CognitiveType.CHAT for fast, low-latency conversational responses.
 
     TEST_QUERY = "test_query"
     # Synthetic / integration / load-test query (non-user-facing).

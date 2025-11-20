@@ -4,13 +4,32 @@
 Cognitive Service + Ray Serve Deployment (Unified Module)
 ===============================================================================
 
-This module implements SeedCore’s central Cognitive Service, combining:
+This module implements SeedCore's central Cognitive Service (Tier-1 Manager)
+in the Tiered Brain architecture, combining:
 
-    • Core cognitive orchestration logic
+    • Strategic orchestration logic (profile allocation, resource management)
     • Ray Serve deployment
     • FastAPI routing
+    • Server-side hydration (Data Pull pattern)
 
 It is designed to be consumed as a single `cognitive_service.py` module.
+
+-------------------------------------------------------------------------------
+Architecture: Tiered Brain (Tier-1 Manager)
+-------------------------------------------------------------------------------
+
+The CognitiveOrchestrator acts as the STRATEGY Layer:
+
+    Responsibilities:
+    1. Resource Management: Allocates Fast vs Deep profiles based on DecisionKind
+    2. Context Isolation: Ensures thread-safe execution via dspy.context
+    3. Data Access: Initializes repositories for Server-Side Hydration
+    4. Governance: Applies circuit breakers and timeouts
+
+    The CognitiveCore (Worker) follows data-driven orders:
+    - skip_retrieval=True: Skip RAG (Fast/Chat mode)
+    - hgnn_embedding present: Use HGNN context
+    - Otherwise: Run RAG pipeline
 
 -------------------------------------------------------------------------------
 Key Functionalities
@@ -30,12 +49,13 @@ Key Functionalities
 
 2. Prompt Context Signature & API Layer
    -------------------------------------
-   • The `/execute` FastAPI endpoint uses `CognitiveRequest` (Pydantic) as the
-     public API contract.
+   • The `/execute` FastAPI endpoint uses `TaskPayload` (Pydantic) as the
+     public API contract for system-wide consistency.
    • Requests are converted into an internal `CognitiveContext` object
      consumed by orchestration logic.
-   • `CognitiveOrchestrator` routes work based on `meta.decision_kind`
-       (e.g., FAST_PATH, COGNITIVE).
+   • `CognitiveOrchestrator` resolves profiles based on `DecisionKind`:
+       - FAST_PATH → LLMProfile.FAST
+       - COGNITIVE/ESCALATED → LLMProfile.DEEP
    • Supports runtime overrides:
         - `llm_provider_override`
         - `llm_model_override`
@@ -44,19 +64,35 @@ Key Functionalities
    -------------------------------
    • The `CognitiveOrchestrator` maintains multiple `CognitiveCore` instances,
      one per `LLMProfile` (FAST, DEEP).
+   • Each Core is initialized with `graph_repo` and `session_maker` for
+     server-side hydration (Lazy Coordinator pattern).
    • `CognitiveService` (Serve layer) uses `asyncio.to_thread` to call the
      synchronous `forward_cognitive_task()` method without blocking the event loop.
-   • The orchestrator’s planning (`core.forward`) uses a `ThreadPoolExecutor`
-     with per-profile timeouts to run blocking LLM calls.
+   • Thread-safe execution: Uses `dspy.context(lm=execution_lm)` to isolate
+     LM settings per request, preventing global state conflicts.
    • A `CircuitBreaker` protects the system from repeatedly calling a failing
      LLM provider.
+
+4. Server-Side Hydration (Data Pull Pattern)
+   ------------------------------------------
+   • When Coordinator sends minimal payload (only `task_id`), the Core can
+     hydrate context from the database using `TaskMetadataRepository`.
+   • Hydration occurs automatically in `_run_rag_pipeline` if context is "thin".
+   • Supports Lazy Coordinator architecture where Coordinator doesn't need to
+     fetch full task data before routing.
+
+5. Chat Optimization
+   ------------------
+   • Chat tasks use `dspy.Predict` instead of `ChainOfThought` for low latency.
+   • Fast path with `skip_retrieval=True` for conversational interactions.
+   • Optimized for high-velocity agent-tunneled conversations.
 
 -------------------------------------------------------------------------------
 Exports
 -------------------------------------------------------------------------------
 - CognitiveService      : Ray Serve deployment class (`@serve.deployment`)
 - cognitive_app         : Bound FastAPI application instance
-- CognitiveOrchestrator : Main orchestrator for cognitive execution
+- CognitiveOrchestrator : Main orchestrator for cognitive execution (Tier-1)
 - LLMEngine, OpenAIEngine, MLServiceEngine, NimEngine
 - CognitiveContext, CognitiveType, LLMProfile
 
@@ -65,6 +101,8 @@ Notes
 -------------------------------------------------------------------------------
 - `dsp_patch` is imported at module load time to ensure DSPy hooks are applied
   before any LLM engine initialization.
+- The Orchestrator manages Core lifecycle; no global singletons.
+- Database session factory is injected into Cores for hydration support.
 -------------------------------------------------------------------------------
 """
 
@@ -84,25 +122,38 @@ import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol
 
 # 2) Third-party light deps (safe at import time)
 import httpx  # type: ignore[reportMissingImports]
-from fastapi import FastAPI  # type: ignore[reportMissingImports]
-from pydantic import BaseModel, Field  # type: ignore[reportMissingImports]
+from fastapi import FastAPI, HTTPException  # type: ignore[reportMissingImports]
+from pydantic import BaseModel  # type: ignore[reportMissingImports]
 from ray import serve  # type: ignore[reportMissingImports]
 
 # 3) SeedCore internals (no heavy side effects)
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from ..coordinator.utils import normalize_task_payloads
 from ..cognitive.cognitive_core import CognitiveCore, Fact
-from ..models.cognitive import CognitiveContext, CognitiveType, DecisionKind
+from ..models.cognitive import CognitiveContext, CognitiveType, DecisionKind, LLMProfile
+from ..models.task_payload import TaskPayload
 try:
     from seedcore.utils.ray_utils import ML
 except Exception:
     ML = None  # Fallback handled in _make_engine
 from ..models.result_schema import create_error_result
+
+# Optional: Graph Repo for Server-Side Hydration
+try:
+    from ..graph.task_metadata_repository import TaskMetadataRepository
+except ImportError:
+    TaskMetadataRepository = None
+
+# Database (Required for Server-Side Hydration)
+try:
+    from ..database import get_async_pg_session_factory
+    get_async_session_maker = get_async_pg_session_factory  # Alias for clarity
+except ImportError:
+    get_async_session_maker = None
 
 if TYPE_CHECKING:
     from ..cognitive.cognitive_core import ContextBroker
@@ -115,10 +166,6 @@ logger = ensure_serve_logger("seedcore.cognitive_service", level="DEBUG")
 # 5) Provider-agnostic interfaces / helpers
 # -----------------------------------------------------------------------------
 
-class LLMProfile(Enum):
-    """LLM profile types for different cognitive processing depths."""
-    FAST = "fast"
-    DEEP = "deep"
 
 
 class LLMEngine(Protocol):
@@ -548,21 +595,39 @@ def _make_engine(provider: str, profile: LLMProfile, model: str):
 
 class CognitiveOrchestrator:
     """
-    Service layer for cognitive operations with multi-provider, dual-profile (FAST/DEEP) support.
+    The STRATEGY Layer (Tier-1 Manager).
+    
+    Responsibilities:
+    1. Resource Management: Allocates Fast vs Deep profiles.
+    2. Context Isolation: Ensures thread-safe execution via dspy.context.
+    3. Data Access: Initializes repositories for Server-Side Hydration.
+    4. Governance: Applies circuit breakers and timeouts.
     """
+
     def __init__(self, ocps_client=None, profiles: Optional[Dict[LLMProfile, dict]] = None):
         self.ocps_client = ocps_client
-        self.schema_version = "v2.0"
-        self._executor = ThreadPoolExecutor(max_workers=4)
+        self.schema_version = "v2.1"
+        
+        # Configurable Thread Pool
+        max_workers = int(os.getenv("COGNITIVE_MAX_WORKERS", "8"))
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
-        deep_provider = _default_provider_deep()
-        logger.info(f"Resolved DEEP profile provider: {deep_provider} (LLM_PROVIDER_DEEP={os.getenv('LLM_PROVIDER_DEEP', 'not set')})")
-        explicit_fast = os.getenv("LLM_PROVIDER_FAST")
-        if explicit_fast:
-            logger.info(f"FAST profile provider explicitly set: {explicit_fast}")
-        fast_provider = (_first_non_empty(explicit_fast, None) or _default_provider_fast()).lower()
-        logger.info(f"Resolved FAST profile provider: {fast_provider}")
+        # --- 1. Data Layer (Server-Side Hydration) ---
+        self.graph_repo = None
+        self.session_maker = None
+        
+        if TaskMetadataRepository and get_async_session_maker:
+            try:
+                self.graph_repo = TaskMetadataRepository()
+                self.session_maker = get_async_session_maker()
+                logger.info("✅ CognitiveOrchestrator connected to Graph Repository & DB")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to connect to Graph Repository: {e}")
 
+        # --- 2. Profile Resolution ---
+        deep_provider = self._resolve_provider_env("DEEP")
+        fast_provider = self._resolve_provider_env("FAST")
+        
         self.profiles = profiles or {
             LLMProfile.FAST: {
                 "provider": fast_provider,
@@ -578,71 +643,136 @@ class CognitiveOrchestrator:
             },
         }
 
-        if deep_provider == "openai" or fast_provider == "openai":
-            try:
-                from ..utils.token_logger import enable_token_logging
-                enable_token_logging()
-                logger.debug("Token logging enabled early in CognitiveService.__init__")
-            except Exception as e:
-                logger.debug(f"Could not enable token logging early: {e}")
-
+        # --- 3. Core Initialization ---
         self.cores: Dict[LLMProfile, CognitiveCore] = {}
         self.core_configs: Dict[LLMProfile, dict] = {}
         self.circuit_breakers: Dict[LLMProfile, CircuitBreaker] = {}
         self._initialize_cores()
 
-        # Legacy single-core disabled
-        self.cognitive_core = None
-
     def _initialize_cores(self):
+        """Initialize the persistent CognitiveCores for each profile."""
         for profile, config in self.profiles.items():
             try:
                 provider = config["provider"].lower()
                 model = config["model"]
-                engine = _make_engine(provider, profile, model)
-                core = self._create_core_with_engine(provider, engine, config)
+                
+                # 1. Create the DSPy LM (The "Brain")
+                lm = self._create_dspy_lm(provider, model, config)
+                config["_dspy_lm"] = lm
+                
+                # 2. Create the Execution Core (The "Worker")
+                # CRITICAL: Pass self.graph_repo and session_maker for server-side hydration
+                core = CognitiveCore(
+                    llm_provider=provider,
+                    model=model,
+                    context_broker=None,
+                    ocps_client=self.ocps_client,
+                    graph_repo=self.graph_repo,
+                    session_maker=self.session_maker
+                )
+                
                 self.cores[profile] = core
                 self.core_configs[profile] = config
-                self.circuit_breakers[profile] = CircuitBreaker(failure_threshold=3, recovery_timeout=60.0)
-                logger.info(f"Initialized {profile.value} core with provider={provider} model={model}")
+                self.circuit_breakers[profile] = CircuitBreaker(
+                    failure_threshold=3, recovery_timeout=60.0
+                )
+                logger.info(f"✅ Initialized {profile.value} core | {provider}/{model}")
+                
             except Exception as e:
-                logger.error(f"Failed to initialize {profile.value} core: {e}")
-                continue
+                logger.error(f"❌ Failed to initialize {profile.value} core: {e}")
 
-    def _create_core_with_engine(self, provider: str, engine: LLMEngine, config: dict) -> CognitiveCore:
+    def _create_dspy_lm(self, provider: str, model: str, config: dict) -> Any:
+        """Factory to create DSPy LM objects. Used by init and overrides."""
         import dspy  # type: ignore[reportMissingImports]
-        provider = provider.lower()
-        model = config["model"]
         max_tokens = config.get("max_tokens", 1024)
-
-        if provider in ("openai", "azure"):
-            try:
-                from ..utils.token_logger import enable_token_logging
-                enable_token_logging()
-            except Exception as e:
-                logger.debug(f"Could not enable token logging: {e}")
+        provider = provider.lower()
 
         if provider == "openai":
-            lm = dspy.OpenAI(model=model, max_tokens=max_tokens)
+            return dspy.OpenAI(model=model, max_tokens=max_tokens)
         elif provider == "anthropic":
             try:
-                lm = dspy.Anthropic(model=model, max_tokens=max_tokens)
+                return dspy.Anthropic(model=model, max_tokens=max_tokens)
             except Exception:
-                lm = dspy.LM(provider="anthropic", model=model, max_tokens=max_tokens)
+                return dspy.LM(provider="anthropic", model=model, max_tokens=max_tokens)
         elif provider == "google":
             try:
-                lm = dspy.Google(model=model, max_tokens=max_tokens)
+                return dspy.Google(model=model, max_tokens=max_tokens)
             except Exception:
-                lm = dspy.LM(provider="google", model=model, max_tokens=max_tokens)
+                return dspy.LM(provider="google", model=model, max_tokens=max_tokens)
         elif provider == "azure":
-            lm = dspy.OpenAI(model=model, max_tokens=max_tokens)
-        else:
-            lm = _DSPyEngineShim(engine)  # type: ignore
-
-        config["_dspy_lm"] = lm
-        return CognitiveCore(llm_provider=provider, model=model, context_broker=None, ocps_client=self.ocps_client)
+            return dspy.OpenAI(model=model, max_tokens=max_tokens)
+        
+        # Fallback to Generic Engine Shim
+        engine = _make_engine(provider, LLMProfile.FAST, model)  # Profile doesn't matter for make_engine here
+        return _DSPyEngineShim(engine)
 
     # ------------------ Orchestration methods ------------------
+
+    def _resolve_profile(self, kind: DecisionKind, use_deep_hint: Optional[bool]) -> LLMProfile:
+        """Determines the correct LLM profile based on decision kind and hints."""
+        # 1. Explicit Hint Override (Legacy support)
+        if use_deep_hint is True:
+            return LLMProfile.DEEP
+            
+        # 2. Decision Kind Mapping
+        if kind in (DecisionKind.COGNITIVE, DecisionKind.ESCALATED):
+            return LLMProfile.DEEP
+        
+        # 3. Default
+        return LLMProfile.FAST
+
+    def _resolve_lm_engine(self, profile: LLMProfile, input_data: Dict[str, Any]) -> Any:
+        """Resolves the LM Engine, handling per-request overrides."""
+        params_cog = input_data.get("params", {}).get("cognitive", {})
+        prov_override = params_cog.get("llm_provider_override") or input_data.get("llm_provider_override")
+        mod_override = params_cog.get("llm_model_override") or input_data.get("llm_model_override")
+
+        if prov_override or mod_override:
+            config = self.core_configs.get(profile, {})
+            target_prov = (prov_override or config.get("provider", "openai")).lower().strip()
+            target_mod = (mod_override or config.get("model", "gpt-4o")).strip()
+            
+            logger.info(f"🔧 Override active: {target_prov}/{target_mod}")
+            
+            # Use the factory to create a lightweight LM object (not a whole core)
+            temp_config = config.copy()
+            temp_config["max_tokens"] = config.get("max_tokens", 1024)
+            return self._create_dspy_lm(target_prov, target_mod, temp_config)
+
+        # Default: Return cached LM from init
+        config = self.core_configs.get(profile)
+        if config and "_dspy_lm" in config:
+            return config["_dspy_lm"]
+            
+        raise RuntimeError(f"No LM configuration found for profile {profile}")
+
+    def _inject_telemetry(self, result: Dict, profile: LLMProfile, kind: DecisionKind, lm: Any):
+        """Injects operational metadata into the result."""
+        result.setdefault("result", {}).setdefault("meta", {})
+        
+        provider = getattr(lm, "provider", "unknown")
+        model = getattr(lm, "model", "unknown")
+        
+        # Handle Shim/Engine wrapper
+        if hasattr(lm, "engine"):
+             model = getattr(lm.engine, "model", model)
+             
+        result["result"]["meta"].update({
+            "profile_used": profile.value,
+            "decision_kind": kind.value,
+            "provider_used": provider,
+            "model_used": model,
+            "timestamp": time.time()
+        })
+
+    def _resolve_provider_env(self, profile_name: str) -> str:
+        """Helper to get default providers from env."""
+        # e.g. LLM_PROVIDER_FAST
+        explicit = os.getenv(f"LLM_PROVIDER_{profile_name}")
+        if explicit: 
+            return explicit.lower()
+        # Fallback to general LLM_PROVIDERS list or openai
+        return "openai"
 
     def plan(self, context: 'CognitiveContext', depth: LLMProfile = LLMProfile.FAST) -> Dict[str, Any]:
         core = self.cores.get(depth) or self.cores.get(LLMProfile.FAST)
@@ -684,18 +814,14 @@ class CognitiveOrchestrator:
             return normalize_task_payloads(create_error_result(error_msg, "PROCESSING_ERROR").model_dump())
 
     def health_check(self) -> Dict[str, Any]:
-        try:
-            if not self.cores:
-                return {"status": "unhealthy", "reason": "No cognitive cores initialized", "timestamp": time.time()}
-            return {
-                "status": "healthy",
-                "cognitive_core_available": True,
-                "schema_version": self.schema_version,
-                "cores": {profile.value: "available" for profile in self.cores.keys()},
-                "timestamp": time.time(),
-            }
-        except Exception as e:
-            return {"status": "unhealthy", "reason": f"Health check failed: {str(e)}", "timestamp": time.time()}
+        return {
+            "status": "healthy",
+            "cores": {p.value: "active" for p in self.cores},
+            "graph_repo": bool(self.graph_repo)
+        }
+
+    def shutdown(self):
+        self._executor.shutdown(wait=True)
 
     def process_cognitive_task(self, context: 'CognitiveContext') -> Dict[str, Any]:
         logger.warning("process_cognitive_task() is deprecated; use forward_cognitive_task()")
@@ -708,86 +834,48 @@ class CognitiveOrchestrator:
         return self.forward_cognitive_task(context)
 
     def forward_cognitive_task(self, context: 'CognitiveContext', use_deep: Optional[bool] = None) -> Dict[str, Any]:
-        input_data_raw = context.input_data or {}
-        input_data = normalize_task_payloads(dict(input_data_raw))
-        meta_extra = input_data.get("meta") or {}
-        input_data["meta"] = meta_extra
-        context.input_data = input_data
-
-        if use_deep is not None and "decision_kind" not in meta_extra:
-            inferred_kind = DecisionKind.COGNITIVE if use_deep else DecisionKind.FAST_PATH
-            meta_extra["decision_kind"] = inferred_kind.value
-            logger.debug("Injected decision_kind='%s' from use_deep=%s", inferred_kind.value, use_deep)
-
-        decision_kind_raw = meta_extra.get("decision_kind")
-        decision_kind_value = (str(decision_kind_raw).strip().lower()
-                               if decision_kind_raw is not None else DecisionKind.FAST_PATH.value)
-
-        legacy_aliases = {"ray_agent_fast": DecisionKind.FAST_PATH}
+        """
+        Executes a cognitive task with thread-safety and profile management.
+        """
         try:
-            decision_kind_enum = DecisionKind(decision_kind_value)
-        except ValueError:
-            decision_kind_enum = legacy_aliases.get(decision_kind_value)
-        if decision_kind_enum is None:
-            logger.warning("Unknown decision_kind '%s'. Defaulting to FAST.", decision_kind_raw)
-            decision_kind_enum = DecisionKind.FAST_PATH
-
-        if decision_kind_enum is DecisionKind.FAST_PATH:
-            profile_key = LLMProfile.FAST
-        elif decision_kind_enum in (DecisionKind.COGNITIVE, DecisionKind.ESCALATED):
-            profile_key = LLMProfile.DEEP
-        else:
-            profile_key = LLMProfile.FAST
-
-        provider_override = input_data.get("llm_provider_override")
-        model_override = input_data.get("llm_model_override")
-
-        if provider_override or model_override:
-            target_provider = (provider_override or "").lower().strip() or self.profiles.get(profile_key, {}).get("provider", "openai")
-            target_model = (model_override or "").strip() or _model_for(target_provider, profile_key)
-            try:
-                logger.info("Creating temporary core override provider=%s model=%s", target_provider, target_model)
-                temp_engine = _make_engine(target_provider, profile_key, target_model)
-                temp_config = {"provider": target_provider, "model": target_model, "max_tokens": self.profiles.get(profile_key, {}).get("max_tokens", 2048)}
-                temp_core = self._create_core_with_engine(target_provider, temp_engine, temp_config)
-                import dspy  # type: ignore[reportMissingImports]
-                if "_dspy_lm" in temp_config:
-                    dspy.settings.configure(lm=temp_config["_dspy_lm"])
-                    logger.debug("Configured DSPy with override LM (provider=%s, profile=%s)", target_provider, profile_key.value)
-                result = temp_core.forward(context)
-                if isinstance(result, dict):
-                    result.setdefault("result", {}).setdefault("meta", {})
-                    result["result"]["meta"]["profile_used"] = profile_key.value
-                    result["result"]["meta"]["provider_override"] = target_provider
-                    result["result"]["meta"]["model_override"] = target_model
-                    if meta_extra:
-                        result["result"]["meta"].update(meta_extra)
-                return normalize_task_payloads(result)
-            except Exception as e:
-                logger.warning("Failed override provider=%s model=%s: %s. Falling back.", target_provider, target_model, e)
-
-        if self.cores:
+            # 1. Strategy: Resolve Profile
+            decision_kind = context.decision_kind
+            profile_key = self._resolve_profile(decision_kind, use_deep)
+            
+            # 2. Resource: Select Core
             core = self.cores.get(profile_key)
-            if core:
-                try:
-                    import dspy  # type: ignore[reportMissingImports]
-                    config = self.core_configs.get(profile_key)
-                    if config and "_dspy_lm" in config:
-                        dspy.settings.configure(lm=config["_dspy_lm"])
-                        logger.debug("Configured DSPy with %s LM (provider=%s)", profile_key.value, config.get("provider"))
-                    result = core.forward(context)
-                    if isinstance(result, dict):
-                        result.setdefault("result", {}).setdefault("meta", {})
-                        result["result"]["meta"]["profile_used"] = profile_key.value
-                        result["result"]["meta"]["provider_used"] = config.get("provider", "unknown") if config else "unknown"
-                        if meta_extra:
-                            result["result"]["meta"].update(meta_extra)
-                    return normalize_task_payloads(result)
-                except Exception as e:
-                    logger.error("Error forwarding cognitive task with %s profile: %s", profile_key.value, e)
+            if not core:
+                return create_error_result(
+                    f"No core available for profile {profile_key}", 
+                    "SERVICE_UNAVAILABLE"
+                ).model_dump()
 
-        logger.error("No compatible cognitive core (decision_kind=%s, profile=%s)", decision_kind_enum.value, profile_key.value)
-        return normalize_task_payloads({"success": False, "result": {}, "payload": {}, "cog_type": context.cog_type.value, "metadata": {}, "error": "No compatible cognitive core for this request (legacy core disabled)"})
+            # 3. Resource: Resolve Engine (Handle Overrides)
+            execution_lm = self._resolve_lm_engine(profile_key, context.input_data)
+
+            # 4. Execution: Thread-Safe Context
+            # This ensures that parallel requests do not clobber global settings
+            import dspy  # type: ignore[reportMissingImports]
+            
+            if hasattr(dspy, 'context'):
+                with dspy.context(lm=execution_lm):
+                    logger.debug(f"⚡ Executing {context.cog_type.value} on {profile_key.value}")
+                    raw_result = core.forward(context)
+            else:
+                # Fallback for older DSPy (Risky)
+                logger.warning("dspy.context missing; using global settings.")
+                dspy.settings.configure(lm=execution_lm)
+                raw_result = core.forward(context)
+
+            # 5. Metadata Injection
+            result = normalize_task_payloads(raw_result)
+            self._inject_telemetry(result, profile_key, decision_kind, execution_lm)
+
+            return result
+
+        except Exception as e:
+            logger.exception(f"Orchestration Failed: {e}")
+            return create_error_result(str(e), "COGNITIVE_EXECUTION_ERROR").model_dump()
 
     def build_fragments_for_synthesis(self, context: 'CognitiveContext', facts: List['Fact'], summary: str) -> List[Dict[str, Any]]:
         if not self.cores:
@@ -815,11 +903,6 @@ class CognitiveOrchestrator:
         self.core_configs.clear()
         self.circuit_breakers.clear()
         logger.info("All cognitive cores reset")
-
-    def shutdown(self):
-        if hasattr(self, '_executor'):
-            self._executor.shutdown(wait=True)
-            logger.info("Thread pool executor shutdown")
 
     def initialize_cognitive_core(self, llm_provider: str = "openai", model: str = "gpt-4o", context_broker: Optional['ContextBroker'] = None) -> 'CognitiveCore':
         logger.warning("initialize_cognitive_core() deprecated in multi-profile system")
@@ -862,21 +945,8 @@ RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
 
 # --- Request/Response Models ---
-class CognitiveRequest(BaseModel):
-    """Unified request model for the /execute endpoint using TaskPayload schema.
-    
-    All requests must use the unified TaskPayload format with cognitive metadata
-    in params.cognitive namespace.
-    """
-    # TaskPayload format fields (required)
-    type: str
-    task_id: str
-    params: Dict[str, Any] = Field(default_factory=dict)
-    description: str = ""
-    domain: Optional[str] = None
-    
-    class Config:
-        extra = "allow"  # Allow additional TaskPayload fields
+# Note: Using TaskPayload directly for system-wide consistency
+# Cognitive metadata is expected in params.cognitive namespace
 
 class CognitiveResponse(BaseModel):
     """Unified response model for the /execute endpoint."""
@@ -935,108 +1005,108 @@ class CognitiveService:
         }
 
     @app.post("/execute", response_model=CognitiveResponse)
-    async def execute_cognitive_task(self, request: CognitiveRequest):
+    async def execute_cognitive_task(self, request: TaskPayload):
+        """
+        Executes a cognitive task using the standard TaskPayload.
+        Expects input params to contain a 'cognitive' dictionary with metadata.
+        """
         start_time = time.time()
         
-        # Extract from unified TaskPayload format
-        params = request.params or {}
+        # 1. Validate Cognitive Metadata
+        # TaskPayload guarantees .params is a dict, so we can access safely
+        params = request.params
         cognitive_section = params.get("cognitive", {})
         
         if not cognitive_section:
-            raise ValueError(
-                "params.cognitive is required. Expected structure: "
-                "params.cognitive = {agent_id, cog_type, decision_kind, ...}"
+            # Fail fast if the client didn't use the new execute_async standard
+            raise HTTPException(
+                status_code=400, 
+                detail="Missing 'params.cognitive' metadata. Use CognitiveServiceClient."
             )
         
-        # Extract required fields from params.cognitive
+        # 2. Extract Required Fields
         agent_id = cognitive_section.get("agent_id")
-        if not agent_id:
-            raise ValueError("params.cognitive.agent_id is required")
-        
         cog_type_str = cognitive_section.get("cog_type")
-        if not cog_type_str:
-            raise ValueError("params.cognitive.cog_type is required")
+        
+        if not agent_id or not cog_type_str:
+            raise HTTPException(
+                status_code=400, 
+                detail="params.cognitive must contain 'agent_id' and 'cog_type'"
+            )
         
         try:
             cog_type = CognitiveType(cog_type_str)
         except ValueError:
-            raise ValueError(f"Invalid cog_type '{cog_type_str}'. Must be a valid CognitiveType.")
+            raise HTTPException(status_code=400, detail=f"Invalid cog_type: {cog_type_str}")
         
-        decision_kind_str = cognitive_section.get("decision_kind", DecisionKind.FAST_PATH.value)
+        # 3. Construct Cognitive Context
+        # We use request.model_dump() to ensure we pass the full, validated structure
+        # including any routing hints or drift scores that might be relevant to the planner.
         
-        # Extract task_id
-        task_id = request.task_id
+        # Note: request.model_dump() triggers .to_db_params(), which packs routing info 
+        # into params['routing']. This is exactly what we want.
+        input_data = request.model_dump()
         
-        # Build input_data from TaskPayload structure for CognitiveContext
-        # This preserves the full TaskPayload structure for cognitive_core to access
-        input_data = {
-            "task_id": task_id,
-            "type": request.type,
-            "description": request.description or "",
-            "domain": request.domain,
-            "params": params,  # Include full params for cognitive processing
-        }
-        
-        # Extract overrides from params.cognitive
-        llm_provider_override = cognitive_section.get("llm_provider_override")
-        llm_model_override = cognitive_section.get("llm_model_override")
-        
-        if llm_provider_override:
-            input_data["llm_provider_override"] = llm_provider_override
-        if llm_model_override:
-            input_data["llm_model_override"] = llm_model_override
+        # Extract overrides explicitly from the cognitive section (for backward compatibility)
+        # The CognitiveContext will extract these from params.cognitive via its decision_kind property
+        if "llm_provider_override" in cognitive_section:
+            input_data["llm_provider_override"] = cognitive_section["llm_provider_override"]
+        if "llm_model_override" in cognitive_section:
+            input_data["llm_model_override"] = cognitive_section["llm_model_override"]
         
         try:
+            # Create CognitiveContext using standard dataclass initialization
+            # The decision_kind will be automatically extracted via the property
             context = CognitiveContext(
                 agent_id=agent_id,
                 cog_type=cog_type,
-                input_data=input_data,
+                input_data=input_data,  # Contains full TaskPayload structure with params.cognitive
             )
 
-            decision_kind = decision_kind_str
+            # Use context.decision_kind property instead of manually extracting
             self.logger.info(
-                f"/execute: Received task_id={task_id} for agent {agent_id}. "
-                f"cog_type={cog_type.value}, decision_kind={decision_kind}"
+                f"/execute: Task {request.task_id} | Agent {agent_id} | "
+                f"Type {cog_type.value} | Kind {context.decision_kind.value}"
             )
 
+            # 4. Forward to Orchestrator (Off-thread)
             result_dict = await asyncio.to_thread(
                 self.cognitive_service.forward_cognitive_task,
                 context,
             )
 
             processing_time = (time.time() - start_time) * 1000
-            self.logger.info(
-                f"/execute: Completed task_id={task_id} for agent {agent_id} "
-                f"in {processing_time:.2f}ms. Success={result_dict.get('success')}"
-            )
-
+            
+            # Log success/fail
             if not result_dict.get("success", False):
-                return CognitiveResponse(
-                    success=False,
-                    result=result_dict.get("result", {}),
-                    error=result_dict.get("error", "Cognitive task failed"),
-                    metadata=result_dict.get("metadata", {}),
+                self.logger.warning(
+                    f"Task {request.task_id} failed in {processing_time:.2f}ms: {result_dict.get('error')}"
+                )
+            else:
+                self.logger.info(
+                    f"Task {request.task_id} completed in {processing_time:.2f}ms"
                 )
 
             return CognitiveResponse(
-                success=True,
+                success=result_dict.get("success", False),
                 result=result_dict.get("result", {}),
-                error=None,
+                error=result_dict.get("error"),
                 metadata=result_dict.get("metadata", {}),
             )
 
+        except HTTPException:
+            # Re-raise HTTP exceptions as-is
+            raise
         except Exception as e:
+            # ... error handling remains the same ...
             processing_time = (time.time() - start_time) * 1000
             tb_str = traceback.format_exc()
-            self.logger.error(
-                f"FATAL /execute: Unhandled exception for task_id={task_id} "
-                f"after {processing_time:.2f}ms. Error: {e}\n{tb_str}"
-            )
+            self.logger.error(f"FATAL: {e}\n{tb_str}")
             return CognitiveResponse(
-                success=False,
-                result={},
-                error=f"Unhandled exception in API endpoint: {e}",
-                metadata={"traceback": tb_str},
+                success=False, 
+                result={}, 
+                error=str(e), 
+                metadata={"traceback": tb_str}
             )
 
 

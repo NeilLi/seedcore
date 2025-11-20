@@ -19,6 +19,7 @@ class CognitiveType(Enum):
     TASK_PLANNING = "task_planning"
     DECISION_MAKING = "decision_making"
     PROBLEM_SOLVING = "problem_solving"
+    CHAT = "chat"  # Lightweight conversational path
     MEMORY_SYNTHESIS = "memory_synthesis"
     CAPABILITY_ASSESSMENT = "capability_assessment"
 
@@ -46,38 +47,45 @@ class CognitiveType(Enum):
 
 
 # --- This is the "Payload" (The Full Request) ---
-@dataclass(init=False)
+@dataclass
 class CognitiveContext:
-    """The standard request payload for the CognitiveService."""
+    """
+    The runtime context for a cognitive operation.
+    
+    Wraps the raw input data and metadata for the CognitiveCore.
+    """
 
     agent_id: str
     cog_type: CognitiveType
     input_data: Dict[str, Any]
+    # Context layers
     memory_context: Optional[Dict[str, Any]] = None
     energy_context: Optional[Dict[str, Any]] = None
     lifecycle_context: Optional[Dict[str, Any]] = None
 
-    def __init__(
-        self,
-        agent_id: str,
-        *,
-        cog_type: Optional[CognitiveType] = None,
-        input_data: Optional[Dict[str, Any]] = None,
-        memory_context: Optional[Dict[str, Any]] = None,
-        energy_context: Optional[Dict[str, Any]] = None,
-        lifecycle_context: Optional[Dict[str, Any]] = None,
-        task_type: Optional[CognitiveType] = None,
-    ) -> None:
-        resolved_type = cog_type or task_type
-        if resolved_type is None:
-            raise ValueError("CognitiveContext requires cog_type or task_type")
+    def __post_init__(self):
+        """Safety validation after standard init."""
+        if not self.cog_type:
+            raise ValueError("CognitiveContext requires a valid cog_type")
+        if self.input_data is None:
+            self.input_data = {}
 
-        self.agent_id = agent_id
-        self.cog_type = resolved_type
-        self.input_data = input_data or {}
-        self.memory_context = memory_context
-        self.energy_context = energy_context
-        self.lifecycle_context = lifecycle_context
+    @property
+    def decision_kind(self) -> DecisionKind:
+        """Extracts decision kind from input_data metadata safely."""
+        # Check params.cognitive (New Standard)
+        params = self.input_data.get("params", {})
+        if "cognitive" in params:
+            kind = params["cognitive"].get("decision_kind")
+        else:
+            # Check top-level meta (Legacy)
+            kind = self.input_data.get("meta", {}).get("decision_kind")
+        
+        # Default to FAST_PATH
+        try:
+            return DecisionKind(kind)
+        except (ValueError, TypeError):
+            return DecisionKind.FAST_PATH
 
     @property
     def task_type(self) -> CognitiveType:

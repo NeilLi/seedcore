@@ -4,75 +4,99 @@ SeedCore Task Routing Layer
 ===========================
 
 This module defines the routing interface used by the Dispatcher to send tasks
-into the unified SeedCore execution pipeline. After the recent refactoring,
-routing now follows a multi-stage decision architecture:
+into the unified SeedCore execution pipeline. The architecture follows a
+"Thick Service, Thin Client" pattern where routers are lightweight clients
+that delegate all decision logic to backend services.
+
+Unified Interface Architecture
+-------------------------------
+
+The Coordinator Service now uses a **Universal Interface** pattern:
+- **Single Business Endpoint**: `/route-and-execute` handles all business operations
+- **Type-Based Routing**: Uses `TaskPayload.type` to route internally:
+  * `type: "anomaly_triage"` → Anomaly triage pipeline
+  * `type: "ml_tune_callback"` → ML tuning callback handler
+  * Other types → Standard routing & execution
+- **Operational Endpoints**: Health, metrics, and admin endpoints are hidden from schema
+  but remain available for Kubernetes/Prometheus
 
 Routers
 -------
 - CoordinatorHttpRouter:
-    The primary entry point. Sends tasks to the Coordinator service for
-    scoring and high-level decision making.
-- OrganismRouter:
-    Executes tasks through the Organism Service (Organs + Agents + Tools).
-    Handles both fast-path and deep-path agent execution.
-- RouterFactory:
-    Simple factory that returns appropriate router instances.
+    Thin client that sends tasks to the Coordinator Service (Tier-0).
+    The Coordinator Service handles the complete lifecycle:
+    - Type-based routing (anomaly_triage, ml_tune_callback, or standard)
+    - Scoring (Surprise Score, PKG evaluation)
+    - Routing Decision (FAST_PATH, COGNITIVE, ESCALATED)
+    - Delegation (to Cognitive Service or Organism Service)
+    - Execution (via downstream services)
+    - Persistence (audit trail, telemetry)
+    
+    The only client-side optimization is the "agent_tunnel" bypass for
+    low-latency chat interactions.
 
-End-to-End Routing Flow
------------------------
+- OrganismRouter:
+    Direct client for the Organism Service (Tier-1).
+    Executes tasks through Organs → Agents → Tools.
+    Handles agent selection, specialization matching, and tool execution.
+    May escalate to Cognitive Service if result.kind == "cognitive".
+
+- RouterFactory:
+    Factory that creates appropriate router instances based on configuration.
+
+Architecture Overview
+--------------------
+
+The routing layer follows a simplified, pass-through pattern:
 
 1. Dispatcher receives a task from the DB queue.
 
-2. CoordinatorHttpRouter sends the task to the Coordinator Service, which:
-    - Computes scores (skill vectors, specialization fit, organ metrics).
-    - Determines classification & routing decision using DecisionKind:
-        * FAST / DEEP  → execute locally via OrganismRouter
-        * COGNITIVE    → escalate to planning + HGNN + cognitive composition
-        * HGNN         → Coordinator has already decomposed the task
-        * ERROR        → return error directly
+2. CoordinatorHttpRouter (Thin Client):
+    - Optionally bypasses Coordinator for "agent_tunnel" mode (chat optimization)
+    - Otherwise: POSTs task to Coordinator Service `/route-and-execute`
+    - Returns the final result (Coordinator handles all delegation internally)
 
-3. Coordinator Decision Routing:
-    - kind == "fast" or "deep":
-        → Execute through OrganismRouter (Organs → Workers → Tools).
-    - kind == "cognitive":
-        → OrganismRouter performs orchestration:
-            * Invoke CognitiveService, RAG, or planning
-            * Compose results or decompose subtasks
-    - kind in {"hgnn", "error"}:
-        → Return Coordinator’s output as the final result.
+3. Coordinator Service (Tier-0 - Thick Service):
+    - **Type-Based Routing**: Routes internally based on `TaskPayload.type`:
+        * `"anomaly_triage"` → Anomaly triage pipeline (ML detection, HGNN escalation)
+        * `"ml_tune_callback"` → ML tuning callback handler (energy tracking)
+        * Other types → Standard routing & execution
+    - Persists task (Inbox Pattern - System of Record)
+    - Computes routing decision (Surprise Score + PKG)
+    - Executes based on decision:
+        * FAST_PATH → Delegates to Organism Service
+        * COGNITIVE → Delegates to Cognitive Service for planning
+        * ESCALATED → Delegates to Cognitive Service for HGNN reasoning
+    - Persists audit trail (proto-plans, telemetry)
+    - Returns final execution result
 
-4. OrganismRouter Execution:
-    - Runs the task through Organism Core:
-        * specialization selection
-        * organ routing
-        * worker agent execution
-        * skill vectors, capability updates
-        * tool execution (train.*, mem.*, external APIs)
-    - After execution:
-        * If Organism result.kind == "cognitive":
-              → Invoke Cognitive orchestration path
-        * Else (fast/deep/hgnn/error):
-              → Return Organism result
+4. Organism Service (Tier-1):
+    - Routes to appropriate organ based on task type/specialization
+    - Selects agent from organ (with sticky routing for conversations)
+    - Executes task via agent tools
+    - Returns execution result
 
-Summary of Updated Policy
--------------------------
+5. Cognitive Service (Tier-1):
+    - Performs planning, problem-solving, or HGNN reasoning
+    - Returns structured cognitive result
 
-Coordinator:
-    - Handles scoring, drift detection, specialization matching,
-      surprise detection, and classification.
-    - Determines DecisionKind and returns a high-level routing decision.
+Key Design Principles
+----------------------
 
-Organism:
-    - Handles the majority of real work (fast/deep tasks).
-    - Routes tasks to organs and agents based on specialization.
-    - Executes tools, cognitive modules, training modules, etc.
-    - Only escalates to Cognitive path when explicitly required.
+- **Unified Interface**: Single business endpoint (`/route-and-execute`) for all operations
+- **Type Polymorphism**: Uses `TaskPayload.type` for internal routing
+- **Separation of Concerns**: Routers are thin clients; Services handle logic
+- **Single Source of Truth**: Coordinator Service is the authoritative decision maker
+- **No Double Delegation**: Client routers don't interpret decision_kind
+- **Latency Optimization**: "agent_tunnel" bypass for high-velocity chat
+- **Auditability**: All routing decisions and executions are persisted
 
-This keeps the pipeline:
-    * Fast for normal tasks
-    * Intelligent for ambiguous tasks
-    * Scalable for composite workloads
-    * Unified across Coordinator, Organism, and Cognitive services
+This architecture ensures:
+    * Simplicity: Thin clients are easy to maintain
+    * Consistency: All decision logic centralized in Coordinator
+    * Performance: Optimized paths for common cases (chat, fast tasks)
+    * Observability: Complete audit trail of routing and execution
+    * Client Simplicity: Clients only need to know one endpoint
 """
 
 import os
@@ -472,19 +496,14 @@ class CoordinatorHttpRouter(Router):
     """
     HTTP-based router that calls Coordinator service.
 
-    Flow:
-      1. Send task to Coordinator (/route-and-execute).
-      2. Inspect Coordinator's result["kind"]:
-          - kind == DecisionKind.FAST_PATH ("fast")
-                → delegate to fast router (default: OrganismRouter)
-          - kind == DecisionKind.COGNITIVE ("cognitive")
-                → delegate to CognitiveService for planning
-          - else (DecisionKind.ESCALATED "hgnn", DecisionKind.ERROR "error", etc.)
-                → return Coordinator's result directly
+    The Coordinator Service (Tier-0) now handles the full lifecycle:
+    - Scoring (Surprise/PKG)
+    - Routing Decision
+    - Delegation (to Cognitive or Organism service)
+    - Persistence
 
-    Why we do NOT forward "hgnn":
-      "hgnn" in the new schema already means we HAVE a decomposed multi-step
-      plan (EscalatedResult). There's nothing further to plan.
+    This router is a thin client that simply hands off tasks and awaits final results.
+    The only client-side optimization is the "agent_tunnel" bypass for low-latency chat.
     """
 
     def __init__(
@@ -523,15 +542,6 @@ class CoordinatorHttpRouter(Router):
             retry_config=retry_config
         )
 
-        try:
-            self.cognitive_client = CognitiveServiceClient()
-        except Exception as client_err:
-            logger.warning(
-                "CoordinatorHttpRouter failed to initialize CognitiveServiceClient: %s",
-                client_err,
-            )
-            self.cognitive_client = None
-
         logger.info(f"CoordinatorHttpRouter initialized with base_url: {base_url}")
 
 
@@ -540,24 +550,40 @@ class CoordinatorHttpRouter(Router):
         payload: Union[TaskPayload, Dict[str, Any]],
         correlation_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Route task through Coordinator HTTP API and then follow its routing kind."""
+        """
+        Route task through Coordinator HTTP API (Unified Interface).
+
+        The Coordinator Service (Tier-0) uses a unified `/route-and-execute` endpoint
+        that handles all business operations via type-based routing:
+        - type: "anomaly_triage" → Anomaly triage pipeline
+        - type: "ml_tune_callback" → ML tuning callback handler
+        - Other types → Standard routing & execution
+
+        The Coordinator Service handles the complete lifecycle:
+        - Type-based internal routing
+        - Scoring (Surprise/PKG)
+        - Routing Decision (FAST_PATH, COGNITIVE, ESCALATED)
+        - Delegation (to Cognitive or Organism service)
+        - Execution (via downstream services)
+        - Persistence (audit trail, telemetry)
+
+        This client simply hands off the task and awaits the final result.
+        No client-side decision logic is required.
+        """
+        started_at = datetime.now(timezone.utc)
+        
         try:
             task_payload = _coerce_task_payload(payload)
             task_data = task_payload.model_dump()
             if correlation_id:
                 task_data["correlation_id"] = correlation_id
 
-            started_at = datetime.now(timezone.utc)
-
             task_id = task_payload.task_id
             
-            # Check interaction mode - agent_tunnel bypasses Coordinator for direct routing
+            # 1. Handle "Agent Tunnel" Bypass (Latency Optimization)
+            # This is the ONLY client-side routing logic we keep.
             params = task_data.get("params", {})
-            interaction = params.get("interaction", {})
-            mode = interaction.get("mode")
-            
-            if mode == "agent_tunnel":
-                # Human ↔ Agent conversation with memory - bypass Coordinator for low latency
+            if params.get("interaction", {}).get("mode") == "agent_tunnel":
                 logger.info(
                     f"[CoordinatorHttpRouter] Agent tunnel mode detected for task {task_id}; "
                     "routing directly to OrganismRouter"
@@ -572,6 +598,7 @@ class CoordinatorHttpRouter(Router):
                         correlation_id=correlation_id
                     )
                     await organism_router.close()
+                    _attach_exec_metrics(result, started_at, attempt=1)
                     return result
                 except Exception as tunnel_err:
                     logger.warning(
@@ -582,111 +609,17 @@ class CoordinatorHttpRouter(Router):
 
             logger.info(f"Routing task via Coordinator HTTP: {task_id}")
 
-            # 1. Ask Coordinator to process / decide
+            # 2. Call Coordinator (Unified Endpoint)
+            # The Coordinator now executes the downstream logic (Cognitive/Fast) itself.
+            # We don't need to interpret 'decision_kind' here anymore.
             result = await self.client.post("/route-and-execute", json=task_data)
-            logger.info(f"Coordinator returned: {result}")
-
-            # Extract correlation_id if Coordinator issued one (trace propagation override)
-            # This allows Coordinator to start new trace segments for sub-tasks or cognitive plans
-            coordinator_corr = (
-                result.get("payload", {}).get("metadata", {}).get("correlation_id")
-                or result.get("metadata", {}).get("correlation_id")
-                or result.get("correlation_id")
-            )
-            if coordinator_corr:
-                correlation_id = coordinator_corr
-                logger.debug(f"Using Coordinator-issued correlation_id: {correlation_id}")
-
-            # 2. Check decision_kind and route accordingly
-            decision_kind = result.get("kind")
             
-            if decision_kind == DecisionKind.COGNITIVE:
-                # Handle cognitive execution in router layer
-                logger.info(
-                    f"[CoordinatorHttpRouter] Cognitive decision detected for task {task_id}; "
-                    "executing via CognitiveService"
-                )
-                
-                try:
-                    if not self.cognitive_client:
-                        logger.error(
-                            "[CoordinatorHttpRouter] cognitive_client is not initialized; "
-                            "cannot process cognitive execution"
-                        )
-                        result["warning"] = "CognitiveServiceClient unavailable"
-                        result["success"] = False
-                        result["error"] = "CognitiveServiceClient unavailable"
-                    else:
-                        # Use unified TaskPayload interface for cognitive execution
-                        # Coordinator has already determined this needs cognitive processing
-                        # Ensure correlation_id is in params if provided
-                        task_for_cognitive = task_payload
-                        if correlation_id:
-                            # Create a copy with correlation_id in params
-                            task_dict = task_payload.model_dump()
-                            params = dict(task_dict.get("params") or {})
-                            if "metadata" not in params:
-                                params["metadata"] = {}
-                            params["metadata"]["correlation_id"] = correlation_id
-                            task_dict["params"] = params
-                            task_for_cognitive = task_dict
-                        
-                        cog_res = await self.cognitive_client.execute_async(
-                            agent_id=result.get("agent_id") or f"planner_{task_id}",
-                            cog_type=CognitiveType.TASK_PLANNING,
-                            decision_kind=DecisionKind.COGNITIVE,
-                            task=task_for_cognitive,
-                        )
-                        
-                        # Wrap cognitive response into standard result format
-                        result = _wrap_cognitive_response(
-                            task_data=task_data,
-                            correlation_id=correlation_id,
-                            cog_res=cog_res,
-                        )
-                        
-                except Exception as exc:
-                    logger.warning(
-                        f"[CoordinatorHttpRouter] Cognitive execution failed for task {task_id}: {exc}",
-                        exc_info=True,
-                    )
-                    result.setdefault("warnings", []).append(f"Cognitive execution failed: {exc}")
-                    result["success"] = False
-                    result["error"] = str(exc)
-                    
-            elif decision_kind == DecisionKind.FAST_PATH.value:
-                # Delegate to OrganismRouter for fast/deep execution
-                logger.info(
-                    f"[CoordinatorHttpRouter] Task {task_id}: Coordinator chose {decision_kind}; delegating to OrganismRouter"
-                )
-                try:
-                    fast_router = RouterFactory.create_router(
-                        router_type="organism",
-                        config=self.config
-                    )
-                    fast_res = await fast_router.route_and_execute(
-                        task_data,
-                        correlation_id=correlation_id
-                    )
-                    await fast_router.close()
-                    result = fast_res
-
-                except Exception as handoff_err:
-                    logger.warning(
-                        f"[CoordinatorHttpRouter] Fast-path or deep delegation failed for task {task_id}: {handoff_err}"
-                    )
-                    result.setdefault("warnings", []).append(
-                        f"Fast-path or deep delegation failed: {handoff_err}"
-                    )
-            else:
-                # ESCALATED (HGNN), ERROR, or other: return coordinator result as-is
-                logger.debug(
-                    f"[CoordinatorHttpRouter] Task {task_id}: Coordinator returned {decision_kind}; "
-                    "returning result directly"
-                )
+            # 3. Validation
+            if not isinstance(result, dict):
+                raise ValueError("Coordinator returned invalid response")
 
         except Exception as e:
-            logger.error(f"CoordinatorHttpRouter failed to route task: {e}")
+            logger.error(f"CoordinatorHttpRouter failed: {e}", exc_info=True)
             result = {
                 "kind": DecisionKind.ERROR.value,
                 "success": False,
@@ -694,6 +627,7 @@ class CoordinatorHttpRouter(Router):
                 "path": "coordinator_http_error"
             }
 
+        # 4. Metrics Attachment
         selected_agent = (
             result.get("selected_agent_id")
             or result.get("meta", {}).get("routing_decision", {}).get("selected_agent_id")
@@ -704,6 +638,7 @@ class CoordinatorHttpRouter(Router):
         )
         _attach_routing_decision(result, selected_agent, score)
         _attach_exec_metrics(result, started_at, attempt=1)
+        
         return result
 
     async def health_check(self) -> Dict[str, Any]:

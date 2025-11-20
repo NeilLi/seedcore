@@ -9,7 +9,7 @@ import json
 import ast
 from typing import Any, Dict, List, Optional, Union, Literal
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator  # pyright: ignore[reportMissingImports]
 
 from .cognitive import DecisionKind
 

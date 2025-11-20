@@ -1,11 +1,96 @@
 """
-Ray Serve Application for SeedCore ML Models
+Ray Serve Application for SeedCore ML Service
 
-This module provides a Ray Serve application that deploys:
-- Salience scoring models
-- Anomaly detection models
-- Predictive scaling models
-- XGBoost distributed training and inference
+This module provides a comprehensive ML-as-a-Service platform deployed via Ray Serve,
+offering traditional ML, gradient boosting, LLM capabilities, and Deep Graph Reasoning.
+
+Architecture:
+    The service is built on:
+    - Ray Serve: Distributed deployment and scaling of ML workloads
+    - FastAPI: RESTful API layer with async request handling
+    - StatusActor: Ray Actor for managing shared job state across processes/threads
+    - PyTorch Geometric: Backend for hypergraph and graph neural network operations
+
+Core Capabilities:
+
+    1. Traditional ML Models:
+       - Salience Scoring (/score/salience): Computes importance scores for features
+         or text using statistical and embedding-based methods
+       - Anomaly Detection (/detect/anomaly): Identifies outliers and anomalous
+         patterns in feature vectors or time-series data
+       - Drift Scoring (/drift/score): Measures distribution shift between training
+         and production data using TF-IDF and statistical methods
+       - Scaling Prediction (/predict/scaling): Forecasts resource requirements and
+         scaling needs based on workload patterns
+
+    2. XGBoost Service (/xgboost/*):
+       Distributed gradient boosting for structured data:
+       - Training: Distributed model training with configurable hyperparameters
+       - Inference: Real-time and batch prediction endpoints
+       - Model Management: Load, list, delete, and promote models
+       - Hyperparameter Tuning: Async job-based optimization with status tracking
+       - Model Refresh: Automatic model updates with energy-based promotion gates
+       - Distillation: Knowledge distillation from episodes to lightweight models
+
+    3. LLM Capabilities (/chat, /embeddings, /rerank):
+       OpenAI-compatible endpoints for language model operations:
+       - Chat Completions: Conversational AI with configurable models
+       - Embeddings: Text-to-vector encoding for semantic search and RAG
+       - Reranking: Relevance scoring for retrieval-augmented generation
+
+    4. Graph & Hypergraph Learning (/hgnn/*):
+       Deep structural reasoning for the "Escalated" path:
+       - Structural Embedding (/hgnn/embed): Converts hypergraph topology (nodes/edges)
+         and anomaly snapshots into a dense vector space (hgnn_embedding). This allows
+         neuro-symbolic systems to reason about where in the system architecture a
+         failure occurred.
+       - Causal Path Finding (/hgnn/causal-path): Identifies probable root-cause paths
+         by analyzing hyperedge activation patterns during anomaly events.
+
+Key Components:
+
+    StatusActor (Ray Actor):
+        Manages shared state for async jobs (e.g., hyperparameter tuning):
+        - Thread-safe job status tracking with automatic local fallback
+
+    Drift Detector:
+        Lazy-initialized service for detecting data distribution shifts using
+        statistical comparison.
+
+    XGBoost Service:
+        Singleton service for gradient boosting with energy-aware promotion gates.
+
+    HGNN Service (Hypergraph Neural Network):
+        Specialized deep learning service for structural analysis:
+        - Uses incidence matrices to model high-order dependencies (shared resources,
+          multi-service failures)
+        - Provides the hgnn_embedding vector used by the Coordinator to seed deep reasoning
+        - Optimized for inference latency using TorchScript or ONNX Runtime
+
+Integration Points:
+
+    Energy Service:
+        Model promotion gates and flywheel event logging
+
+    Coordinator Service:
+        - Consumes /drift/score for routing decisions (Fast vs. Cognitive)
+        - Consumes /hgnn/embed to generate the context vector for "Escalated" tasks
+
+    Cognitive Service:
+        Consumes /embeddings for RAG and /hgnn/causal-path for root cause analysis
+
+Deployment:
+    Deployed as a Ray Serve deployment with async request handling, background task
+    support, and health/resource monitoring.
+
+Environment Variables:
+    SEEDCORE_HGNN_MODEL_PATH: Path to the pre-trained HGNN weights
+    SEEDCORE_PROMOTION_LTOT_CAP: Maximum Lipschitz constant for model promotion
+    SEEDCORE_E_GUARD: Energy guard threshold for promotion
+
+Error Handling:
+    - Graceful degradation: Local fallback when Ray Actor unavailable
+    - Comprehensive error logging with context and HTTPException-based responses
 """
 
 from __future__ import annotations

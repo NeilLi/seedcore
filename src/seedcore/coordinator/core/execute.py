@@ -1,9 +1,11 @@
 """
 Core execution orchestration for:
 - Fast path (organs)
-- Planner path (cognitive)
-- Escalated path (HGNN)
+- Routing decisions (Surprise Score + PKG evaluation)
 - Route-and-execute coordinator
+
+This module focuses purely on Routing Policy computation. It does NOT execute
+Cognitive/Planner logic - that is handled by the Service layer (coordinator_service.py).
 
 This module exposes a framework-free orchestration layer with a stable public API.
 """
@@ -25,13 +27,14 @@ from collections.abc import (
 from dataclasses import dataclass
 from typing import Any
 
-from ...models.cognitive import DecisionKind
+from ...models.cognitive import CognitiveType, DecisionKind
 from ...models.result_schema import (
     create_cognitive_result,
     create_escalated_result,
     create_error_result,
     create_fast_path_result,
 )
+from ..utils import extract_decision, extract_proto_plan
 from ..core.policies import (
     SurpriseComputer,
     decide_route_with_hysteresis,
@@ -63,6 +66,132 @@ PkgEvalFn = Callable[
 
 
 # ---------------------------------------------------------------------------
+# Helper Functions for Subtask Decomposition
+# ---------------------------------------------------------------------------
+
+def _extract_solution_steps(plan_res: Any) -> list[dict[str, Any]]:
+    """Safely extract solution steps from a cognitive planning result."""
+    if not isinstance(plan_res, dict):
+        return []
+    
+    result_data = plan_res.get("result", {})
+    if not isinstance(result_data, dict):
+        return []
+        
+    steps = result_data.get("solution_steps") or result_data.get("steps")
+    if isinstance(steps, list):
+        return steps
+    return []
+
+
+def _prepare_step_task_payload(
+    parent_task: Any, 
+    step: dict[str, Any], 
+    index: int, 
+    cid: str | None
+) -> tuple[dict[str, Any], str]:
+    """
+    Prepares a single sub-task payload by inheriting context from the parent.
+    
+    Returns: (prepared_task_dict, target_organ_hint)
+    """
+    # 1. Unwrap and Copy
+    # Steps from planner might be { "task": {...}, "organ_id": ... }
+    raw_task = step.get("task", step)
+    if not isinstance(raw_task, dict):
+        raise ValueError(f"Step {index} has invalid task structure")
+    
+    step_task = dict(raw_task)  # Defensive copy
+    if "params" not in step_task:
+        step_task["params"] = {}
+
+    # 2. Resolve Parent Params (Handle TaskPayload object vs Dict)
+    if hasattr(parent_task, "params"):
+        parent_params = parent_task.params
+        parent_id = parent_task.task_id
+    elif isinstance(parent_task, dict):
+        parent_params = parent_task.get("params", {})
+        parent_id = parent_task.get("task_id", "unknown")
+    else:
+        parent_params = {}
+        parent_id = "unknown"
+
+    # 3. Routing Inheritance Logic
+    parent_routing = parent_params.get("routing", {}) if isinstance(parent_params, dict) else {}
+    child_routing = step_task["params"].get("routing", {})
+    
+    # Merge: Parent Defaults -> Child Overrides
+    merged_routing = {**parent_routing, **child_routing}
+    step_task["params"]["routing"] = merged_routing
+    
+    # 3b. Interaction Inheritance (for conversation context)
+    parent_interaction = parent_params.get("interaction", {}) if isinstance(parent_params, dict) else {}
+    child_interaction = step_task["params"].get("interaction", {})
+    
+    # Merge interaction params (preserve conversation_id and assigned_agent_id from parent)
+    # This ensures subtasks inherit conversation context for sticky routing
+    merged_interaction = {**parent_interaction, **child_interaction}
+    step_task["params"]["interaction"] = merged_interaction
+
+    # 4. Context Inheritance
+    step_task["params"]["parent_task_id"] = parent_id
+    step_task["params"]["step_index"] = index
+    
+    if cid:
+        step_task.setdefault("correlation_id", cid)
+    
+    # Note: Sticky routing (agent affinity) is handled by Organism Router (Tier-1)
+    # The interaction params are inherited above, so the Organism Router will handle
+    # sticky routing when it processes the subtask
+
+    # 6. Determine Target Organ
+    # Priority: Explicit Step Organ > Merged Routing Hint > Default
+    organ_hint = step.get("organ_id") or merged_routing.get("target_organ_hint") or "organism"
+
+    return step_task, organ_hint
+
+
+def _aggregate_execution_results(
+    parent_task_id: str,
+    solution_steps: list[Any],
+    step_results: list[dict[str, Any]],
+    decision_kind: str,
+    original_meta: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Formats the final result of a decomposed execution plan."""
+    
+    all_succeeded = all(r.get("result", {}).get("success", False) for r in step_results)
+    partial_success = any(r.get("result", {}).get("success", False) for r in step_results)
+
+    aggregated = {
+        "success": all_succeeded,
+        "result": {
+            "plan": {
+                "parent_task_id": parent_task_id,
+                "total_steps": len(solution_steps),
+                "completed_steps": len(step_results),
+                "steps": step_results,
+            },
+            "aggregated": {
+                "all_succeeded": all_succeeded,
+                "partial_success": partial_success,
+            },
+        },
+        "metadata": {
+            "decomposition": True,
+            "decision_kind": decision_kind,
+            "parent_task_id": parent_task_id,
+        },
+    }
+
+    # Preserve original planner metadata
+    if original_meta:
+        aggregated["metadata"].update(original_meta)
+
+    return aggregated
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -75,14 +204,22 @@ async def route_and_execute(
     # Configuration objects
     routing_config: RouteConfig,
     execution_config: ExecutionConfig,
-    hgnn_config: HGNNConfig | None = None,
 ) -> dict[str, Any]:
     """
-    Unified route and execute: computes routing decision_kind and executes appropriate path.
+    Unified route and execute: computes routing decision and executes accordingly.
 
-    Returns a standardized result object produced by result_schema helpers.
+    This function handles:
+    - Routing Policy computation (Surprise Score + PKG evaluation)
+    - Fast Path execution via Organism Service
+    - Cognitive/Escalated Path delegation to Cognitive Service
+    - Audit trail persistence (proto-plans and telemetry)
+
+    Returns:
+        - Fast Path: Returns execution result from Organism Service
+        - Cognitive/Escalated Path: Returns planning result from Cognitive Service
+        - Error: Returns error result with routing metadata
     """
-    # 1) Process task input into a standardized context
+    # 1. Context Processing
     task_data = await _process_task_input(
         task=task,
         eventizer_helper=eventizer_helper,
@@ -90,8 +227,7 @@ async def route_and_execute(
     )
     ctx = TaskContext.from_dict(task_data)
 
-    # 2) Compute routing decision_kind
-    # Extract correlation_id from execution_config if available
+    # 2. Compute Routing Decision (The "Brain" of the Coordinator)
     cid = execution_config.cid if hasattr(execution_config, 'cid') else None
     routing_result = await _compute_routing_decision(
         ctx=ctx,
@@ -99,33 +235,228 @@ async def route_and_execute(
         correlation_id=cid,
     )
 
-    decision_kind = routing_result["decision_kind"]
+    decision = extract_decision(routing_result)
+    if not decision:
+        decision = routing_result.get("decision_kind", DecisionKind.ERROR.value)
+    
+    # Convert task to TaskPayload if needed for downstream processing
+    task_obj, task_dict = coerce_task_payload(task)
+    
+    # Extract agent_id for cognitive calls
+    agent_id = (
+        task_dict.get("params", {}).get("agent_id")
+        or getattr(task_obj, "params", {}).get("agent_id", "unknown")
+        if hasattr(task_obj, "params")
+        else "unknown"
+    )
 
-    # HGNN path: execute if config is wired; else return routing result
-    if decision_kind == DecisionKind.ESCALATED:
-        if hgnn_config is None:
-            logger.warning("[route] HGNN config unavailable; returning routing metadata only")
+    # 3. Handle Decision Execution
+    # --- PATH A: Cognitive / Escalated Path ---
+    if decision in [DecisionKind.COGNITIVE.value, DecisionKind.ESCALATED.value]:
+        if not execution_config.cognitive_client:
+            logger.error("[route] Cognitive client not available, cannot handle %s decision", decision)
             return routing_result["result"]
-
+        
         try:
-            hgnn_result = await _execute_hgnn(
-                task=task,
-                ctx=ctx,
-                exec_cfg=execution_config,
-                hgnn_cfg=hgnn_config,
-            )
-
-            # Merge routing metadata into execution result
-            if isinstance(hgnn_result, dict) and isinstance(routing_result.get("result"), dict):
-                routing_meta = routing_result["result"].get("payload", {}).get("metadata", {})
-                hgnn_result.setdefault("metadata", {}).update(routing_meta)
-            return hgnn_result
-        except RuntimeError as e:
-            # Validation failed - missing required HGNN deps
-            logger.warning("[route] HGNN validation failed: %s; returning routing metadata only", e)
-            return routing_result["result"]
+            decision_kind_enum = DecisionKind(decision)
+            # Determine cog_type based on decision
+            cog_type = CognitiveType.TASK_PLANNING  # Default for planning
+            if decision == DecisionKind.ESCALATED.value:
+                cog_type = CognitiveType.PROBLEM_SOLVING  # Use problem solving for escalated
             
-    # Fast and planner paths: return routing result; downstream will execute
+            plan_res = await execution_config.cognitive_client.execute_async(
+                agent_id=agent_id,
+                cog_type=cog_type,
+                decision_kind=decision_kind_enum,
+                task=task_obj  # The client will serialize this
+            )
+            
+            # Persist proto-plan if present in cognitive response
+            proto_plan = extract_proto_plan(plan_res)
+            if proto_plan and execution_config.persist_proto_plan_func:
+                try:
+                    await execution_config.persist_proto_plan_func(
+                        execution_config.graph_task_repo,
+                        task_obj.task_id,
+                        decision,
+                        proto_plan,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[route] Failed to persist proto-plan for %s: %s",
+                        task_obj.task_id,
+                        exc,
+                    )
+            
+            # 1. Extract Steps
+            solution_steps = _extract_solution_steps(plan_res)
+            
+            # 2. Execute Decomposition Loop
+            if solution_steps:
+                task_id = getattr(task_obj, "task_id", task_obj.get("task_id", "unknown") if isinstance(task_obj, dict) else "unknown")
+                logger.info("[route] Decomposing %d steps for task %s", len(solution_steps), task_id)
+                
+                step_results = []
+                
+                for i, step in enumerate(solution_steps):
+                    try:
+                        # A. Prepare (Logic extracted)
+                        step_task, organ_hint = _prepare_step_task_payload(
+                            parent_task=task_obj,
+                            step=step,
+                            index=i,
+                            cid=cid
+                        )
+                        
+                        # B. Execute (Network Call)
+                        logger.debug(
+                            "[route] Executing step %d/%d (organ_hint=%s)", 
+                            i + 1, len(solution_steps), organ_hint
+                        )
+                        
+                        # Calculate safe timeout based on SLO
+                        timeout = execution_config.fast_path_latency_slo_ms / 1000.0 * 2
+                        
+                        step_result = await execution_config.organism_execute(
+                            organ_id=organ_hint,
+                            task_dict=step_task,
+                            timeout=timeout,
+                            cid_local=cid or str(uuid.uuid4()),
+                        )
+                        
+                        step_results.append({
+                            "step_index": i,
+                            "step": step,
+                            "result": step_result,
+                        })
+
+                    except Exception as step_exc:
+                        logger.error(
+                            "[route] Step %d failed for %s: %s", i, task_id, step_exc, exc_info=True
+                        )
+                        step_results.append({
+                            "step_index": i,
+                            "step": step,
+                            "result": create_error_result(
+                                f"Step execution failed: {str(step_exc)}", 
+                                "step_execution_error"
+                            ).model_dump(),
+                        })
+                        # Optional: Break on failure here if strict consistency is required
+                
+                # C. Aggregate (Logic extracted)
+                planner_meta = plan_res.get("metadata") if isinstance(plan_res, dict) else {}
+                
+                return _aggregate_execution_results(
+                    parent_task_id=task_id,
+                    solution_steps=solution_steps,
+                    step_results=step_results,
+                    decision_kind=decision,
+                    original_meta=planner_meta
+                )
+            
+            # If no steps, just return the plan (Thought without Action)
+            return plan_res
+            
+        except Exception as exc:
+            logger.error(
+                "[route] Cognitive service delegation failed for %s: %s",
+                task_obj.task_id,
+                exc,
+                exc_info=True
+            )
+            # Fall through to return routing_result as fallback
+            return routing_result["result"]
+
+    # --- PATH B: Fast Path (Reflex) ---
+    # Only execute if decision is actually FAST_PATH
+    if decision == DecisionKind.FAST_PATH.value:
+        # The Core gave us a route (organ_id), now we must DRIVE it.
+        
+        # 1. Extract the Target
+        result_data = routing_result.get("result", {})
+        target_organ = (
+            result_data.get("organ_id")
+            or result_data.get("routed_to")
+            or routing_result.get("organ_id")
+            or routing_result.get("routed_to")
+            or "organism"
+        )
+        
+        # 2. EXECUTE (The Missing Link)
+        # We call the Organism Service's unified endpoint.
+        def _corr_headers(target: str, cid: str) -> dict[str, str]:
+            """Create correlation headers for cross-service communication."""
+            return {
+                "Content-Type": "application/json",
+                "X-Service": "coordinator",
+                "X-Source-Service": "coordinator",
+                "X-Target-Service": target,
+                "X-Correlation-ID": cid,
+            }
+        
+        try:
+            # Inject hint if specific organ was resolved
+            task_dict_copy = dict(task_dict)
+            if target_organ and target_organ not in ("organism", "random"):
+                task_dict_copy.setdefault("params", {})
+                task_dict_copy["params"].setdefault("routing", {})
+                task_dict_copy["params"]["routing"]["target_organ_hint"] = target_organ
+            
+            # Note: Sticky routing (agent affinity) is handled by Organism Router (Tier-1)
+            # The Coordinator (Tier-0) only handles high-level routing decisions
+
+            timeout = execution_config.fast_path_latency_slo_ms / 1000.0 * 2  # Give some buffer
+            execution_response = await execution_config.organism_execute(
+                organ_id=target_organ,
+                task_dict=task_dict_copy,
+                timeout=timeout,
+                cid_local=cid or str(uuid.uuid4()),
+            )
+            
+            # Merge the Execution Result into our Return Value
+            # We prefer the execution result, but keep routing metadata if needed
+            final_result = execution_response
+
+        except Exception as e:
+            logger.error(f"[route] Fast path execution failed: {e}")
+            final_result = create_error_result(f"Execution failed: {str(e)}", "execution_error").model_dump()
+
+        # 3. PERSISTENCE (Audit Trail)
+        # We persist the 'proto-plan' (routing decision) and telemetry
+        # regardless of execution success/failure.
+        
+        # A. Proto-Plan Persistence
+        proto_plan = extract_proto_plan(routing_result)
+        if proto_plan and execution_config.persist_proto_plan_func:
+            try:
+                # The persistence function handles its own session management
+                await execution_config.persist_proto_plan_func(
+                    execution_config.graph_task_repo,
+                    task_obj.task_id,
+                    decision,
+                    proto_plan,
+                )
+            except Exception as exc:
+                logger.warning(f"[route] Failed to persist proto-plan: {exc}")
+
+        # B. Telemetry Persistence
+        if execution_config.record_router_telemetry_func:
+            try:
+                # The telemetry function handles its own session management
+                await execution_config.record_router_telemetry_func(
+                    execution_config.graph_task_repo,
+                    task_obj.task_id,
+                    routing_result  # The routing data, not the execution result
+                )
+            except Exception as exc:
+                logger.warning(f"[route] Telemetry failed: {exc}")
+
+        return final_result
+    
+    # --- PATH C: Fallback/Error Path ---
+    # If decision is not FAST_PATH, COGNITIVE, or ESCALATED, return routing result
+    logger.warning(f"[route] Unhandled decision kind: {decision}, returning routing result")
     return routing_result["result"]
 
 
@@ -133,7 +464,6 @@ async def resolve_fast_route(
     *,
     task: dict[str, Any],
     normalize_task_dict: Callable[[Any], tuple[dict[str, Any], dict[str, Any]]],
-    extract_agent_id: Callable[[dict[str, Any]], str | None],
     compute_drift_score: Callable[[dict[str, Any], Any, Any], Awaitable[float]],
     resolve_route_cached: Callable[[str, str | None, str | None, str], Awaitable[str | None]],
     static_route_fallback: Callable[[str, str | None], str],
@@ -153,10 +483,6 @@ async def resolve_fast_route(
 
     task_dict, meta = normalize_task_dict(task)
     task_id = str(task_dict.get("id") or meta.get("task_id") or "unknown")
-    agent_id = extract_agent_id(task_dict)  # optional; warning-only if missing
-
-    if not agent_id:
-        logger.warning("[fast] No agent ID for task %s", task_id)
 
     # Signals: drift & energy (best-effort)
     await _inject_drift_and_energy(
@@ -183,7 +509,7 @@ async def resolve_fast_route(
 
     # Persist (best-effort)
     if persist:
-        await _persist_task_best_effort(graph_task_repo, task_dict, agent_id=agent_id, organ_id=route)
+        await _persist_task_best_effort(graph_task_repo, task_dict, agent_id=None, organ_id=route)
 
     latency_ms = (time.time() - t0) * 1000.0
 
@@ -561,148 +887,6 @@ async def _process_task_input(
     }
 
 
-def _make_escalation_result(
-    results: list[dict[str, Any]],
-    plan: list[dict[str, Any]],
-    success: bool
-) -> dict[str, Any]:
-    """Uniform escalated result object for HGNN path."""
-    return {
-        "success": success,
-        "escalated": True,
-        "plan_source": "cognitive_service",
-        "plan": plan,
-        "results": results,
-        "path": "hgnn",
-    }
-
-
-def _validate_hgnn_cfg(cfg: HGNNConfig) -> None:
-    """Validate that HGNNConfig has all required fields."""
-    missing = []
-    if cfg.hgnn_decompose is None:
-        missing.append("hgnn_decompose")
-    if cfg.bulk_resolve_func is None:
-        missing.append("bulk_resolve_func")
-    if cfg.persist_plan_func is None:
-        missing.append("persist_plan_func")
-    if not all(missing):
-        raise RuntimeError(f"HGNNConfig missing required fields: {', '.join(missing)}")
-
-
-async def _execute_hgnn(
-    *,
-    task: Any,
-    ctx: TaskContext,
-    exec_cfg: ExecutionConfig,
-    hgnn_cfg: HGNNConfig,
-) -> dict[str, Any]:
-    """
-    Execute HGNN decomposition plan with best-effort persistence and step execution.
-    """
-    _validate_hgnn_cfg(hgnn_cfg)
-    t0 = time.time()
-
-    # Root task
-    root_task_dict, meta = exec_cfg.normalize_task_dict(task)
-    if not isinstance(root_task_dict, Mapping):
-        if isinstance(root_task_dict, uuid.UUID):
-            root_task_dict = {"id": str(root_task_dict)}
-        elif isinstance(root_task_dict, str):
-            root_task_dict = {"id": root_task_dict}
-        else:
-            root_task_dict = {"id": str(root_task_dict)}
-    if not isinstance(meta, Mapping):
-        meta = {}
-    task_id = str(
-        root_task_dict.get("id")
-        or meta.get("task_id")
-        or getattr(ctx, "task_id", None)
-        or "unknown"
-    )
-    root_agent_id = exec_cfg.extract_agent_id(root_task_dict)
-
-    # Try decomposition
-    try:
-        plan = await hgnn_cfg.hgnn_decompose(task)
-    except Exception as e:
-        logger.warning("[hgnn] decomposition error: %s", e)
-        plan = []
-
-    # Fallback if no plan
-    if not plan:
-        rr = await exec_cfg.organism_execute("random", root_task_dict, _bound_timeout(5.0), exec_cfg.cid)
-        latency_ms = (time.time() - t0) * 1000.0
-        if hasattr(exec_cfg.metrics, "track_metrics"):
-            exec_cfg.metrics.track_metrics("hgnn_fallback", rr.get("success", False), latency_ms)
-        return {"success": rr.get("success", False), "result": rr, "path": "hgnn_fallback"}
-
-    # Root signals & persistence
-    await _inject_drift_and_energy(
-        root_task_dict,
-        compute_drift_score=exec_cfg.compute_drift_score,
-        ml_client=exec_cfg.ml_client,
-        predicate_router=exec_cfg.predicate_router,
-    )
-    root_db_id = await _persist_task_best_effort(
-        exec_cfg.graph_task_repo, root_task_dict, agent_id=root_agent_id
-    )
-
-    # Persist plan (best-effort)
-    try:
-        await hgnn_cfg.persist_plan_func(task, plan, root_db_id)
-    except Exception as e:
-        logger.warning("[hgnn] persist plan failed for %s: %s", task_id, e)
-
-    # Resolve routes (bulk)
-    try:
-        idx_to_logical = await hgnn_cfg.bulk_resolve_func(plan, exec_cfg.cid)
-    except Exception as e:
-        logger.warning("[hgnn] bulk resolve failed, will fallback: %s", e)
-        idx_to_logical = {}
-
-    # Fill organ_id per step
-    for idx, step in enumerate(plan):
-        if not isinstance(step, dict):
-            continue
-        if not step.get("organ_id"):
-            st = step.get("task", {}) or {}
-            step["organ_id"] = idx_to_logical.get(idx) or exec_cfg.static_route_fallback(
-                exec_cfg.normalize_type(st.get("type")),
-                exec_cfg.normalize_domain(st.get("domain")),
-            )
-
-    # Execute sequentially
-    results: list[dict[str, Any]] = []
-    for idx, step in enumerate(plan):
-        organ_id = step.get("organ_id")
-        raw_subtask = step.get("task")
-        subtask_dict = dict(raw_subtask) if isinstance(raw_subtask, dict) else dict(root_task_dict)
-
-        await _inject_drift_and_energy(
-            subtask_dict,
-            compute_drift_score=exec_cfg.compute_drift_score,
-            ml_client=exec_cfg.ml_client,
-            predicate_router=exec_cfg.predicate_router,
-        )
-
-        # Persist child + edge (best-effort)
-        sub_agent_id = exec_cfg.extract_agent_id(subtask_dict) or root_agent_id
-        child_db_id = await _persist_task_best_effort(
-            exec_cfg.graph_task_repo, subtask_dict, agent_id=sub_agent_id, organ_id=organ_id
-        )
-        await _persist_dependency_best_effort(exec_cfg.graph_task_repo, root_db_id, child_db_id)
-
-        # Execute a step
-        r = await exec_cfg.organism_execute(organ_id, subtask_dict, _bound_timeout(5.0), exec_cfg.cid)
-        results.append({"organ_id": organ_id, **r})
-
-    success = all(x.get("success") for x in results)
-    latency_ms = (time.time() - t0) * 1000.0
-    if hasattr(exec_cfg.metrics, "track_metrics"):
-        exec_cfg.metrics.track_metrics("hgnn", success, latency_ms)
-
-    return _make_escalation_result(results, plan, success)
 
 
 # ---------------------------------------------------------------------------
@@ -935,7 +1119,6 @@ class RouteConfig:
 class ExecutionConfig:
     """Configuration for task execution dependencies."""
     normalize_task_dict: Callable[[Any], tuple[dict[str, Any], dict[str, Any]]]
-    extract_agent_id: Callable[[dict[str, Any]], str | None]
     compute_drift_score: Callable[[dict[str, Any], Any, Any], Awaitable[float]]
     organism_execute: Callable[[str, dict[str, Any], float, str], Awaitable[dict[str, Any]]]
     graph_task_repo: Any
@@ -947,13 +1130,10 @@ class ExecutionConfig:
     static_route_fallback: Callable[[str, str | None], str]
     normalize_type: Callable[[str | None], str]
     normalize_domain: Callable[[str | None], str | None]
+    # New dependencies for decision execution
+    cognitive_client: Any | None = None
+    persist_proto_plan_func: Callable[[Any, str, str, dict[str, Any]], Awaitable[None]] | None = None
+    record_router_telemetry_func: Callable[[Any, str, dict[str, Any]], Awaitable[None]] | None = None
+    resolve_session_factory_func: Callable[[Any], Any] | None = None
+    fast_path_latency_slo_ms: float = 5000.0  # Default 5 seconds
 
-
-@dataclass(frozen=True)
-class HGNNConfig:
-    """Configuration for HGNN decomposition (optional)."""
-    hgnn_decompose: Callable[[Any], Awaitable[list[dict[str, Any]]]]
-    bulk_resolve_func: Callable[[list[dict[str, Any]], str], Awaitable[dict[int, str]]]
-    persist_plan_func: Callable[[Any, list[dict[str, Any]], Any | None], Awaitable[None]]
-    planner_client: Any | None = None
-    graph_sql_repo: Any | None = None

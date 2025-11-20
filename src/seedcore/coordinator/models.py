@@ -17,9 +17,9 @@ class AnomalyTriageResponse(BaseModel):
     agent_id: str
     anomalies: Dict[str, Any]
     reason: Dict[str, Any]
-    decision: Dict[str, Any]
+    decision_kind: Dict[str, Any]  # Changed from 'decision' to match code usage
     correlation_id: str
-    p_fast: float
+    p_fast: Optional[float] = None  # Made optional to match code
     escalated: bool
     tuning_job: Optional[Dict[str, Any]] = None
 

@@ -282,6 +282,34 @@ For comprehensive architecture details, see:
 - **Service Discovery**: Automatic endpoint discovery via centralized gateway
 - **Centralized Ray Connection**: Single source of truth for all Ray operations
 
+#### ⚡ Scaling Evolution Path
+
+SeedCore's inter-service communication follows a tiered evolution strategy optimized for the Ray ecosystem:
+
+**Tier-0: HTTP/JSON (Current)**
+- **Protocol**: HTTP/1.1 via `httpx` with JSON serialization
+- **Use Case**: Universal compatibility, easy debugging, stateless communication
+- **Best For**: Development, testing, external integrations, polyglot environments
+- **Performance**: Suitable for current workloads (LLM latency dominates network overhead)
+
+**Tier-1: Ray Native Handles (Next Step)**
+- **Protocol**: Ray Serve Deployment Handles (`serve.get_app_handle`)
+- **Use Case**: Internal cluster communication within Ray ecosystem
+- **Benefits**: 
+  - Zero-copy serialization via Plasma Object Store (shared memory references)
+  - No Protobuf schema maintenance (direct Python method calls)
+  - Auto-discovery and routing via Ray
+  - Near-gRPC performance without binary protocol complexity
+- **When to Adopt**: When internal routing latency becomes a bottleneck (Coordinator ↔ Organism, Cognitive ↔ ML)
+
+**Tier-2: gRPC (Edge/External)**
+- **Protocol**: gRPC with Protobuf (`ray.serve.grpc`)
+- **Use Case**: External clients (IoT devices, mobile apps), polyglot services (Go/Rust/C++)
+- **Benefits**: Binary serialization, strict typing, low-latency edge communication
+- **When to Adopt**: External ingress layer, strict latency requirements for edge devices
+
+**Recommendation**: Start with HTTP, upgrade to Ray Handles for internal cluster communication when scaling, reserve gRPC for external edge interfaces.
+
 ## 🚀 Deployment Options
 
 ### 1. Complete Automated Deployment (Recommended)

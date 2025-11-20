@@ -6,13 +6,12 @@ This module provides a base HTTP client with circuit breaker, retry logic,
 and standardized error handling for all SeedCore services.
 """
 
-import os
 import time
 import asyncio
 import logging
-from typing import Callable, Any, Optional, Dict, Union
+from typing import Callable, Any, Optional
 from enum import Enum
-import httpx
+import httpx  # pyright: ignore[reportMissingImports]
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)

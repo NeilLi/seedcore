@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from typing import Any, Dict, Optional, List
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator  # pyright: ignore[reportMissingImports]
 
 # ------------ Helper payloads (router inbox) ------------
 class ToolCallPayload(BaseModel):

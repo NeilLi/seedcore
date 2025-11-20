@@ -48,15 +48,17 @@ except Exception:  # pragma: no cover - optional dependency
 # Centralized result schema
 from ..models.result_schema import create_cognitive_result, create_error_result
 from ..models.fact import Fact
-from ..models.cognitive import DecisionKind, CognitiveType, CognitiveContext
+from ..models.cognitive import CognitiveType, CognitiveContext
 from .context_broker import (
     ContextBroker,
     RetrievalSufficiency,
     _fact_to_context_dict,
 )
 from .signatures import (
+    HGNNReasoningSignature,
     AnalyzeFailureSignature,
     CapabilityAssessmentSignature,
+    ChatSignature,
     DecisionMakingSignature,
     MemorySynthesisSignature,
     ProblemSolvingSignature,
@@ -93,6 +95,12 @@ except Exception:
 
 MLT_ENABLED = os.getenv("MLT_ENABLED", "1") in {"1", "true", "True"}
 
+# Database & Repo imports (for Server-Side Hydration)
+try:
+    from ..graph.task_metadata_repository import TaskMetadataRepository
+except ImportError:
+    TaskMetadataRepository = None
+
 
 # =============================================================================
 # Cognitive Service
@@ -113,11 +121,16 @@ class CognitiveCore(dspy.Module):
         model: Optional[str] = "gpt-4o",
         context_broker: Optional[ContextBroker] = None,
         ocps_client=None,
+        # --- NEW: Hydration Dependencies ---
+        graph_repo: Optional[Any] = None,
+        session_maker: Optional[Any] = None,
     ):
         super().__init__()
         self.llm_provider = llm_provider or "unknown"
         self.model = model or "unknown"
         self.ocps_client = ocps_client
+        self.graph_repo = graph_repo
+        self.session_maker = session_maker  # Factory for DB sessions
         self.schema_version = "v2.0"
         self._state_lock = threading.RLock()
         self._last_sufficiency: Dict[str, Any] = {}
@@ -165,8 +178,11 @@ class CognitiveCore(dspy.Module):
         self.task_planner = dspy.ChainOfThought(TaskPlanningSignature)
         self.decision_maker = dspy.ChainOfThought(DecisionMakingSignature)
         self.problem_solver = dspy.ChainOfThought(ProblemSolvingSignature)
+        # OPTIMIZATION: Use Predict (Direct) for Chat to ensure low latency
+        self.chat_handler = dspy.Predict(ChatSignature)
         self.memory_synthesizer = dspy.ChainOfThought(MemorySynthesisSignature)
         self.capability_assessor = dspy.ChainOfThought(CapabilityAssessmentSignature)
+        self.hgnn_reasoner = dspy.ChainOfThought(HGNNReasoningSignature)
         
         # Task mapping
         self.task_handlers = {
@@ -174,6 +190,7 @@ class CognitiveCore(dspy.Module):
             CognitiveType.TASK_PLANNING: self.task_planner,
             CognitiveType.DECISION_MAKING: self.decision_maker,
             CognitiveType.PROBLEM_SOLVING: self.problem_solver,
+            CognitiveType.CHAT: self.chat_handler,
             CognitiveType.MEMORY_SYNTHESIS: self.memory_synthesizer,
             CognitiveType.CAPABILITY_ASSESSMENT: self.capability_assessor,
             
@@ -206,6 +223,7 @@ class CognitiveCore(dspy.Module):
             CognitiveType.TASK_PLANNING: 600,     # 10 minutes (sufficiency data)
             CognitiveType.DECISION_MAKING: 600,   # 10 minutes (sufficiency data)
             CognitiveType.PROBLEM_SOLVING: 600,   # 10 minutes (sufficiency data)
+            CognitiveType.CHAT: 300,              # 5 minutes (lightweight conversational, volatile)
             CognitiveType.MEMORY_SYNTHESIS: 1800, # 30 minutes (no sufficiency)
             CognitiveType.CAPABILITY_ASSESSMENT: 600, # 10 minutes (sufficiency data)
             
@@ -249,9 +267,12 @@ class CognitiveCore(dspy.Module):
 
     def process(self, context: CognitiveContext) -> Dict[str, Any]:
         """
-        Pipeline router that selects the appropriate cognitive pathway based on decision kind.
+        Executes the task based on Data Availability (Tactics), not DecisionKind (Strategy).
         
-        Extracts decision_kind from unified TaskPayload format: params.cognitive.decision_kind
+        The Worker follows orders from input data:
+        - skip_retrieval=True: Skip RAG (Fast/Chat mode)
+        - hgnn_embedding present: Use HGNN context
+        - Otherwise: Run RAG pipeline
         """
         task_id = self._extract_task_id(context.input_data)
         logger.debug(
@@ -259,103 +280,51 @@ class CognitiveCore(dspy.Module):
         )
 
         input_data = context.input_data or {}
-        
-        # Extract decision_kind from unified TaskPayload format: params.cognitive.decision_kind
-        params = input_data.get("params", {})
-        cognitive_section = params.get("cognitive", {})
-        
-        if not cognitive_section:
-            logger.warning(
-                f"Task {task_id}: Missing params.cognitive section. "
-                "Expected unified TaskPayload format with params.cognitive.decision_kind"
-            )
-            decision_kind_raw = None
-        else:
-            decision_kind_raw = cognitive_section.get("decision_kind")
-        
-        decision_kind_value = (
-            str(decision_kind_raw).strip().lower()
-            if decision_kind_raw is not None
-            else DecisionKind.FAST_PATH.value
-        )
-
-        legacy_aliases = {
-            "ray_agent_fast": DecisionKind.FAST_PATH,
-            "dispatcher_planner": DecisionKind.COGNITIVE,
-            "coordinator_hgnn": DecisionKind.ESCALATED,
-        }
-        try:
-            decision_kind = DecisionKind(decision_kind_value)
-        except ValueError:
-            decision_kind = legacy_aliases.get(decision_kind_value)
-
-        if decision_kind is None:
-            logger.warning(
-                f"Task {task_id}: Unknown decision_kind '{decision_kind_raw}'. Defaulting to FAST_PATH."
-            )
-            decision_kind = DecisionKind.FAST_PATH
-
-        logger.debug(f"Task {task_id}: Routed to pipeline for {decision_kind.value}")
-
         cache_key = self._generate_cache_key(
             context.cog_type, context.agent_id, input_data
         )
 
         try:
-            if decision_kind is DecisionKind.COGNITIVE:
-                logger.debug(f"Task {task_id}: Running COGNITIVE (RAG + Plan) pipeline.")
-                knowledge_context = self._run_rag_pipeline(context, cache_key, task_id)
-                return self._run_handler_and_postprocess(
-                    context, knowledge_context, cache_key, task_id
-                )
+            # 1. Cache Check (handled in _run_rag_pipeline or _run_handler_and_postprocess)
+            # 2. Knowledge Context Construction (Data-Driven Flow)
+            
+            # Check A: Do we have HGNN context?
+            params = input_data.get("params", {})
+            hgnn_section = params.get("hgnn", {})
+            hgnn_embedding = hgnn_section.get("hgnn_embedding") or input_data.get("hgnn_embedding")
+            
+            # Check B: Did the caller request to skip RAG?
+            # (The Orchestrator sets this based on DecisionKind=FAST or Chat Mode)
+            skip_retrieval = input_data.get("skip_retrieval", False)
 
-            if decision_kind is DecisionKind.FAST_PATH:
-                logger.debug(f"Task {task_id}: Running FAST_PATH (Plan Only) pipeline.")
+            if hgnn_embedding:
+                logger.debug(f"Task {task_id}: Using provided HGNN context for deep reasoning.")
+                # Run the HGNN pipeline: Vector -> Graph -> LLM
+                return self._run_hgnn_pipeline(context, hgnn_embedding)
+            
+            elif skip_retrieval:
+                logger.debug(f"Task {task_id}: Retrieval skipped by request (Fast/Chat).")
                 knowledge_context = {
                     "facts": [],
-                    "summary": "No RAG requested for fast path.",
+                    "summary": "Retrieval skipped.",
                     "sufficiency": {},
-                    "escalate_hint": False,
                 }
-                return self._run_handler_and_postprocess(
-                    context, knowledge_context, cache_key, task_id
-                )
+                
+            else:
+                # Default: Run RAG
+                logger.debug(f"Task {task_id}: Executing RAG pipeline.")
+                knowledge_context = self._run_rag_pipeline(context, cache_key, task_id)
 
-            if decision_kind is DecisionKind.ESCALATED:
-                logger.debug(f"Task {task_id}: Running ESCALATED (HGNN context) pipeline.")
-                # Extract HGNN data from params.hgnn (new format) or input_data.hgnn_embedding (legacy)
-                hgnn_section = params.get("hgnn", {})
-                hgnn_embedding = hgnn_section.get("hgnn_embedding") or input_data.get("hgnn_embedding")
-                knowledge_context = {
-                    "facts": [],
-                    "summary": "Context provided by external HGNN.",
-                    "sufficiency": {"trust_score": 1.0, "coverage": 1.0},
-                    "escalate_hint": False,
-                    "hgnn_embedding": hgnn_embedding,
-                }
-                return self._run_handler_and_postprocess(
-                    context, knowledge_context, cache_key, task_id
-                )
-
-            logger.warning(
-                f"Task {task_id}: Unhandled decision_kind '{decision_kind}'. Defaulting to FAST_PATH."
-            )
-            fallback_context = {
-                "facts": [],
-                "summary": "Defaulting to fast path.",
-                "sufficiency": {},
-                "escalate_hint": False,
-            }
+            # 3. Execution
             return self._run_handler_and_postprocess(
-                context, fallback_context, cache_key, task_id
+                context, knowledge_context, cache_key, task_id
             )
 
         except CachedResultFound as crf:
-            logger.debug(f"Task {task_id}: Returning cached result from Mw.")
             return crf.cached_result
         except Exception as e:
-            logger.error(f"Error processing {context.cog_type.value} task: {e}", exc_info=True)
-            return create_error_result(f"Processing error: {str(e)}", "PROCESSING_ERROR").model_dump()
+            logger.exception(f"Processing error: {e}")
+            return create_error_result(str(e), "PROCESSING_ERROR").model_dump()
 
     def _run_rag_pipeline(
         self,
@@ -364,6 +333,17 @@ class CognitiveCore(dspy.Module):
         task_id: Optional[str],
     ) -> Dict[str, Any]:
         """Execute the retrieval-and-budgeting pipeline, returning a knowledge context."""
+        
+        # --- NEW: Server-Side Hydration ---
+        # If we have an ID but no parameters, pull from DB
+        if self.graph_repo and self.session_maker and task_id:
+            # Basic check: is the context 'thin'?
+            if not context.input_data.get("params") and not context.input_data.get("description"):
+                try:
+                    asyncio.run(self._hydrate_context(task_id, context))
+                except Exception as e:
+                    logger.warning(f"Hydration failed for {task_id}: {e}")
+        
         cached_result = self._get_cached_result(
             cache_key,
             context.cog_type,
@@ -486,6 +466,92 @@ class CognitiveCore(dspy.Module):
         }
 
         return knowledge_context
+
+    async def _hydrate_context(self, task_id: str, context: CognitiveContext):
+        """Pull task data from DB into the context object."""
+        if not self.session_maker or not self.graph_repo:
+            return
+            
+        async with self.session_maker() as session:
+            async with session.begin():
+                data = await self.graph_repo.get_task_context(session, task_id)
+                if data:
+                    logger.info(f"💧 Hydrated task {task_id}")
+                    # Merge non-destructively
+                    for k, v in data.items():
+                        if k not in context.input_data or not context.input_data[k]:
+                            context.input_data[k] = v
+                    # Ensure params structure exists
+                    if "params" in data and isinstance(data["params"], dict):
+                        if "params" not in context.input_data:
+                            context.input_data["params"] = {}
+                        context.input_data["params"].update(data["params"])
+
+    def _run_hgnn_pipeline(self, context: CognitiveContext, embedding: List[float]) -> Dict[str, Any]:
+        """
+        The 'Deep Reasoning' Pipeline: Vector -> Graph -> LLM
+        
+        This method implements the Neuro-Symbolic Bridge:
+        1. Translates the mathematical vector back into human-readable graph nodes
+        2. Uses DSPy to reason about structural relationships
+        3. Returns a structured diagnosis and mitigation plan
+        
+        Args:
+            context: The cognitive context containing task information
+            embedding: The HGNN embedding vector from ML Service
+            
+        Returns:
+            Dictionary with analysis, root_cause, solution_steps, and metadata
+        """
+        logger.info(f"🧠 Starting HGNN Deep Reasoning for {context.agent_id}")
+        
+        # Step A: Vector Translation (Hydration)
+        graph_neighbors = []
+        if self.graph_repo and self.session_maker:
+            # Synchronously run async DB call (using helper)
+            async def _fetch():
+                async with self.session_maker() as session:
+                    return await self.graph_repo.find_hgnn_neighbors(session, embedding)
+            
+            try:
+                graph_neighbors = self._run_coro_sync(_fetch())
+            except Exception as e:
+                logger.warning(f"HGNN neighbor fetch failed: {e}")
+        
+        context_str = json.dumps(graph_neighbors, indent=2)
+        anomaly_desc = str(context.input_data.get("description", "Unknown Anomaly detected via system drift."))
+        
+        # Step B: DSPy Execution
+        # Note: No 'with dspy.context' here. The Orchestrator already set the DEEP profile.
+        prediction = self.hgnn_reasoner(
+            structural_context=context_str,
+            anomaly_description=anomaly_desc
+        )
+            
+        # Step C: Structuring
+        return {
+            "success": True,
+            "result": {
+                "analysis": prediction.structural_analysis,
+                "root_cause": prediction.root_cause_hypothesis,
+                # Helper to format the text plan into list of steps
+                "solution_steps": self._parse_plan_text(prediction.mitigation_plan),
+                "meta": {
+                    "source": "hgnn_deep_reasoning",
+                    "neighbors_found": len(graph_neighbors)
+                }
+            }
+        }
+
+    def _parse_plan_text(self, text: str) -> List[Dict[str, Any]]:
+        """Simple helper to convert LLM text block into step list."""
+        # Basic heuristic: split by newlines or numbers
+        steps = []
+        for line in text.split('\n'):
+            clean = line.strip()
+            if clean and (clean[0].isdigit() or clean.startswith('-')):
+                steps.append({"type": "execute", "description": clean})
+        return steps or [{"type": "unknown", "description": text}]
 
     def _ensure_synopsis_embedder(self) -> Optional[Any]:
         if self._synopsis_embedder or self._synopsis_embedder_failed:
@@ -672,6 +738,8 @@ class CognitiveCore(dspy.Module):
             payload = self._normalize_failure_analysis(payload)
         elif context.cog_type == CognitiveType.TASK_PLANNING:
             payload = self._normalize_task_planning(payload)
+        elif context.cog_type == CognitiveType.CHAT:
+            payload = self._normalize_chat(payload)
 
         escalate_hint = knowledge_context.get("escalate_hint", False)
         sufficiency = knowledge_context.get("sufficiency", {}) or {}
@@ -949,73 +1017,243 @@ class CognitiveCore(dspy.Module):
         """Best-effort extraction of a task id from input data for logging.
         
         Supports unified TaskPayload format (task_id at top level) and legacy formats.
+        
+        Priority order:
+        1. Top-level task_id (TaskPayload standard format)
+        2. params.task_id (alternative location)
+        3. Legacy keys: id, request_id, job_id, run_id
+        
+        Args:
+            input_data: The input data dictionary, typically from TaskPayload.model_dump()
+            
+        Returns:
+            Task ID as string, or None if not found
         """
-        # Check top-level task_id first (TaskPayload format)
+        if not input_data:
+            return None
+        
+        # 1. Check top-level task_id first (TaskPayload standard format)
+        # TaskPayload.model_dump() puts task_id at the top level
         task_id = input_data.get("task_id")
-        if isinstance(task_id, (str, int)) and task_id is not None:
-            return str(task_id)
+        if task_id is not None:
+            # Handle both string and numeric IDs
+            if isinstance(task_id, str) and task_id.strip():
+                return task_id.strip()
+            elif isinstance(task_id, (int, float)) and task_id != 0:
+                return str(int(task_id))
         
-        # Check params.task_id (alternative TaskPayload location)
-        params = input_data.get("params", {})
-        task_id = params.get("task_id")
-        if isinstance(task_id, (str, int)) and task_id is not None:
-            return str(task_id)
+        # 2. Check params.task_id (alternative TaskPayload location)
+        params = input_data.get("params")
+        if isinstance(params, dict):
+            task_id = params.get("task_id")
+            if task_id is not None:
+                if isinstance(task_id, str) and task_id.strip():
+                    return task_id.strip()
+                elif isinstance(task_id, (int, float)) and task_id != 0:
+                    return str(int(task_id))
         
-        # Legacy fallback: check common keys
+        # 3. Legacy fallback: check common keys
         for key in ("id", "request_id", "job_id", "run_id"):
             value = input_data.get(key)
-            if isinstance(value, (str, int)) and value is not None:
-                return str(value)
+            if value is not None:
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+                elif isinstance(value, (int, float)) and value != 0:
+                    return str(int(value))
+        
         return None
 
     def _normalize_failure_analysis(self, payload: dict) -> dict:
-        """Normalize failure analysis specific fields."""
+        """
+        Normalize failure analysis specific fields.
+        
+        Handles:
+        - confidence_score: Ensures it's a float in [0.0, 1.0]
+        - Nested task structures: Normalizes any TaskPayload-like structures
+        
+        Args:
+            payload: The raw payload dict from DSPy handler output
+            
+        Returns:
+            Normalized payload dict
+        """
+        if not isinstance(payload, dict):
+            return payload
+        
+        # Normalize confidence_score
         if "confidence_score" in payload:
             try:
-                payload["confidence_score"] = float(payload["confidence_score"])
-            except Exception:
-                pass
+                conf = payload["confidence_score"]
+                # Handle string values
+                if isinstance(conf, str):
+                    conf = float(conf.strip())
+                elif isinstance(conf, (int, float)):
+                    conf = float(conf)
+                else:
+                    conf = 0.0
+                
+                # Clamp to valid range [0.0, 1.0]
+                payload["confidence_score"] = max(0.0, min(conf, 1.0))
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid confidence_score '{payload.get('confidence_score')}': {e}. Defaulting to 0.0")
+                payload["confidence_score"] = 0.0
+        
+        # Normalize nested task structure if present (TaskPayload format)
+        if "task" in payload and isinstance(payload["task"], dict):
+            payload["task"] = normalize_task_payloads(payload["task"])
+        
+        # Normalize solution_steps if present (may contain TaskPayload-like structures)
+        if "solution_steps" in payload and isinstance(payload["solution_steps"], list):
+            normalized_steps = []
+            for step in payload["solution_steps"]:
+                if isinstance(step, dict):
+                    # Normalize any nested task structures in steps
+                    if "task" in step and isinstance(step["task"], dict):
+                        step["task"] = normalize_task_payloads(step["task"])
+                    normalized_steps.append(step)
+                else:
+                    normalized_steps.append(step)
+            payload["solution_steps"] = normalized_steps
+        
         return payload
 
     def _normalize_task_planning(self, payload: dict) -> dict:
-        """Normalize task planning fields, especially estimated_complexity."""
+        """
+        Normalize task planning fields, especially estimated_complexity.
+        
+        Handles:
+        - estimated_complexity: Ensures it's a float in [1.0, 10.0]
+        - step_by_step_plan: Backward compatibility alias for solution_steps
+        - Nested task structures: Normalizes any TaskPayload-like structures in solution_steps
+        
+        Args:
+            payload: The raw payload dict from DSPy handler output
+            
+        Returns:
+            Normalized payload dict
+        """
+        if not isinstance(payload, dict):
+            return payload
+        
         # Back-compat: Some downstream consumers expect 'step_by_step_plan'.
         # If we produced a uniform plan in 'solution_steps', mirror it.
         if "step_by_step_plan" not in payload and "solution_steps" in payload:
             payload["step_by_step_plan"] = payload.get("solution_steps")
 
+        # Normalize estimated_complexity
         val = payload.get("estimated_complexity")
-        if val is None:
-            return payload
+        if val is not None:
+            if isinstance(val, (int, float)):
+                # Clamp to valid range [1.0, 10.0]
+                num = float(val)
+                payload["estimated_complexity"] = max(1.0, min(num, 10.0))
+            elif isinstance(val, str):
+                # Normalize commas and strip text
+                text = val.replace(",", ".").strip()
 
-        if isinstance(val, (int, float)):
-            # Clamp to valid range [1.0, 10.0]
-            num = float(val)
-            payload["estimated_complexity"] = max(1.0, min(num, 10.0))
-            return payload
-
-        if isinstance(val, str):
-            # Normalize commas and strip text
-            text = val.replace(",", ".").strip()
-
-            # Broader numeric extraction: find any number in the string
-            match = re.search(r'([0-9]+(?:\.[0-9]+)?)', text)
-            if match:
-                try:
-                    num = float(match.group(1))
-                    # Clamp to valid range [1.0, 10.0]
-                    payload["estimated_complexity"] = max(1.0, min(num, 10.0))
-                    logger.debug(f"Extracted numeric complexity from '{val}': {payload['estimated_complexity']}")
-                    return payload
-                except ValueError:
-                    logger.warning(f"Could not convert extracted complexity: {match.group(1)}")
+                # Broader numeric extraction: find any number in the string
+                match = re.search(r'([0-9]+(?:\.[0-9]+)?)', text)
+                if match:
+                    try:
+                        num = float(match.group(1))
+                        # Clamp to valid range [1.0, 10.0]
+                        payload["estimated_complexity"] = max(1.0, min(num, 10.0))
+                        logger.debug(f"Extracted numeric complexity from '{val}': {payload['estimated_complexity']}")
+                    except ValueError:
+                        logger.warning(f"Could not convert extracted complexity: {match.group(1)}")
+                        payload["estimated_complexity"] = 5.0
+                else:
+                    logger.warning(f"Could not extract numeric value from estimated_complexity: '{val}'")
+                    payload["estimated_complexity"] = 5.0
             else:
-                logger.warning(f"Could not extract numeric value from estimated_complexity: '{val}'")
-        else:
-            logger.warning(f"Unexpected type for estimated_complexity: {type(val)}")
+                logger.warning(f"Unexpected type for estimated_complexity: {type(val)}")
+                payload["estimated_complexity"] = 5.0
 
-        # Fallback: set to default middle value to avoid post-condition violations
-        payload["estimated_complexity"] = 5.0
+        # Normalize nested task structure if present (TaskPayload format)
+        if "task" in payload and isinstance(payload["task"], dict):
+            payload["task"] = normalize_task_payloads(payload["task"])
+
+        # Normalize solution_steps - ensure each step follows TaskPayload structure
+        if "solution_steps" in payload and isinstance(payload["solution_steps"], list):
+            normalized_steps = []
+            for idx, step in enumerate(payload["solution_steps"]):
+                if isinstance(step, dict):
+                    # Ensure step has required TaskPayload-like structure
+                    # Each step should have 'type' and 'params' at minimum
+                    if "type" not in step:
+                        logger.warning(f"solution_steps[{idx}] missing 'type' field")
+                        step["type"] = "unknown_task"
+                    
+                    if "params" not in step:
+                        step["params"] = {}
+                    
+                    # Normalize any nested task structures in steps
+                    if "task" in step and isinstance(step["task"], dict):
+                        step["task"] = normalize_task_payloads(step["task"])
+                    
+                    # Normalize params if it contains TaskPayload-like structures
+                    if "params" in step and isinstance(step["params"], dict):
+                        # Check if params contains nested routing or cognitive sections
+                        # that might need normalization
+                        if "routing" in step["params"] and isinstance(step["params"]["routing"], dict):
+                            # Already normalized by TaskPayload structure
+                            pass
+                    
+                    normalized_steps.append(step)
+                else:
+                    logger.warning(f"solution_steps[{idx}] is not a dict, skipping normalization")
+                    normalized_steps.append(step)
+            payload["solution_steps"] = normalized_steps
+            
+            # Update step_by_step_plan if it was set earlier
+            if "step_by_step_plan" in payload:
+                payload["step_by_step_plan"] = normalized_steps
+
+        return payload
+
+    def _normalize_chat(self, payload: dict) -> dict:
+        """
+        Normalize chat-specific fields.
+        
+        Handles:
+        - confidence: Ensures it's a float in [0.0, 1.0] and maps to confidence_score for consistency
+        - response: Ensures it's a string
+        
+        Args:
+            payload: The raw payload dict from DSPy handler output
+            
+        Returns:
+            Normalized payload dict
+        """
+        if not isinstance(payload, dict):
+            return payload
+        
+        # Normalize confidence field (ChatSignature outputs 'confidence', not 'confidence_score')
+        if "confidence" in payload:
+            try:
+                conf = payload["confidence"]
+                # Handle string values
+                if isinstance(conf, str):
+                    conf = float(conf.strip())
+                elif isinstance(conf, (int, float)):
+                    conf = float(conf)
+                else:
+                    conf = 0.0
+                
+                # Clamp to valid range [0.0, 1.0]
+                conf_normalized = max(0.0, min(conf, 1.0))
+                payload["confidence"] = conf_normalized
+                # Also set confidence_score for consistency with other cognitive types
+                payload["confidence_score"] = conf_normalized
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid confidence '{payload.get('confidence')}': {e}. Defaulting to 0.0")
+                payload["confidence"] = 0.0
+                payload["confidence_score"] = 0.0
+        
+        # Ensure response is a string
+        if "response" in payload and not isinstance(payload["response"], str):
+            payload["response"] = str(payload.get("response", ""))
+        
         return payload
 
     def _validate_solution_steps(self, payload: Dict[str, Any], violations: List[str]) -> None:
@@ -1092,6 +1330,9 @@ class CognitiveCore(dspy.Module):
         elif context.cog_type == CognitiveType.DECISION_MAKING:
             decision_ctx = context.input_data.get("decision_context", {})
             query_parts.append(f"decision making {decision_ctx.get('options', '')}")
+        elif context.cog_type == CognitiveType.CHAT:
+            message = context.input_data.get("message", "")
+            query_parts.append(f"chat {message[:100]}")
         elif context.cog_type in (CognitiveType.GRAPH_EMBED, CognitiveType.GRAPH_EMBED_V2):
             start_node_ids = context.input_data.get("start_node_ids", [])
             query_parts.append(f"graph embedding nodes {self._format_id_list(start_node_ids)}")
@@ -1153,6 +1394,13 @@ class CognitiveCore(dspy.Module):
                 formatted["constraints"] = json.dumps(formatted["constraints"])
             if "available_tools" in formatted and isinstance(formatted["available_tools"], dict):
                 formatted["available_tools"] = json.dumps(formatted["available_tools"])
+        elif cog_type == CognitiveType.CHAT:
+            # ChatSignature expects conversation_history as JSON string
+            if "conversation_history" in formatted:
+                if isinstance(formatted["conversation_history"], (list, dict)):
+                    formatted["conversation_history"] = json.dumps(formatted["conversation_history"])
+                elif formatted["conversation_history"] is None:
+                    formatted["conversation_history"] = "[]"
         elif cog_type == CognitiveType.MEMORY_SYNTHESIS:
             # MemorySynthesisSignature expects JSON strings
             if "memory_fragments" in formatted:
@@ -1477,46 +1725,5 @@ class CognitiveCore(dspy.Module):
 # =============================================================================
 # Global Cognitive Core Instance Management
 # =============================================================================
-
-COGNITIVE_CORE_INSTANCE: Optional[CognitiveCore] = None
-
-
-def initialize_cognitive_core(
-    llm_provider: str = "openai",
-    model: str = "gpt-4o",
-    context_broker: Optional[ContextBroker] = None,
-    ocps_client=None,
-) -> CognitiveCore:
-    """Initialize the global cognitive core instance."""
-    global COGNITIVE_CORE_INSTANCE
-    
-    if COGNITIVE_CORE_INSTANCE is None:
-        try:
-            COGNITIVE_CORE_INSTANCE = CognitiveCore(
-                llm_provider=llm_provider,
-                model=model,
-                context_broker=context_broker,
-                ocps_client=ocps_client,
-            )
-            logger.info(
-                "Initialized global cognitive core with %s and %s",
-                COGNITIVE_CORE_INSTANCE.llm_provider,
-                COGNITIVE_CORE_INSTANCE.model,
-            )
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize cognitive core: {e}")
-            raise
-    
-    return COGNITIVE_CORE_INSTANCE
-
-
-def get_cognitive_core() -> Optional[CognitiveCore]:
-    """Get the global cognitive core instance."""
-    return COGNITIVE_CORE_INSTANCE
-
-
-def reset_cognitive_core():
-    """Reset the global cognitive core instance (useful for testing)."""
-    global COGNITIVE_CORE_INSTANCE
-    COGNITIVE_CORE_INSTANCE = None
+# Global singleton management removed - CognitiveOrchestrator now manages lifecycle
+# =============================================================================

@@ -7,11 +7,10 @@ This package provides the core coordinator functionality, including:
 - API models for coordinator endpoints
 
 Modules:
-- core.py: CoordinatorCore façade and routing pipeline
 - dao.py: DAOs for telemetry, outbox, and proto plan persistence
 - models.py: Pydantic models for API requests/responses
 - utils.py: Utility functions for task normalization, redaction, and data processing
-- core/: Submodules for routing, policies, plan, and execution
+- core/: Submodules for routing, policies, plan, and execution (execute.py contains route_and_execute)
 
 Public API:
 - Models: AnomalyTriageRequest, AnomalyTriageResponse, TuneCallbackRequest
@@ -39,7 +38,6 @@ from .utils import (
     DEFAULT_RECURSION_DEPTH,
     normalize_task_dict,
     convert_task_to_dict,
-    extract_agent_id,
     extract_proto_plan,
     extract_decision,
     extract_from_nested,
@@ -62,7 +60,6 @@ __all__ = [
     # Utility functions
     "normalize_task_dict",
     "convert_task_to_dict",
-    "extract_agent_id",
     "extract_proto_plan",
     "extract_decision",
     "extract_from_nested",

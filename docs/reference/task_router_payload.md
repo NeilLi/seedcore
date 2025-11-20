@@ -62,10 +62,75 @@ The interaction envelope controls how tasks are routed and executed, particularl
 **Interaction Modes:**
 
 - `agent_tunnel`: Human ↔ Agent conversation with memory. Tasks are routed directly to the OrganismRouter, bypassing Coordinator for low-latency conversational flows. The assigned agent maintains conversation context.
+  - **Cognitive Integration:** When `mode == "agent_tunnel"`, tasks are typically processed using `CognitiveType.CHAT` with `DecisionKind.FAST_PATH` for low-latency conversational responses.
+  - **Conversation Context:** Conversation history should be passed via `params.chat.history` or top-level `conversation_history` field.
+  - **Example Payload:**
+    ```json
+    {
+      "type": "chat",
+      "task_id": "chat_123",
+      "description": "User message here",
+      "message": "User message here",
+      "conversation_history": [
+        {"role": "user", "content": "Previous message"},
+        {"role": "assistant", "content": "Previous response"}
+      ],
+      "params": {
+        "interaction": {
+          "mode": "agent_tunnel",
+          "conversation_id": "conv_123"
+        },
+        "cognitive": {
+          "agent_id": "agent_xyz",
+          "cog_type": "chat",
+          "decision_kind": "fast"
+        },
+        "chat": {
+          "message": "User message here",
+          "history": [...],
+          "agent_persona": "...",
+          "style": "concise_conversational"
+        }
+      }
+    }
+    ```
 - `one_shot`: Single-turn task execution without conversation context.
 - `coordinator_routed`: Default mode. Tasks go through Coordinator for scoring and decision-making before routing.
 
-**Important:** When `mode == "agent_tunnel"`, the router bypasses Coordinator and routes directly to OrganismRouter for faster response times in conversational scenarios.
+**Important:** When `mode == "agent_tunnel"`, the router bypasses Coordinator and routes directly to OrganismRouter for faster response times in conversational scenarios. The Cognitive Service will use `CognitiveType.CHAT` for these requests, providing lightweight conversational responses optimized for latency.
+
+### Cognitive Metadata (`params.cognitive`)
+
+The cognitive metadata envelope provides information for the Cognitive Service when tasks are processed through cognitive reasoning:
+
+```json
+{
+  "cognitive": {
+    "agent_id": "agent_xyz",
+    "cog_type": "chat",  // or "task_planning", "problem_solving", etc.
+    "decision_kind": "fast",  // or "planner", "hgnn"
+    "llm_provider_override": "openai",  // optional
+    "llm_model_override": "gpt-4o"  // optional
+  }
+}
+```
+
+**Cognitive Types (`cog_type`):**
+- `chat`: Lightweight conversational path for agent-tunneled interactions
+- `task_planning`: Decompose complex tasks into structured plans
+- `problem_solving`: Generate multi-step solution plans
+- `failure_analysis`: Analyze failures and propose solutions
+- `decision_making`: Evaluate options and select best choice
+- `memory_synthesis`: Synthesize insights from memory fragments
+- `capability_assessment`: Assess agent capabilities and improvement plans
+- Graph and fact operations: `graph_embed`, `graph_rag_query`, `fact_search`, etc.
+
+**Decision Kinds (`decision_kind`):**
+- `fast`: Fast path - direct execution without RAG retrieval
+- `planner`: Cognitive path - includes RAG retrieval and planning
+- `hgnn`: Escalated path - uses HGNN embeddings for deep context
+
+**Important:** The `params.cognitive` namespace is the **standard location** for cognitive metadata. The Cognitive Service extracts `agent_id`, `cog_type`, and `decision_kind` from this namespace. Legacy top-level `meta.decision_kind` is still supported but deprecated.
 
 ### Router Inbox (`params.routing`)
 

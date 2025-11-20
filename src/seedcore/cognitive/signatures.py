@@ -7,8 +7,10 @@ __all__ = [
     "TaskPlanningSignature",
     "DecisionMakingSignature",
     "ProblemSolvingSignature",
+    "ChatSignature",
     "MemorySynthesisSignature",
     "CapabilityAssessmentSignature",
+    "HGNNReasoningSignature",
 ]
 
 # =============================================================================
@@ -164,6 +166,32 @@ class ProblemSolvingSignature(WithKnowledgeMixin, dspy.Signature):
     )
 
 
+class ChatSignature(WithKnowledgeMixin, dspy.Signature):
+    """
+    Lightweight conversational path for chat-based interactions.
+    Provides natural language responses based on user messages and knowledge context.
+    """
+    
+    message = dspy.InputField(
+        desc="The user's message or question to respond to."
+    )
+    
+    conversation_history = dspy.InputField(
+        desc=("Optional JSON string containing recent conversation history. "
+              "Schema: [{'role': 'user'|'assistant', 'content': '...'}, ...]")
+    )
+    
+    response = dspy.OutputField(
+        desc="A natural, conversational response to the user's message. "
+             "Use the knowledge context to provide accurate and helpful information. "
+             "Keep responses concise and relevant."
+    )
+    
+    confidence = dspy.OutputField(
+        desc="A single floating-point number between 0.0 and 1.0 indicating confidence in the response."
+    )
+
+
 class MemorySynthesisSignature(WithKnowledgeMixin, dspy.Signature):
     """Synthesize a single, actionable insight from multiple memory fragments."""
     
@@ -220,4 +248,34 @@ class CapabilityAssessmentSignature(WithKnowledgeMixin, dspy.Signature):
         desc=("A JSON list of dictionaries for the improvement plan. "
               "Schema: [{'step': int, 'action': str, 'metric': str, 'description': str}]"),
         prefix="```json\n"
+    )
+
+
+class HGNNReasoningSignature(dspy.Signature):
+    """
+    Performs deep diagnosis based on Hypergraph structural anomalies.
+    Analyses why a specific task vector drifted from the norm.
+    """
+    
+    # Input: The Translation of the Vector (From Phase 1)
+    structural_context = dspy.InputField(
+        desc="List of graph nodes and edges found near the anomaly vector."
+    )
+    
+    # Input: The Raw Anomaly Data (From ML Service)
+    anomaly_description = dspy.InputField(
+        desc="The raw error logs or timeseries data that triggered the surprise."
+    )
+    
+    # Chain of Thought
+    structural_analysis = dspy.OutputField(
+        desc="Analyze the relationship between the retrieved nodes. Are they shared dependencies? Is there a bottleneck?"
+    )
+    
+    root_cause_hypothesis = dspy.OutputField(
+        desc="The most likely root cause based on the structural proximity of the nodes."
+    )
+    
+    mitigation_plan = dspy.OutputField(
+        desc="A step-by-step plan to fix the structural issue."
     )

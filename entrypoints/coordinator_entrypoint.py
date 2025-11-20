@@ -28,12 +28,10 @@ RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
 def build_coordinator(args: dict = None):
     """Builder for the Coordinator Serve app."""
     # Collect env vars from the *controller* process to inject into replicas
+    # Note: OCPS_DRIFT_THRESHOLD, FAST_PATH_LATENCY_SLO_MS, MAX_PLAN_STEPS,
+    # COGNITIVE_MAX_INFLIGHT, and REDIS_URL are set in rayservice.yaml and env.example
     env_vars = {
         "SEEDCORE_PG_DSN": os.getenv("SEEDCORE_PG_DSN", ""),
-        "OCPS_DRIFT_THRESHOLD": os.getenv("OCPS_DRIFT_THRESHOLD", "0.5"),
-        "FAST_PATH_LATENCY_SLO_MS": os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"),
-        "MAX_PLAN_STEPS": os.getenv("MAX_PLAN_STEPS", "16"),
-        "COGNITIVE_MAX_INFLIGHT": os.getenv("COGNITIVE_MAX_INFLIGHT", "64"),
         "COORDINATOR_REPLICAS": os.getenv("COORDINATOR_REPLICAS", "1"),
         "COORDINATOR_NUM_CPUS": os.getenv("COORDINATOR_NUM_CPUS", "0.2"),
         "SERVE_GATEWAY": os.getenv("SERVE_GATEWAY", "http://seedcore-svc-stable-svc:8000"),
@@ -44,7 +42,6 @@ def build_coordinator(args: dict = None):
         "COGNITIVE_SERVICE_TIMEOUT": os.getenv("COGNITIVE_SERVICE_TIMEOUT", "15.0"),
         "ORGANISM_SERVICE_TIMEOUT": os.getenv("ORGANISM_SERVICE_TIMEOUT", "5.0"),
         "SERVE_CALL_TIMEOUT_S": os.getenv("SERVE_CALL_TIMEOUT_S", "120"),
-        "REDIS_URL": os.getenv("REDIS_URL", "redis://localhost:6379"),
         # Circuit breaker timeouts
         "CB_ML_TIMEOUT_S": os.getenv("CB_ML_TIMEOUT_S", "5.0"),
         "CB_COG_TIMEOUT_S": os.getenv("CB_COG_TIMEOUT_S", "8.0"),

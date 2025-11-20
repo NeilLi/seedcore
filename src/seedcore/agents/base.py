@@ -165,6 +165,12 @@ class BaseAgent:
         self.mcp_client = mcp_client
         if mcp_client and getattr(tool_manager, "_mcp_client", None) is None:
             tool_manager._mcp_client = mcp_client
+        
+        # Inject cognitive_client into ToolManager if provided
+        # cognitive_client is for Cognitive Service (LLM/reasoning), different from MCP
+        # Note: self.cognitive_client is set later (line 228), but we inject it here for ToolManager
+        if cognitive_client and getattr(tool_manager, "cognitive_client", None) is None:
+            tool_manager.cognitive_client = cognitive_client
 
         # Skills (deltas) + optional persistence
         self.skills: SkillVector = SkillVector()
