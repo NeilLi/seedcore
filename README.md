@@ -1,12 +1,63 @@
-# SeedCore: Dynamic Cognitive Architecture with XGBoost ML Integration
+# SeedCore: A Neuro-Symbolic Cognitive Architecture
 
 [![Run Tests](https://github.com/NeilLi/seedcore/actions/workflows/tests.yml/badge.svg)](https://github.com/NeilLi/seedcore/actions/workflows/tests.yml)
 
-SeedCore is a self-evolving cognitive system that merges distributed computing with biological design principles.
+SeedCore is a self-evolving cognitive operating system that fuses distributed computing with biological design principles. It orchestrates a persistent cognitive organism—a living runtime that supports real-time adaptation, deep structural reasoning, and autonomous self-repair.
 
-It runs on Kubernetes + Ray and combines persistent agents, energy-driven feedback loops, and XGBoost-powered learning to create adaptive, stateful intelligence.
+Built on Kubernetes and Ray, SeedCore replaces monolithic control logic with a Planes of Control architecture that cleanly separates high-level strategy from low-level execution. It integrates System 1 (reflexive) and System 2 (deliberative) pipelines, handling high-velocity events on the fast path while reserving costly reasoning for high-entropy anomalies.
 
-Designed for real-time cognition, schema evolution, and self-repair, SeedCore transforms static software pipelines into a dynamic, collaborative cognitive organism.
+## Core Architecture: Planes of Control
+
+SeedCore is organized into four operational planes, flowing from abstract strategy to concrete computation:
+
+### 🧠 Intelligence Plane (Cognitive Service)
+
+A shared Brain-as-a-Service layer providing neuro-symbolic reasoning and strategic orchestration. It dynamically allocates computational profiles (Fast vs Deep) based on task complexity, guarantees thread-safe execution across concurrent requests, and hydrates context on demand from persistent storage.
+
+This plane bridges vector-space anomalies with semantic graph neighborhoods via Hypergraph Neural Networks (HGNN), enabling LLMs to reason about structural root causes (e.g., "the cluster is fractured") rather than only react to raw logs or text.
+
+### 🎮 Control Plane (Coordinator Service)
+
+The strategic cortex. It ingests stimuli and governs system behavior using an Online Change-Point Sentinel (OCPS) to detect "surprise" via information entropy. It leverages a Policy Knowledge Graph (PKG) for governance and drives the Plan → Execute → Audit loop, decomposing abstract intentions into concrete, executable sub-tasks.
+
+### ⚡ Execution Plane (Organism Service)
+
+The nervous system. A high-performance, distributed runtime managing a workforce of persistent, stateful agents acting as local reflex layers.
+
+Agents:
+
+- React to tasks and execute tool calls
+- Enforce RBAC (tools & data scopes)
+- Compute local salience scores
+- Advertise their specialization and skills
+
+This plane handles dynamic routing, load balancing, sticky session affinity (`agent_tunnel`), and tool execution with millisecond latency. Agents focus on local execution only; global routing, cognitive reasoning, and cross-agent coordination are the responsibility of the Control and Intelligence planes.
+
+### ⚙️ Infrastructure Plane (ML Service)
+
+The computational substrate. It exposes the raw "physics and math" of the organism, hosting:
+
+- XGBoost services for regime detection
+- Drift detectors for data distribution shifts
+- The HGNN inference engine for structural reasoning
+
+## Key Capabilities
+
+**Tiered Cognition**
+
+Dynamically switches between Fast Path (heuristic/reflexive) and Deep Path (planner/reasoning) execution based on both semantic urgency and measured drift in incoming signals.
+
+**Energy-Driven Dynamics**
+
+Agents and organs operate under a metabolic energy budget (`E_state`), creating feedback loops that naturally dampen runaway processes and reward efficient problem-solving.
+
+**Neuro-Symbolic Bridge**
+
+Combines the speed of neural models (for embedding and pattern matching) with the interpretability of symbolic logic (for planning, constraints, and rule enforcement).
+
+**Config-Driven Perception**
+
+The Eventizer engine converts unstructured inputs into structured semantic signals ("Tags") using deterministic, hot-swappable pattern definitions, ensuring the organism perceives the world consistently across all planes.
 
 ## 🚀 Quick Start (Kubernetes + KubeRay)
 
@@ -135,7 +186,42 @@ curl http://localhost:8000/ops/energy/health
 
 ## 🏗️ Architecture Overview
 
-SeedCore implements a distributed, intelligent organism architecture using Ray Serve for service orchestration and Ray Actors for distributed computation. The system features a robust **epoch-based runtime registry** that provides comprehensive actor lifecycle management, cluster coordination, and fault tolerance.
+SeedCore implements a distributed **Control/Execution Plane architecture** using Ray Serve for service orchestration and Ray Actors for distributed computation. The system features a robust **epoch-based runtime registry** that provides comprehensive actor lifecycle management, cluster coordination, and fault tolerance.
+
+### Control/Execution Plane Architecture
+
+SeedCore follows a **"Planes of Control"** architecture with three distinct planes:
+
+#### 1. Control Plane (Coordinator Service)
+- **Universal Interface**: Single `POST /route-and-execute` endpoint consolidates all business logic (Triage, Tuning, Execution)
+- **Strategic Orchestration**: Implements "Plan-Execute-Audit" loop - decomposes Cognitive Plans into concrete subtasks and dispatches to Organism
+- **Semantic Policy Engine**: Fuses Mathematical Drift (ML Service) with Semantic Urgency (Eventizer Tags) for intelligent routing decisions
+- **Type-Based Routing**: Uses `TaskPayload.type` for internal routing:
+  - `type: "anomaly_triage"` → Anomaly triage pipeline
+  - `type: "ml_tune_callback"` → ML tuning callback handler
+  - Other types → Standard routing & execution
+- **Clean Architecture**: Removed legacy `CoordinatorCore` wrapper and HGNN execution logic
+
+#### 2. Intelligence Plane (Cognitive Service)
+- **Server-Side Hydration**: Implements "Data Pull" pattern - `CognitiveCore` hydrates context from `TaskMetadataRepository` using `task_id`, reducing network payload size
+- **Neuro-Symbolic Bridge**: `HGNNReasoningSignature` pipeline translates ML vector embeddings (`hgnn_embedding`) into semantic graph neighborhoods for deep reasoning
+- **Concurrency Safety**: Replaced global `dspy.settings` with thread-safe `dspy.context` managers
+- **Worker Pattern**: `CognitiveCore` is purely data-driven, stripped of routing logic
+
+#### 3. Execution Plane (Organism & API)
+- **Thin API Client**: `seedcore-api` acts as "Dumb Pipe" (Ingest & Queue only) - removed local eventizer processing
+- **Unified Gateway**: All clients use Organism's canonical `/route-and-execute` endpoint
+- **Sticky Sessions**: `agent_tunnel` logic in `OrganismRouter` enables low-latency conversational affinity via Redis
+
+#### 4. Perception (Eventizer & System 1)
+- **Config-Driven Logic**: `EventizerService` injects attributes (`target_organ`, `required_skill`) directly from `eventizer_patterns.json` metadata, removing hardcoded Python heuristics
+- **Centralization**: Single source of truth for text analysis hosted in Coordinator
+- **Schema Validation**: Enforced strict JSON schema validation for pattern files
+
+#### 5. Infrastructure Improvements
+- **Fast-Lane Dispatch**: `_enqueue_task_embedding_now` for best-effort immediate indexing
+- **Dependency Injection**: Cleaned up session factories and client wiring across all services
+- **Interface Hygiene**: Operational endpoints (`/health`, `/metrics`) hidden from public API schemas but available for Kubernetes/Prometheus
 
 ### Key Architectural Components
 
@@ -143,10 +229,10 @@ SeedCore implements a distributed, intelligent organism architecture using Ray S
 - **Ray Serve Services**: Independent microservices for different capabilities
   - **ML Service** (`/ml`): XGBoost machine learning and model management
   - **Cognitive Service** (`/cognitive`): Advanced reasoning with DSPy integration
-  - **State Service** (`/state`): Centralized state aggregation and collection
-  - **Energy Service** (`/energy`): Energy calculations and agent optimization
-  - **Coordinator Service** (`/pipeline`): Task coordination and orchestration
-  - **Organism Service** (`/organism`): Agent and organ lifecycle management
+  - **State Service** (`/ops/state`): Centralized state aggregation and collection
+  - **Energy Service** (`/ops/energy`): Energy calculations and agent optimization
+  - **Coordinator Service** (`/pipeline`): Control Plane - unified routing and orchestration
+  - **Organism Service** (`/organism`): Execution Plane - agent and organ lifecycle management
 
 #### Runtime Registry and Actor Lifecycle
 - **Epoch-Based Cluster Management**: Prevents split-brain scenarios with advisory-locked epoch updates
@@ -269,6 +355,9 @@ For comprehensive architecture details, see:
 
 ### 🧠 Advanced Cognitive Intelligence
 - **DSPy v2 Integration**: Enhanced cognitive reasoning with OCPS fast/deep path routing
+- **Server-Side Hydration**: Data Pull pattern reduces network payload by hydrating context from database using `task_id`
+- **Neuro-Symbolic Bridge**: `HGNNReasoningSignature` translates ML vector embeddings into semantic graph neighborhoods
+- **Thread-Safe Execution**: Uses `dspy.context` managers instead of global settings for concurrency safety
 - **RRF Fusion & MMR Diversity**: Better retrieval and diversification algorithms
 - **Dynamic Token Budgeting**: OCPS-informed budgeting and escalation hints
 - **Enhanced Fact Schema**: Provenance, trust, and policy flags
@@ -276,11 +365,15 @@ For comprehensive architecture details, see:
 - **Cache Governance**: TTL per task type with hardened cache management
 
 ### 🔄 Service Communication Architecture
+- **Unified Interface**: Single `POST /route-and-execute` endpoint for all Coordinator operations
+- **Thin Client Pattern**: Routers are lightweight clients that delegate all decision logic to backend services
+- **Agent Tunnel Optimization**: Low-latency bypass for conversational interactions via Redis sticky sessions
 - **Circuit Breaker Pattern**: Fault tolerance with configurable failure thresholds
 - **Exponential Backoff Retry**: Jittered retry logic with configurable delays
 - **Resource Management**: Rate limiting and concurrency control
 - **Service Discovery**: Automatic endpoint discovery via centralized gateway
 - **Centralized Ray Connection**: Single source of truth for all Ray operations
+- **Fast-Lane Dispatch**: Best-effort immediate task embedding indexing for reduced latency
 
 #### ⚡ Scaling Evolution Path
 
@@ -573,11 +666,13 @@ kubectl get pods -n kuberay-system
 - **Model Management**: `GET /ml/models`, `DELETE /ml/models/{model_id}`
 - **Hyperparameter Tuning**: `POST /ml/tune`
 
-#### Cognitive Service (`/cognitive`)
+#### Cognitive Service (`/cognitive`) - Intelligence Plane
 - **Health Check**: `GET /cognitive/health`
-- **Agent Management**: `POST /cognitive/agents`, `GET /cognitive/agents`
-- **Task Execution**: `POST /cognitive/execute`
-- **Reasoning**: `POST /cognitive/reason`
+- **Task Execution**: `POST /cognitive/execute` - Executes cognitive tasks with server-side hydration
+  - Supports Data Pull pattern: hydrates context from `TaskMetadataRepository` using `task_id`
+  - Neuro-symbolic bridge: translates ML embeddings into semantic graph neighborhoods
+  - Thread-safe execution via `dspy.context` managers
+- **Service Info**: `GET /cognitive/info` - Service metadata and configuration
 
 #### State Service (`/ops/state`)
 - **Health Check**: `GET /ops/state/health`
@@ -589,14 +684,23 @@ kubectl get pods -n kuberay-system
 - **Energy Computation**: `POST /ops/energy/compute-energy`
 - **Agent Optimization**: `POST /ops/energy/optimize-agents`
 
-#### Coordinator Service (`/pipeline`)
-- **Health Check**: `GET /pipeline/health`
-- **Task Coordination**: `POST /pipeline/coordinate`
+#### Coordinator Service (`/pipeline`) - Control Plane
+- **Health Check**: `GET /pipeline/health` (hidden from schema)
+- **Unified Interface**: `POST /pipeline/route-and-execute` - Universal entrypoint for all business operations
+  - Type-based routing: `type: "anomaly_triage"` → Anomaly triage pipeline
+  - Type-based routing: `type: "ml_tune_callback"` → ML tuning callback handler
+  - Other types → Standard routing & execution
+  - Handles complete lifecycle: routing, scoring, delegation, execution, persistence
+- **Metrics**: `GET /pipeline/metrics` (hidden from schema)
+- **Predicate Admin**: `GET /pipeline/predicates/status`, `POST /pipeline/predicates/reload` (hidden from schema)
 
-#### Organism Service (`/organism`)
+#### Organism Service (`/organism`) - Execution Plane
 - **Health Check**: `GET /organism/health`
+- **Unified Gateway**: `POST /organism/route-and-execute` - Canonical endpoint for routing and execution
+- **Routing Only**: `POST /organism/route-only` - Get routing decision without execution
 - **Organ Management**: `GET /organism/organs`
 - **Agent Management**: `GET /organism/agents`
+- **Sticky Sessions**: Agent tunnel mode for low-latency conversational affinity via Redis
 
 ### Standalone API Endpoints (Port 8002)
 - **Health Check**: `GET /health`
@@ -665,6 +769,13 @@ For issues and questions:
 ## 🎉 Recent Updates
 
 ### Latest Enhancements (2025)
+- ✅ **Control/Execution Plane Architecture**: Major refactor transitioning to distributed "Planes of Control" architecture
+  - **Control Plane**: Universal `/route-and-execute` interface consolidating all business logic (Triage, Tuning, Execution)
+  - **Intelligence Plane**: Server-side hydration with Data Pull pattern, neuro-symbolic bridge, thread-safe execution
+  - **Execution Plane**: Thin API client pattern, unified gateway, sticky sessions via Redis agent tunnel
+  - **Perception**: Config-driven Eventizer with JSON schema validation, centralized text analysis
+- ✅ **Semantic Policy Engine**: Fuses Mathematical Drift (ML Service) with Semantic Urgency (Eventizer Tags) for intelligent routing
+- ✅ **Plan-Execute-Audit Loop**: Coordinator decomposes Cognitive Plans into concrete subtasks and dispatches to Organism
 - ✅ **Complete Database Schema Evolution**: 19 comprehensive migrations for task management, HGNN architecture, facts system, runtime registry, PKG policy governance, and embedding enhancements
 - ✅ **Ray Serve Microservices Architecture**: Independent services for ML, Cognitive, State, Energy, Coordinator, and Organism management
 - ✅ **Advanced Cognitive Intelligence**: DSPy v2 integration with OCPS fast/deep path routing and enhanced fact management
