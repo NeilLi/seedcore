@@ -11,12 +11,10 @@ import os
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlalchemy import text
-
-logger = logging.getLogger(__name__)
+from fastapi import FastAPI  # pyright: ignore[reportMissingImports]
+from fastapi.middleware.cors import CORSMiddleware  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncEngine  # pyright: ignore[reportMissingImports]
+from sqlalchemy import text  # pyright: ignore[reportMissingImports]
 
 from .database import get_async_pg_engine  # must return postgresql+asyncpg engine
 from .models import TaskBase
@@ -27,6 +25,8 @@ from .graph.task_embedding_worker import (
     task_embedding_worker,
 )
 from .api.routers.control_router import router as control_router
+
+logger = logging.getLogger(__name__)
 
 ENABLE_ENV_ENDPOINT = os.getenv("ENABLE_DEBUG_ENV", "false").lower() in ("1","true","yes")
 RUN_DDL_ON_STARTUP = os.getenv("RUN_DDL_ON_STARTUP", "true").lower() in ("1","true","yes")  # set false in prod

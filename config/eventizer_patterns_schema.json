@@ -1,18 +1,18 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://seedcore.ai/schemas/eventizer_patterns.json",
+  "$id": "https://schemas.seedcore.ai/ops/eventizer/v1/patterns.json",
   "title": "Eventizer Patterns Configuration Schema",
-  "description": "Schema for SeedCore Eventizer pattern bundles (domain-agnostic). Backward-compatible with keyword_dictionaries.",
+  "description": "Schema for SeedCore Eventizer pattern bundles. Defines deterministic extraction rules for task routing.",
   "type": "object",
   "properties": {
     "version": {
       "type": "string",
-      "description": "Bundle version (semver).",
+      "description": "Bundle semantic version (e.g., 1.2.0). Must be compatible with the schema major version.",
       "pattern": "^\\d+\\.\\d+\\.\\d+$"
     },
     "metadata": {
       "type": "object",
-      "description": "Bundle metadata for governance & audit.",
+      "description": "Governance metadata for audit trails.",
       "properties": {
         "name": { "type": "string" },
         "description": { "type": "string" },
@@ -22,14 +22,14 @@
         "domains": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Informational list of domains this bundle targets (e.g., hotel_ops, fintech, healthcare, robotics)."
+          "description": "Target domains (e.g., hotel_ops, robotics)."
         }
       },
-      "required": ["name", "description"]
+      "required": ["name", "description", "updated_at"]
     },
     "settings": {
       "type": "object",
-      "description": "Global matching & safety settings.",
+      "description": "Global engine settings and resource limits.",
       "properties": {
         "default_case_sensitive": { "type": "boolean", "default": false },
         "default_whole_word": { "type": "boolean", "default": true },
@@ -38,58 +38,49 @@
         "max_patterns": { "type": "integer", "minimum": 1, "default": 20000 },
         "enable_aho_corasick": { "type": "boolean", "default": true },
         "enable_regex_optimization": { "type": "boolean", "default": true },
-        "locale": { "type": "string", "description": "BCP-47 locale hint, e.g., en-US, zh-CN" },
-        "languages": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "Accepted language hints for this bundle."
-        },
-        "budget_ms_soft": { "type": "number", "minimum": 1, "default": 40, "description": "Soft budget hint for the compiler to slice time across engines." },
-        "budget_ms_hard": { "type": "number", "minimum": 1, "default": 100, "description": "Hard budget for all matching combined." },
-        "max_regex_length": { "type": "integer", "minimum": 1, "default": 4096, "description": "Safety: reject overly long regex strings." },
-        "max_keywords_total": { "type": "integer", "minimum": 1, "default": 200000, "description": "Safety: cap total keywords across sets." }
+        "locale": { "type": "string", "default": "en-US" },
+        "budget_ms_soft": { "type": "number", "default": 40 },
+        "budget_ms_hard": { "type": "number", "default": 100 },
+        "max_regex_length": { "type": "integer", "default": 4096 },
+        "max_keywords_total": { "type": "integer", "default": 200000 }
       }
     },
 
     "tag_aliases": {
       "type": "object",
-      "description": "Optional alias map from pattern families to event types (used by router).",
+      "description": "Maps internal shorthand to canonical event types.",
       "additionalProperties": { "type": "string" }
     },
 
     "regex_patterns": {
       "type": "array",
-      "description": "Regular expressions (complex logic, high precision).",
+      "description": "High-precision patterns using regular expressions.",
       "items": {
         "type": "object",
         "properties": {
           "id": { "type": "string", "pattern": "^[a-zA-Z0-9:_-]+$" },
           "pattern": { "type": "string", "minLength": 1 },
-          "flags": { "type": "integer", "minimum": 0, "default": 0, "description": "Python re flags bitmask (e.g., re.IGNORECASE=2)." },
-          "priority": { "type": "integer", "minimum": 0, "maximum": 1000, "default": 100 },
-          "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.9 },
+          "flags": { "type": "integer", "default": 0 },
+          "priority": { "type": "integer", "minimum": 0, "maximum": 1000 },
+          "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
           "event_types": {
             "type": "array",
             "items": { "type": "string" },
-            "minItems": 1,
-            "description": "Free-form types; router maps them (e.g., hvac, security, vip, allergen, emergency, maintenance, fraud, healthcare, robotics, custom)."
+            "minItems": 1
           },
           "description": { "type": "string" },
-          "whole_word": { "type": "boolean", "default": false },
-          "case_sensitive": { "type": "boolean", "default": false },
+          "whole_word": { "type": "boolean" },
+          "case_sensitive": { "type": "boolean" },
           "enabled": { "type": "boolean", "default": true },
           "emits_tags": {
             "type": "array",
-            "items": { "type": "string" },
-            "description": "Router tags to emit if matched (e.g., vip, privacy, allergen, hvac_fault)."
+            "items": { "type": "string" }
           },
           "emits_attributes": {
             "type": "object",
-            "description": "Static attributes to emit on match (e.g., {\"temp_target_c\": 21}).",
+            "description": "Key-value pairs injected into the task context on match.",
             "additionalProperties": true
           },
-          "budget_ms": { "type": "number", "minimum": 0, "description": "Optional per-pattern budget hint." },
-          "throttle_ms": { "type": "number", "minimum": 0, "description": "Optional throttle to limit how often this pattern fires." },
           "metadata": { "type": "object", "additionalProperties": true }
         },
         "required": ["id", "pattern", "event_types"]
@@ -98,7 +89,7 @@
 
     "keyword_patterns": {
       "type": "array",
-      "description": "Keyword sets (fast matching).",
+      "description": "High-performance keyword sets (Aho-Corasick).",
       "items": {
         "type": "object",
         "properties": {
@@ -108,16 +99,16 @@
             "items": { "type": "string", "minLength": 1 },
             "minItems": 1
           },
-          "priority": { "type": "integer", "minimum": 0, "maximum": 1000, "default": 100 },
-          "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.7 },
+          "priority": { "type": "integer" },
+          "confidence": { "type": "number" },
           "event_types": {
             "type": "array",
             "items": { "type": "string" },
             "minItems": 1
           },
           "description": { "type": "string" },
-          "whole_word": { "type": "boolean", "default": true },
-          "case_sensitive": { "type": "boolean", "default": false },
+          "whole_word": { "type": "boolean" },
+          "case_sensitive": { "type": "boolean" },
           "enabled": { "type": "boolean", "default": true },
           "emits_tags": { "type": "array", "items": { "type": "string" } },
           "emits_attributes": { "type": "object", "additionalProperties": true },
@@ -129,7 +120,7 @@
 
     "entity_patterns": {
       "type": "array",
-      "description": "Named-entity patterns (regex and/or keyword contexts).",
+      "description": "Context-aware entity extraction rules.",
       "items": {
         "type": "object",
         "properties": {
@@ -142,23 +133,18 @@
               "properties": {
                 "regex": { "type": "string" },
                 "keywords": { "type": "array", "items": { "type": "string" } },
-                "context": { "type": "string", "description": "Optional regex for context checking" }
+                "context": { "type": "string" }
               },
-              "anyOf": [
-                { "required": ["regex"] },
-                { "required": ["keywords"] }
-              ]
-            },
-            "minItems": 1
+              "anyOf": [ { "required": ["regex"] }, { "required": ["keywords"] } ]
+            }
           },
-          "priority": { "type": "integer", "minimum": 0, "maximum": 1000, "default": 100 },
-          "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.8 },
-          "event_types": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+          "priority": { "type": "integer" },
+          "confidence": { "type": "number" },
+          "event_types": { "type": "array", "items": { "type": "string" } },
           "description": { "type": "string" },
           "enabled": { "type": "boolean", "default": true },
           "emits_tags": { "type": "array", "items": { "type": "string" } },
           "emits_attributes": { "type": "object", "additionalProperties": true },
-          "window_chars": { "type": "integer", "minimum": 0, "default": 64, "description": "Optional left/right context window when scoring." },
           "metadata": { "type": "object", "additionalProperties": true }
         },
         "required": ["id", "entity_type", "patterns", "event_types"]
@@ -167,40 +153,23 @@
 
     "composite_rules": {
       "type": "array",
-      "description": "Optional boolean compositions of pattern IDs (for higher-level signals).",
+      "description": "Boolean logic rules combining multiple signals.",
       "items": {
         "type": "object",
         "properties": {
-          "id": { "type": "string", "pattern": "^[a-zA-Z0-9:_-]+$" },
+          "id": { "type": "string" },
           "any_of": { "type": "array", "items": { "type": "string" } },
           "all_of": { "type": "array", "items": { "type": "string" } },
           "none_of": { "type": "array", "items": { "type": "string" } },
           "emits_tags": { "type": "array", "items": { "type": "string" } },
           "emits_attributes": { "type": "object", "additionalProperties": true },
-          "priority": { "type": "integer", "minimum": 0, "maximum": 1000, "default": 120 },
-          "enabled": { "type": "boolean", "default": true },
-          "metadata": { "type": "object", "additionalProperties": true }
+          "priority": { "type": "integer" },
+          "enabled": { "type": "boolean", "default": true }
         },
-        "anyOf": [
-          { "required": ["id", "any_of"] },
-          { "required": ["id", "all_of"] }
-        ]
-      }
-    },
-
-    "keyword_dictionaries": {
-      "type": "array",
-      "description": "DEPRECATED (backward-compat). Use keyword_patterns instead.",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": { "type": "string" },
-          "keywords": { "type": "array", "items": { "type": "string" } }
-        },
-        "required": ["name", "keywords"]
+        "required": ["id"]
       }
     }
   },
-  "required": ["version", "regex_patterns", "keyword_patterns", "entity_patterns"],
+  "required": ["version", "regex_patterns", "keyword_patterns"],
   "additionalProperties": false
 }

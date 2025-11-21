@@ -23,8 +23,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from ..schemas.eventizer_models import (
     EntitySpan,
     PIIAudit,
-    RedactMode,
-    TextNormalizationResult
+    RedactMode
 )
 from ..utils.text_normalizer import SpanMap
 

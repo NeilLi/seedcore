@@ -1,1077 +1,287 @@
 """
-Coordinator Service: Main entrypoint for routing, executing, and orchestrating
-tasks across different execution paths (Fast, Planner, HGNN, and ERROR).
+Coordinator Service (Tier-0 Control Plane)
+
+Responsibilities:
+1. Ingestion & System of Record (Persist to DB).
+2. Strategy & Routing (Surprise Score, PKG Policy).
+3. Plan-Execute-Audit Loop (Orchestrating multi-step plans).
+4. Anomaly Triage & Memory Consolidation.
+
+This service is the "Cortex" of the organism. It decides WHAT to do,
+but delegates HOW (Cognitive) and ACTION (Organism).
 """
 
-# ---------------------------------------------------------------------------
-# 1. Standard Library Imports
-# ---------------------------------------------------------------------------
 import asyncio
-import inspect
 import json
 import os
-import random
-import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
-)
+from enum import Enum
+from typing import Any, Dict, Union
 
-if TYPE_CHECKING:
-    pass
+import redis  # pyright: ignore[reportMissingImports]
+from fastapi import FastAPI, Request  # pyright: ignore[reportMissingImports]
+from ray import serve  # pyright: ignore[reportMissingImports]
 
-# ---------------------------------------------------------------------------
-# 2. Third-Party Imports
-# ---------------------------------------------------------------------------
-import redis  # type: ignore[reportMissingImports]
-from fastapi import FastAPI, HTTPException, Request  # type: ignore[reportMissingImports]
-from ray import serve  # type: ignore[reportMissingImports]
-from sqlalchemy import text  # type: ignore[reportMissingImports]
+# --- Internal Imports ---
+from ..logging_setup import ensure_serve_logger, setup_logging
+from ..database import get_async_pg_session_factory
+from ..utils.ray_utils import COG, ML, ORG
 
-# ---------------------------------------------------------------------------
-# 3. First-Party (Local) Imports
-# ---------------------------------------------------------------------------
+# Models
+from ..models import TaskPayload
+from ..models.cognitive import DecisionKind, CognitiveType
+from ..models.result_schema import create_error_result
+from ..coordinator.models import AnomalyTriageRequest, AnomalyTriageResponse, TuneCallbackRequest
 
-# Optional graph dependency
-try:
-    from ..graph.task_metadata_repository import TaskMetadataRepository  # type: ignore
-except ImportError:  # pragma: no cover
-    TaskMetadataRepository = None  # type: ignore
-
-from ..coordinator.core.plan import persist_and_register_dependencies
+# Core Logic
 from ..coordinator.core.policies import (
-    compute_drift_score,
-    create_ocps_valve,
+    compute_drift_score, 
     SurpriseComputer,
+    OCPSValve
 )
 from ..coordinator.core.execute import (
     route_and_execute as core_route_and_execute,
     RouteConfig,
-    ExecutionConfig,
+    ExecutionConfig
 )
 from ..coordinator.core.routing import (
     RouteCache,
     resolve_route_cached_async,
     static_route_fallback,
 )
-from ..coordinator.dao import TaskOutboxDAO, TaskProtoPlanDAO, TaskRouterTelemetryDAO
-from ..coordinator.models import (
-    AnomalyTriageRequest,
-    AnomalyTriageResponse,
-    TuneCallbackRequest,
-)
 from ..coordinator.utils import (
-    # Task normalization
-    convert_task_to_dict,
-    normalize_task_dict,
-    sync_task_identity,
     coerce_task_payload,
-    # Extraction
-    extract_decision,
-    extract_proto_plan,
-    # Normalization
-    normalize_domain,
     normalize_string,
-    # Data processing
-    redact_sensitive_data,
+    normalize_domain,
+    normalize_task_dict,
+    redact_sensitive_data
 )
+
+# DAOs
+from ..coordinator.dao import TaskOutboxDAO, TaskProtoPlanDAO, TaskRouterTelemetryDAO
+from ..graph.task_metadata_repository import TaskMetadataRepository
+
+# Predicates (Policy)
 from ..predicates import PredicateRouter, load_predicates
-from ..predicates.safe_metrics import create_safe_counter
 from ..predicates.safe_storage import SafeStorage
+
+# Operations
+from ..ops.metrics import get_global_metrics_tracker
+from ..ops.pkg.manager import get_global_pkg_manager
+
+# Clients
 from ..serve.cognitive_client import CognitiveServiceClient
 from ..serve.ml_client import MLServiceClient
 from ..serve.organism_client import OrganismServiceClient
-from ..utils.ray_utils import COG, ML, ORG  # Used for constants
-from ..database import get_async_pg_session_factory
-from ..models import Task, TaskPayload
-from ..models.cognitive import CognitiveType, DecisionKind
-from ..models.result_schema import create_error_result
-from ..ops.metrics import get_global_metrics_tracker
-from ..ops.eventizer.eventizer_features import (
-    features_from_payload as default_features_from_payload,
-)
-from ..ops.pkg.manager import get_global_pkg_manager
+# CHANGED: Import Client instead of Service
+from ..serve.eventizer_client import EventizerServiceClient
 
-
-# ---------------------------------------------------------------------------
-# 4. Service-Level Setup
-# ---------------------------------------------------------------------------
-from ..logging_setup import ensure_serve_logger, setup_logging
 
 setup_logging(app_name="seedcore.coordinator_service.driver")
 logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
 
-# ---------------------------------------------------------------------------
-# 5. Constants
-# ---------------------------------------------------------------------------
-# NOTE: Default values here should match those defined in coordinator_entrypoint.py
-# The entrypoint sets these environment variables before importing this module,
-# but these defaults ensure consistent behavior if env vars are not set.
-#
-# Constants defined in coordinator_entrypoint.py env_vars dict:
-# - SEEDCORE_API_URL, SEEDCORE_API_TIMEOUT
-# - ORCH_HTTP_TIMEOUT, ML_SERVICE_TIMEOUT, COGNITIVE_SERVICE_TIMEOUT, ORGANISM_SERVICE_TIMEOUT
-# - SERVE_CALL_TIMEOUT_S
-# - TUNE_SPACE_TYPE, TUNE_CONFIG_TYPE, TUNE_EXPERIMENT_PREFIX
-#
-# Constants NOT in entrypoint (set via rayservice.yaml/env.example):
-# - REDIS_URL, FAST_PATH_LATENCY_SLO_MS, MAX_PLAN_STEPS, COGNITIVE_MAX_INFLIGHT, PREDICATES_CONFIG_PATH
-
-# --- Timeouts ---
-ORCH_TIMEOUT = float(os.getenv("ORCH_HTTP_TIMEOUT", "10.0"))  # Set in entrypoint
-ML_TIMEOUT = float(os.getenv("ML_SERVICE_TIMEOUT", "8.0"))  # Set in entrypoint
-COG_TIMEOUT = float(os.getenv("COGNITIVE_SERVICE_TIMEOUT", "15.0"))  # Set in entrypoint
-ORG_TIMEOUT = float(os.getenv("ORGANISM_SERVICE_TIMEOUT", "5.0"))  # Set in entrypoint
-SEEDCORE_API_TIMEOUT = float(os.getenv("SEEDCORE_API_TIMEOUT", "5.0"))  # Set in entrypoint
-CALL_TIMEOUT_S = int(os.getenv("SERVE_CALL_TIMEOUT_S", "120"))  # Set in entrypoint
-
-# --- Service URLs ---
-SEEDCORE_API_URL = os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002")  # Set in entrypoint
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")  # Set in rayservice.yaml/env.example
-
-# --- Ray Gateway URLs (derived from imported constants) ---
-ORG_URL = ORG    # Alias for clarity
-ML_URL = ML  # Alias for clarity
-COG_URL = COG  # Alias for clarity
-
-# --- Feature & Tuning Configuration ---
-# NOTE: Defaults should match coordinator_entrypoint.py env_vars dictionary
-FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))  # Set in rayservice.yaml/env.example
-MAX_PLAN_STEPS = int(os.getenv("MAX_PLAN_STEPS", "16"))  # Set in rayservice.yaml/env.example
-COGNITIVE_MAX_INFLIGHT = int(os.getenv("COGNITIVE_MAX_INFLIGHT", "64"))  # Set in rayservice.yaml/env.example
-PREDICATES_CONFIG_PATH = os.getenv(
-    "PREDICATES_CONFIG_PATH", "/app/config/predicates.yaml"
-)  # Set in rayservice.yaml/env.example
-TUNE_SPACE_TYPE = os.getenv("TUNE_SPACE_TYPE", "basic")  # Set in entrypoint
-TUNE_CONFIG_TYPE = os.getenv("TUNE_CONFIG_TYPE", "fast")  # Set in entrypoint
-TUNE_EXPERIMENT_PREFIX = os.getenv("TUNE_EXPERIMENT_PREFIX", "coordinator-tune")  # Set in entrypoint
-
-# ---------------------------------------------------------------------------
-# 6. Helper Functions
-# ---------------------------------------------------------------------------
-
-def err(msg: str, error_type: str = "coordinator_error") -> dict:
-    """Create a standardized error result."""
-    return create_error_result(error=msg, error_type=error_type).model_dump()
-
-
-async def _maybe_call(func: Callable[..., Any], *args, **kwargs):
-    """Call sync/async functions, tolerating missing kwargs for legacy call sites."""
-    def _is_kwarg_error(exc: TypeError) -> bool:
-        msg = str(exc)
-        return any(token in msg for token in ("unexpected", "positional", "keywords"))
-
-    if kwargs:
-        inspect_target = getattr(func, "side_effect", None) or getattr(func, "__wrapped__", func)
-        try:
-            inspect.signature(inspect_target).bind_partial(*args, **kwargs)
-        except (TypeError, ValueError):
-            kwargs = {}
-
-    try:
-        result = func(*args, **kwargs)
-        if inspect.isawaitable(result):
-            return await result
-        return result
-    except TypeError as exc:
-        if not (kwargs and _is_kwarg_error(exc)):
-            raise
-
-    # Retry without kwargs
-    result = func(*args)
-    if inspect.isawaitable(result):
-        return await result
-    return result
-
-def _corr_headers(target: str, cid: str) -> Dict[str, str]:
-    """Create correlation headers for cross-service communication."""
-    return {
-        "Content-Type": "application/json",
-        "X-Service": "coordinator",
-        "X-Source-Service": "coordinator",
-        "X-Target-Service": target,
-        "X-Correlation-ID": cid,
-    }
-
-# Coordination primitives (OCPS, Surprise, drift, energy) are now imported from coordinator.core.policies
-# Route cache structures are now imported from coordinator.core.routing
-
-# ---------- FastAPI/Serve ----------
-# Note: route_prefix is already set in rayservice.yaml as /pipeline
-# So we use empty string here to avoid double prefixing
+# --- Constants ---
+PREDICATES_CONFIG_PATH = os.getenv("PREDICATES_CONFIG_PATH", "/app/config/predicates.yaml")
+FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 router_prefix = ""
+
+class RetentionPolicy(Enum):
+    """Memory retention strategy based on information entropy."""
+    FULL_ARCHIVE = "full"       # High Entropy / Novelty
+    SUMMARY_ONLY = "summary"    # Medium Entropy / Routine
+    DROP = "drop"               # Low Entropy / Noise
+
 
 @serve.deployment(name="Coordinator")
 class Coordinator:
     def __init__(self):
-        setup_logging(app_name="seedcore.coordinator_service.replica")
-        self.logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
-
-        self.app = FastAPI(
-            title="SeedCore Coordinator",
-            version="1.0.0",
-            docs_url="/docs",
-            redoc_url="/redoc",
-            openapi_url="/openapi.json",
-        )
-
-        # Initialize service clients with conservative circuit breakers
-        self.ml_client = MLServiceClient(
-            base_url=ML, 
-            timeout=float(os.getenv("CB_ML_TIMEOUT_S", "5.0")),
-            warmup_timeout=float(os.getenv("CB_ML_WARMUP_TIMEOUT_S", "30.0"))
-        )
+        self.app = FastAPI(title="SeedCore Coordinator (Control Plane)")
         
-        self.cognitive_client = CognitiveServiceClient(
-            base_url=COG, 
-            timeout=float(os.getenv("CB_COG_TIMEOUT_S", "8.0"))
-        )
+        # 1. Service Mesh Clients
+        self.ml_client = MLServiceClient(base_url=ML)
+        self.cognitive_client = CognitiveServiceClient(base_url=COG)
+        self.organism_client = OrganismServiceClient(base_url=ORG)
         
-        self.organism_client = OrganismServiceClient(
-            base_url=ORG, 
-            timeout=float(os.getenv("CB_ORG_TIMEOUT_S", "5.0"))
-        )
+        # CHANGED: Initialize Remote Client for System 1 Perception
+        # This connects to the Ops module where Eventizer is running
+        self.eventizer = EventizerServiceClient()
         
-        self.ocps = create_ocps_valve()
+        # 2. Infrastructure & DAOs
         self.metrics = get_global_metrics_tracker()
-
+        self._session_factory = get_async_pg_session_factory()
+        
         try:
-            self._session_factory = get_async_pg_session_factory()
-        except Exception as exc:  # pragma: no cover - defensive log for misconfigured env
-            logger.warning(f"Failed to initialize async session factory: {exc}")
-            self._session_factory = None
+            self.graph_task_repo = TaskMetadataRepository()
+            logger.info("✅ Task Repository initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Task Repository init failed: {e}")
+            self.graph_task_repo = None
+
         self.telemetry_dao = TaskRouterTelemetryDAO()
         self.outbox_dao = TaskOutboxDAO()
         self.proto_plan_dao = TaskProtoPlanDAO()
-
-        # Tiny TTL route cache with single-flight
-        self.route_cache = RouteCache(
-            ttl_s=float(os.getenv("ROUTE_CACHE_TTL_S", "3.0")),
-            jitter_s=float(os.getenv("ROUTE_CACHE_JITTER_S", "0.5"))
-        )
-        self._last_seen_epoch = None  # Track organism epoch for cache invalidation
         
-        # Feature flag for safe rollout
-        def _env_bool(name: str, default: bool = False) -> bool:
-            """Robust environment variable parsing for boolean values."""
-            val = os.getenv(name)
-            if val is None:
-                return default
-            return val.lower() in ("1", "true", "yes", "y", "on")
+        # 3. Policy Engines (System 2: Anomaly Detection)
+        tau_fast = float(os.getenv("SURPRISE_TAU_FAST", "0.35"))
+        tau_plan = float(os.getenv("SURPRISE_TAU_PLAN", "0.60"))
+        self.surprise_computer = SurpriseComputer(tau_fast=tau_fast, tau_plan=tau_plan)
+        self.ocps = OCPSValve() # Neural accumulator
         
-        self.routing_remote_enabled = _env_bool("ROUTING_REMOTE", False)
-        self.routing_remote_types = set(os.getenv("ROUTING_REMOTE_TYPES", "graph_embed,graph_rag_query,graph_fact_embed,graph_fact_query,nim_task_embed,graph_sync_nodes").split(","))
-
-        self.graph_repository = None  # Lazily instantiated GraphTaskRepository
-        self._graph_repo_checked = False
-        self.graph_task_repo = self._get_graph_repository()  # Consistent attribute name
-
-        
-        # Initialize safe storage (Redis with in-memory fallback)
-        try:
-            redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-            self.storage = SafeStorage(redis_client)
-            self.logger.info(f"✅ Storage initialized: {self.storage.get_backend_type()}")
-        except Exception as e:
-            self.logger.warning(f"⚠️ Redis connection failed, using in-memory storage: {e}")
-            self.storage = SafeStorage(None)
-
-        # Maintain runtime context on the actor instance (not the FastAPI app)
-        self.runtime_ctx = {
-            "storage": self.storage,
-            "metrics": self.metrics,
-        }
-
-        # Per-replica Prometheus counters (avoid module-level globals for Ray serialization)
-        try:
-            self.prom_outbox_flush_ok = create_safe_counter(
-                "coord_outbox_flush_ok_total",
-                "Number of successful outbox flush operations",
-                labelnames=["event_type"],
-            )
-            self.prom_outbox_flush_retry = create_safe_counter(
-                "coord_outbox_flush_retry_total",
-                "Number of outbox flush retry operations",
-                labelnames=["event_type"],
-            )
-            self.prom_outbox_insert_ok = create_safe_counter(
-                "coord_outbox_insert_ok_total",
-                "Number of successful outbox insert operations",
-                labelnames=["event_type"],
-            )
-            self.prom_outbox_insert_dup = create_safe_counter(
-                "coord_outbox_insert_dup_total",
-                "Number of duplicate outbox insert operations",
-                labelnames=["event_type"],
-            )
-            self.prom_outbox_insert_err = create_safe_counter(
-                "coord_outbox_insert_err_total",
-                "Number of failed outbox insert operations",
-                labelnames=["event_type"],
-            )
-        except Exception:
-            self.prom_outbox_flush_ok = None
-            self.prom_outbox_flush_retry = None
-            self.prom_outbox_insert_ok = None
-            self.prom_outbox_insert_dup = None
-            self.prom_outbox_insert_err = None
-        
-        # Initialize predicate system (will be loaded async in __post_init__)
-        self.predicate_config = None
-        self.predicate_router = None
-        
-        # Routing is now handled by OrganismManager via resolve-route endpoints
-        # Old static routing rules are preserved in _static_route_fallback method
-        
-        # Configuration
-        self.fast_path_latency_slo_ms = FAST_PATH_LATENCY_SLO_MS
-        self.max_plan_steps = MAX_PLAN_STEPS
-        
-        # Initialize predicate system synchronously first
+        # Predicates (Static Rules)
         try:
             self.predicate_config = load_predicates(PREDICATES_CONFIG_PATH)
             self.predicate_router = PredicateRouter(self.predicate_config)
-            self.logger.info("✅ Predicate system initialized")
-        except Exception as e:
-            self.logger.warning(f"⚠️ Failed to load predicate config, using fallback: {e}")
-            # Create a minimal fallback configuration
+        except Exception:
             from ..predicates.loader import create_default_config
             self.predicate_config = create_default_config()
             self.predicate_router = PredicateRouter(self.predicate_config)
-        
-        # Background task state
+
+        # Routing Cache
+        self.route_cache = RouteCache(ttl_s=3.0)
+        self._last_seen_epoch = None
+
+        # Hysteresis Thresholds
+        self.tau_fast_exit = float(os.getenv("SURPRISE_TAU_FAST_EXIT", str(tau_fast + 0.03)))
+        self.tau_plan_exit = float(os.getenv("SURPRISE_TAU_PLAN_EXIT", str(tau_plan - 0.03)))
+        self.ood_to01 = None # Configurable mapping function
+        self.timeout_s = int(os.getenv("SERVE_CALL_TIMEOUT_S", "2"))
+
+        # 4. Storage (Redis)
+        try:
+            redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+            self.storage = SafeStorage(redis_client)
+        except Exception:
+            self.storage = SafeStorage(None)
+            
+        # Runtime Context for Workers
+        self.runtime_ctx = {
+            "storage": self.storage,
+            "metrics": self.metrics
+        }
+
+        # State Flags
         self._bg_started = False
         self._background_tasks_started = False
         self._warmup_started = False
-        
-        # Initialize Policy Logic directly (formerly inside CoordinatorCore)
-        # Parse thresholds with safe defaults
-        tau_fast = float(os.getenv("SURPRISE_TAU_FAST", "0.35"))
-        tau_plan = float(os.getenv("SURPRISE_TAU_PLAN", "0.60"))
-        
-        # Initialize the Policy Engine
-        self.surprise_computer = SurpriseComputer(
-            weights=None,  # loads from env
-            tau_fast=tau_fast,
-            tau_plan=tau_plan
-        )
-        
-        # Hysteresis settings
-        self.tau_fast_exit = float(os.getenv("SURPRISE_TAU_FAST_EXIT", str(tau_fast + 0.03)))
-        self.tau_plan_exit = float(os.getenv("SURPRISE_TAU_PLAN_EXIT", str(tau_plan - 0.03)))
-        
-        # OOD mapping function (can be overridden)
-        self.ood_to01 = None  # Default to None, can be set if needed
-        self.timeout_s = int(os.getenv("SERVE_CALL_TIMEOUT_S", "2"))
+        self.routing_remote_enabled = False 
+        self.routing_remote_types = set()
 
         self._register_routes()
-        logger.info("✅ Coordinator initialized")
+        logger.info("✅ Coordinator (Tier-0) initialized")
 
     def _register_routes(self) -> None:
-        """
-        Minimalist Route Registration.
-        
-        One Business Endpoint + Mandatory Ops Endpoints.
-        
-        Business Endpoints (Public API):
-        - /route-and-execute: Unified entrypoint for all business logic
-          Uses TaskPayload.type to route internally:
-          * type: "anomaly_triage" → Anomaly triage pipeline
-          * type: "ml_tune_callback" → ML tuning callback handler
-          * Other types → Standard routing & execution
-        
-        Operational Endpoints (Hidden from Schema):
-        - /health: Kubernetes liveness probe
-        - /readyz: Kubernetes readiness probe
-        - /metrics: Prometheus metrics
-        - /predicates/*: Predicate system management (admin)
-        """
-        # --- 1. The ONE Business Endpoint ---
+        """Unified Route Registration."""
+        # Business Endpoint
         self.app.add_api_route(
             f"{router_prefix}/route-and-execute",
             self.route_and_execute,
             methods=["POST"],
-            summary="Unified Entrypoint for Routing, Triage, and Callbacks",
-            description=(
-                "Universal interface for all Coordinator operations. "
-                "Uses TaskPayload.type to route internally:\n"
-                "- type: 'anomaly_triage' → Anomaly triage pipeline\n"
-                "- type: 'ml_tune_callback' → ML tuning callback handler\n"
-                "- Other types → Standard routing & execution"
-            ),
-            tags=["Execution"],
+            summary="Unified Entrypoint for Routing, Triage, and Execution",
+            tags=["Execution"]
         )
         
-        # --- 2. Mandatory Ops Endpoints (Keep these hidden but active!) ---
-        # Kubernetes needs these to know if your service is alive.
-        # If you remove them, your pod will crash loop.
-        self.app.add_api_route(
-            "/health",
-            self.health,
-            methods=["GET"],
-            include_in_schema=False,  # Hide from OpenAPI docs
-        )
-        self.app.add_api_route(
-            "/readyz",
-            self.ready,
-            methods=["GET"],
-            include_in_schema=False,  # Hide from OpenAPI docs
-        )
+        # Ops Endpoints
+        self.app.add_api_route("/health", self.health, methods=["GET"], include_in_schema=False)
+        self.app.add_api_route("/readyz", self.ready, methods=["GET"], include_in_schema=False)
+        self.app.add_api_route(f"{router_prefix}/metrics", self.get_metrics, methods=["GET"], include_in_schema=False)
         
-        # Prometheus needs this for graphs.
-        self.app.add_api_route(
-            f"{router_prefix}/metrics",
-            self.get_metrics,
-            methods=["GET"],
-            include_in_schema=False,  # Hide from OpenAPI docs
-        )
-        
-        # Predicate system management (admin endpoints)
-        self.app.add_api_route(
-            f"{router_prefix}/predicates/status",
-            self.get_predicate_status,
-            methods=["GET"],
-            include_in_schema=False,  # Hide from OpenAPI docs
-        )
-        self.app.add_api_route(
-            f"{router_prefix}/predicates/config",
-            self.get_predicate_config,
-            methods=["GET"],
-            include_in_schema=False,  # Hide from OpenAPI docs
-        )
-        self.app.add_api_route(
-            f"{router_prefix}/predicates/reload",
-            self.reload_predicates,
-            methods=["POST"],
-            include_in_schema=False,  # Hide from OpenAPI docs
-        )
+        # Predicate Admin
+        self.app.add_api_route(f"{router_prefix}/predicates/status", self.get_predicate_status, methods=["GET"], include_in_schema=False)
+        self.app.add_api_route(f"{router_prefix}/predicates/reload", self.reload_predicates, methods=["POST"], include_in_schema=False)
 
     async def __call__(self, request: Request):
-        """
-        ASGI callable for Ray Serve.
-        
-        FastAPI apps are natively ASGI-compatible, so we can call them directly
-        without a wrapper. This removes unnecessary overhead and enables full
-        ASGI feature support (e.g., WebSockets).
-        """
+        """Direct ASGI call for Ray Serve."""
         send = getattr(request, "send", None) or getattr(request, "_send", None)
         if send is None:
             raise RuntimeError("Request object does not provide an ASGI send callable")
-        # Direct call to FastAPI app (no wrapper needed)
         await self.app(request.scope, request.receive, send)
 
-    async def _ensure_background_tasks_started(self):
-        """Ensure background tasks are started (called on first request)."""
-        if self._bg_started:
-            return
-            
-        # Resolve Serve handles once and keep them
-        try:
-            self.ops = serve.get_deployment_handle("OpsGateway", app_name="ops")
-            self.ml = serve.get_deployment_handle("MLService", app_name="ml_service")
-            self.cog = serve.get_deployment_handle("CognitiveService", app_name="cognitive")
-            self._bg_started = True
-            logger.info("Coordinator wired → ops/ml/cognitive handles ready")
-        except Exception as e:
-            logger.warning(f"Failed to get some Serve handles: {e}")
-            # Continue with partial handles - some services might not be available
-            
-        if not self._background_tasks_started:
-            asyncio.create_task(self._start_background_tasks())
-            self._background_tasks_started = True
-            
-        if not self._warmup_started:
-            asyncio.create_task(self._warmup_drift_detector())
-            self._warmup_started = True
-
-    
-
-    async def _start_background_tasks(self):
-        """Start background maintenance tasks."""
-        try:
-            # Predicate router should already be initialized synchronously
-            if self.predicate_router is not None:
-                await self.predicate_router.start_background_tasks()
-                self.logger.info("🚀 Started Coordinator background tasks")
-            else:
-                self.logger.warning("⚠️ Predicate router not initialized, skipping background tasks")
-            # Start task outbox flusher loop
-            asyncio.create_task(self._task_outbox_flusher_loop())
-        except Exception as e:
-            self.logger.error(f"❌ Failed to start background tasks: {e}")
-    
-    async def _warmup_drift_detector(self):
+    # ------------------------------------------------------------------
+    # 1. The Universal Router
+    # ------------------------------------------------------------------
+    async def route_and_execute(self, payload: Union[TaskPayload, Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Warm up the drift detector to avoid cold start latency.
-        
-        Uses staggered warmup with jitter to prevent thundering herd when
-        multiple replicas start simultaneously in a cluster.
+        The Main Loop of the Control Plane.
         """
-        try:
-            # Staggered warmup with jitter to prevent thundering herd
-            # Each replica waits a random amount of time before warming up
-            base_delay = 2.0  # Base delay in seconds
-            jitter = random.uniform(0, 3.0)  # Random jitter 0-3 seconds
-            total_delay = base_delay + jitter
-            
-            logger.info(f"⏳ Staggered warmup: waiting {total_delay:.2f}s (base={base_delay}s, jitter={jitter:.2f}s)")
-            await asyncio.sleep(total_delay)
-            
-            # Call ML service warmup endpoint
-            warmup_request = {
-                "sample_texts": [
-                    "Test task for warmup",
-                    "General query about system status", 
-                    "Anomaly detection task with high priority",
-                    "Execute complex workflow with multiple steps"
-                ]
-            }
-            
-            # First, check if ML service is healthy
-            try:
-                if not await self.ml_client.is_healthy():
-                    logger.warning("⚠️ ML service health check failed, skipping warmup")
-                    return
-                logger.info("✅ ML service health check passed")
-            except Exception as e:
-                logger.warning(f"⚠️ ML service health check failed: {e}, skipping warmup")
-                return
-            
-            logger.info(f"🔄 Calling ML service warmup at {self.ml_client.base_url}/drift/warmup")
-            
-            # Try warmup with retries
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    response = await self.ml_client.warmup_drift_detector(
-                        sample_texts=warmup_request.get("sample_texts")
-                    )
-                    break  # Success, exit retry loop
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        wait_time = 2 ** attempt  # Exponential backoff
-                        logger.warning(f"⚠️ ML service warmup attempt {attempt + 1} failed: {e}, retrying in {wait_time}s", exc_info=True)
-                        await asyncio.sleep(wait_time)
-                    else:
-                        raise  # Re-raise on final attempt
-            
-            if response.get("status") == "success":
-                warmup_time = response.get("warmup_time_ms", 0.0)
-                logger.info(f"✅ Drift detector warmup completed in {warmup_time:.2f}ms (after {total_delay:.2f}s delay)")
-                # Record circuit-breaker metrics for successful warmup
-                self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "warmup_success")
-            else:
-                logger.warning(f"⚠️ Drift detector warmup failed: {response.get('error', 'Unknown error')}")
-                # Record circuit-breaker metrics for failed warmup
-                self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "warmup_failed")
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Drift detector warmup failed: {e}", exc_info=True)
-            # Record circuit-breaker metrics for warmup exception
-            self.predicate_router.metrics.record_circuit_breaker_event("ml_service", "warmup_exception")
-            # Don't fail startup if warmup fails - drift detection will use fallback
-            logger.info("ℹ️ Drift detection will use fallback mode until ML service is available")
-
-    async def _task_outbox_flusher_loop(self) -> None:
-        """Periodically flush task_outbox nim_task_embed events to the LTM worker with backoff.
-        
-        Uses TaskOutboxDAO for all database operations to maintain separation of concerns.
-        """
-        try:
-            session_factory = getattr(self, "_session_factory", None) or get_async_pg_session_factory()
-            self._session_factory = session_factory
-        except Exception as exc:
-            logger.warning(f"[Coordinator] No session factory for outbox flusher: {exc}")
-            return
-
-        interval_s = float(os.getenv("TASK_OUTBOX_FLUSH_INTERVAL_S", "5"))
-        batch_size = int(os.getenv("TASK_OUTBOX_FLUSH_BATCH", "100"))
-
-        while True:
-            try:
-                async with session_factory() as s:
-                    async with s.begin():
-                        # Use DAO method for concurrent-safe event claiming
-                        rows = await self.outbox_dao.claim_pending_nim_task_embeds(s, limit=batch_size)
-
-                        if not rows:
-                            await s.rollback()
-                        for row in rows:
-                            try:
-                                data = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
-                                task_id = data.get("task_id")
-                                ok = await self._enqueue_task_embedding_now(task_id, reason="outbox")
-                                if ok:
-                                    await self.outbox_dao.delete(s, row["id"])
-                                    if self.prom_outbox_flush_ok:
-                                        try:
-                                            self.prom_outbox_flush_ok.labels("nim_task_embed").inc()
-                                        except Exception:
-                                            pass
-                                else:
-                                    # Use DAO backoff method for retry logic
-                                    await self.outbox_dao.backoff(s, row["id"])
-                                    if self.prom_outbox_flush_retry:
-                                        try:
-                                            self.prom_outbox_flush_retry.labels("nim_task_embed").inc()
-                                        except Exception:
-                                            pass
-                            except Exception as exc:
-                                logger.warning(f"[Coordinator] Outbox item {row.get('id')} failed: {exc}")
-                                # Use DAO backoff method for error handling
-                                await self.outbox_dao.backoff(s, row["id"])
-                                if self.prom_outbox_flush_retry:
-                                    try:
-                                        self.prom_outbox_flush_retry.labels("nim_task_embed").inc()
-                                    except Exception:
-                                        pass
-            except Exception as exc:
-                logger.debug(f"[Coordinator] Outbox flusher tick failed: {exc}")
-            await asyncio.sleep(max(1.0, interval_s))
-    
-    async def _compute_drift_score(self, task: Dict[str, Any]) -> float:
-        """
-        Compute drift score using the ML service drift detector.
-        
-        Delegates to the centralized compute_drift_score function from policies module.
-        
-        Returns:
-            Drift score suitable for OCPSValve integration
-        """
-        metrics = getattr(self, 'predicate_router', None)
-        if metrics:
-            metrics = metrics.metrics
-        return await compute_drift_score(
-            task=task,
-            ml_client=self.ml_client,
-            metrics=metrics,
-        )
-    
-    # Helper methods now use utils functions
-    def _normalize(self, x: Optional[str]) -> Optional[str]:
-        """Normalize string for consistent matching."""
-        return normalize_string(x)
-    
-    def _norm_domain(self, domain: Optional[str]) -> Optional[str]:
-        """Normalize domain to standard taxonomy."""
-        return normalize_domain(domain)
-
-    def _static_route_fallback(self, task_type: str, domain: Optional[str]) -> str:
-        """Fallback routing using static rules when organism is unavailable."""
-        return static_route_fallback(task_type, domain)
-
-    async def _bulk_resolve_routes_cached(self, steps, cid):
-        """
-        Coordinator no longer resolves microscopic routing.
-        Returns empty organ hints; organism decides actual routing.
-        """
-        return {idx: None for idx, _ in enumerate(steps)}
-
-    def _persist_job_state(self, job_id: str, state: Dict[str, Any]):
-        """Persist job state using safe storage."""
-        success = self.storage.set(f"job:{job_id}", state, ttl=86400)  # 24h TTL
-        if not success:
-            logger.warning(f"Failed to persist job state for {job_id}")
-    
-    def _get_job_state(self, job_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve job state using safe storage."""
-        return self.storage.get(f"job:{job_id}")
-
-    async def _fire_and_forget_memory_synthesis(self, agent_id: str, anomalies: dict, 
-                                               reason: dict, decision_kind: dict, cid: str):
-        """Fire-and-forget memory synthesis with proper error handling and metrics."""
-        start_time = time.time()
+        await self._ensure_background_tasks_started()
         
         try:
-            # Redact sensitive data
-            redacted_anomalies = self._redact_sensitive_data(anomalies.get("anomalies", []))
-            redacted_reason = self._redact_sensitive_data(reason.get("result") or reason)
-            redacted_decision = self._redact_sensitive_data(decision_kind.get("result") or decision_kind)
+            # A. Ingest
+            task_obj, task_dict = coerce_task_payload(payload)
+            task_type = task_obj.type.lower()
+
+            # B. Special Workflows
+            if task_type == "anomaly_triage":
+                req = AnomalyTriageRequest(**task_dict.get("params", {}))
+                return await self._handle_anomaly_triage(req)
             
-            payload = {
-                "agent_id": agent_id,
-                "memory_fragments": [
-                    {"anomalies": redacted_anomalies},
-                    {"reason": redacted_reason},
-                    {"decision_kind": redacted_decision}
-                ],
-                "synthesis_goal": "incident_triage_summary"
-            }
-            
-            await self.cognitive_client.post("/synthesize-memory",
-                                           json=payload,
-                                           headers=_corr_headers("cognitive", cid))
-            
-            duration = time.time() - start_time
-            self.predicate_router.metrics.record_memory_synthesis("success", duration)
-            logger.debug(f"[Coordinator] Memory synthesis completed for agent {agent_id} in {duration:.2f}s")
-            
-        except Exception as e:
-            duration = time.time() - start_time
-            self.predicate_router.metrics.record_memory_synthesis("failure", duration)
-            logger.debug(f"[Coordinator] Memory synthesis failed (best-effort): {e}")
-    
-    # Helper methods now use utils functions
-    def _redact_sensitive_data(self, data: Any) -> Any:
-        """Redact sensitive data from memory synthesis payload."""
-        return redact_sensitive_data(data)
+            if task_type == "ml_tune_callback":
+                req = TuneCallbackRequest(**task_dict.get("params", {}))
+                return await self._handle_tune_callback(req)
 
-    def _normalize_task_dict(self, task_like: Any) -> Tuple[Union[uuid.UUID, str], Dict[str, Any]]:
-        return normalize_task_dict(task_like)
-
-    def _sync_task_identity(self, task_like: Any, task_id: str) -> None:
-        sync_task_identity(task_like, task_id)
-
-
-
-    def _convert_task_to_dict(self, task) -> Dict[str, Any]:
-        """Convert task object to dictionary, handling TaskPayload and other types."""
-        return convert_task_to_dict(task)
-
-    def _fallback_plan(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Create a minimal safe fallback plan when cognitive reasoning is unavailable."""
-        ttype = (task.get("type") or task.get("task_type") or "").strip().lower()
-        
-        # Use static fallback routing (new routing is async)
-        organ_id = self._static_route_fallback(ttype, task.get("domain"))
-        
-        return [{"organ_id": organ_id, "task": task}]
-
-    def _validate_or_fallback(self, plan: List[Dict[str, Any]], task: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
-        """Validate the plan from CognitiveCore and return fallback if invalid."""
-        if not isinstance(plan, list) or len(plan) > self.max_plan_steps:
-            logger.warning(f"Plan validation failed: invalid format or too many steps ({len(plan) if isinstance(plan, list) else 'not a list'})")
-            return None
-
-        for idx, step in enumerate(plan):
-            if not isinstance(step, dict):
-                logger.warning(f"Plan validation failed: step is not a dict: {step}")
-                return None
-
-            if "task" not in step or not isinstance(step["task"], dict):
-                logger.warning(f"Plan validation failed: step missing 'task' dict: {step}")
-                return None
-            
-            # Ensure stable IDs exist in plan for reliable edge creation
-            if "id" not in step and "step_id" not in step:
-                step["id"] = f"step_{idx}_{uuid.uuid4().hex[:8]}"
-                step["step_id"] = step["id"]
-            
-            # Ensure task has stable ID
-            if isinstance(step.get("task"), dict):
-                task_data = step["task"]
-                if "id" not in task_data and "task_id" not in task_data:
-                    task_data["id"] = f"subtask_{idx}_{uuid.uuid4().hex[:8]}"
-                    task_data["task_id"] = task_data["id"]
-
-        return plan
-
-    def _get_graph_repository(self):
-        """Return a lazily-instantiated GraphTaskRepository if available."""
-        if self.graph_repository is not None or self._graph_repo_checked:
-            return self.graph_repository
-
-        self._graph_repo_checked = True
-
-        if TaskMetadataRepository is None:
-            return None
-
-        try:
-            self.graph_repository = TaskMetadataRepository()
-        except TypeError as exc:
-            logger.debug(f"TaskMetadataRepository instantiation failed (signature mismatch): {exc}")
-            self.graph_repository = None
-        except Exception as exc:  # pragma: no cover - defensive logging for unexpected errors
-            logger.warning(f"TaskMetadataRepository initialization failed: {exc}")
-            self.graph_repository = None
-
-        return self.graph_repository
-
-    def _get_graph_sql_repository(self):
-        """Legacy alias retained for compatibility with older coordinator tests."""
-        return self._get_graph_repository()
-
-
-    async def _persist_plan_subtasks(
-        self,
-        task: Task,
-        plan: List[Dict[str, Any]],
-        *,
-        root_db_id: Optional[uuid.UUID] = None,
-    ):
-        """Insert subtasks for the HGNN plan and register dependency edges.
-        
-        Delegates to persist_and_register_dependencies from coordinator.core.plan.
-        """
-        repo = self._get_graph_repository()
-        if repo is None:
-            return []
-        
-        return await persist_and_register_dependencies(
-            plan=plan,
-            repo=repo,
-            task=task,
-            root_db_id=root_db_id,
-        )
-
-    # Removed _execute_fast and _execute_hgnn - these are now handled by execute.py's route_and_execute
-    # Removed _make_escalation_result - this is now in execute.py
-
-    def _extract_proto_plan(self, route_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        return extract_proto_plan(route_result)
-
-    def _extract_decision(self, route_result: Dict[str, Any]) -> Optional[str]:
-        return extract_decision(route_result)
-
-    async def _persist_proto_plan(
-        self,
-        repo: Optional[Any],
-        task_id: str,
-        decision_kind: Optional[str],
-        proto_plan: Optional[Dict[str, Any]],
-    ) -> None:
-        if proto_plan is None:
-            return
-        dao = getattr(self, "proto_plan_dao", None)
-        if dao is None:
-            return
-        session_factory = self._resolve_session_factory(repo)
-        if session_factory is None:
-            return
-        metrics = getattr(self, "metrics", None)
-        try:
-            async with session_factory() as session:
-                async with session.begin():
-                    result = await dao.upsert(
-                        session,
-                        task_id=str(task_id),
-                        route=decision_kind or "unknown",
-                        proto_plan=proto_plan,
-                    )
-            if metrics is not None:
-                status = "truncated" if result.get("truncated") else "ok"
-                metrics.record_proto_plan_upsert(status)
-        except Exception as exc:
-            logger.debug(
-                "[Coordinator] Skipping proto-plan persistence for %s: %s",
-                task_id,
-                exc,
-            )
-            if metrics is not None:
-                metrics.record_proto_plan_upsert("err")
-
-    # Removed _dispatch_route_followup, _dispatch_planner, _dispatch_hgnn, and _get_graph_sql_repository
-    # These are no longer needed - follow-up dispatch is handled by the Service layer
-
-    def _resolve_session_factory(self, repo: Optional[Any] = None):
-        session_factory = getattr(self, "_session_factory", None)
-        if session_factory is not None:
-            return session_factory
-
-        if repo is not None:
-            session_factory = getattr(repo, "_session_factory", None)
-            if session_factory is not None:
-                self._session_factory = session_factory
-                return session_factory
-
-        try:
-            session_factory = get_async_pg_session_factory()
-            self._session_factory = session_factory
-            return session_factory
-        except Exception as exc:  # pragma: no cover - log and continue without telemetry persistence
-            logger.warning(f"[Coordinator] Failed to obtain session factory for telemetry persistence: {exc}")
-            return None
-
-    async def _record_router_telemetry(
-        self,
-        repo: Optional[Any],
-        task_id: str,
-        route_result: Dict[str, Any],
-    ) -> None:
-        telemetry_dao = getattr(self, "telemetry_dao", None)
-        outbox_dao = getattr(self, "outbox_dao", None)
-        if telemetry_dao is None or outbox_dao is None:
-            return
-
-        if not isinstance(route_result, dict):
-            return
-
-        payload = route_result.get("payload") if isinstance(route_result.get("payload"), dict) else None
-        if not payload:
-            return
-
-        surprise = payload.get("surprise") if isinstance(payload.get("surprise"), dict) else None
-        decision_kind = payload.get("decision_kind")
-        if surprise is None or decision_kind is None:
-            return
-
-        try:
-            surprise_score = float(surprise.get("S"))
-        except (TypeError, ValueError):
-            logger.debug("[Coordinator] Surprise score missing or invalid; skipping telemetry persistence")
-            return
-
-        x_vector = surprise.get("x")
-        weights = surprise.get("weights")
-        if x_vector is None or weights is None:
-            logger.debug("[Coordinator] Surprise components missing; skipping telemetry persistence")
-            return
-
-        try:
-            x_list = list(x_vector)
-            weights_list = list(weights)
-        except TypeError:
-            logger.debug("[Coordinator] Surprise vectors not iterable; skipping telemetry persistence")
-            return
-
-        ocps_metadata = surprise.get("ocps") if isinstance(surprise.get("ocps"), dict) else {}
-
-        session_factory = self._resolve_session_factory(repo)
-        if session_factory is None:
-            return
-
-        dedupe_key = f"{task_id}:task.primary"
-        metrics = getattr(self, "metrics", None)
-        prom_insert_ok = getattr(self, "prom_outbox_insert_ok", None)
-        prom_insert_dup = getattr(self, "prom_outbox_insert_dup", None)
-        prom_insert_err = getattr(self, "prom_outbox_insert_err", None)
-
-        enqueue_fn = getattr(outbox_dao, "enqueue_embed_task", None) or getattr(
-            outbox_dao, "enqueue_nim_task_embed", None
-        )
-        if enqueue_fn is None:
-            logger.debug("[Coordinator] Outbox DAO has no enqueue method; skipping telemetry")
-            return
-
-        try:
-            async with session_factory() as session:
-                use_tx = callable(getattr(session, "begin", None)) and not hasattr(session, "begin_calls")
-
-                async def _run_ops() -> bool:
-                    await session.execute(
-                        text("SELECT ensure_task_node(CAST(:tid AS uuid))"),
-                        {"tid": str(task_id)},
-                    )
-                    await telemetry_dao.insert(
-                        session,
-                        task_id=str(task_id),
-                        surprise_score=surprise_score,
-                        x_vector=x_list,
-                        weights=weights_list,
-                        ocps_metadata=ocps_metadata,
-                        chosen_route=str(decision_kind),
-                    )
-                    return await enqueue_fn(
-                        session,
-                        task_id=str(task_id),
-                        reason="router",
-                        dedupe_key=dedupe_key,
-                    )
-
-                if use_tx:
+            # C. Core Pipeline
+            # 1. Persist Inbox (System of Record)
+            correlation_id = task_dict.get("correlation_id") or uuid.uuid4().hex
+            if self.graph_task_repo and self._session_factory:
+                async with self._session_factory() as session:
                     async with session.begin():
-                        inserted = await _run_ops()
-                else:
-                    inserted = await _run_ops()
+                        await self.graph_task_repo.create_task(
+                            session, task_dict, agent_id=task_dict.get("params", {}).get("agent_id")
+                        )
 
-                if metrics is not None:
-                    metrics.record_outbox_enqueue("ok" if inserted else "dup")
-                if inserted and prom_insert_ok:
-                    try:
-                        prom_insert_ok.labels("nim_task_embed").inc()
-                    except Exception:
-                        pass
-                elif not inserted and prom_insert_dup:
-                    try:
-                        prom_insert_dup.labels("nim_task_embed").inc()
-                    except Exception:
-                        pass
-        except Exception as exc:
-            logger.warning(
-                "[Coordinator] Failed to persist router telemetry/outbox for %s: %s",
-                task_id,
-                exc,
+            # 2. Compute Strategy (Fast vs Deep)
+            exec_config = self._build_execution_config(correlation_id)
+            route_config = self._build_route_config()
+            
+            result = await core_route_and_execute(
+                task=task_obj,
+                routing_config=route_config,
+                execution_config=exec_config,
+                eventizer_helper=self._run_eventizer # <--- Wired here
             )
-            if metrics is not None:
-                metrics.record_outbox_enqueue("err")
-            if prom_insert_err:
-                try:
-                    prom_insert_err.labels("nim_task_embed").inc()
-                except Exception:
-                    pass
-            raise
 
-        await self._enqueue_task_embedding_now(task_id)
+            return result
 
-    async def _enqueue_task_embedding_now(self, task_id: str, reason: str = "router") -> bool:
+        except Exception as e:
+            logger.exception(f"Coordinator Route/Execute Failed: {e}")
+            return create_error_result(str(e), "coordinator_fatal").model_dump()
+
+    # ------------------------------------------------------------------
+    # 2. Adapters & Config Builders
+    # ------------------------------------------------------------------
+
+    async def _run_eventizer(self, task_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Adapter: Task Dict -> Eventizer Service (Ops Module) -> Feature Dict.
+        This feeds the 'System 1' perception into the 'System 2' router.
+        """
+        text = task_dict.get("description") or ""
+        if not text: return {}
+        
         try:
-            from seedcore.graph.task_embedding_worker import enqueue_task_embedding_job
-        except Exception as exc:  # pragma: no cover - optional dependency missing
-            logger.info(
-                "[Coordinator] Embedding worker unavailable; task %s will remain in outbox: %s",
-                task_id,
-                exc,
-            )
-            return False
+            # Use the EventizerServiceClient
+            payload = {
+                "text": text,
+                "domain": task_dict.get("domain"),
+                "task_type": task_dict.get("type")
+            }
+            resp = await self.eventizer.process_eventizer_request(payload)
+            
+            # Client already returns dict format, just extract relevant fields
+            return {
+                "event_tags": resp.get("event_tags", {}),
+                "attributes": resp.get("attributes", {}),
+                "confidence": resp.get("confidence", {}),
+                "pii_redacted": resp.get("pii_redacted", False)
+            }
+        except Exception as e:
+            logger.warning(f"Eventizer failed (non-blocking): {e}")
+            return {}
 
-        last_exc: Optional[BaseException] = None
-        for attempt in range(2):
-            try:
-                ctx = getattr(self, "runtime_ctx", {}) or {}
-                return await asyncio.wait_for(
-                    enqueue_task_embedding_job(ctx, task_id, reason=reason),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError as exc:
-                last_exc = exc
-                logger.warning(
-                    "[Coordinator] Embedding worker timed out (attempt %s) while enqueuing task %s",
-                    attempt + 1,
-                    task_id,
-                )
-            except Exception as exc:
-                last_exc = exc
-                logger.warning(
-                    "[Coordinator] Failed to hand task %s to embedding worker on attempt %s: %s",
-                    task_id,
-                    attempt + 1,
-                    exc,
-                )
-            await asyncio.sleep(0)
-
-        if last_exc is not None:
-            logger.debug(
-                "[Coordinator] Falling back to outbox for task %s after enqueue failures: %s",
-                task_id,
-                last_exc,
-            )
-        return False
-
-    async def process_task(self, payload: Union[TaskPayload, Dict[str, Any]]) -> Dict[str, Any]:
-        """Backward-compatible wrapper around route_and_execute."""
-        return await self.route_and_execute(payload)
-
-    # ------------------------------------------------------------------
-    # Config Builders (Absorbed from coordinator_core.py)
-    # ------------------------------------------------------------------
-    
     def _build_route_config(self) -> RouteConfig:
-        """Build RouteConfig from Coordinator instance."""
-        async def evaluate_pkg_func(
-            tags: Sequence[str],
-            signals: Mapping[str, Any],
-            context: Mapping[str, Any] | None,
-            timeout_s: int,
-        ) -> dict[str, Any]:
-            """PKG evaluation adapter."""
+        """Builds routing policy config with global PKG manager."""
+        async def evaluate_pkg_func(tags, signals, context, timeout_s):
             pkg_mgr = get_global_pkg_manager()
             evaluator = pkg_mgr and pkg_mgr.get_active_evaluator()
             if not evaluator:
@@ -1082,15 +292,12 @@ class Coordinator:
                 "signals": signals,
                 "context": context or {},
             })
-            if not isinstance(res, dict):
-                raise ValueError("Invalid PKG result type")
-            
             return {
                 "tasks": res.get("subtasks", []),
                 "edges": res.get("dag", []),
                 "version": res.get("snapshot") or evaluator.version,
             }
-        
+
         return RouteConfig(
             surprise_computer=self.surprise_computer,
             tau_fast_exit=self.tau_fast_exit,
@@ -1101,37 +308,19 @@ class Coordinator:
         )
 
     def _build_execution_config(self, cid: str) -> ExecutionConfig:
-        """
-        Builds the dependency injection container for the execution core.
-        Now resides directly in the Service tier (Tier-0).
-        """
+        """Builds execution dependency container."""
         
-        # Helper for tracing headers
-        def _corr_headers(target: str, correlation_id: str) -> Dict[str, str]:
+        def _corr_headers(target: str, c: str) -> Dict[str, str]:
             return {
                 "Content-Type": "application/json",
                 "X-Service": "coordinator",
                 "X-Source-Service": "coordinator",
                 "X-Target-Service": target,
-                "X-Correlation-ID": correlation_id,
+                "X-Correlation-ID": c,
             }
         
-        # 1. The Execution Adapter (The "Muscle")
-        async def organism_execute(
-            organ_id: str,
-            task_dict: dict[str, Any],
-            timeout: float,
-            cid_local: str,
-        ) -> dict[str, Any]:
-            """
-            Delegates execution to the Organism Service via the Unified Endpoint.
-            The Organism Router (Tier-1) makes the final agent selection.
-            """
-            
-            # Inject the Coordinator's "Fast Path" decision as a Hint, not a Command.
-            # If organ_id is specific (e.g. "search_organ"), we suggest it.
-            # If organ_id is generic ("organism"), we let the router decide entirely.
-            # Make a copy to avoid mutating the original dict
+        async def organism_execute(organ_id, task_dict, timeout, cid_local):
+            # Inject Routing Hint if Coordinator picked a specific organ
             task_dict = dict(task_dict)
             if organ_id and organ_id not in ("organism", "random"):
                 task_dict.setdefault("params", {})
@@ -1139,95 +328,41 @@ class Coordinator:
                 task_dict["params"]["routing"]["target_organ_hint"] = organ_id
             
             try:
-                # Call the Unified Endpoint (/route-and-execute)
-                # This handles internal routing + agent execution in one hop.
+                # Call Unified Organism Endpoint
                 res = await self.organism_client.post(
                     "/route-and-execute",
                     json={"task": task_dict},
                     headers=_corr_headers("organism", cid_local),
-                    timeout=timeout,
+                    timeout=timeout
                 )
                 
-                # Normalization for Coordinator Logic
-                # The Coordinator expects a flat result or specific structure.
-                # We ensure 'organ_id' is present so we know where it ran.
                 if isinstance(res, dict):
-                    result_data = res.get("result", {})
-                    
-                    # Extract where it actually ran (Tier-1 Decision)
-                    executed_organ = (
-                        res.get("routing", {}).get("router_decision", {}).get("organ_id")
-                        or result_data.get("routing", {}).get("router_decision", {}).get("organ_id")
-                        or result_data.get("organ_id")
+                    # Back-fill organ_id from result
+                    final_organ = (
+                        res.get("result", {}).get("routing", {}).get("router_decision", {}).get("organ_id")
+                        or res.get("result", {}).get("organ_id")
                         or organ_id
                     )
-                    
-                    # Back-fill top level for metric tracking
-                    res.setdefault("organ_id", executed_organ)
-                    
-                    # Back-fill result level for downstream consumers
-                    if isinstance(result_data, dict):
-                        result_data.setdefault("organ_id", executed_organ)
-
-                return res
+                    res.setdefault("organ_id", final_organ)
+                    if "result" in res and isinstance(res["result"], dict):
+                         res["result"].setdefault("organ_id", final_organ)
                 
+                return res
             except Exception as e:
-                # Graceful Failure: Return error dict, don't crash the Coordinator
-                logger.error(f"[Coord] Organism call failed (hint={organ_id}): {e}")
-                return {
-                    "success": False,
-                    "error": f"Organism call failed: {str(e)}",
-                    "organ_id": organ_id,
-                    "result": {}
-                }
-        
-        # 2. The Routing Adapter (The "Map")
-        async def resolve_route_cached(
-            task_type: str,
-            domain: str | None,
-            preferred: str | None,
-            cid_local: str,
-        ) -> str | None:
-            """
-            Wrapper for the routing logic. 
-            Uses the Coordinator's local cache and Predicate rules.
-            """
-            return await resolve_route_cached_async(
-                task_type=task_type,
-                domain=domain,
-                route_cache=self.route_cache,
-                normalize_func=self._normalize,
-                static_route_fallback_func=self._static_route_fallback,
-                organism_client=self.organism_client,
-                routing_remote_enabled=self.routing_remote_enabled,
-                routing_remote_types=self.routing_remote_types,
-                preferred_logical_id=preferred,
-                cid=cid_local,
-                metrics=self.metrics,
-                last_seen_epoch=self._last_seen_epoch,
-            )
-        
-        # 3. Persistence Adapters
-        async def persist_proto_plan_func(
-            repo: Optional[Any],
-            task_id: str,
-            decision_kind: Optional[str],
-            proto_plan: Optional[Dict[str, Any]],
-        ) -> None:
-            """Adapter for persisting proto-plans."""
-            await self._persist_proto_plan(repo, task_id, decision_kind, proto_plan)
-        
-        async def record_router_telemetry_func(
-            repo: Optional[Any],
-            task_id: str,
-            route_result: Dict[str, Any],
-        ) -> None:
-            """Adapter for recording router telemetry."""
-            await self._record_router_telemetry(repo, task_id, route_result)
-        
-        # 4. Assemble Config
+                logger.error(f"Organism execution failed: {e}")
+                return {"success": False, "error": str(e), "organ_id": organ_id}
+
+        async def persist_proto_plan_func(repo, tid, kind, plan):
+            await self._persist_proto_plan(repo, tid, kind, plan)
+            
+        async def record_router_telemetry_func(repo, tid, res):
+            await self._record_router_telemetry(repo, tid, res)
+
+        def resolve_session_factory(repo=None):
+            return self._session_factory
+
         return ExecutionConfig(
-            normalize_task_dict=normalize_task_dict,  # Use the imported utils function
+            normalize_task_dict=normalize_task_dict,
             compute_drift_score=self._compute_drift_score,
             organism_execute=organism_execute,
             graph_task_repo=self.graph_task_repo,
@@ -1235,446 +370,235 @@ class Coordinator:
             predicate_router=self.predicate_router,
             metrics=self.metrics,
             cid=cid,
-            resolve_route_cached=resolve_route_cached,
-            static_route_fallback=self._static_route_fallback,
-            normalize_type=self._normalize,
-            normalize_domain=self._norm_domain,
-            # New dependencies for decision execution
+            resolve_route_cached=self._resolve_route_cached_adapter,
+            static_route_fallback=static_route_fallback,
+            normalize_type=normalize_string,
+            normalize_domain=normalize_domain,
             cognitive_client=self.cognitive_client,
             persist_proto_plan_func=persist_proto_plan_func,
             record_router_telemetry_func=record_router_telemetry_func,
-            resolve_session_factory_func=self._resolve_session_factory,
-            fast_path_latency_slo_ms=self.fast_path_latency_slo_ms,
+            resolve_session_factory_func=resolve_session_factory,
+            fast_path_latency_slo_ms=self.fast_path_latency_slo_ms
         )
 
-    async def route_and_execute(self, payload: Union[TaskPayload, Dict[str, Any]]):
-        """
-        Universal Interface: Unified entrypoint for all Coordinator operations.
-        
-        Uses TaskPayload.type to route internally:
-        - type: "anomaly_triage" → Anomaly triage pipeline
-        - type: "ml_tune_callback" → ML tuning callback handler  
-        - Other types → Standard routing & execution
-        
-        Responsibilities:
-        1. Ingest: Persist incoming task to DB (System of Record)
-        2. Route: Type-based internal routing to appropriate handler
-        3. Delegate: Forward to appropriate service (Cognitive/Organism) based on decision
-        """
-        await self._ensure_background_tasks_started()
-        try:
-            # 1. Coerce & Extract Type
-            task_obj, task_dict = coerce_task_payload(payload)
-            task_type = task_dict.get("type") or getattr(task_obj, "type", None) or "unknown_task"
-            
-            # 2. Type-Based Routing (Business Logic Polymorphism)
-            # Handle special business endpoints via type field
-            if task_type == "anomaly_triage":
-                # Convert to AnomalyTriageRequest format for compatibility
-                params = task_dict.get("params", {})
-                anomaly_payload = AnomalyTriageRequest(
-                    agent_id=params.get("agent_id") or task_dict.get("agent_id", "unknown"),
-                    series=params.get("series") or task_dict.get("series", []),
-                    context=params.get("context") or task_dict.get("context", {}),
-                )
-                return await self._handle_anomaly_triage(anomaly_payload)
-            
-            elif task_type == "ml_tune_callback":
-                # Convert to TuneCallbackRequest format for compatibility
-                params = task_dict.get("params", {})
-                callback_payload = TuneCallbackRequest(
-                    job_id=params.get("job_id") or task_dict.get("job_id", ""),
-                    status=params.get("status") or task_dict.get("status", "unknown"),
-                    E_after=params.get("E_after") or task_dict.get("E_after"),
-                    gpu_seconds=params.get("gpu_seconds") or task_dict.get("gpu_seconds"),
-                    error=params.get("error") or task_dict.get("error"),
-                )
-                return await self._handle_tune_callback(callback_payload)
-            
-            # 3. Standard Routing & Execution (Default Path)
-            # Extract correlation_id from request if present
-            correlation_id = None
-            if isinstance(payload, dict):
-                correlation_id = payload.get("correlation_id")
-            correlation_id = correlation_id or task_dict.get("correlation_id")
-            if not correlation_id and hasattr(task_obj, "correlation_id"):
-                correlation_id = getattr(task_obj, "correlation_id", None)  # type: ignore[attr-defined]
-            if not correlation_id:
-                correlation_id = uuid.uuid4().hex
+    async def _resolve_route_cached_adapter(self, task_type, domain, preferred, cid_local):
+        return await resolve_route_cached_async(
+            task_type=task_type,
+            domain=domain,
+            route_cache=self.route_cache,
+            normalize_func=normalize_string,
+            static_route_fallback_func=static_route_fallback,
+            organism_client=self.organism_client,
+            routing_remote_enabled=self.routing_remote_enabled,
+            routing_remote_types=self.routing_remote_types,
+            preferred_logical_id=preferred,
+            cid=cid_local,
+            metrics=self.metrics,
+            last_seen_epoch=self._last_seen_epoch,
+        )
 
-            # 4. PERSISTENCE (Keep this! This is the "Inbox")
-            # We use a local session to save the incoming request.
-            repo = self.graph_task_repo or self._get_graph_repository()
-            self.graph_task_repo = repo
-
-            if repo is None or not hasattr(repo, "create_task"):
-                message = (
-                    f"[Coordinator] Task repository unavailable; cannot persist task {task_obj.task_id}"
-                )
-                logger.warning(message)
-                raise HTTPException(status_code=503, detail="Task metadata repository unavailable")
-            
-            logger.info(f"[Coordinator] Using repository: {type(repo)} for task {task_obj.task_id}")
-
-            agent_id: Optional[str] = None
-            params = task_dict.get("params")
-            if isinstance(params, dict):
-                agent_id = params.get("agent_id")
-
-            try:
-                # Get a database session for the repository
-                session_factory = self._resolve_session_factory(repo)
-                if session_factory is None:
-                    raise RuntimeError("session factory unavailable")
-                async with session_factory() as session:
-                    async with session.begin():
-                        await repo.create_task(session, task_dict, agent_id=agent_id)
-            except Exception as persist_exc:
-                logger.warning(
-                    "[Coordinator] Failed to persist incoming task %s: %s",
-                    task_obj.task_id,
-                    persist_exc,
-                )
-                raise HTTPException(status_code=503, detail="Failed to persist task metadata") from persist_exc
-
-            # 5. Core Logic (Stateless)
-            # Build configs and call execute.route_and_execute directly
-            # All decision handling, execution, and persistence is now handled inside core_route_and_execute
-            route_config = self._build_route_config()
-            exec_config = self._build_execution_config(correlation_id)
-            
-            result = await core_route_and_execute(
-                task=task_obj,
-                routing_config=route_config,
-                execution_config=exec_config,
-                eventizer_helper=default_features_from_payload,
-            )
-            
-            # Return the result (which may be from Cognitive Service, Organism Service, or routing decision)
-            return result
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.exception(f"[Coordinator] route_and_execute failed: {e}")
-            return err(str(e), "coordinator_error")
-
-    async def health(self):
-        """Health check endpoint with PKG status."""
-        pkg_enabled = False
-        try:
-            pkg_mgr = get_global_pkg_manager()
-            evaluator = pkg_mgr and pkg_mgr.get_active_evaluator()
-            pkg_enabled = evaluator is not None
-        except Exception:
-            pass
-        
-        response = {
-            "status": "healthy",
-            "coordinator": True,
-            "pkg": {"enabled": pkg_enabled}
-        }
-        return response
-    
-    async def get_metrics(self):
-        """Get current task execution metrics."""
-        # Ensure background tasks are started
-        await self._ensure_background_tasks_started()
-        return self.metrics.get_metrics()
-    
-    async def ready(self):
-        """Readiness probe for k8s."""
-        return {"ready": bool(getattr(self, "_bg_started", False))}
-    
-    async def get_predicate_status(self):
-        """Get predicate system status and GPU guard information."""
-        import hashlib
-        
-        # Get file modification time and hash
-        config_path = Path(PREDICATES_CONFIG_PATH)
-        loaded_at = None
-        file_hash = None
-        
-        if config_path.exists():
-            stat = config_path.stat()
-            loaded_at = time.ctime(stat.st_mtime)
-            
-            # Calculate file hash
-            with open(config_path, 'rb') as f:
-                file_hash = hashlib.sha256(f.read()).hexdigest()[:16]
-        
-        return {
-            "predicate_config": {
-                "version": self.predicate_config.metadata.version,
-                "commit": self.predicate_config.metadata.commit,
-                "loaded_at": loaded_at,
-                "file_hash": file_hash,
-                "routing_rules": len(self.predicate_config.routing),
-                "mutation_rules": len(self.predicate_config.mutations),
-                "routing_enabled": getattr(self.predicate_config, 'routing_enabled', True),
-                "mutations_enabled": getattr(self.predicate_config, 'mutations_enabled', True),
-                "gpu_guard_enabled": getattr(self.predicate_config, 'gpu_guard_enabled', False),
-                "is_fallback": self.predicate_config.metadata.version == "fallback"
-            },
-            "gpu_guard": self.predicate_router.get_gpu_guard_status(),
-            "signals": self.predicate_router._signal_cache,
-            "escalation_ratio": self.predicate_router.metrics.get_escalation_ratio(),
-            "circuit_breakers": {
-                "ml_service": self.ml_client.get_metrics(),
-                "cognitive_service": self.cognitive_client.get_metrics(),
-                "organism_service": self.organism_client.get_metrics()
-            },
-            "storage": {
-                "backend": self.storage.get_backend_type(),
-                "redis_available": self.storage.get_backend_type() == "redis"
-            }
-        }
-    
-    async def get_predicate_config(self):
-        """Get current predicate configuration."""
-        return self.predicate_config.dict()
-    
-    async def reload_predicates(self):
-        """Reload predicate configuration from file."""
-        try:
-            self.predicate_config = load_predicates(PREDICATES_CONFIG_PATH)
-            self.predicate_router = PredicateRouter(self.predicate_config)
-            logger.info("✅ Predicate configuration reloaded")
-            return {"success": True, "message": "Configuration reloaded successfully"}
-        except Exception as e:
-            logger.error(f"❌ Failed to reload predicate config: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def _handle_tune_callback(self, payload: TuneCallbackRequest):
-        """
-        Callback endpoint for ML tuning job completion.
-        
-        Note: Energy tracking (E_before, Delta E) is now handled by the ML Service.
-        The Coordinator only tracks job status and correlation metadata.
-        """
-        try:
-            job_id = payload.job_id
-            logger.info(f"[Coordinator] Received tuning callback for job {job_id}: {payload.status}")
-            
-            # Get persisted job state (for correlation metadata only)
-            job_state = self._get_job_state(job_id)
-            if not job_state:
-                logger.warning(f"No job state found for {job_id}")
-                return {"success": False, "error": "Job state not found"}
-            
-            # Handle job completion/failure
-            if payload.status == "completed":
-                # ML Service handles Delta E calculation and metrics recording
-                # Coordinator only updates job status
-                self.predicate_router.update_gpu_job_status(job_id, "completed", success=True)
-                
-                # Record metrics if Delta E is provided by ML Service
-                if payload.E_after is not None:
-                    # Note: Delta E calculation is handled by ML Service
-                    # We can still record GPU seconds for monitoring
-                    logger.info(
-                        f"[Coordinator] Job {job_id} completed: "
-                        f"E_after={payload.E_after:.4f}, GPU_seconds={payload.gpu_seconds}"
-                    )
-                else:
-                    logger.info(f"[Coordinator] Job {job_id} completed: GPU_seconds={payload.gpu_seconds}")
-            else:
-                # Job failed
-                self.predicate_router.update_gpu_job_status(job_id, "failed", success=False)
-                logger.warning(f"Job {job_id} failed: {payload.error}")
-            
-            # Clean up job state
-            self.storage.delete(f"job:{job_id}")
-            
-            return {"success": True, "message": "Callback processed"}
-            
-        except Exception as e:
-            logger.error(f"❌ Error processing tuning callback: {e}")
-            return {"success": False, "error": str(e)}
+    # ------------------------------------------------------------------
+    # 3. Workflows (Triage, Callbacks)
+    # ------------------------------------------------------------------
 
     async def _handle_anomaly_triage(self, payload: AnomalyTriageRequest):
-        """
-        Anomaly triage pipeline:
-          1) Detect anomalies (ML)
-          2) If OCPS escalates → HGNN (multi-plan) via Cognitive
-             Else → FAST path (no planner/HGNN)
-          3) Predicate: possibly submit tuning/retrain
-          4) Fire-and-forget memory synthesis
-          5) Return aggregated response
-        """
         cid = uuid.uuid4().hex
         agent_id = payload.agent_id
-        series = payload.series or []
-        context = payload.context or {}
-
-        # Drift & OCPS gate (True now means HGNN escalation)
+        
         task_data = {
-            "id": f"anomaly_triage_{agent_id}",
+            "id": f"triage_{agent_id}", 
             "type": "anomaly_triage",
-            "description": f"Anomaly triage for agent {agent_id}",
-            "priority": 7,
-            "complexity": 0.8,
-            "series_length": len(series),
-            "context": context,
+            "description": f"Triage for {agent_id}",
+            "context": payload.context
         }
+        
         drift_score = await self._compute_drift_score(task_data)
-        ocps = getattr(self, "ocps", None)
-        hgnn_escalate = bool(ocps.update(drift_score)) if ocps else True
-
-        logger.info(
-            "[Coordinator] anomaly_triage start agent=%s drift=%.4f hgnn_escalate=%s cid=%s",
-            agent_id, drift_score, hgnn_escalate, cid
-        )
-
-        # 1) Detect anomalies
-        try:
-            anomalies = await asyncio.wait_for(
-                self.ml_client.detect_anomaly({"data": series}), timeout=10
-            )
-        except Exception as e:
-            logger.exception("[Coordinator] anomaly detection failed: %s", e)
-            # Error envelope via your response model (FAST fallback semantics)
-            return AnomalyTriageResponse(
-                agent_id=agent_id,
-                anomalies={"error": str(e)},
-                reason={"result": {"thought": "ml error"}},
-                decision_kind={"result": {"action": "hold"}},
-                correlation_id=cid,
-                p_fast=getattr(ocps, "p_fast", None),
-                escalated=False,
-                tuning_job={"skipped": True},
-            )
-
-        # FAST short-circuit: no anomalies
-        if not anomalies.get("anomalies"):
-            decision_kind = {"result": {"action": "hold", "reason": "no anomalies"}}
-            asyncio.create_task(self._fire_and_forget_memory_synthesis(agent_id, anomalies, {}, decision_kind, cid))
-            logger.info("[Coordinator] No anomalies; FAST path (hold). cid=%s", cid)
-            return AnomalyTriageResponse(
-                agent_id=agent_id,
-                anomalies=anomalies,
-                reason={},                 # no planner/hgnn reasoning
-                decision_kind=decision_kind,
-                correlation_id=cid,
-                p_fast=getattr(ocps, "p_fast", None),
-                escalated=False,           # FAST
-                tuning_job=None,
-            )
-
-        # 2) Route: HGNN (escalated) vs FAST
-        reason: dict = {}                       # keep field for schema continuity
-        decision_kind: dict = {"result": {"action": "hold"}}
-
-        if hgnn_escalate:
-            logger.info("[Coordinator] OCPS escalated → CognitiveService (ESCALATED) path. cid=%s", cid)
-
-            input_data = {
-                "problem_statement": f"Anomaly triage HGNN plan (agent={agent_id})",
-                "constraints": {"latency_ms": self.fast_path_latency_slo_ms},
-                "available_tools": {},
-                "anomalies": anomalies.get("anomalies", []),
-            }
-
-            meta = {
-                "task_id": task_data["id"],
-                "correlation_id": cid,
-                "original_context": context,
-            }
-
+        is_novel = drift_score > 0.7
+        retention = RetentionPolicy.FULL_ARCHIVE if is_novel else RetentionPolicy.SUMMARY_ONLY
+        should_escalate = self.ocps.update(drift_score)
+        
+        decision_kind = DecisionKind.ESCALATED if should_escalate else DecisionKind.FAST_PATH
+        reason = {"drift_score": drift_score, "is_novel": is_novel}
+        
+        if should_escalate:
+            logger.info(f"[Triage] Escalating {agent_id} (Score: {drift_score:.2f})")
             try:
-                hgnn_resp = await asyncio.wait_for(
-                    self.cognitive_client.execute_async(
-                        agent_id=agent_id,
-                        cog_type=CognitiveType.PROBLEM_SOLVING,
-                        decision_kind=DecisionKind.ESCALATED,
-                        input_data=input_data,
-                        meta=meta,
-                    ),
-                    timeout=20,
+                cog_res = await self.cognitive_client.execute_async(
+                    agent_id=agent_id,
+                    cog_type=CognitiveType.PROBLEM_SOLVING,
+                    decision_kind=DecisionKind.ESCALATED,
+                    task={"params": {"hgnn": {"embedding": payload.series}}}
                 )
-
-                if not hgnn_resp.get("success"):
-                    logger.warning(
-                        "[Coordinator] HGNN /execute call failed: %s; staying HOLD",
-                        hgnn_resp.get("error"),
-                    )
-                    hgnn_resp = {"success": False, "error": hgnn_resp.get("error"), "result": {}}
+                reason = cog_res.get("result", {})
             except Exception as e:
-                logger.warning(f"[Coordinator] HGNN /execute call failed: {e}; staying HOLD")
-                hgnn_resp = {"success": False, "error": str(e), "result": {}}
+                logger.warning(f"[Triage] Cognitive check failed: {e}")
 
-            suggested = (
-                hgnn_resp.get("result", {}).get("meta", {}) or {}
-            ).get("suggested_action")
+        if retention != RetentionPolicy.DROP:
+            asyncio.create_task(self._fire_and_forget_memory_synthesis(
+                agent_id=agent_id,
+                anomalies={"series": payload.series, "score": drift_score},
+                reason=reason,
+                decision_kind=decision_kind.value,
+                cid=cid,
+                retention_policy=retention
+            ))
 
-            if suggested:
-                decision_kind = {"result": {"action": suggested, "source": "hgnn"}}
-            else:
-                decision_kind = {"result": {"action": "hold", "source": "hgnn"}}
-
-            # Keep some reasoning breadcrumbs (optional)
-            reason = {"result": {"planner": "hgnn", "meta": hgnn_resp.get("result", {}).get("meta", {})}}
-
-        else:
-            # FAST: no planner, no hgnn
-            logger.info("[Coordinator] OCPS gated HGNN; FAST path. cid=%s", cid)
-            decision_kind = {"result": {"action": "hold", "source": "fast"}}
-
-        # 3) Predicate: tune / retrain
-        tuning_job = None
-        action = (decision_kind.get("result") or {}).get("action", "hold")
-        mutation_decision = self.predicate_router.evaluate_mutation(
-            task={"type": "anomaly_triage", "domain": "anomaly", "priority": 7, "complexity": 0.8},
-            decision_kind=decision_kind.get("result", {}),
-        )
-
-        if mutation_decision.action in {"submit_tuning", "submit_retrain"}:
-            try:
-                # Submit tuning job - ML Service will handle energy tracking
-                # The ML Service (StatusActor) is responsible for recording E_before
-                # and calculating Delta E when the job completes
-                tuning_job = await self.ml_client.submit_tuning_job({
-                    "space_type": TUNE_SPACE_TYPE,
-                    "config_type": TUNE_CONFIG_TYPE,
-                    "experiment_name": f"{TUNE_EXPERIMENT_PREFIX}-{agent_id}-{cid}",
-                    "callback_url": f"{SEEDCORE_API_URL}/pipeline/route-and-execute",
-                    "agent_id": agent_id,  # Pass agent_id so ML Service can track energy
-                })
-                if tuning_job.get("job_id"):
-                    # Persist minimal job state (agent_id, timestamp) for callback correlation
-                    # Energy tracking (E_before, Delta E) is handled by ML Service
-                    self._persist_job_state(tuning_job["job_id"], {
-                        "agent_id": agent_id,
-                        "submitted_at": time.time(),
-                        "job_type": mutation_decision.action.replace("submit_", ""),
-                    })
-                    self.predicate_router.update_gpu_job_status(tuning_job["job_id"], "started")
-                logger.info("[Coordinator] tuning job submitted: %s (%s)", tuning_job.get("job_id", "unknown"), mutation_decision.reason)
-            except Exception as e:
-                logger.warning("[Coordinator] tuning submission failed: %s", e)
-                tuning_job = {"error": str(e)}
-        else:
-            logger.info("[Coordinator] mutation decision: %s (%s)", mutation_decision.action, mutation_decision.reason)
-
-        # 4) Memory synthesis (best-effort)
-        asyncio.create_task(self._fire_and_forget_memory_synthesis(agent_id, anomalies, reason, decision_kind, cid))
-
-        # 5) Build response
-        logger.info(
-            "[Coordinator] anomaly_triage done agent=%s action=%s hgnn_escalated=%s cid=%s",
-            agent_id, action, hgnn_escalate, cid
-        )
         return AnomalyTriageResponse(
             agent_id=agent_id,
-            anomalies=anomalies,
-            reason=reason,                 # may include minimal HGNN meta
-            decision_kind=decision_kind,             # action from HGNN if available; else 'hold'
+            anomalies={},
+            reason=reason,
+            decision_kind={"result": {"action": "escalate" if should_escalate else "hold"}},
             correlation_id=cid,
-            p_fast=getattr(ocps, "p_fast", None),
-            escalated=hgnn_escalate,       # True → HGNN (DecisionKind.ESCALATED), False → FAST
-            tuning_job=tuning_job,
+            escalated=should_escalate
         )
 
+    async def _handle_tune_callback(self, payload: TuneCallbackRequest):
+        try:
+            logger.info(f"[Coord] Tuning callback {payload.job_id}: {payload.status}")
+            success = (payload.status == "completed")
+            self.predicate_router.update_gpu_job_status(payload.job_id, payload.status, success=success)
+            if success:
+                logger.info(f"Job {payload.job_id} success. GPU Secs: {payload.gpu_seconds}")
+            self.storage.delete(f"job:{payload.job_id}")
+            return {"success": True}
+        except Exception as e:
+            logger.error(f"Callback processing failed: {e}")
+            return {"success": False, "error": str(e)}
 
-# Bind the deployment
+    # ------------------------------------------------------------------
+    # 4. Internal Helpers
+    # ------------------------------------------------------------------
+
+    async def _compute_drift_score(self, task: Dict[str, Any]) -> float:
+        return await compute_drift_score(
+            task=task,
+            ml_client=self.ml_client,
+            metrics=self.metrics
+        )
+
+    async def _fire_and_forget_memory_synthesis(self, agent_id, anomalies, reason, decision_kind, cid, retention_policy):
+        try:
+            if retention_policy == RetentionPolicy.DROP:
+                return
+
+            if retention_policy == RetentionPolicy.SUMMARY_ONLY:
+                anomalies = self._prune_heavy_content(anomalies)
+                
+            payload = {
+                "agent_id": agent_id,
+                "memory_fragments": [
+                    {"anomalies": redact_sensitive_data(anomalies)},
+                    {"reason": redact_sensitive_data(reason)},
+                    {"decision": str(decision_kind)}
+                ],
+                "synthesis_goal": "incident_summary"
+            }
+            
+            await self.cognitive_client.post(
+                "/synthesize-memory", 
+                json=payload, 
+                headers={"X-Correlation-ID": cid}
+            )
+        except Exception as e:
+            logger.warning(f"Memory synthesis failed: {e}")
+
+    def _prune_heavy_content(self, data: Any) -> Any:
+        HEAVY_KEYS = {"dom_tree", "screenshot_base64", "full_http_body", "series"}
+        if isinstance(data, dict):
+            return {k: (v if k not in HEAVY_KEYS else "<PRUNED>") for k, v in data.items()}
+        return data
+
+    async def _persist_proto_plan(self, repo, tid, kind, plan):
+        try:
+             async with self._session_factory() as session:
+                async with session.begin():
+                    await self.proto_plan_dao.upsert(session, str(tid), str(kind), plan)
+        except Exception as e:
+            logger.warning(f"Proto-plan persist failed: {e}")
+
+    async def _record_router_telemetry(self, repo, tid, res):
+        try:
+             async with self._session_factory() as session:
+                async with session.begin():
+                    payload = res.get("payload", {})
+                    surprise = payload.get("surprise", {})
+                    await self.telemetry_dao.insert(
+                        session,
+                        task_id=str(tid),
+                        surprise_score=float(surprise.get("S", 0.0)),
+                        x_vector=list(surprise.get("x", [])),
+                        weights=list(surprise.get("weights", [])),
+                        chosen_route=str(res.get("decision_kind", "unknown")),
+                        ocps_metadata=surprise.get("ocps", {})
+                    )
+        except Exception as e:
+             logger.warning(f"Telemetry persist failed: {e}")
+
+    async def _enqueue_task_embedding_now(self, task_id: str, reason: str = "router") -> bool:
+        try:
+            from ..graph.task_embedding_worker import enqueue_task_embedding_job
+            for _ in range(2):
+                try:
+                    await asyncio.wait_for(
+                        enqueue_task_embedding_job(self.runtime_ctx, task_id, reason=reason),
+                        timeout=2.0
+                    )
+                    return True
+                except Exception:
+                    await asyncio.sleep(0.1)
+            return False
+        except ImportError:
+            return False
+        except Exception as e:
+            logger.warning(f"Fast-embed failed: {e}")
+            return False
+
+    async def _task_outbox_flusher_loop(self):
+        while True:
+            try:
+                if self._session_factory:
+                    async with self._session_factory() as s:
+                        async with s.begin():
+                            rows = await self.outbox_dao.claim_pending_nim_task_embeds(s, limit=50)
+                            for row in rows:
+                                tid = json.loads(row["payload"])["task_id"]
+                                if await self._enqueue_task_embedding_now(tid, "outbox"):
+                                    await self.outbox_dao.delete(s, row["id"])
+                                else:
+                                    await self.outbox_dao.backoff(s, row["id"])
+            except Exception as e:
+                logger.debug(f"Outbox flush error: {e}")
+            await asyncio.sleep(5.0)
+
+    async def _start_background_tasks(self):
+        # Removed local eventizer init since we use client now
+        # But the client might have cache logic, usually no init needed for HTTP client
+        asyncio.create_task(self._task_outbox_flusher_loop())
+        asyncio.create_task(self._warmup_drift_detector())
+
+    async def _warmup_drift_detector(self):
+        import random
+        await asyncio.sleep(random.uniform(2.0, 5.0))
+        try:
+            if await self.ml_client.is_healthy():
+                await self.ml_client.warmup_drift_detector(["warmup"])
+        except Exception:
+            pass
+
+    async def health(self): return {"status": "healthy", "tier": "0"}
+    async def ready(self): return {"ready": self._bg_started}
+    async def get_metrics(self): return self.metrics.get_metrics()
+    async def get_predicate_status(self): return {"rules": len(self.predicate_config.routing)}
+    async def get_predicate_config(self): return self.predicate_config.dict()
+    async def reload_predicates(self):
+        self.predicate_config = load_predicates(PREDICATES_CONFIG_PATH)
+        self.predicate_router = PredicateRouter(self.predicate_config)
+        return {"status": "reloaded"}
+
+    def _normalize(self, x): return normalize_string(x)
+    def _norm_domain(self, x): return normalize_domain(x)
+    def _static_route_fallback(self, t, d): return static_route_fallback(t, d)
+    def _get_job_state(self, jid): return self.storage.get(f"job:{jid}")
+
+# Deployment Bind
 coordinator_deployment = Coordinator.bind()
-

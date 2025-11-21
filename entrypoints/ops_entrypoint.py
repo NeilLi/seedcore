@@ -70,20 +70,82 @@ class EventizerService:
             logger.info("EventizerService initialized")
 
     async def process(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Process text through eventizer pipeline."""
+        """
+        Process text through eventizer pipeline.
+        
+        Uses the dict interface which handles EventizerRequest construction
+        and returns a dict representation of EventizerResponse.
+        """
         try:
             if not self._initialized:
                 await self.initialize()
             
             # Process through eventizer using dict interface
+            # This handles EventizerRequest construction and returns dict response
             response = await self.impl.process_dict(payload)
             
-            # Response is already a dict
+            # Check if process_dict returned an error response
+            if isinstance(response, dict) and response.get("success") is False:
+                error_msg = response.get("error", "Unknown error")
+                logger.error(f"Eventizer processing failed: {error_msg}")
+                # Return error response in EventizerResponse format
+                return {
+                    "original_text": payload.get("text", ""),
+                    "processed_text": payload.get("text", ""),
+                    "event_tags": {
+                        "event_types": [],
+                        "keywords": [],
+                        "entities": [],
+                        "patterns": [],
+                        "priority": 0,
+                        "urgency": "normal"
+                    },
+                    "attributes": {},
+                    "confidence": {
+                        "overall_confidence": 0.0,
+                        "confidence_level": "low",
+                        "needs_ml_fallback": True,
+                        "fallback_reasons": ["exception"],
+                        "processing_notes": [error_msg]
+                    },
+                    "processing_time_ms": 0.0,
+                    "patterns_applied": 0,
+                    "pii_redacted": False,
+                    "errors": [error_msg],
+                    "success": False
+                }
+            
+            # Response is already a dict (EventizerResponse.model_dump())
             return response
             
         except Exception as e:
-            logger.error(f"Eventizer processing failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Eventizer processing failed: {str(e)}")
+            logger.exception(f"Eventizer processing failed: {e}")
+            # Return error response matching EventizerResponse structure
+            return {
+                "original_text": payload.get("text", ""),
+                "processed_text": payload.get("text", ""),
+                "event_tags": {
+                    "event_types": [],
+                    "keywords": [],
+                    "entities": [],
+                    "patterns": [],
+                    "priority": 0,
+                    "urgency": "normal"
+                },
+                "attributes": {},
+                "confidence": {
+                    "overall_confidence": 0.0,
+                    "confidence_level": "low",
+                    "needs_ml_fallback": True,
+                    "fallback_reasons": ["exception"],
+                    "processing_notes": [str(e)]
+                },
+                "processing_time_ms": 0.0,
+                "patterns_applied": 0,
+                "pii_redacted": False,
+                "errors": [str(e)],
+                "success": False
+            }
 
     async def health(self) -> Dict[str, Any]:
         """Health check."""
@@ -193,13 +255,21 @@ class OpsGateway:
         # Eventizer endpoints
         @router.post("/eventizer/process")
         async def process_eventizer(payload: Dict[str, Any]):
-            """Process text through eventizer pipeline."""
+            """
+            Process text through eventizer pipeline.
+            
+            Returns EventizerResponse as dict. Errors are returned as part of
+            the response structure (with success=False) rather than HTTP errors,
+            matching the eventizer_client.py interface.
+            """
             try:
                 result = await self.eventizer.process.remote(payload)
+                # Service wrapper returns dict response (may contain error info)
                 return result
             except Exception as e:
-                logger.error(f"Eventizer processing failed: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                # Only raise HTTPException for transport/deployment errors
+                logger.error(f"Eventizer service call failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Service unavailable: {str(e)}")
 
         @router.get("/eventizer/health")
         async def eventizer_health():

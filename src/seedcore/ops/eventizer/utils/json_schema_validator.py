@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 # Try to import jsonschema, fall back to basic validation if not available
 try:
-    import jsonschema
-    from jsonschema import Draft7Validator, ValidationError
+    import jsonschema  # pyright: ignore[reportMissingModuleSource, reportUnusedImport]  # noqa: F401
+    from jsonschema import Draft7Validator  # pyright: ignore[reportMissingModuleSource]
     JSONSCHEMA_AVAILABLE = True
     logger.debug("jsonschema available, using full validation")
 except ImportError:
@@ -28,8 +28,8 @@ except ImportError:
 
 
 @dataclass
-class ValidationError:
-    """Represents a validation error."""
+class SchemaValidationIssue:
+    """Represents a validation error, warning, or info message."""
     path: str
     message: str
     severity: str = "error"  # error, warning, info
@@ -39,9 +39,10 @@ class ValidationError:
 class ValidationResult:
     """Result of JSON Schema validation."""
     is_valid: bool
-    errors: List[ValidationError]
-    warnings: List[ValidationError]
+    errors: List[SchemaValidationIssue]
+    warnings: List[SchemaValidationIssue]
     stats: Dict[str, Any]
+    file_path: Optional[str] = None
 
 
 class EventizerPatternsValidator:
@@ -64,8 +65,17 @@ class EventizerPatternsValidator:
         self.validator = self._create_validator() if JSONSCHEMA_AVAILABLE else None
     
     def _get_default_schema_path(self) -> Path:
-        """Get the default schema path."""
-        # Look for schema in config directory (project root)
+        """Get the default schema path by searching upward for config directory."""
+        # Start from current file and search upward for config directory
+        current = Path(__file__).resolve()
+        while current.parent != current:  # Stop at filesystem root
+            config_dir = current / "config"
+            schema_file = config_dir / "eventizer_patterns_schema.json"
+            if schema_file.exists():
+                return schema_file
+            current = current.parent
+        
+        # Fallback to original logic if config not found
         project_root = Path(__file__).parent.parent.parent.parent.parent
         return project_root / "config" / "eventizer_patterns_schema.json"
     
@@ -110,19 +120,23 @@ class EventizerPatternsValidator:
         except FileNotFoundError:
             return ValidationResult(
                 is_valid=False,
-                errors=[ValidationError("file", f"File not found: {file_path}")],
+                errors=[SchemaValidationIssue("file", f"File not found: {file_path}")],
                 warnings=[],
-                stats={}
+                stats={},
+                file_path=str(file_path)
             )
         except json.JSONDecodeError as e:
             return ValidationResult(
                 is_valid=False,
-                errors=[ValidationError("file", f"Invalid JSON: {e}")],
+                errors=[SchemaValidationIssue("file", f"Invalid JSON: {e}")],
                 warnings=[],
-                stats={}
+                stats={},
+                file_path=str(file_path)
             )
         
-        return self.validate_data(data)
+        result = self.validate_data(data)
+        result.file_path = str(file_path)
+        return result
     
     def validate_data(self, data: Dict[str, Any]) -> ValidationResult:
         """
@@ -144,7 +158,7 @@ class EventizerPatternsValidator:
         
         # Full validation with jsonschema
         if self.validator is None:
-            errors.append(ValidationError("validator", "Validator not available"))
+            errors.append(SchemaValidationIssue("validator", "Validator not available"))
             return ValidationResult(False, errors, warnings, stats)
         
         try:
@@ -153,10 +167,15 @@ class EventizerPatternsValidator:
             
             for error in validation_errors:
                 path = ".".join(str(p) for p in error.absolute_path) if error.absolute_path else "root"
-                errors.append(ValidationError(
+                # Check if error has severity hint (jsonschema doesn't support this natively,
+                # but we can infer from error type or message)
+                severity = "error"
+                if hasattr(error, "severity"):
+                    severity = error.severity
+                errors.append(SchemaValidationIssue(
                     path=path,
                     message=error.message,
-                    severity="error"
+                    severity=severity
                 ))
             
             # Additional custom validations
@@ -168,40 +187,43 @@ class EventizerPatternsValidator:
             is_valid = len(errors) == 0
             
         except Exception as e:
-            errors.append(ValidationError("validation", f"Validation failed: {e}"))
+            errors.append(SchemaValidationIssue("validation", f"Validation failed: {e}"))
             is_valid = False
         
         return ValidationResult(is_valid, errors, warnings, stats)
     
-    def _basic_validation(self, data: Dict[str, Any], errors: List[ValidationError], 
-                         warnings: List[ValidationError], stats: Dict[str, Any]) -> ValidationResult:
+    def _basic_validation(self, data: Dict[str, Any], errors: List[SchemaValidationIssue], 
+                         warnings: List[SchemaValidationIssue], stats: Dict[str, Any]) -> ValidationResult:
         """Basic validation without jsonschema library."""
         # Check required fields
         required_fields = ["version", "regex_patterns", "keyword_patterns", "entity_patterns"]
         for field in required_fields:
             if field not in data:
-                errors.append(ValidationError(field, f"Required field '{field}' is missing"))
+                errors.append(SchemaValidationIssue(field, f"Required field '{field}' is missing"))
         
         # Basic type checking
         if "version" in data and not isinstance(data["version"], str):
-            errors.append(ValidationError("version", "Version must be a string"))
+            errors.append(SchemaValidationIssue("version", "Version must be a string"))
         
         if "regex_patterns" in data and not isinstance(data["regex_patterns"], list):
-            errors.append(ValidationError("regex_patterns", "Regex patterns must be an array"))
+            errors.append(SchemaValidationIssue("regex_patterns", "Regex patterns must be an array"))
         
         if "keyword_patterns" in data and not isinstance(data["keyword_patterns"], list):
-            errors.append(ValidationError("keyword_patterns", "Keyword patterns must be an array"))
+            errors.append(SchemaValidationIssue("keyword_patterns", "Keyword patterns must be an array"))
         
         if "entity_patterns" in data and not isinstance(data["entity_patterns"], list):
-            errors.append(ValidationError("entity_patterns", "Entity patterns must be an array"))
+            errors.append(SchemaValidationIssue("entity_patterns", "Entity patterns must be an array"))
+        
+        # Perform custom validations (same as full validation)
+        self._custom_validations(data, errors, warnings)
         
         # Generate basic stats
         stats = self._generate_stats(data)
         
         return ValidationResult(len(errors) == 0, errors, warnings, stats)
     
-    def _custom_validations(self, data: Dict[str, Any], errors: List[ValidationError], 
-                           warnings: List[ValidationError]) -> None:
+    def _custom_validations(self, data: Dict[str, Any], errors: List[SchemaValidationIssue], 
+                           warnings: List[SchemaValidationIssue]) -> None:
         """Perform custom validations beyond JSON Schema."""
         # Check for duplicate pattern IDs
         all_ids = set()
@@ -214,16 +236,11 @@ class EventizerPatternsValidator:
                 if not isinstance(pattern, dict):
                     continue
                 
-                pattern_id = pattern.get("id")
-                if not pattern_id:
-                    errors.append(ValidationError(
-                        f"{pattern_type}[{i}].id",
-                        "Pattern ID is required"
-                    ))
-                    continue
+                # Set default ID if missing
+                pattern_id = pattern.setdefault("id", f"{pattern_type}_{i}")
                 
                 if pattern_id in all_ids:
-                    errors.append(ValidationError(
+                    errors.append(SchemaValidationIssue(
                         f"{pattern_type}[{i}].id",
                         f"Duplicate pattern ID: {pattern_id}"
                     ))
@@ -232,13 +249,14 @@ class EventizerPatternsValidator:
         
         # Check pattern limits
         settings = data.get("settings", {})
-        max_patterns = settings.get("max_patterns", 10000)
+        max_patterns = settings.get("max_patterns", 20000)
         
         total_patterns = sum(len(data.get(pt, [])) for pt in ["regex_patterns", "keyword_patterns", "entity_patterns"])
         if total_patterns > max_patterns:
-            warnings.append(ValidationError(
+            warnings.append(SchemaValidationIssue(
                 "patterns",
-                f"Total patterns ({total_patterns}) exceeds recommended limit ({max_patterns})"
+                f"Total patterns ({total_patterns}) exceeds recommended limit ({max_patterns})",
+                severity="warning"
             ))
         
         # Validate regex patterns
@@ -253,84 +271,197 @@ class EventizerPatternsValidator:
         if "entity_patterns" in data:
             self._validate_entity_patterns(data["entity_patterns"], errors, warnings)
     
+    def _require_type(self, value: Any, expected_type: type, path: str, 
+                     errors: List[SchemaValidationIssue]) -> bool:
+        """Helper to check if value is of expected type."""
+        if not isinstance(value, expected_type):
+            errors.append(SchemaValidationIssue(
+                path,
+                f"Expected {expected_type.__name__}, got {type(value).__name__}"
+            ))
+            return False
+        return True
+    
     def _validate_regex_patterns(self, patterns: List[Dict[str, Any]], 
-                                errors: List[ValidationError], warnings: List[ValidationError]) -> None:
+                                errors: List[SchemaValidationIssue], warnings: List[SchemaValidationIssue]) -> None:
         """Validate regex patterns."""
         import re
         
         for i, pattern in enumerate(patterns):
-            pattern_id = pattern.get("id", f"regex_{i}")
-            regex = pattern.get("pattern", "")
-            
-            if not regex:
-                errors.append(ValidationError(
-                    f"regex_patterns[{i}].pattern",
-                    "Regex pattern cannot be empty"
+            if not isinstance(pattern, dict):
+                errors.append(SchemaValidationIssue(
+                    f"regex_patterns[{i}]",
+                    "Pattern must be an object"
                 ))
                 continue
             
+            pattern.setdefault("id", f"regex_{i}")
+            regex = pattern.get("pattern")
+            
+            # Type check: pattern must be a string
+            if not isinstance(regex, str):
+                errors.append(SchemaValidationIssue(
+                    f"regex_patterns[{i}].pattern",
+                    f"Regex pattern must be a string (got {type(regex).__name__})"
+                ))
+                continue
+            
+            if not regex.strip():
+                errors.append(SchemaValidationIssue(
+                    f"regex_patterns[{i}].pattern",
+                    "Regex pattern must be a non-empty string"
+                ))
+                continue
+            
+            # Validate flags type
+            flags = pattern.get("flags", 0)
+            if not isinstance(flags, int):
+                errors.append(SchemaValidationIssue(
+                    f"regex_patterns[{i}].flags",
+                    f"flags must be an integer (got {type(flags).__name__})"
+                ))
+                continue
+            
+            # Compile regex to validate syntax
             try:
-                flags = pattern.get("flags", 0)
                 re.compile(regex, flags)
             except re.error as e:
-                errors.append(ValidationError(
+                errors.append(SchemaValidationIssue(
                     f"regex_patterns[{i}].pattern",
-                    f"Invalid regex pattern: {e}"
+                    f"Invalid regex: {e}"
                 ))
     
     def _validate_keyword_patterns(self, patterns: List[Dict[str, Any]], 
-                                  errors: List[ValidationError], warnings: List[ValidationError]) -> None:
+                                  errors: List[SchemaValidationIssue], warnings: List[SchemaValidationIssue]) -> None:
         """Validate keyword patterns."""
         for i, pattern in enumerate(patterns):
-            pattern_id = pattern.get("id", f"keyword_{i}")
-            keywords = pattern.get("keywords", [])
-            
-            if not keywords:
-                errors.append(ValidationError(
-                    f"keyword_patterns[{i}].keywords",
-                    "Keywords list cannot be empty"
+            if not isinstance(pattern, dict):
+                errors.append(SchemaValidationIssue(
+                    f"keyword_patterns[{i}]",
+                    "Pattern must be an object"
                 ))
                 continue
             
-            # Check for empty keywords
-            empty_keywords = [kw for kw in keywords if not kw.strip()]
-            if empty_keywords:
-                warnings.append(ValidationError(
+            pattern.setdefault("id", f"keyword_{i}")
+            keywords = pattern.get("keywords")
+            
+            # Type check: keywords must be a list
+            if not isinstance(keywords, list):
+                errors.append(SchemaValidationIssue(
                     f"keyword_patterns[{i}].keywords",
-                    f"Found {len(empty_keywords)} empty keywords"
+                    f"Keywords must be a list (got {type(keywords).__name__})"
+                ))
+                continue
+            
+            if len(keywords) == 0:
+                errors.append(SchemaValidationIssue(
+                    f"keyword_patterns[{i}].keywords",
+                    "Keywords must be a non-empty list"
+                ))
+                continue
+            
+            # Validate each keyword is a string
+            invalid_keywords = [
+                kw for kw in keywords
+                if not isinstance(kw, str) or not kw.strip()
+            ]
+            
+            if invalid_keywords:
+                warnings.append(SchemaValidationIssue(
+                    f"keyword_patterns[{i}].keywords",
+                    f"{len(invalid_keywords)} invalid or empty keywords found",
+                    severity="warning"
                 ))
     
     def _validate_entity_patterns(self, patterns: List[Dict[str, Any]], 
-                                 errors: List[ValidationError], warnings: List[ValidationError]) -> None:
+                                 errors: List[SchemaValidationIssue], warnings: List[SchemaValidationIssue]) -> None:
         """Validate entity patterns."""
+        import re
+        
         for i, pattern in enumerate(patterns):
-            pattern_id = pattern.get("id", f"entity_{i}")
-            entity_patterns = pattern.get("patterns", [])
+            if not isinstance(pattern, dict):
+                errors.append(SchemaValidationIssue(
+                    f"entity_patterns[{i}]",
+                    "Pattern must be an object"
+                ))
+                continue
             
-            if not entity_patterns:
-                errors.append(ValidationError(
+            pattern.setdefault("id", f"entity_{i}")
+            sub_patterns = pattern.get("patterns")
+            
+            # Type check: patterns must be a list
+            if not isinstance(sub_patterns, list):
+                errors.append(SchemaValidationIssue(
                     f"entity_patterns[{i}].patterns",
-                    "Entity patterns list cannot be empty"
+                    f"Entity patterns must be a list (got {type(sub_patterns).__name__})"
+                ))
+                continue
+            
+            if len(sub_patterns) == 0:
+                errors.append(SchemaValidationIssue(
+                    f"entity_patterns[{i}].patterns",
+                    "Entity patterns must be a non-empty list"
                 ))
                 continue
             
             # Validate each sub-pattern
-            for j, sub_pattern in enumerate(entity_patterns):
-                if not isinstance(sub_pattern, dict):
-                    errors.append(ValidationError(
-                        f"entity_patterns[{i}].patterns[{j}]",
-                        "Entity sub-pattern must be an object"
+            for j, sub in enumerate(sub_patterns):
+                path = f"entity_patterns[{i}].patterns[{j}]"
+                
+                if not isinstance(sub, dict):
+                    errors.append(SchemaValidationIssue(
+                        path,
+                        "Sub-pattern must be an object"
                     ))
                     continue
                 
-                has_regex = "regex" in sub_pattern
-                has_keywords = "keywords" in sub_pattern
+                regex_value = sub.get("regex")
+                keywords_value = sub.get("keywords")
+                
+                has_regex = isinstance(regex_value, str)
+                has_keywords = isinstance(keywords_value, list)
                 
                 if not has_regex and not has_keywords:
-                    errors.append(ValidationError(
-                        f"entity_patterns[{i}].patterns[{j}]",
-                        "Entity sub-pattern must have either 'regex' or 'keywords'"
+                    errors.append(SchemaValidationIssue(
+                        path,
+                        "Sub-pattern must have either 'regex' (string) or 'keywords' (list)"
                     ))
+                    continue
+                
+                # Validate regex if present
+                if has_regex:
+                    if not regex_value.strip():
+                        errors.append(SchemaValidationIssue(
+                            path + ".regex",
+                            "Regex pattern must be a non-empty string"
+                        ))
+                    else:
+                        try:
+                            re.compile(regex_value)
+                        except re.error as exc:
+                            errors.append(SchemaValidationIssue(
+                                path + ".regex",
+                                f"Invalid regex: {exc}"
+                            ))
+                
+                # Validate keywords if present
+                if has_keywords:
+                    if len(keywords_value) == 0:
+                        errors.append(SchemaValidationIssue(
+                            path + ".keywords",
+                            "Keywords list cannot be empty"
+                        ))
+                    else:
+                        invalid = [
+                            kw for kw in keywords_value
+                            if not isinstance(kw, str) or not kw.strip()
+                        ]
+                        if invalid:
+                            warnings.append(SchemaValidationIssue(
+                                path + ".keywords",
+                                f"{len(invalid)} invalid or empty keywords",
+                                severity="warning"
+                            ))
     
     def _generate_stats(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Generate validation statistics."""
@@ -341,6 +472,7 @@ class EventizerPatternsValidator:
             "entity_patterns": 0,
             "enabled_patterns": 0,
             "disabled_patterns": 0,
+            "invalid_patterns": 0,
             "version": data.get("version", "unknown"),
             "has_metadata": "metadata" in data,
             "has_settings": "settings" in data
@@ -348,17 +480,23 @@ class EventizerPatternsValidator:
         
         for pattern_type in ["regex_patterns", "keyword_patterns", "entity_patterns"]:
             patterns = data.get(pattern_type, [])
-            count = len(patterns)
-            stats[f"{pattern_type}"] = count
-            stats["total_patterns"] += count
-            
-            # Count enabled/disabled patterns
+            if not isinstance(patterns, list):
+                continue
+                
+            count = 0
             for pattern in patterns:
                 if isinstance(pattern, dict):
+                    count += 1
+                    # Count enabled/disabled patterns
                     if pattern.get("enabled", True):
                         stats["enabled_patterns"] += 1
                     else:
                         stats["disabled_patterns"] += 1
+                else:
+                    stats["invalid_patterns"] += 1
+            
+            stats[f"{pattern_type}"] = count
+            stats["total_patterns"] += count
         
         return stats
 

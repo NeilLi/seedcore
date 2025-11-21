@@ -11,6 +11,7 @@ __all__ = [
     "MemorySynthesisSignature",
     "CapabilityAssessmentSignature",
     "HGNNReasoningSignature",
+    "CausalDecompositionSignature",
 ]
 
 # =============================================================================
@@ -278,4 +279,37 @@ class HGNNReasoningSignature(dspy.Signature):
     
     mitigation_plan = dspy.OutputField(
         desc="A step-by-step plan to fix the structural issue."
+    )
+
+
+class CausalDecompositionSignature(WithKnowledgeMixin, dspy.Signature):
+    """
+    Decompose a high-entropy event into interdependent sub-tasks across organs.
+    
+    This signature is used by the Cognitive Core to break down complex incidents
+    (like the hotel Presidential Suite incident) into a structured execution plan
+    with explicit dependencies between tasks assigned to different organs.
+    """
+    
+    structural_context = dspy.InputField(
+        desc="Graph neighbors (e.g., 'Room 404', 'DoorLock', 'GuestProfile'). "
+              "These represent the entities and relationships in the knowledge graph "
+              "that are relevant to the incident."
+    )
+    
+    incident_report = dspy.InputField(
+        desc="The raw guest call transcript or incident description. "
+              "This contains the unstructured narrative of what happened."
+    )
+    
+    # The Output is a Structured Dependency List
+    # Format: "TaskID | Organ | Action | DependsOn"
+    execution_plan = dspy.OutputField(
+        desc=("List of subtasks in structured format. "
+              "Each line follows: 'TaskID | Organ | Action | DependsOn' "
+              "Example: 'T1 | Security | Override Lock | None', "
+              "'T2 | Engineering | Replace Battery | T1' "
+              "Use 'None' for tasks with no dependencies. "
+              "The knowledge context may contain historical patterns and organ capabilities "
+              "to inform the decomposition.")
     )

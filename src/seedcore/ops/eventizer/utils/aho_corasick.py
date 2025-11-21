@@ -301,7 +301,7 @@ class AhoCorasickMatcher:
 
 # Optional pyahocorasick integration
 try:
-    import ahocorasick
+    import ahocorasick  # pyright: ignore[reportMissingImports]
     AHO_CORASICK_AVAILABLE = True
     logger.debug("pyahocorasick available, will use optimized implementation")
 except ImportError:

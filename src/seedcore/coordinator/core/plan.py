@@ -15,7 +15,7 @@ Notes
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Set, Tuple, Iterable
+from typing import Any, Dict, List, Optional, Set, Tuple
 import asyncio
 
 from ..utils import (
@@ -25,8 +25,6 @@ from ..utils import (
     resolve_child_task_id,
     collect_record_aliases,
     collect_step_aliases,
-    collect_aliases_from_mapping,
-    collect_aliases_from_object,
 )
 
 logger = logging.getLogger(__name__)

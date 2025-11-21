@@ -1,349 +1,542 @@
 {
-    "version": "1.2.0",
-    "metadata": {
-      "name": "SeedCore Default Eventizer Bundle",
-      "description": "General-purpose patterns for deterministic event classification across hotel_ops, security, fintech, healthcare, and robotics.",
-      "author": "SeedCore Team",
-      "created_at": "2024-01-01T00:00:00Z",
-      "updated_at": "2025-10-15T00:00:00Z",
-      "domains": ["hotel_ops", "security", "fintech", "healthcare", "robotics"]
-    },
-    "settings": {
-      "default_case_sensitive": false,
-      "default_whole_word": true,
-      "default_priority": 100,
-      "default_confidence": 0.8,
-      "max_patterns": 20000,
-      "enable_aho_corasick": true,
-      "enable_regex_optimization": true,
-      "locale": "en-US",
-      "languages": ["en"],
-      "budget_ms_soft": 40,
-      "budget_ms_hard": 100,
-      "max_regex_length": 4096,
-      "max_keywords_total": 200000
-    },
-  
-    "tag_aliases": {
-      "hvac": "hvac",
-      "security": "security",
-      "vip": "vip",
-      "allergen": "allergen",
-      "emergency": "emergency",
-      "maintenance": "maintenance",
-      "fraud": "fraud",
-      "healthcare": "healthcare",
-      "robotics": "robotics"
-    },
-  
-    "regex_patterns": [
-      {
-        "id": "hvac_temperature",
-        "pattern": "(?:temperature|temp|hvac|ac|heating|cooling)\\s*(?:is|at|reaches?|drops?|rises?)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:°\\s*[CF]|degrees?)?",
-        "flags": 2,
-        "priority": 60,
-        "confidence": 0.98,
-        "event_types": ["hvac"],
-        "description": "HVAC temperature value mentions",
-        "whole_word": false,
-        "case_sensitive": false,
-        "enabled": true,
-        "emits_tags": ["hvac_fault"],
-        "emits_attributes": { "temp_value_numeric": "$1" }
-      },
-      {
-        "id": "hvac_issue",
-        "pattern": "(?:hvac|air\\s*conditioning|heating|cooling|thermostat)\\s*(?:problem|issue|broken|not\\s*working|malfunction|offline)",
-        "flags": 2,
-        "priority": 70,
-        "confidence": 0.99,
-        "event_types": ["hvac"],
-        "description": "HVAC malfunction signals",
-        "enabled": true,
-        "emits_tags": ["hvac_fault"]
-      },
-  
-      {
-        "id": "security_alert",
-        "pattern": "(?:security|alarm|breach|intrusion|unauthorized|suspicious)\\s*(?:alert|warning|detected|found|triggered)",
-        "flags": 2,
-        "priority": 80,
-        "confidence": 0.99,
-        "event_types": ["security"],
-        "description": "Security alerts and warnings",
-        "enabled": true,
-        "emits_tags": ["security_alert"]
-      },
-  
-      {
-        "id": "emergency_signal",
-        "pattern": "(?:emergency|urgent|critical|immediate|asap|help|assistance)\\s*(?:needed|required|situation|now)",
-        "flags": 2,
-        "priority": 90,
-        "confidence": 0.99,
-        "event_types": ["emergency"],
-        "description": "Emergency callouts",
-        "enabled": true,
-        "emits_tags": ["emergency"]
-      },
-  
-      {
-        "id": "maintenance_need",
-        "pattern": "(?:maintenance|repair|fix|service|check|inspect)\\s*(?:needed|required|scheduled|due|overdue)",
-        "flags": 2,
-        "priority": 65,
-        "confidence": 0.98,
-        "event_types": ["maintenance"],
-        "description": "Maintenance requests/schedules",
-        "enabled": true,
-        "emits_tags": ["maintenance_request"]
-      },
-  
-      {
-        "id": "vip_intent",
-        "pattern": "(?:vip|executive|presidential\\s*suite|ceo|director|cxo)\\s*(?:access|visit|arrival|departure|stay)",
-        "flags": 2,
-        "priority": 55,
-        "confidence": 0.97,
-        "event_types": ["vip"],
-        "description": "VIP intent/arrival",
-        "enabled": true,
-        "emits_tags": ["vip", "privacy"],
-        "emits_attributes": { "privacy_mode": "STRICT" }
-      },
-  
-      {
-        "id": "allergen_exposure",
-        "pattern": "(?:allergen|allergy|peanut|nuts|dairy|gluten|shellfish|sesame)\\b.*\\b(?:exposure|reaction|contamination|presence)",
-        "flags": 34,
-        "priority": 70,
-        "confidence": 0.98,
-        "event_types": ["allergen"],
-        "description": "Allergen exposure events",
-        "enabled": true,
-        "emits_tags": ["allergen"]
-      },
-  
-      {
-        "id": "fraud_chargeback",
-        "pattern": "\\b(chargeback|dispute)\\b.*\\b(fraud|unauthorized|stolen)\\b",
-        "flags": 34,
-        "priority": 85,
-        "confidence": 0.98,
-        "event_types": ["fraud"],
-        "description": "Fraud-related chargebacks",
-        "enabled": true,
-        "emits_tags": ["fraud", "policy_risk"]
-      },
-      {
-        "id": "payment_limit_breach",
-        "pattern": "\\b(limit|threshold)\\b.*\\b(exceeded|breached|over)\\b.*\\b(payment|transfer|wire)\\b",
-        "flags": 34,
-        "priority": 70,
-        "confidence": 0.96,
-        "event_types": ["fraud"],
-        "description": "Payment limit breach signals",
-        "enabled": true,
-        "emits_tags": ["policy_risk"]
-      },
-  
-      {
-        "id": "healthcare_allergy_flag",
-        "pattern": "\\b(anaphylaxis|anaphylactic|severe\\s+allergy)\\b",
-        "flags": 34,
-        "priority": 90,
-        "confidence": 0.99,
-        "event_types": ["healthcare", "allergen"],
-        "description": "Severe allergy indicator",
-        "enabled": true,
-        "emits_tags": ["allergen", "emergency"]
-      },
-  
-      {
-        "id": "robotics_fault",
-        "pattern": "\\b(robot|arm|agv|amr|drone|elevator|door)\\b.*\\b(fault|error|stalled|jammed|blocked|overheat|offline)\\b",
-        "flags": 34,
-        "priority": 80,
-        "confidence": 0.97,
-        "event_types": ["robotics", "maintenance"],
-        "description": "General robotics/IoT malfunction",
-        "enabled": true,
-        "emits_tags": ["maintenance_request"]
-      }
-    ],
-  
-    "keyword_patterns": [
-      {
-        "id": "hvac_keywords",
-        "keywords": ["temperature", "thermostat", "hvac", "air conditioning", "heating", "cooling", "ventilation", "filter", "compressor", "ductwork"],
-        "priority": 50,
-        "confidence": 0.75,
-        "event_types": ["hvac"],
-        "description": "HVAC keyword set",
-        "whole_word": true,
-        "case_sensitive": false,
-        "enabled": true,
-        "emits_tags": ["hvac_related"]
-      },
-      {
-        "id": "security_keywords",
-        "keywords": ["security", "alarm", "breach", "intrusion", "unauthorized", "suspicious", "camera", "keycard", "perimeter", "access", "monitoring"],
-        "priority": 60,
-        "confidence": 0.8,
-        "event_types": ["security"],
-        "description": "Security keyword set",
-        "enabled": true,
-        "emits_tags": ["security_related"]
-      },
-      {
-        "id": "emergency_keywords",
-        "keywords": ["emergency", "urgent", "critical", "immediate", "asap", "help", "assistance", "evacuation", "panic", "distress"],
-        "priority": 90,
-        "confidence": 0.9,
-        "event_types": ["emergency"],
-        "description": "Emergency keyword set",
-        "enabled": true,
-        "emits_tags": ["emergency"]
-      },
-      {
-        "id": "vip_keywords",
-        "keywords": ["vip", "executive", "presidential", "suite", "ceo", "director", "concierge", "priority"],
-        "priority": 55,
-        "confidence": 0.85,
-        "event_types": ["vip"],
-        "description": "VIP keywords",
-        "enabled": true,
-        "emits_tags": ["vip", "privacy"]
-      },
-      {
-        "id": "fraud_keywords",
-        "keywords": ["chargeback", "dispute", "unauthorized", "stolen", "aml", "kyc", "sanctions"],
-        "priority": 80,
-        "confidence": 0.85,
-        "event_types": ["fraud"],
-        "description": "Fintech fraud keywords",
-        "enabled": true,
-        "emits_tags": ["policy_risk"]
-      },
-      {
-        "id": "robotics_keywords",
-        "keywords": ["robot", "amr", "agv", "drone", "elevator", "door", "robotic", "arm", "luggage bot"],
-        "priority": 70,
-        "confidence": 0.8,
-        "event_types": ["robotics"],
-        "description": "Robotics/IoT assets keywords",
-        "enabled": true,
-        "emits_tags": ["maintenance_request"]
-      }
-    ],
-  
-    "entity_patterns": [
-      {
-        "id": "temperature_entity",
-        "entity_type": "CUSTOM/TEMPERATURE",
-        "patterns": [
-          { "regex": "\\b\\d+(?:\\.\\d+)?\\s*(?:°\\s*[CF]|degrees?)\\b", "context": "(?:temperature|temp|hvac|ac|heating|cooling)" }
-        ],
-        "priority": 60,
-        "confidence": 0.9,
-        "event_types": ["hvac"],
-        "description": "Temperature value extraction",
-        "enabled": true,
-        "emits_attributes": { "value_hint": "temperature" }
-      },
-      {
-        "id": "room_number_entity",
-        "entity_type": "CUSTOM/ROOM",
-        "patterns": [
-          { "regex": "\\b(?:room|rm|suite)\\s*[-#:]?\\s*[A-Za-z0-9]{2,6}\\b" }
-        ],
-        "priority": 55,
-        "confidence": 0.8,
-        "event_types": ["hvac", "security", "maintenance", "vip"],
-        "description": "Room/suite number extraction",
-        "enabled": true
-      },
-      {
-        "id": "currency_amount",
-        "entity_type": "MONEY",
-        "patterns": [
-          { "regex": "\\b(?:USD|EUR|GBP|\\$|€|£)\\s?\\d{1,3}(?:[,\\s]\\d{3})*(?:\\.\\d{1,2})?\\b" }
-        ],
-        "priority": 70,
-        "confidence": 0.85,
-        "event_types": ["fraud", "maintenance", "vip"],
-        "description": "Currency amounts",
-        "enabled": true
-      },
-      {
-        "id": "account_reference",
-        "entity_type": "CUSTOM/ACCOUNT",
-        "patterns": [
-          { "regex": "\\b(?:acct|account|iban|pan)[:\\s-]?[A-Za-z0-9]{6,34}\\b" }
-        ],
-        "priority": 65,
-        "confidence": 0.8,
-        "event_types": ["fraud"],
-        "description": "Financial account references",
-        "enabled": true
-      },
-      {
-        "id": "device_id",
-        "entity_type": "CUSTOM/DEVICE",
-        "patterns": [
-          { "regex": "\\b(dev|device|serial|sn)[:\\s-]?[A-Za-z0-9\\-]{6,32}\\b" }
-        ],
-        "priority": 60,
-        "confidence": 0.8,
-        "event_types": ["robotics", "maintenance", "security"],
-        "description": "Device or serial identifiers",
-        "enabled": true
-      },
-      {
-        "id": "time_entity",
-        "entity_type": "TIME",
-        "patterns": [
-          { "regex": "\\b(?:\\d{1,2}:\\d{2}(?:\\s*[AP]M)?|\\d{1,2}\\s*(?:am|pm|AM|PM))\\b" }
-        ],
-        "priority": 45,
-        "confidence": 0.7,
-        "event_types": ["maintenance", "vip", "emergency"],
-        "description": "Time mentions",
-        "enabled": true
-      }
-    ],
-  
-    "composite_rules": [
-      {
-        "id": "vip_privacy_baseline",
-        "any_of": ["vip_intent", "vip_keywords"],
-        "emits_tags": ["privacy", "vip"],
-        "emits_attributes": { "privacy_mode": "STRICT" },
-        "priority": 120,
-        "enabled": true
-      },
-      {
-        "id": "allergen_or_emergency",
-        "any_of": ["allergen_exposure", "emergency_signal"],
-        "emits_tags": ["emergency"],
-        "priority": 110,
-        "enabled": true
-      },
-      {
-        "id": "robotics_fault_high",
-        "all_of": ["robotics_fault", "maintenance_need"],
-        "emits_tags": ["maintenance_request"],
-        "emits_attributes": { "priority": "critical" },
-        "priority": 130,
-        "enabled": true
-      }
-    ],
-  
-    "keyword_dictionaries": [
-      {
-        "name": "DEPRECATED_example_only",
-        "keywords": ["legacy", "backward", "compat"]
-      }
+  "version": "1.2.0",
+  "metadata": {
+    "name": "SeedCore Default Eventizer Bundle",
+    "description": "General-purpose patterns for deterministic event classification across hotel_ops, security, fintech, healthcare, and robotics.",
+    "author": "SeedCore Team",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2025-10-15T00:00:00Z",
+    "domains": [
+      "hotel_ops",
+      "security",
+      "fintech",
+      "healthcare",
+      "robotics"
     ]
-  }
-  
+  },
+  "settings": {
+    "default_case_sensitive": false,
+    "default_whole_word": true,
+    "default_priority": 100,
+    "default_confidence": 0.8,
+    "max_patterns": 20000,
+    "enable_aho_corasick": true,
+    "enable_regex_optimization": true,
+    "locale": "en-US",
+    "languages": [
+      "en"
+    ],
+    "budget_ms_soft": 40,
+    "budget_ms_hard": 100,
+    "max_regex_length": 4096,
+    "max_keywords_total": 200000
+  },
+  "tag_aliases": {
+    "hvac": "hvac",
+    "security": "security",
+    "vip": "vip",
+    "allergen": "allergen",
+    "emergency": "emergency",
+    "maintenance": "maintenance",
+    "fraud": "fraud",
+    "healthcare": "healthcare",
+    "robotics": "robotics"
+  },
+  "regex_patterns": [
+    {
+      "id": "hvac_temperature",
+      "pattern": "(?:temperature|temp|hvac|ac|heating|cooling)\\s*(?:is|at|reaches?|drops?|rises?)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:°\\s*[CF]|degrees?)?",
+      "flags": 2,
+      "priority": 60,
+      "confidence": 0.98,
+      "event_types": [
+        "hvac"
+      ],
+      "description": "HVAC temperature value mentions",
+      "whole_word": false,
+      "case_sensitive": false,
+      "enabled": true,
+      "emits_tags": [
+        "hvac_fault"
+      ],
+      "emits_attributes": {
+        "temp_value_numeric": "$1"
+      }
+    },
+    {
+      "id": "hvac_issue",
+      "pattern": "(?:hvac|air\\s*conditioning|heating|cooling|thermostat)\\s*(?:problem|issue|broken|not\\s*working|malfunction|offline)",
+      "flags": 2,
+      "priority": 70,
+      "confidence": 0.99,
+      "event_types": [
+        "hvac"
+      ],
+      "description": "HVAC malfunction signals",
+      "enabled": true,
+      "emits_tags": [
+        "hvac_fault"
+      ]
+    },
+    {
+      "id": "security_alert",
+      "pattern": "(?:security|alarm|breach|intrusion|unauthorized|suspicious)\\s*(?:alert|warning|detected|found|triggered)",
+      "flags": 2,
+      "priority": 80,
+      "confidence": 0.99,
+      "event_types": [
+        "security"
+      ],
+      "description": "Security alerts and warnings",
+      "enabled": true,
+      "emits_tags": [
+        "security_alert"
+      ]
+    },
+    {
+      "id": "emergency_signal",
+      "pattern": "(?:emergency|urgent|critical|immediate|asap|help|assistance)\\s*(?:needed|required|situation|now)",
+      "flags": 2,
+      "priority": 90,
+      "confidence": 0.99,
+      "event_types": [
+        "emergency"
+      ],
+      "description": "Emergency callouts",
+      "enabled": true,
+      "emits_tags": [
+        "emergency"
+      ]
+    },
+    {
+      "id": "maintenance_need",
+      "pattern": "(?:maintenance|repair|fix|service|check|inspect)\\s*(?:needed|required|scheduled|due|overdue)",
+      "flags": 2,
+      "priority": 65,
+      "confidence": 0.98,
+      "event_types": [
+        "maintenance"
+      ],
+      "description": "Maintenance requests/schedules",
+      "enabled": true,
+      "emits_tags": [
+        "maintenance_request"
+      ]
+    },
+    {
+      "id": "vip_intent",
+      "pattern": "(?:vip|executive|presidential\\s*suite|ceo|director|cxo)\\s*(?:access|visit|arrival|departure|stay)",
+      "flags": 2,
+      "priority": 55,
+      "confidence": 0.97,
+      "event_types": [
+        "vip"
+      ],
+      "description": "VIP intent/arrival",
+      "enabled": true,
+      "emits_tags": [
+        "vip",
+        "privacy"
+      ],
+      "emits_attributes": {
+        "privacy_mode": "STRICT"
+      }
+    },
+    {
+      "id": "allergen_exposure",
+      "pattern": "(?:allergen|allergy|peanut|nuts|dairy|gluten|shellfish|sesame)\\b.*\\b(?:exposure|reaction|contamination|presence)",
+      "flags": 34,
+      "priority": 70,
+      "confidence": 0.98,
+      "event_types": [
+        "allergen"
+      ],
+      "description": "Allergen exposure events",
+      "enabled": true,
+      "emits_tags": [
+        "allergen"
+      ]
+    },
+    {
+      "id": "fraud_chargeback",
+      "pattern": "\\b(chargeback|dispute)\\b.*\\b(fraud|unauthorized|stolen)\\b",
+      "flags": 34,
+      "priority": 85,
+      "confidence": 0.98,
+      "event_types": [
+        "fraud"
+      ],
+      "description": "Fraud-related chargebacks",
+      "enabled": true,
+      "emits_tags": [
+        "fraud",
+        "policy_risk"
+      ]
+    },
+    {
+      "id": "payment_limit_breach",
+      "pattern": "\\b(limit|threshold)\\b.*\\b(exceeded|breached|over)\\b.*\\b(payment|transfer|wire)\\b",
+      "flags": 34,
+      "priority": 70,
+      "confidence": 0.96,
+      "event_types": [
+        "fraud"
+      ],
+      "description": "Payment limit breach signals",
+      "enabled": true,
+      "emits_tags": [
+        "policy_risk"
+      ]
+    },
+    {
+      "id": "healthcare_allergy_flag",
+      "pattern": "\\b(anaphylaxis|anaphylactic|severe\\s+allergy)\\b",
+      "flags": 34,
+      "priority": 90,
+      "confidence": 0.99,
+      "event_types": [
+        "healthcare",
+        "allergen"
+      ],
+      "description": "Severe allergy indicator",
+      "enabled": true,
+      "emits_tags": [
+        "allergen",
+        "emergency"
+      ]
+    },
+    {
+      "id": "robotics_fault",
+      "pattern": "\\b(robot|arm|agv|amr|drone|elevator|door)\\b.*\\b(fault|error|stalled|jammed|blocked|overheat|offline)\\b",
+      "flags": 34,
+      "priority": 80,
+      "confidence": 0.97,
+      "event_types": [
+        "robotics",
+        "maintenance"
+      ],
+      "description": "General robotics/IoT malfunction",
+      "enabled": true,
+      "emits_tags": [
+        "maintenance_request"
+      ]
+    }
+  ],
+  "keyword_patterns": [
+    {
+      "id": "hvac_keywords",
+      "keywords": [
+        "temperature",
+        "thermostat",
+        "hvac",
+        "air conditioning",
+        "heating",
+        "cooling",
+        "ventilation",
+        "filter",
+        "compressor",
+        "ductwork"
+      ],
+      "priority": 50,
+      "confidence": 0.75,
+      "event_types": [
+        "hvac"
+      ],
+      "description": "HVAC keyword set",
+      "whole_word": true,
+      "case_sensitive": false,
+      "enabled": true,
+      "emits_tags": [
+        "hvac_related"
+      ]
+    },
+    {
+      "id": "security_keywords",
+      "keywords": [
+        "security",
+        "alarm",
+        "breach",
+        "intrusion",
+        "unauthorized",
+        "suspicious",
+        "camera",
+        "keycard",
+        "badge",
+        "perimeter",
+        "access",
+        "monitoring"
+      ],
+      "priority": 60,
+      "confidence": 0.8,
+      "event_types": [
+        "security"
+      ],
+      "description": "Security keyword set",
+      "enabled": true,
+      "emits_tags": [
+        "security_related"
+      ]
+    },
+    {
+      "id": "emergency_keywords",
+      "keywords": [
+        "emergency",
+        "urgent",
+        "critical",
+        "immediate",
+        "asap",
+        "help",
+        "assistance",
+        "evacuation",
+        "panic",
+        "distress"
+      ],
+      "priority": 90,
+      "confidence": 0.9,
+      "event_types": [
+        "emergency"
+      ],
+      "description": "Emergency keyword set",
+      "enabled": true,
+      "emits_tags": [
+        "emergency"
+      ]
+    },
+    {
+      "id": "vip_keywords",
+      "keywords": [
+        "vip",
+        "executive",
+        "presidential",
+        "suite",
+        "ceo",
+        "director",
+        "concierge",
+        "priority"
+      ],
+      "priority": 55,
+      "confidence": 0.85,
+      "event_types": [
+        "vip"
+      ],
+      "description": "VIP keywords",
+      "enabled": true,
+      "emits_tags": [
+        "vip",
+        "privacy"
+      ]
+    },
+    {
+      "id": "fraud_keywords",
+      "keywords": [
+        "chargeback",
+        "dispute",
+        "unauthorized",
+        "stolen",
+        "aml",
+        "kyc",
+        "sanctions"
+      ],
+      "priority": 80,
+      "confidence": 0.85,
+      "event_types": [
+        "fraud"
+      ],
+      "description": "Fintech fraud keywords",
+      "enabled": true,
+      "emits_tags": [
+        "policy_risk"
+      ]
+    },
+    {
+      "id": "robotics_keywords",
+      "keywords": [
+        "robot",
+        "amr",
+        "agv",
+        "drone",
+        "elevator",
+        "door",
+        "robotic",
+        "arm",
+        "luggage bot"
+      ],
+      "priority": 70,
+      "confidence": 0.8,
+      "event_types": [
+        "robotics"
+      ],
+      "description": "Robotics/IoT assets keywords",
+      "enabled": true,
+      "emits_tags": [
+        "maintenance_request"
+      ]
+    }
+  ],
+  "entity_patterns": [
+    {
+      "id": "temperature_entity",
+      "entity_type": "CUSTOM/TEMPERATURE",
+      "patterns": [
+        {
+          "regex": "\\b\\d+(?:\\.\\d+)?\\s*(?:°\\s*[CF]|degrees?)\\b",
+          "context": "(?:temperature|temp|hvac|ac|heating|cooling)"
+        }
+      ],
+      "priority": 60,
+      "confidence": 0.9,
+      "event_types": [
+        "hvac"
+      ],
+      "description": "Temperature value extraction",
+      "enabled": true,
+      "emits_attributes": {
+        "value_hint": "temperature"
+      }
+    },
+    {
+      "id": "room_number_entity",
+      "entity_type": "CUSTOM/ROOM",
+      "patterns": [
+        {
+          "regex": "\\b(?:room|rm|suite)\\s*[-#:]?\\s*[A-Za-z0-9]{2,6}\\b"
+        }
+      ],
+      "priority": 55,
+      "confidence": 0.8,
+      "event_types": [
+        "hvac",
+        "security",
+        "maintenance",
+        "vip"
+      ],
+      "description": "Room/suite number extraction",
+      "enabled": true
+    },
+    {
+      "id": "currency_amount",
+      "entity_type": "MONEY",
+      "patterns": [
+        {
+          "regex": "\\b(?:USD|EUR|GBP|\\$|€|£)\\s?\\d{1,3}(?:[,\\s]\\d{3})*(?:\\.\\d{1,2})?\\b"
+        }
+      ],
+      "priority": 70,
+      "confidence": 0.85,
+      "event_types": [
+        "fraud",
+        "maintenance",
+        "vip"
+      ],
+      "description": "Currency amounts",
+      "enabled": true
+    },
+    {
+      "id": "account_reference",
+      "entity_type": "CUSTOM/ACCOUNT",
+      "patterns": [
+        {
+          "regex": "\\b(?:acct|account|iban|pan)[:\\s-]?[A-Za-z0-9]{6,34}\\b"
+        }
+      ],
+      "priority": 65,
+      "confidence": 0.8,
+      "event_types": [
+        "fraud"
+      ],
+      "description": "Financial account references",
+      "enabled": true
+    },
+    {
+      "id": "device_id",
+      "entity_type": "CUSTOM/DEVICE",
+      "patterns": [
+        {
+          "regex": "\\b(dev|device|serial|sn)[:\\s-]?[A-Za-z0-9\\-]{6,32}\\b"
+        }
+      ],
+      "priority": 60,
+      "confidence": 0.8,
+      "event_types": [
+        "robotics",
+        "maintenance",
+        "security"
+      ],
+      "description": "Device or serial identifiers",
+      "enabled": true
+    },
+    {
+      "id": "time_entity",
+      "entity_type": "TIME",
+      "patterns": [
+        {
+          "regex": "\\b(?:\\d{1,2}:\\d{2}(?:\\s*[AP]M)?|\\d{1,2}\\s*(?:am|pm|AM|PM))\\b"
+        }
+      ],
+      "priority": 45,
+      "confidence": 0.7,
+      "event_types": [
+        "maintenance",
+        "vip",
+        "emergency"
+      ],
+      "description": "Time mentions",
+      "enabled": true
+    }
+  ],
+  "composite_rules": [
+    {
+      "id": "vip_privacy_baseline",
+      "any_of": [
+        "vip_intent",
+        "vip_keywords"
+      ],
+      "emits_tags": [
+        "privacy",
+        "vip"
+      ],
+      "emits_attributes": {
+        "privacy_mode": "STRICT"
+      },
+      "priority": 120,
+      "enabled": true
+    },
+    {
+      "id": "allergen_or_emergency",
+      "any_of": [
+        "allergen_exposure",
+        "emergency_signal"
+      ],
+      "emits_tags": [
+        "emergency"
+      ],
+      "priority": 110,
+      "enabled": true
+    },
+    {
+      "id": "robotics_fault_high",
+      "all_of": [
+        "robotics_fault",
+        "maintenance_need"
+      ],
+      "emits_tags": [
+        "maintenance_request"
+      ],
+      "emits_attributes": {
+        "priority": "critical"
+      },
+      "priority": 130,
+      "enabled": true
+    }
+  ],
+  "keyword_dictionaries": [
+    {
+      "name": "DEPRECATED_example_only",
+      "keywords": [
+        "legacy",
+        "backward",
+        "compat"
+      ]
+    }
+  ]
+}

@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 
 # -----------------------------
