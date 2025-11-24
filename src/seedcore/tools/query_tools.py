@@ -157,7 +157,6 @@ class GeneralQueryTool:
         self, 
         description: str, 
         task_data: Optional[Dict[str, Any]] = None,
-        # NEW: Allow passing explicit conversation history
         conversation_history: Optional[List[Dict[str, str]]] = None 
     ) -> Dict[str, Any]:
         """
@@ -165,21 +164,35 @@ class GeneralQueryTool:
 
         Args:
             description: The query description or chat message
-            task_data: Optional task metadata
-            conversation_history: Optional conversation history for chat mode
+            task_data: Optional task metadata (may contain params.conversation_history injected by PersistentAgent)
+            conversation_history: Optional conversation history for chat mode.
+                **MUST come from PersistentAgent** - QueryTools never infers or reconstructs history.
                 Format: [{"role": "user"|"assistant", "content": "..."}, ...]
+                If not provided, falls back to task_data.params.conversation_history (also from PersistentAgent).
 
         Returns:
             Query result dictionary
+            
+        Note:
+            - PersistentAgent is the single source of truth for chat history
+            - QueryTools treats conversation_history as read-only and forwards it to CognitiveCore
+            - History is already windowed (last N turns) by PersistentAgent before reaching QueryTools
         """
         task_data = task_data or {}
         params = task_data.get("params", {}) or {}
 
         # 1. Detect Interaction Mode (Is this a chat or a query?)
-        # Check if the upstream router flagged this as an 'interaction'
-        interaction_mode = params.get("interaction", {}).get("mode")
+        # QueryTools treats conversation_history as READ-ONLY - it MUST come from PersistentAgent
+        # PersistentAgent is the single source of truth and already provides windowed history (last N turns)
+        interaction = params.get("interaction", {})
+        
+        # Extract conversation_history: explicit parameter (preferred) or from task_data.params (both from PersistentAgent)
+        # QueryTools NEVER infers, reconstructs, or generates history - it only reads what PersistentAgent provides
+        history = conversation_history or params.get("conversation_history") or []
+        
+        # Chat mode detection: canonical rules (no heuristics)
         is_conversational = (
-            interaction_mode == "agent_tunnel" 
+            interaction.get("mode") == "agent_tunnel"
             or conversation_history is not None
             or params.get("is_chat", False)
         )
@@ -228,11 +241,21 @@ class GeneralQueryTool:
             }
 
         # In-flight request deduplication
+        # PersistentAgent ensures one agent handles one conversation with stable conversation_id
+        # No need for history_hash - conversation_id + task_id is sufficient
         task_id = task_data.get("task_id") or task_data.get("id")
-        # Include conversation history in key for chat mode to avoid deduplication across different contexts
-        if is_conversational and conversation_history:
-            history_hash = hash(str(conversation_history)) % 10000
-            request_key = task_id if task_id else f"chat:{description[:80]}:{history_hash}:{profile}"
+        conversation_id = interaction.get("conversation_id")
+        
+        if is_conversational:
+            # For chat mode, use conversation_id + task_id for deduplication
+            # PersistentAgent guarantees stable conversation_id per conversation
+            if conversation_id and task_id:
+                request_key = f"chat:{conversation_id}:{task_id}:{profile}"
+            elif conversation_id:
+                request_key = f"chat:{conversation_id}:{hash(description)}:{profile}"
+            else:
+                # Fallback: use task_id or description hash
+                request_key = task_id if task_id else f"chat:{hash(description)}:{profile}"
         else:
             request_key = task_id if task_id else f"{description[:100]}:{profile}"
 
@@ -260,6 +283,9 @@ class GeneralQueryTool:
                                     "confidence": payload.get("confidence") or payload.get("confidence_score", 0.0),
                                     "meta": metadata,
                                     "profile_used": profile,
+                                    "interaction": interaction,
+                                    "assigned_agent_id": interaction.get("assigned_agent_id", self.agent_id),
+                                    "conversation_id": conversation_id,
                                 }
                             else:
                                 result = {
@@ -315,22 +341,27 @@ class GeneralQueryTool:
                 
                 if is_conversational:
                     # CHAT PAYLOAD: Focus on history and persona
+                    # History is READ-ONLY from PersistentAgent (already windowed to last N turns)
+                    # QueryTools forwards history without modification - no inference or reconstruction
                     task_params["chat"] = {
                         "message": description,
-                        "history": conversation_history or [],  # Pass the full context!
+                        "history": history,  # Read-only from PersistentAgent (explicit param or task_data.params)
                         "agent_persona": self._get_agent_capabilities(),
                         "style": "concise_conversational"
                     }
-                    # Hint to Core: Skip RAG for simple chat to save time
-                    # BUT: If deep reasoning is forced, we likely need RAG context
-                    # So only skip retrieval if NOT forcing deep reasoning
+                    
+                    # Note: PersistentAgent already sets interaction metadata (mode, assigned_agent_id, conversation_id)
+                    # We preserve it here but don't rewrite it to avoid duplication
+                    # Just ensure interaction dict exists for reference
+                    task_params.setdefault("interaction", interaction)
+                    
+                    # Skip retrieval by default for chat (low-latency optimization)
+                    # Only override when force_rag or force_deep_reasoning is requested
                     if not params.get("force_rag") and not params.get("force_deep_reasoning"):
                         task_dict["skip_retrieval"] = True
                     
-                    # Also set message at top level for ChatSignature
-                    task_dict["message"] = description
-                    if conversation_history:
-                        task_dict["conversation_history"] = conversation_history
+                    # Note: PersistentAgent already sets task_dict["message"] and task_dict["conversation_history"]
+                    # We don't need to set them again here - they're already present from PersistentAgent
                 else:
                     # SOLVER PAYLOAD: Focus on problem definition
                     if "constraints" not in task_params:
@@ -370,14 +401,18 @@ class GeneralQueryTool:
                 # Handle chat vs query response formatting
                 if is_conversational:
                     # CHAT RESPONSE: Extract response and confidence
+                    # Include interaction metadata for coherence with PersistentAgent
                     result = {
                         "query_type": "agent_chat",
                         "message": description,
                         "response": payload.get("response", ""),
                         "confidence": payload.get("confidence") or payload.get("confidence_score", 0.0),
-                        "conversation_history": conversation_history or [],
+                        "conversation_history": history,
                         "meta": metadata,
                         "profile_used": profile,
+                        "interaction": interaction,
+                        "assigned_agent_id": interaction.get("assigned_agent_id", self.agent_id),
+                        "conversation_id": conversation_id,
                     }
                 else:
                     # QUERY RESPONSE: Extract thought process and plan
@@ -457,6 +492,7 @@ async def register_query_tools(
     update_energy_state: Optional[callable] = None,
     get_performance_data: Optional[callable] = None,
     get_agent_capabilities_dict: Optional[callable] = None,
+    get_conversation_history: Optional[callable] = None,  # For future use: PersistentAgent chat history access
     mfb_client: Optional[Any] = None,
     in_flight_tracker: Optional[Dict[str, asyncio.Task]] = None,
     in_flight_lock: Optional[asyncio.Lock] = None,
@@ -479,6 +515,7 @@ async def register_query_tools(
         update_energy_state: Optional function that updates energy state
         get_performance_data: Optional function that returns performance data
         get_agent_capabilities_dict: Optional function that returns capabilities dict
+        get_conversation_history: Optional function that returns conversation history (for future use)
         mfb_client: Optional FlashbulbClient instance
         in_flight_tracker: Optional dict for tracking in-flight requests (falls back to empty dict if None)
         in_flight_lock: Optional lock for in_flight_tracker access (falls back to new lock if None)

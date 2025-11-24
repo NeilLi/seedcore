@@ -6,8 +6,7 @@ This reference explains how `Task` rows and the in-memory `TaskPayload` model ca
 
 - All router inputs live under `params.routing`. The `Task` ORM already persists `params` as JSONB and exposes a GIN index for querying nested keys.
 
-```97:104:src/seedcore/models/task.py
-    params: Mapped[Dict[str, Any]] = mapped_column(
+```params: Mapped[Dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
         default=dict,
@@ -64,6 +63,11 @@ The interaction envelope controls how tasks are routed and executed, particularl
 - `agent_tunnel`: Human ↔ Agent conversation with memory. Tasks are routed directly to the OrganismRouter, bypassing Coordinator for low-latency conversational flows. The assigned agent maintains conversation context.
   - **Cognitive Integration:** When `mode == "agent_tunnel"`, tasks are typically processed using `CognitiveType.CHAT` with `DecisionKind.FAST_PATH` for low-latency conversational responses.
   - **Conversation Context:** Conversation history should be passed via `params.chat.history` or top-level `conversation_history` field.
+  - **Memory Architecture:** 
+    - **PersistentAgent is the canonical maintainer of conversation history.** It writes chat history to MwManager (episodic memory) and maintains the conversation state.
+    - **CognitiveCore does not persist chat history.** It is stateless and receives conversation history from PersistentAgent.
+    - **CognitiveMemoryBridge hydrates chat history** before inference by retrieving episodic memory from MwManager, but PersistentAgent's conversation_history takes precedence when provided.
+    - QueryTools must pass both `task_params["chat"]["history"] = conversation_history` and top-level `conversation_history` for ChatSignature compatibility.
   - **Example Payload:**
     ```json
     {
@@ -88,8 +92,8 @@ The interaction envelope controls how tasks are routed and executed, particularl
         "chat": {
           "message": "User message here",
           "history": [...],
-          "agent_persona": "...",
-          "style": "concise_conversational"
+          "agent_persona": "...",  // Agent personality/instructions for chat responses
+          "style": "concise_conversational"  // Response style preference
         }
       }
     }
@@ -117,6 +121,9 @@ The cognitive metadata envelope provides information for the Cognitive Service w
 
 **Cognitive Types (`cog_type`):**
 - `chat`: Lightweight conversational path for agent-tunneled interactions
+  - Automatically chosen when `params.interaction.mode == "agent_tunnel"`, but QueryTools may override when `force_deep_reasoning` or `force_rag` are set
+  - **Retrieval behavior:** CHAT mode defaults to `skip_retrieval=True` for latency optimization, unless `force_rag=true` or `force_deep_reasoning=true` are set
+  - **Memory hydration:** Uses only ORGAN-scope holons + episodic chat history (no GLOBAL holons unless in coordinator mode)
 - `task_planning`: Decompose complex tasks into structured plans
 - `problem_solving`: Generate multi-step solution plans
 - `failure_analysis`: Analyze failures and propose solutions
@@ -131,6 +138,32 @@ The cognitive metadata envelope provides information for the Cognitive Service w
 - `hgnn`: Escalated path - uses HGNN embeddings for deep context
 
 **Important:** The `params.cognitive` namespace is the **standard location** for cognitive metadata. The Cognitive Service extracts `agent_id`, `cog_type`, and `decision_kind` from this namespace. Legacy top-level `meta.decision_kind` is still supported but deprecated.
+
+**CognitiveCore Architecture:**
+- **CognitiveCore is stateless.** All state (chat history, episodic traces, holons) comes from MemoryBridge + MwManager + HolonFabric.
+- CognitiveCore does not persist conversation history; PersistentAgent maintains chat state.
+- CognitiveMemoryBridge hydrates context before inference but does not store it.
+
+### Cognitive Retrieval Scope Rules (MANDATORY)
+
+**Critical:** CognitiveCore determines retrieval scope and memory writing behavior based on `agent_id`:
+
+- **If `agent_id` is `None` (coordinator mode):**
+  - Only **GLOBAL** holons are retrieved
+  - Memory writing is **disabled** (no MwManager writes, no HolonFabric promotion)
+  - No episodic chat history is hydrated
+  - Used for coordinator-level tasks that don't belong to a specific agent
+
+- **If `agent_id` is provided (agent mode):**
+  - **ORGAN + ENTITY + GLOBAL** holons are retrieved (scoped retrieval via CognitiveMemoryBridge)
+  - **Episodic chat history** is hydrated from MwManager
+  - **Memory writing is enabled:**
+    - MwManager writes episodic traces
+    - HolonFabric promotion for long-term memory
+    - MemoryEvent creation for provenance tracking
+  - Used for agent-tunneled conversations and agent-specific cognitive tasks
+
+**Architecture Note:** This scope-based retrieval ensures that agents only access memory scoped to their organ/entity, while coordinator tasks operate on global knowledge only. Memory writes only occur in agent mode to maintain proper attribution and scoping.
 
 ### Router Inbox (`params.routing`)
 
@@ -204,6 +237,11 @@ Track execution timing and attempt data without extra columns:
 ### TaskPayload Helpers
 
 `TaskPayload` exposes validators and helpers that normalize JSON inputs, unpack router envelopes, and guarantee that serialized payloads include the router structure.
+
+**Chat Interaction Notes:**
+- For chat interactions, `task_params.chat.*` is passed through TaskPayload unchanged.
+- **TaskPayload does NOT manage conversation_history;** PersistentAgent maintains conversation state independently.
+- The router layer is pure dispatch and does not write memory; only agents and CognitiveCore perform memory operations.
 
 ```72:104:src/seedcore/models/task_payload.py
     def to_db_params(self) -> Dict[str, Any]:

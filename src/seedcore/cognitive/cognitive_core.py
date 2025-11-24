@@ -560,6 +560,25 @@ class CognitiveCore(dspy.Module):
             # Detect personal vs global mode
             is_personal = bool(context.agent_id)
             
+            # For CHAT mode: Extract conversation_history from input_data BEFORE hydration
+            # PersistentAgent injects conversation_history into task_data.params and top-level
+            # This ensures ChatSignature receives the correct conversation context
+            conversation_history_from_input = None
+            if context.cog_type == CognitiveType.CHAT:
+                # Priority: top-level conversation_history > params.conversation_history > params.chat.history
+                conversation_history_from_input = (
+                    input_data.get("conversation_history") or
+                    params.get("conversation_history") or
+                    params.get("chat", {}).get("history") or
+                    []
+                )
+                # Ensure it's a list
+                if not isinstance(conversation_history_from_input, list):
+                    conversation_history_from_input = []
+                logger.debug(
+                    f"Chat mode: Extracted conversation_history from input ({len(conversation_history_from_input)} turns)"
+                )
+            
             # Attempt lazy bridge initialization only for personal mode
             memory_bridge = None
             if is_personal:
@@ -578,9 +597,15 @@ class CognitiveCore(dspy.Module):
 
                 # Minimal context block to keep downstream DSPy safe
                 params.setdefault("context", {})
+                # For CHAT mode: use conversation_history from input if available
+                chat_history_for_context = (
+                    conversation_history_from_input
+                    if context.cog_type == CognitiveType.CHAT and conversation_history_from_input
+                    else []
+                )
                 params["context"].update({
                     "holons": [],
-                    "chat_history": [],
+                    "chat_history": chat_history_for_context,
                     "token_budget": 0,
                 })
                 input_data["params"] = params
@@ -591,13 +616,13 @@ class CognitiveCore(dspy.Module):
                 knowledge_context = {
                     "facts": [],
                     "holons": [],
-                    "chat_history": [],
+                    "chat_history": chat_history_for_context,
                     "token_budget": 0,
                     "summary": "Memory bridge unavailable; retrieval skipped.",
                     "sufficiency": {
                         "token_budget": 0,
                         "holon_count": 0,
-                        "chat_turns": 0,
+                        "chat_turns": len(chat_history_for_context),
                     }
                 }
 
@@ -636,8 +661,19 @@ class CognitiveCore(dspy.Module):
                     )
                     
                     holons = ctx_section.get("holons", [])
-                    chat_history = ctx_section.get("chat_history", [])
+                    chat_history_from_hydration = ctx_section.get("chat_history", [])
                     token_budget = ctx_section.get("token_budget", 0)
+
+                    # For CHAT mode: Prefer conversation_history from input (PersistentAgent)
+                    # over chat_history from hydration, as PersistentAgent owns the conversation state
+                    if context.cog_type == CognitiveType.CHAT and conversation_history_from_input:
+                        chat_history = conversation_history_from_input
+                        logger.debug(
+                            f"Chat mode: Using conversation_history from PersistentAgent "
+                            f"({len(chat_history)} turns) over hydration ({len(chat_history_from_hydration)} turns)"
+                        )
+                    else:
+                        chat_history = chat_history_from_hydration
 
                     # Build knowledge_context compatible with existing handler
                     # For backward compatibility, we present holons as "facts" to the handler.
@@ -662,9 +698,15 @@ class CognitiveCore(dspy.Module):
                     logger.exception(f"Memory bridge hydration failed: {e}")
                     # Safe fallback
                     params.setdefault("context", {})
+                    # For CHAT mode: use conversation_history from input if available
+                    chat_history_fallback = (
+                        conversation_history_from_input
+                        if context.cog_type == CognitiveType.CHAT and conversation_history_from_input
+                        else []
+                    )
                     params["context"].update({
                         "holons": [],
-                        "chat_history": [],
+                        "chat_history": chat_history_fallback,
                         "token_budget": 0,
                     })
                     input_data["params"] = params
@@ -672,13 +714,13 @@ class CognitiveCore(dspy.Module):
                     knowledge_context = {
                         "facts": [],
                         "holons": [],
-                        "chat_history": [],
+                        "chat_history": chat_history_fallback,
                         "token_budget": 0,
                         "summary": "Hydration failed",
                         "sufficiency": {
                             "token_budget": 0,
                             "holon_count": 0,
-                            "chat_turns": 0,
+                            "chat_turns": len(chat_history_fallback),
                         },
                     }
 
@@ -920,6 +962,31 @@ class CognitiveCore(dspy.Module):
         hgnn_embedding = working_context.pop("hgnn_embedding", None)
         if hgnn_embedding is not None:
             enhanced_input["hgnn_embedding"] = hgnn_embedding
+
+        # For CHAT mode: Ensure message and conversation_history are set correctly
+        # ChatSignature expects: message (str) and conversation_history (JSON string)
+        if context.cog_type == CognitiveType.CHAT:
+            # Extract message from multiple possible locations
+            message = (
+                enhanced_input.get("message") or
+                enhanced_input.get("description") or
+                enhanced_input.get("params", {}).get("chat", {}).get("message") or
+                ""
+            )
+            enhanced_input["message"] = message
+            
+            # Extract conversation_history from knowledge_context (which was set from input)
+            # or fallback to input_data
+            chat_history = knowledge_context.get("chat_history", [])
+            if not chat_history:
+                # Fallback to input_data if not in knowledge_context
+                chat_history = (
+                    enhanced_input.get("conversation_history") or
+                    enhanced_input.get("params", {}).get("conversation_history") or
+                    enhanced_input.get("params", {}).get("chat", {}).get("history") or
+                    []
+                )
+            enhanced_input["conversation_history"] = chat_history
 
         enhanced_input["knowledge_context"] = json.dumps(working_context)
         enhanced_input = self._format_input_for_signature(enhanced_input, context.cog_type)
