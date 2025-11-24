@@ -6,14 +6,16 @@ from seedcore.agents.roles import DEFAULT_ROLE_REGISTRY, NullSkillStore, Special
 
 
 @ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
-class RayAgent(BaseAgent):
+class PersistentAgent(BaseAgent):
     """
     Minimal stateful agent:
     - BaseAgent handles tool execution + stateless logic
-    - MemoryBridge handles Mw/LTM
-    - CognitiveBridge handles cognitive client
+    - CognitiveBridge handles cognitive client (includes centralized memory via CognitiveMemoryBridge)
     - CheckpointManager handles persistence
     - QueryToolRegistrar installs query tools
+    
+    Note: Memory consolidation is now handled centrally by CognitiveCore via CognitiveMemoryBridge.
+    LongTermMemoryManager and MemoryBridge have been removed and replaced with HolonFabric + CognitiveMemoryBridge.
     """
 
     def __init__(
@@ -28,7 +30,6 @@ class RayAgent(BaseAgent):
         organ_id=None,
         initial_role_probs=None,
         mw_manager=None,
-        ltm_manager=None,
         checkpoint_cfg=None,
         **legacy_kwargs
     ):
@@ -45,18 +46,15 @@ class RayAgent(BaseAgent):
         if initial_role_probs:
             self.state.p = dict(initial_role_probs)
 
+        # Store mw_manager for tool registration (kept for backward compatibility with legacy query tools)
+        # Memory consolidation is now handled centrally by CognitiveCore via CognitiveMemoryBridge
+        # LongTermMemoryManager and MemoryBridge have been removed
+        self._mw_manager = mw_manager
+
         # --- Delegated components ---
-        from .bridges.memory_bridge import MemoryBridge
         from .bridges.cognitive_bridge import CognitiveBridge
         from .bridges.checkpoint_manager import CheckpointManager
         from .bridges.tool_registrar import QueryToolRegistrar
-
-        self.memory = MemoryBridge(
-            agent_id=self.agent_id,
-            mw_manager=mw_manager,
-            ltm_manager=ltm_manager,
-            state=self.state,
-        )
 
         self.cog = CognitiveBridge(
             cognitive_client=cognitive_client,
@@ -83,13 +81,12 @@ class RayAgent(BaseAgent):
     # Main execution path
     # ---------------------------------------------------------------------
     async def execute_task(self, task_data):
-        """Run stateless execution + stateful post-processing."""
+        """Run stateless execution + stateful post-processing.
+        
+        Note: Memory consolidation is now handled centrally by CognitiveCore
+        via CognitiveMemoryBridge.process_post_execution().
+        """
         result = await super().execute_task(task_data)
-
-        # Memory after-action
-        asyncio.create_task(
-            self.memory.handle_post_task(task_data, result)
-        )
 
         # Persist checkpoint
         self.ckpt.after_task()
@@ -103,4 +100,9 @@ class RayAgent(BaseAgent):
 
     # Expose minimal telemetry
     def get_summary_stats(self):
-        return self.memory.summary(self.state)
+        """Return summary statistics for the agent."""
+        return {
+            "agent_id": self.agent_id,
+            "tasks_processed": self.state.tasks_processed,
+            "memory_writes": self.state.memory_writes,
+        }

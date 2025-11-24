@@ -16,7 +16,7 @@ That logic is centralized in the OrganismCore and StateService.
 
 The Organ supports multiple agent types:
 - BaseAgent (default): Stateless, generic executor
-- RayAgent: Stateful wrapper with memory (Mw/Mlt) and checkpointing
+- PersistentAgent: Stateful wrapper with memory (Mw/Mlt) and checkpointing
 - ObserverAgent: Proactive cache warmer
 - UtilityLearningAgent: System observer and tuner
 """
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from ..serve.cognitive_client import CognitiveServiceClient
     # --- Add imports for stateful dependencies ---
     from ..memory.mw_manager import MwManager
-    from ..memory.long_term_memory import LongTermMemoryManager
+    from ..memory.holon_fabric import HolonFabric
 
 logger = ensure_serve_logger("seedcore.Organ", level="DEBUG")
 
@@ -112,9 +112,9 @@ class Organ:
         skill_store: "SkillStoreProtocol",
         tool_manager: "ToolManager",
         cognitive_client: "CognitiveServiceClient",
-        # --- Optional stateful dependencies (for RayAgent) ---
+        # --- Optional stateful dependencies (for PersistentAgent) ---
         mw_manager: Optional["MwManager"] = None,
-        ltm_manager: Optional["LongTermMemoryManager"] = None,
+        holon_fabric: Optional["HolonFabric"] = None,
         checkpoint_cfg: Optional[Dict[str, Any]] = None,
         # --- Optional AgentIDFactory for ID generation ---
         agent_id_factory: Optional[AgentIDFactory] = None,
@@ -130,7 +130,7 @@ class Organ:
 
         # --- Store stateful dependencies to pass to agents ---
         self.mw_manager = mw_manager
-        self.ltm_manager = ltm_manager
+        self.holon_fabric = holon_fabric
         self.checkpoint_cfg = checkpoint_cfg or {"enabled": False}
         
         # --- Optional AgentIDFactory for ID generation ---
@@ -172,7 +172,7 @@ class Organ:
         **agent_actor_options
     ) -> None:
         """
-        Creates, registers, and stores a new BaseAgent or RayAgent actor.
+        Creates, registers, and stores a new BaseAgent or PersistentAgent actor.
         
         Args:
             agent_id: Unique identifier for the agent
@@ -180,7 +180,7 @@ class Organ:
             organ_id: ID of the organ (for verification)
             agent_class_name: Type of agent to create. Options:
                 - "BaseAgent" (default): Stateless, generic executor
-                - "RayAgent": Stateful wrapper with memory and checkpointing
+                - "PersistentAgent": Stateful wrapper with memory and checkpointing
                 - "ObserverAgent": Proactive cache warmer
                 - "UtilityLearningAgent": System observer and tuner
             **agent_actor_options: Ray actor options (name, num_cpus, lifetime, etc.)
@@ -197,10 +197,10 @@ class Organ:
             logger.info(f"🚀 [{self.organ_id}] Creating {agent_class_name} '{agent_id}'...")
             
             # --- Dynamically choose agent class and params ---
-            if agent_class_name == "RayAgent":
-                from ..agents.ray_agent import RayAgent as AgentToCreate
+            if agent_class_name == "PersistentAgent":
+                from ..agents.persistent_agent import PersistentAgent as AgentToCreate
                 
-                # Parameters for the STATEFUL RayAgent
+                # Parameters for the STATEFUL PersistentAgent
                 agent_params = {
                     "agent_id": agent_id,
                     "tool_manager": self.tool_manager,
@@ -210,7 +210,7 @@ class Organ:
                     "cognitive_client": self.cognitive_client,
                     "organ_id": self.organ_id,
                     "mw_manager": self.mw_manager,
-                    "ltm_manager": self.ltm_manager,
+                    "holon_fabric": self.holon_fabric,
                     "checkpoint_cfg": self.checkpoint_cfg
                 }
             elif agent_class_name == "ObserverAgent":

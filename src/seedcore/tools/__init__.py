@@ -8,7 +8,7 @@ Provides the ToolManager and tool implementations for the Habitat Intelligence O
 
 Key components:
     - ToolManager: Enhanced tool manager with namespaces, RBAC, metrics, and tracing
-    - Memory tools: Integration with MwManager and LongTermMemoryManager
+    - Memory tools: Integration with MwManager and HolonFabric (replaces LongTermMemoryManager)
     - Training tools: Agent skill progression and behavior training
 """
 

@@ -13,7 +13,7 @@
 #      • Direct agent-level execution (given organ_id + agent_id)
 #      • Health monitoring and reconciliation
 #      • Agent workforce evolution (scale up/down)
-#      • Connection to the distributed LongTermMemoryManager Ray actor
+#      • Connection to HolonFabric for long-term memory (replaces LongTermMemoryManager)
 #
 #    Architecture:
 #      • RoutingDirectory (Tier-0) = routing decisions and policy brain
@@ -62,8 +62,10 @@ from seedcore.logging_setup import setup_logging, ensure_serve_logger
 from seedcore.organs.organ import Organ, AgentIDFactory  # ← NEW ORGAN CLASS
 from seedcore.organs.router import RoutingDirectory
 
-# Long-term memory backend (Ray actor)
-from seedcore.memory.long_term_memory import LongTermMemoryManager
+# Long-term memory backend (HolonFabric replaces LongTermMemoryManager)
+from seedcore.memory.holon_fabric import HolonFabric
+from seedcore.memory.backends.pgvector_backend import PgVectorStore
+from seedcore.memory.backends.neo4j_graph import Neo4jGraph
 # --- Import stateful dependencies ---
 from seedcore.memory.mw_manager import MwManager
 
@@ -86,25 +88,32 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 # =====================================================================
-#  SkillStore Adapter — Bridge LTM to SkillStoreProtocol
+#  SkillStore Adapter — Bridge HolonFabric to SkillStoreProtocol
 # =====================================================================
 
 
-class LTMSkillStoreAdapter(SkillStoreProtocol):
+class HolonFabricSkillStoreAdapter(SkillStoreProtocol):
     """
-    Wraps a Ray LongTermMemoryManager actor to satisfy SkillStoreProtocol.
+    Wraps HolonFabric to satisfy SkillStoreProtocol.
     This is the unified storage backend for agent skill vectors.
+    Replaces LTMSkillStoreAdapter which used LongTermMemoryManager Ray actor.
     """
 
-    def __init__(self, ltm_handle):
-        self.ltm = ltm_handle
+    def __init__(self, holon_fabric: HolonFabric):
+        self.holon_fabric = holon_fabric
 
     async def get_skill_vector(self, agent_id: str) -> Optional[List[float]]:
         try:
-            result = await self.ltm.query_holon_by_id_async.remote(agent_id)
-            result = await asyncio.to_thread(ray.get, result)
-            if result and "embedding" in result:
-                return result["embedding"]
+            # Query by ID using graph store
+            neighbors = await self.holon_fabric.graph.get_neighbors(agent_id, limit=1)
+            if neighbors:
+                # Try to get embedding from vector store
+                try:
+                    vec_result = await self.holon_fabric.vec.get_by_id(agent_id)
+                    if vec_result and "embedding" in vec_result:
+                        return vec_result["embedding"].tolist() if hasattr(vec_result["embedding"], "tolist") else vec_result["embedding"]
+                except Exception:
+                    pass
             return None
         except Exception as e:
             logger.error(f"[SkillStore] Error loading skill vector for {agent_id}: {e}")
@@ -114,14 +123,22 @@ class LTMSkillStoreAdapter(SkillStoreProtocol):
         self, agent_id: str, vector: List[float], meta: Dict[str, Any] = None
     ) -> bool:
         """
-        Persist an agent's skill vector into LTM as a holon.
+        Persist an agent's skill vector into HolonFabric as a holon.
         """
         try:
-            holon = {
-                "vector": {"id": agent_id, "embedding": vector, "meta": meta or {}}
-            }
-            ref = self.ltm.insert_holon_async.remote(holon)
-            return bool(await asyncio.to_thread(ray.get, ref))
+            from seedcore.models.holon import Holon, HolonType, HolonScope
+            
+            holon = Holon(
+                id=agent_id,
+                type=HolonType.FACT,  # Skill vectors are facts
+                scope=HolonScope.GLOBAL,  # Skills are globally accessible
+                content=meta or {},
+                summary=f"Skill vector for agent {agent_id}",
+                embedding=vector,
+                links=[],
+            )
+            await self.holon_fabric.insert_holon(holon)
+            return True
         except Exception as e:
             logger.error(f"[SkillStore] Error saving skill vector for {agent_id}: {e}")
             return False
@@ -188,13 +205,13 @@ class OrganismCore:
 
         # Global infrastructure
         self.role_registry: RoleRegistry = role_registry or DEFAULT_ROLE_REGISTRY
-        self.skill_store: Optional[LTMSkillStoreAdapter] = None
+        self.skill_store: Optional[HolonFabricSkillStoreAdapter] = None
         self.tool_manager: Optional[ToolManager] = None
         self.cognitive_client: Optional[CognitiveServiceClient] = None
         self.energy_client: Optional[EnergyServiceClient] = None
-        self.ltm_handle: Optional[Any] = None
+        self.holon_fabric: Optional[HolonFabric] = None
         
-        # --- Stateful dependencies for RayAgent ---
+        # --- Stateful dependencies for PersistentAgent ---
         self.mw_manager: Optional[MwManager] = None
         self.checkpoint_cfg: Dict[str, Any] = {
             "enabled": True,
@@ -239,7 +256,7 @@ class OrganismCore:
         """
         Bootstraps:
           0. Ensure Janitor actor (system maintenance service)
-          1. LongTermMemoryManager Ray actor
+          1. HolonFabric instance (replaces LongTermMemoryManager Ray actor)
           2. SkillStore adapter
           3. RoleRegistry
           4. ToolManager
@@ -264,34 +281,43 @@ class OrganismCore:
         await self._ensure_janitor_actor()
 
         # --------------------------------------------------------------
-        # 1. Start distributed LongTermMemoryManager
+        # 1. Initialize HolonFabric (replaces LongTermMemoryManager)
         # --------------------------------------------------------------
         try:
-            logger.info("🔌 Launching LongTermMemoryManager (Ray actor)...")
+            logger.info("🔌 Initializing HolonFabric...")
 
-            self.ltm_handle = LongTermMemoryManager.options(
-                name="ltm_manager",
-                lifetime="detached",
-                namespace=AGENT_NAMESPACE,
-                max_restarts=-1,
-                max_task_retries=-1,
-            ).remote()
+            # Create backend stores
+            pg_store = PgVectorStore(
+                os.getenv("PG_DSN", "postgresql://postgres:password@postgresql:5432/seedcore"),
+                pool_size=10
+            )
+            neo4j_graph = Neo4jGraph(
+                os.getenv("NEO4J_URI") or os.getenv("NEO4J_BOLT_URL", "bolt://neo4j:7687"),
+                auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "password"))
+            )
 
-            # Async initialization inside actor
-            await self._ray_await(self.ltm_handle.initialize.remote())
+            # Initialize connection pools
+            await pg_store._get_pool()
 
-            logger.info("✅ LTM Manager ready.")
+            # Create HolonFabric instance
+            self.holon_fabric = HolonFabric(
+                vec_store=pg_store,
+                graph=neo4j_graph,
+                embedder=None  # Can be set later if needed
+            )
+
+            logger.info("✅ HolonFabric ready.")
 
         except Exception as e:
             logger.error(
-                f"[OrganismCore] Failed to start LTM Manager: {e}", exc_info=True
+                f"[OrganismCore] Failed to initialize HolonFabric: {e}", exc_info=True
             )
             raise
 
         # --------------------------------------------------------------
         # 2. Create SkillStore adapter
         # --------------------------------------------------------------
-        self.skill_store = LTMSkillStoreAdapter(self.ltm_handle)
+        self.skill_store = HolonFabricSkillStoreAdapter(self.holon_fabric)
 
         # --------------------------------------------------------------
         # 3. RoleRegistry (already set in __init__ via DEFAULT_ROLE_REGISTRY or provided)
@@ -398,7 +424,7 @@ class OrganismCore:
                     cognitive_client=self.cognitive_client,
                     # Stateful dependencies
                     mw_manager=self.mw_manager,
-                    ltm_manager=self.ltm_handle,
+                    holon_fabric=self.holon_fabric,
                     checkpoint_cfg=self.checkpoint_cfg,
                 )
 
@@ -1552,7 +1578,7 @@ class OrganismCore:
                 cognitive_client=self.cognitive_client,
                 # Stateful dependencies
                 mw_manager=self.mw_manager,
-                ltm_manager=self.ltm_handle,
+                holon_fabric=self.holon_fabric,
                 checkpoint_cfg=self.checkpoint_cfg,
             )
         except Exception as e:
@@ -1692,13 +1718,16 @@ class OrganismCore:
                     f"[OrganismCore] Error shutting down organ {organ_id}: {e}"
                 )
 
-        # Close LTM
-        if self.ltm_handle:
+        # Close HolonFabric connections
+        if self.holon_fabric:
             try:
-                logger.info("[OrganismCore] Closing LTM actor")
-                await self._ray_await(self.ltm_handle.close.remote())
+                logger.info("[OrganismCore] Closing HolonFabric connections")
+                if hasattr(self.holon_fabric, "vec") and self.holon_fabric.vec:
+                    await self.holon_fabric.vec.close()
+                if hasattr(self.holon_fabric, "graph") and self.holon_fabric.graph:
+                    await self.holon_fabric.graph.close()
             except Exception as e:
-                logger.error(f"[OrganismCore] Failed to close LTM: {e}")
+                logger.error(f"[OrganismCore] Failed to close HolonFabric: {e}")
 
         logger.info("[OrganismCore] Shutdown complete")
 

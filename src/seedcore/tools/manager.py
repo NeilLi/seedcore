@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from seedcore.serve.mcp_client import MCPServiceClient
     from seedcore.serve.cognitive_client import CognitiveServiceClient
     from seedcore.memory.mw_manager import MwManager
-    from seedcore.memory.long_term_memory import LongTermMemoryManager
+    from seedcore.memory.holon_fabric import HolonFabric
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class ToolManager:
     1. Internal registered Python tools (including query tools from query_tools.py:
        general_query, knowledge.find, task.collaborative, cognitive.*)
     2. Memory: MW tools (memory.mw.*)
-    3. Memory: LTM tools (memory.ltm.*)
+    3. Memory: HolonFabric tools (memory.holon.*)
     4. Cognitive service tools (cog.* or reason.*)
     5. External MCP service tools
     
@@ -74,7 +74,7 @@ class ToolManager:
         self,
         *,
         mw_manager: Optional["MwManager"] = None,
-        ltm_manager: Optional["LongTermMemoryManager"] = None,
+        holon_fabric: Optional["HolonFabric"] = None,
         rbac_provider: Optional[Any] = None,
         skill_store: Optional["SkillStoreProtocol"] = None,
         enable_tracing: bool = True,
@@ -92,7 +92,9 @@ class ToolManager:
 
         # Service dependencies
         self.mw_manager = mw_manager
-        self.ltm_manager = ltm_manager
+        self.holon_fabric = holon_fabric
+        # Deprecated: kept for backward compatibility
+        self.ltm_manager = None
         self._mcp_client = mcp_client
         self.cognitive_client = cognitive_client
 
@@ -175,17 +177,89 @@ class ToolManager:
         except Exception as e:
             raise ToolError(name, "MW execute failed", e)
 
-    async def _execute_ltm(self, name: str, args: Dict[str, Any], agent_id: str):
-        if not self.ltm_manager:
-            raise ToolError(name, "LTM manager not configured")
+    async def _execute_holon(self, name: str, args: Dict[str, Any], agent_id: str):
+        """Execute HolonFabric operations.
+        
+        Note: LongTermMemoryManager is deprecated. Use HolonFabric instead.
+        This method provides backward compatibility for memory.ltm.* tool calls.
+        """
+        if not self.holon_fabric:
+            raise ToolError(name, "HolonFabric not configured")
         try:
             method = name.split(".", 2)[-1]
-            handler = getattr(self.ltm_manager, method, None)
-            if not handler:
-                raise ToolError(name, f"Unknown LTM method '{method}'")
-            return await handler(**args)
+            # Map legacy LTM method names to HolonFabric operations
+            if method == "query":
+                # Query by ID - use graph store to find node, then retrieve from vector store
+                holon_id = args.get("holon_id")
+                if not holon_id:
+                    raise ToolError(name, "Missing holon_id parameter")
+                # Try to get from graph store first
+                try:
+                    neighbors = await self.holon_fabric.graph.get_neighbors(holon_id, limit=1)
+                    if neighbors:
+                        # Found in graph, construct a basic Holon from metadata
+                        node_data = neighbors[0] if isinstance(neighbors, list) else neighbors
+                        props = node_data.get("props", {})
+                        return {
+                            "id": holon_id,
+                            "type": props.get("type", "fact"),
+                            "scope": props.get("scope", "global"),
+                            "summary": node_data.get("summary", ""),
+                            "content": props,
+                        }
+                except Exception:
+                    pass
+                # Fallback: return None if not found
+                return None
+            elif method == "search":
+                # Vector similarity search
+                embedding = args.get("embedding")
+                limit = args.get("limit", 5)
+                if not embedding:
+                    raise ToolError(name, "Missing embedding parameter")
+                import numpy as np
+                query_vec = np.array(embedding, dtype=np.float32)
+                # Use GLOBAL scope by default, can be extended with scopes parameter
+                from seedcore.models.holon import HolonScope
+                holons = await self.holon_fabric.query_context(
+                    query_vec=query_vec,
+                    scopes=[HolonScope.GLOBAL],
+                    limit=limit
+                )
+                # Convert Holon objects to dicts for backward compatibility
+                return [h.dict() if hasattr(h, "dict") else h for h in holons]
+            elif method == "store":
+                # Insert holon
+                holon_data = args.get("holon_data")
+                if not holon_data:
+                    raise ToolError(name, "Missing holon_data parameter")
+                # Convert legacy holon_data format to Holon object
+                from seedcore.models.holon import Holon, HolonType, HolonScope
+                vector_data = holon_data.get("vector", {})
+                graph_data = holon_data.get("graph", {})
+                
+                holon = Holon(
+                    id=vector_data.get("id", graph_data.get("src_uuid")),
+                    type=HolonType.FACT,  # Default type
+                    scope=HolonScope.GLOBAL,  # Default scope
+                    content=vector_data.get("meta", {}),
+                    summary=vector_data.get("meta", {}).get("summary", ""),
+                    embedding=vector_data.get("embedding", []),
+                    links=[graph_data] if graph_data else [],
+                )
+                await self.holon_fabric.insert_holon(holon)
+                return True
+            elif method == "relationships":
+                # Get relationships
+                holon_id = args.get("holon_id")
+                if not holon_id:
+                    raise ToolError(name, "Missing holon_id parameter")
+                neighbors = await self.holon_fabric.graph.get_neighbors(holon_id)
+                return neighbors
+            else:
+                raise ToolError(name, f"Unknown HolonFabric method '{method}'")
         except Exception as e:
-            raise ToolError(name, "LTM execute failed", e)
+            raise ToolError(name, "HolonFabric execute failed", e)
 
     # ============================================================
     # Cognitive routing
@@ -259,9 +333,9 @@ class ToolManager:
             if name.startswith("memory.mw."):
                 return await self._execute_mw(name, args, agent_id)
 
-            # 3. LTM tools
-            if name.startswith("memory.ltm."):
-                return await self._execute_ltm(name, args, agent_id)
+            # 3. HolonFabric tools (replaces legacy LTM tools)
+            if name.startswith("memory.ltm.") or name.startswith("memory.holon."):
+                return await self._execute_holon(name, args, agent_id)
 
             # 4. Cognitive service tools (direct cognitive service calls)
             # Note: cognitive.* query tools are handled above as internal tools

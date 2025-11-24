@@ -99,23 +99,74 @@ class PgVectorStore:
             logger.error(f"Upsert failed for holon {holon.uuid}: {e}", exc_info=True)
             return False
 
-    async def search(self, emb: np.ndarray, k: int = 10) -> List[asyncpg.Record]:
+    async def search(self, emb: np.ndarray, k: int = 10, filters: Optional[Dict[str, Any]] = None) -> List[asyncpg.Record]:
         """
-        Performs vector similarity search.
+        Performs vector similarity search with optional metadata filtering.
         Returns raw asyncpg.Record objects.
+        
+        Args:
+            emb: Query embedding vector
+            k: Number of results to return
+            filters: Optional filter dictionary. Supports:
+                - "or": List of filter conditions (each is a dict with keys like "scope", "access_policy", "entity_id")
         """
-        q = """
+        where_clauses = []
+        params = [emb]  # First param is always the embedding vector
+        param_idx = 2  # Start from $2 since $1 is the embedding
+        
+        # Build WHERE clause from filters
+        if filters and "or" in filters:
+            or_conditions = []
+            for condition in filters["or"]:
+                if "scope" in condition:
+                    if condition["scope"] == "global":
+                        or_conditions.append("meta->>'scope' = 'global'")
+                    elif condition["scope"] == "organ" and "access_policy" in condition:
+                        or_conditions.append(
+                            f"(meta->>'scope' = 'organ' AND ${param_idx} = ANY(SELECT jsonb_array_elements_text(meta->'access_policy')))"
+                        )
+                        params.append(condition["access_policy"])
+                        param_idx += 1
+                    elif condition["scope"] == "entity" and "entity_id" in condition:
+                        entity_filter = condition["entity_id"]
+                        if isinstance(entity_filter, dict) and "in" in entity_filter:
+                            # Handle "in" operator for entity_id
+                            entity_ids = entity_filter["in"]
+                            or_conditions.append(
+                                f"(meta->>'scope' = 'entity' AND meta->>'entity_id' = ANY(${param_idx}::text[]))"
+                            )
+                            params.append(entity_ids)
+                            param_idx += 1
+                        else:
+                            or_conditions.append(
+                                f"(meta->>'scope' = 'entity' AND meta->>'entity_id' = ${param_idx})"
+                            )
+                            params.append(entity_filter)
+                            param_idx += 1
+            
+            if or_conditions:
+                where_clauses.append(f"({' OR '.join(or_conditions)})")
+        
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        
+        # Add limit parameter
+        params.append(k)
+        limit_param = param_idx
+        
+        q = f"""
             SELECT uuid, meta, embedding <-> $1::vector AS dist
             FROM holons 
+            {where_sql}
             ORDER BY dist 
-            LIMIT $2
+            LIMIT ${limit_param}
             """
         
         try:
             pool = await self._get_pool()
             vec_str = self._embedding_to_str(emb)
+            params[0] = vec_str  # Replace embedding numpy array with string
             async with pool.acquire() as conn:
-                return await conn.fetch(q, vec_str, k)
+                return await conn.fetch(q, *params)
         except Exception as e:
             logger.error(f"Vector search failed: {e}", exc_info=True)
             return []

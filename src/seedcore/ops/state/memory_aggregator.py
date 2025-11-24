@@ -5,7 +5,7 @@
 MemoryAggregator - Proactive aggregator for memory manager stats.
 
 This service runs a continuous background loop to poll all central memory
-managers (MwManager, LtmManager/HolonFabric) for their system-wide telemetry.
+managers (MwManager, HolonFabric) for their system-wide telemetry.
 
 It provides a real-time, cached view of the organism's memory system health,
 excluding per-agent ('ma') stats, which are handled by the AgentAggregator.
@@ -17,18 +17,19 @@ import time
 from typing import Dict, Any, Optional
 
 # Import the data model. Note: 'ma' will be empty from this aggregator.
-from ...models.state import MemoryVector
 
 # Optional memory module imports
 try:
     from ...memory.mw_manager import MwManager
-    from ...memory.long_term_memory import LongTermMemoryManager
     from ...memory.holon_fabric import HolonFabric
+    from ...memory.backends.pgvector_backend import PgVectorStore
+    from ...memory.backends.neo4j_graph import Neo4jGraph
     _MEMORY_AVAILABLE = True
 except ImportError:
     MwManager = None  # type: ignore
-    LongTermMemoryManager = None  # type: ignore
     HolonFabric = None  # type: ignore
+    PgVectorStore = None  # type: ignore
+    Neo4jGraph = None  # type: ignore
     _MEMORY_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,6 @@ class MemoryAggregator:
 
         # Lazy initialization of memory managers
         self._mw_manager: Optional[MwManager] = None
-        self._ltm_manager: Optional[LongTermMemoryManager] = None
         self._holon_fabric: Optional[HolonFabric] = None
 
         # Control
@@ -130,7 +130,7 @@ class MemoryAggregator:
                     new_stats["mw"] = mw_stats
 
                 if isinstance(mlt_stats, Exception):
-                    logger.error(f"Failed to poll LtmManager: {mlt_stats}")
+                    logger.error(f"Failed to poll HolonFabric: {mlt_stats}")
                     new_stats["mlt"] = self._stats_cache.get("mlt", {}) # Keep old
                 else:
                     new_stats["mlt"] = mlt_stats
@@ -236,15 +236,23 @@ class MemoryAggregator:
             logger.debug("HolonFabric unavailable, returning simulated stats")
             return self._get_simulated_mlt_stats()
         
-        # Get stats from HolonFabric (already async)
-        stats = await fabric.get_stats()
+        try:
+            # Query stats directly from backends
+            total_holons = await fabric.vec.get_count()
+            total_relationships = await fabric.graph.get_count()
+            
+            # Get bytes_used from pgvector store
+            bytes_query = "SELECT pg_total_relation_size('holons')"
+            bytes_used = await fabric.vec.execute_scalar_query(bytes_query)
+            bytes_used = int(bytes_used) if bytes_used is not None else 0
+            
+            status = "active"  # Assume active if we can query
+            
+        except Exception as e:
+            logger.error(f"Failed to query HolonFabric stats: {e}")
+            return self._get_simulated_mlt_stats()
         
         # --- Process Stats (copied from legacy) ---
-        total_holons = stats.get("total_holons", 0)
-        total_relationships = stats.get("total_relationships", 0)
-        bytes_used = stats.get("bytes_used", 0)
-        status = stats.get("status", "unknown")
-        
         storage_gb = bytes_used / (1024 ** 3)
         avg_holon_size = bytes_used / total_holons if total_holons > 0 else 0
         compression_ratio = 0.65  # Default estimate
@@ -260,7 +268,7 @@ class MemoryAggregator:
             "index_size_mb": round(index_size_mb, 2),
             "bytes_used": bytes_used,
             "status": status,
-            "vector_dimensions": stats.get("vector_dimensions", 768)
+            "vector_dimensions": 768  # Default, can be made configurable
         }
 
     async def _poll_mfb_stats(self) -> Dict[str, Any]:
@@ -284,32 +292,28 @@ class MemoryAggregator:
                 return None
         return self._mw_manager
 
-    def _get_ltm_manager(self) -> Optional[LongTermMemoryManager]:
-        """Get or create an LTM instance (dependency for HolonFabric)."""
-        if not _MEMORY_AVAILABLE or LongTermMemoryManager is None:
-            return None
-        if self._ltm_manager is None:
-            try:
-                self._ltm_manager = LongTermMemoryManager()
-            except Exception as e:
-                logger.debug(f"Failed to create LongTermMemoryManager: {e}")
-                return None
-        return self._ltm_manager
-
     def _get_holon_fabric(self) -> Optional[HolonFabric]:
         """Get or create a HolonFabric instance for LTM stats."""
         if not _MEMORY_AVAILABLE or HolonFabric is None:
             return None
         if self._holon_fabric is None:
             try:
-                ltm = self._get_ltm_manager()
-                if ltm is None:
-                    return None
+                import os
+                # Create backend stores directly
+                pg_store = PgVectorStore(
+                    os.getenv("PG_DSN", "postgresql://postgres:password@postgresql:5432/seedcore"),
+                    pool_size=10
+                )
+                neo4j_graph = Neo4jGraph(
+                    os.getenv("NEO4J_URI") or os.getenv("NEO4J_BOLT_URL", "bolt://neo4j:7687"),
+                    auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "password"))
+                )
                 
-                # Access the backends directly from LongTermMemoryManager
+                # Create HolonFabric instance
                 self._holon_fabric = HolonFabric(
-                    vec_store=ltm.pg_store,
-                    graph=ltm.neo4j_graph
+                    vec_store=pg_store,
+                    graph=neo4j_graph,
+                    embedder=None  # No embedder needed for stats collection
                 )
             except Exception as e:
                 logger.debug(f"Failed to create HolonFabric: {e}")

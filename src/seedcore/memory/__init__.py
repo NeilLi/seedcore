@@ -16,21 +16,17 @@
 
 This package provides the memory system for SeedCore, including:
 - Working memory (Mw) via MwManager
-- Long-term memory (Mlt) via HolonFabric
+- Long-term memory via HolonFabric (unified vector + graph storage)
+- HolonClient for persisting cognitive facts to HolonFabric
 - Adaptive memory control loops
 - Memory consolidation utilities
 """
 
 # Core memory classes
-from .holon_fabric import HolonFabric
+from .holon_fabric import HolonFabric, Embedder
+from .holon_client import HolonClient
 from .mw_manager import MwManager
 from .system import SharedMemorySystem, MemoryTier
-
-# Long-term memory manager
-try:
-    from .long_term_memory import LongTermMemoryManager
-except ImportError:
-    LongTermMemoryManager = None  # type: ignore
 
 # Adaptive memory loop functions
 from .adaptive_loop import (
@@ -68,10 +64,11 @@ except ImportError:
 __all__ = [
     # Core classes
     "HolonFabric",
+    "HolonClient",
+    "Embedder",
     "MwManager",
     "SharedMemorySystem",
     "MemoryTier",
-    "LongTermMemoryManager",
     # Adaptive loop functions
     "calculate_dynamic_mem_util",
     "calculate_cost_vq",

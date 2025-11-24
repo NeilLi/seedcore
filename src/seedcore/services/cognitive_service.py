@@ -120,7 +120,7 @@ import random
 import time
 import threading
 import traceback
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol
 
@@ -131,7 +131,6 @@ from pydantic import BaseModel  # type: ignore[reportMissingImports]
 from ray import serve  # type: ignore[reportMissingImports]
 
 # 3) SeedCore internals (no heavy side effects)
-from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from ..coordinator.utils import normalize_task_payloads
 from ..cognitive.cognitive_core import CognitiveCore, Fact
 from ..models.cognitive import CognitiveContext, CognitiveType, DecisionKind, LLMProfile
@@ -159,6 +158,8 @@ if TYPE_CHECKING:
     from ..cognitive.cognitive_core import ContextBroker
 
 # Configure logging for driver process (script that invokes serve.run)
+from seedcore.logging_setup import ensure_serve_logger, setup_logging
+
 setup_logging(app_name="seedcore.cognitive_service.driver")
 logger = ensure_serve_logger("seedcore.cognitive_service", level="DEBUG")
 
@@ -473,7 +474,18 @@ def _timeout(profile: LLMProfile, provider: str) -> int:
 # CENTRAL PROVIDER REGISTRY
 # ----------------------------------------------------------------------
 
-PROVIDER_CONFIG = {
+# ----------------------------------------------------------------------
+# CENTRAL PROVIDER REGISTRY
+# ----------------------------------------------------------------------
+
+def _default_max_tokens(profile: LLMProfile) -> int:
+    return 2048 if profile is LLMProfile.DEEP else 1024
+
+
+PROVIDER_CONFIG: Dict[str, Dict[str, Any]] = {
+    # ------------------------------------------------------------------
+    # OpenAI – handled via OpenAIEngine (+ DSPy core integration)
+    # ------------------------------------------------------------------
     "openai": {
         "env": {
             "deep": "OPENAI_MODEL_DEEP",
@@ -483,11 +495,16 @@ PROVIDER_CONFIG = {
             "deep": "gpt-4o",
             "fast": "gpt-4o-mini",
         },
+        # Thin engine: mainly carries model + max_tokens; DSPy does the rest.
         "engine": lambda model, profile: OpenAIEngine(
             model=model,
-            max_tokens=2048 if profile is LLMProfile.DEEP else 1024
+            max_tokens=_default_max_tokens(profile),
         ),
     },
+
+    # ------------------------------------------------------------------
+    # Anthropic – DSPy-native (no custom engine needed)
+    # ------------------------------------------------------------------
     "anthropic": {
         "env": {
             "deep": "ANTHROPIC_MODEL_DEEP",
@@ -497,11 +514,13 @@ PROVIDER_CONFIG = {
             "deep": "claude-3-5-sonnet",
             "fast": "claude-3-5-haiku",
         },
-        "engine": lambda model, profile: OpenAIEngine(
-            model=model,
-            max_tokens=2048 if profile is LLMProfile.DEEP else 1024
-        ),
+        # None ⇒ handled directly by DSPy (e.g. dspy.Anthropic).
+        "engine": lambda model, profile: None,
     },
+
+    # ------------------------------------------------------------------
+    # Google (Gemini) – DSPy-native
+    # ------------------------------------------------------------------
     "google": {
         "env": {
             "deep": "GOOGLE_MODEL_DEEP",
@@ -511,11 +530,13 @@ PROVIDER_CONFIG = {
             "deep": "gemini-1.5-pro",
             "fast": "gemini-1.5-flash",
         },
-        "engine": lambda model, profile: OpenAIEngine(
-            model=model,
-            max_tokens=2048 if profile is LLMProfile.DEEP else 1024
-        ),
+        # None ⇒ handled directly by DSPy (e.g. dspy.Google or Gemini wrapper).
+        "engine": lambda model, profile: None,
     },
+
+    # ------------------------------------------------------------------
+    # Azure OpenAI – DSPy-native (usually via Azure OpenAI integration)
+    # ------------------------------------------------------------------
     "azure": {
         "env": {
             "deep": "AZURE_OPENAI_MODEL_DEEP",
@@ -525,13 +546,18 @@ PROVIDER_CONFIG = {
             "deep": "gpt-4o",
             "fast": "gpt-4o-mini",
         },
-        "engine": lambda model, profile: OpenAIEngine(
-            model=model,
-            max_tokens=2048 if profile is LLMProfile.DEEP else 1024
-        ),
+        # None ⇒ handled directly by DSPy (Azure-specific config in core).
+        "engine": lambda model, profile: None,
     },
+
+    # ------------------------------------------------------------------
+    # NIM – OpenAI-compatible engine using NimEngine
+    # ------------------------------------------------------------------
     "nim": {
-        "env": {"deep": "NIM_LLM_MODEL", "fast": "NIM_LLM_MODEL"},
+        "env": {
+            "deep": "NIM_LLM_MODEL",
+            "fast": "NIM_LLM_MODEL",
+        },
         "defaults": {
             "deep": "meta/llama-3.1-8b-base",
             "fast": "meta/llama-3.1-8b-base",
@@ -539,13 +565,17 @@ PROVIDER_CONFIG = {
         "engine": lambda model, profile: NimEngine(
             model=model,
             temperature=0.7,
-            max_tokens=2048 if profile is LLMProfile.DEEP else 1024,
+            max_tokens=_default_max_tokens(profile),
             base_url=os.getenv("NIM_LLM_BASE_URL"),
             api_key=os.getenv("NIM_LLM_API_KEY", "none"),
             use_sdk=None,
             timeout=_timeout(profile, "nim"),
         ),
     },
+
+    # ------------------------------------------------------------------
+    # MLService – custom HTTP LLM service
+    # ------------------------------------------------------------------
     "mlservice": {
         "env": {
             "deep": "MLS_MODEL_DEEP",
@@ -557,9 +587,10 @@ PROVIDER_CONFIG = {
         },
         "engine": lambda model, profile: MLServiceEngine(
             model=model,
-            max_tokens=2048 if profile is LLMProfile.DEEP else 1024,
+            max_tokens=_default_max_tokens(profile),
             temperature=0.7,
-            base_url=os.getenv("MLS_BASE_URL") or (str(ML).rstrip("/") if ML else "http://127.0.0.1:8000/ml"),
+            # Let MLServiceEngine handle base_url fallback logic itself.
+            base_url=os.getenv("MLS_BASE_URL") or None,
         ),
     },
 }
@@ -657,7 +688,7 @@ class CognitiveOrchestrator:
                 model = config["model"]
                 
                 # 1. Create the DSPy LM (The "Brain")
-                lm = self._create_dspy_lm(provider, model, config)
+                lm = self._create_dspy_lm(provider, model, config, profile)
                 config["_dspy_lm"] = lm
                 
                 # 2. Create the Execution Core (The "Worker")
@@ -681,7 +712,7 @@ class CognitiveOrchestrator:
             except Exception as e:
                 logger.error(f"❌ Failed to initialize {profile.value} core: {e}")
 
-    def _create_dspy_lm(self, provider: str, model: str, config: dict) -> Any:
+    def _create_dspy_lm(self, provider: str, model: str, config: dict, profile: LLMProfile) -> Any:
         """Factory to create DSPy LM objects. Used by init and overrides."""
         import dspy  # type: ignore[reportMissingImports]
         max_tokens = config.get("max_tokens", 1024)
@@ -702,8 +733,9 @@ class CognitiveOrchestrator:
         elif provider == "azure":
             return dspy.OpenAI(model=model, max_tokens=max_tokens)
         
-        # Fallback to Generic Engine Shim
-        engine = _make_engine(provider, LLMProfile.FAST, model)  # Profile doesn't matter for make_engine here
+        # Fallback to Generic Engine Shim (nim/mlservice/local)
+        # Profile is used for max_tokens and timeout configuration
+        engine = _make_engine(provider, profile, model)
         return _DSPyEngineShim(engine)
 
     # ------------------ Orchestration methods ------------------
@@ -737,7 +769,7 @@ class CognitiveOrchestrator:
             # Use the factory to create a lightweight LM object (not a whole core)
             temp_config = config.copy()
             temp_config["max_tokens"] = config.get("max_tokens", 1024)
-            return self._create_dspy_lm(target_prov, target_mod, temp_config)
+            return self._create_dspy_lm(target_prov, target_mod, temp_config, profile)
 
         # Default: Return cached LM from init
         config = self.core_configs.get(profile)
@@ -767,71 +799,19 @@ class CognitiveOrchestrator:
 
     def _resolve_provider_env(self, profile_name: str) -> str:
         """Helper to get default providers from env."""
-        # e.g. LLM_PROVIDER_FAST
+        # e.g. LLM_PROVIDER_FAST or LLM_PROVIDER_DEEP
         explicit = os.getenv(f"LLM_PROVIDER_{profile_name}")
         if explicit: 
-            return explicit.lower()
-        # Fallback to general LLM_PROVIDERS list or openai
+            return explicit.strip().lower()
+        # Check LLM_PROVIDERS list (e.g., LLM_PROVIDERS=openai,anthropic,nim)
+        providers = get_active_providers() or _normalize_list(os.getenv("LLM_PROVIDERS"))
+        if providers:
+            return providers[0]
+        # Fallback to openai
         return "openai"
-
-    def plan(self, context: 'CognitiveContext', depth: LLMProfile = LLMProfile.FAST) -> Dict[str, Any]:
-        core = self.cores.get(depth) or self.cores.get(LLMProfile.FAST)
-        circuit_breaker = self.circuit_breakers.get(depth) or self.circuit_breakers.get(LLMProfile.FAST)
-        if core is None:
-            return create_error_result(f"No cognitive core for profile {depth.value}", "SERVICE_UNAVAILABLE").model_dump()
-
-        timeout_seconds = self.profiles.get(depth, {}).get("timeout_seconds", 10)
-
-        import dspy  # type: ignore[reportMissingImports]
-        config = self.core_configs.get(depth)
-        logger.info(f"Using timeout={timeout_seconds}s for {depth.value} planning (provider={config.get('provider') if config else 'unknown'})")
-        if config and "_dspy_lm" in config:
-            dspy.settings.configure(lm=config["_dspy_lm"])
-            logger.debug(f"Configured DSPy with {depth.value} profile LM (provider={config.get('provider')})")
-
-        def _execute_with_timeout():
-            future = self._executor.submit(core.forward, context)
-            try:
-                return future.result(timeout=timeout_seconds)
-            except FuturesTimeoutError:
-                raise TimeoutError(f"LLM planning timed out after {timeout_seconds}s")
-
-        try:
-            result = circuit_breaker.call(_execute_with_timeout) if circuit_breaker else _execute_with_timeout()
-            if isinstance(result, dict):
-                result.setdefault("result", {}).setdefault("meta", {})
-                meta = result["result"]["meta"]
-                meta["profile_used"] = depth.value
-                meta["provider_used"] = config.get("provider", "unknown") if config else "unknown"
-                meta["timeout_seconds"] = timeout_seconds
-                meta["circuit_breaker_state"] = circuit_breaker.state.state if circuit_breaker else "N/A"
-            return normalize_task_payloads(result)
-        except Exception as e:
-            logger.error(f"Error in {depth.value} planning: {e}")
-            error_msg = f"Planning error: {str(e)}"
-            if circuit_breaker and circuit_breaker.state.state == "OPEN":
-                error_msg += " (Circuit breaker OPEN)"
-            return normalize_task_payloads(create_error_result(error_msg, "PROCESSING_ERROR").model_dump())
-
-    def health_check(self) -> Dict[str, Any]:
-        return {
-            "status": "healthy",
-            "cores": {p.value: "active" for p in self.cores},
-            "graph_repo": bool(self.graph_repo)
-        }
 
     def shutdown(self):
         self._executor.shutdown(wait=True)
-
-    def process_cognitive_task(self, context: 'CognitiveContext') -> Dict[str, Any]:
-        logger.warning("process_cognitive_task() is deprecated; use forward_cognitive_task()")
-        input_data = context.input_data or {}
-        meta = input_data.get("meta") or {}
-        input_data["meta"] = meta
-        if "decision_kind" not in meta:
-            meta["decision_kind"] = DecisionKind.FAST_PATH.value
-        context.input_data = input_data
-        return self.forward_cognitive_task(context)
 
     def forward_cognitive_task(self, context: 'CognitiveContext', use_deep: Optional[bool] = None) -> Dict[str, Any]:
         """

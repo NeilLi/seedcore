@@ -22,6 +22,16 @@ class Neo4jGraph:
             print(f"Neo4j query failed: {e}")
             raise
 
+    async def upsert_node(self, uuid: str, holon_type: str, summary: str):
+        """
+        Asynchronously creates or updates a node with the given properties.
+        """
+        q = (
+            "MERGE (a:Holon {uuid:$u}) "
+            "SET a.type = $t, a.summary = $s"
+        )
+        await self._execute_query(q, {"u": uuid, "t": holon_type, "s": summary})
+
     async def upsert_edge(self, src_uuid: str, rel: str, dst_uuid: str):
         """
         Asynchronously merges nodes and creates a relationship between them.

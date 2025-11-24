@@ -3,7 +3,7 @@
 class QueryToolRegistrar:
     """
     Handles async registration of query tools.
-    Keeps RayAgent clean.
+    Keeps PersistentAgent clean.
     """
 
     def __init__(self, agent):
@@ -14,14 +14,14 @@ class QueryToolRegistrar:
             from ...tools import query_tools
 
             # Ensure tool_manager has required dependencies
-            # register_query_tools extracts mw_manager, ltm_manager, and cognitive_client from tool_manager
+            # register_query_tools extracts mw_manager and cognitive_client from tool_manager
+            # Note: ltm_manager has been removed - use HolonFabric via CognitiveMemoryBridge instead
             tool_manager = self.agent.tools
             
-            # Set mw_manager and ltm_manager on tool_manager if not already set
-            if tool_manager.mw_manager is None:
-                tool_manager.mw_manager = self.agent.memory.mw
-            if tool_manager.ltm_manager is None:
-                tool_manager.ltm_manager = self.agent.memory.ltm
+            # Set mw_manager on tool_manager if not already set
+            # mw_manager is kept for backward compatibility with legacy query tools
+            if tool_manager.mw_manager is None and hasattr(self.agent, "_mw_manager"):
+                tool_manager.mw_manager = self.agent._mw_manager
             
             # Set cognitive_client on tool_manager (separate from _mcp_client)
             # cognitive_client is for Cognitive Service (LLM/reasoning), not MCP service

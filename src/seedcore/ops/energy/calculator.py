@@ -12,11 +12,11 @@ from dataclasses import dataclass, field, asdict
 from .weights import EnergyWeights
 from ...models.state import UnifiedState  # lightweight import; no heavy deps
 
-# Avoid runtime circular import: only import RayAgent for typing
+# Avoid runtime circular import: only import PersistentAgent for typing
 if TYPE_CHECKING:
-    from seedcore.agents.ray_agent import RayAgent  # pragma: no cover
+    from seedcore.agents.persistent_agent import PersistentAgent  # pragma: no cover
 else:
-    RayAgent = Any  # type: ignore
+    PersistentAgent = Any  # type: ignore
 
 
 @dataclass
@@ -388,7 +388,7 @@ def energy_gradient(unified_state: Any, weights: EnergyWeights) -> Dict[str, Any
 
 
 # Legacy functions for backward compatibility
-def calculate_pair_energy(agents: List[RayAgent]) -> float:
+def calculate_pair_energy(agents: List[PersistentAgent]) -> float:
     """
     Legacy function for backward compatibility.
     Calculates the pairwise collaboration energy.
@@ -414,7 +414,7 @@ def calculate_pair_energy(agents: List[RayAgent]) -> float:
     return pair_energy
 
 
-def calculate_entropy_energy(agents: List[RayAgent], alpha: float = 0.5) -> float:
+def calculate_entropy_energy(agents: List[PersistentAgent], alpha: float = 0.5) -> float:
     """
     Legacy function for backward compatibility.
     Calculates the role diversity energy.
@@ -431,7 +431,7 @@ def calculate_entropy_energy(agents: List[RayAgent], alpha: float = 0.5) -> floa
     return -alpha * total_entropy
 
 
-def calculate_reg_energy(agents: List[RayAgent], lambda_reg: float = 0.01) -> float:
+def calculate_reg_energy(agents: List[PersistentAgent], lambda_reg: float = 0.01) -> float:
     """
     Legacy function for backward compatibility.
     Calculates the regularization energy.
@@ -464,7 +464,7 @@ def calculate_mem_energy(memory_system, beta_mem: float = 0.2) -> float:
 
 
 def calculate_total_energy(
-    agents: List[RayAgent],
+    agents: List[PersistentAgent],
     memory_system,
     weights: Optional[Dict[str, float]] = None
 ) -> Dict[str, float]:

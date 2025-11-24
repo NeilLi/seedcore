@@ -99,15 +99,36 @@ class MwHotItemsTool:
         }
 
 # ============================================================
-# LongTermMemory Tools
+# HolonFabric Tools (replaces LongTermMemoryManager)
 # ============================================================
 
 class LtmQueryTool:
-    def __init__(self, ltm_manager: Any):
-        self.ltm_manager = ltm_manager
+    """Query holon by ID using HolonFabric.
+    
+    Note: LongTermMemoryManager is deprecated. This tool now uses HolonFabric.
+    """
+    def __init__(self, holon_fabric: Any):
+        self.holon_fabric = holon_fabric
 
     async def execute(self, holon_id: str):
-        return await self.ltm_manager.query_holon_by_id_async(holon_id)
+        if not self.holon_fabric:
+            raise ValueError("HolonFabric not available")
+        # Query by ID: try graph store first, then vector store
+        try:
+            neighbors = await self.holon_fabric.graph.get_neighbors(holon_id, limit=1)
+            if neighbors:
+                node_data = neighbors[0] if isinstance(neighbors, list) else neighbors
+                props = node_data.get("props", {})
+                return {
+                    "id": holon_id,
+                    "type": props.get("type", "fact"),
+                    "scope": props.get("scope", "global"),
+                    "summary": node_data.get("summary", ""),
+                    "content": props,
+                }
+        except Exception:
+            pass
+        return None
 
     def schema(self):
         return {
@@ -124,11 +145,27 @@ class LtmQueryTool:
 
 
 class LtmSearchTool:
-    def __init__(self, ltm_manager: Any):
-        self.ltm_manager = ltm_manager
+    """Vector similarity search using HolonFabric.
+    
+    Note: LongTermMemoryManager is deprecated. This tool now uses HolonFabric.
+    """
+    def __init__(self, holon_fabric: Any):
+        self.holon_fabric = holon_fabric
 
     async def execute(self, embedding: List[float], limit: int = 5):
-        return await self.ltm_manager.query_similar_holons_async(embedding, limit)
+        if not self.holon_fabric:
+            raise ValueError("HolonFabric not available")
+        import numpy as np
+        from seedcore.models.holon import HolonScope
+        
+        query_vec = np.array(embedding, dtype=np.float32)
+        holons = await self.holon_fabric.query_context(
+            query_vec=query_vec,
+            scopes=[HolonScope.GLOBAL],
+            limit=limit
+        )
+        # Convert Holon objects to dicts for backward compatibility
+        return [h.dict() if hasattr(h, "dict") else h for h in holons]
 
     def schema(self):
         return {
@@ -146,14 +183,42 @@ class LtmSearchTool:
 
 
 class LtmStoreTool:
-    def __init__(self, ltm_manager: Any):
-        self.ltm_manager = ltm_manager
+    """Store holon using HolonFabric.
+    
+    Note: LongTermMemoryManager is deprecated. This tool now uses HolonFabric.
+    """
+    def __init__(self, holon_fabric: Any):
+        self.holon_fabric = holon_fabric
 
     async def execute(self, holon_data: Dict[str, Any]):
-        success = await self.ltm_manager.insert_holon_async(holon_data)
+        if not self.holon_fabric:
+            raise ValueError("HolonFabric not available")
+        from seedcore.models.holon import Holon, HolonType, HolonScope
+        
+        # Convert legacy holon_data format to Holon object
+        vector_data = holon_data.get("vector", {})
+        graph_data = holon_data.get("graph", {})
+        
+        holon = Holon(
+            id=vector_data.get("id", graph_data.get("src_uuid", "")),
+            type=HolonType.FACT,  # Default type
+            scope=HolonScope.GLOBAL,  # Default scope
+            content=vector_data.get("meta", {}),
+            summary=vector_data.get("meta", {}).get("summary", ""),
+            embedding=vector_data.get("embedding", []),
+            links=[graph_data] if graph_data else [],
+        )
+        
+        try:
+            await self.holon_fabric.insert_holon(holon)
+            success = True
+        except Exception as e:
+            logger.error(f"Failed to insert holon: {e}")
+            success = False
+        
         return {
             "status": "success" if success else "failed",
-            "holon_id": holon_data.get("vector", {}).get("id"),
+            "holon_id": holon.id,
             "_reflection": {
                 "skill": "memory_management",
                 "delta": 0.01,
@@ -176,11 +241,17 @@ class LtmStoreTool:
 
 
 class LtmRelationshipsTool:
-    def __init__(self, ltm_manager: Any):
-        self.ltm_manager = ltm_manager
+    """Get holon relationships using HolonFabric.
+    
+    Note: LongTermMemoryManager is deprecated. This tool now uses HolonFabric.
+    """
+    def __init__(self, holon_fabric: Any):
+        self.holon_fabric = holon_fabric
 
     async def execute(self, holon_id: str):
-        return await self.ltm_manager.get_holon_relationships(holon_id)
+        if not self.holon_fabric:
+            raise ValueError("HolonFabric not available")
+        return await self.holon_fabric.graph.get_neighbors(holon_id)
 
     def schema(self):
         return {

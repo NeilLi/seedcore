@@ -28,7 +28,7 @@ class CollaborativeTaskTool:
         self,
         find_knowledge_tool: FindKnowledgeTool,
         mw_manager: Any,
-        ltm_manager: Any,
+        holon_fabric: Any,
         agent_id: str,
         get_energy_slice: callable,
     ):
@@ -38,13 +38,13 @@ class CollaborativeTaskTool:
         Args:
             find_knowledge_tool: FindKnowledgeTool instance for knowledge finding
             mw_manager: MwManager instance for artifact storage
-            ltm_manager: LongTermMemoryManager instance for promotion
+            holon_fabric: HolonFabric instance for promotion (replaces LongTermMemoryManager)
             agent_id: ID of the agent using this tool
             get_energy_slice: Function that returns current energy slice value
         """
         self.find_knowledge_tool = find_knowledge_tool
         self.mw_manager = mw_manager
-        self.mlt_manager = ltm_manager
+        self.holon_fabric = holon_fabric
         self.agent_id = agent_id
         self._get_energy_slice = get_energy_slice
 
@@ -68,11 +68,11 @@ class CollaborativeTaskTool:
             },
         }
 
-    async def _promote_to_mlt(
+    async def _promote_to_holon_fabric(
         self, key: str, obj: Dict[str, Any], compression: bool = True
     ) -> bool:
-        """Promote an object to Mlt by creating a Holon."""
-        if not self.mlt_manager:
+        """Promote an object to HolonFabric by creating a Holon."""
+        if not self.holon_fabric:
             return False
 
         try:
@@ -97,23 +97,26 @@ class CollaborativeTaskTool:
             vec = np.pad(vec, (0, 768 - len(vec)), mode="constant")
             embedding = vec / (np.linalg.norm(vec) + 1e-6)
 
-            # Build the holon dict for the LTM manager
-            holon_data = {
-                "vector": {
-                    "id": key,
-                    "embedding": embedding,
-                    "meta": payload,
-                },
-                "graph": {
-                    "src_uuid": key,
+            # Build the Holon object for HolonFabric
+            from seedcore.models.holon import Holon, HolonType, HolonScope
+            
+            holon = Holon(
+                id=key,
+                type=HolonType.FACT,  # Default type
+                scope=HolonScope.GLOBAL,  # Default scope
+                content=payload,
+                summary=str(payload.get("result_preview", ""))[:200] if payload.get("result_preview") else "",
+                embedding=embedding.tolist(),
+                links=[{
                     "rel": "GENERATED_BY",
-                    "dst_uuid": self.agent_id,
-                },
-            }
+                    "target_id": self.agent_id,
+                }],
+            )
 
-            return await self.mlt_manager.insert_holon_async(holon_data)
+            await self.holon_fabric.insert_holon(holon)
+            return True
         except Exception as e:
-            logger.debug(f"[{self.agent_id}] Mlt promote failed for {key}: {e}")
+            logger.debug(f"[{self.agent_id}] HolonFabric promote failed for {key}: {e}")
             return False
 
     def _mw_put_json_local(self, key: str, obj: Dict[str, Any]) -> bool:
@@ -233,7 +236,7 @@ class CollaborativeTaskTool:
         )
 
         if success and quality >= 0.8:
-            await self._promote_to_mlt(artifact_key, artifact, compression=True)
+            await self._promote_to_holon_fabric(artifact_key, artifact, compression=True)
 
         return result
 

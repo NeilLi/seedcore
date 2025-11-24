@@ -5,12 +5,12 @@ This module implements the energy gradient proxy system for intelligent agent se
 based on the Cognitive Organism Architecture (COA) specifications.
 """
 
-import ray
+import ray  # pyright: ignore[reportMissingImports]
 from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:  # Avoid circular imports at runtime
-    from seedcore.agents.ray_agent import RayAgent  # pragma: no cover
+    from seedcore.agents.persistent_agent import PersistentAgent  # pragma: no cover
 else:
-    RayAgent = Any  # type: ignore
+    PersistentAgent = Any  # type: ignore
 import numpy as np
 import logging
 
@@ -51,7 +51,7 @@ class GlobalClippedOpt:
 
 
 
-def score_agent(agent: RayAgent, task: Dict[str, Any]) -> float:
+def score_agent(agent: PersistentAgent, task: Dict[str, Any]) -> float:
     """
     Scores an agent for a task based on the energy gradient proxy.
     score = w_pair * ΔE_pair + w_hyper * ΔE_hyper - w_explore * ΔH
@@ -97,7 +97,7 @@ def score_agent(agent: RayAgent, task: Dict[str, Any]) -> float:
         return float('inf')  # Worst possible score
 
 
-def select_best_agent(agent_pool: List[RayAgent], task: Dict[str, Any]) -> Tuple[Optional[RayAgent], float]:
+def select_best_agent(agent_pool: List[PersistentAgent], task: Dict[str, Any]) -> Tuple[Optional[PersistentAgent], float]:
     """
     Selects the best agent from a pool by finding the one with the
     minimum energy score (arg-min).
@@ -165,7 +165,7 @@ def select_best_agent(agent_pool: List[RayAgent], task: Dict[str, Any]) -> Tuple
 
 
 def calculate_agent_suitability_score(
-    agent: RayAgent, 
+    agent: PersistentAgent, 
     task_data: Dict[str, Any],
     weights: Dict[str, float]
 ) -> float:
@@ -173,10 +173,6 @@ def calculate_agent_suitability_score(
     Legacy function for backward compatibility.
     Calculates an agent's suitability for a task based on an energy gradient proxy.
     """
-    # Get default weights if not provided
-    w_pair = weights.get('w_pair', 1.0)
-    w_hyper = weights.get('w_hyper', 1.0)
-    w_explore = weights.get('w_explore', 0.2)
     
     try:
         # Get energy proxy from agent
@@ -283,10 +279,10 @@ def estimate_task_complexity(task_data: Dict[str, Any]) -> float:
 
 
 def rank_agents_by_suitability(
-    agents: List[RayAgent],
+    agents: List[PersistentAgent],
     task_data: Dict[str, Any],
     weights: Optional[Dict[str, float]] = None
-) -> List[tuple[RayAgent, float]]:
+) -> List[tuple[PersistentAgent, float]]:
     """
     Ranks agents by their suitability for a task.
     

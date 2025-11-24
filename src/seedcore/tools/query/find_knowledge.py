@@ -23,7 +23,7 @@ class FindKnowledgeTool:
     def __init__(
         self,
         mw_manager: Any,
-        ltm_manager: Any,
+        holon_fabric: Any,
         agent_id: str,
     ):
         """
@@ -31,11 +31,11 @@ class FindKnowledgeTool:
 
         Args:
             mw_manager: MwManager instance for working memory
-            ltm_manager: LongTermMemoryManager instance for long-term memory
+            holon_fabric: HolonFabric instance for long-term memory (replaces LongTermMemoryManager)
             agent_id: ID of the agent using this tool
         """
         self.mw_manager = mw_manager
-        self.mlt_manager = ltm_manager
+        self.holon_fabric = holon_fabric
         self.agent_id = agent_id
 
     @property
@@ -71,7 +71,7 @@ class FindKnowledgeTool:
         logger.info(f"[{self.agent_id}] 🔍 Searching for '{fact_id}'...")
 
         # Check if memory managers are available
-        if not self.mw_manager or not self.mlt_manager:
+        if not self.mw_manager or not self.holon_fabric:
             logger.error(f"[{self.agent_id}] ❌ Memory managers not available")
             return None
 
@@ -139,14 +139,31 @@ class FindKnowledgeTool:
             except Exception as e:
                 logger.error(f"[{self.agent_id}] ❌ Error querying Mw: {e}")
 
-            # 2. On a miss, escalate to Long-Term Memory (Mlt)
+            # 2. On a miss, escalate to HolonFabric (long-term memory)
             logger.info(
-                f"[{self.agent_id}] ⚠️ '{fact_id}' not in Mw (cache miss). Escalating to Mlt..."
+                f"[{self.agent_id}] ⚠️ '{fact_id}' not in Mw (cache miss). Escalating to HolonFabric..."
             )
-            long_term_data = await self.mlt_manager.query_holon_by_id_async(fact_id)
+            # Query by ID using graph store
+            try:
+                neighbors = await self.holon_fabric.graph.get_neighbors(fact_id, limit=1)
+                if neighbors:
+                    node_data = neighbors[0] if isinstance(neighbors, list) else neighbors
+                    props = node_data.get("props", {})
+                    long_term_data = {
+                        "id": fact_id,
+                        "type": props.get("type", "fact"),
+                        "scope": props.get("scope", "global"),
+                        "summary": node_data.get("summary", ""),
+                        "content": props,
+                    }
+                else:
+                    long_term_data = None
+            except Exception as e:
+                logger.error(f"[{self.agent_id}] ❌ Error querying HolonFabric: {e}")
+                long_term_data = None
 
             if long_term_data:
-                logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in Mlt.")
+                logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in HolonFabric.")
 
                 # 3. Cache the retrieved data back into Mw
                 logger.info(f"[{self.agent_id}] 💾 Caching '{fact_id}' back to Mw...")
@@ -161,7 +178,7 @@ class FindKnowledgeTool:
             else:
                 # On total miss: write negative cache
                 logger.info(
-                    f"[{self.agent_id}] ❌ '{fact_id}' not found in Mlt. Setting negative cache."
+                    f"[{self.agent_id}] ❌ '{fact_id}' not found in HolonFabric. Setting negative cache."
                 )
                 try:
                     self.mw_manager.set_negative_cache(
@@ -174,7 +191,7 @@ class FindKnowledgeTool:
                 return None
 
         except Exception as e:
-            logger.error(f"[{self.agent_id}] ❌ Error querying Mlt: {e}")
+            logger.error(f"[{self.agent_id}] ❌ Error querying HolonFabric: {e}")
             return None
         finally:
             # Always clear in-flight sentinel

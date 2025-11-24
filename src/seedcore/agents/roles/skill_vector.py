@@ -20,7 +20,8 @@ from typing import Dict, Optional, Any
 class SkillStoreProtocol:
     """
     Minimal async persistence protocol for skill vectors.
-    Implementations can wrap your LongTermMemoryManager or any KV store.
+    Implementations can wrap HolonFabric (via HolonFabricSkillStoreAdapter) or any KV store.
+    LongTermMemoryManager has been removed and replaced with HolonFabric.
     """
     async def load(self, agent_id: str) -> Optional[Dict[str, float]]:
         raise NotImplementedError

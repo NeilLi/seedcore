@@ -12,16 +12,16 @@ The drift detector is designed to run under 50ms for typical feature sizes.
 import os
 import time
 import logging
-import numpy as np
+import numpy as np  # pyright: ignore[reportMissingImports]
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from sentence_transformers import SentenceTransformer
+import torch  # pyright: ignore[reportMissingImports]
+import torch.nn as nn  # pyright: ignore[reportMissingImports]
+import torch.nn.functional as F  # pyright: ignore[reportMissingImports]
+from sentence_transformers import SentenceTransformer  # pyright: ignore[reportMissingImports]
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer  # pyright: ignore[reportMissingImports]
 import re
 import hashlib
 import json

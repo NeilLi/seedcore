@@ -5,7 +5,7 @@ This module provides enhanced cognitive reasoning capabilities for agents using 
 with OCPS integration, RRF fusion, MMR diversity, dynamic token budgeting, and
 comprehensive fact schema with provenance and trust.
 
-Key Enhancements:
+Key Features:
 - Enhanced Fact schema with provenance, trust, and policy flags
 - RRF fusion and MMR diversification for better retrieval
 - Dynamic token budgeting based on OCPS signals
@@ -13,8 +13,33 @@ Key Enhancements:
 - Post-condition checks for DSPy outputs
 - OCPS-informed budgeting and escalation hints (no routing)
 - Fact sanitization and conflict detection
+- HGNN (Heterogeneous Graph Neural Network) reasoning support
+- Graph operations: embedding, RAG queries, node synchronization
+- Fact operations: embedding, querying, search, and storage
+- Resource management: artifacts, capabilities, memory cells
+- Agent layer management: models, policies, services, skills
+- Long-term memory via HolonFabric + CognitiveMemoryBridge (per-agent memory bridges)
+- MwManager integration for episodic/working memory operations
+- Pre-execution hydration and post-execution memory consolidation
+- Server-side hydration support for graph repositories
 
-Note: Coordinator decides fast vs escalate; Organism resolves/executes.
+Memory Architecture:
+- Per-agent memory bridges: Each agent gets its own CognitiveMemoryBridge instance
+  for scoped retrieval and memory writes (HolonFabric + MwManager)
+- Global/coordinator mode: Requests without agent_id skip memory bridge operations
+  (no memory writes, no scoped retrieval)
+- Personal/agent mode: Requests with agent_id use per-agent memory bridges for:
+  - Pre-execution hydration: HolonFabric retrieval + episodic memory + token budgeting
+  - Post-execution consolidation: Mw episodic writes + Holon promotion + MemoryEvent creation
+- LongTermMemoryManager has been removed and replaced with HolonFabric + CognitiveMemoryBridge
+
+Architecture Notes:
+- Coordinator decides fast vs escalate; Organism resolves/executes
+- CognitiveCore follows data-driven flow based on input availability
+- Supports skip_retrieval mode for fast/chat paths
+- HGNN context can be provided directly without RAG pipeline
+- Memory bridge initialization is lazy (on-demand per agent)
+- ContextBroker is deprecated in favor of CognitiveMemoryBridge + HolonFabricRetrieval
 """
 from __future__ import annotations
 
@@ -26,13 +51,15 @@ import os
 import re
 import threading
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 import dspy  # pyright: ignore[reportMissingImports]
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
+from seedcore.memory.holon_fabric import HolonFabric
+from seedcore.models.holon import Holon, HolonScope
 from ..coordinator.utils import normalize_task_payloads
 
 try:
@@ -64,6 +91,7 @@ from .signatures import (
     ProblemSolvingSignature,
     TaskPlanningSignature,
 )
+from .memory_bridge import CognitiveMemoryBridge
 
 setup_logging("seedcore.CognitiveCore")
 logger = ensure_serve_logger("seedcore.CognitiveCore", level="DEBUG")
@@ -76,7 +104,7 @@ class CachedResultFound(Exception):
         self.cached_result = cached_result
         super().__init__("Cached result found, aborting pipeline.")
 
-# Optional Mw/Mlt dependencies
+# Optional Mw dependencies (episodic memory)
 try:
     from src.seedcore.memory.mw_manager import MwManager
     _MW_AVAILABLE = True
@@ -86,21 +114,72 @@ except Exception:
 
 MW_ENABLED = os.getenv("MW_ENABLED", "1") in {"1", "true", "True"}
 
-try:
-    from src.seedcore.memory.long_term_memory import LongTermMemoryManager
-    _MLT_AVAILABLE = True
-except Exception:
-    LongTermMemoryManager = None  # type: ignore
-    _MLT_AVAILABLE = False
-
-MLT_ENABLED = os.getenv("MLT_ENABLED", "1") in {"1", "true", "True"}
-
 # Database & Repo imports (for Server-Side Hydration)
 try:
     from ..graph.task_metadata_repository import TaskMetadataRepository
 except ImportError:
     TaskMetadataRepository = None
 
+# Holon Client import (for Memory Bridge)
+try:
+    from ..memory.holon_client import HolonClient
+except ImportError:
+    HolonClient = None  # type: ignore
+
+class DefaultScopeResolver:
+    """Default implementation of ScopeResolver protocol."""
+    def resolve(self, *, agent_id: str, organ_id: Optional[str], task_params: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+        """Return (scopes, entity_ids). Scopes are Holon scopes like ["GLOBAL", "ORGAN", "ENTITY"]."""
+        scopes = ["GLOBAL"]
+
+        if organ_id:
+            scopes.append("ORGAN")
+
+        # ENTITY scopes if user passes entity_ids in params
+        entity_ids = task_params.get("entity_ids") or []
+        if not isinstance(entity_ids, list):
+            entity_ids = [entity_ids] if entity_ids else []
+        if entity_ids:
+            scopes.append("ENTITY")
+
+        return scopes, entity_ids
+
+class HolonFabricRetrieval:
+    def __init__(self, fabric: HolonFabric, embedder):
+        self.fabric = fabric
+        self.embedder = embedder
+
+    async def query_context(
+        self,
+        *,
+        text: str,
+        scopes: Sequence[str],
+        organ_id: Optional[str],
+        entity_ids: Sequence[str],
+        limit: int,
+        agent_id: Optional[str] = None,
+        ocps: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+
+        vec = self.embedder.embed(text)
+        holons = await self.fabric.query_context(
+            query_vec=vec,
+            scopes=[HolonScope(s) for s in scopes],
+            organ_id=organ_id,
+            entity_ids=list(entity_ids),
+            limit=limit,
+        )
+
+        return [self._holon_to_dict(h) for h in holons]
+
+    def _holon_to_dict(self, h: Holon):
+        return {
+            "id": h.id,
+            "summary": h.summary,
+            "content": h.content,
+            "confidence": h.confidence,
+            "scope": h.scope.value,
+        }
 
 # =============================================================================
 # Cognitive Service
@@ -135,11 +214,9 @@ class CognitiveCore(dspy.Module):
         self._state_lock = threading.RLock()
         self._last_sufficiency: Dict[str, Any] = {}
         
-        # Initialize Mw/Mlt support first
+        # Initialize Mw support (episodic memory)
         self._mw_enabled = bool(MW_ENABLED and _MW_AVAILABLE)
         self._mw_by_agent: Dict[str, MwManager] = {} if self._mw_enabled else {}
-        self._mlt_enabled = bool(MLT_ENABLED and _MLT_AVAILABLE)
-        self._mlt = LongTermMemoryManager() if self._mlt_enabled else None
         self._sufficiency_thresholds = {
             "coverage": 0.6,
             "diversity": 0.5,
@@ -162,7 +239,10 @@ class CognitiveCore(dspy.Module):
         self._synopsis_embedder_failed = False
         self._synopsis_embedder_lock = threading.Lock()
         
-        # Create ContextBroker with Mw/Mlt search functions if none provided
+        # Create ContextBroker with Mw search functions if none provided
+        # NOTE: ContextBroker is deprecated in favor of CognitiveMemoryBridge + HolonFabricRetrieval
+        # Kept for backward compatibility with legacy handlers that may still use it
+        # Long-term memory uses HolonFabric via CognitiveMemoryBridge
         if context_broker is None:
             # Create lambda functions that will be bound to agent_id at call time
             def text_fn(query, k):
@@ -170,6 +250,7 @@ class CognitiveCore(dspy.Module):
             def vec_fn(query, k):
                 return self._mw_first_vector_search("", query, k)  # Will be overridden in process()
             self.context_broker = ContextBroker(text_fn, vec_fn, token_budget=1500, ocps_client=self.ocps_client)
+            logger.debug("ContextBroker initialized (legacy mode - consider migrating to CognitiveMemoryBridge)")
         else:
             self.context_broker = context_broker
         
@@ -254,29 +335,199 @@ class CognitiveCore(dspy.Module):
         
         logger.info(f"Initialized CognitiveCore with {self.llm_provider} and model {self.model}")
 
-        # Log Mw/Mlt integration status
+        # Log Mw integration status
         if self._mw_enabled:
             logger.info("MwManager integration: ENABLED")
         else:
             logger.info("MwManager integration: DISABLED (missing module or env)")
 
-        if self._mlt_enabled:
-            logger.info("LongTermMemoryManager integration: ENABLED")
+        # Log synopsis embedding status
+        synopsis_enabled = (
+            self._synopsis_embedding_backend in {"nim", "nim-retrieval", "sentence-transformer"}
+            and (self._synopsis_embedding_base_url or self._synopsis_embedding_backend == "sentence-transformer")
+        )
+        if synopsis_enabled:
+            logger.info(
+                f"Synopsis embedding: ENABLED (backend={self._synopsis_embedding_backend}, "
+                f"model={self._synopsis_embedding_model})"
+            )
         else:
-            logger.info("LongTermMemoryManager integration: DISABLED (missing module or env)")
+            logger.info(
+                "Synopsis embedding: DISABLED (backend not configured or dependencies unavailable)"
+            )
+        
+        # Memory bridges (per-agent) - supports multi-agent and global/coordinator modes
+        # Global/coordinator requests (no agent_id) don't use memory bridges
+        # Personal/agent requests get per-agent bridges for scoped retrieval and memory writes
+        self.memory_bridges: Dict[str, CognitiveMemoryBridge] = {}
+        
+        # Per-agent memory components (for future multi-agent memory isolation)
+        # Currently uses shared instances with fallback to defaults, but prepared for per-agent injection
+        self.scope_resolvers: Dict[str, Any] = {}  # Dict[str, ScopeResolver] - per-agent scope resolution
+        self.cognitive_retrievals: Dict[str, Any] = {}  # Dict[str, CognitiveRetrieval] - per-agent retrieval
+        
+        # Shared memory components (used by all agents, can be overridden per-agent)
+        # These are set externally or lazily initialized
+        self.holon_client: Optional[Any] = None  # HolonClient instance
+        self.holon_fabric: Optional[Any] = None  # HolonFabric instance (for HolonFabricRetrieval)
+        self.scope_resolver: Optional[Any] = None  # Default ScopeResolver (fallback)
+        self.cognitive_retrieval: Optional[Any] = None  # Default CognitiveRetrieval (fallback)
+
+    def set_memory_bridge(self, memory_bridge: CognitiveMemoryBridge) -> None:
+        """Set the memory bridge instance for a specific agent.
+        
+        This should be called when all required dependencies are available:
+        - agent_id, organ_id (from context)
+        - MwManager (from _mw_by_agent)
+        - HolonClient, ScopeResolver, CognitiveRetrieval (provided externally)
+        """
+        agent_id = memory_bridge.agent_id
+        if agent_id in self.memory_bridges:
+            logger.warning(f"Overwriting existing memory bridge for agent_id={agent_id}")
+        self.memory_bridges[agent_id] = memory_bridge
+        logger.info(
+            f"Memory bridge configured for agent_id={agent_id}, organ_id={memory_bridge.organ_id}"
+        )
+    
+    def set_scope_resolver(self, agent_id: str, scope_resolver: Any) -> None:
+        """Set a per-agent scope resolver.
+        
+        If not set, will fall back to shared scope_resolver or DefaultScopeResolver.
+        """
+        self.scope_resolvers[agent_id] = scope_resolver
+        logger.debug(f"Scope resolver configured for agent_id={agent_id}")
+    
+    def set_cognitive_retrieval(self, agent_id: str, cognitive_retrieval: Any) -> None:
+        """Set a per-agent cognitive retrieval instance.
+        
+        If not set, will fall back to shared cognitive_retrieval or attempt to create HolonFabricRetrieval.
+        """
+        self.cognitive_retrievals[agent_id] = cognitive_retrieval
+        logger.debug(f"Cognitive retrieval configured for agent_id={agent_id}")
+
+    def _get_memory_bridge(self, agent_id: Optional[str]) -> Optional[CognitiveMemoryBridge]:
+        """Get the memory bridge for a specific agent.
+        
+        Returns None for global/coordinator requests (no agent_id) or if bridge doesn't exist.
+        """
+        if not agent_id:
+            return None
+        return self.memory_bridges.get(agent_id)
+
+
+    def _try_initialize_memory_bridge(self, agent_id: Optional[str], organ_id: Optional[str] = None) -> bool:
+        """Attempt to lazily initialize a per-agent memory bridge.
+        
+        Returns True if initialization was successful, False otherwise.
+        Global/coordinator requests (no agent_id) return False immediately.
+        """
+        # 0) Global / coordinator requests: skip bridge entirely
+        if not agent_id:
+            logger.debug("Memory bridge initialization skipped: no agent_id (global/coordinator request).")
+            return False
+
+        # Already initialized for this agent
+        if agent_id in self.memory_bridges:
+            return True
+
+        # 1) MwManager must be enabled and available for this agent
+        if not getattr(self, "_mw_enabled", False):
+            logger.debug("Memory bridge initialization skipped: MwManager not enabled")
+            return False
+
+        mw = self._mw_by_agent.get(agent_id) if hasattr(self, "_mw_by_agent") else None
+        if mw is None:
+            logger.debug(
+                "Memory bridge initialization skipped: "
+                f"No MwManager instance for agent_id={agent_id}"
+            )
+            return False
+
+        # 2) External dependencies: HolonClient, ScopeResolver, CognitiveRetrieval
+        # Note: HolonClient from memory.holon_client implements the Protocol from memory_bridge
+        
+        # HolonClient: shared across all agents (set externally)
+        holon_client = self.holon_client
+        
+        # ScopeResolver: per-agent if available, otherwise shared, otherwise default
+        scope_resolver = self.scope_resolvers.get(agent_id) or self.scope_resolver
+        if scope_resolver is None:
+            scope_resolver = DefaultScopeResolver()
+            logger.debug(f"Using DefaultScopeResolver for agent_id={agent_id}")
+        
+        # CognitiveRetrieval: per-agent if available, otherwise shared, otherwise try to create
+        cognitive_retrieval = self.cognitive_retrievals.get(agent_id) or self.cognitive_retrieval
+        if cognitive_retrieval is None:
+            holon_fabric = self.holon_fabric
+            embedder = self._ensure_synopsis_embedder()
+            
+            if holon_fabric is not None and embedder is not None:
+                cognitive_retrieval = HolonFabricRetrieval(fabric=holon_fabric, embedder=embedder)
+                logger.debug(f"Using HolonFabricRetrieval for agent_id={agent_id}")
+            else:
+                missing_components = []
+                if holon_fabric is None:
+                    missing_components.append("holon_fabric")
+                if embedder is None:
+                    missing_components.append("embedder (synopsis_embedder)")
+                logger.debug(
+                    f"Cannot create HolonFabricRetrieval for agent_id={agent_id}: missing {', '.join(missing_components)}"
+                )
+
+        missing = []
+        if holon_client is None:
+            if HolonClient is None:
+                missing.append("HolonClient (module not available - install from memory.holon_client)")
+            else:
+                missing.append("HolonClient (self.holon_client - set an instance of memory.holon_client.HolonClient)")
+        if cognitive_retrieval is None:
+            missing.append("CognitiveRetrieval (self.cognitive_retrieval or set self.holon_fabric + embedder for HolonFabricRetrieval)")
+
+        if missing:
+            logger.debug(
+                "Memory bridge initialization skipped: missing external dependencies: "
+                + ", ".join(missing)
+                + ". Use set_memory_bridge() or set these attributes on CognitiveCore."
+            )
+            return False
+
+        # 3) Construct the CognitiveMemoryBridge for this agent
+        try:
+            bridge_logger = logger.getChild("memory_bridge")
+            memory_bridge = CognitiveMemoryBridge(
+                agent_id=agent_id,
+                organ_id=organ_id,
+                mw=mw,
+                holon=holon_client,
+                scope_resolver=scope_resolver,
+                retrieval=cognitive_retrieval,
+                logger=bridge_logger,
+            )
+            self.memory_bridges[agent_id] = memory_bridge
+            logger.info(
+                "Lazily initialized CognitiveMemoryBridge for "
+                f"agent_id={agent_id}, organ_id={organ_id}"
+            )
+            return True
+        except Exception as e:
+            logger.exception(f"Memory bridge initialization failed: {e}")
+            return False
+
 
     def process(self, context: CognitiveContext) -> Dict[str, Any]:
         """
         Executes the task based on Data Availability (Tactics), not DecisionKind (Strategy).
-        
+
         The Worker follows orders from input data:
-        - skip_retrieval=True: Skip RAG (Fast/Chat mode)
-        - hgnn_embedding present: Use HGNN context
-        - Otherwise: Run RAG pipeline
+        - If HGNN context is provided: use HGNN path (vector -> graph -> LLM).
+        - Otherwise: delegate PRE-EXECUTION hydration to CognitiveMemoryBridge
+        (Holon Fabric retrieval + episodic memory + token budgeting),
+        optionally skipping retrieval if requested.
         """
         task_id = self._extract_task_id(context.input_data)
         logger.debug(
-            f"CognitiveCore.process: Routing cog_type={context.cog_type.value} agent_id={context.agent_id} task_id={task_id or 'n/a'}"
+            f"CognitiveCore.process: Routing cog_type={context.cog_type.value} "
+            f"agent_id={context.agent_id} task_id={task_id or 'n/a'}"
         )
 
         input_data = context.input_data or {}
@@ -285,39 +536,163 @@ class CognitiveCore(dspy.Module):
         )
 
         try:
-            # 1. Cache Check (handled in _run_rag_pipeline or _run_handler_and_postprocess)
-            # 2. Knowledge Context Construction (Data-Driven Flow)
-            
-            # Check A: Do we have HGNN context?
-            params = input_data.get("params", {})
+            # ------------------------------------------------------------------
+            # 1. HGNN fast-path (unchanged)
+            # ------------------------------------------------------------------
+            # Normalize params safely (Issue 1 fix)
+            params = input_data.get("params") or {}
             hgnn_section = params.get("hgnn", {})
-            hgnn_embedding = hgnn_section.get("hgnn_embedding") or input_data.get("hgnn_embedding")
-            
-            # Check B: Did the caller request to skip RAG?
-            # (The Orchestrator sets this based on DecisionKind=FAST or Chat Mode)
+            hgnn_embedding = (
+                hgnn_section.get("hgnn_embedding")
+                or input_data.get("hgnn_embedding")
+            )
+
             skip_retrieval = input_data.get("skip_retrieval", False)
 
             if hgnn_embedding:
                 logger.debug(f"Task {task_id}: Using provided HGNN context for deep reasoning.")
                 # Run the HGNN pipeline: Vector -> Graph -> LLM
                 return self._run_hgnn_pipeline(context, hgnn_embedding)
+
+            # ------------------------------------------------------------------
+            # 2. PRE-EXECUTION hydration via CognitiveMemoryBridge (Holon Fabric)
+            # ------------------------------------------------------------------
+            # Detect personal vs global mode
+            is_personal = bool(context.agent_id)
             
-            elif skip_retrieval:
-                logger.debug(f"Task {task_id}: Retrieval skipped by request (Fast/Chat).")
+            # Attempt lazy bridge initialization only for personal mode
+            memory_bridge = None
+            if is_personal:
+                organ_id = input_data.get("organ_id") or params.get("organ_id")
+                self._try_initialize_memory_bridge(context.agent_id, organ_id)
+                memory_bridge = self._get_memory_bridge(context.agent_id)
+            else:
+                logger.debug("Global/coordinator request detected: skipping memory bridge init.")
+            
+            # If still no bridge → fallback to empty or global-only hydration
+            if not memory_bridge:
+                logger.debug(
+                    f"CognitiveCore.memory_bridge is not configured for agent {context.agent_id}. "
+                    "Proceeding with empty or global-only hydration context."
+                )
+
+                # Minimal context block to keep downstream DSPy safe
+                params.setdefault("context", {})
+                params["context"].update({
+                    "holons": [],
+                    "chat_history": [],
+                    "token_budget": 0,
+                })
+                input_data["params"] = params
+
+                # Use empty knowledge_context to proceed with handler
+                # For global mode: no memory writes later, no scoped retrieval
+                # For personal mode without bridge: same behavior (graceful degradation)
                 knowledge_context = {
                     "facts": [],
-                    "summary": "Retrieval skipped.",
-                    "sufficiency": {},
+                    "holons": [],
+                    "chat_history": [],
+                    "token_budget": 0,
+                    "summary": "Memory bridge unavailable; retrieval skipped.",
+                    "sufficiency": {
+                        "token_budget": 0,
+                        "holon_count": 0,
+                        "chat_turns": 0,
+                    }
                 }
-                
-            else:
-                # Default: Run RAG
-                logger.debug(f"Task {task_id}: Executing RAG pipeline.")
-                knowledge_context = self._run_rag_pipeline(context, cache_key, task_id)
 
-            # 3. Execution
+            else:
+                # Normal hydration path with MemoryBridge (personal mode)
+                # Build task envelope for MemoryBridge
+                base_task: Dict[str, Any] = {
+                    "id": task_id,
+                    "type": context.cog_type.value,
+                    "description": input_data.get("description") or "",
+                    "goal": input_data.get("goal") or "",
+                    "params": dict(params),
+                }
+
+                ocps = input_data.get("ocps") or None
+
+                try:
+                    # Use _run_coro_sync instead of asyncio.run() to avoid nested event loop issues
+                    hydrated_task = self._run_coro_sync(
+                        memory_bridge.hydrate_task(
+                            task=base_task,
+                            ocps=ocps,
+                            skip_retrieval=skip_retrieval,
+                        ),
+                        timeout=10.0
+                    )
+                    
+                    # Update input_data with hydrated task (merge back)
+                    input_data.update(hydrated_task)
+                    
+                    # Extract knowledge_context from hydrated params
+                    ctx_section = (
+                        hydrated_task
+                        .get("params", {})
+                        .get("context", {})
+                    )
+                    
+                    holons = ctx_section.get("holons", [])
+                    chat_history = ctx_section.get("chat_history", [])
+                    token_budget = ctx_section.get("token_budget", 0)
+
+                    # Build knowledge_context compatible with existing handler
+                    # For backward compatibility, we present holons as "facts" to the handler.
+                    facts = [self._holon_to_fact(h) for h in holons]
+
+                    knowledge_context = {
+                        "facts": facts,
+                        "holons": holons,
+                        "chat_history": chat_history,
+                        "token_budget": token_budget,
+                        "summary": "Hydrated via Holon Memory Fabric",
+                        "sufficiency": {
+                            "token_budget": token_budget,
+                            "holon_count": len(holons),
+                            "chat_turns": len(chat_history),
+                        },
+                        "bridge_context": ctx_section,  # Full bridge context for advanced planners
+                        "memory_context": ctx_section,  # Standardized key for DSPy compatibility
+                    }
+
+                except Exception as e:
+                    logger.exception(f"Memory bridge hydration failed: {e}")
+                    # Safe fallback
+                    params.setdefault("context", {})
+                    params["context"].update({
+                        "holons": [],
+                        "chat_history": [],
+                        "token_budget": 0,
+                    })
+                    input_data["params"] = params
+                    
+                    knowledge_context = {
+                        "facts": [],
+                        "holons": [],
+                        "chat_history": [],
+                        "token_budget": 0,
+                        "summary": "Hydration failed",
+                        "sufficiency": {
+                            "token_budget": 0,
+                            "holon_count": 0,
+                            "chat_turns": 0,
+                        },
+                    }
+
+            # ------------------------------------------------------------------
+            # 5. Execution: run handler + POST-EXECUTION consolidation
+            # ------------------------------------------------------------------
+            # _run_handler_and_postprocess is assumed to:
+            #   - invoke DSPy / LLM pipeline
+            #   - possibly be extended to call memory_bridge.process_post_execution(...)
             return self._run_handler_and_postprocess(
-                context, knowledge_context, cache_key, task_id
+                context,
+                knowledge_context,
+                cache_key,
+                task_id,
             )
 
         except CachedResultFound as crf:
@@ -326,166 +701,7 @@ class CognitiveCore(dspy.Module):
             logger.exception(f"Processing error: {e}")
             return create_error_result(str(e), "PROCESSING_ERROR").model_dump()
 
-    def _run_rag_pipeline(
-        self,
-        context: CognitiveContext,
-        cache_key: str,
-        task_id: Optional[str],
-    ) -> Dict[str, Any]:
-        """Execute the retrieval-and-budgeting pipeline, returning a knowledge context."""
-        
-        # --- NEW: Server-Side Hydration ---
-        # If we have an ID but no parameters, pull from DB
-        if self.graph_repo and self.session_maker and task_id:
-            # Basic check: is the context 'thin'?
-            if not context.input_data.get("params") and not context.input_data.get("description"):
-                try:
-                    asyncio.run(self._hydrate_context(task_id, context))
-                except Exception as e:
-                    logger.warning(f"Hydration failed for {task_id}: {e}")
-        
-        cached_result = self._get_cached_result(
-            cache_key,
-            context.cog_type,
-            agent_id=context.agent_id,
-            task_id=task_id,
-        )
-        if cached_result:
-            logger.info(
-                f"Cache hit for {context.cog_type.value} task task_id={task_id or 'n/a'}"
-            )
-            raise CachedResultFound(cached_result)
-
-        if not self.context_broker:
-            knowledge_context = {
-                "facts": [],
-                "summary": "No context broker available",
-                "sufficiency": {},
-            }
-            if self._mw_enabled:
-                mw = self._mw(context.agent_id)
-                if mw:
-                    try:
-                        query = self._build_query(context)
-                        query_hash = hashlib.md5(query.encode()).hexdigest()[:12]
-                        mw.set_global_item_typed("_neg", "query", query_hash, "1", ttl_s=60)
-                    except Exception:
-                        pass
-            return knowledge_context
-
-        temp_broker = self._bind_broker(context.agent_id)
-
-        query = self._build_query(context)
-        retrieve_start = time.time()
-        facts, sufficiency = temp_broker.retrieve(query, k=20, cog_type=context.cog_type)
-        retrieve_end = time.time()
-
-        budget_start = time.time()
-        budgeted_facts, summary, final_sufficiency = temp_broker.budget(facts, context.cog_type)
-        budget_end = time.time()
-
-        self._update_last_sufficiency(final_sufficiency.__dict__)
-
-        mw = self._mw(context.agent_id) if self._mw_enabled else None
-        if mw:
-            for f in budgeted_facts[:10]:
-                try:
-                    mw.set_global_item_typed("fact", "global", f.id, _fact_to_context_dict(f), ttl_s=1800)
-                    neg_key = f"_neg:fact:global:{f.id}"
-                    try:
-                        if hasattr(mw, "del_global_key_sync"):
-                            mw.del_global_key_sync(neg_key)
-                        else:
-                            mw.set_global_item(neg_key, {"expired": True}, ttl_s=1)
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-
-        if self._mlt:
-            try:
-                if final_sufficiency.coverage > 0.7 and final_sufficiency.trust_score > 0.6:
-                    synopsis = {
-                        "agent_id": context.agent_id,
-                        "cog_type": context.cog_type.value,
-                        "summary": summary,
-                        "facts": [
-                            {"id": f.id, "source": f.source, "score": f.score, "trust": f.trust}
-                            for f in budgeted_facts[:5]
-                        ],
-                        "ts": time.time(),
-                    }
-                    synopsis_id = f"cc:syn:{context.cog_type.value}:{int(time.time())}"
-                    embedding = self._generate_synopsis_embedding(synopsis)
-                    if embedding is None:
-                        logger.debug(
-                            "Skipping synopsis holon persistence because no embedding backend is available."
-                        )
-                    else:
-                        holon_data = {
-                            "vector": {
-                                "id": synopsis_id,
-                                "embedding": embedding.tolist(),
-                                "meta": synopsis,
-                            },
-                            "graph": {
-                                "src_uuid": synopsis_id,
-                                "rel": "GENERATED_BY",
-                                "dst_uuid": context.agent_id,
-                            },
-                        }
-
-                        try:
-                            self._run_coro_sync(self._mlt.insert_holon_async(holon_data), timeout=5.0)
-                        except Exception:
-                            logger.debug("Holon persistence failed; continuing without synopsis cache.", exc_info=True)
-
-                    if mw:
-                        try:
-                            mw.set_global_item_typed(
-                                "synopsis",
-                                "global",
-                                f"{context.cog_type.value}:{context.agent_id}",
-                                synopsis,
-                                ttl_s=3600,
-                            )
-                        except Exception:
-                            logger.debug("Failed to cache synopsis in Mw; continuing.", exc_info=True)
-            except Exception as exc:  # pragma: no cover - advisory logging only
-                logger.debug(f"Failed to store synopsis in Mlt: {exc}")
-
-        knowledge_context = self._build_knowledge_context(budgeted_facts, summary, final_sufficiency)
-        knowledge_context["sufficiency"] = {
-            **final_sufficiency.__dict__,
-            "_thresholds": dict(self._sufficiency_thresholds),
-        }
-        knowledge_context["_planner_timings"] = {
-            "retrieve_ms": int((retrieve_end - retrieve_start) * 1000),
-            "budget_ms": int((budget_end - budget_start) * 1000),
-            "_budget_end_time": budget_end,
-        }
-
-        return knowledge_context
-
-    async def _hydrate_context(self, task_id: str, context: CognitiveContext):
-        """Pull task data from DB into the context object."""
-        if not self.session_maker or not self.graph_repo:
-            return
-            
-        async with self.session_maker() as session:
-            async with session.begin():
-                data = await self.graph_repo.get_task_context(session, task_id)
-                if data:
-                    logger.info(f"💧 Hydrated task {task_id}")
-                    # Merge non-destructively
-                    for k, v in data.items():
-                        if k not in context.input_data or not context.input_data[k]:
-                            context.input_data[k] = v
-                    # Ensure params structure exists
-                    if "params" in data and isinstance(data["params"], dict):
-                        if "params" not in context.input_data:
-                            context.input_data["params"] = {}
-                        context.input_data["params"].update(data["params"])
+    
 
     def _run_hgnn_pipeline(self, context: CognitiveContext, embedding: List[float]) -> Dict[str, Any]:
         """
@@ -785,6 +1001,64 @@ class CognitiveCore(dspy.Module):
         if not is_valid:
             logger.warning(f"Post-condition violations: {violations}")
 
+        # 🔥 POST-EXECUTION MEMORY CONSOLIDATION
+        # Memory Bridge writes episodic memory (Mw), creates MemoryEvent, and promotes to HolonFabric
+        # Only run for personal/agent requests (not global/coordinator)
+        is_personal = bool(context.agent_id)
+        if is_personal:
+            memory_bridge = self._get_memory_bridge(context.agent_id)
+        else:
+            memory_bridge = None
+        
+        if memory_bridge:
+            try:
+                # Extract ocps from context input_data
+                ocps = context.input_data.get("ocps") if context.input_data else None
+                
+                # Build task dict for memory bridge (matches what was used in hydration)
+                # Extract task_id consistently (Issue 4 fix)
+                task_id_for_memory = (
+                    self._extract_task_id(context.input_data)
+                    or payload.get("task_id")
+                    or (context.input_data.get("task_id") if context.input_data else None)
+                    or f"ad-hoc:{int(time.time() * 1000)}"
+                )
+                
+                task_dict: Dict[str, Any] = {
+                    "id": task_id_for_memory,
+                    "type": context.cog_type.value,
+                    "description": context.input_data.get("description", "") if context.input_data else "",
+                    "goal": context.input_data.get("goal", "") if context.input_data else "",
+                    "params": context.input_data.get("params", {}) if context.input_data else {},
+                }
+                
+                # Call memory bridge post-execution consolidation
+                memory_event = self._run_coro_sync(
+                    memory_bridge.process_post_execution(
+                        task=task_dict,
+                        result=payload,
+                        ocps=ocps,
+                    ),
+                    timeout=5.0
+                )
+                
+                # Store memory event ID in payload metadata for telemetry
+                payload.setdefault("meta", {})["memory_event_id"] = memory_event.id
+                logger.debug(
+                    f"Memory bridge post-execution completed: memory_event_id={memory_event.id}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Memory bridge post-execution failed: {e}",
+                    exc_info=True
+                )
+                # Continue execution even if memory bridge fails
+        elif is_personal:
+            # Personal request but no bridge available - log but don't fail
+            logger.debug(
+                f"Memory bridge post-execution skipped: no bridge for agent_id={context.agent_id}"
+            )
+
         return payload, suff_dict, violations
 
     def _package_result(
@@ -842,6 +1116,28 @@ class CognitiveCore(dspy.Module):
         ]
 
     # ------------------------ Helper Methods ------------------------
+    def _holon_to_fact(self, h: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert a Holon dict to a Fact-like dict for backward compatibility with handlers.
+        
+        HolonFabric holons have a different structure than RAG facts, so we normalize them
+        to match the expected fact schema used by DSPy handlers.
+        
+        Args:
+            h: Holon dict from HolonFabric with keys: id, summary, content, confidence, scope, etc.
+            
+        Returns:
+            Fact-like dict with normalized structure
+        """
+        return {
+            "id": h.get("id"),
+            "source": "holon",
+            "score": h.get("confidence", 1.0),
+            "trust": h.get("trust_score", h.get("confidence", 0.7)),
+            "summary": h.get("summary", ""),
+            "content": h.get("content", {}),
+            "scope": h.get("scope"),  # GLOBAL, ORGAN, ENTITY
+        }
+    
     def _generate_cache_key(self, cog_type: CognitiveType, agent_id: str, input_data: Dict[str, Any]) -> str:
         """Generate hardened cache key with provider, model, and schema version."""
         stable_hash = self._stable_hash(cog_type, agent_id, input_data)
@@ -1459,16 +1755,9 @@ class CognitiveCore(dspy.Module):
         if not mw:
             return []
         # MwManager doesn't have search_text method - return empty for now
-        # Text search would need to be implemented via Mlt or external search service
+        # Text search should use CognitiveMemoryBridge + HolonFabricRetrieval instead
         return []
 
-    def _mlt_text_search(self, q: str, k: int) -> List[Dict[str, Any]]:
-        """Search text in Mlt."""
-        if not self._mlt:
-            return []
-        # LongTermMemoryManager doesn't have search_text method - return empty for now
-        # Text search would need to be implemented via HolonFabric or external search service
-        return []
 
     def _mw_vector_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
         """Search vectors in Mw for agent."""
@@ -1476,16 +1765,9 @@ class CognitiveCore(dspy.Module):
         if not mw:
             return []
         # MwManager doesn't have search_vector method - return empty for now
-        # Vector search would need to be implemented via Mlt or external search service
+        # Vector search should use CognitiveMemoryBridge + HolonFabricRetrieval instead
         return []
 
-    def _mlt_vector_search(self, q: str, k: int) -> List[Dict[str, Any]]:
-        """Search vectors in Mlt."""
-        if not self._mlt:
-            return []
-        # LongTermMemoryManager doesn't have search_vector method - return empty for now
-        # Vector search would need to be implemented via HolonFabric or external search service
-        return []
 
     def _run_coro_sync(self, coro: Awaitable[Any], *, timeout: Optional[float] = None) -> Any:
         """Run an async coroutine from sync context without nesting event loops."""
@@ -1505,7 +1787,7 @@ class CognitiveCore(dspy.Module):
             return future.result(timeout=timeout)
 
     def _bind_broker(self, agent_id: str) -> ContextBroker:
-        """Return a ContextBroker instance with Mw/Mlt bindings for the given agent."""
+        """Return a ContextBroker instance with Mw search bindings for the given agent."""
         def text_fn(query, k):
             return self._mw_first_text_search(agent_id, query, k)
         def vec_fn(query, k):
@@ -1557,38 +1839,20 @@ class CognitiveCore(dspy.Module):
         return str(ids)
 
     def _mw_first_text_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
-        """Search Mw first, then Mlt, with Mw backfill on Mlt hits."""
-        hits = self._mw_text_search(agent_id, q, k)
-        if hits or not self._mlt:
-            return hits
-        # fallback to Mlt and backfill Mw
-        mlt_hits = self._mlt_text_search(q, k)
-        mw = self._mw(agent_id)
-        if mw:
-            for h in mlt_hits:
-                try:
-                    # Use global write-through for cluster-wide visibility
-                    mw.set_global_item_typed("fact", "global", h.get('id', ''), h, ttl_s=1800)
-                except Exception:
-                    pass
-        return mlt_hits
+        """Search Mw for text queries.
+        
+        NOTE: This method is deprecated. Use CognitiveMemoryBridge + HolonFabricRetrieval
+        for proper scoped retrieval with HolonFabric.
+        """
+        return self._mw_text_search(agent_id, q, k)
 
     def _mw_first_vector_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
-        """Search Mw first, then Mlt, with Mw backfill on Mlt hits."""
-        hits = self._mw_vector_search(agent_id, q, k)
-        if hits or not self._mlt:
-            return hits
-        # fallback to Mlt and backfill Mw
-        mlt_hits = self._mlt_vector_search(q, k)
-        mw = self._mw(agent_id)
-        if mw:
-            for h in mlt_hits:
-                try:
-                    # Use global write-through for cluster-wide visibility
-                    mw.set_global_item_typed("fact", "global", h.get('id', ''), h, ttl_s=1800)
-                except Exception:
-                    pass
-        return mlt_hits
+        """Search Mw for vector queries.
+        
+        NOTE: This method is deprecated. Use CognitiveMemoryBridge + HolonFabricRetrieval
+        for proper scoped vector search with HolonFabric.
+        """
+        return self._mw_vector_search(agent_id, q, k)
 
     def _create_plan_from_steps(self, steps: List[Dict[str, Any]], escalate_hint: bool = False, 
                                sufficiency: Optional[Dict[str, Any]] = None, 

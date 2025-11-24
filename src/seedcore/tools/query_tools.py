@@ -2,7 +2,7 @@
 # seedcore/tools/query_tools.py
 """
 Query Tools for general queries, knowledge finding, and collaborative tasks.
-These tools handle task-specific logic that was previously embedded in RayAgent.
+These tools handle task-specific logic that was previously embedded in PersistentAgent.
 """
 
 from __future__ import annotations
@@ -465,11 +465,11 @@ async def register_query_tools(
     """
     Register all query tools with the ToolManager.
 
-    This function uses ToolManager's internal dependencies (mw_manager, ltm_manager, mcp_client)
+    This function uses ToolManager's internal dependencies (mw_manager, holon_fabric, mcp_client)
     and only requires agent-specific context functions.
 
     Args:
-        tool_manager: The ToolManager instance to register with (must have mw_manager, ltm_manager, mcp_client)
+        tool_manager: The ToolManager instance to register with (must have mw_manager, holon_fabric, mcp_client)
         agent_id: ID of the agent using these tools
         get_agent_capabilities: Function that returns agent capabilities summary string
         get_energy_slice: Function that returns current energy slice value
@@ -484,9 +484,9 @@ async def register_query_tools(
         in_flight_lock: Optional lock for in_flight_tracker access (falls back to new lock if None)
     """
     # Extract dependencies from ToolManager (single source of truth)
-    # Note: mw_manager and ltm_manager come from ToolManager to avoid duplication
+    # Note: mw_manager and holon_fabric come from ToolManager to avoid duplication
     mw_manager = tool_manager.mw_manager
-    ltm_manager = tool_manager.ltm_manager
+    holon_fabric = tool_manager.holon_fabric
 
     # Use cognitive_client: explicit parameter > ToolManager.cognitive_client > None
     # cognitive_client is different from mcp_client (Cognitive service vs MCP service)
@@ -501,7 +501,7 @@ async def register_query_tools(
         )
 
     # Register FindKnowledgeTool first (it's a dependency)
-    find_knowledge_tool = FindKnowledgeTool(mw_manager, ltm_manager, agent_id)
+    find_knowledge_tool = FindKnowledgeTool(mw_manager, holon_fabric, agent_id)
     await tool_manager.register("knowledge.find", find_knowledge_tool)
 
     # Register GeneralQueryTool
@@ -518,7 +518,7 @@ async def register_query_tools(
     collaborative_task_tool = CollaborativeTaskTool(
         find_knowledge_tool,
         mw_manager,
-        ltm_manager,
+        holon_fabric,
         agent_id,
         get_energy_slice,
     )
