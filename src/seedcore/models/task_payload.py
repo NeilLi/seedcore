@@ -68,6 +68,7 @@ class TaskPayload(BaseModel):
     # TOP-LEVEL CHAT CONVENIENCE FIELD (for ChatSignature)
     # ------------------------------------------------------------------
     conversation_history: Optional[List[Dict[str, Any]]] = None
+    skip_retrieval: Optional[bool] = None
 
     # ------------------------------------------------------------------
     # CHAT ENVELOPE MIRRORS (→ params.chat.*)
@@ -201,6 +202,12 @@ class TaskPayload(BaseModel):
         if self.conversation_history:
             p["conversation_history"] = self.conversation_history
 
+        # ------------------------------------------------------------
+        # Top-level skip_retrieval flag (↔ QueryTools / CognitiveCore)
+        # ------------------------------------------------------------
+        if self.skip_retrieval is not None:
+            p["skip_retrieval"] = self.skip_retrieval
+
         return p
 
     # =====================================================================
@@ -258,6 +265,7 @@ class TaskPayload(BaseModel):
 
         # --- Legacy conversation history ---
         conversation_history = params.get("conversation_history")
+        skip_retrieval = params.get("skip_retrieval")
 
         return cls(
             # Core
@@ -300,4 +308,5 @@ class TaskPayload(BaseModel):
 
             # Compatibility
             conversation_history=conversation_history,
+            skip_retrieval=skip_retrieval,
         )

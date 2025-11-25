@@ -1056,7 +1056,6 @@ class CognitiveService:
         context = CognitiveContext(
             agent_id=agent_id,
             cog_type=cog_type,
-            decision_kind=decision_kind,
             input_data=input_data,
         )
 

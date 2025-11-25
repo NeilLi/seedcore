@@ -19,6 +19,7 @@ class CognitiveType(Enum):
     TASK_PLANNING = "task_planning"
     DECISION_MAKING = "decision_making"
     FAILURE_ANALYSIS = "failure_analysis"
+    CAUSAL_DECOMPOSITION = "causal_decomposition"
 
     # Memory-based reasoning
     MEMORY_SYNTHESIS = "memory_synthesis"

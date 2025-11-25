@@ -75,7 +75,7 @@ except Exception:  # pragma: no cover - optional dependency
 # Centralized result schema
 from ..models.result_schema import create_cognitive_result, create_error_result
 from ..models.fact import Fact
-from ..models.cognitive import CognitiveType, CognitiveContext
+from ..models.cognitive import CognitiveType, CognitiveContext, DecisionKind
 from .context_broker import (
     ContextBroker,
     RetrievalSufficiency,
@@ -90,6 +90,7 @@ from .signatures import (
     MemorySynthesisSignature,
     ProblemSolvingSignature,
     TaskPlanningSignature,
+    CausalDecompositionSignature,
 )
 from .memory_bridge import CognitiveMemoryBridge
 
@@ -264,6 +265,7 @@ class CognitiveCore(dspy.Module):
         self.memory_synthesizer = dspy.ChainOfThought(MemorySynthesisSignature)
         self.capability_assessor = dspy.ChainOfThought(CapabilityAssessmentSignature)
         self.hgnn_reasoner = dspy.ChainOfThought(HGNNReasoningSignature)
+        self.causal_decomposer = dspy.ChainOfThought(CausalDecompositionSignature)
         
         # Task mapping
         self.task_handlers = {
@@ -274,6 +276,7 @@ class CognitiveCore(dspy.Module):
             CognitiveType.CHAT: self.chat_handler,
             CognitiveType.MEMORY_SYNTHESIS: self.memory_synthesizer,
             CognitiveType.CAPABILITY_ASSESSMENT: self.capability_assessor,
+            CognitiveType.CAUSAL_DECOMPOSITION: self.causal_decomposer,
             
             # Graph task handlers (Migration 007+)
             CognitiveType.GRAPH_EMBED: self._handle_graph_embed,
@@ -307,6 +310,7 @@ class CognitiveCore(dspy.Module):
             CognitiveType.CHAT: 300,              # 5 minutes (lightweight conversational, volatile)
             CognitiveType.MEMORY_SYNTHESIS: 1800, # 30 minutes (no sufficiency)
             CognitiveType.CAPABILITY_ASSESSMENT: 600, # 10 minutes (sufficiency data)
+            CognitiveType.CAUSAL_DECOMPOSITION: 900, # 15 minutes (structural reasoning output)
             
             # Graph task TTLs (Migration 007+) - shorter for sufficiency-bearing
             CognitiveType.GRAPH_EMBED: 600,        # 10 minutes (sufficiency data)
@@ -516,50 +520,45 @@ class CognitiveCore(dspy.Module):
 
     def process(self, context: CognitiveContext) -> Dict[str, Any]:
         """
-        Executes the task based on Data Availability (Tactics), not DecisionKind (Strategy).
+        Executes the task based on:
+        - Strategy (DecisionKind): FAST_PATH / COGNITIVE / ESCALATED
+        - Data availability (knowledge_context, hgnn_embedding, etc.)
 
-        The Worker follows orders from input data:
-        - If HGNN context is provided: use HGNN path (vector -> graph -> LLM).
-        - Otherwise: delegate PRE-EXECUTION hydration to CognitiveMemoryBridge
-        (Holon Fabric retrieval + episodic memory + token budgeting),
-        optionally skipping retrieval if requested.
+        v2 semantics:
+        - If decision_kind == ESCALATED and knowledge_context.hgnn_embedding is present:
+                → use HGNN path (vector → graph → LLM)
+        - Otherwise:
+                → delegate PRE-EXECUTION hydration to CognitiveMemoryBridge
+                (Holon Fabric retrieval + episodic memory + token budgeting),
+                optionally skipping retrieval if requested.
         """
         task_id = self._extract_task_id(context.input_data)
+        input_data = context.input_data or {}
+        decision_kind = context.decision_kind
+
         logger.debug(
-            f"CognitiveCore.process: Routing cog_type={context.cog_type.value} "
+            f"CognitiveCore.process: cog_type={context.cog_type.value} "
+            f"decision_kind={decision_kind.value} "
             f"agent_id={context.agent_id} task_id={task_id or 'n/a'}"
         )
 
-        input_data = context.input_data or {}
         cache_key = self._generate_cache_key(
             context.cog_type, context.agent_id, input_data
         )
 
         try:
             # ------------------------------------------------------------------
-            # 1. HGNN fast-path (unchanged)
+            # 1. Normalize params + basic flags
             # ------------------------------------------------------------------
-            # Normalize params safely (Issue 1 fix)
             params = input_data.get("params") or {}
-            hgnn_section = params.get("hgnn", {})
-            hgnn_embedding = (
-                hgnn_section.get("hgnn_embedding")
-                or input_data.get("hgnn_embedding")
-            )
-
-            skip_retrieval = input_data.get("skip_retrieval", False)
-
-            if hgnn_embedding:
-                logger.debug(f"Task {task_id}: Using provided HGNN context for deep reasoning.")
-                # Run the HGNN pipeline: Vector -> Graph -> LLM
-                return self._run_hgnn_pipeline(context, hgnn_embedding)
+            skip_retrieval = bool(input_data.get("skip_retrieval", False))
 
             # ------------------------------------------------------------------
             # 2. PRE-EXECUTION hydration via CognitiveMemoryBridge (Holon Fabric)
             # ------------------------------------------------------------------
             # Detect personal vs global mode
             is_personal = bool(context.agent_id)
-            
+
             # For CHAT mode: Extract conversation_history from input_data BEFORE hydration
             # PersistentAgent injects conversation_history into task_data.params and top-level
             # This ensures ChatSignature receives the correct conversation context
@@ -567,18 +566,19 @@ class CognitiveCore(dspy.Module):
             if context.cog_type == CognitiveType.CHAT:
                 # Priority: top-level conversation_history > params.conversation_history > params.chat.history
                 conversation_history_from_input = (
-                    input_data.get("conversation_history") or
-                    params.get("conversation_history") or
-                    params.get("chat", {}).get("history") or
-                    []
+                    input_data.get("conversation_history")
+                    or params.get("conversation_history")
+                    or params.get("chat", {}).get("history")
+                    or []
                 )
                 # Ensure it's a list
                 if not isinstance(conversation_history_from_input, list):
                     conversation_history_from_input = []
                 logger.debug(
-                    f"Chat mode: Extracted conversation_history from input ({len(conversation_history_from_input)} turns)"
+                    f"Chat mode: Extracted conversation_history from input "
+                    f"({len(conversation_history_from_input)} turns)"
                 )
-            
+
             # Attempt lazy bridge initialization only for personal mode
             memory_bridge = None
             if is_personal:
@@ -587,15 +587,19 @@ class CognitiveCore(dspy.Module):
                 memory_bridge = self._get_memory_bridge(context.agent_id)
             else:
                 logger.debug("Global/coordinator request detected: skipping memory bridge init.")
-            
-            # If still no bridge → fallback to empty or global-only hydration
+
+            # We'll build a unified knowledge_context in all branches
+            knowledge_context: Dict[str, Any]
+
+            # ------------------------------------------------------------------
+            # 2a. No memory bridge → minimal / global-only hydration
+            # ------------------------------------------------------------------
             if not memory_bridge:
                 logger.debug(
                     f"CognitiveCore.memory_bridge is not configured for agent {context.agent_id}. "
                     "Proceeding with empty or global-only hydration context."
                 )
 
-                # Minimal context block to keep downstream DSPy safe
                 params.setdefault("context", {})
                 # For CHAT mode: use conversation_history from input if available
                 chat_history_for_context = (
@@ -610,9 +614,6 @@ class CognitiveCore(dspy.Module):
                 })
                 input_data["params"] = params
 
-                # Use empty knowledge_context to proceed with handler
-                # For global mode: no memory writes later, no scoped retrieval
-                # For personal mode without bridge: same behavior (graceful degradation)
                 knowledge_context = {
                     "facts": [],
                     "holons": [],
@@ -623,12 +624,15 @@ class CognitiveCore(dspy.Module):
                         "token_budget": 0,
                         "holon_count": 0,
                         "chat_turns": len(chat_history_for_context),
-                    }
+                    },
+                    # v2: ensure HGNN key is always present (even if None)
+                    "hgnn_embedding": None,
                 }
 
             else:
-                # Normal hydration path with MemoryBridge (personal mode)
-                # Build task envelope for MemoryBridge
+                # ------------------------------------------------------------------
+                # 2b. Normal hydration path with MemoryBridge (personal mode)
+                # ------------------------------------------------------------------
                 base_task: Dict[str, Any] = {
                     "id": task_id,
                     "type": context.cog_type.value,
@@ -647,22 +651,19 @@ class CognitiveCore(dspy.Module):
                             ocps=ocps,
                             skip_retrieval=skip_retrieval,
                         ),
-                        timeout=10.0
+                        timeout=10.0,
                     )
-                    
+
                     # Update input_data with hydrated task (merge back)
                     input_data.update(hydrated_task)
-                    
-                    # Extract knowledge_context from hydrated params
-                    ctx_section = (
-                        hydrated_task
-                        .get("params", {})
-                        .get("context", {})
-                    )
-                    
+
+                    # Extract context block from hydrated params
+                    ctx_section = hydrated_task.get("params", {}).get("context", {})
+
                     holons = ctx_section.get("holons", [])
                     chat_history_from_hydration = ctx_section.get("chat_history", [])
                     token_budget = ctx_section.get("token_budget", 0)
+                    hgnn_embedding = ctx_section.get("hgnn_embedding")  # <-- v2 HGNN source
 
                     # For CHAT mode: Prefer conversation_history from input (PersistentAgent)
                     # over chat_history from hydration, as PersistentAgent owns the conversation state
@@ -670,13 +671,14 @@ class CognitiveCore(dspy.Module):
                         chat_history = conversation_history_from_input
                         logger.debug(
                             f"Chat mode: Using conversation_history from PersistentAgent "
-                            f"({len(chat_history)} turns) over hydration ({len(chat_history_from_hydration)} turns)"
+                            f"({len(chat_history)} turns) over hydration "
+                            f"({len(chat_history_from_hydration)} turns)"
                         )
                     else:
                         chat_history = chat_history_from_hydration
 
                     # Build knowledge_context compatible with existing handler
-                    # For backward compatibility, we present holons as "facts" to the handler.
+                    # For backward compatibility, we present holons as "facts".
                     facts = [self._holon_to_fact(h) for h in holons]
 
                     knowledge_context = {
@@ -692,13 +694,14 @@ class CognitiveCore(dspy.Module):
                         },
                         "bridge_context": ctx_section,  # Full bridge context for advanced planners
                         "memory_context": ctx_section,  # Standardized key for DSPy compatibility
+                        # v2 HGNN location:
+                        "hgnn_embedding": hgnn_embedding,
                     }
 
                 except Exception as e:
                     logger.exception(f"Memory bridge hydration failed: {e}")
                     # Safe fallback
                     params.setdefault("context", {})
-                    # For CHAT mode: use conversation_history from input if available
                     chat_history_fallback = (
                         conversation_history_from_input
                         if context.cog_type == CognitiveType.CHAT and conversation_history_from_input
@@ -710,7 +713,7 @@ class CognitiveCore(dspy.Module):
                         "token_budget": 0,
                     })
                     input_data["params"] = params
-                    
+
                     knowledge_context = {
                         "facts": [],
                         "holons": [],
@@ -722,10 +725,33 @@ class CognitiveCore(dspy.Module):
                             "holon_count": 0,
                             "chat_turns": len(chat_history_fallback),
                         },
+                        "hgnn_embedding": None,
                     }
 
             # ------------------------------------------------------------------
-            # 5. Execution: run handler + POST-EXECUTION consolidation
+            # 3. ESCALATED / HGNN path (DecisionKind + knowledge_context)
+            # ------------------------------------------------------------------
+            hgnn_embedding = knowledge_context.get("hgnn_embedding")
+
+            if decision_kind is DecisionKind.ESCALATED:
+                if hgnn_embedding is not None:
+                    logger.debug(
+                        f"Task {task_id}: decision_kind=ESCALATED with hgnn_embedding "
+                        f"→ running HGNN pipeline"
+                    )
+                    return self._run_hgnn_pipeline(
+                        context=context,
+                        hgnn_embedding=hgnn_embedding,
+                        knowledge_context=knowledge_context,
+                    )
+                else:
+                    logger.warning(
+                        f"Task {task_id}: decision_kind=ESCALATED but no hgnn_embedding in "
+                        f"knowledge_context → falling back to normal cognitive pipeline"
+                    )
+
+            # ------------------------------------------------------------------
+            # 4. Execution: run handler + POST-EXECUTION consolidation
             # ------------------------------------------------------------------
             # _run_handler_and_postprocess is assumed to:
             #   - invoke DSPy / LLM pipeline
@@ -742,8 +768,6 @@ class CognitiveCore(dspy.Module):
         except Exception as e:
             logger.exception(f"Processing error: {e}")
             return create_error_result(str(e), "PROCESSING_ERROR").model_dump()
-
-    
 
     def _run_hgnn_pipeline(self, context: CognitiveContext, embedding: List[float]) -> Dict[str, Any]:
         """
@@ -1696,6 +1720,10 @@ class CognitiveCore(dspy.Module):
         elif context.cog_type == CognitiveType.CHAT:
             message = context.input_data.get("message", "")
             query_parts.append(f"chat {message[:100]}")
+        elif context.cog_type == CognitiveType.CAUSAL_DECOMPOSITION:
+            structural = context.input_data.get("structural_context", "")
+            incident = context.input_data.get("incident_report", "")
+            query_parts.append(f"causal decomposition {structural} {incident[:80]}")
         elif context.cog_type in (CognitiveType.GRAPH_EMBED, CognitiveType.GRAPH_EMBED_V2):
             start_node_ids = context.input_data.get("start_node_ids", [])
             query_parts.append(f"graph embedding nodes {self._format_id_list(start_node_ids)}")
@@ -1757,6 +1785,12 @@ class CognitiveCore(dspy.Module):
                 formatted["constraints"] = json.dumps(formatted["constraints"])
             if "available_tools" in formatted and isinstance(formatted["available_tools"], dict):
                 formatted["available_tools"] = json.dumps(formatted["available_tools"])
+        elif cog_type == CognitiveType.CAUSAL_DECOMPOSITION:
+            # CausalDecompositionSignature expects structured context blocks
+            if "structural_context" in formatted and isinstance(formatted["structural_context"], (list, dict)):
+                formatted["structural_context"] = json.dumps(formatted["structural_context"])
+            if "incident_report" in formatted and isinstance(formatted["incident_report"], (list, dict)):
+                formatted["incident_report"] = json.dumps(formatted["incident_report"])
         elif cog_type == CognitiveType.CHAT:
             # ChatSignature expects conversation_history as JSON string
             if "conversation_history" in formatted:
@@ -2056,5 +2090,4 @@ class CognitiveCore(dspy.Module):
 # =============================================================================
 # Global Cognitive Core Instance Management
 # =============================================================================
-# Global singleton management removed - CognitiveOrchestrator now manages lifecycle
-# =============================================================================
+
