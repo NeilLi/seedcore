@@ -34,60 +34,24 @@ class TaskStatus(enum.Enum):
     RETRY = "retry"
 
 class TaskType(str, enum.Enum):
-    """Canonical task types for routing and dispatch.
-
-    These types are what the RoutingDirectory / dispatchers
-    (GraphDispatcher, QueueDispatcher, etc.) should switch on.
+    """
+    Canonical semantic categories for user-facing tasks.
+    TaskPayload v2 provides the routing/cognitive detail.
     """
 
-    # ==========================================================
-    # Graph / KG tasks (handled by GraphDispatcher)
-    # ==========================================================
-    GRAPH_EMBED = "graph_embed"
-    # Embed graph nodes/entities (concepts, devices, users) into a vector space.
+    # ------------------------------
+    # User-facing task categories
+    # ------------------------------
+    CHAT = "chat"            # Conversational agent-tunnel tasks
+    QUERY = "query"          # Ask/answer, reasoning, planning, search
+    ACTION = "action"        # Tool execution, system operations
+    GRAPH = "graph"          # Graph/knowledge-graph operations
+    MAINTENANCE = "maintenance"  # Health checks, telemetry, background ops
 
-    GRAPH_RAG_QUERY = "graph_rag_query"
-    # Hybrid RAG over graph + vector stores (structural hops + dense retrieval).
-
-    GRAPH_FACT_EMBED = "graph_fact_embed"
-    # Embed atomic facts/edges (triples, propositions) into vector space.
-
-    GRAPH_FACT_QUERY = "graph_fact_query"
-    # Logical / fact-level graph query (e.g., constraints over facts/edges).
-
-    NIM_TASK_EMBED = "nim_task_embed"
-    # Embed tasks into NIM / task-space embedding for meta-control / routing.
-
-    GRAPH_SYNC_NODES = "graph_sync_nodes"
-    # Sync external state (devices, rooms, users, configs) into graph nodes.
-
-    # ==========================================================
-    # General / queue-based tasks (handled by QueueDispatcher)
-    # ==========================================================
-    PING = "ping"
-    # Very cheap liveness / connectivity probe (no heavy work).
-
-    HEALTH_CHECK = "health_check"
-    # Deeper component / system health check (may touch multiple subsystems).
-
-    GENERAL_QUERY = "general_query"
-    # Primary "ask the system a question" pathway (LLM + tools + memory).
-
-    CHAT = "chat"
-    # Lightweight conversational path for agent-tunneled interactions.
-    # Uses CognitiveType.CHAT for fast, low-latency conversational responses.
-
-    TEST_QUERY = "test_query"
-    # Synthetic / integration / load-test query (non-user-facing).
-
-    FACT_SEARCH = "fact_search"
-    # Non-graph factual lookup (e.g., local store, config, or KV memory).
-
-    EXECUTE = "execute"
-    # Execute an action/plan/tool/agent step (downstream may route to actuator).
-
-    UNKNOWN_TASK = "unknown_task"
-    # Fallback when we cannot classify the task; should be rare in practice.
+    # ------------------------------
+    # Safety fallback
+    # ------------------------------
+    UNKNOWN = "unknown"
 
 class Task(Base):
     """Unified task schema with routing and execution metadata stored in JSONB."""

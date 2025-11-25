@@ -8,7 +8,7 @@ from seedcore.agents.roles import DEFAULT_ROLE_REGISTRY, NullSkillStore, Special
 @ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
 class PersistentAgent(BaseAgent):
     """
-    Stateful agent with conversational memory:
+    Stateful agent with conversational memory (TaskPayload v2.0 compliant):
     - BaseAgent handles tool execution + stateless logic
     - CheckpointManager handles persistence
     - QueryToolRegistrar installs query tools
@@ -18,6 +18,11 @@ class PersistentAgent(BaseAgent):
     - PersistentAgent owns chat_history (short-term, per conversation)
     - CognitiveCore owns long-term holons + episodic consolidation
     - QueryTools remain stateless and receive history from agent
+    
+    TaskPayload v2.0 Structure:
+    - Injects params.chat.{message, history} (chat envelope)
+    - Injects params.interaction.{mode, conversation_id, assigned_agent_id} (interaction envelope)
+    - Sets top-level conversation_history for ChatSignature compatibility
     
     Note: Memory consolidation is now handled centrally by CognitiveCore via CognitiveMemoryBridge.
     LongTermMemoryManager and MemoryBridge have been removed and replaced with HolonFabric + CognitiveMemoryBridge.
@@ -169,79 +174,134 @@ class PersistentAgent(BaseAgent):
         }
 
     # ---------------------------------------------------------------------
-    # Main execution path
+    # Main execution path (TaskPayload v2)
     # ---------------------------------------------------------------------
     async def execute_task(self, task_data):
-        """Run stateless execution + stateful post-processing with chat history management.
-        
-        For agent_tunnel mode:
-        - Detects incoming chat messages
-        - Updates chat history
-        - Injects conversation_history into task_data.params before tool execution
-        - Extracts assistant response and updates chat history after execution
-        
-        Note: Memory consolidation is now handled centrally by CognitiveCore
-        via CognitiveMemoryBridge.process_post_execution().
         """
-        # Ensure dict
+        Run stateless execution + stateful post-processing with chat history management.
+
+        Responsibilities:
+        - Normalize TaskPayload v2 envelopes (chat, interaction, cognitive)
+        - Manage conversation history window
+        - Inject chat.message + chat.history + top-level conversation_history
+        - Maintain PersistentAgent's local episodic memory buffer
+        - Extract assistant messages after LLM execution
+        - Do not write long-term memory here (CognitiveMemoryBridge handles that)
+
+        Shapes enforced (TaskPayload v2):
+            params.chat: {
+                message,
+                history,
+                agent_persona?,
+                style?
+            }
+
+            params.interaction: {
+                mode: "agent_tunnel",
+                conversation_id?,
+                assigned_agent_id
+            }
+
+            task_data.conversation_history: top-level (ChatSignature)
+        """
+
+        # ---------------------------------------------------------
+        # 0. Defensive normalization
+        # ---------------------------------------------------------
         if not isinstance(task_data, dict):
             task_data = dict(task_data) if hasattr(task_data, "__dict__") else {}
 
         params = task_data.setdefault("params", {})
         interaction = params.setdefault("interaction", {})
+        chat = params.setdefault("chat", {})
 
-        # Detect chat-tunnel conversational mode
-        if interaction.get("mode") == "agent_tunnel":
-            # ---- 1. Extract incoming message (single authoritative logic) ----
+        is_tunnel = interaction.get("mode") == "agent_tunnel"
+
+        # =========================================================
+        # 1. Handle agent_tunnel chat mode
+        # =========================================================
+        if is_tunnel:
+
+            # -----------------------------------------------------
+            # 1A. Extract authoritative incoming message
+            # -----------------------------------------------------
             incoming_msg = (
-                task_data.get("message")
-                or task_data.get("description")
-                or params.get("chat", {}).get("message")
+                task_data.get("message") or
+                task_data.get("description") or
+                chat.get("message")
             )
+
             if incoming_msg:
+                # Local episodic write (agent-level only)
                 self.add_user_message(incoming_msg)
 
-            # ---- 2. Inject windowed chat history into payload ----
-            # Use recent history only to avoid large payloads to CognitiveCore
-            # Full history remains stored locally for episodic memory/consolidation
+                # v2 Chat Envelope
+                chat["message"] = incoming_msg
+
+            # -----------------------------------------------------
+            # 1B. Inject WINDOWED chat history for CognitiveCore
+            # -----------------------------------------------------
             recent_history = self.get_recent_history(max_turns=6)
-            
-            # Set in params (QueryTools reads from here)
-            params["conversation_history"] = recent_history
-            # Also set at top level (required by ChatSignature)
+
+            # Canonical v2 placement
+            chat["history"] = recent_history
+
+            # ChatSignature requirement (top-level)
             task_data["conversation_history"] = recent_history
 
-            # ---- 3. Canonicalize interaction metadata ----
+            # -----------------------------------------------------
+            # 1C. Canonicalize interaction envelope (v2)
+            # -----------------------------------------------------
             interaction["mode"] = "agent_tunnel"
-            interaction.setdefault("assigned_agent_id", self.agent_id)
-            
-            # Preserve conversation_id if present
-            if "conversation_id" in interaction:
-                params["interaction"]["conversation_id"] = interaction["conversation_id"]
 
-        # ---- Run BaseAgent logic ----
+            # The agent that owns this tunnel
+            interaction.setdefault("assigned_agent_id", self.agent_id)
+
+            # conversation_id is preserved if present; nothing to change
+
+        # =========================================================
+        # 2. Delegate to BaseAgent or parent execution
+        # =========================================================
         result = await super().execute_task(task_data)
 
-        # ---- Update assistant history (post-op) ----
-        if interaction.get("mode") == "agent_tunnel":
+        # =========================================================
+        # 3. Post-processing: extract assistant message for memory
+        # =========================================================
+        if is_tunnel:
             assistant_msg = None
+
+            # --------------------------
+            # Extract assistant output
+            # --------------------------
             try:
                 if isinstance(result, dict):
+                    # Standard SeedCore shape: { "result": {...} }
                     res = result.get("result") or result
+
                     if isinstance(res, dict):
+                        # Most common return shapes
                         assistant_msg = (
-                            res.get("response")
-                            or res.get("message")
+                            res.get("response") or
+                            res.get("assistant_reply") or
+                            res.get("message")
                         )
+
+                    # Raw string (rare but possible)
                     if not assistant_msg and isinstance(res, str):
                         assistant_msg = res
+
             except Exception:
                 pass
 
+            # --------------------------
+            # Write assistant message
+            # --------------------------
             if isinstance(assistant_msg, str) and assistant_msg.strip():
                 self.add_assistant_message(assistant_msg)
 
-        # Persist checkpoint
+        # =========================================================
+        # 4. Local checkpoint (not long-term memory)
+        # =========================================================
         self.ckpt.after_task()
 
         return result

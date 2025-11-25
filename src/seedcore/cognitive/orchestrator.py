@@ -1,0 +1,1 @@
+# stub template for cognitive orchestrator
