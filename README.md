@@ -186,6 +186,8 @@ curl http://localhost:8000/ops/energy/health
 
 ## 🏗️ Architecture Overview
 
+![SeedCore Architecture](papers/seedcore-architecture.png)
+
 SeedCore implements a distributed **Control/Execution Plane architecture** using Ray Serve for service orchestration and Ray Actors for distributed computation. The system features a robust **epoch-based runtime registry** that provides comprehensive actor lifecycle management, cluster coordination, and fault tolerance.
 
 ### Control/Execution Plane Architecture
