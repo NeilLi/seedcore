@@ -809,7 +809,7 @@ class GraphDispatcher:
         text_map = {}
         node_id_to_uuid = {}
 
-        for uuid, text in content_map.items():
+        for uuid, task_text in content_map.items():
             node_ids = self._ensure_task_nodes([uuid])
             if not node_ids:
                 logger.warning("⚠ No graph node for task %s", uuid)
@@ -819,7 +819,7 @@ class GraphDispatcher:
                 logger.warning("⚠ Task %s produced %d graph nodes", uuid, len(node_ids))
 
             node_id = node_ids[0]
-            text_map[node_id] = text
+            text_map[node_id] = task_text
             node_id_to_uuid[node_id] = uuid
 
         if not text_map:

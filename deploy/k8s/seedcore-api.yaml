@@ -45,8 +45,6 @@ spec:
               value: "127.0.0.1:8002"
             - name: SEEDCORE_SKIP_EAGER_RAY
               value: "1"
-            - name: SEEDCORE_BOOTSTRAP_OPTIONAL
-              value: "0"
           envFrom:
             - configMapRef:
                 name: seedcore-env

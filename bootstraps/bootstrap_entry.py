@@ -33,8 +33,8 @@ def main() -> int:
     exit_after = os.getenv("EXIT_AFTER_BOOTSTRAP", "true").lower() in ("1", "true", "yes")
 
     # Import lazily so these modules can share utilities but stay independent
-    from bootstraps.bootstrap_organism import bootstrap_organism
-    from bootstraps.bootstrap_dispatchers import bootstrap_dispatchers
+    from .bootstrap_organism import bootstrap_organism
+    from .bootstrap_dispatchers import bootstrap_dispatchers
 
     rc = 0
     if mode in ("all", "organism"):

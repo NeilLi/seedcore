@@ -8,7 +8,6 @@ Warm them up (DB pools) and kick off their run loops.
 import os
 import sys
 import time
-from pathlib import Path
 
 import ray  # pyright: ignore[reportMissingImports]
 
@@ -23,13 +22,6 @@ from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
 setup_logging(app_name="seedcore.dispatchers")  # centralized stdout logging only
 log = ensure_serve_logger("seedcore.dispatchers")
-
-# Add src to path for imports
-ROOT = Path(__file__).resolve().parents[1]  # /app
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
 
 # ---------- helpers ----------
 def _env_bool(name: str, default: str | bool = "false") -> bool:
@@ -53,9 +45,7 @@ def _env_float(name: str, default: float) -> float:
 
 # --- ENV defaults ---
 # Use ray_utils for unified Ray configuration - no need to set defaults here
-# ray_utils will handle RAY_ADDRESS internally with proper fallbacks
 
-RAY_ADDRESS = os.getenv("RAY_ADDRESS")  # used by ensure_ray_initialized if set
 RAY_NAMESPACE = (
     os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev")).strip()
     or "seedcore-dev"
