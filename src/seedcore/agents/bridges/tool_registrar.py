@@ -2,14 +2,10 @@
 
 class QueryToolRegistrar:
     """
-    Handles async registration of query tools.
-    Keeps PersistentAgent clean.
-    
-    Responsibilities:
-    - Attach required dependencies to ToolManager (mw_manager, holon_fabric, cognitive_client)
-    - Provide helper functions for agent capabilities, energy, memory, performance
-    - Register query tools with proper dependency injection
-    - Ensure proper error handling (no silent failures)
+    Responsible for registering query tools for agent execution.
+    Supports both:
+      - Local ToolManager (single mode)
+      - Remote ToolManagerShard actors (sharded mode)
     """
 
     def __init__(self, agent):
@@ -19,151 +15,108 @@ class QueryToolRegistrar:
         try:
             from ...tools import query_tools
 
-            tool_manager = self.agent.tools
+            handler = self.agent.tool_handler
 
             # -----------------------------------------------------
-            # Attach required dependencies to ToolManager
+            # Build agent-side capability & helper closures
             # -----------------------------------------------------
-            
-            # Attach mw_manager if missing
-            if getattr(tool_manager, "mw_manager", None) is None:
-                if hasattr(self.agent, "_mw_manager"):
-                    tool_manager.mw_manager = self.agent._mw_manager
-
-            # Attach holon_fabric if missing (required for FindKnowledgeTool)
-            if getattr(tool_manager, "holon_fabric", None) is None:
-                if hasattr(self.agent, "holon_fabric"):
-                    tool_manager.holon_fabric = self.agent.holon_fabric
-
-            # Attach cognitive_client for cognitive service
-            if getattr(tool_manager, "cognitive_client", None) is None:
-                if self.agent.cognitive_client is not None:
-                    tool_manager.cognitive_client = self.agent.cognitive_client
-
-            # -----------------------------------------------------
-            # Capability summary (string)
-            # -----------------------------------------------------
-            def _cap_summary():
-                """Get agent capabilities as a summary string."""
-                # Prefer public API: advertise_capabilities
-                if hasattr(self.agent, "advertise_capabilities"):
-                    caps = self.agent.advertise_capabilities()
-                    # Extract summary if available, otherwise stringify
-                    if isinstance(caps, dict):
-                        summary = caps.get("summary") or caps.get("description")
-                        if summary:
-                            return summary
-                    return str(caps)
-                # Fallback: use _role_context() to build summary
-                ctx = self.agent._role_context()
-                skills = ctx.get("skills", [])
-                specialization = ctx.get("specialization", "unknown")
-                capability = ctx.get("capability", 0.5)
-                return (
-                    f"Specialization: {specialization}, "
-                    f"Capability: {capability:.2f}, "
-                    f"Skills: {', '.join(skills[:5])}"
-                )
-
-            # -----------------------------------------------------
-            # Capability dict
-            # -----------------------------------------------------
-            def _cap_dict():
-                """Get agent capabilities as dict."""
-                # Use stable public API only
-                if hasattr(self.agent, "advertise_capabilities"):
-                    return self.agent.advertise_capabilities()
-                # No fallback - return empty dict if API not available
+            get_cap_summary = self._get_cap_summary
+            get_cap_dict = self._get_cap_dict
+            get_energy_slice = self._get_energy_slice
+            get_energy_state = self._get_energy_state
+            update_energy_state = self._update_energy_state
+            get_performance = self._get_performance
+            def get_memory_context():
                 return {}
+            get_conversation_history = self._get_conversation_history
 
-            # -----------------------------------------------------
-            # Energy helpers
-            # -----------------------------------------------------
-            def _energy_slice():
-                """Get current energy slice value."""
-                if hasattr(self.agent, "_energy_slice"):
-                    return self.agent._energy_slice()
-                # Fallback: use capability as energy proxy
-                return getattr(self.agent.state, "c", 0.5)
-
-            def _energy_state():
-                """Get energy state."""
-                if hasattr(self.agent, "get_energy_state"):
-                    return self.agent.get_energy_state()
-                # Fallback: return None (optional)
-                return None
-
-            def _update_energy_state(v):
-                """Update energy state."""
-                if hasattr(self.agent, "update_energy_state"):
-                    return self.agent.update_energy_state(v)
-                # Fallback: no-op (optional)
-                return None
-
-            # -----------------------------------------------------
-            # Memory & performance helpers
-            # -----------------------------------------------------
-            def _memory_context():
-                """Get memory context dict."""
-                # Memory context comes entirely from CognitiveMemoryBridge/HolonFabric/MwManager
-                # QueryTools no longer fetch memory context themselves
-                # Return empty dict as fallback (backward compatibility only)
-                return {}
-
-            def _performance():
-                """Get performance data dict."""
-                if hasattr(self.agent.state, "to_performance_metrics"):
-                    return self.agent.state.to_performance_metrics()
-                return {}
-
-            # -----------------------------------------------------
-            # Chat history access (for future use)
-            # -----------------------------------------------------
-            def _conversation_history():
-                """
-                Get windowed conversation history from PersistentAgent.
-                
-                Returns recent history (last N turns) consistent with what PersistentAgent
-                sends to CognitiveCore. PersistentAgent is the single source of truth.
-                """
-                # PersistentAgent owns chat history and provides windowed history
-                # Use get_recent_history() to match what PersistentAgent sends to CognitiveCore
-                if hasattr(self.agent, "get_recent_history"):
-                    return self.agent.get_recent_history(max_turns=6)
-                # Fallback to full history if get_recent_history not available (backward compatibility)
-                if hasattr(self.agent, "get_chat_history"):
-                    return self.agent.get_chat_history()
-                return []
-
-            # -----------------------------------------------------
-            # Register Tools
-            # -----------------------------------------------------
-            await query_tools.register_query_tools(
-                tool_manager=tool_manager,
+            # Common args passed regardless of mode
+            common_args = dict(
                 agent_id=self.agent.agent_id,
-                get_agent_capabilities=_cap_summary,
-                get_agent_capabilities_dict=_cap_dict,
-                get_energy_slice=_energy_slice,
-                get_energy_state=_energy_state,
-                update_energy_state=_update_energy_state,
-                get_performance_data=_performance,
-                get_memory_context=_memory_context,
-                get_conversation_history=_conversation_history,
+                get_agent_capabilities=get_cap_summary,
+                get_agent_capabilities_dict=get_cap_dict,
+                get_energy_slice=get_energy_slice,
+                get_energy_state=get_energy_state,
+                update_energy_state=update_energy_state,
+                get_performance_data=get_performance,
+                get_memory_context=get_memory_context,
+                get_conversation_history=get_conversation_history,
                 in_flight_tracker=getattr(self.agent, "_inflight", {}),
                 in_flight_lock=getattr(self.agent, "_inflight_lock", None),
                 mfb_client=getattr(self.agent, "mfb_client", None),
-                cognitive_client=tool_manager.cognitive_client,
                 normalize_cog_resp=getattr(self.agent, "_normalize_cog_resp", None),
+            )
+
+            # SHARDED MODE ----------------------------------------
+            if isinstance(handler, list):
+                # Broadcast registration to every shard
+                for shard in handler:
+                    await shard.register_query_tools.remote(
+                        cognitive_client=self.agent.cognitive_client,
+                        **common_args
+                    )
+                return
+
+            # SINGLE-MODE -----------------------------------------
+            await query_tools.register_query_tools(
+                tool_manager=handler,
+                cognitive_client=handler.cognitive_client,
+                **common_args,
             )
 
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
             logger.error(
-                "❌ QueryToolRegistrar failed to register tools for agent %s: %s",
-                getattr(self.agent, "agent_id", "unknown"),
-                e,
-                exc_info=True
+                "❌ QueryToolRegistrar failed for agent %s: %s",
+                getattr(self.agent, "agent_id", "unknown"), e, exc_info=True
             )
-            # Re-raise to ensure failures are visible
             raise
+
+    # -------------------------------------------------------------
+    # CAPABILITY / ENERGY / PERFORMANCE HELPERS (unchanged API)
+    # -------------------------------------------------------------
+    def _get_cap_summary(self):
+        if hasattr(self.agent, "advertise_capabilities"):
+            caps = self.agent.advertise_capabilities()
+            if isinstance(caps, dict):
+                return caps.get("summary") or caps.get("description") or str(caps)
+            return str(caps)
+        ctx = self.agent._role_context()
+        return (
+            f"Specialization: {ctx.get('specialization','unknown')}, "
+            f"Capability: {ctx.get('capability',0.5):.2f}, "
+            f"Skills: {', '.join(ctx.get('skills',[])[:5])}"
+        )
+
+    def _get_cap_dict(self):
+        if hasattr(self.agent, "advertise_capabilities"):
+            return self.agent.advertise_capabilities()
+        return {}
+
+    def _get_energy_slice(self):
+        if hasattr(self.agent, "_energy_slice"):
+            return self.agent._energy_slice()
+        return getattr(self.agent.state, "c", 0.5)
+
+    def _get_energy_state(self):
+        if hasattr(self.agent, "get_energy_state"):
+            return self.agent.get_energy_state()
+        return None
+
+    def _update_energy_state(self, v):
+        if hasattr(self.agent, "update_energy_state"):
+            return self.agent.update_energy_state(v)
+
+    def _get_performance(self):
+        if hasattr(self.agent.state, "to_performance_metrics"):
+            return self.agent.state.to_performance_metrics()
+        return {}
+
+    def _get_conversation_history(self):
+        if hasattr(self.agent, "get_recent_history"):
+            return self.agent.get_recent_history(max_turns=6)
+        if hasattr(self.agent, "get_chat_history"):
+            return self.agent.get_chat_history()
+        return []
+

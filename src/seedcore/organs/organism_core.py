@@ -68,6 +68,7 @@ from seedcore.memory.backends.pgvector_backend import PgVectorStore
 from seedcore.memory.backends.neo4j_graph import Neo4jGraph
 # --- Import stateful dependencies ---
 from seedcore.memory.mw_manager import MwManager
+from seedcore.tools.manager_actor import ToolManagerShard
 
 setup_logging(app_name="seedcore.OrganismCore")
 logger = ensure_serve_logger("seedcore.OrganismCore", level="DEBUG")
@@ -207,6 +208,10 @@ class OrganismCore:
         self.role_registry: RoleRegistry = role_registry or DEFAULT_ROLE_REGISTRY
         self.skill_store: Optional[HolonFabricSkillStoreAdapter] = None
         self.tool_manager: Optional[ToolManager] = None
+        self.num_tool_shards: int = 0
+        self.agent_threshold_for_shards: int = 1000
+        self.tool_shards: List[Any] = []   # or List["ToolManagerShard"]
+        self.tool_handler: Any = None  # Can be ToolManager or List[ToolManagerShard]
         self.cognitive_client: Optional[CognitiveServiceClient] = None
         self.energy_client: Optional[EnergyServiceClient] = None
         self.holon_fabric: Optional[HolonFabric] = None
@@ -329,7 +334,24 @@ class OrganismCore:
         # --------------------------------------------------------------
         # 4. ToolManager (with skill store for micro-flywheel)
         # --------------------------------------------------------------
-        self.tool_manager = ToolManager(skill_store=self.skill_store)
+        num_agents = await self._count_agents_from_config()
+
+        if num_agents < self.agent_threshold_for_shards:
+            self.tool_manager = ToolManager(skill_store=self.skill_store)
+            self.tool_handler = self.tool_manager
+        else:
+            self.num_tool_shards = min(16, max(4, num_agents // 1000 * 4))  # recommended default
+            self.tool_shards = [
+                ToolManagerShard.remote(
+                    skill_store=self.skill_store,
+                    mw_manager=self.mw_manager,
+                    holon_fabric=self.holon_fabric,
+                    cognitive_client=self.cognitive_client,
+                    mcp_client=getattr(self, 'mcp_client', None),
+                )
+                for _ in range(self.num_tool_shards)
+            ]
+            self.tool_handler = self.tool_shards
 
         # --------------------------------------------------------------
         # 5. Cognitive service client
@@ -420,7 +442,7 @@ class OrganismCore:
                     # Stateless dependencies
                     role_registry=self.role_registry,
                     skill_store=self.skill_store,
-                    tool_manager=self.tool_manager,
+                    tool_handler=self.tool_handler,
                     cognitive_client=self.cognitive_client,
                     # Stateful dependencies
                     mw_manager=self.mw_manager,
@@ -508,6 +530,19 @@ class OrganismCore:
         logger.info(
             f"🗺 Built specialization routing map: { {k.name: v for k, v in self.specialization_to_organ.items()} }"
         )
+    
+    # ==================================================================
+    #  AGENT NUM COUNT
+    # ==================================================================
+    async def _count_agents_from_config(self) -> int:
+        total = 0
+        for cfg in self.organ_configs:
+            organ_id = cfg["id"]
+            organ = self.organs.get(organ_id)
+            if not organ:
+                continue
+            total += len(cfg.get("agents", []))
+        return total   
 
     # =====================================================================
     #  ASYNC RAY HELPER
@@ -1574,7 +1609,7 @@ class OrganismCore:
                 # Stateless dependencies
                 role_registry=self.role_registry,
                 skill_store=self.skill_store,
-                tool_manager=self.tool_manager,
+                tool_handler=self.tool_handler,
                 cognitive_client=self.cognitive_client,
                 # Stateful dependencies
                 mw_manager=self.mw_manager,

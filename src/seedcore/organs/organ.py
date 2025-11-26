@@ -110,7 +110,7 @@ class Organ:
         # --- Injected Dependencies from OrganismCore ---
         role_registry: "RoleRegistry",
         skill_store: "SkillStoreProtocol",
-        tool_manager: "ToolManager",
+        tool_handler: Any,  # Can be ToolManager or List[ToolManagerShard]
         cognitive_client: "CognitiveServiceClient",
         # --- Optional stateful dependencies (for PersistentAgent) ---
         mw_manager: Optional["MwManager"] = None,
@@ -124,7 +124,7 @@ class Organ:
         # Injected global singletons
         self.role_registry = role_registry
         self.skill_store = skill_store
-        self.tool_manager = tool_manager
+        self.tool_handler = tool_handler
         # We store the *client*, not just the URL, for consistency
         self.cognitive_client = cognitive_client 
 
@@ -149,7 +149,7 @@ class Organ:
         """Called by OrganismCore on startup."""
         # Check that shared dependencies are configured
         return (
-            self.tool_manager is not None
+            self.tool_handler is not None
             and self.role_registry is not None
             and self.skill_store is not None
             and self.cognitive_client is not None
@@ -203,7 +203,7 @@ class Organ:
                 # Parameters for the STATEFUL PersistentAgent
                 agent_params = {
                     "agent_id": agent_id,
-                    "tool_manager": self.tool_manager,
+                    "tool_handler": self.tool_handler,
                     "specialization": specialization,
                     "role_registry": self.role_registry,
                     "skill_store": self.skill_store,
@@ -219,7 +219,7 @@ class Organ:
                 # Parameters for ObserverAgent (extends BaseAgent)
                 agent_params = {
                     "agent_id": agent_id,
-                    "tool_manager": self.tool_manager,
+                    "tool_handler": self.tool_handler,
                     "specialization": specialization,
                     "role_registry": self.role_registry,
                     "skill_store": self.skill_store,
@@ -232,7 +232,7 @@ class Organ:
                 # Parameters for UtilityLearningAgent (extends BaseAgent)
                 agent_params = {
                     "agent_id": agent_id,
-                    "tool_manager": self.tool_manager,
+                    "tool_handler": self.tool_handler,
                     "specialization": specialization,
                     "role_registry": self.role_registry,
                     "skill_store": self.skill_store,
@@ -246,7 +246,7 @@ class Organ:
                 # Parameters for the STATELESS BaseAgent
                 agent_params = {
                     "agent_id": agent_id,
-                    "tool_manager": self.tool_manager,
+                    "tool_handler": self.tool_handler,
                     "specialization": specialization,
                     "role_registry": self.role_registry,
                     "skill_store": self.skill_store,

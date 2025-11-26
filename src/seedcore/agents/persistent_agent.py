@@ -35,7 +35,7 @@ class PersistentAgent(BaseAgent):
         specialization=Specialization.GENERALIST,
         role_registry=None,
         skill_store=None,
-        tool_manager=None,
+        tool_handler=None,
         cognitive_client=None,
         organ_id=None,
         initial_role_probs=None,
@@ -45,7 +45,7 @@ class PersistentAgent(BaseAgent):
     ):
         super().__init__(
             agent_id=agent_id,
-            tool_manager=tool_manager,
+            tool_handler=tool_handler,
             specialization=specialization,
             role_registry=role_registry or DEFAULT_ROLE_REGISTRY,
             skill_store=skill_store or NullSkillStore(),

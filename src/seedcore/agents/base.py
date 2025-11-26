@@ -29,7 +29,9 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple, Union
 
 # ---- Roles / Skills / RBAC / Routing -------------------------------------------
 
+from seedcore.memory import holon_fabric, mw_manager
 from seedcore.models import TaskPayload
+from seedcore.tools import ToolManager
 from .roles import (
     Specialization,
     RoleProfile,
@@ -46,7 +48,6 @@ from .private_memory import AgentPrivateMemory, PeerEvent
 if TYPE_CHECKING:
     import numpy as np
     from seedcore.models.state import AgentSnapshot
-    from seedcore.tools.manager import ToolManager
     from seedcore.serve.cognitive_client import CognitiveServiceClient
     from seedcore.serve.mcp_client import MCPServiceClient
 
@@ -127,7 +128,7 @@ class BaseAgent:
         self,
         agent_id: str,
         *,
-        tool_manager: Optional["ToolManager"] = None,
+        tool_handler: Optional[Any] = None,  # Can be ToolManager or List[ToolManagerShard]
         specialization: Specialization = Specialization.GENERALIST,
         role_registry: Optional[RoleRegistry] = None,
         skill_store: Optional[SkillStoreProtocol] = None,
@@ -147,30 +148,49 @@ class BaseAgent:
         self.specialization: Specialization = specialization
         self.role_profile: RoleProfile = self._role_registry.get(self.specialization)
 
-        # Tool surface
-        if tool_manager is None:
+        # --------------------------------------------------------------
+        # Tool Handling: supports
+        #   (A) Single ToolManager
+        #   (B) Sharded ToolManager (list of ToolManagerShard actors)
+        # --------------------------------------------------------------
+
+        # Validate tool handler
+        if tool_handler is None:
             logger.warning(
-                "BaseAgent %s started without ToolManager; creating dedicated instance. "
-                "Prefer injecting a shared ToolManager.",
+                "BaseAgent %s started without a tool_handler. "
+                "Falling back to a dedicated ToolManager instance. "
+                "Prefer injecting a shared handler via Organism.",
                 agent_id,
             )
-            # Lazy import to avoid circular dependencies
-            from seedcore.tools.manager import ToolManager as _ToolManager
-            # Internal-only tools by default, no MCP unless explicitly supplied
-            tool_manager = _ToolManager()
-        self.tools: ToolManager = tool_manager
+            # Dedicated fallback
+            self.tool_handler = ToolManager(
+                skill_store=skill_store,
+                mw_manager=mw_manager,
+                holon_fabric=holon_fabric,
+                cognitive_client=cognitive_client,
+                mcp_client=mcp_client,
+            )
+        else:
+            self.tool_handler = tool_handler
 
-        # Store mcp_client separately for higher-level logic
-        # Only inject MCP into ToolManager if explicitly provided (opt-in)
-        self.mcp_client = mcp_client
-        if mcp_client and getattr(tool_manager, "_mcp_client", None) is None:
-            tool_manager._mcp_client = mcp_client
-        
-        # Inject cognitive_client into ToolManager if provided
-        # cognitive_client is for Cognitive Service (LLM/reasoning), different from MCP
-        # Note: self.cognitive_client is set later (line 228), but we inject it here for ToolManager
-        if cognitive_client and getattr(tool_manager, "cognitive_client", None) is None:
-            tool_manager.cognitive_client = cognitive_client
+
+        # --------------------------------------------------------------
+        # Optional dependency injection for single-instance ToolManager
+        # --------------------------------------------------------------
+
+        if not isinstance(self.tool_handler, list):  # non-sharded mode
+            tm = self.tool_handler
+
+            # Inject MCP client only if TM does not already have one
+            if mcp_client and getattr(tm, "_mcp_client", None) is None:
+                tm._mcp_client = mcp_client
+
+            # Inject cognitive client if missing
+            if cognitive_client and getattr(tm, "cognitive_client", None) is None:
+                tm.cognitive_client = cognitive_client
+
+        # (Sharded mode: ToolManagerShard already received clients during creation)
+
 
         # Skills (deltas) + optional persistence
         self.skills: SkillVector = SkillVector()
@@ -720,6 +740,36 @@ class BaseAgent:
             return 0.5
 
     # ============================================================================
+    # Tool execution (unified API for single ToolManager or sharded mode)
+    # ============================================================================
+
+    async def use_tool(self, name: str, args: dict):
+        """
+        Unified tool execution:
+        - Single ToolManager instance
+        - OR sharded ToolManagerShard Ray actors
+        """
+
+        handler = self.tool_handler
+
+        # -------------------------------------------
+        # Sharded mode (list of Ray actors)
+        # -------------------------------------------
+        if isinstance(handler, list):
+            if not handler:
+                raise RuntimeError("Sharded tool_handler is empty.")
+
+            shard = hash(self.agent_id) % len(handler)
+            return await handler[shard].execute_tool.remote(
+                self.agent_id, name, args
+            )
+
+        # -------------------------------------------
+        # Single ToolManager instance
+        # -------------------------------------------
+        return await handler.execute(name, args, self.agent_id)
+
+    # ============================================================================
     # Generic task execution (routing-aware, RBAC-enforced)
     # ============================================================================
 
@@ -790,7 +840,6 @@ class BaseAgent:
         tool_errors: List[Dict[str, Any]] = []
 
         default_tool_timeout_s = float(getattr(self, "default_tool_timeout_s", 20.0))
-        tool_manager = getattr(self, "tools", None)
 
         for call in tv.tool_calls:
             tool_name = call.get("name")
@@ -813,31 +862,34 @@ class BaseAgent:
                 continue
 
             # (b) Tool availability
-            if not tool_manager:
-                tool_errors.append({"tool": tool_name, "error": "tool_manager_missing"})
-                continue
-
-            has_attr = getattr(tool_manager, "has", None)
-            if not callable(has_attr):
-                tool_errors.append({"tool": tool_name, "error": "tool_manager_missing"})
-                continue
-
-            try:
-                has_result = has_attr(tool_name)
-                if inspect.isawaitable(has_result):
-                    has_result = await has_result
-                if not has_result:
-                    tool_errors.append({"tool": tool_name, "error": "tool_missing"})
+            # In sharded mode, we skip availability checks (shards handle it)
+            # In single ToolManager mode, check availability
+            if not isinstance(self.tool_handler, list):
+                if not self.tool_handler:
+                    tool_errors.append({"tool": tool_name, "error": "tool_handler_missing"})
                     continue
-            except Exception as exc:
-                tool_errors.append({"tool": tool_name, "error": f"tool_has_error:{exc}"})
-                continue
+
+                has_attr = getattr(self.tool_handler, "has", None)
+                if not callable(has_attr):
+                    tool_errors.append({"tool": tool_name, "error": "tool_handler_missing"})
+                    continue
+
+                try:
+                    has_result = has_attr(tool_name)
+                    if inspect.isawaitable(has_result):
+                        has_result = await has_result
+                    if not has_result:
+                        tool_errors.append({"tool": tool_name, "error": "tool_missing"})
+                        continue
+                except Exception as exc:
+                    tool_errors.append({"tool": tool_name, "error": f"tool_has_error:{exc}"})
+                    continue
 
             # (c) Execution with timeout
             args = dict(call.get("args") or {})
             tool_timeout = float(args.pop("_timeout_s", default_tool_timeout_s))
             try:
-                output = await asyncio.wait_for(tool_manager.execute(tool_name, args), timeout=tool_timeout)
+                output = await asyncio.wait_for(self.use_tool(tool_name, args), timeout=tool_timeout)
                 # Ensure output is JSON-serializable (handle numpy arrays, etc.)
                 output = self._make_json_safe(output)
                 results.append({"tool": tool_name, "ok": True, "output": output})
