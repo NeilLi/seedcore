@@ -1,71 +1,174 @@
-"""Core utilities for task normalization, redaction, and data processing."""
+"""
+Core utilities for task normalization, redaction, and data processing.
+Acts as the Coordinator layer's entry point for sanitizing, unpacking, and scoring tasks.
+"""
 
 import uuid
 import logging
-import inspect
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Iterable, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-# Import models for type hints
-from seedcore.models import TaskPayload, Task
+# Import models
+from seedcore.models.task_payload import TaskPayload
+from seedcore.models.task import TaskType
 
 logger = logging.getLogger(__name__)
 
-# Constants for maintainability
-MAX_STRING_LENGTH = 1000  # Maximum string length before truncation in redaction
-DEFAULT_RECURSION_DEPTH = 10  # Default maximum recursion depth for nested structure traversal
+# Constants
+MAX_STRING_LENGTH = 1000
+DEFAULT_RECURSION_DEPTH = 10
+
+# ============================================================================
+# 1. PRIMARY NORMALIZATION PIPELINE
+# ============================================================================
 
 
-def _is_empty(value: Any) -> bool:
-    """Utility to determine if a value should be treated as empty."""
-    if value is None:
-        return True
-    if isinstance(value, (str, bytes)) and value == "":
-        return True
-    if isinstance(value, (list, tuple, set, dict)) and len(value) == 0:
-        return True
-    return False
+def coerce_task_payload(task: Any) -> Tuple[TaskPayload, Dict[str, Any]]:
+    """
+    The robust entry point for normalizing ANY task input into a TaskPayload.
+
+    It handles three distinct input formats:
+    1. **TaskPayload Object**: Internal calls.
+    2. **Dispatcher Dump** (via `model_dump`): Hybrid dict with `task_id` AND packed `params`.
+    3. **DB Row** (via `to_db_row`): Strict dict with `id` AND packed `params`.
+    4. **Raw API Input**: Dict with top-level fields only, NO packed `params`.
+
+    Returns:
+        (TaskPayload object, Merged Dict for DB/API)
+    """
+    # --- Step 1: Structural Normalization ---
+    # This standardizes ID to 'id' key in the dict, but we track the value separately.
+    task_id, raw_dict = normalize_task_dict(task)
+
+    # --- Step 2: Type Normalization ---
+    raw_type = raw_dict.get("type") or raw_dict.get("task_type")
+    canonical_type = normalize_type(raw_type)
+    raw_dict["type"] = canonical_type
+
+    # --- Step 3: Decompose Params (Hydration) ---
+
+    # Case A: Input is already a TaskPayload object
+    if isinstance(task, TaskPayload):
+        payload = task
+        if str(task_id) != payload.task_id:
+            payload.task_id = str(task_id)
+
+    # Case B: Input is a Dict (Dispatcher Dump, DB Row, or Raw)
+    else:
+        try:
+            params = raw_dict.get("params")
+
+            # CRITICAL DECISION LOGIC:
+            # The Dispatcher sends `model_dump()`, which contains `params` populated with
+            # envelopes (graph, routing, chat).
+            # If `params` has these envelopes, we MUST treat it as a DB-style row
+            # and unpack from `params` to ensure consistency.
+
+            is_packed_payload = isinstance(params, dict) and (
+                "graph" in params
+                or "routing" in params
+                or "cognitive" in params
+                or "chat" in params
+            )
+
+            if is_packed_payload:
+                # ROUTE 1: TRUST PARAMS (Dispatcher/DB Source)
+                # TaskPayload.from_db() handles both 'id' and 'task_id' keys safely.
+                # It unpacks params -> top-level fields.
+                payload = TaskPayload.from_db(raw_dict)
+            else:
+                # ROUTE 2: TRUST TOP-LEVEL (External API Source)
+                # Standard Pydantic load. params might be empty, so it builds
+                # envelopes from top-level fields (e.g. chat_message).
+                payload = TaskPayload.model_validate(raw_dict)
+
+        except Exception as e:
+            logger.warning(
+                f"Task payload validation warning: {e}. Falling back to permissive load."
+            )
+            payload = _permissive_load(raw_dict, task_id, canonical_type)
+
+    # --- Step 4: Compute / Backfill Scores ---
+    _compute_scoring_features(payload)
+
+    # --- Step 5: Generate Output Formats ---
+    # We generate a clean DB row format for downstream persistence.
+    db_row = payload.to_db_row()
+
+    # We mix in extra fields from the input (like correlation_id) that aren't in the DB schema
+    # but are needed for passing context to the next service.
+    original_extras = {
+        k: v for k, v in raw_dict.items() if k not in db_row and k != "params"
+    }
+
+    # Priority overwrite: The calculated payload values (db_row) should overwrite raw input,
+    # EXCEPT for ID, where we want to ensure we keep the normalized ID.
+    merged_dict = {**original_extras, **db_row}
+
+    return payload, merged_dict
 
 
-def sync_task_identity(task_like: Any, task_id: str) -> None:
-    """Sync task identity by setting id/task_id on the task object or dict."""
-    if isinstance(task_like, dict):
-        task_like["id"] = task_id
-        task_like.setdefault("task_id", task_id)
-        return
-    for attr in ("id", "task_id"):
-        if hasattr(task_like, attr):
-            try:
-                setattr(task_like, attr, task_id)
-            except Exception:
-                continue
+def _compute_scoring_features(payload: TaskPayload) -> None:
+    """
+    Compute derived scores (Drift, Priority) based on the HYDRATED payload.
+    """
+    # 1. Priority Calculation (if not set)
+    if payload.priority == 0:
+        # Domain heuristics
+        if payload.domain in ("security", "fintech", "compliance"):
+            payload.priority = 3
+
+        # Unpacked Check: Risk
+        risk = payload.params.get("risk", {})
+        if isinstance(risk, dict) and risk.get("is_high_stakes"):
+            payload.priority = 5
+
+        # Unpacked Check: Routing Hints
+        if payload.params.get("routing", {}).get("hints", {}).get("priority"):
+            payload.priority = int(payload.params["routing"]["hints"]["priority"])
+
+    # 2. Drift Score (Complexity Baseline)
+    if payload.type == TaskType.GRAPH and payload.drift_score == 0.0:
+        # Example: Large top_k implies heavy search
+        if payload.graph_config.get("top_k", 0) > 20:
+            payload.drift_score = 0.5
+
+
+def _permissive_load(data: Dict[str, Any], task_id: Any, t_type: str) -> TaskPayload:
+    """Fallback loader for malformed inputs to prevent crash loops."""
+    # Try to grab ID from anywhere
+    tid = str(task_id)
+    if not tid or tid == "None":
+        tid = str(uuid.uuid4())
+
+    return TaskPayload(
+        task_id=tid,
+        type=t_type,
+        params=data.get("params") or {},
+        description=data.get("description") or data.get("prompt") or "",
+        domain=data.get("domain"),
+    )
+
+
+# ============================================================================
+# 2. DICT & ID NORMALIZATION
+# ============================================================================
 
 
 def normalize_task_dict(task: Any) -> Tuple[Union[uuid.UUID, str], Dict[str, Any]]:
     """
     Normalize a task-like object to a (task_id, task_dict).
-
-    Accepts:
-      - dict-like objects
-      - pydantic models (with .model_dump() or .dict())
-      - objects with __dict__
-    ID resolution order:
-      - 'id'
-      - 'task_id'
-      - 'uuid' / 'uid'
-      - otherwise generate a new UUID4
-    Returns:
-      (uuid.UUID, dict) — the dict will always include an 'id' string.
     """
-    # 1) Convert to dict best-effort
     task_dict = convert_task_to_dict(task) or {}
-    
-    # 2) Resolve/generate ID
+
+    # Resolve ID: Prioritize 'id', then 'task_id'
     raw_id = task_dict.get("id") or task_dict.get("task_id")
     task_id_str: str
+    task_id_value: Union[uuid.UUID, str]
+
     if raw_id:
         try:
             task_uuid = uuid.UUID(str(raw_id))
-            task_id_value: Union[uuid.UUID, str] = task_uuid
+            task_id_value = task_uuid
             task_id_str = str(task_uuid)
         except (ValueError, TypeError):
             task_id_str = canonicalize_identifier(raw_id)
@@ -75,870 +178,238 @@ def normalize_task_dict(task: Any) -> Tuple[Union[uuid.UUID, str], Dict[str, Any
         task_id_value = task_uuid
         task_id_str = str(task_uuid)
 
+    # Ensure both keys exist for compatibility
     task_dict["id"] = task_id_str
     task_dict.setdefault("task_id", task_id_str)
-    
-    # 3) Sync identity back to original object if possible
+
     sync_task_identity(task, task_id_str)
-    
     return task_id_value, task_dict
 
 
 def convert_task_to_dict(task: Any) -> Dict[str, Any]:
-    """Convert task object to dictionary, handling TaskPayload and other types."""
+    """Convert task object to dictionary."""
     if isinstance(task, dict):
         return task.copy()
-    elif hasattr(task, 'model_dump'):
-        task_dict = task.model_dump()
-        # Handle TaskPayload which has 'task_id' instead of 'id'
-        if hasattr(task, 'task_id') and 'id' not in task_dict:
-            task_dict['id'] = task.task_id
-        return task_dict
-    elif hasattr(task, 'dict'):
-        task_dict = task.dict()
-        # Handle TaskPayload which has 'task_id' instead of 'id'
-        if hasattr(task, 'task_id') and 'id' not in task_dict:
-            task_dict['id'] = task.task_id
-        return task_dict
-    elif hasattr(task, '__dict__'):
+    elif hasattr(task, "model_dump"):  # Pydantic v2
+        return task.model_dump()
+    elif hasattr(task, "dict"):  # Pydantic v1
+        return task.dict()
+    elif hasattr(task, "__dict__"):
         return task.__dict__.copy()
-    else:
-        logger.warning(f"Unknown task type: {type(task)}")
-        return {}
+    return {}
 
 
 def canonicalize_identifier(value: Any) -> str:
-    """Canonicalize an identifier-like value to a string (lossless where possible)."""
+    """Canonicalize an identifier-like value to a string."""
     if value is None:
         return ""
     if isinstance(value, uuid.UUID):
         return str(value)
-    if isinstance(value, bool):
-        return "1" if value else "0"
-    if isinstance(value, (int,)):
-        return str(value)
     if isinstance(value, float):
-        # Int-like floats -> int string; otherwise preserve float repr
         return str(int(value)) if value.is_integer() else str(value)
-    # Fallback: string normalize
     return str(value).strip()
 
 
-def redact_sensitive_data(data: Any) -> Any:
-    """Redact sensitive data from memory synthesis payload."""
-    if isinstance(data, dict):
-        redacted = {}
-        for key, value in data.items():
-            if any(sensitive in key.lower() for sensitive in ['password', 'token', 'key', 'secret']):
-                if isinstance(value, (dict, list)):
-                    redacted[key] = redact_sensitive_data(value)
-                else:
-                    redacted[key] = "[REDACTED]"
-            else:
-                redacted[key] = redact_sensitive_data(value)
-        return redacted
-    elif isinstance(data, list):
-        return [redact_sensitive_data(item) for item in data]
-    elif isinstance(data, str) and len(data) > MAX_STRING_LENGTH:
-        return data[:MAX_STRING_LENGTH] + "... [TRUNCATED]"
-    else:
-        return data
+def sync_task_identity(task_like: Any, task_id: str) -> None:
+    """Sync task identity by setting id/task_id on the object."""
+    if isinstance(task_like, dict):
+        task_like["id"] = task_id
+        task_like.setdefault("task_id", task_id)
+        return
+    for attr in ("id", "task_id"):
+        if hasattr(task_like, attr):
+            try:
+                setattr(task_like, attr, task_id)
+            except Exception:
+                pass
 
 
-def extract_from_nested(
-    data: Dict[str, Any],
-    key_paths: List[Tuple[str, ...]],
-    value_type: Optional[type] = None,
-    max_depth: Optional[int] = DEFAULT_RECURSION_DEPTH
-) -> Optional[Any]:
-    """
-    Unified pattern-based extractor for nested dictionary values.
-    
-    Searches through a dictionary using multiple key paths, returning the first
-    matching value that satisfies the type constraint (if provided).
-    
-    Args:
-        data: Dictionary to search in
-        key_paths: List of tuples representing key paths to try (e.g., [("payload", "metadata", "decision")])
-        value_type: Optional type constraint to validate the extracted value (e.g., str, dict)
-        max_depth: Maximum depth to traverse (prevents infinite loops)
-    
-    Returns:
-        First matching value found, or None if no match
-    
-    Example:
-        >>> data = {"payload": {"metadata": {"decision": "planner"}}}
-        >>> extract_from_nested(data, [("payload", "metadata", "decision"), ("payload", "decision")], str)
-        'planner'
-    """
-    if not isinstance(data, dict) or max_depth is not None and max_depth <= 0:
-        return None
-    
-    for key_path in key_paths:
-        if not key_path:
-            continue
-        
-        current = data
-        for i, key in enumerate(key_path):
-            if not isinstance(current, dict):
-                break
-            current = current.get(key)
-            if current is None:
-                break
-            # If we've reached the last key in the path
-            if i == len(key_path) - 1:
-                # Check type constraint if provided
-                if value_type is None or isinstance(current, value_type):
-                    return current
-        # If we got here, this path didn't match
-        continue
-    
-    return None
+# ============================================================================
+# 3. TYPE NORMALIZATION
+# ============================================================================
 
 
-def extract_proto_plan(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def normalize_type(task_type: Optional[str]) -> str:
     """
-    Extract 'proto_plan' from a route/execute payload.
-    Looks under payload['metadata']['proto_plan'] and payload['proto_plan'].
+    Normalize common type aliases to canonical TaskType enum values.
     """
-    return extract_from_nested(
-        payload,
-        key_paths=[
-            ("metadata", "proto_plan"),
-            ("proto_plan",),
-        ],
-        value_type=dict
-    )
+    if not task_type:
+        return "unknown"
 
+    normalized = str(task_type).strip().lower()
 
-def extract_decision(route_result: Dict[str, Any]) -> Optional[str]:
-    """
-    Extract 'decision' from a route result dict.
-    Checks result['payload']['metadata']['decision'], result['payload']['decision'], and result['decision'].
-    """
-    return extract_from_nested(
-        route_result,
-        key_paths=[
-            ("payload", "metadata", "decision"),
-            ("payload", "decision"),
-            ("decision",),
-        ],
-        value_type=str
-    )
-
-
-def extract_dependency_token(
-    ref: Any,
-    max_depth: Optional[int] = DEFAULT_RECURSION_DEPTH,
-    visited: Optional[Set[int]] = None
-) -> Any:
-    """
-    Extract a "dependency token" from a reference value.
-    Recursively searches through nested structures to find task identifiers.
-    
-    Uses memoization (via visited set) and depth-limiting to handle very deep structures
-    efficiently and prevent infinite loops from circular references.
-    
-    Args:
-        ref: The reference value to extract a token from
-        max_depth: Maximum recursion depth to prevent infinite loops (default: DEFAULT_RECURSION_DEPTH)
-        visited: Set of object IDs already processed (for memoization/circular reference detection)
-    
-    Returns:
-        Extracted token or None if not found
-    """
-    if ref is None:
-        return None
-    
-    # Depth limit check
-    if max_depth is not None and max_depth <= 0:
-        return None
-    
-    # Initialize visited set on first call
-    if visited is None:
-        visited = set()
-    
-    # Memoization: Check if we've already processed this object (prevents circular references)
-    # Use id() for objects that can be hashed in sets (handles mutable objects)
-    ref_id = id(ref)
-    if ref_id in visited:
-        return None  # Circular reference detected
-    visited.add(ref_id)
-    
+    # 1. Check if valid Enum value
     try:
-        # Handle collections
-        if isinstance(ref, (list, tuple, set)):
-            for item in ref:
-                token = extract_dependency_token(
-                    item,
-                    max_depth - 1 if max_depth is not None else None,
-                    visited
-                )
-                if token is not None:
-                    return token
-            return None
+        return TaskType(normalized).value
+    except ValueError:
+        pass
 
-        # Handle dictionaries
-        if isinstance(ref, dict):
-            for key in ("task_id", "id", "parent_task_id", "source_task_id", "step_id", "child_task_id", "task"):
-                if key in ref:
-                    token = extract_dependency_token(
-                        ref[key],
-                        max_depth - 1 if max_depth is not None else None,
-                        visited
-                    )
-                    if token is not None:
-                        return token
-            return None
+    # 2. Alias Mapping
+    type_map = {
+        # Graph / Memory
+        "embed": TaskType.GRAPH.value,
+        "rag": TaskType.GRAPH.value,
+        "knowledge": TaskType.GRAPH.value,
+        "graph_query": TaskType.GRAPH.value,
+        "graph_embed": TaskType.GRAPH.value,
+        # Action
+        "execute": TaskType.ACTION.value,
+        "tool": TaskType.ACTION.value,
+        "function": TaskType.ACTION.value,
+        # Chat
+        "conversation": TaskType.CHAT.value,
+        "message": TaskType.CHAT.value,
+        # Query (Reasoning)
+        "search": TaskType.QUERY.value,
+        "plan": TaskType.QUERY.value,
+        "reasoning": TaskType.QUERY.value,
+        "triage": TaskType.QUERY.value,
+        "anomaly_triage": TaskType.QUERY.value,
+        # Maintenance
+        "health": TaskType.MAINTENANCE.value,
+        "cron": TaskType.MAINTENANCE.value,
+    }
 
-        # Handle objects with attributes
-        for attr in ("task_id", "id", "parent_task_id", "source_task_id", "step_id", "child_task_id"):
-            if hasattr(ref, attr):
-                token = extract_dependency_token(
-                    getattr(ref, attr),
-                    max_depth - 1 if max_depth is not None else None,
-                    visited
-                )
-                if token is not None:
-                    return token
-
-        # Handle numeric types
-        if isinstance(ref, float) and ref.is_integer():
-            return int(ref)
-
-        # Return the value itself if it's a primitive we can use
-        return ref
-    finally:
-        # Remove from visited set when we're done processing this branch
-        # This allows the same object to be visited again in a different branch
-        visited.discard(ref_id)
-
-
-def build_task_from_dict(task_data: Dict[str, Any]) -> Task:
-    """
-    Build a Task model from a dict. Ensures required fields, populates sensible defaults.
-    """
-    if not isinstance(task_data, dict):
-        raise TypeError("task_data must be a dict")
-
-    # ID
-    tid_raw = task_data.get("id") or task_data.get("task_id")
-    tid = canonicalize_identifier(tid_raw) if tid_raw else str(uuid.uuid4())
-
-    return Task(
-        id=tid,
-        type=str(task_data.get("type") or "").strip() or "unknown",
-        description=str(task_data.get("description") or ""),
-        params=task_data.get("params") or {},
-        domain=task_data.get("domain"),
-        features=task_data.get("features") or {},
-        history_ids=task_data.get("history_ids") or [],
-    )
-
-
-def normalize_string(x: Optional[str]) -> Optional[str]:
-    """Normalize string for consistent matching."""
-    return x.strip().lower() if x else None
+    return type_map.get(normalized, normalized)
 
 
 def normalize_domain(domain: Optional[str]) -> Optional[str]:
     """Normalize domain to standard taxonomy."""
     if not domain:
         return None
-    
-    domain = str(domain).strip().lower()
-    
-    # Map common variations to standard domains
-    domain_map = {
-        "fact": "facts",
-        "admin": "management", 
-        "mgmt": "management",
-        "util": "utility",
-        "hospitality": "hospitality",
-        "hotel": "hospitality", 
-        "hospitality_service": "hospitality",
-        "customer_service": "customer_service",
-        "support": "customer_service",
-        "guest_services": "customer_service",
-        "operations": "operations",
+    d = str(domain).strip().lower()
+
+    aliases = {
+        "admin": "management",
+        "hotel": "hospitality",
         "ops": "operations",
-        "maintenance": "maintenance",
-        "facilities": "maintenance",
-        "security": "security",
-        "safety": "security",
-        "food_service": "food_service",
         "f&b": "food_service",
-        "food_and_beverage": "food_service",
-        "housekeeping": "housekeeping",
-        "cleaning": "housekeeping",
-        "concierge": "concierge",
-        "guest_experience": "guest_experience",
-        "guest_relations": "guest_relations"
+        "finance": "fintech",
+        "med": "healthcare",
+        "security": "security",
     }
-    
-    return domain_map.get(domain, domain)
+    return aliases.get(d, d)
 
 
-def validate_task_payload(payload: Dict[str, Any]) -> TaskPayload:
-    """Validate and convert dict to TaskPayload model."""
-    try:
-        return TaskPayload(**payload)
-    except Exception as e:
-        logger.warning(f"Failed to validate TaskPayload: {e}")
-        # Return a minimal valid TaskPayload
-        return TaskPayload(
-            type=payload.get("type", "unknown"),
-            params=payload.get("params", {}),
-            description=payload.get("description", ""),
-            domain=payload.get("domain"),
-            drift_score=payload.get("drift_score", 0.0),
-            task_id=payload.get("task_id", str(uuid.uuid4()))
-        )
+# ============================================================================
+# 4. EXTRACTION, REDACTION & UTILS
+# ============================================================================
 
 
-def validate_task(task_data: Dict[str, Any]) -> Task:
-    """Validate and convert dict to Task model."""
-    try:
-        return Task(**task_data)
-    except Exception as e:
-        logger.warning(f"Failed to validate Task: {e}")
-        # Return a minimal valid Task
-        return Task(
-            type=task_data.get("type", "unknown"),
-            description=task_data.get("description", ""),
-            params=task_data.get("params", {}),
-            domain=task_data.get("domain"),
-            features=task_data.get("features", {}),
-            history_ids=task_data.get("history_ids", [])
-        )
-
-
-def coerce_task_payload(task: Any) -> Tuple[TaskPayload, Dict[str, Any]]:
-    """
-    Normalize any task-like object into a TaskPayload while preserving caller-supplied fields.
-    Returns the TaskPayload and a merged dict containing the canonical payload plus extras.
-    """
-    original_dict = convert_task_to_dict(task)
-
-    if isinstance(task, TaskPayload):
-        payload = task
-    else:
-        try:
-            payload = TaskPayload.model_validate(original_dict)
-        except Exception:
-            try:
-                payload = TaskPayload.from_db(original_dict)
-            except Exception:
-                fallback_id = original_dict.get("task_id") or original_dict.get("id") or uuid.uuid4().hex
-                payload = TaskPayload(
-                    task_id=str(fallback_id),
-                    type=original_dict.get("type") or original_dict.get("task_type") or "unknown_task",
-                    params=original_dict.get("params") or {},
-                    description=original_dict.get("description") or original_dict.get("prompt") or "",
-                    domain=original_dict.get("domain"),
-                    drift_score=float(original_dict.get("drift_score") or 0.0),
-                )
-
-    if not payload.task_id or payload.task_id in ("", "None"):
-        payload = payload.copy(update={"task_id": uuid.uuid4().hex})
-
-    normalized_dict = payload.model_dump()
-    merged: Dict[str, Any] = dict(normalized_dict)
-
-    # Merge params while preserving routing envelope from normalized payload
-    merged_params = dict(normalized_dict.get("params") or {})
-    orig_params = original_dict.get("params")
-    if isinstance(orig_params, dict):
-        for key, value in orig_params.items():
-            if key == "routing" and isinstance(value, dict):
-                routing = merged_params.setdefault("routing", {})
-                for routing_key, routing_value in value.items():
-                    if routing_key not in routing:
-                        routing[routing_key] = routing_value
-                continue
-            if key not in merged_params:
-                merged_params[key] = value
-    merged["params"] = merged_params
-
-    # Merge top-level extras from original dict (e.g., correlation_id)
-    for key, value in original_dict.items():
-        if key == "params":
-            continue
-        if key not in merged or _is_empty(merged.get(key)):
-            merged[key] = value
-
-    merged["task_id"] = payload.task_id
-    merged.setdefault("id", payload.task_id)
-    sync_task_identity(task, payload.task_id)
-    return payload, merged
-
-
-def normalize_task_payloads(data: Any) -> Any:
-    """
-    Recursively normalize any task payloads contained within the provided data structure.
-    Returns the transformed structure (mutates dict/list inputs in place when possible).
-    """
-    if isinstance(data, TaskPayload):
-        _, normalized = coerce_task_payload(data)
-        return normalized
-
+def redact_sensitive_data(data: Any) -> Any:
+    """Redact sensitive keys (password, token, etc) from dicts."""
     if isinstance(data, dict):
-        looks_like_task = "type" in data and "params" in data
-        params = data.get("params")
-        already_normalized = looks_like_task and isinstance(params, dict) and "routing" in params
-        if looks_like_task and not already_normalized:
-            _, data = coerce_task_payload(data)
-        for key, value in list(data.items()):
-            data[key] = normalize_task_payloads(value)
-        return data
-
-    if isinstance(data, list):
-        return [normalize_task_payloads(item) for item in data]
-
+        return {
+            k: (
+                "[REDACTED]"
+                if any(s in k.lower() for s in ["password", "token", "secret", "key"])
+                else redact_sensitive_data(v)
+            )
+            for k, v in data.items()
+        }
+    elif isinstance(data, list):
+        return [redact_sensitive_data(item) for item in data]
     return data
 
 
-def task_to_payload(task: Task) -> TaskPayload:
-    """Convert Task -> TaskPayload (preserving ID as task_id)."""
-    return TaskPayload(
-        type=task.type,
-        params=task.params,
-        description=task.description or "",
-        domain=task.domain,
-        drift_score=0.0,  # or pass-through if you compute it upstream
-        task_id=task.id,
-    )
-
-
-def payload_to_task(payload: TaskPayload) -> Task:
-    """Convert TaskPayload -> Task (symmetric to task_to_payload)."""
-    return Task(
-        id=payload.task_id,
-        type=payload.type,
-        description=payload.description or "",
-        params=payload.params or {},
-        domain=payload.domain,
-        features={},       # default empty
-        history_ids=[],    # default empty
-    )
-
-
-def normalize_type(task_type: Optional[str]) -> str:
-    """
-    Normalize common type aliases to canonical names.
-    Falls back to the cleaned original if no mapping applies.
-    """
-    if not task_type:
-        return "unknown"
-    
-    # Convert to lowercase and strip whitespace
-    normalized = str(task_type).strip().lower()
-    
-    # Map common variations to standard types
-    type_map = {
-        # Anomaly detection
-        "anomaly_triage": "anomaly_triage",
-        "anomaly": "anomaly_triage",
-        "triage": "anomaly_triage",
-        
-        # Execution
-        "execute": "execute",
-        "exec": "execute",
-        "run": "execute",
-        
-        # Graph operations
-        "graph_fact_embed": "graph_fact_embed",
-        "fact_embed": "graph_fact_embed",
-        "graph_fact_query": "graph_fact_query",
-        "fact_query": "graph_fact_query",
-        "graph_embed": "graph_embed",
-        "embed": "graph_embed",
-        "graph_rag_query": "graph_rag_query",
-        "rag_query": "graph_rag_query",
-        
-        # Resource management
-        "artifact_manage": "artifact_manage",
-        "artifact": "artifact_manage",
-        "capability_manage": "capability_manage",
-        "capability": "capability_manage",
-        "memory_cell_manage": "memory_cell_manage",
-        "memory_cell": "memory_cell_manage",
-        "model_manage": "model_manage",
-        "model": "model_manage",
-        "policy_manage": "policy_manage",
-        "policy": "policy_manage",
-        "service_manage": "service_manage",
-        "service": "service_manage",
-        "skill_manage": "skill_manage",
-        "skill": "skill_manage",
-        
-        # Generic operations
-        "retrieval": "retrieval",
-        "ranking": "ranking",
-        "generation": "generation",
-        "routing": "routing",
-        "route": "routing",
-        "router": "routing",
-        "orchestration": "orchestration",
-    }
-    
-    return type_map.get(normalized, normalized)
-
-
-def _is_nonstring_iterable(x: Any) -> bool:
-    """Check if x is an iterable but not a string or bytes."""
-    return isinstance(x, Iterable) and not isinstance(x, (str, bytes))
-
-
-async def _init_inputs_and_eventizer(
-    self,
-    task: Union["TaskPayload", Dict[str, Any]],
-    *,
-    eventizer_helper: Optional[Callable[[Any], Any]] = None,
-) -> Tuple["TaskPayload", Dict[str, Any]]:
-    """
-    Normalize task input and collect eventizer-derived metadata.
-
-    Returns:
-      (task: TaskPayload, ctx: Dict[str, Any]) where ctx has:
-        - tags: Set[str]
-        - eventizer_data: Dict[str, Any]
-        - eventizer_tags: Dict[str, Any]
-        - attributes: Dict[str, Any]
-        - confidence: Dict[str, Any]
-        - pii_redacted: bool
-        - eventizer_summary: Optional[Dict[str, Any]]
-    """
-    # ---- 1) Task normalization (dict -> TaskPayload)
-    if not isinstance(task, TaskPayload):
-        task = TaskPayload.model_validate(task)
-
-    params: Dict[str, Any] = task.params or {}
-
-    # ---- 2) Resolve eventizer helper (supports sync or async)
-    helper = eventizer_helper
-    if helper is None:
-        # fall back to a default on self if present (optional)
-        helper = getattr(self, "default_features_from_payload", None)
-
-    eventizer_data: Dict[str, Any] = {}
-    if helper is not None:
-        maybe_features = helper(task)
-        if inspect.isawaitable(maybe_features):
-            maybe_features = await maybe_features
-        if isinstance(maybe_features, dict):
-            eventizer_data = maybe_features  # only accept dict
-
-    # ---- 3) Tags: params.event_tags ⊎ eventizer_data.event_tags.event_types (set semantics)
-    tags: Set[str] = set()
-    param_tags = params.get("event_tags") or []
-    if _is_nonstring_iterable(param_tags):
-        tags.update(str(t) for t in param_tags)
-
-    eventizer_tags: Dict[str, Any] = {}
-    if isinstance(eventizer_data.get("event_tags"), dict):
-        eventizer_tags = eventizer_data["event_tags"]
-        evt_types = eventizer_tags.get("event_types")
-        if _is_nonstring_iterable(evt_types):
-            tags.update(str(t) for t in evt_types)
-
-        # Domain inference: only when task.domain is unset
-        evt_domain = eventizer_tags.get("domain")
-        if evt_domain and not task.domain:
-            task.domain = str(evt_domain)
-
-    # ---- 3.5) Additional domain inference from tags if still unset
-    if not task.domain:
-        # Map domain-specific tags to domains
-        if any(tag in tags for tag in ["vip", "allergen", "luggage_custody", "hvac_fault", "privacy"]):
-            task.domain = "hotel_ops"
-        elif any(tag in tags for tag in ["fraud", "chargeback", "payment"]):
-            task.domain = "fintech"
-        elif any(tag in tags for tag in ["healthcare", "medical", "allergy"]):
-            task.domain = "healthcare"
-        elif any(tag in tags for tag in ["robotics", "iot", "fault"]):
-            task.domain = "robotics"
-
-    # ---- 4) Attributes & Confidence merges (params override eventizer)
-    attributes: Dict[str, Any] = {}
-    if isinstance(eventizer_data.get("attributes"), dict):
-        attributes.update(eventizer_data["attributes"])
-    if isinstance(params.get("attributes"), dict):
-        attributes.update(params["attributes"])  # params win
-
-    confidence: Dict[str, Any] = {}
-    if isinstance(eventizer_data.get("confidence"), dict):
-        confidence.update(eventizer_data["confidence"])
-    if isinstance(params.get("confidence"), dict):
-        confidence.update(params["confidence"])  # params win
-
-    # ---- 5) PII flag with correct precedence
-    pii_redacted = bool(params.get("pii", {}).get("was_redacted", False))
-    if "pii_redacted" in eventizer_data:
-        pii_redacted = bool(eventizer_data.get("pii_redacted"))
-
-    # ---- 6) Compact eventizer summary (optional, for payloads/logs)
-    eventizer_summary: Optional[Dict[str, Any]] = None
-    if eventizer_data:
-        eventizer_summary = {
-            "event_tags": eventizer_tags.get("event_types") if eventizer_tags else None,
-            "attributes": eventizer_data.get("attributes"),
-            "confidence": eventizer_data.get("confidence"),
-            "patterns_applied": eventizer_data.get("patterns_applied"),
-            "pii_redacted": eventizer_data.get("pii_redacted"),
-        }
-
-    ctx = {
-        "tags": tags,
-        "eventizer_data": eventizer_data,
-        "eventizer_tags": eventizer_tags,
-        "attributes": attributes,
-        "confidence": confidence,
-        "pii_redacted": pii_redacted,
-        "eventizer_summary": eventizer_summary,
-    }
-    return task, ctx
-
-
-# ============================================================================
-# PKG (Policy Graph Kernel) Utility Functions
-# ============================================================================
-
-def _normalise_sequence_length(value: Any) -> Optional[int]:
-    """Best-effort helper to compute the length of a sequence for logging."""
-    if hasattr(value, "__len__"):
-        try:
-            return len(value)  # type: ignore[arg-type]
-        except Exception:  # pragma: no cover - defensive
-            return None
-    return None
-
-
-def _coerce_pkg_result(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Coerce a PKG result mapping into a mutable dictionary."""
-    coerced = dict(result)
-    coerced.setdefault("version", result.get("version"))
-    return coerced
-
-
-# ============================================================================
-# Dependency Management Utility Functions
-# ============================================================================
-
-def iter_dependency_entries(dependencies: Any) -> Iterable[Any]:
-    """Iterate over dependency entries, handling nested structures."""
-    if dependencies is None:
-        return []
-
-    if isinstance(dependencies, (list, tuple, set)):
-        for item in dependencies:
-            if isinstance(item, (list, tuple, set)):
-                for nested in iter_dependency_entries(item):
-                    yield nested
-            else:
-                yield item
-    else:
-        yield dependencies
-
-
-def resolve_child_task_id(record: Any, fallback_step: Any) -> Any:
-    """Extract the task identifier for a persisted subtask."""
-    if record is not None:
-        if isinstance(record, dict):
-            for key in ("task_id", "id", "child_task_id", "subtask_id"):
-                if key in record:
-                    token = extract_dependency_token(record[key])
-                    if token is not None:
-                        return token
-            if "task" in record:
-                token = extract_dependency_token(record["task"])
-                if token is not None:
-                    return token
-        else:
-            for attr in ("task_id", "id", "child_task_id", "subtask_id"):
-                if hasattr(record, attr):
-                    token = extract_dependency_token(getattr(record, attr))
-                    if token is not None:
-                        return token
-            if hasattr(record, "task"):
-                token = extract_dependency_token(getattr(record, "task"))
-                if token is not None:
-                    return token
-
-    if fallback_step is not None:
-        if isinstance(fallback_step, dict):
-            for key in ("task_id", "id", "step_id"):
-                if key in fallback_step:
-                    token = extract_dependency_token(fallback_step[key])
-                    if token is not None:
-                        return token
-            if "task" in fallback_step:
-                token = extract_dependency_token(fallback_step["task"])
-                if token is not None:
-                    return token
-        else:
-            for attr in ("task_id", "id", "step_id"):
-                if hasattr(fallback_step, attr):
-                    token = extract_dependency_token(getattr(fallback_step, attr))
-                    if token is not None:
-                        return token
-            if hasattr(fallback_step, "task"):
-                token = extract_dependency_token(getattr(fallback_step, "task"))
-                if token is not None:
-                    return token
-
-    return None
-
-
-def _collect_aliases_from_item(
-    item: Any,
+def extract_from_nested(
+    data: Dict[str, Any],
+    key_paths: List[Tuple[str, ...]],
+    value_type: Optional[type] = None,
     max_depth: Optional[int] = DEFAULT_RECURSION_DEPTH,
-    include_metadata: bool = True
-) -> Set[str]:
-    """
-    Unified helper to collect identifier aliases from a record or step.
-    
-    Args:
-        item: The record or step to extract aliases from
-        max_depth: Maximum recursion depth to prevent infinite loops (default: DEFAULT_RECURSION_DEPTH)
-        include_metadata: Whether to traverse metadata sections (default: True)
-    
-    Returns:
-        Set of canonicalized identifier strings
-    """
-    aliases: Set[str] = set()
+) -> Optional[Any]:
+    """Unified pattern-based extractor for nested dictionary values."""
+    if not isinstance(data, dict) or (max_depth is not None and max_depth <= 0):
+        return None
 
-    if isinstance(item, dict):
-        aliases.update(collect_aliases_from_mapping(item, max_depth, include_metadata))
-        maybe_task = item.get("task")
-        if isinstance(maybe_task, dict):
-            aliases.update(collect_aliases_from_mapping(maybe_task, max_depth, include_metadata))
-        if include_metadata:
-            maybe_meta = item.get("metadata")
-            if isinstance(maybe_meta, dict):
-                aliases.update(collect_aliases_from_mapping(maybe_meta, max_depth, include_metadata))
-    else:
-        aliases.update(collect_aliases_from_object(item, max_depth, include_metadata))
+    for path in key_paths:
+        curr = data
+        for i, key in enumerate(path):
+            if not isinstance(curr, dict):
+                break
+            curr = curr.get(key)
+            if curr is None:
+                break
+            if i == len(path) - 1:
+                if value_type is None or isinstance(curr, value_type):
+                    return curr
+    return None
 
-    return aliases
+
+def extract_dependency_token(
+    ref: Any,
+    max_depth: Optional[int] = DEFAULT_RECURSION_DEPTH,
+    visited: Optional[Set[int]] = None,
+) -> Any:
+    """Recursively searches through nested structures to find task identifiers."""
+    if ref is None or (max_depth is not None and max_depth <= 0):
+        return None
+
+    visited = visited or set()
+    if id(ref) in visited:
+        return None
+    visited.add(id(ref))
+
+    try:
+        if isinstance(ref, (list, tuple, set)):
+            for item in ref:
+                res = extract_dependency_token(item, max_depth - 1, visited)
+                if res:
+                    return res
+        elif isinstance(ref, dict):
+            for k in ("task_id", "id", "parent_task_id", "child_task_id"):
+                if k in ref:
+                    res = extract_dependency_token(ref[k], max_depth - 1, visited)
+                    if res:
+                        return res
+        elif hasattr(ref, "__dict__"):
+            for k in ("task_id", "id"):
+                if hasattr(ref, k):
+                    res = extract_dependency_token(
+                        getattr(ref, k), max_depth - 1, visited
+                    )
+                    if res:
+                        return res
+    finally:
+        visited.discard(id(ref))
+
+    # Base case: Primitive that looks like an ID
+    if isinstance(ref, str) and len(ref) > 5:
+        return ref
+    return None
 
 
 def collect_record_aliases(
     record: Any,
     max_depth: Optional[int] = DEFAULT_RECURSION_DEPTH,
-    include_metadata: bool = True
+    include_metadata: bool = True,
 ) -> Set[str]:
-    """
-    Collect all possible identifier aliases from a record.
-    
-    Args:
-        record: The record to extract aliases from
-        max_depth: Maximum recursion depth to prevent infinite loops (default: DEFAULT_RECURSION_DEPTH)
-        include_metadata: Whether to traverse metadata sections (default: True)
-    
-    Returns:
-        Set of canonicalized identifier strings
-    """
-    return _collect_aliases_from_item(record, max_depth, include_metadata)
-
-
-def collect_step_aliases(
-    step: Any,
-    max_depth: Optional[int] = DEFAULT_RECURSION_DEPTH,
-    include_metadata: bool = True
-) -> Set[str]:
-    """
-    Collect all possible identifier aliases from a step.
-    
-    Args:
-        step: The step to extract aliases from
-        max_depth: Maximum recursion depth to prevent infinite loops (default: DEFAULT_RECURSION_DEPTH)
-        include_metadata: Whether to traverse metadata sections (default: True)
-    
-    Returns:
-        Set of canonicalized identifier strings
-    """
-    return _collect_aliases_from_item(step, max_depth, include_metadata)
-
-
-def collect_aliases_from_mapping(
-    mapping: Dict[str, Any],
-    max_depth: Optional[int] = DEFAULT_RECURSION_DEPTH,
-    include_metadata: bool = True
-) -> Set[str]:
-    """
-    Collect identifier aliases from a dictionary mapping.
-    
-    Args:
-        mapping: Dictionary to extract aliases from
-        max_depth: Maximum recursion depth to prevent infinite loops (default: DEFAULT_RECURSION_DEPTH)
-        include_metadata: Whether to traverse metadata sections (default: True)
-    
-    Returns:
-        Set of canonicalized identifier strings
-    """
-    if max_depth is not None and max_depth <= 0:
-        return set()
-    
+    """Collect all possible identifier aliases from a record."""
     aliases: Set[str] = set()
-    alias_keys = {"task_id", "id", "step_id", "original_task_id", "child_task_id", "source_task_id", "parent_task_id"}
 
-    for key in alias_keys:
-        if key in mapping:
-            token = extract_dependency_token(mapping[key], max_depth)
-            if token is not None:
-                aliases.add(canonicalize_identifier(token))
+    def _collect(item, d):
+        if d <= 0:
+            return
+        if isinstance(item, dict):
+            for k in ("task_id", "id", "child_task_id", "source_task_id"):
+                if k in item:
+                    aliases.add(canonicalize_identifier(item[k]))
+            if include_metadata and "metadata" in item:
+                _collect(item["metadata"], d - 1)
+        elif hasattr(item, "task_id"):
+            aliases.add(canonicalize_identifier(getattr(item, "task_id")))
 
-    if max_depth is not None and max_depth > 1:
-        for key, value in mapping.items():
-            # Skip metadata if include_metadata is False
-            if not include_metadata and key == "metadata":
-                continue
-            if isinstance(value, dict):
-                aliases.update(collect_aliases_from_mapping(value, max_depth - 1, include_metadata))
-
-    return aliases
+    _collect(record, max_depth or 5)
+    return {a for a in aliases if a}
 
 
-def collect_aliases_from_object(
-    obj: Any,
-    max_depth: Optional[int] = DEFAULT_RECURSION_DEPTH,
-    include_metadata: bool = True
-) -> Set[str]:
-    """
-    Collect identifier aliases from an object.
-    
-    Args:
-        obj: Object to extract aliases from
-        max_depth: Maximum recursion depth to prevent infinite loops (default: DEFAULT_RECURSION_DEPTH)
-        include_metadata: Whether to traverse metadata sections (default: True)
-    
-    Returns:
-        Set of canonicalized identifier strings
-    """
-    if max_depth is not None and max_depth <= 0:
-        return set()
-    
-    aliases: Set[str] = set()
-    alias_keys = ("task_id", "id", "step_id", "original_task_id", "child_task_id", "source_task_id", "parent_task_id")
+def resolve_child_task_id(record: Any, fallback_step: Any) -> Any:
+    """Extract the task identifier for a persisted subtask."""
+    t = extract_dependency_token(record, max_depth=2)
+    if t:
+        return t
+    return extract_dependency_token(fallback_step, max_depth=2)
 
-    for key in alias_keys:
-        if hasattr(obj, key):
-            token = extract_dependency_token(getattr(obj, key), max_depth)
-            if token is not None:
-                aliases.add(canonicalize_identifier(token))
 
-    if max_depth is not None and max_depth > 1:
-        # Always process "task" attribute
-        if hasattr(obj, "task"):
-            value = getattr(obj, "task")
-            if isinstance(value, dict):
-                aliases.update(collect_aliases_from_mapping(value, max_depth - 1, include_metadata))
-        
-        # Conditionally process "metadata" attribute
-        if include_metadata and hasattr(obj, "metadata"):
-            value = getattr(obj, "metadata")
-            if isinstance(value, dict):
-                aliases.update(collect_aliases_from_mapping(value, max_depth - 1, include_metadata))
-
-    return aliases
+def _is_empty(value: Any) -> bool:
+    return value in (None, "", [], {}, set())

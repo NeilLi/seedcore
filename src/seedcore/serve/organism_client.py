@@ -17,19 +17,23 @@ logger = logging.getLogger(__name__)
 
 def get_organism_service_handle():
     """
-    Get a Ray Serve deployment handle to OrganismService.
-    
-    This is a convenience function for services that need direct Ray handle access
-    (e.g., StateService's AgentAggregator which needs to call .remote() methods).
-    
-    Returns:
-        Ray Serve deployment handle to OrganismService
+    Acquire a Ray Serve DeploymentHandle to OrganismService.
+    Intended for internal system use (StateService, AgentAggregator).
     """
+    from ray import serve  # pyright: ignore[reportMissingImports]
+
     try:
-        from ray import serve  # pyright: ignore[reportMissingImports]
-        return serve.get_deployment_handle("OrganismService", app_name="organism")
+        handle = serve.get_deployment_handle(
+            name="OrganismService",
+            app_name="organism"
+        )
+        return handle
     except Exception as e:
-        logger.error(f"Failed to get OrganismService handle: {e}")
+        logger.error(
+            f"[StateService] Failed to get OrganismService deployment handle: {e}. "
+            "Ensure the 'organism' Serve app is running and includes the deployment "
+            "'OrganismService'."
+        )
         raise
 
 class OrganismServiceClient(BaseServiceClient):

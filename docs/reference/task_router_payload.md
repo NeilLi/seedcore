@@ -181,6 +181,64 @@ Controls the reasoning path and memory rules.
 
 ---
 
+# ## Graph Envelope (`params.graph`)
+
+TaskType.GRAPH workloads follow the **Polymorphic Payload** pattern: the Task table’s `type` column selects the correct envelope, and the envelope’s `kind` field maps 1:1 to `GraphOperationKind`. Add a `graph` key (sibling to `chat`, `risk`, etc.) whenever a dispatcher needs to invoke graph operations.
+
+```json
+{
+  "graph": {
+    "kind": "rag_query",
+    "collection": "policy_v2",
+    "inputs": {
+      "...": "GraphOperation inputs (e.g., query text, filters)"
+    },
+    "config": {
+      "...": "Hyper parameters (top_k, score thresholds, flags)"
+    }
+  }
+}
+```
+
+### Field semantics
+
+* `kind` — discriminator that routes to a concrete `GraphOperationKind`.
+* `collection` — graph/vector partition (e.g., `"policy_v2"`).
+* `inputs` — payload required by the operation (query text, metadata filters, seed nodes).
+* `config` — optional hyperparameters (limits, score thresholds, vector toggles).
+
+### Example: `GraphOperationKind.RAG_QUERY`
+
+```json
+{
+  "type": "graph",
+  "params": {
+    "graph": {
+      "kind": "rag_query",
+      "collection": "policy_v2",
+      "inputs": {
+        "query_text": "How do I process a late checkout?",
+        "filter_metadata": {
+          "domain": "hotel_policy"
+        }
+      },
+      "config": {
+        "top_k": 5,
+        "min_score": 0.75,
+        "include_vectors": false
+      }
+    },
+    "risk": {
+      "...": "risk envelope remains available for downstream routing/explainability"
+    }
+  }
+}
+```
+
+The router still honors the other envelopes (`risk`, `routing`, etc.), but when `type == "graph"` the dispatcher opens `params.graph` to identify the graph operation to execute.
+
+---
+
 # ## Cognitive Retrieval Scope Rules (MANDATORY)
 
 Retrieval & memory write rules depend strictly on **agent_id**:

@@ -181,31 +181,29 @@ The system implements a **dual-dispatcher architecture** that separates graph-re
 #### Task Type Classification
 
 **Graph Task Types** (handled by GraphDispatcher):
+- All tasks with `type="graph"` (from `TaskType.GRAPH` enum)
+- The specific graph operation is determined by `TaskPayload.graph_op` field:
+  - `embed` - Graph embedding operations (legacy numeric node IDs + HGNN-aware UUID/text IDs)
+  - `rag_query` - Similarity search over graph embeddings
+  - `fact_embed` - Facts system embeddings
+  - `fact_query` - Fact-based similarity search
+  - `nim_embed` - NIM retrieval embeddings (task texts)
+  - `sync_nodes` - Maintenance: sync graph_node_map
+
 ```python
-GRAPH_TASK_TYPES = (
-    "graph_embed",           # Legacy: numeric node IDs
-    "graph_rag_query",       # Legacy: numeric node IDs
-    "graph_embed_v2",        # HGNN-aware: UUID/text IDs
-    "graph_rag_query_v2",    # HGNN-aware: UUID/text IDs
-    "graph_fact_embed",      # Facts system embeddings
-    "graph_fact_query",      # Facts system queries
-    "nim_task_embed",        # NIM retrieval embeddings
-    "graph_sync_nodes",      # Maintenance: sync graph_node_map
-)
+# From graph_dispatcher.py
+GRAPH_TASK_TYPES = (TaskType.GRAPH.value,)  # Only claims tasks with type="graph"
 ```
 
 **General Task Types** (handled by QueueDispatcher):
-- All other task types not in `GRAPH_TASK_TYPES`
+- All tasks with types from `TaskType` enum (except `GRAPH`):
+  - `chat` - Conversational agent-tunnel tasks
+  - `query` - Ask/answer, reasoning, planning, search
+  - `action` - Tool execution, system operations
+  - `maintenance` - Health checks, telemetry, background operations
+  - `unknown` - Fallback for unrecognized task types
+- All custom task types not in the `TaskType` enum
 - Routed through coordinator service for execution
-- Examples found in verification scripts:
-  - `ping` - Connectivity test tasks
-  - `general_query` - General query tasks (used for escalation testing)
-  - `test_query` - Test query tasks
-  - `fact_search` - Fact search tasks
-  - `execute` - Execute/action tasks (e.g., robot_arm domain)
-  - `unknown_task` - Unknown/fallback task types
-  - `health_check` - Health check tasks
-  - Other examples: `cognitive_task`, `agent_task`, `organ_task`, etc.
 
 **Routing Flow for General Task Types:**
 
@@ -353,27 +351,27 @@ Supports multiple entity types with automatic node mapping:
 
 **5. Task Processing Flow**
 
-**Graph Embed Operations** (`graph_embed`, `graph_embed_v2`):
+**Graph Embed Operations** (`type="graph"`, `graph_op="embed"`):
 1. Resolve start node IDs (from UUIDs/text IDs to numeric node_ids)
 2. Compute embeddings via GraphEmbedder (with optional chunking)
 3. Upsert embeddings to `graph_embeddings` table
 4. Return embedding statistics and node metadata
 
-**Graph RAG Query Operations** (`graph_rag_query`, `graph_rag_query_v2`):
+**Graph RAG Query Operations** (`type="graph"`, `graph_op="rag_query"`):
 1. Resolve start node IDs
 2. Compute seed embeddings
 3. Compute centroid from seed embeddings
 4. Vector similarity search in `graph_embeddings` table
 5. Return top-k neighbors with scores
 
-**NIM Task Embed Operations** (`nim_task_embed`):
+**NIM Task Embed Operations** (`type="graph"`, `graph_op="nim_embed"`):
 1. Fetch task text content from PostgreSQL
 2. Resolve task UUIDs to node_ids via `graph_node_map`
 3. Embed text content via NimRetrievalEmbedder
 4. Upsert embeddings with content hash and model metadata
 5. Return embedding statistics
 
-**Fact Operations** (`graph_fact_embed`, `graph_fact_query`):
+**Fact Operations** (`type="graph"`, `graph_op="fact_embed"` or `graph_op="fact_query"`):
 - Similar to graph embed/query but specifically for facts
 - Uses fact-specific node resolution
 - Supports fact-based similarity search

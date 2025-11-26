@@ -13,6 +13,9 @@ import argparse
 import asyncio
 import requests
 
+# Import simplified TaskType enum
+from seedcore.models.task import TaskType
+
 """
 Verify SeedCore architecture end-to-end:
 
@@ -3269,14 +3272,16 @@ def scenario_nim_task_embed(conn) -> Optional[uuid.UUID]:
         
         log.info(f"📋 Found {len(task_ids)} tasks for nim_task_embed test: {task_ids[:5]}")
         
-        # Create nim_task_embed task
+        # Create nim_task_embed task using simplified TaskType
+        # Use type="graph" with _legacy_type in params for backward compatibility
         params = {
-            "start_task_ids": task_ids
+            "start_task_ids": task_ids,
+            "_legacy_type": "nim_task_embed"  # Allow GraphDispatcher to infer graph_op
         }
         
         task_id = pg_insert_generic_task(
             conn,
-            ttype="nim_task_embed",
+            ttype=TaskType.GRAPH.value,  # "graph"
             description=f"Embed {len(task_ids)} tasks with NIM retrieval",
             params=params,
             drift=0.0  # No drift for embedding tasks
@@ -3432,15 +3437,20 @@ def test_single_route_resolution(ray, coord) -> bool:
     """Test single route resolution via organism HTTP endpoint."""
     log.info("🔍 Testing single route resolution...")
     base = _organism_base_url()
+    # Use simplified TaskType enum - graph operations use type="graph" with _legacy_type in params
+    graph_type = TaskType.GRAPH.value
+    query_type = TaskType.QUERY.value
+    action_type = TaskType.ACTION.value
+    
     test_cases = [
-        {"type": "graph_embed", "domain": "facts", "expected": "graph_dispatcher"},
-        {"type": "fact_search", "domain": None, "expected": "utility_organ_1"},
-        {"type": "execute", "domain": "robot_arm", "expected": "actuator_organ_1"},
-        {"type": "general_query", "domain": None, "expected": "utility_organ_1"},
+        {"type": graph_type, "domain": "facts", "expected": "graph_dispatcher", "params": {"_legacy_type": "graph_embed"}},
+        {"type": query_type, "domain": None, "expected": "utility_organ_1", "params": {"_legacy_type": "fact_search"}},
+        {"type": action_type, "domain": "robot_arm", "expected": "actuator_organ_1", "params": {}},
+        {"type": query_type, "domain": None, "expected": "utility_organ_1", "params": {"_legacy_type": "general_query"}},
     ]
     success = True
     for tc in test_cases:
-        payload = {"task": {"type": tc["type"], "domain": tc["domain"], "params": {}}}
+        payload = {"task": {"type": tc["type"], "domain": tc["domain"], "params": tc.get("params", {})}}
         ok_case = False
         for candidate in _candidate_bases(base):
             url = f"{candidate}/resolve-route"
@@ -3465,11 +3475,16 @@ def test_bulk_route_resolution(ray, coord) -> bool:
     """Test bulk route resolution via organism HTTP endpoint."""
     log.info("🔍 Testing bulk route resolution...")
     base = _organism_base_url()
+    # Use simplified TaskType enum
+    graph_type = TaskType.GRAPH.value
+    query_type = TaskType.QUERY.value
+    action_type = TaskType.ACTION.value
+    
     test_tasks = [
-        {"index": 0, "type": "graph_embed", "domain": "facts"},
-        {"index": 1, "type": "graph_embed", "domain": "facts"},  # Duplicate
-        {"index": 2, "type": "fact_search", "domain": None},
-        {"index": 3, "type": "execute", "domain": "robot_arm"},
+        {"index": 0, "type": graph_type, "domain": "facts", "params": {"_legacy_type": "graph_embed"}},
+        {"index": 1, "type": graph_type, "domain": "facts", "params": {"_legacy_type": "graph_embed"}},  # Duplicate
+        {"index": 2, "type": query_type, "domain": None, "params": {"_legacy_type": "fact_search"}},
+        {"index": 3, "type": action_type, "domain": "robot_arm", "params": {}},
     ]
     for candidate in _candidate_bases(base):
         url = f"{candidate}/resolve-routes"
@@ -3517,8 +3532,8 @@ def test_routing_feature_flags(ray, coord):
         routing_remote = env_bool("ROUTING_REMOTE", False)
         log.info(f"  ROUTING_REMOTE: {routing_remote}")
         
-        # Test ROUTING_REMOTE_TYPES
-        routing_types = env("ROUTING_REMOTE_TYPES", "graph_embed,graph_rag_query")
+        # Test ROUTING_REMOTE_TYPES - now using simplified "graph" type
+        routing_types = env("ROUTING_REMOTE_TYPES", f"{TaskType.GRAPH.value}")  # Default to "graph"
         log.info(f"  ROUTING_REMOTE_TYPES: {routing_types}")
         
         # Test cache TTL settings
@@ -3539,12 +3554,17 @@ def test_routing_fallback_behavior(ray, coord):
     log.info("🔍 Testing routing fallback behavior...")
     
     try:
-        # Test static fallback rules
+        # Test static fallback rules - using simplified TaskType enum
+        graph_type = TaskType.GRAPH.value
+        query_type = TaskType.QUERY.value
+        action_type = TaskType.ACTION.value
+        unknown_type = TaskType.UNKNOWN.value
+        
         test_cases = [
-            {"type": "graph_embed", "domain": "facts", "expected": "graph_dispatcher"},
-            {"type": "fact_search", "domain": None, "expected": "utility_organ_1"},
-            {"type": "execute", "domain": "robot_arm", "expected": "actuator_organ_1"},
-            {"type": "unknown_task", "domain": None, "expected": "utility_organ_1"},
+            {"type": graph_type, "domain": "facts", "expected": "graph_dispatcher", "params": {"_legacy_type": "graph_embed"}},
+            {"type": query_type, "domain": None, "expected": "utility_organ_1", "params": {"_legacy_type": "fact_search"}},
+            {"type": action_type, "domain": "robot_arm", "expected": "actuator_organ_1", "params": {}},
+            {"type": unknown_type, "domain": None, "expected": "utility_organ_1", "params": {}},
         ]
         
         for test_case in test_cases:

@@ -43,7 +43,6 @@ AgentHandle = ray.actor.ActorHandle
 if TYPE_CHECKING:
     from ..agents.roles.specialization import RoleRegistry
     from ..agents.roles.skill_vector import SkillStoreProtocol
-    from ..tools.manager import ToolManager
     from ..serve.cognitive_client import CognitiveServiceClient
     # --- Add imports for stateful dependencies ---
     from ..memory.mw_manager import MwManager

@@ -30,15 +30,18 @@ import datetime
 from typing import Any, Dict, List, Optional
 
 import ray  # pyright: ignore[reportMissingImports]
+import asyncpg  # pyright: ignore[reportMissingImports]
 from prometheus_client import Counter, Gauge, CollectorRegistry  # pyright: ignore[reportMissingImports]
 try:
     import psutil  # for RSS telemetry if available  # pyright: ignore[reportMissingModuleSource]
 except Exception:
     psutil = None
 
-from seedcore.logging_setup import ensure_serve_logger
 from seedcore.models import TaskPayload
+from seedcore.models.task import TaskType
 from seedcore.dispatcher.router import RouterFactory, Router
+
+from seedcore.logging_setup import ensure_serve_logger
 
 logger = ensure_serve_logger("seedcore.dispatchers", level="DEBUG")
 
@@ -87,10 +90,8 @@ RUN_LEASE_S    = int(os.getenv("TASK_LEASE_S", "600"))   # 10m default
 
 # --------- SQL (asyncpg-style $1 params) ----------
 # Exclude all graph task types handled by GraphDispatcher
-GRAPH_TASK_TYPES_EXCLUSION = (
-    'graph_embed', 'graph_rag_query',
-    'graph_fact_embed', 'graph_fact_query', 'nim_task_embed', 'graph_sync_nodes'
-)
+GRAPH_TASK_TYPES_EXCLUSION = (TaskType.GRAPH.value,)
+
 CLAIM_BATCH_SQL = f"""
 WITH c AS (
   SELECT id
@@ -273,7 +274,6 @@ class Dispatcher:
 
     async def _create_pool(self, min_size=1, max_size=4):
         """Unified pool creation with consistent tuning parameters."""
-        import asyncpg
         return await asyncpg.create_pool(
             dsn=self.dsn,
             min_size=min_size,
@@ -549,7 +549,7 @@ class Dispatcher:
                 
                 # Route and execute task using router interface
                 logger.info(f"[QueueDispatcher] 📤 About to route task {tid} via router")
-                logger.info(f"[QueueDispatcher] 🎯 Task ID: {tid} | Executing task type: {item['type']}")
+                logger.info(f"[QueueDispatcher] 🎯 Task ID: {tid} | Executing task type: {payload.type}")
                 logger.info(f"[QueueDispatcher] 📋 Task payload: {payload.dict()}")
                 logger.info(f"[QueueDispatcher] 🔧 Router: {self.router}")
                 
@@ -581,7 +581,7 @@ class Dispatcher:
                     logger.error(f"[QueueDispatcher] 🔧 Router type: {type(self.router)}")
                     logger.error(f"[QueueDispatcher] 🔧 Router config: {getattr(self.router, 'config', 'No config')}")
                     logger.error(f"[QueueDispatcher] 🔧 Router base_url: {getattr(self.router, 'client', {}).get('base_url', 'No base_url') if hasattr(self.router, 'client') else 'No client'}")
-                    logger.error(f"[QueueDispatcher] 🔧 Exception traceback:", exc_info=True)
+                    logger.error("[QueueDispatcher] 🔧 Exception traceback:", exc_info=True)
                     raise
 
                 # Persist results via pooled connection
@@ -655,7 +655,7 @@ class Dispatcher:
                 logger.error(f"[QueueDispatcher] ❌ CRITICAL: Dispatcher {self.name} task {tid} failed with exception: {e}")
                 logger.error(f"[QueueDispatcher] 🔧 Exception type: {type(e)}")
                 logger.error(f"[QueueDispatcher] 📋 Exception details: {str(e)}")
-                logger.exception(f"[QueueDispatcher] 🔧 Full exception traceback:")
+                logger.exception("[QueueDispatcher] 🔧 Full exception traceback:")
                 attempts = item["attempts"] + 1
                 max_attempts = int(os.getenv("MAX_TASK_ATTEMPTS", "3"))
                 
@@ -779,7 +779,7 @@ class Dispatcher:
 
         # ✅ Router is now initialized and ready for task processing
         logger.info(f"[QueueDispatcher] 🔍 Router initialized successfully: {type(self.router)}")
-        logger.info(f"[QueueDispatcher] 🏥 Router is ready for task processing")
+        logger.info("[QueueDispatcher] 🏥 Router is ready for task processing")
 
         # LISTEN/NOTIFY connection (better batching)
         listen_task = None
@@ -973,7 +973,6 @@ class Reaper:
     async def _ensure_pool(self):
         if self.pool is None:
             try:
-                import asyncpg
                 # Use same pool tuning as Dispatcher for consistency
                 self.pool = await asyncpg.create_pool(
                     dsn=self.dsn,
@@ -1012,8 +1011,8 @@ class Reaper:
         LIMIT %s
         """
         try:
-            import psycopg2
-            from psycopg2.extras import RealDictCursor
+            import psycopg2  # pyright: ignore[reportMissingModuleSource]
+            from psycopg2.extras import RealDictCursor  # pyright: ignore[reportMissingModuleSource]
             
             with psycopg2.connect(self.dsn) as con, con.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(q_select, (REAP_BATCH,))

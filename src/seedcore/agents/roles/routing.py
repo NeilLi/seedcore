@@ -1,25 +1,28 @@
 # agents/roles/routing.py
 """
-Routing & capability advertisement for the meta-controller.
+DEPRECATED: Agent routing utilities for introspection and simulation.
 
-This module provides:
-- AgentAdvertisement: canonical capability snapshot for routing decisions
-- Router: in-memory registry + scoring-based selection across agents
+⚠️  DEPRECATION NOTICE ⚠️
+-------------------------
+This module is DEPRECATED for production routing. Real routing is handled by:
+- `seedcore.organs.router.RoutingDirectory` (Tier-1 routing)
+- `seedcore.dispatcher.router` (Tier-0 routing)
 
-Scoring heuristics (simple, extensible):
-- Role match: specialization and/or required tags
-- Skill match: cosine-like overlap between requested skills and advertised skills
-- Capacity: prefer lower mem_util (more headroom)
-- Capability: prefer higher capability
-- Health/latency: prefer healthy and low-latency agents
+This module is KEPT as a utility for:
+- Agent self-advertisement / introspection (AgentAdvertisement, build_advertisement)
+- Scoring heuristics (for analysis and simulation)
+- Future multi-agent scheduling (experimental)
+- Local/offline simulation
+- Training reinforcement agents
 
-You can replace/extend the scoring strategy without changing agent code.
+DO NOT use Router for production routing decisions.
 """
 
 from __future__ import annotations
 
 import math
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Set
 
@@ -32,7 +35,10 @@ from .specialization import Specialization, RoleProfile, RoleRegistry
 @dataclass
 class AgentAdvertisement:
     """
-    Canonical snapshot for meta-controller routing.
+    Canonical capability snapshot for agent introspection and simulation.
+    
+    ⚠️  NOTE: This is kept for agent self-advertisement and introspection.
+    It is NOT used for production routing decisions.
 
     Required:
       - agent_id: unique logical agent identifier
@@ -79,8 +85,21 @@ class AgentAdvertisement:
 
 class Router:
     """
-    In-memory router that selects best-matching agents for incoming tasks.
-
+    DEPRECATED: In-memory router for simulation and experimentation only.
+    
+    ⚠️  DEPRECATION WARNING ⚠️
+    This class is DEPRECATED for production routing. Real routing is handled by:
+    - `seedcore.organs.router.RoutingDirectory` (Tier-1 routing)
+    - `seedcore.dispatcher.router` (Tier-0 routing)
+    
+    This class is KEPT as a utility for:
+    - Local/offline simulation
+    - Training reinforcement agents
+    - Scoring heuristics analysis
+    - Future multi-agent scheduling experiments
+    
+    DO NOT use this for production routing decisions.
+    
     Public methods:
       - register/refresh: add or update an advertisement
       - remove: delete an agent from consideration
@@ -88,6 +107,13 @@ class Router:
     """
 
     def __init__(self, registry: RoleRegistry) -> None:
+        warnings.warn(
+            "Router is deprecated for production routing. "
+            "Use seedcore.organs.router.RoutingDirectory for real routing. "
+            "This class is kept for simulation and experimentation only.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self._registry = registry
         self._ads: Dict[str, AgentAdvertisement] = {}
 
@@ -102,15 +128,34 @@ class Router:
     # ---- Registry ops -----------------------------------------------------------
 
     def register(self, ad: AgentAdvertisement) -> None:
+        warnings.warn(
+            "Router.register() is deprecated for production routing. "
+            "This method is kept for simulation and experimentation only.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self._ads[ad.agent_id] = ad
 
     def refresh(self, ad: AgentAdvertisement) -> None:
+        warnings.warn(
+            "Router.refresh() is deprecated for production routing. "
+            "This method is kept for simulation and experimentation only.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self.register(ad)
 
     def remove(self, agent_id: str) -> None:
+        warnings.warn(
+            "Router.remove() is deprecated for production routing. "
+            "This method is kept for simulation and experimentation only.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self._ads.pop(agent_id, None)
 
     def all_ads(self) -> List[AgentAdvertisement]:
+        """Get all advertisements (for introspection/simulation only)."""
         return list(self._ads.values())
 
     # ---- Selection --------------------------------------------------------------
@@ -124,6 +169,13 @@ class Router:
         region: Optional[str] = None,
         zone: Optional[str] = None,
     ) -> Optional[AgentAdvertisement]:
+        warnings.warn(
+            "Router.select_best() is deprecated for production routing. "
+            "Use seedcore.organs.router.RoutingDirectory for real routing. "
+            "This method is kept for simulation and experimentation only.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         res = self.select_topk(
             k=1,
             required_role=required_role,
@@ -145,8 +197,19 @@ class Router:
         zone: Optional[str] = None,
     ) -> List[AgentAdvertisement]:
         """
-        Return top-k agents ranked by a composite score.
+        DEPRECATED: Return top-k agents ranked by a composite score.
+        
+        ⚠️  This method is deprecated for production routing.
+        Use seedcore.organs.router.RoutingDirectory for real routing.
+        This method is kept for simulation and experimentation only.
         """
+        warnings.warn(
+            "Router.select_topk() is deprecated for production routing. "
+            "Use seedcore.organs.router.RoutingDirectory for real routing. "
+            "This method is kept for simulation and experimentation only.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         req_tags = set(required_tags or [])
         candidates = [ad for ad in self._ads.values() if self._eligible(ad, required_role, req_tags, region, zone)]
         if not candidates:
@@ -238,7 +301,32 @@ def build_advertisement(
     zone: Optional[str] = None,
 ) -> AgentAdvertisement:
     """
-    Convenience builder that pulls routing tags from the RoleProfile if not provided.
+    Convenience builder for agent self-advertisement and introspection.
+    
+    This function is KEPT as a utility for agent self-advertisement.
+    It is used by agents to create capability snapshots for introspection,
+    monitoring, and simulation purposes.
+    
+    Note: The resulting AgentAdvertisement is NOT used for production routing.
+    Real routing is handled by seedcore.organs.router.RoutingDirectory.
+    
+    Args:
+        agent_id: Unique agent identifier
+        role_profile: Role profile containing routing tags
+        specialization: Agent specialization enum
+        materialized_skills: Materialized skill vector {name: 0..1}
+        capability: Agent capability score (0..1)
+        mem_util: Memory utilization (0..1)
+        routing_tags: Optional routing tags (defaults to role_profile.routing_tags)
+        capacity_hint: Optional capacity override (0..1 free headroom)
+        health: Health state string
+        latency_ms: Optional latency in milliseconds
+        quality_avg: Optional rolling average quality (0..1)
+        region: Optional region hint
+        zone: Optional zone hint
+    
+    Returns:
+        AgentAdvertisement instance for introspection/simulation
     """
     tags = set(routing_tags) if routing_tags is not None else set(role_profile.routing_tags or set())
     return AgentAdvertisement(
@@ -264,6 +352,8 @@ def _clamp01(x: float) -> float:
 def _skill_similarity(a: Dict[str, float], b: Dict[str, float]) -> float:
     """
     Cosine-like similarity over shared skill keys. Returns 0..1.
+    
+    Utility function for scoring heuristics (simulation/experimentation only).
     """
     if not a or not b:
         return 0.0

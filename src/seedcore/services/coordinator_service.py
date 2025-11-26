@@ -257,7 +257,7 @@ class Coordinator:
         This feeds the 'System 1' perception into the 'System 2' router.
         """
         text = task_dict.get("description") or ""
-        if not text: return {}
+        if not text: return {}  # noqa: E701
         
         try:
             # Use the EventizerServiceClient
