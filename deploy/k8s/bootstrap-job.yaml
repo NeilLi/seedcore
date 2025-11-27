@@ -1,0 +1,107 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seedcore-bootstrap
+  namespace: seedcore-dev
+  labels:
+    app: seedcore
+    component: bootstrap
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: seedcore
+        component: bootstrap
+    spec:
+      serviceAccountName: seedcore-service-account
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 10
+
+      containers:
+        - name: bootstrap
+          image: seedcore:latest
+          imagePullPolicy: IfNotPresent
+
+          command: ["python", "/app/bootstraps/bootstrap_entry.py"]
+
+          # ⚠ For dev clusters only; remove hostPath in production.
+          volumeMounts:
+            - name: project-src
+              mountPath: /app
+
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+            - name: BOOTSTRAP_MODE
+              value: "all"
+            - name: EXIT_AFTER_BOOTSTRAP
+              value: "true"
+
+            - name: FORCE_REPLACE_DISPATCHERS
+              value: "true"
+            - name: DISPATCHER_COUNT
+              value: "2"
+            - name: SEEDCORE_GRAPH_DISPATCHERS
+              value: "1"
+
+            - name: DGLBACKEND
+              value: "pytorch"
+
+            - name: RAY_ADDRESS
+              value: "ray://seedcore-svc-head-svc:10001"
+            - name: RAY_NAMESPACE
+              value: "seedcore-dev"
+            - name: SEEDCORE_NS
+              value: "seedcore-dev"
+            - name: RUNNING_IN_CLUSTER
+              value: "1"
+
+            - name: SEEDCORE_PG_DSN
+              value: "postgresql://postgres:postgres@postgresql.seedcore-dev.svc.cluster.local:5432/seedcore"
+
+            - name: OCPS_DRIFT_THRESHOLD
+              value: "0.5"
+            - name: COGNITIVE_TIMEOUT_S
+              value: "8.0"
+            - name: COGNITIVE_MAX_INFLIGHT
+              value: "64"
+            - name: FAST_PATH_LATENCY_SLO_MS
+              value: "1000"
+            - name: MAX_PLAN_STEPS
+              value: "16"
+
+            - name: NIM_RETRIEVAL_MODEL
+              value: "nvidia/nv-embedqa-e5-v5"
+            - name: NIM_RETRIEVAL_BASE_URL
+              value: "http://af3a6a34f659a409584db07209d82853-1298671438.us-east-1.elb.amazonaws.com/v1"
+            - name: NIM_RETRIEVAL_API_KEY
+              value: "none"
+            - name: NIM_RETRIEVAL_PROVIDER
+              value: "nim"
+
+            - name: SERVE_BASE_URL
+              value: "http://seedcore-svc-stable-svc.seedcore-dev.svc.cluster.local:8000"
+            - name: ORGANISM_URL
+              value: "http://seedcore-svc-stable-svc.seedcore-dev.svc.cluster.local:8000/organism"
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+            limits:
+              cpu: "200m"
+              memory: "1Gi"
+
+      # ⚠ For development clusters; remove for production
+      volumes:
+        - name: project-src
+          hostPath:
+            path: /project
+            type: Directory
