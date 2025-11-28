@@ -563,47 +563,10 @@ class CoordinatorHttpRouter(Router):
             # 1. Prepare Payload
             task_payload = _coerce_task_payload(payload)
             task_data = task_payload.model_dump()
-            if correlation_id:
-                task_data["correlation_id"] = correlation_id
 
             task_id = task_payload.task_id
 
-            # 2. "Agent Tunnel" Bypass (Latency Optimization)
-            # Safe access to nested params
-            params = task_data.get("params") or {}
-            interaction = params.get("interaction") or {}
-
-            if interaction.get("mode") == "agent_tunnel":
-                logger.debug(f"[Router] 🚇 Attempting Tunnel for {task_id}")
-
-                # Initialize variable scope for finally block
-                organism_router = None
-                try:
-                    organism_router = RouterFactory.create_router(
-                        router_type="organism", config=self.config
-                    )
-
-                    # Execute direct routing
-                    result = await organism_router.route_and_execute(
-                        task_data, correlation_id=correlation_id
-                    )
-
-                    # Success: Return immediately
-                    _attach_exec_metrics(result, started_at, attempt=1)
-                    return result
-
-                except Exception as tunnel_err:
-                    logger.warning(
-                        f"[Router] 🚇 Tunnel failed for {task_id}: {tunnel_err} -> Fallback to Coord"
-                    )
-                    # Do NOT return; fall through to standard Coordinator logic
-
-                finally:
-                    # CRITICAL: Always close the resource, even on error
-                    if organism_router:
-                        await organism_router.close()
-
-            # 3. Standard Coordinator Routing (Unified Endpoint)
+            # 2. Standard Coordinator Routing (Unified Endpoint)
             logger.debug(f"[Router] 📡 Routing via Coordinator HTTP: {task_id}")
 
             # We assume self.client handles network errors and returns Dict
@@ -623,7 +586,7 @@ class CoordinatorHttpRouter(Router):
                 "task_id": str(task_id) if "task_id" in locals() else "unknown",
             }
 
-        # 4. Metrics Attachment (Safe Extraction)
+        # 3. Metrics Attachment (Safe Extraction)
         # Using .get chain with defaults to prevent KeyErrors on partial results
         meta = result.get("meta", {})
         decision = meta.get("routing_decision") or {}

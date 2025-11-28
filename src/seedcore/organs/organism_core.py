@@ -61,6 +61,7 @@ from seedcore.models import TaskPayload
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 from seedcore.organs.organ import Organ, AgentIDFactory  # ← NEW ORGAN CLASS
 from seedcore.organs.router import RoutingDirectory
+from seedcore.organs.tunnel_policy import TunnelActivationPolicy
 
 # Long-term memory backend (HolonFabric replaces LongTermMemoryManager)
 from seedcore.memory.holon_fabric import HolonFabric
@@ -185,8 +186,10 @@ class OrganismCore:
 
     def __init__(
         self,
+        tunnel_policy: Optional[TunnelActivationPolicy] = None,
         config_path: Path | str = ORGANS_CONFIG_PATH,
         role_registry: Optional[RoleRegistry] = None,
+        **kwargs,
     ):
         self._initialized = False
         self._lock = asyncio.Lock()
@@ -200,6 +203,10 @@ class OrganismCore:
 
         # Agent → organ (informational only, for registry)
         self.agent_to_organ_map: Dict[str, str] = {}
+
+        self.tunnel_policy = tunnel_policy or TunnelActivationPolicy()
+
+        self.tunnel_registry: Dict[str, Dict[str, Any]] = {}
 
         # Load config (YAML)
         self._load_config(config_path)
@@ -655,6 +662,26 @@ class OrganismCore:
                 # Execute task directly on agent actor
                 ref = agent_handle.execute_task.remote(task_dict)
                 result = await self._ray_await(ref)
+            
+            # 4. Tunnel Activation Policy (post-processing)
+            try:
+                # Evaluate agent output
+                if self.tunnel_policy.should_activate(result):
+                    # Extract CID
+                    cid = (
+                        result.get("conversation_id")
+                        or task_dict.get("conversation_id")
+                        or task_dict.get("params", {}).get("conversation_id")
+                        or f"auto:{organ_id}:{agent_id}"
+                    )
+
+                    if cid:
+                        await self.ensure_tunnel(cid, agent_id, result)
+                        result["tunnel_active"] = True
+                        result["tunnel_id"] = cid
+                        result["tunnel_reason"] = "policy_activation"
+            except Exception as te:
+                logger.error(f"[Organism] Tunnel activation failed: {te}")
 
             return {
                 "organ_id": organ_id,
@@ -669,6 +696,44 @@ class OrganismCore:
                 "agent_id": agent_id,
                 "error": f"Execution failure: {e}",
             }
+
+    # =====================================================================
+    #  TUNNEL MANAGEMENT
+    # =====================================================================
+
+    async def ensure_tunnel(self, conversation_id: str, agent_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Ensure a persistent tunnel exists for a conversation with an agent.
+        
+        If a tunnel already exists for this conversation and agent, updates the
+        last_active timestamp and returns the existing tunnel. Otherwise, creates
+        a new tunnel entry in the registry.
+        
+        Args:
+            conversation_id: Unique identifier for the conversation
+            agent_id: ID of the agent handling the conversation
+            context: Context dictionary containing conversation context (text/message)
+            
+        Returns:
+            Dict containing tunnel metadata including conversation_id, agent_id,
+            created_at, last_active, and context_snapshot
+        """
+        if conversation_id in self.tunnel_registry:
+            existing = self.tunnel_registry[conversation_id]
+            if existing["agent_id"] == agent_id:
+                existing["last_active"] = time.time()
+                return existing
+
+        tunnel = {
+            "conversation_id": conversation_id,
+            "agent_id": agent_id,
+            "created_at": time.time(),
+            "last_active": time.time(),
+            "context_snapshot": context.get("text") or context.get("message"),
+        }
+        self.tunnel_registry[conversation_id] = tunnel
+        logger.info(f"[Organism] 🚇 Tunnel Established: {conversation_id} -> {agent_id}")
+        return tunnel
 
     # =====================================================================
     #  REGISTRY API FOR ROUTER (Router pulls data; OrganismCore never pushes routing logic)

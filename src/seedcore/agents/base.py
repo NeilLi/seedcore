@@ -970,6 +970,21 @@ class BaseAgent:
             },
         }
 
+        # --- 6) Agent-side tunnel request signals --------------------------------
+        try:
+            tunnel = tv.tunnel or {}
+            if isinstance(tunnel, dict):
+                if tunnel.get("activate") is True:
+                    result["activate_tunnel"] = True
+                if "intent" in tunnel:
+                    result["intent"] = tunnel["intent"]
+                if "continuation_prob" in tunnel:
+                    result["continuation_prob"] = float(tunnel["continuation_prob"])
+                if "conversation_id" in tunnel:
+                    result["conversation_id"] = tunnel["conversation_id"]
+        except Exception:
+            pass
+
         return result
 
     def _estimate_quality(self, results, errors, _task_view) -> float:

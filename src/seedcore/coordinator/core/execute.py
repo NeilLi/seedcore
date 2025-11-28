@@ -126,6 +126,8 @@ class ExecutionConfig:
     ) = None
     resolve_session_factory_func: Callable[[Any], Any] | None = None
     fast_path_latency_slo_ms: float = 5000.0
+    tunnel_lookup: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None
+    tunnel_store: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +183,35 @@ async def route_and_execute(
     Args:
         task: Strongly typed TaskPayload (already normalized by upstream service).
     """
+    # 0. Tunnel Fast-Path (conversation affinity override)
+    correlation_id = execution_config.cid
+    conversation_id = task.conversation_id
+
+    if conversation_id and execution_config.tunnel_lookup:
+        tunnel = await execution_config.tunnel_lookup(conversation_id)
+        if tunnel:
+            
+            # 🚇 Force routing: Use tunnel's agent & organ directly
+            organ_id = tunnel["organ_id"]
+            agent_id = tunnel["agent_id"]
+            logger.info(f"[Coordinator] 🚇 Tunnel hit: {conversation_id} → {agent_id} in {organ_id}")
+
+            # Execute directly via Organism
+            task_dict = task.model_dump()
+            execution_response = await execution_config.organism_execute(
+                organ_id=organ_id,
+                task_dict=task_dict,
+                timeout=execution_config.fast_path_latency_slo_ms / 1000.0 * 2,
+                cid_local=conversation_id,
+            )
+
+            # If Organism returns updated tunnel info, store it
+            if execution_response.get("tunnel_active"):
+                if execution_config.tunnel_store:
+                    await execution_config.tunnel_store(conversation_id, execution_response)
+
+            return execution_response
+
     # 1. Context Processing
     # We generate the dict representation once for Eventizer/Helpers
     task_dict = task.model_dump()
@@ -193,11 +224,10 @@ async def route_and_execute(
     ctx = TaskContext.from_dict(task_ctx_data)
 
     # 2. Compute Routing Decision (System 2)
-    cid = execution_config.cid
     routing_result = await _compute_routing_decision(
         ctx=ctx,
         cfg=routing_config,
-        correlation_id=cid,
+        correlation_id=correlation_id,
     )
 
     decision = _extract_decision(routing_result)
@@ -261,7 +291,7 @@ async def route_and_execute(
                             parent_task=task, 
                             step=step, 
                             index=i, 
-                            cid=cid
+                            cid=correlation_id
                         )
 
                         # Execute via Organism (Fast Path)
@@ -271,7 +301,7 @@ async def route_and_execute(
                             organ_id=organ_hint,
                             task_dict=step_task,
                             timeout=timeout,
-                            cid_local=cid or str(uuid.uuid4()),
+                            cid_local=correlation_id or str(uuid.uuid4()),
                         )
 
                         step_results.append(
@@ -292,7 +322,7 @@ async def route_and_execute(
                 planner_meta = (
                     plan_res.get("metadata", {}) if isinstance(plan_res, dict) else {}
                 )
-                return _aggregate_execution_results(
+                res = _aggregate_execution_results(
                     parent_task_id=task.task_id,
                     solution_steps=solution_steps,
                     step_results=step_results,
@@ -300,8 +330,22 @@ async def route_and_execute(
                     original_meta=planner_meta,
                 )
 
+                # 🚇 Check for tunnel activation
+                if conversation_id and res.get("tunnel_active"):
+                    if execution_config.tunnel_store:
+                        await execution_config.tunnel_store(conversation_id, res)
+
+                return res
+
             # If no steps, just return the plan (Thought without Action)
-            return plan_res
+            plan_res_final = plan_res
+            
+            # 🚇 Check for tunnel activation
+            if conversation_id and plan_res_final.get("tunnel_active"):
+                if execution_config.tunnel_store:
+                    await execution_config.tunnel_store(conversation_id, plan_res_final)
+            
+            return plan_res_final
 
         except Exception as exc:
             logger.error(f"[route] Cognitive path failed: {exc}", exc_info=True)
@@ -330,9 +374,14 @@ async def route_and_execute(
                 organ_id=target_organ,
                 task_dict=task_dict_copy,
                 timeout=timeout,
-                cid_local=cid or str(uuid.uuid4()),
+                cid_local=correlation_id or str(uuid.uuid4()),
             )
             final_result = execution_response
+
+            # 🚇 Check for tunnel activation
+            if conversation_id and execution_response.get("tunnel_active"):
+                if execution_config.tunnel_store:
+                    await execution_config.tunnel_store(conversation_id, execution_response)
 
         except Exception as e:
             logger.error(f"[route] Fast path execution failed: {e}")

@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, List
 from enum import Enum
 import json
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator  # pyright: ignore[reportMissingImports]
 
@@ -48,6 +49,12 @@ class RouterInbox(BaseModel):
     hints: RouterHints = Field(default_factory=RouterHints)
     v: int = 1
 
+class TaskTunnelHints(BaseModel):
+    activate: Optional[bool] = None
+    intent: Optional[str] = None
+    continuation_prob: Optional[float] = None
+    conversation_id: Optional[str] = None
+
 # ========================================================================
 #                           MAIN TaskPayload
 # ========================================================================
@@ -76,6 +83,7 @@ class TaskPayload(BaseModel):
     description: str = ""
     domain: Optional[str] = None
     drift_score: float = 0.0
+    correlation_id: Optional[str] = None
     
     # The raw params bag (source of truth for DB)
     params: Dict[str, Any] = Field(default_factory=dict)
@@ -124,6 +132,7 @@ class TaskPayload(BaseModel):
     interaction_mode: Optional[str] = None            # agent_tunnel, one_shot, coordinator_routed
     conversation_id: Optional[str] = None
     assigned_agent_id: Optional[str] = None
+    tunnel: Optional[TaskTunnelHints] = None
 
     # ------------------------------------------------------------------
     # COGNITIVE METADATA MIRRORS (→ params.cognitive.*)
@@ -190,6 +199,12 @@ class TaskPayload(BaseModel):
         elif "embed" in lt:
             self.graph_kind = GraphOperationKind.EMBED
 
+        return self
+
+    @model_validator(mode="after")
+    def auto_correlation_id(self):
+        if not self.correlation_id:
+            self.correlation_id = uuid4().hex
         return self
 
     # =====================================================================
