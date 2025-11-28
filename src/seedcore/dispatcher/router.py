@@ -31,7 +31,7 @@ Routers
     - Delegation (to Cognitive Service or Organism Service)
     - Execution (via downstream services)
     - Persistence (audit trail, telemetry)
-    
+
     The only client-side optimization is the "agent_tunnel" bypass for
     low-latency chat interactions.
 
@@ -190,9 +190,7 @@ def _wrap_cognitive_response(
     if cog_res.get("success"):
         payload = cog_res.get("result") or {}
         confidence = (
-            payload.get("confidence_score")
-            if isinstance(payload, dict)
-            else None
+            payload.get("confidence_score") if isinstance(payload, dict) else None
         )
 
         cognitive_result = create_cognitive_result(
@@ -225,7 +223,9 @@ def _wrap_cognitive_response(
         return result_dict
 
     # Failure path – wrap as error result while preserving metadata
-    error_message = cog_res.get("error") or "CognitiveService returned unsuccessful result"
+    error_message = (
+        cog_res.get("error") or "CognitiveService returned unsuccessful result"
+    )
 
     error_result = create_error_result(
         error=error_message,
@@ -257,6 +257,7 @@ def _wrap_cognitive_response(
     err_dict["error"] = error_message
     return err_dict
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -264,9 +265,11 @@ logger = logging.getLogger(__name__)
 # Config / Base
 # -----------------------------------------------------------------------------
 
+
 @dataclass
 class RouterConfig:
     """Configuration for router implementations."""
+
     timeout: float = 30.0
     max_retries: int = 3
     retry_delay: float = 1.0
@@ -281,7 +284,7 @@ class Router(ABC):
     async def route_and_execute(
         self,
         payload: Union[TaskPayload, Dict[str, Any]],
-        correlation_id: Optional[str] = None
+        correlation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Route and execute a task.
@@ -305,9 +308,11 @@ class Router(ABC):
         """Close router resources."""
         pass
 
+
 # -----------------------------------------------------------------------------
 # OrganismRouter
 # -----------------------------------------------------------------------------
+
 
 class OrganismRouter(Router):
     """
@@ -330,9 +335,7 @@ class OrganismRouter(Router):
     """
 
     def __init__(
-        self,
-        base_url: Optional[str] = None,
-        config: Optional[RouterConfig] = None
+        self, base_url: Optional[str] = None, config: Optional[RouterConfig] = None
     ):
         self.config = config or RouterConfig()
 
@@ -340,6 +343,7 @@ class OrganismRouter(Router):
         if base_url is None:
             try:
                 from seedcore.utils.ray_utils import SERVE_GATEWAY
+
                 base_url = f"{SERVE_GATEWAY}/organism"
             except Exception:
                 base_url = "http://127.0.0.1:8000/organism"
@@ -348,12 +352,12 @@ class OrganismRouter(Router):
         circuit_breaker = CircuitBreaker(
             failure_threshold=self.config.circuit_breaker_failures,
             recovery_timeout=self.config.circuit_breaker_timeout,
-            expected_exception=(Exception,)
+            expected_exception=(Exception,),
         )
         retry_config = RetryConfig(
             max_attempts=self.config.max_retries,
             base_delay=self.config.retry_delay,
-            max_delay=self.config.retry_delay * 4
+            max_delay=self.config.retry_delay * 4,
         )
 
         self.client = BaseServiceClient(
@@ -361,7 +365,7 @@ class OrganismRouter(Router):
             base_url=base_url,
             timeout=self.config.timeout,
             circuit_breaker=circuit_breaker,
-            retry_config=retry_config
+            retry_config=retry_config,
         )
 
         try:
@@ -376,9 +380,9 @@ class OrganismRouter(Router):
         logger.info(f"OrganismRouter initialized with base_url: {base_url}")
 
     async def route_and_execute(
-    self,
-    payload: Union[TaskPayload, Dict[str, Any]],
-    correlation_id: Optional[str] = None
+        self,
+        payload: Union[TaskPayload, Dict[str, Any]],
+        correlation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Unified entrypoint for routing + executing tasks through the OrganismService.
@@ -413,7 +417,7 @@ class OrganismRouter(Router):
             # Extract result from OrganismResponse format
             # OrganismResponse: { success, result, error, task_type }
             result = response.get("result", {})
-            
+
             # Add warnings if success=False
             if not response.get("success", True):
                 result.setdefault("error", response.get("error"))
@@ -464,7 +468,9 @@ class OrganismRouter(Router):
                     result.setdefault("warning", f"Cognitive escalation failed: {exc}")
 
         except Exception as e:
-            logger.error(f"[OrganismRouter] Failed to route task {task_payload.task_id}: {e}")
+            logger.error(
+                f"[OrganismRouter] Failed to route task {task_payload.task_id}: {e}"
+            )
             result = {
                 "kind": DecisionKind.ERROR.value,
                 "success": False,
@@ -473,24 +479,24 @@ class OrganismRouter(Router):
             }
 
         # 4. Attach routing metadata + execution metrics
-        selected_agent = (
-            result.get("selected_agent_id")
-            or result.get("meta", {}).get("routing_decision", {}).get("selected_agent_id")
-        )
+        selected_agent = result.get("selected_agent_id") or result.get("meta", {}).get(
+            "routing_decision", {}
+        ).get("selected_agent_id")
 
-        score = (
-            result.get("router_score")
-            or result.get("meta", {}).get("routing_decision", {}).get("router_score")
-        )
+        score = result.get("router_score") or result.get("meta", {}).get(
+            "routing_decision", {}
+        ).get("router_score")
 
         _attach_routing_decision(result, selected_agent, score)
         _attach_exec_metrics(result, started_at, attempt=1)
 
         return result
 
+
 # -----------------------------------------------------------------------------
 # CoordinatorHttpRouter
 # -----------------------------------------------------------------------------
+
 
 class CoordinatorHttpRouter(Router):
     """
@@ -507,9 +513,7 @@ class CoordinatorHttpRouter(Router):
     """
 
     def __init__(
-        self,
-        base_url: Optional[str] = None,
-        config: Optional[RouterConfig] = None
+        self, base_url: Optional[str] = None, config: Optional[RouterConfig] = None
     ):
         self.config = config or RouterConfig()
 
@@ -517,6 +521,7 @@ class CoordinatorHttpRouter(Router):
         if base_url is None:
             try:
                 from seedcore.utils.ray_utils import SERVE_GATEWAY
+
                 # Coordinator is fronted under /pipeline
                 base_url = f"{SERVE_GATEWAY}/pipeline"
             except Exception:
@@ -526,12 +531,12 @@ class CoordinatorHttpRouter(Router):
         circuit_breaker = CircuitBreaker(
             failure_threshold=self.config.circuit_breaker_failures,
             recovery_timeout=self.config.circuit_breaker_timeout,
-            expected_exception=(Exception,)
+            expected_exception=(Exception,),
         )
         retry_config = RetryConfig(
             max_attempts=self.config.max_retries,
             base_delay=self.config.retry_delay,
-            max_delay=self.config.retry_delay * 4
+            max_delay=self.config.retry_delay * 4,
         )
 
         self.client = BaseServiceClient(
@@ -539,106 +544,98 @@ class CoordinatorHttpRouter(Router):
             base_url=base_url,
             timeout=self.config.timeout,
             circuit_breaker=circuit_breaker,
-            retry_config=retry_config
+            retry_config=retry_config,
         )
 
         logger.info(f"CoordinatorHttpRouter initialized with base_url: {base_url}")
 
-
     async def route_and_execute(
         self,
         payload: Union[TaskPayload, Dict[str, Any]],
-        correlation_id: Optional[str] = None
+        correlation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Route task through Coordinator HTTP API (Unified Interface).
-
-        The Coordinator Service (Tier-0) uses a unified `/route-and-execute` endpoint
-        that handles all business operations via type-based routing:
-        - type: "anomaly_triage" → Anomaly triage pipeline
-        - type: "ml_tune_callback" → ML tuning callback handler
-        - Other types → Standard routing & execution
-
-        The Coordinator Service handles the complete lifecycle:
-        - Type-based internal routing
-        - Scoring (Surprise/PKG)
-        - Routing Decision (FAST_PATH, COGNITIVE, ESCALATED)
-        - Delegation (to Cognitive or Organism service)
-        - Execution (via downstream services)
-        - Persistence (audit trail, telemetry)
-
-        This client simply hands off the task and awaits the final result.
-        No client-side decision logic is required.
+        Route task through Coordinator HTTP API with Client-Side Optimization (Tunnel).
         """
         started_at = datetime.now(timezone.utc)
-        
+
         try:
+            # 1. Prepare Payload
             task_payload = _coerce_task_payload(payload)
             task_data = task_payload.model_dump()
             if correlation_id:
                 task_data["correlation_id"] = correlation_id
 
             task_id = task_payload.task_id
-            
-            # 1. Handle "Agent Tunnel" Bypass (Latency Optimization)
-            # This is the ONLY client-side routing logic we keep.
-            params = task_data.get("params", {})
-            if params.get("interaction", {}).get("mode") == "agent_tunnel":
-                logger.info(
-                    f"[CoordinatorHttpRouter] Agent tunnel mode detected for task {task_id}; "
-                    "routing directly to OrganismRouter"
-                )
+
+            # 2. "Agent Tunnel" Bypass (Latency Optimization)
+            # Safe access to nested params
+            params = task_data.get("params") or {}
+            interaction = params.get("interaction") or {}
+
+            if interaction.get("mode") == "agent_tunnel":
+                logger.debug(f"[Router] 🚇 Attempting Tunnel for {task_id}")
+
+                # Initialize variable scope for finally block
+                organism_router = None
                 try:
                     organism_router = RouterFactory.create_router(
-                        router_type="organism",
-                        config=self.config
+                        router_type="organism", config=self.config
                     )
+
+                    # Execute direct routing
                     result = await organism_router.route_and_execute(
-                        task_data,
-                        correlation_id=correlation_id
+                        task_data, correlation_id=correlation_id
                     )
-                    await organism_router.close()
+
+                    # Success: Return immediately
                     _attach_exec_metrics(result, started_at, attempt=1)
                     return result
+
                 except Exception as tunnel_err:
                     logger.warning(
-                        f"[CoordinatorHttpRouter] Agent tunnel routing failed for task {task_id}: {tunnel_err}"
+                        f"[Router] 🚇 Tunnel failed for {task_id}: {tunnel_err} -> Fallback to Coord"
                     )
-                    # Fall through to Coordinator routing as fallback
-                    logger.info(f"[CoordinatorHttpRouter] Falling back to Coordinator routing for task {task_id}")
+                    # Do NOT return; fall through to standard Coordinator logic
 
-            logger.info(f"Routing task via Coordinator HTTP: {task_id}")
+                finally:
+                    # CRITICAL: Always close the resource, even on error
+                    if organism_router:
+                        await organism_router.close()
 
-            # 2. Call Coordinator (Unified Endpoint)
-            # The Coordinator now executes the downstream logic (Cognitive/Fast) itself.
-            # We don't need to interpret 'decision_kind' here anymore.
+            # 3. Standard Coordinator Routing (Unified Endpoint)
+            logger.debug(f"[Router] 📡 Routing via Coordinator HTTP: {task_id}")
+
+            # We assume self.client handles network errors and returns Dict
             result = await self.client.post("/route-and-execute", json=task_data)
-            
-            # 3. Validation
+
+            # Validation
             if not isinstance(result, dict):
-                raise ValueError("Coordinator returned invalid response")
+                raise ValueError(f"Coordinator returned invalid type: {type(result)}")
 
         except Exception as e:
-            logger.error(f"CoordinatorHttpRouter failed: {e}", exc_info=True)
+            logger.error(f"[Router] ❌ Routing failed: {e}", exc_info=True)
             result = {
-                "kind": DecisionKind.ERROR.value,
+                "kind": "error",  # DecisionKind.ERROR.value
                 "success": False,
                 "error": str(e),
-                "path": "coordinator_http_error"
+                "path": "coordinator_http_error",
+                "task_id": str(task_id) if "task_id" in locals() else "unknown",
             }
 
-        # 4. Metrics Attachment
-        selected_agent = (
-            result.get("selected_agent_id")
-            or result.get("meta", {}).get("routing_decision", {}).get("selected_agent_id")
+        # 4. Metrics Attachment (Safe Extraction)
+        # Using .get chain with defaults to prevent KeyErrors on partial results
+        meta = result.get("meta", {})
+        decision = meta.get("routing_decision") or {}
+
+        selected_agent = result.get("selected_agent_id") or decision.get(
+            "selected_agent_id"
         )
-        score = (
-            result.get("router_score")
-            or result.get("meta", {}).get("routing_decision", {}).get("router_score")
-        )
+        score = result.get("router_score") or decision.get("router_score")
+
         _attach_routing_decision(result, selected_agent, score)
         _attach_exec_metrics(result, started_at, attempt=1)
-        
+
         return result
 
     async def health_check(self) -> Dict[str, Any]:
@@ -649,7 +646,7 @@ class CoordinatorHttpRouter(Router):
             return {
                 "status": "unhealthy",
                 "error": str(e),
-                "router_type": "coordinator_http"
+                "router_type": "coordinator_http",
             }
 
     async def close(self):
@@ -660,6 +657,7 @@ class CoordinatorHttpRouter(Router):
 # -----------------------------------------------------------------------------
 # RouterFactory
 # -----------------------------------------------------------------------------
+
 
 class RouterFactory:
     """
@@ -673,8 +671,7 @@ class RouterFactory:
 
     @staticmethod
     def create_router(
-        router_type: Optional[str] = None,
-        config: Optional[RouterConfig] = None
+        router_type: Optional[str] = None, config: Optional[RouterConfig] = None
     ) -> Router:
         """
         Create a router instance based on configuration.
@@ -698,8 +695,12 @@ class RouterFactory:
                 timeout=float(os.getenv("DISPATCHER_ROUTER_TIMEOUT", "30.0")),
                 max_retries=int(os.getenv("DISPATCHER_ROUTER_MAX_RETRIES", "3")),
                 retry_delay=float(os.getenv("DISPATCHER_ROUTER_RETRY_DELAY", "1.0")),
-                circuit_breaker_failures=int(os.getenv("DISPATCHER_ROUTER_CB_FAILURES", "5")),
-                circuit_breaker_timeout=float(os.getenv("DISPATCHER_ROUTER_CB_TIMEOUT", "30.0"))
+                circuit_breaker_failures=int(
+                    os.getenv("DISPATCHER_ROUTER_CB_FAILURES", "5")
+                ),
+                circuit_breaker_timeout=float(
+                    os.getenv("DISPATCHER_ROUTER_CB_TIMEOUT", "30.0")
+                ),
             )
 
         logger.info(f"Creating router of type: {router_type}")
@@ -724,8 +725,7 @@ class RouterFactory:
 
     @staticmethod
     async def create_router_with_health_check(
-        router_type: Optional[str] = None,
-        config: Optional[RouterConfig] = None
+        router_type: Optional[str] = None, config: Optional[RouterConfig] = None
     ) -> Router:
         """
         Create a router and verify it's healthy.

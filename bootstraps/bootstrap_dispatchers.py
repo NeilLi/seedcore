@@ -21,7 +21,7 @@ from seedcore.utils.ray_utils import (
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
 setup_logging(app_name="seedcore.dispatchers")  # centralized stdout logging only
-log = ensure_serve_logger("seedcore.dispatchers")
+logger = ensure_serve_logger("seedcore.dispatchers")
 
 # ---------- helpers ----------
 def _env_bool(name: str, default: str | bool = "false") -> bool:
@@ -110,25 +110,25 @@ def _resolve_ray_response(response, timeout_s: float = 15.0):
         else:
             return ray.get(response, timeout=timeout_s)
     except Exception as e:
-        log.warning(f"Failed to resolve Ray response: {e}")
+        logger.warning(f"Failed to resolve Ray response: {e}")
         raise
 
 
 def _ensure_ray() -> bool:
     """Use ray_utils to ensure Ray is properly initialized."""
     if is_ray_available():
-        log.info("✅ Ray already available")
+        logger.info("✅ Ray already available")
         return True
 
-    log.info("🚀 Initializing Ray connection...")
+    logger.info("🚀 Initializing Ray connection...")
     success = ensure_ray_initialized(ray_namespace=RAY_NAMESPACE, force_reinit=False)
 
     if success:
         cluster_info = get_ray_cluster_info()
-        log.info(f"✅ Ray connected: {cluster_info}")
+        logger.info(f"✅ Ray connected: {cluster_info}")
         return True
     else:
-        log.error("❌ Failed to initialize Ray")
+        logger.error("❌ Failed to initialize Ray")
         return False
 
 
@@ -136,7 +136,7 @@ def _kill_if_exists(name: str):
     try:
         a = ray.get_actor(name, namespace=RAY_NAMESPACE)
         ray.kill(a, no_restart=True)
-        log.info("♻️ Killed %s", name)
+        logger.info("♻️ Killed %s", name)
         # wait name to be reusable
         deadline = time.time() + 30
         while time.time() < deadline:
@@ -145,7 +145,7 @@ def _kill_if_exists(name: str):
                 time.sleep(0.3)
             except Exception:
                 return
-        log.warning("⚠️ Actor %s name may still be reserved", name)
+        logger.warning("⚠️ Actor %s name may still be reserved", name)
     except Exception:
         pass
 
@@ -156,45 +156,50 @@ def _optional_resources():
 
 def _ensure_reaper(env_vars: dict):
     if not _env_bool("ENABLE_REAPER", "true"):
-        log.info("ℹ️ Reaper disabled (ENABLE_REAPER=false)")
+        logger.info("ℹ️ Reaper disabled")
         return
+
+    # Check existing
     try:
         reaper = ray.get_actor("seedcore_reaper", namespace=RAY_NAMESPACE)
-        log.info("✅ Reaper already exists")
-
-        # Run one-shot stale task sweep during bootstrap
+        # Check if healthy (if ping exists, otherwise just ensure loop is running)
         try:
-            result = ray.get(reaper.reap_stale_tasks.remote(), timeout=30)
-            log.info(f"✅ Initial stale task sweep completed: {result}")
-        except Exception as e:
-            log.warning(f"Initial stale task sweep failed: {e}")
+            ray.get(reaper.ping.remote(), timeout=5)
+            logger.info("✅ Reaper already exists and is healthy")
+        except Exception:
+            # Ping might not exist, but actor exists - ensure loop is running
+            logger.info("✅ Reaper already exists")
+        # Ensure loop is running (idempotent)
+        reaper.run.remote()
+        return
     except Exception:
-        from seedcore.dispatcher import Reaper
+        pass  # Recreate
 
-        opts = dict(
-            name="seedcore_reaper",
-            lifetime="detached",
-            namespace=RAY_NAMESPACE,
-            num_cpus=0.05,
-            runtime_env={"env_vars": env_vars},
-        )
-        res = _optional_resources()
-        if res:
-            opts["resources"] = res
-        reaper = Reaper.options(**opts).remote(dsn=PG_DSN)
-        log.info("✅ Reaper created")
+    # Create new
+    from seedcore.dispatcher import Reaper
 
-        # Run one-shot stale task sweep after creating reaper
-        try:
-            result = ray.get(reaper.reap_stale_tasks.remote(), timeout=30)
-            log.info(f"✅ Initial stale task sweep completed: {result}")
-        except Exception as e:
-            log.warning(f"Initial stale task sweep failed: {e}")
+    opts = dict(
+        name="seedcore_reaper",
+        lifetime="detached",
+        namespace=RAY_NAMESPACE,
+        num_cpus=0.05,
+        runtime_env={"env_vars": env_vars},
+    )
+    # Use generic resource logic
+    res = _optional_resources()
+    if res:
+        opts["resources"] = res
+
+    reaper = Reaper.options(**opts).remote(dsn=PG_DSN)
+
+    # Start the loop immediately
+    reaper.run.remote()
+    logger.info("✅ Reaper created and loop started")
 
 
 def _ensure_graph_dispatchers(env_vars: dict):
     if not _env_bool("ENABLE_GRAPH_DISPATCHERS", "true"):
-        log.info("ℹ️ GraphDispatchers disabled")
+        logger.info("ℹ️ GraphDispatchers disabled")
         return
     from seedcore.dispatcher import GraphDispatcher
 
@@ -210,12 +215,12 @@ def _ensure_graph_dispatchers(env_vars: dict):
                 a = ray.get_actor(name, namespace=RAY_NAMESPACE)
                 try:
                     if ray.get(a.ping.remote(), timeout=GRAPH_PING_TIMEOUT_S) == "pong":
-                        log.info("✅ %s alive", name)
+                        logger.info("✅ %s alive", name)
                         graph_dispatchers_all.append(a)
                         ok += 1
                         continue
                 except Exception:
-                    log.info("↪️ %s unresponsive; recreating", name)
+                    logger.info("↪️ %s unresponsive; recreating", name)
                     _kill_if_exists(name)
             except Exception:
                 pass
@@ -228,9 +233,10 @@ def _ensure_graph_dispatchers(env_vars: dict):
             runtime_env={"env_vars": env_vars},
             max_restarts=1,
         )
-        # Always pin GraphDispatcher to head node to ensure logs appear in bootstrap job stdout
-        # This ensures logs are captured by the bootstrap job's stdout, matching QueueDispatcher behavior
-        opts["resources"] = {"head_node": 0.001}
+        # Use generic resource logic (respects PIN_TO_HEAD env var)
+        res = _optional_resources()
+        if res:
+            opts["resources"] = res
         a = GraphDispatcher.options(**opts).remote(dsn=PG_DSN, name=name)
         graph_dispatchers_all.append(a)
         graph_dispatchers_created.append(a)
@@ -249,7 +255,7 @@ def _ensure_graph_dispatchers(env_vars: dict):
                 # Optional: ask for startup status if actor implements it
                 try:
                     status = ray.get(a.get_startup_status.remote(), timeout=5)
-                    log.info(
+                    logger.info(
                         "📊 %s startup (attempt %d/%d): %s",
                         name,
                         attempt + 1,
@@ -260,7 +266,7 @@ def _ensure_graph_dispatchers(env_vars: dict):
                     pass
 
                 if ray.get(a.ping.remote(), timeout=GRAPH_PING_TIMEOUT_S) == "pong":
-                    log.info(
+                    logger.info(
                         "✅ %s created and responsive (attempt %d/%d)",
                         name,
                         attempt + 1,
@@ -271,7 +277,7 @@ def _ensure_graph_dispatchers(env_vars: dict):
                     break
             except Exception as e:
                 if attempt < max_retries - 1:
-                    log.info(
+                    logger.info(
                         "⏳ %s not ready (attempt %d/%d): %s — retrying in %.1fs",
                         name,
                         attempt + 1,
@@ -282,7 +288,7 @@ def _ensure_graph_dispatchers(env_vars: dict):
                     time.sleep(retry_delay)
                     waited += retry_delay
                     if waited >= GRAPH_READY_TOTAL_TIMEOUT_S:
-                        log.warning(
+                        logger.warning(
                             "⚠️ %s exceeded total wait budget (%.1fs)",
                             name,
                             GRAPH_READY_TOTAL_TIMEOUT_S,
@@ -290,22 +296,22 @@ def _ensure_graph_dispatchers(env_vars: dict):
                         break
                     retry_delay *= 2  # Exponential backoff
                 else:
-                    log.warning(
+                    logger.warning(
                         "⚠️ %s ping failed after %d attempts: %s", name, max_retries, e
                     )
 
         if not ping_success:
-            log.warning("⚠️ %s created but not responsive after all retries", name)
+            logger.warning("⚠️ %s created but not responsive after all retries", name)
 
     # Start run loops only for actors we just created (avoid double-run enqueues)
     for a in graph_dispatchers_created:
         try:
             a.run.remote()
-            log.info("🚀 Started GraphDispatcher run loop")
+            logger.info("🚀 Started GraphDispatcher run loop")
         except Exception as e:
-            log.warning("⚠️ Failed to start GraphDispatcher loop: %s", e)
+            logger.warning("⚠️ Failed to start GraphDispatcher loop: %s", e)
 
-    log.info(
+    logger.info(
         "📊 GraphDispatchers responsive: %d/%d (expected=%d, strict=%s)",
         ok,
         GRAPH_COUNT,
@@ -334,11 +340,11 @@ def _ensure_dispatchers(env_vars: dict):
                 a = ray.get_actor(name, namespace=RAY_NAMESPACE)
                 try:
                     if ray.get(a.ping.remote(), timeout=5) == "pong":
-                        log.info("✅ %s alive", name)
+                        logger.info("✅ %s alive", name)
                         dispatchers.append(a)
                         continue
                 except Exception:
-                    log.info("↪️ %s unresponsive; recreating", name)
+                    logger.info("↪️ %s unresponsive; recreating", name)
                     _kill_if_exists(name)
             except Exception:
                 pass
@@ -351,17 +357,15 @@ def _ensure_dispatchers(env_vars: dict):
             runtime_env={"env_vars": env_vars},
             max_restarts=1,
         )
-        # Pin QueueDispatcher to head node for consistent logging visibility
+        # Use generic resource logic (respects PIN_TO_HEAD env var)
         res = _optional_resources()
-        if not res:
-            # If PIN_TO_HEAD is false, still pin to head node to ensure logs appear in bootstrap stdout
-            res = {"head_node": 0.001}
-        opts["resources"] = res
+        if res:
+            opts["resources"] = res
 
         a = Dispatcher.options(**opts).remote(dsn=PG_DSN, name=name)
         dispatchers.append(a)
         created.append(a)
-        log.info("✅ %s created", name)
+        logger.info("✅ %s created", name)
 
     # Warm-up newly created (ensure pool ready)
     ready = 0
@@ -371,21 +375,26 @@ def _ensure_dispatchers(env_vars: dict):
             if ok:
                 ready += 1
                 st = ray.get(a.get_status.remote(), timeout=5)
-                log.info("✅ warmup: %s", st)
+                logger.info("✅ warmup: %s", st)
             else:
                 st = ray.get(a.get_status.remote(), timeout=5)
-                log.warning("⚠️ not ready: %s", st)
+                logger.warning("⚠️ not ready: %s", st)
         except Exception as e:
-            log.warning("⚠️ warmup failed: %s", e)
+            logger.warning("⚠️ warmup failed: %s", e)
 
-    # Kick off run loops (fire & forget)
-    for a in dispatchers:
+    # Kick off run loops ONLY for created actors
+    for a in created:
         try:
             a.run.remote()
         except Exception as e:
-            log.warning("⚠️ failed to start run loop: %s", e)
+            logger.warning("⚠️ failed to start run loop: %s", e)
 
-    log.info("📊 Dispatchers created: %d, warmed up: %d", len(dispatchers), ready)
+    # For existing ones, we assume they are running.
+    # If you want to be safe, you can call a.run.remote() on 'dispatchers' list,
+    # relying on the "already_running" guard in the Actor.
+    # But usually, touching 'created' is sufficient.
+
+    logger.info("📊 Dispatchers created: %d, warmed up: %d", len(dispatchers), ready)
     return len(dispatchers) > 0 and (ready > 0 or not created)
 
 
@@ -393,19 +402,19 @@ def bootstrap_dispatchers() -> bool:
     """Public entry used by bootstrap_entry.py."""
     try:
         if not _ensure_ray():
-            log.error("❌ Failed to initialize Ray connection")
+            logger.error("❌ Failed to initialize Ray connection")
             return False
 
         if not is_ray_available():
-            log.error("❌ Ray cluster unavailable")
+            logger.error("❌ Ray cluster unavailable")
             return False
         try:
             ci = get_ray_cluster_info()
-            log.info("ℹ️ Ray cluster: %s", ci)
+            logger.info("ℹ️ Ray cluster: %s", ci)
         except Exception:
             pass
     except Exception as e:
-        log.error("❌ Failed to init Ray: %s", e)
+        logger.error("❌ Failed to init Ray: %s", e)
         return False
 
     env_vars = {k: os.getenv(k, "") for k in ENV_KEYS}
@@ -413,22 +422,22 @@ def bootstrap_dispatchers() -> bool:
     try:
         _ensure_graph_dispatchers(env_vars)
     except Exception as e:
-        log.error("❌ GraphDispatcher bring-up failed: %s", e)
+        logger.error("❌ GraphDispatcher bring-up failed: %s", e)
         # If strict, abort bootstrap; otherwise continue with queue dispatchers
         if STRICT_GRAPH:
             return False
 
     ok = _ensure_dispatchers(env_vars)
     if not ok:
-        log.error("❌ Dispatcher bring-up failed")
+        logger.error("❌ Dispatcher bring-up failed")
         return False
 
     if EXIT_AFTER:
-        log.info("🚪 EXIT_AFTER_BOOTSTRAP=true — exiting")
+        logger.info("🚪 EXIT_AFTER_BOOTSTRAP=true — exiting")
         return True
 
     # Optional health loop for debugging
-    log.info("👀 EXIT_AFTER_BOOTSTRAP=false — keeping job alive")
+    logger.info("👀 EXIT_AFTER_BOOTSTRAP=false — keeping job alive")
     try:
         while True:
             time.sleep(60)

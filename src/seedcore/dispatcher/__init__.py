@@ -18,8 +18,8 @@ Dispatcher implementations for SeedCore.
 
 # Dispatchers
 # from .queue_dispatcher import Dispatcher, Reaper
-from .dispatcher_actor import Dispatcher
-from .reaper_actor import Reaper
+from .queue_dispatcher import Dispatcher
+from .reaper import Reaper
 from .graph_dispatcher import GraphDispatcher
 
 __all__ = [
