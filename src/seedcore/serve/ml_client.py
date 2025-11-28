@@ -198,6 +198,29 @@ class MLServiceClient(BaseServiceClient):
             Scaling prediction result
         """
         return await self.post("/predict/scaling", json=metrics)
+
+    async def predict_all(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Unified ML inference (roles, drift, anomaly, scaling) from StateService metrics.
+        
+        Args:
+            metrics: Either the raw /state/system-metrics response or the nested metrics dict.
+        """
+        payload = metrics or {}
+        return await self.post("/integrations/predict_all", json=payload)
+    
+    async def get_adaptive_params(self) -> Dict[str, Any]:
+        """Get adaptive parameters from MLService."""
+        return await self.get("/integrations/adaptive_params")
+
+    async def update_adaptive_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Sends feedback to ML Service to adjust dynamic parameters (e.g. temperature).
+        """
+        url = f"{self.base_url}/integrations/adaptive_params"
+        async with self._session.post(url, json=params) as resp:
+            resp.raise_for_status()
+            return await resp.json()
     
     # --- LLM Endpoints ---
     async def chat(self, model: str, messages: List[Dict[str, str]], **params) -> Dict[str, Any]:

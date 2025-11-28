@@ -116,6 +116,7 @@ class SystemState:
     h_hgnn: Optional[np.ndarray] = None
     E_patterns: Optional[np.ndarray] = None  # hyperedge selection/activation
     w_mode: Optional[np.ndarray] = None      # system mode weights (optional)
+    ml: Dict[str, Any] = field(default_factory=dict)  # ML annotations (roles, drift, anomaly, scaling)
 
     def __post_init__(self):
         if self.h_hgnn is not None:
@@ -124,6 +125,11 @@ class SystemState:
             self.E_patterns = _as_f32(self.E_patterns)
         if self.w_mode is not None:
             self.w_mode = _as_f32(self.w_mode)
+        if self.ml is None:
+            self.ml = {}
+        else:
+            # Ensure JSON-safe shallow copy
+            self.ml = dict(self.ml)
 
 
 @dataclass
@@ -325,6 +331,7 @@ class UnifiedState:
                 "h_hgnn": None if self.system.h_hgnn is None else _as_f32(self.system.h_hgnn).tolist(),
                 "E_patterns": None if self.system.E_patterns is None else _as_f32(self.system.E_patterns).tolist(),
                 "w_mode": None if self.system.w_mode is None else _as_f32(self.system.w_mode).tolist(),
+                "ml": self.system.ml or {},
             },
             "memory": {
                 "ma": self.memory.ma,
@@ -361,6 +368,7 @@ class UnifiedState:
             h_hgnn=None if sysd.get("h_hgnn") is None else _as_f32(sysd.get("h_hgnn")),
             E_patterns=None if sysd.get("E_patterns") is None else _as_f32(sysd.get("E_patterns")),
             w_mode=None if sysd.get("w_mode") is None else _as_f32(sysd.get("w_mode")),
+            ml=dict(sysd.get("ml") or {}),
         )
         memd = payload.get("memory") or {}
         memory = MemoryVector(ma=memd.get("ma", {}), mw=memd.get("mw", {}), mlt=memd.get("mlt", {}), mfb=memd.get("mfb", {}))

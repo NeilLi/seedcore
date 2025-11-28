@@ -185,10 +185,131 @@ def sanitize_json(data: Any) -> Any:
 ml_app = FastAPI()
 
 # Service state for startup initialization
+# Runtime state (model cache, adaptive params, snapshot)
 _service_state = {
-    "drift_detector": None,
-    "warmup_task": None,
+    "scaling_temperature": 1.0,
+    "ml_snapshot": None,
 }
+
+# ------------------------- helpers ----------------------------------------
+
+def _safe_float(x: Any, default: float = 0.0) -> float:
+    try:
+        return float(x)
+    except Exception:
+        return default
+
+def _safe_dict(x: Any) -> Dict[str, Any]:
+    return x if isinstance(x, dict) else {}
+
+# ------------------------- unified payload extraction ----------------------
+
+def extract_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    StateService v2 MUST provide summary vector:
+        payload["summary"] = {...}
+    MLService does NOT compute or infer metrics.
+    """
+    if isinstance(payload, dict) and isinstance(payload.get("summary"), dict):
+        return payload["summary"]
+
+    logger.warning("[MLService] Missing summary in payload; returning empty summary")
+    return {}
+
+# ------------------------- DRIFT ------------------------------------------
+
+def _coerce_drift_output(result: Any) -> Dict[str, Any]:
+    """Normalize drift detector output."""
+    if isinstance(result, dict):
+        return {
+            "score": _safe_float(result.get("score"), 0.5),
+            "confidence": _safe_float(result.get("confidence"), 0.1),
+            "model_version": result.get("model_version", "unknown"),
+        }
+    return {"score": _safe_float(result, 0.5), "confidence": 0.1, "model_version": "unknown"}
+
+async def run_drift(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Run drift detection model (LLM or local)."""
+    try:
+        from seedcore.ml.drift_detector import compute_drift_score
+        desc = f"{summary.get('total_agents',0)} agents • mem={summary.get('memory_util_scalar',0.0):.2f}"
+        task = {"id": f"drift_{int(time.time()*1000)}", "description": desc}
+        result = await compute_drift_score(task, text=desc)
+        return _coerce_drift_output(result)
+    except Exception as e:
+        logger.warning(f"[MLService] drift failed: {e}")
+        snap = get_snapshot()
+        fallback = snap.get("drift", 0.5) if snap else 0.5
+        return {"score": fallback, "confidence": 0.1, "fallback": True}
+
+# ------------------------- ANOMALY ----------------------------------------
+
+def run_anomaly(summary: Dict[str, Any], drift_score: float) -> float:
+    """
+    Combine drift + memory_anomaly_score.
+    StateService must provide memory_anomaly_score.
+    """
+    memory_anom = _safe_float(summary.get("memory_anomaly_score"), None)
+    if memory_anom is None:
+        # drift-only fallback
+        return float(drift_score)
+    return float(max(0.0, min(1.0, 0.6 * drift_score + 0.4 * memory_anom)))
+
+# ------------------------- SCALING ----------------------------------------
+
+def adjust_temp(delta_E: Optional[float]) -> float:
+    """Adaptive temperature update from Energy feedback."""
+    temp = _service_state.get("scaling_temperature", 1.0)
+    if delta_E is None:
+        return temp
+
+    if delta_E < 0:  # energy worsening → more conservative
+        temp *= 1.02
+    else:            # improving → sharper decisions
+        temp *= 0.98
+
+    temp = max(0.5, min(2.0, temp))
+    _service_state["scaling_temperature"] = temp
+    return temp
+
+def run_scaling(summary: Dict[str, Any]) -> float:
+    """
+    StateService should compute `scaling_score`.
+    MLService only applies temperature shaping.
+    """
+    base = _safe_float(summary.get("scaling_score"), 0.5)
+    temp = _service_state.get("scaling_temperature", 1.0)
+    if temp != 1.0:
+        base = base ** (1.0 / temp)
+    return float(max(0.0, min(1.0, base)))
+
+# ------------------------- ROLES ------------------------------------------
+
+def extract_roles(summary: Dict[str, Any]) -> Dict[str, float]:
+    """
+    StateService should provide avg_role = {"E":..., "S":..., "O":...}
+    """
+    avg_role = _safe_dict(summary.get("avg_role"))
+    if avg_role:
+        return {
+            "E": _safe_float(avg_role.get("E"), 1/3),
+            "S": _safe_float(avg_role.get("S"), 1/3),
+            "O": _safe_float(avg_role.get("O"), 1/3),
+        }
+    return {"E": 1/3, "S": 1/3, "O": 1/3}
+
+# ------------------------- SNAPSHOT ----------------------------------------
+
+def get_snapshot(max_age: float = 60.0) -> Optional[Dict[str, Any]]:
+    snap = _service_state.get("ml_snapshot")
+    if not isinstance(snap, dict):
+        return None
+    if time.time() - snap.get("ts", 0) > max_age:
+        return None
+    return snap.get("data")
+
+def set_snapshot(data: Dict[str, Any]):
+    _service_state["ml_snapshot"] = {"ts": time.time(), "data": data}
 
 # Global status actor handle (init in MLService.__init__)
 status_actor = None
@@ -245,7 +366,7 @@ def _status_all() -> Dict[str, Dict[str, Any]]:
 async def root():
     return {
         "status": "ok",
-        "service": "seedcore-ml",
+        "service": "ml_service",
         "version": "1.0.0",
         "endpoints": {
             "health": "/health",
@@ -260,6 +381,13 @@ async def root():
             "drift_scoring": "/drift/score",
             "drift_warmup": "/drift/warmup",
             "scaling_prediction": "/predict/scaling",
+            "integrations": {
+                "predict_all": "/integrations/predict_all",
+                "adaptive_params": {
+                    "get": "/integrations/adaptive_params",
+                    "update": "/integrations/adaptive_params",
+                },
+            },
             "xgboost": {
                 "train": "/xgboost/train",
                 "predict": "/xgboost/predict",
@@ -379,142 +507,215 @@ async def score_salience(request: Dict[str, Any]):
 @ml_app.post("/detect/anomaly")
 async def detect_anomaly(request: Dict[str, Any]):
     """
-    Enhanced anomaly detection using drift scoring service.
-    
-    This endpoint now uses the Neural-CUSUM drift detector instead of simple thresholds.
-    It provides more sophisticated anomaly detection based on task embeddings and runtime metrics.
+    Time-series anomaly detection using drift detector.
+    MLService performs only:
+    - drift-based embedding comparison
+    - returns raw drift scores
+    No classification, no thresholds, no business logic.
     """
     try:
         from seedcore.ml.drift_detector import compute_drift_score
         
-        data = request.get("data", [])
-        if not data:
-            return {"error": "No data provided", "status": "error"}
+        data = request.get("data")
+        if not isinstance(data, list) or len(data) == 0:
+            return {"status": "error", "error": "Request must include non-empty 'data' array"}
 
-        # Convert data series to task format for drift detection
+        # Minimal ML input
         task = {
-            "id": f"anomaly_detection_{int(time.time())}",
-            "type": "anomaly_detection",
-            "description": f"Anomaly detection for series of {len(data)} points",
-            "priority": 6,
-            "complexity": 0.7,
-            "series_data": data,
+            "id": f"detect_anomaly_{int(time.time()*1000)}",
+            "type": "anomaly_series",
             "series_length": len(data),
-            "series_mean": float(np.mean(data)) if data else 0.0,
-            "series_std": float(np.std(data)) if data else 0.0
+            "series_mean": float(np.mean(data)),
+            "series_std": float(np.std(data)),
         }
-        
-        # Compute drift score
-        drift_result = await compute_drift_score(task)
-        
-        # Convert drift score to anomaly detection results
-        anomalies = []
-        drift_threshold = 0.5  # Threshold for considering drift as anomaly
-        
-        if drift_result.score > drift_threshold:
-            # High drift detected - flag as anomaly
-            anomalies.append({
-                "index": 0,  # Single anomaly for the entire series
-                "value": drift_result.score,
-                "severity": "high" if drift_result.score > 0.8 else "medium",
-                "drift_score": drift_result.score,
-                "log_likelihood": drift_result.log_likelihood,
-                "confidence": drift_result.confidence
-            })
-        
+
+        # Drift computation
+        drift_result = await compute_drift_score(task, text=str(data))
+
         return {
-            "anomalies": anomalies,
-            "drift_score": drift_result.score,
-            "log_likelihood": drift_result.log_likelihood,
-            "confidence": drift_result.confidence,
-            "processing_time_ms": drift_result.processing_time_ms,
-            "model": "neural_cusum_drift_detector",
             "status": "success",
-            "timestamp": time.time(),
-        }
-    except Exception as e:
-        logger.error(f"Error in anomaly detection: {e}")
-        return {"error": str(e), "status": "error", "timestamp": time.time()}
-
-@ml_app.post("/predict/scaling")
-async def predict_scaling(request: Dict[str, Any]):
-    try:
-        metrics = request.get("metrics", {})
-        if not metrics:
-            return {"error": "No metrics provided", "status": "error"}
-
-        cpu_usage = metrics.get("cpu_usage", 0.5)
-        memory_usage = metrics.get("memory_usage", 0.5)
-
-        if cpu_usage > 0.8 or memory_usage > 0.8:
-            recommendation = "scale_up"
-        elif cpu_usage < 0.2 and memory_usage < 0.2:
-            recommendation = "scale_down"
-        else:
-            recommendation = "maintain"
-
-        return {
-            "recommendation": recommendation,
-            "confidence": 0.85,
-            "model": "scaling_predictor",
-            "status": "success",
-            "timestamp": time.time(),
-        }
-    except Exception as e:
-        logger.error(f"Error in scaling prediction: {e}")
-        return {"error": str(e), "status": "error", "timestamp": time.time()}
-
-@ml_app.post("/drift/score")
-async def compute_drift_score(request: Dict[str, Any]):
-    """
-    Compute drift score for a task using Neural-CUSUM drift detector.
-    
-    This endpoint:
-    1. Extracts text embeddings using SentenceTransformer
-    2. Combines with runtime metrics
-    3. Runs through lightweight MLP to produce log-likelihood scores
-    4. Returns drift score suitable for OCPSValve integration
-    
-    Expected to run under 50ms for typical feature sizes.
-    """
-    try:
-        from seedcore.ml.drift_detector import compute_drift_score
-        
-        # Extract task and text from request
-        task = request.get("task", {})
-        text = request.get("text")
-        
-        logger.info(f"[DriftDetector] Received request: task={task}, text='{text[:100] if text else 'None'}'")
-        
-        if not task:
-            logger.error("[DriftDetector] No task provided in request")
-            return {"error": "No task provided", "status": "error"}
-        
-        # Compute drift score using lazy-loaded drift detector
-        logger.debug(f"[DriftDetector] Computing drift score for task: {task.get('id', 'unknown')}")
-        drift_result = await compute_drift_score(task, text)
-        
-        logger.info(f"[DriftDetector] Computed drift score: {drift_result.score:.4f} (mode: {drift_result.drift_mode})")
-        
-        # Return sanitized result
-        return {
             "drift_score": drift_result.score,
             "log_likelihood": drift_result.log_likelihood,
             "confidence": drift_result.confidence,
             "processing_time_ms": drift_result.processing_time_ms,
             "model_version": drift_result.model_version,
-            "model_checksum": drift_result.model_checksum,
             "drift_mode": drift_result.drift_mode,
-            "accuracy_warning": drift_result.accuracy_warning,
-            "status": "success",
             "timestamp": time.time(),
         }
-        
+
     except Exception as e:
-        import traceback
-        logger.error(f"[DriftDetector] Error in drift scoring: {e}")
-        logger.error(f"[DriftDetector] Traceback: {traceback.format_exc()}")
-        return {"error": str(e), "status": "error", "timestamp": time.time()}
+        logger.error(f"[MLService] detect_anomaly failed: {e}")
+        return {"status": "error", "error": str(e), "timestamp": time.time()}
+
+@ml_app.post("/predict/scaling")
+async def predict_scaling(request: Dict[str, Any]):
+    """
+    DEPRECATED: compatibility wrapper.
+    Redirects to unified /integrations/predict_all endpoint.
+    Scaling policy must be applied in Coordinator, not MLService.
+    """
+    try:
+        metrics = request.get("metrics") or request
+        result = await predict_all_state_metrics(metrics)
+        
+        scaling_score = result["ml_stats"]["scaling_score"]
+        
+        return {
+            "status": "success",
+            "scaling_score": scaling_score,
+            "deprecated": True,
+            "note": "Use /integrations/predict_all instead",
+            "timestamp": time.time(),
+        }
+    except Exception as e:
+        logger.error(f"[MLService] scaling wrapper failed: {e}")
+        return {"status": "error", "error": str(e), "timestamp": time.time()}
+
+@ml_app.post("/integrations/predict_all")
+async def predict_all_state_metrics(request: Dict[str, Any]):
+    """
+    Unified ML inference entrypoint.
+    MLService v2 expects ONLY a pre-aggregated summary vector from StateService.
+    No aggregation, no heuristics, no State logic.
+    """
+    try:
+        # Extract summary provided by StateService
+        summary = extract_summary(request)
+        if not summary:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing 'summary' in payload. StateService must provide pre-aggregated summary."
+            )
+
+        # --- Run ML models only ---
+        drift_info = await run_drift(summary)
+        drift_score = _safe_float(drift_info.get("score"), 0.5)
+
+        anomaly_score = run_anomaly(summary, drift_score)
+        scaling_score = run_scaling(summary)
+        roles = extract_roles(summary)
+
+        ml_stats = {
+            "p_pred": roles,
+            "drift": drift_score,
+            "drift_meta": drift_info,
+            "anomaly": anomaly_score,
+            "scaling_score": scaling_score,
+            "adaptive_params": {
+                "scaling_temperature": _service_state.get("scaling_temperature", 1.0),
+            },
+            "summary": summary,
+            "timestamp": time.time(),
+        }
+
+        # Snapshot for degraded mode resilience
+        set_snapshot(ml_stats)
+
+        return {"status": "success", "ml_stats": ml_stats}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[MLService] predict_all failed: {e}", exc_info=True)
+        fallback = get_snapshot(max_age=300)
+        if fallback:
+            return {
+                "status": "degraded",
+                "ml_stats": fallback,
+                "error": str(e),
+            }
+        raise HTTPException(500, detail=str(e))
+
+@ml_app.get("/integrations/adaptive_params")
+async def get_adaptive_params():
+    """
+    ML-only adaptive parameters.
+    StateService owns all baselines & aggregation logic.
+    """
+    return {
+        "status": "success",
+        "adaptive_params": {
+            "scaling_temperature": _service_state.get("scaling_temperature", 1.0),
+        },
+        "timestamp": time.time(),
+        "note": "All baselines and system metrics are computed by StateService.",
+    }
+@ml_app.post("/integrations/adaptive_params")
+async def update_adaptive_params(request: Dict[str, Any]):
+    """
+    Update ML-only tuning parameters.
+    Supported: scaling_temperature (0.5–2.0)
+    """
+    try:
+        updates = {}
+
+        # Scaling temperature
+        if "scaling_temperature" in request:
+            temp = _safe_float(request["scaling_temperature"], 1.0)
+            temp = max(0.5, min(2.0, temp))
+            _service_state["scaling_temperature"] = temp
+            updates["scaling_temperature"] = temp
+
+        if not updates:
+            raise HTTPException(
+                400, "No valid parameters. Supported: scaling_temperature"
+            )
+
+        return {
+            "status": "success",
+            "updated_params": updates,
+            "current_params": {
+                "scaling_temperature": _service_state.get("scaling_temperature", 1.0),
+            },
+            "timestamp": time.time(),
+            "note": "StateService owns baselines, EMA, scaling weights.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[MLService] Failed to update adaptive params: {e}")
+        raise HTTPException(500, detail=str(e))
+
+@ml_app.post("/drift/score")
+async def compute_drift_score_api(request: Dict[str, Any]):
+    """
+    Drift scoring endpoint (ML-only).
+    Runs Neural-CUSUM drift detector on a single task+text pair.
+    """
+    try:
+        from seedcore.ml.drift_detector import compute_drift_score
+
+        task = request.get("task") or {}
+        text = request.get("text")
+
+        if not task:
+            raise HTTPException(400, "Missing 'task' in request")
+
+        # Run drift model (async)
+        drift = await compute_drift_score(task, text)
+
+        return {
+            "status": "success",
+            "drift_score": drift.score,
+            "confidence": drift.confidence,
+            "log_likelihood": drift.log_likelihood,
+            "processing_time_ms": drift.processing_time_ms,
+            "model_version": drift.model_version,
+            "drift_mode": drift.drift_mode,
+            "timestamp": time.time(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[MLService] Drift scoring error: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": time.time(),
+        }
+
 
 @ml_app.post("/drift/warmup")
 async def warmup_drift_detector(request: Dict[str, Any] = None):

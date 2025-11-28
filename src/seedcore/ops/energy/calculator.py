@@ -27,6 +27,8 @@ class EnergyTerms:
     entropy: float = 0.0
     reg: float = 0.0
     mem: float = 0.0
+    drift: float = 0.0
+    anomaly: float = 0.0
     total: float = 0.0
 
 
@@ -289,6 +291,7 @@ class SystemParameters:
     weights: EnergyWeights
     memory_stats: Dict[str, Any]
     include_gradients: bool = True
+    ml_stats: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -330,8 +333,20 @@ def compute_energy_unified(
 
     # Compute
     bd, gd = energy_and_grad(state_dict, params.weights, params.memory_stats)
+    ml_stats = params.ml_stats or {}
+    extra_total = 0.0
+    drift_term = float(params.weights.lambda_drift) * float(ml_stats.get("drift", 0.0))
+    anomaly_term = float(params.weights.mu_anomaly) * float(ml_stats.get("anomaly", 0.0))
+    if drift_term:
+        bd["drift_term"] = drift_term
+        extra_total += drift_term
+    if anomaly_term:
+        bd["anomaly_term"] = anomaly_term
+        extra_total += anomaly_term
     if "total" not in bd:
         bd["total"] = sum(float(bd.get(k, 0.0)) for k in ("pair", "hyper", "entropy", "reg", "mem"))
+    if extra_total:
+        bd["total"] = float(bd.get("total", 0.0)) + extra_total
     return EnergyResult(breakdown=bd, gradients=(gd if params.include_gradients else None))
 
 

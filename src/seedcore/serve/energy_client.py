@@ -96,7 +96,17 @@ class EnergyServiceClient(BaseServiceClient):
         
         Returns:
             A dictionary of energy terms, e.g.:
-            { "pair": ..., "hyper": ..., "entropy": ..., "total": ... }
+            {
+                "pair": ...,
+                "hyper": ...,
+                "entropy": ...,
+                "reg": ...,
+                "mem": ...,
+                "drift_term": ...,
+                "anomaly_term": ...,
+                "scaling_score": ...,
+                "total": ...
+            }
         """
         # Path includes the /ops prefix from the gateway
         return await self.get("/ops/energy/metrics")

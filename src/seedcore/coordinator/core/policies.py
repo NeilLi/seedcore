@@ -28,6 +28,7 @@ EPS = 1e-12
 
 # --- Type Definitions ---
 
+
 class OCPSIn(TypedDict):
     S_t: float
     h: float
@@ -35,6 +36,7 @@ class OCPSIn(TypedDict):
     flag_on: NotRequired[bool]
     drift_flag: NotRequired[bool]
     drift: NotRequired[float]
+
 
 class SurpriseSignals(TypedDict, total=False):
     mw_hit: float
@@ -51,51 +53,54 @@ class SurpriseSignals(TypedDict, total=False):
     kappa: float
     criticality: float
     # NEW: Eventizer Tags for Semantic Urgency
-    event_tags: Any 
+    event_tags: Any
 
 
 # --- Helpers ---
 
+
 def _env_float(name: str, default: float) -> float:
     """Get float from environment."""
     val = os.getenv(name)
-    if val is None: return default
+    if val is None:
+        return default
     try:
         return float(val)
     except ValueError:
         return default
+
 
 def _normalize_weights(w: Sequence[float]) -> tuple[float, ...]:
     w_pos = [max(0.0, wi) for wi in w]
     s = sum(w_pos)
     return tuple((wi / (s + EPS)) for wi in w_pos)
 
+
 def _parse_weights(env_var: str, default=(0.25, 0.20, 0.15, 0.20, 0.10, 0.10)):
     raw = os.getenv(env_var)
-    if not raw: return default
+    if not raw:
+        return default
     try:
         ws = [max(0.0, float(x.strip())) for x in raw.split(",")]
-        if len(ws) != 6: return default
+        if len(ws) != 6:
+            return default
         s = sum(ws) or 1.0
-        return tuple(w/s for w in ws)
+        return tuple(w / s for w in ws)
     except Exception:
         return default
 
 
 # --- Core Classes ---
 
+
 class SurpriseComputer:
     """
     Computes surprise scores for routing decisions.
     Now enriched with Semantic Urgency (x6) via Eventizer tags.
     """
-    
+
     def __init__(
-        self,
-        weights=None,
-        tau_fast=0.35,
-        tau_plan=0.60,
-        normalize_mode: str = "simple"
+        self, weights=None, tau_fast=0.35, tau_plan=0.60, normalize_mode: str = "simple"
     ):
         weights = weights or _parse_weights("SURPRISE_WEIGHTS")
         self.w_hat = _normalize_weights(weights)
@@ -105,14 +110,16 @@ class SurpriseComputer:
 
     def compute(self, signals: SurpriseSignals) -> Dict[str, Any]:
         """Compute surprise score with structured logging."""
-        
+
         # 1. Compute Features (x1-x6)
         # Note: x6 (Cost/Risk) now includes semantic urgency from event_tags
-        xs, ocps_state = compute_all_features(signals, normalize_mode=self.normalize_mode)
-        
+        xs, ocps_state = compute_all_features(
+            signals, normalize_mode=self.normalize_mode
+        )
+
         # 2. Weighted Sum
         S = max(0.0, min(1.0, sum(w * x for w, x in zip(self.w_hat, xs))))
-        
+
         # 3. Thresholding
         if S < self.tau_fast:
             decision_kind = DecisionKind.FAST_PATH.value
@@ -120,18 +127,18 @@ class SurpriseComputer:
             decision_kind = DecisionKind.COGNITIVE.value
         else:
             decision_kind = DecisionKind.ESCALATED.value
-        
+
         return {
-            "S": S, 
-            "x": xs, 
-            "weights": self.w_hat, 
+            "S": S,
+            "x": xs,
+            "weights": self.w_hat,
             "decision_kind": decision_kind,
             "ocps": {
                 "S_t": ocps_state.S_t,
                 "h": ocps_state.h,
                 "flag_on": ocps_state.flag_on,
-                "drift_score": ocps_state.drift_score
-            }
+                "drift_score": ocps_state.drift_score,
+            },
         }
 
 
@@ -139,6 +146,7 @@ class OCPSValve:
     """
     Neural-CUSUM accumulator for drift detection.
     """
+
     def __init__(self, nu: float = 0.1, h: float = None):
         self.nu = nu
         self.h = _env_float("OCPS_DRIFT_THRESHOLD", 0.5) if h is None else h
@@ -151,13 +159,13 @@ class OCPSValve:
         drift = max(0.0, min(1.0, drift))
         self.S = max(0.0, self.S + drift - self.nu)
         esc = self.S > self.h
-        
+
         if esc:
             self.esc_hits += 1
             self.S = 0.0  # Reset on escalation
         else:
             self.fast_hits += 1
-        
+
         return esc
 
     @property
@@ -166,34 +174,48 @@ class OCPSValve:
         return (self.fast_hits / tot) if tot else 1.0
 
 
-# --- Routing Logic ---
-
 def decide_route_with_hysteresis(
-    surprise_score: float, 
+    surprise_score: float,
     last_decision: Optional[str] = None,
-    fast_enter: float = 0.35, 
+    fast_enter: float = 0.35,
     fast_exit: float = 0.38,
-    plan_enter: float = 0.60, 
-    plan_exit: float = 0.57
+    plan_enter: float = 0.60,
+    plan_exit: float = 0.57,
 ) -> str:
-    """Hysteresis-based routing decision."""
-    S = max(0.0, min(1.0, float(surprise_score)))
-    
-    fast = DecisionKind.FAST_PATH.value
-    hgnn = DecisionKind.ESCALATED.value
-    planner = DecisionKind.COGNITIVE.value
+    """Hysteresis-based routing decision (fast → plan → HGNN)."""
 
-    # Hysteresis checks
-    if last_decision == fast and S < fast_exit: return fast
-    if last_decision == hgnn and S > plan_exit: return hgnn
+    # Clamp and alias
+    S = max(0.0, min(1.0, surprise_score))
 
-    # Fresh decision
-    if S < fast_enter: return fast
-    elif S < plan_enter: return planner
-    else: return hgnn
+    FAST = DecisionKind.FAST_PATH.value
+    PLAN = DecisionKind.COGNITIVE.value
+    HGNN = DecisionKind.ESCALATED.value
+
+    # ------------------------------------------------------------------
+    # 1) Hysteresis: stick with last decision if still inside its band.
+    # ------------------------------------------------------------------
+    if last_decision == FAST and S < fast_exit:
+        return FAST
+
+    if last_decision == PLAN and fast_exit <= S < plan_exit:
+        return PLAN
+
+    if last_decision == HGNN and S >= plan_exit:
+        return HGNN
+
+    # ------------------------------------------------------------------
+    # 2) Fresh decision if hysteresis does not apply.
+    # ------------------------------------------------------------------
+    if S < fast_enter:
+        return FAST
+    elif S < plan_enter:
+        return PLAN
+    else:
+        return HGNN
 
 
 # --- Drift Calculation (The "System 2" Input) ---
+
 
 async def compute_drift_score(
     task: Dict[str, Any],
@@ -205,18 +227,17 @@ async def compute_drift_score(
     Combines ML Service (Statistical Drift) with Task Metadata (Heuristic Drift).
     """
     # 1. ML Service Call (Remote)
-    if ml_client and hasattr(ml_client, 'compute_drift_score'):
+    if ml_client and hasattr(ml_client, "compute_drift_score"):
         try:
             # Use simplified text payload (don't construct huge strings here)
-            text_payload = f"{task.get('type')} {task.get('domain')} {task.get('description')}"
-            
-            response = await ml_client.compute_drift_score(
-                task=task,
-                text=text_payload
+            text_payload = (
+                f"{task.get('type')} {task.get('domain')} {task.get('description')}"
             )
+
+            response = await ml_client.compute_drift_score(task=task, text=text_payload)
             if response.get("status") == "success":
                 return max(0.0, min(1.0, float(response.get("drift_score", 0.0))))
-                
+
         except Exception as e:
             logger.warning(f"ML drift computation failed: {e}")
 
@@ -228,14 +249,18 @@ def _compute_fallback_drift_score(task: Dict[str, Any]) -> float:
     """Heuristic drift score based on task type and priority."""
     score = 0.0
     t_type = str(task.get("type", "")).lower()
-    
-    if "anomaly" in t_type: score += 0.3  # noqa: E701
-    if "graph" in t_type: score += 0.1  # noqa: E701
-    
+
+    if "anomaly" in t_type:
+        score += 0.3  # noqa: E701
+    if "graph" in t_type:
+        score += 0.1  # noqa: E701
+
     prio = float(task.get("priority", 5))
-    if prio >= 8: score += 0.2
-    
+    if prio >= 8:
+        score += 0.2
+
     return max(0.0, min(1.0, score))
+
 
 # --- Removed: get_current_energy_state (Moved to Organism/Energy Service) ---
 # --- Removed: create_ocps_valve (Use OCPSValve directly) ---

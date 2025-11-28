@@ -39,6 +39,9 @@ class EnergyTerms:
     entropy: float = 0.0
     reg: float = 0.0
     mem: float = 0.0
+    drift: float = 0.0
+    anomaly: float = 0.0
+    scaling: float = 0.0
     total: float = 0.0
 
 @dataclass
@@ -48,6 +51,9 @@ class EnergyLedger:
     entropy: float = 0.0
     reg: float = 0.0
     mem: float = 0.0
+    drift_term: float = 0.0
+    anomaly_term: float = 0.0
+    scaling_score: float = 0.0
     
     # Energy history tracking
     pair_history: deque = field(default_factory=lambda: deque(maxlen=1000))
@@ -55,6 +61,9 @@ class EnergyLedger:
     entropy_history: deque = field(default_factory=lambda: deque(maxlen=1000))
     reg_history: deque = field(default_factory=lambda: deque(maxlen=1000))
     mem_history: deque = field(default_factory=lambda: deque(maxlen=1000))
+    drift_history: deque = field(default_factory=lambda: deque(maxlen=1000))
+    anomaly_history: deque = field(default_factory=lambda: deque(maxlen=1000))
+    scaling_history: deque = field(default_factory=lambda: deque(maxlen=1000))
     total_history: deque = field(default_factory=lambda: deque(maxlen=1000))
     
     # Last delta tracking
@@ -95,10 +104,13 @@ class EnergyLedger:
                 "entropy": float(breakdown.get("entropy", 0.0)),
                 "reg": float(breakdown.get("reg", 0.0)),
                 "mem": float(breakdown.get("mem", 0.0)),
+                "drift_term": float(breakdown.get("drift_term", 0.0)),
+                "anomaly_term": float(breakdown.get("anomaly_term", 0.0)),
                 "total": float(breakdown.get("total", 0.0)),
             },
             "p_fast": float(extra.get("p_fast", 0.0)),
             "ocps_drift": float(extra.get("drift", 0.0)),
+            "scaling_score": float(extra.get("scaling_score", 0.0)),
             "beta_mem": float(extra.get("beta_mem", self.beta_mem)),
         }
         # Update internal state
@@ -107,6 +119,9 @@ class EnergyLedger:
         self.entropy = rec["terms"]["entropy"]
         self.reg = rec["terms"]["reg"]
         self.mem = rec["terms"]["mem"]
+        self.drift_term = rec["terms"]["drift_term"]
+        self.anomaly_term = rec["terms"]["anomaly_term"]
+        self.scaling_score = rec["scaling_score"]
         self.last_delta = rec["dE"]
         self.total_history.append(rec["terms"]["total"])
 
@@ -136,7 +151,15 @@ class EnergyLedger:
 
     @property
     def total(self) -> float:
-        return self.pair + self.hyper + self.entropy + self.reg + self.mem
+        return (
+            self.pair
+            + self.hyper
+            + self.entropy
+            + self.reg
+            + self.mem
+            + self.drift_term
+            + self.anomaly_term
+        )
 
     @property
     def terms(self) -> EnergyTerms:
@@ -147,11 +170,16 @@ class EnergyLedger:
             entropy=float(self.entropy),
             reg=float(self.reg),
             mem=float(self.mem),
+            drift=float(self.drift_term),
+            anomaly=float(self.anomaly_term),
+            scaling=float(self.scaling_score),
             total=float(self.total),
         )
 
     def reset(self):
         self.pair = self.hyper = self.entropy = self.reg = self.mem = 0.0
+        self.drift_term = self.anomaly_term = 0.0
+        self.scaling_score = 0.0
         self.last_delta = 0.0
         
         # Clear history
@@ -160,6 +188,9 @@ class EnergyLedger:
         self.entropy_history.clear()
         self.reg_history.clear()
         self.mem_history.clear()
+        self.drift_history.clear()
+        self.anomaly_history.clear()
+        self.scaling_history.clear()
         self.total_history.clear()
     
     def update_term(self, term: str, delta: float):
@@ -189,6 +220,9 @@ class EnergyLedger:
             "entropy": list(self.entropy_history)[-window:] if len(self.entropy_history) >= window else list(self.entropy_history),
             "reg": list(self.reg_history)[-window:] if len(self.reg_history) >= window else list(self.reg_history),
             "mem": list(self.mem_history)[-window:] if len(self.mem_history) >= window else list(self.mem_history),
+            "drift_term": list(self.drift_history)[-window:] if len(self.drift_history) >= window else list(self.drift_history),
+            "anomaly_term": list(self.anomaly_history)[-window:] if len(self.anomaly_history) >= window else list(self.anomaly_history),
+            "scaling_score": list(self.scaling_history)[-window:] if len(self.scaling_history) >= window else list(self.scaling_history),
             "total": list(self.total_history)[-window:] if len(self.total_history) >= window else list(self.total_history)
         }
     

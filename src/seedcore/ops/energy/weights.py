@@ -27,12 +27,14 @@ import numpy as np
 @dataclass
 class EnergyWeights:
     """Container for energy weights with projection keeping maps non-expansive.
-
+    
     - W_pair: symmetric pairwise collaboration weights [N, N]
     - W_hyper: hyperedge pattern weights [E]
     - alpha_entropy: scalar α for role entropy
     - lambda_reg: scalar λ for L2 regularizer
     - beta_mem: scalar β for memory cost
+    - lambda_drift: scalar stabilizer for ML drift term
+    - mu_anomaly: scalar stabilizer for ML anomaly term
     """
 
     W_pair: np.ndarray  # shape [N, N]
@@ -40,6 +42,8 @@ class EnergyWeights:
     alpha_entropy: float
     lambda_reg: float
     beta_mem: float
+    lambda_drift: float = 0.0
+    mu_anomaly: float = 0.0
 
     def project(self, r_pair: float = 1.0, r_hyper: float = 1.0) -> None:
         """Clip spectral norms / magnitudes to keep maps non-expansive."""
@@ -59,6 +63,8 @@ class EnergyWeights:
             "alpha_entropy": float(self.alpha_entropy),
             "lambda_reg": float(self.lambda_reg),
             "beta_mem": float(self.beta_mem),
+            "lambda_drift": float(self.lambda_drift),
+            "mu_anomaly": float(self.mu_anomaly),
         }
 
 
@@ -81,6 +87,8 @@ def adapt_energy_weights(
     weights.alpha_entropy *= (1.0 - gamma_spec * dspec + max(0.0, -dreason) * gamma_reason)
     weights.lambda_reg *= (1.0 + gamma_smart * dsmart)
     weights.beta_mem *= (1.0 + gamma_smart * dsmart)
+    weights.lambda_drift *= (1.0 + gamma_reason * dreason)
+    weights.mu_anomaly *= (1.0 + gamma_reason * dreason)
     # Gentle hyper weight nudge
     if weights.W_hyper.size > 0:
         weights.W_hyper *= (1.0 + gamma_reason * dreason)
