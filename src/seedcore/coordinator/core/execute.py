@@ -172,7 +172,6 @@ def _extract_proto_plan(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 async def route_and_execute(
     *,
     task: TaskPayload,
-    fact_dao: Any | None = None,
     eventizer_helper: Callable[[Any], Any] | None = None,
     routing_config: RouteConfig,
     execution_config: ExecutionConfig,

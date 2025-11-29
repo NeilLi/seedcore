@@ -1,128 +1,150 @@
-* The **new full TaskPayload v2 envelope model**
-* The clarified **chat**, **interaction**, and **cognitive** envelopes
-* The distinction between **router inbox vs cognitive envelopes**
-* Correct memory semantics
-* Correct conversational rules
-* AND a **final, comprehensive, end-to-end task payload example** that includes *every field* your system supports.
+# ✅ Task Routing Payload Reference (TaskPayload v2)
 
-This is now ready to drop directly into your docs.
+This reference details the `TaskPayload` model, explaining how the `Task` row carries routing inputs, cognitive metadata, chat envelopes, interaction state, and execution telemetry—**without schema migrations**.
 
----
+SeedCore leverages PostgreSQL `JSONB` to store high-evolution metadata:
 
-# ✅ **Task Routing Payload Reference (Updated for TaskPayload v2)**
+* **Inputs:** `params` (JSONB)
+* **Outputs:** `result.meta` (JSONB)
 
-This reference explains how the `Task` row and the in-memory `TaskPayload` model carry routing inputs, cognitive metadata, chat envelopes, interaction state, and execution telemetry — **all without schema migrations**.
+## Data Persistence Strategy
 
-SeedCore stores everything under:
-
-```
-params (JSONB)
-result.meta (JSONB)
-```
-
-This enables high-evolution metadata flows without column churn.
-
----
-
-# ## Keep Data in JSONB
-
-The `Task` ORM persists `params` as JSONB:
+The `Task` ORM persists `params` as a flexible JSONB column.
 
 ```python
 params: Mapped[Dict[str, Any]] = mapped_column(
     JSONB,
     nullable=False,
     default=dict,
-    comment="Input parameters including fast_eventizer outputs and Router inbox fields under params.routing",
+    comment="Input parameters including interaction modes, cognitive flags, and Router inbox.",
 )
 ```
 
-### Why JSONB?
+**Architecture Benefits:**
 
-* Flexible evolution (new envelopes for chat, cognitive, planning)
-* No schema changes when enriching agent metadata
-* GIN indexes allow deep nested queries
-* Clean isolation: router metadata stays in `params.routing`, cognitive metadata in `params.cognitive`, etc.
-
-Router decisions and execution metrics remain under:
-
-```
-result.meta.routing_decision
-result.meta.exec
-```
+* **Isolation:** Router input (`params.routing`), Router decision (`params._router`), and Cognitive settings (`params.cognitive`) are strictly isolated.
+* **Indexing:** GIN indexes allow high-performance querying on nested fields (e.g., finding all tasks requiring specific skills).
+* **Evolution:** New envelopes (e.g., `graph`, `planning`) can be added without table locks.
 
 ---
 
-# ## Risk Envelope (`params.risk`)
+## 1. Interaction Envelope (`params.interaction`)
 
-Risk classification comes from upstream cognitive analysis:
-
-```json
-{
-  "risk": {
-    "is_high_stakes": true,
-    "score": 0.92,
-    "severity": 0.8,
-    "user_impact": 0.9,
-    "business_criticality": 0.85
-  }
-}
-```
-
-### Key Rules
-
-* **Risk is NOT part of routing.**
-  Routing uses: specialization, skills, hints — not risk.
-
-* Router determines high-stakes via:
-
-  * `params.risk.is_high_stakes`
-  * or fallback: `metadata.risk.is_high_stakes`
-
-* Priority is **not a risk flag**.
-  Do not use `priority >= X` as a proxy.
-
----
-
-# ## Interaction Envelope (`params.interaction`)
-
-Controls *how* the task flows through the system.
+Controls **how** the task flows through the system topology.
 
 ```json
 {
   "interaction": {
-    "mode": "agent_tunnel",
+    "mode": "coordinator_routed",
     "conversation_id": "conv_123",
-    "assigned_agent_id": "agent_xyz"
+    "assigned_agent_id": null
   }
 }
 ```
 
 ### Interaction Modes
 
-| Mode                   | Behavior                                                          |
-| ---------------------- | ----------------------------------------------------------------- |
-| **agent_tunnel**       | Bypasses Coordinator → direct to OrganismRouter, low-latency chat |
-| **one_shot**           | Stateless request/response                                        |
-| **coordinator_routed** | Goes through Coordinator scoring (default)                        |
+| Mode | Behavior |
+| :--- | :--- |
+| **`coordinator_routed`** | **Default.** Task is sent to the Coordinator, scored, and routed to the best Organ/Agent. |
+| **`agent_tunnel`** | **Bypasses Router.** Task is sent directly to `assigned_agent_id`. Used for low-latency chat. |
+| **`one_shot`** | Stateless request/response. No memory hydration. |
 
-### Agent-Tunnel Mode
-
-When `mode == "agent_tunnel"`:
-
-* Router bypassed
-* Task routed directly to assigned agent
-* Cognitive executes in **CHAT + FAST_PATH** mode
-* Retrieval defaults to `skip_retrieval=True`
-* PersistentAgent injects conversation history
-* MwManager writes episodic memory
-* HolonFabric promotes long-term memory where applicable
+**Critical Rule:** If `mode == "agent_tunnel"`, the **Router is skipped entirely**. The `params.routing` envelope is ignored.
 
 ---
 
-# ## Chat Envelope (`params.chat`)
+## 2. Router Inbox (`params.routing`)
 
-Used for all conversational tasks:
+**Read-Only Input.** These are the signals the Router uses to select an Agent (when not in tunnel mode).
+
+```json
+{
+  "routing": {
+    "required_specialization": "GuestEmpathy",
+    "specialization": "GeneralSupport",
+    "skills": {
+      "empathy": 0.9,
+      "service_recovery": 0.7
+    },
+    "hints": {
+      "priority": 5,
+      "deadline_at": "2025-11-11T12:00:00Z",
+      "ttl_seconds": 900
+    },
+    "tools": [
+      {"name": "iot.read", "args": {"sensor": "thermostat", "room": 401}}
+    ]
+  }
+}
+```
+
+### Field Semantics
+
+* **`required_specialization`** (String, Optional): **HARD Constraint.** The target Organ *must* match this specialization.
+* **`specialization`** (String, Optional): **SOFT Hint.** The router prefers this specialization but may fallback.
+* **`skills`** (Dict[str, float]): Required skill levels (0.0 - 1.0). Used for scoring agents within an Organ.
+* **`hints`** (Dict): Metadata for scheduling (priority, deadlines, TTL).
+* **`tools`** (List): Definitions of tools the agent must be able to execute.
+
+---
+
+## 3. Router Output (`params._router`)
+
+**Write-Only / System Generated.** The Router populates this after making a decision. Upstream components should not write to this.
+
+```json
+{
+  "_router": {
+    "is_high_stakes": true,
+    "agent_id": "agent_GEA_02",
+    "organ_id": "organ_guestcare",
+    "reason": "Selected based on specialization match and availability"
+  }
+}
+```
+
+### Field Semantics
+
+* `is_high_stakes` — Router's determination of high-stakes status (may differ from `params.risk.is_high_stakes`)
+* `agent_id` — Selected agent identifier (also written to `result.meta.routing_decision.selected_agent_id`)
+* `organ_id` — Selected organ identifier
+* `reason` — Human-readable explanation of routing decision
+
+---
+
+## 4. Cognitive Metadata (`params.cognitive`)
+
+Controls the reasoning engine, LLM selection, and memory I/O barriers.
+
+```json
+{
+  "cognitive": {
+    "agent_id": "agent_xyz",
+    "cog_type": "chat",
+    "decision_kind": "fast",
+    "llm_provider_override": "openai",
+    "llm_model_override": "gpt-4o-mini",
+    "skip_retrieval": false,
+    "disable_memory_write": false
+  }
+}
+```
+
+### Key Flags
+
+* **`cog_type`**: `chat` (low latency), `task_planning` (multi-step), `hgnn` (deep reasoning).
+* **`decision_kind`**: `fast` (direct LLM), `planner` (RAG+Plan).
+* **`skip_retrieval`**: If `true`, the ContextBuilder skips vector/graph lookups (saving latency).
+* **`disable_memory_write`**: If `true`, the interaction is **not** saved to episodic memory (e.g., for PII reasons or trivial chit-chat).
+
+**Note:** The `agent_id` is typically populated after routing (from `params._router.agent_id`).
+
+---
+
+## 5. Chat Envelope (`params.chat`)
+
+Used for all conversational tasks.
 
 ```json
 {
@@ -138,52 +160,36 @@ Used for all conversational tasks:
 }
 ```
 
-### Notes
+**Note on History:**
 
-* `history` is a **windowed** conversation context (PersistentAgent decides the window size).
-* `conversation_history` may also appear **top-level** for ChatSignature compatibility.
-* CognitiveCore is stateless — it receives history but does not store it.
-* PersistentAgent manages *persistent* episodic chat history.
+* `conversation_history` (Top-Level) is maintained for **ChatSignature** compatibility.
+* `params.chat.history` is the **internal windowed context** used by the Cognitive Engine.
 
 ---
 
-# ## Cognitive Metadata (`params.cognitive`)
+## 6. Risk Envelope (`params.risk`)
 
-Controls the reasoning path and memory rules.
+Risk classification from upstream analysis.
+
+**Important:** Risk is **NOT** a routing signal. Routing uses `skills` and `specialization`. Risk is used for audit trails and potentially forcing a "High Stakes" protocol in the Cognitive engine.
 
 ```json
 {
-  "cognitive": {
-    "agent_id": "agent_xyz",
-    "cog_type": "chat",
-    "decision_kind": "fast",
-    "llm_provider_override": "openai",
-    "llm_model_override": "gpt-4o-mini",
-    "force_rag": false,
-    "force_deep_reasoning": false
+  "risk": {
+    "is_high_stakes": true,
+    "score": 0.92,
+    "severity": 0.8,
+    "user_impact": 0.9,
+    "business_criticality": 0.85
   }
 }
 ```
 
-### Cognitive Types
-
-* **chat** → low latency, skip retrieval unless overridden
-* **task_planning** → decomposes tasks into steps
-* **problem_solving** → multi-step reasoning
-* **hgnn** → HGNN deep semantic reasoning
-* **fact_search**, **graph_rag_query**, **graph_embed** (graph operations)
-
-### Decision Kinds
-
-* **fast** → direct LLM call, no retrieval
-* **planner** → RAG + step planning
-* **hgnn** → deep HGNN context retrieval + reasoning
-
 ---
 
-# ## Graph Envelope (`params.graph`)
+## 7. Graph Envelope (`params.graph`)
 
-TaskType.GRAPH workloads follow the **Polymorphic Payload** pattern: the Task table’s `type` column selects the correct envelope, and the envelope’s `kind` field maps 1:1 to `GraphOperationKind`. Add a `graph` key (sibling to `chat`, `risk`, etc.) whenever a dispatcher needs to invoke graph operations.
+Used when `TaskType.GRAPH` is active. This envelope dictates specific Graph RAG or maintenance operations.
 
 ```json
 {
@@ -191,157 +197,75 @@ TaskType.GRAPH workloads follow the **Polymorphic Payload** pattern: the Task ta
     "kind": "rag_query",
     "collection": "policy_v2",
     "inputs": {
-      "...": "GraphOperation inputs (e.g., query text, filters)"
+      "query_text": "check out time"
     },
     "config": {
-      "...": "Hyper parameters (top_k, score thresholds, flags)"
+      "top_k": 5
     }
   }
 }
 ```
 
-### Field semantics
+### Field Semantics
 
-* `kind` — discriminator that routes to a concrete `GraphOperationKind`.
-* `collection` — graph/vector partition (e.g., `"policy_v2"`).
-* `inputs` — payload required by the operation (query text, metadata filters, seed nodes).
-* `config` — optional hyperparameters (limits, score thresholds, vector toggles).
-
-### Example: `GraphOperationKind.RAG_QUERY`
-
-```json
-{
-  "type": "graph",
-  "params": {
-    "graph": {
-      "kind": "rag_query",
-      "collection": "policy_v2",
-      "inputs": {
-        "query_text": "How do I process a late checkout?",
-        "filter_metadata": {
-          "domain": "hotel_policy"
-        }
-      },
-      "config": {
-        "top_k": 5,
-        "min_score": 0.75,
-        "include_vectors": false
-      }
-    },
-    "risk": {
-      "...": "risk envelope remains available for downstream routing/explainability"
-    }
-  }
-}
-```
+* **`kind`**: Maps 1:1 to `GraphOperationKind`.
+* **`collection`**: The specific vector/graph partition to query.
+* **`inputs`**: Payload required by the operation (query text, metadata filters, seed nodes).
+* **`config`**: Optional hyperparameters (limits, score thresholds, vector toggles).
 
 The router still honors the other envelopes (`risk`, `routing`, etc.), but when `type == "graph"` the dispatcher opens `params.graph` to identify the graph operation to execute.
 
 ---
 
-# ## Cognitive Retrieval Scope Rules (MANDATORY)
+## 8. Result Metadata (`result.meta`)
 
-Retrieval & memory write rules depend strictly on **agent_id**:
-
-### If `agent_id == None` (Coordinator Mode)
-
-* Retrieve: **GLOBAL** holons only
-* Skip episodic hydration
-* Memory writes disabled
-* Used for global coordinator tasks
-
-### If `agent_id != None` (Agent Mode)
-
-* Retrieve: **ORGAN + ENTITY + GLOBAL** holons
-* Hydrate episodic chat history
-* Memory writes enabled
-
-  * MwManager episodic writes
-  * HolonFabric long-term memory promotion
-  * MemoryEvent provenance entries
-
-This ensures correct **memory scoping** per agent.
-
----
-
-# ## Router Inbox (`params.routing`)
-
-Router-facing metadata:
-
-```json
-{
-  "routing": {
-    "required_specialization": "GuestEmpathy",
-    "desired_skills": {
-      "empathy": 0.9,
-      "service_recovery": 0.7
-    },
-    "tool_calls": [
-      {"name": "iot.read", "args": {"sensor": "thermostat", "room": 401}}
-    ],
-    "hints": {
-      "min_capability": 0.6,
-      "max_mem_util": 0.8,
-      "priority": 5,
-      "deadline_at": "2025-11-11T12:00:00Z",
-      "ttl_seconds": 900
-    },
-    "v": 1
-  }
-}
-```
-
-These are the **only fields** the router reads.
-
----
-
-# ## Router Decision (`result.meta.routing_decision`)
+The source of truth for execution telemetry and decision provenance.
 
 ```json
 {
   "routing_decision": {
     "selected_agent_id": "agent_GEA_02",
+    "selected_organ_id": "organ_guestcare",
     "router_score": 0.87,
     "routed_at": "2025-11-11T11:11:11Z",
     "shortlist": [
       {"agent_id": "agent_GEA_02", "score": 0.87},
       {"agent_id": "agent_GEA_07", "score": 0.82}
     ]
-  }
-}
-```
-
----
-
-# ## Execution Metrics (`result.meta.exec`)
-
-```json
-{
+  },
   "exec": {
     "started_at": "2025-11-11T11:12:00Z",
     "finished_at": "2025-11-11T11:12:35Z",
     "latency_ms": 350,
     "attempt": 1
+  },
+  "cognitive_trace": {
+    "retrieval_scope": {
+      "global_holons": ["hospitality_rules"],
+      "organ_holons": ["guestcare_policies"],
+      "entity_holons": ["guest_44520_profile"]
+    },
+    "episodic_fragments_used": 3,
+    "chosen_model": "gpt-4o-mini",
+    "decision_path": "FAST_PATH_CHAT"
   }
 }
 ```
 
 ---
 
-# ## TaskPayload Serialization Rules
+## Memory & Retrieval Scoping Rules
 
-* All routing metadata is injected under `params.routing`.
-* All chat metadata is injected under `params.chat`.
-* All cognitive metadata is injected under `params.cognitive`.
-* All interaction metadata is injected under `params.interaction`.
-* `conversation_history` may appear both:
+Memory behavior is determined by the `agent_id` context and cognitive flags.
 
-  * top-level
-  * under `params.chat.history`
+| Context | Retrieval Scope | Memory Writes (Episodic) |
+| :--- | :--- | :--- |
+| **Coordinator** (`agent_id=None`) | **GLOBAL** Holons only | **Disabled** |
+| **Agent** (`agent_id!=None`) | **GLOBAL + ORGAN + ENTITY** | **Enabled** (unless `disable_memory_write=true`) |
 
 ---
 
-# ## Querying & Indexing
+## Querying & Indexing
 
 Your JSONB GIN index supports flexible queries. Recommended path indexes:
 
@@ -349,8 +273,20 @@ Your JSONB GIN index supports flexible queries. Recommended path indexes:
 CREATE INDEX ix_tasks_params_routing_spec 
 ON tasks USING gin ((params -> 'routing' ->> 'required_specialization'));
 
+CREATE INDEX ix_tasks_params_routing_specialization 
+ON tasks USING gin ((params -> 'routing' ->> 'specialization'));
+
+CREATE INDEX ix_tasks_params_routing_skills 
+ON tasks USING gin ((params -> 'routing' -> 'skills'));
+
 CREATE INDEX ix_tasks_params_routing_priority 
 ON tasks USING gin ((params #> '{routing,hints,priority}'));
+
+CREATE INDEX ix_tasks_params_router_agent 
+ON tasks USING gin ((params -> '_router' ->> 'agent_id'));
+
+CREATE INDEX ix_tasks_params_router_high_stakes 
+ON tasks USING gin ((params #> '{_router,is_high_stakes}'));
 
 CREATE INDEX ix_tasks_params_risk_high_stakes 
 ON tasks USING gin ((params #> '{risk,is_high_stakes}'));
@@ -366,13 +302,9 @@ ON tasks USING gin ((result #> '{meta,exec,latency_ms}'));
 
 ---
 
-# # 🎉 FINAL: Comprehensive End-to-End Task Payload Example
+# 🎉 Final: Comprehensive End-to-End Task Payload Example
 
-This example includes **EVERY envelope** used by SeedCore:
-
----
-
-# ✅ **Full Unified Task Payload (Everything Included)**
+This JSON represents a fully populated task moving through the system.
 
 ```jsonc
 {
@@ -381,7 +313,7 @@ This example includes **EVERY envelope** used by SeedCore:
   "description": "Guest requests late checkout",
   "domain": "hospitality.guest",
 
-  // Top-level convenience for ChatSignature
+  // Top-level history for API/Signature compatibility
   "conversation_history": [
     {"role": "user", "content": "Hi"},
     {"role": "assistant", "content": "Hello! How may I help you?"},
@@ -389,82 +321,88 @@ This example includes **EVERY envelope** used by SeedCore:
   ],
 
   "params": {
-    // --------------------
-    // 1. Risk Envelope
-    // --------------------
+    // ---------------------------------------------
+    // 1. Interaction: Defines the flow topology
+    // ---------------------------------------------
+    "interaction": {
+      "mode": "coordinator_routed", // Router will be engaged
+      "conversation_id": "conv_44520",
+      "assigned_agent_id": null     // To be determined by Router
+    },
+
+    // ---------------------------------------------
+    // 2. Router Inbox: Requirements for the Router
+    // ---------------------------------------------
+    "routing": {
+      "required_specialization": "GuestEmpathy", // Hard Constraint
+      "specialization": "GuestEmpathy",          // Soft Hint
+      "skills": {
+        "empathy": 0.95,
+        "policy_knowledge": 0.7
+      },
+      "hints": {
+        "priority": 4,
+        "deadline_at": "2025-11-26T14:00:00Z",
+        "ttl_seconds": 1800
+      },
+      "tools": [
+        { "name": "policy.lookup", "args": {"policy_name": "late_checkout"} }
+      ]
+    },
+
+    // ---------------------------------------------
+    // 3. Router Output (System Generated)
+    // ---------------------------------------------
+    "_router": {
+      "is_high_stakes": false,
+      "agent_id": "agent_guestcare_007",
+      "organ_id": "organ_guestcare",
+      "reason": "Matched required_specialization 'GuestEmpathy' with score 0.912"
+    },
+
+    // ---------------------------------------------
+    // 4. Cognitive: Execution Parameters
+    // ---------------------------------------------
+    "cognitive": {
+      "agent_id": "agent_guestcare_007", // Populated after routing
+      "cog_type": "chat",
+      "decision_kind": "fast",
+      "llm_provider_override": "openai",
+      "llm_model_override": "gpt-4o-mini",
+      "skip_retrieval": false,
+      "disable_memory_write": false,
+      "force_rag": false,
+      "force_deep_reasoning": false
+    },
+
+    // ---------------------------------------------
+    // 5. Chat: Conversational Context
+    // ---------------------------------------------
+    "chat": {
+      "message": "Can I check out at 2pm tomorrow?",
+      "history": [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello! How may I help you?"}
+      ],
+      "agent_persona": "Professional hotel concierge with high empathy.",
+      "style": "concise_conversational"
+    },
+
+    // ---------------------------------------------
+    // 6. Risk: Upstream Classification
+    // ---------------------------------------------
     "risk": {
       "is_high_stakes": false,
       "score": 0.31,
       "severity": 0.22,
       "user_impact": 0.35,
       "business_criticality": 0.40
-    },
-
-    // --------------------
-    // 2. Chat Envelope
-    // --------------------
-    "chat": {
-      "message": "Can I check out at 2pm tomorrow?",
-      "history": [
-        {"role": "user", "content": "Hi"},
-        {"role": "assistant", "content": "Hello! How may I help you?"},
-        {"role": "user", "content": "Can I check out at 2pm tomorrow?"}
-      ],
-      "agent_persona": "Professional hotel concierge with high empathy.",
-      "style": "concise_conversational"
-    },
-
-    // --------------------
-    // 3. Interaction Envelope
-    // --------------------
-    "interaction": {
-      "mode": "agent_tunnel",
-      "conversation_id": "conv_44520",
-      "assigned_agent_id": "agent_guestcare_007"
-    },
-
-    // --------------------
-    // 4. Cognitive Envelope
-    // --------------------
-    "cognitive": {
-      "agent_id": "agent_guestcare_007",
-      "cog_type": "chat",
-      "decision_kind": "fast",
-      "llm_provider_override": "openai",
-      "llm_model_override": "gpt-4o-mini",
-      "force_rag": false,
-      "force_deep_reasoning": false
-    },
-
-    // --------------------
-    // 5. Router Inbox
-    // --------------------
-    "routing": {
-      "required_specialization": "GuestEmpathy",
-      "desired_skills": {
-        "empathy": 0.95,
-        "policy_knowledge": 0.7
-      },
-      "tool_calls": [
-        {
-          "name": "policy.lookup",
-          "args": {"policy_name": "late_checkout"}
-        }
-      ],
-      "hints": {
-        "min_capability": 0.65,
-        "max_mem_util": 0.80,
-        "priority": 4,
-        "deadline_at": "2025-11-26T14:00:00Z",
-        "ttl_seconds": 1800
-      },
-      "v": 1
     }
   },
 
-  // --------------------
-  // 6. Result Metadata
-  // --------------------
+  // ---------------------------------------------
+  // 7. Result Metadata: Telemetry & Provenance
+  // ---------------------------------------------
   "result": {
     "data": {
       "assistant_reply": "Certainly! Let me check the late checkout policy for your stay."
@@ -472,6 +410,7 @@ This example includes **EVERY envelope** used by SeedCore:
     "meta": {
       "routing_decision": {
         "selected_agent_id": "agent_guestcare_007",
+        "selected_organ_id": "organ_guestcare",
         "router_score": 0.912,
         "routed_at": "2025-11-25T10:11:45Z",
         "shortlist": [
