@@ -14,13 +14,12 @@ endpoints for on-demand calculations (slower, passive).
 
 import asyncio
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 import numpy as np
 from ray import serve  # pyright: ignore[reportMissingImports]
 from fastapi import FastAPI, HTTPException  # pyright: ignore[reportMissingImports]
-from pydantic import BaseModel  # pyright: ignore[reportMissingImports]
 
-from ..models.state import UnifiedState, AgentSnapshot
+from ..models.state import UnifiedState
 from ..serve.state_client import StateServiceClient
 from ..serve.ml_client import MLServiceClient
 from ..ops.energy.calculator import (
@@ -37,152 +36,20 @@ from ..ops.energy.optimizer import (
     estimate_task_complexity,
 )
 
+from ..models.energy import (
+    EnergyRequest,
+    EnergyResponse,
+    FlywheelResultRequest,
+    FlywheelResultResponse,
+    OptimizationRequest,
+    OptimizationResponse,
+    HealthResponse,
+)
+
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
 setup_logging(app_name="seedcore.energy_service.driver")
 logger = ensure_serve_logger("seedcore.energy", level="DEBUG")
-
-
-# --- Request/Response Models ---
-# (Pydantic models like EnergyRequest, EnergyResponse, etc. are unchanged)
-# ... (all Pydantic models from your original file go here) ...
-# --- (Keep all Pydantic models as-is) ---
-class AgentSnapshotDTO(BaseModel):
-    h: List[float]
-    p: Dict[str, float]
-    c: float
-    mem_util: float
-    lifecycle: str
-    load: float = 0.0
-    learned_skills: Dict[str, float] = {}
-    timestamp: Optional[float] = None
-    schema_version: str = "v1"
-    
-    @classmethod
-    def from_snapshot(cls, snap: AgentSnapshot):
-        return cls(
-            h=snap.h.tolist(),
-            p=snap.p,
-            c=snap.c,
-            mem_util=snap.mem_util,
-            lifecycle=snap.lifecycle,
-            learned_skills=snap.learned_skills,
-            load=snap.load,
-            timestamp=snap.timestamp,
-            schema_version=snap.schema_version
-        )
-# ---------------------------------------------------------------------
-# NOTE:
-#   This schema is intentionally kept unused in v2.
-#
-#   It belongs to the original SeedCore theory where "organs" were
-#   structural cognitive units with:
-#       - h_org   : organ-level latent vector
-#       - P_org   : intra-organ adjacency / connectivity matrix
-#       - v_pso   : PSO velocity for structural optimization
-#
-#   The current implementation uses organs only as execution containers.
-#   The PSO-based structural model is postponed until a future version
-#   (SeedCore v3+) when we have more compute and multi-organ dynamics.
-#
-#   Do NOT remove; this is a placeholder for future research.
-# ---------------------------------------------------------------------
-class OrganStatePayload(BaseModel):
-    h: List[float]
-    P: List[List[float]]
-    v_pso: Optional[List[float]] = None
-
-class SystemStatePayload(BaseModel):
-    h_hgnn: Optional[List[float]] = None
-    E_patterns: Optional[List[float]] = None
-    w_mode: Optional[List[float]] = None
-    ml: Optional[Dict[str, Any]] = None
-
-
-class MemoryVectorPayload(BaseModel):
-    ma: Dict[str, Any] = {}
-    mw: Dict[str, Any] = {}
-    mlt: Dict[str, Any] = {}
-    mfb: Dict[str, Any] = {}
-
-
-class UnifiedStatePayload(BaseModel):
-    agents: Dict[str, AgentSnapshotDTO]
-    organs: Dict[str, OrganStatePayload]
-    system: SystemStatePayload
-    memory: MemoryVectorPayload
-
-
-class EnergyWeightsPayload(BaseModel):
-    alpha_entropy: Optional[float] = None
-    lambda_reg: Optional[float] = None
-    beta_mem: Optional[float] = None
-    W_pair: Optional[List[List[float]]] = None
-    W_hyper: Optional[List[float]] = None
-    lambda_drift: Optional[float] = None
-    mu_anomaly: Optional[float] = None
-
-
-class EnergyRequest(BaseModel):
-    unified_state: UnifiedStatePayload
-    weights: Optional[EnergyWeightsPayload] = None
-    include_gradients: bool = False
-    include_breakdown: bool = True
-
-
-class EnergyResponse(BaseModel):
-    success: bool
-    energy: Optional[Dict[str, float]] = None
-    gradients: Optional[Dict[str, Any]] = None
-    breakdown: Optional[Dict[str, float]] = None
-    error: Optional[str] = None
-    timestamp: float
-    computation_time_ms: float
-
-
-class FlywheelResultRequest(BaseModel):
-    delta_e: float
-    breakdown: Optional[Dict[str, float]] = None
-    cost: Optional[float] = 0.0
-    scope: Optional[str] = "cluster"
-    scope_id: Optional[str] = "-"
-    p_fast: Optional[float] = 0.9
-    drift: Optional[float] = 0.0
-    beta_mem: Optional[float] = None
-
-
-class FlywheelResultResponse(BaseModel):
-    success: bool
-    updated_weights: Dict[str, float]
-    ledger_ok: bool
-    balance_after: Optional[float] = None
-    timestamp: float
-
-
-class OptimizationRequest(BaseModel):
-    unified_state: Dict[str, Any]
-    task: Dict[str, Any]
-    weights: Optional[Dict[str, float]] = None
-    max_agents: Optional[int] = None
-
-
-class OptimizationResponse(BaseModel):
-    success: bool
-    selected_agents: Optional[List[str]] = None
-    suitability_scores: Optional[Dict[str, float]] = None
-    recommended_roles: Optional[Dict[str, str]] = None
-    task_complexity: Optional[float] = None
-    error: Optional[str] = None
-    timestamp: float
-    computation_time_ms: float
-
-
-class HealthResponse(BaseModel):
-    status: str
-    service: str
-    sampler_running: bool
-    state_service_healthy: bool
-    error: Optional[str] = None
 
 
 # --- Service State ---
@@ -217,63 +84,75 @@ state = ServiceState()
 # --- Proactive Background Loop ---
 
 
-async def _execute_flywheel_feedback(current_total_energy: float, ml_stats: Dict[str, Any]) -> float:
+async def _execute_flywheel_feedback(
+    current_total_energy: float, ml_stats: Dict[str, Any]
+) -> float:
     """
     The Control Loop:
-    
+
     Compares current Energy vs Previous Energy.
     If Energy is degrading (increasing), tell ML to be more conservative (higher Temp).
     If Energy is optimizing (decreasing), tell ML to be sharper (lower Temp).
-    
+
     Args:
         current_total_energy: Current total energy from the energy calculation
         ml_stats: ML statistics dict containing adaptive_params
-    
+
     Returns:
         delta_E: The energy change (current - previous)
     """
     # 1. Get previous energy from ledger (default to current if empty)
     prev_total = float(getattr(state.ledger, "total", current_total_energy))
-    
+
     # 2. Calculate Delta E (Change in Energy)
     # Positive Delta = Energy is rising (Bad/Entropy increasing)
     # Negative Delta = Energy is falling (Good/Optimization happening)
     delta_E = current_total_energy - prev_total
-    
+
     # 3. Get current temperature from ML stats (or default 1.0)
     # We assume ml_stats includes 'adaptive_params' from the new ML v2 response
     current_temp = 1.0
     if "adaptive_params" in ml_stats:
-        current_temp = float(ml_stats["adaptive_params"].get("scaling_temperature", 1.0))
-    
+        current_temp = float(
+            ml_stats["adaptive_params"].get("scaling_temperature", 1.0)
+        )
+
     # 4. Determine Feedback Action
     # Threshold: 0.05 (ignore minor fluctuations)
     new_temp = current_temp
-    
+
     if delta_E > 0.05:
         # System getting chaotic -> Increase Temp (Smooth out ML predictions)
         # "Cool down the agent behavior by warming up the softmax temperature"
         new_temp = min(2.0, current_temp * 1.05)
-        logger.info(f"⚡ Flywheel: Energy Spiking (+{delta_E:.3f}). Increasing ML Temp to {new_temp:.3f}")
-        
+        logger.info(
+            f"⚡ Flywheel: Energy Spiking (+{delta_E:.3f}). Increasing ML Temp to {new_temp:.3f}"
+        )
+
     elif delta_E < -0.05:
         # System optimizing -> Decrease Temp (Allow sharper/riskier predictions)
         new_temp = max(0.5, current_temp * 0.95)
-        logger.info(f"⚡ Flywheel: Energy Optimizing ({delta_E:.3f}). Sharpening ML Temp to {new_temp:.3f}")
-    
+        logger.info(
+            f"⚡ Flywheel: Energy Optimizing ({delta_E:.3f}). Sharpening ML Temp to {new_temp:.3f}"
+        )
+
     # 5. Send Control Signal if changed
     if new_temp != current_temp:
         try:
             if state.ml_client:
-                await state.ml_client.update_adaptive_params({
-                    "scaling_temperature": new_temp
-                })
-                logger.debug(f"✅ Flywheel feedback sent to MLService: temp={new_temp:.3f}")
+                await state.ml_client.update_adaptive_params(
+                    {"scaling_temperature": new_temp}
+                )
+                logger.debug(
+                    f"✅ Flywheel feedback sent to MLService: temp={new_temp:.3f}"
+                )
             else:
-                logger.warning("MLService client not available, skipping flywheel feedback")
+                logger.warning(
+                    "MLService client not available, skipping flywheel feedback"
+                )
         except Exception as e:
             logger.warning(f"Failed to send Flywheel feedback to ML: {e}")
-    
+
     return delta_E
 
 
@@ -351,11 +230,11 @@ async def _background_sampler():
                     ml_stats=ml_stats,
                 ),
             )
-            
+
             # --- NEW: FLYWHEEL FEEDBACK STEP ---
             # Extract total energy
             total_energy = float(result.breakdown.get("total", 0.0))
-            
+
             # Execute feedback loop (Calc Delta E -> Update ML)
             delta_E = await _execute_flywheel_feedback(total_energy, ml_stats)
             # -----------------------------------
@@ -499,7 +378,13 @@ async def metrics():
         if total == 0.0:
             state.metrics_tick += 1
             t = state.metrics_tick
-            pair, hyper, ent, reg, mem = -0.50 - 0.01 * t, 0.10 + 0.02 * t, 0.50, 0.05, 0.30
+            pair, hyper, ent, reg, mem = (
+                -0.50 - 0.01 * t,
+                0.10 + 0.02 * t,
+                0.50,
+                0.05,
+                0.30,
+            )
             drift_term = anomaly_term = scaling_score = 0.0
             total = pair + hyper + ent + reg + mem
 
@@ -843,15 +728,26 @@ def _create_weights_for_state(
 @serve.deployment(name="EnergyService")
 @serve.ingress(app)
 class EnergyService:
-    """
-    Ray Serve wrapper for the proactive FastAPI EnergyService.
-    All logic is handled by the FastAPI app, its lifespan events,
-    and its endpoints. This class is just the entrypoint for Ray Serve.
-    """
-
     def __init__(self):
-        # The FastAPI app `app` handles all logic.
         pass
+    
+    async def rpc_compute_energy(self, request: EnergyRequest) -> dict:
+        return await compute_energy_endpoint(request)
+
+    async def rpc_compute_from_state(self) -> dict:
+        return await compute_energy_from_state()
+
+    async def rpc_optimize_agents(self, request: OptimizationRequest) -> dict:
+        return await optimize_agents_endpoint(request)
+
+    async def rpc_flywheel_result(self, request: FlywheelResultRequest) -> dict:
+        return await flywheel_result_endpoint(request)
+
+    async def rpc_metrics(self) -> dict:
+        return await metrics()
+
+    async def rpc_health(self) -> dict:
+        return await health()
 
 
 # --- Main Entrypoint ---

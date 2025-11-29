@@ -268,8 +268,27 @@ async def get_all_agent_snapshots():
 @serve.deployment(name="StateService")
 @serve.ingress(app)
 class StateService:
+
     def __init__(self):
         pass
+
+    # --- RPC Methods ---
+
+    async def rpc_system_metrics(self):
+        """Internal RPC wrapper for the distilled system metrics."""
+        return await get_system_metrics()   # calls FastAPI endpoint
+
+    async def rpc_agent_snapshots(self):
+        """Internal RPC wrapper for raw agent snapshot dump."""
+        return await get_all_agent_snapshots()  # calls FastAPI endpoint
+
+    async def rpc_update_w_mode(self):
+        """Internal RPC wrapper for raw agent w_mode update."""
+        return await update_w_mode()  # calls FastAPI endpoint
+
+    async def rpc_health(self):
+        """Internal RPC health check."""
+        return await health()           # FastAPI health endpoint
 
 
 # --- Main Entrypoint ---

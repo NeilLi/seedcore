@@ -11,11 +11,13 @@ Services:
 """
 
 from .eventizer_service import EventizerService
+from .fact_service import FactManagerService
 from seedcore.ops.eventizer.fact_dao import FactDAO
 from seedcore.ops.eventizer.eventizer_features import features_from_payload
 
 __all__ = [
     "EventizerService",
+    "FactManagerService",
     "FactDAO",
     "features_from_payload",
 ]

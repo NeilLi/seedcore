@@ -21,6 +21,8 @@ import logging
 import hashlib
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any, Tuple, Callable, Set
+from ray import serve  # pyright: ignore[reportMissingImports]
+from fastapi import Request  # pyright: ignore[reportMissingImports]
 
 from ..ops.eventizer.schemas.eventizer_models import (
     EventizerRequest,
@@ -32,7 +34,7 @@ from ..ops.eventizer.schemas.eventizer_models import (
     ConfidenceScore,
     ConfidenceLevel,
     EventType,
-    EntitySpan
+    EntitySpan,
 )
 from ..ops.eventizer.utils.text_normalizer import TextNormalizer, SpanMap
 from ..ops.eventizer.utils.pattern_compiler import PatternCompiler
@@ -45,11 +47,14 @@ logger = logging.getLogger(__name__)
 # Metrics / hooks
 # =========================
 
+
 def _now_ms() -> float:
     return time.perf_counter() * 1000.0
 
+
 def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
 
 def default_metrics_sink(event: str, fields: Dict[str, Any]) -> None:
     logger.debug("metrics.%s %s", event, fields)
@@ -58,6 +63,7 @@ def default_metrics_sink(event: str, fields: Dict[str, Any]) -> None:
 # =========================
 # Service
 # =========================
+
 
 @dataclass
 class ProcessingStats:
@@ -73,7 +79,7 @@ class ProcessingStats:
         self.errors = self.errors or []
 
 
-class EventizerService:
+class EventizerServiceImpl:
     """
     Deterministic eventizer service for text processing & classification.
     Now purely driven by pattern configuration metadata.
@@ -84,7 +90,9 @@ class EventizerService:
         config: Optional[EventizerConfig] = None,
         *,
         metrics_sink: Callable[[str, Dict[str, Any]], None] = default_metrics_sink,
-        ml_fallback_hook: Optional[Callable[[EventizerRequest, EventizerResponse], Any]] = None,
+        ml_fallback_hook: Optional[
+            Callable[[EventizerRequest, EventizerResponse], Any]
+        ] = None,
     ):
         self.config = config or EventizerConfig()
         self._initialized = False
@@ -93,12 +101,12 @@ class EventizerService:
         self._pii_client: Optional[PIIClient] = None
         self._ml_fallback_hook = ml_fallback_hook
         self._metrics = metrics_sink
-        
-        # Event type string mapping is handled dynamically now, 
+
+        # Event type string mapping is handled dynamically now,
         # but we keep a fallback map if needed for legacy code.
         self._eventtype_alias: Dict[str, EventType] = {}
 
-        logger.info("EventizerService configured")
+        logger.info("EventizerServiceImpl configured")
 
     # -----------------
     # Lifecycle
@@ -109,7 +117,7 @@ class EventizerService:
             return
 
         t0 = _now_ms()
-        
+
         self._text_normalizer = TextNormalizer(case="lower", fold_accents=False)
         self._pattern_compiler = PatternCompiler(self.config)
         await self._pattern_compiler.initialize()
@@ -123,7 +131,7 @@ class EventizerService:
 
         self._initialized = True
         t1 = _now_ms()
-        logger.info("EventizerService initialized in %.2f ms", t1 - t0)
+        logger.info("EventizerServiceImpl initialized in %.2f ms", t1 - t0)
 
     # -----------------
     # Public API
@@ -136,14 +144,14 @@ class EventizerService:
         stats = ProcessingStats(start_ms=_now_ms())
         log: List[str] = []
         warnings: List[str] = []
-        
+
         try:
             budget_ms = float(self.config.max_processing_time_ms)
             budget_deadline = stats.start_ms + budget_ms
 
             # 1. Normalize
             norm_text, span_map = await self._normalize_with_map(request.text)
-            
+
             # 2. PII Redaction
             redacted_text = norm_text
             pii_audit = None
@@ -152,7 +160,7 @@ class EventizerService:
                     norm_text,
                     entities=request.pii_entities,
                     mode=request.redact_mode,
-                    span_map=span_map
+                    span_map=span_map,
                 )
                 if redacted_text != norm_text:
                     stats.pii_redacted = True
@@ -180,7 +188,7 @@ class EventizerService:
 
             # 7. Response Construction
             stats.end_ms = _now_ms()
-            
+
             return EventizerResponse(
                 original_text=request.text,
                 original_text_sha256=sha256_hex(request.text),
@@ -195,7 +203,7 @@ class EventizerService:
                 pii_redacted=stats.pii_redacted,
                 warnings=warnings,
                 processing_log=log,
-                eventizer_version="1.2.0"
+                eventizer_version="1.2.0",
             )
 
         except Exception as e:
@@ -206,23 +214,25 @@ class EventizerService:
     # Core Logic: Config-Driven Analysis
     # -----------------
 
-    def _analyze_matches(self, matches: List[PatternMatch], request: EventizerRequest) -> Tuple[EventTags, EventAttributes]:
+    def _analyze_matches(
+        self, matches: List[PatternMatch], request: EventizerRequest
+    ) -> Tuple[EventTags, EventAttributes]:
         """
-        Aggregates all signals from pattern matches. 
+        Aggregates all signals from pattern matches.
         Prioritizes 'emits_attributes' from JSON config, then falls back to framework heuristics.
         """
         # Collections
         unique_event_types: Set[EventType] = set()
         keywords: Set[str] = set()
         entities: Set[str] = set()
-        
+
         # Attribute accumulators
         collected_attrs: Dict[str, Any] = {}
         priority_scores: List[int] = []
-        
+
         for m in matches:
             meta = m.metadata or {}
-            
+
             # A. Event Types
             # Config: "event_types": ["hvac", "maintenance"]
             for et_str in meta.get("event_types", []):
@@ -231,7 +241,7 @@ class EventizerService:
                     et = EventType(et_str.lower())
                     unique_event_types.add(et)
                 except ValueError:
-                    pass 
+                    pass
 
             # B. Keywords/Entities
             if m.pattern_type == "keyword":
@@ -246,19 +256,22 @@ class EventizerService:
             if "emits_attributes" in meta:
                 for k, v in meta["emits_attributes"].items():
                     collected_attrs[k] = v
-            
+
             # D. Priority Signal
             # Config: "priority": 90
             if "priority" in meta:
                 priority_scores.append(meta["priority"])
-            
+
         # F. Synthesize Priority/Urgency (Logic driven by max priority found)
         final_priority = max(priority_scores) if priority_scores else 0
-        
+
         # Map numeric priority to semantic urgency (Configurable thresholds)
-        if final_priority >= 90: urgency = "critical"
-        elif final_priority >= 70: urgency = "high"
-        else: urgency = "normal"
+        if final_priority >= 90:
+            urgency = "critical"
+        elif final_priority >= 70:
+            urgency = "high"
+        else:
+            urgency = "normal"
 
         # Build EventTags
         tags = EventTags(
@@ -267,11 +280,11 @@ class EventizerService:
             entities=list(entities),
             patterns=matches,
             priority=final_priority,
-            urgency=urgency
+            urgency=urgency,
         )
 
         # --- Hybrid Attribute Resolution ---
-        
+
         # 1. Service & Organ: Config > Heuristic Fallback
         req_service = collected_attrs.get("required_service")
         if not req_service:
@@ -279,7 +292,9 @@ class EventizerService:
 
         target_organ = collected_attrs.get("target_organ")
         if not target_organ:
-            target_organ = self._default_organ_heuristic(request.task_type, tags.event_types)
+            target_organ = self._default_organ_heuristic(
+                request.task_type, tags.event_types
+            )
 
         # 2. Dynamic Calculations (Runtime State)
         # Config can override, but dynamic default is usually better
@@ -299,15 +314,17 @@ class EventizerService:
         # Final Assembly
         attrs = EventAttributes(
             required_service=req_service,
-            required_skill=collected_attrs.get("required_skill"), # No fallback (Config only)
+            required_skill=collected_attrs.get(
+                "required_skill"
+            ),  # No fallback (Config only)
             target_organ=target_organ,
             processing_timeout=timeout,
             resource_requirements=resources,
-            routing_hints=hints
+            routing_hints=hints,
         )
-        
+
         # Enrich routing hints with request context
-        if request.domain: 
+        if request.domain:
             attrs.routing_hints["domain_context"] = request.domain
 
         return tags, attrs
@@ -318,36 +335,54 @@ class EventizerService:
 
     def _default_service_heuristic(self, event_types: List[EventType]) -> Optional[str]:
         """Fallback: Map EventType enum to standard service names."""
-        if EventType.HVAC in event_types: return "hvac_service"
-        if EventType.SECURITY in event_types: return "security_service"
-        if EventType.MAINTENANCE in event_types: return "maintenance_service"
-        if EventType.EMERGENCY in event_types: return "emergency_service"
-        if EventType.VIP in event_types: return "vip_service"
+        if EventType.HVAC in event_types:
+            return "hvac_service"
+        if EventType.SECURITY in event_types:
+            return "security_service"
+        if EventType.MAINTENANCE in event_types:
+            return "maintenance_service"
+        if EventType.EMERGENCY in event_types:
+            return "emergency_service"
+        if EventType.VIP in event_types:
+            return "vip_service"
         return None
 
-    def _default_organ_heuristic(self, task_type: Optional[str], event_types: List[EventType]) -> Optional[str]:
+    def _default_organ_heuristic(
+        self, task_type: Optional[str], event_types: List[EventType]
+    ) -> Optional[str]:
         """Fallback: Map task/event types to standard organs."""
-        if EventType.HVAC in event_types: return "hvac_organ"
-        if EventType.SECURITY in event_types: return "security_organ"
-        if task_type in ("graph_embed", "graph_rag_query"): return "graph_dispatcher"
+        if EventType.HVAC in event_types:
+            return "hvac_organ"
+        if EventType.SECURITY in event_types:
+            return "security_organ"
+        if task_type in ("graph_embed", "graph_rag_query"):
+            return "graph_dispatcher"
         return None
 
     def _calculate_dynamic_timeout(self, tags: EventTags, text: str) -> float:
         """Dynamic: Longer text or critical events need more time."""
         base = 30.0
-        if len(tags.patterns) > 5: base += 10.0
-        if len(text) > 1000: base += 5.0
-        if tags.urgency == "critical": base += 20.0
+        if len(tags.patterns) > 5:
+            base += 10.0
+        if len(text) > 1000:
+            base += 5.0
+        if tags.urgency == "critical":
+            base += 20.0
         return base
 
-    def _calculate_dynamic_resources(self, tags: EventTags, text: str) -> Dict[str, Any]:
+    def _calculate_dynamic_resources(
+        self, tags: EventTags, text: str
+    ) -> Dict[str, Any]:
         """Dynamic: Large payloads hint for more resources."""
         req = {"cpu_cores": 2 if len(tags.patterns) > 10 else 1}
         req["memory_mb"] = 512 if len(text) > 5000 else 256
-        if tags.priority > 7: req["gpu_required"] = True
+        if tags.priority > 7:
+            req["gpu_required"] = True
         return req
 
-    def _generate_routing_hints(self, tags: EventTags, request: EventizerRequest) -> Dict[str, Any]:
+    def _generate_routing_hints(
+        self, tags: EventTags, request: EventizerRequest
+    ) -> Dict[str, Any]:
         """Dynamic: Runtime stats useful for the Router."""
         hints = {
             "confidence_threshold": self.config.ml_fallback_threshold,
@@ -356,8 +391,10 @@ class EventizerService:
             "priority": tags.priority,
             "urgency": tags.urgency,
         }
-        if request.domain: hints["domain_context"] = request.domain
-        if request.task_type: hints["task_type_context"] = request.task_type
+        if request.domain:
+            hints["domain_context"] = request.domain
+        if request.task_type:
+            hints["task_type_context"] = request.task_type
         return hints
 
     # -----------------
@@ -368,16 +405,16 @@ class EventizerService:
         assert self._text_normalizer is not None
         return await self._text_normalizer.normalize(text, build_map=True)
 
-    async def _match_all_budgeted_with_compilation(self, text: str, budget_ms: float) -> Tuple[List[PatternMatch], Any]:
-        if not self._pattern_compiler: return [], []
+    async def _match_all_budgeted_with_compilation(
+        self, text: str, budget_ms: float
+    ) -> Tuple[List[PatternMatch], Any]:
+        if not self._pattern_compiler:
+            return [], []
         matches = await self._pattern_compiler.match_all(text, budget_ms=budget_ms)
-        return matches, [] 
+        return matches, []
 
     def _map_pii_spans_to_original(
-        self, 
-        pii_spans: List[EntitySpan], 
-        span_map: SpanMap, 
-        original_text: str
+        self, pii_spans: List[EntitySpan], span_map: SpanMap, original_text: str
     ) -> List[EntitySpan]:
         """
         Map PII spans from normalized text coordinates back to original text coordinates.
@@ -387,18 +424,19 @@ class EventizerService:
             try:
                 original_start = span_map.normalized_to_original(span.start)
                 original_end = span_map.normalized_to_original(span.end)
-                
-                if (0 <= original_start < len(original_text) and 
-                    0 <= original_end <= len(original_text) and 
-                    original_start <= original_end):
-                    
+
+                if (
+                    0 <= original_start < len(original_text)
+                    and 0 <= original_end <= len(original_text)
+                    and original_start <= original_end
+                ):
                     mapped_span = EntitySpan(
                         entity_type=span.entity_type,
                         start=original_start,
                         end=original_end,
                         score=span.score,
                         text=original_text[original_start:original_end],
-                        replacement=span.replacement
+                        replacement=span.replacement,
                     )
                     mapped_spans.append(mapped_span)
                 else:
@@ -407,36 +445,53 @@ class EventizerService:
                 mapped_spans.append(span)
         return mapped_spans
 
-    def _project_matches(self, matches: List[PatternMatch], span_map: SpanMap, original: str) -> List[PatternMatch]:
+    def _project_matches(
+        self, matches: List[PatternMatch], span_map: SpanMap, original: str
+    ) -> List[PatternMatch]:
         projected: List[PatternMatch] = []
         for m in matches:
             o_start, o_end = span_map.project_norm_span_to_orig(m.start_pos, m.end_pos)
             o_start = max(0, min(o_start, len(original)))
             o_end = max(o_start, min(o_end, len(original)))
             meta = dict(m.metadata or {})
-            meta["orig_span"] = {"start": o_start, "end": o_end, "text": original[o_start:o_end]}
-            projected.append(PatternMatch(
-                pattern_id=m.pattern_id,
-                pattern_type=m.pattern_type,
-                matched_text=m.matched_text,
-                start_pos=o_start,
-                end_pos=o_end,
-                confidence=m.confidence,
-                metadata=meta,
-            ))
+            meta["orig_span"] = {
+                "start": o_start,
+                "end": o_end,
+                "text": original[o_start:o_end],
+            }
+            projected.append(
+                PatternMatch(
+                    pattern_id=m.pattern_id,
+                    pattern_type=m.pattern_type,
+                    matched_text=m.matched_text,
+                    start_pos=o_start,
+                    end_pos=o_end,
+                    confidence=m.confidence,
+                    metadata=meta,
+                )
+            )
         return projected
 
-    def _calculate_confidence(self, tags: EventTags, attrs: EventAttributes, stats: ProcessingStats) -> ConfidenceScore:
+    def _calculate_confidence(
+        self, tags: EventTags, attrs: EventAttributes, stats: ProcessingStats
+    ) -> ConfidenceScore:
         pattern_conf = 0.0
         if tags.patterns:
-            pattern_conf = sum(p.confidence for p in tags.patterns) / max(1, len(tags.patterns))
-        
+            pattern_conf = sum(p.confidence for p in tags.patterns) / max(
+                1, len(tags.patterns)
+            )
+
         complete_conf = 0.0
-        if tags.event_types: complete_conf += 0.3
-        if tags.keywords: complete_conf += 0.2
-        if tags.entities: complete_conf += 0.2
-        if attrs.required_service: complete_conf += 0.15
-        if attrs.target_organ: complete_conf += 0.15
+        if tags.event_types:
+            complete_conf += 0.3
+        if tags.keywords:
+            complete_conf += 0.2
+        if tags.entities:
+            complete_conf += 0.2
+        if attrs.required_service:
+            complete_conf += 0.15
+        if attrs.target_organ:
+            complete_conf += 0.15
         complete_conf = min(complete_conf, 1.0)
 
         overall = (pattern_conf + complete_conf) / 2.0
@@ -451,16 +506,19 @@ class EventizerService:
         needs_fallback = overall < self.config.ml_fallback_threshold
         reasons: List[str] = []
         if needs_fallback:
-            if pattern_conf < 0.5: reasons.append("low_pattern_confidence")
-            if complete_conf < 0.5: reasons.append("incomplete_extraction")
-            if not tags.patterns: reasons.append("no_patterns_matched")
+            if pattern_conf < 0.5:
+                reasons.append("low_pattern_confidence")
+            if complete_conf < 0.5:
+                reasons.append("incomplete_extraction")
+            if not tags.patterns:
+                reasons.append("no_patterns_matched")
 
         return ConfidenceScore(
             overall_confidence=overall,
             confidence_level=level,
             needs_ml_fallback=needs_fallback,
             fallback_reasons=reasons,
-            processing_notes=["pii_redacted"] if stats.pii_redacted else []
+            processing_notes=["pii_redacted"] if stats.pii_redacted else [],
         )
 
     def _create_error_response(self, request, error_msg, stats):
@@ -496,3 +554,109 @@ class EventizerService:
         except Exception as e:
             logger.error(f"Error processing dict payload: {e}")
             return {"error": str(e), "success": False}
+
+
+@serve.deployment(route_prefix=None)  # No direct public route; called via handle
+class EventizerService:
+    """Ray Serve wrapper for EventizerService."""
+
+    def __init__(self) -> None:
+        self.impl = EventizerServiceImpl()
+        self._initialized = False
+
+    async def __call__(self, request: Request) -> Dict[str, Any]:
+        """Health check endpoint."""
+        return {"status": "healthy", "service": "eventizer"}
+
+    async def initialize(self) -> None:
+        """Initialize the underlying service."""
+        if not self._initialized:
+            await self.impl.initialize()
+            self._initialized = True
+            logger.info("EventizerService initialized")
+
+    async def process(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process text through eventizer pipeline.
+
+        Uses the dict interface which handles EventizerRequest construction
+        and returns a dict representation of EventizerResponse.
+        """
+        try:
+            if not self._initialized:
+                await self.initialize()
+
+            # Process through eventizer using dict interface
+            # This handles EventizerRequest construction and returns dict response
+            response = await self.impl.process_dict(payload)
+
+            # Check if process_dict returned an error response
+            if isinstance(response, dict) and response.get("success") is False:
+                error_msg = response.get("error", "Unknown error")
+                logger.error(f"Eventizer processing failed: {error_msg}")
+                # Return error response in EventizerResponse format
+                return {
+                    "original_text": payload.get("text", ""),
+                    "processed_text": payload.get("text", ""),
+                    "event_tags": {
+                        "event_types": [],
+                        "keywords": [],
+                        "entities": [],
+                        "patterns": [],
+                        "priority": 0,
+                        "urgency": "normal",
+                    },
+                    "attributes": {},
+                    "confidence": {
+                        "overall_confidence": 0.0,
+                        "confidence_level": "low",
+                        "needs_ml_fallback": True,
+                        "fallback_reasons": ["exception"],
+                        "processing_notes": [error_msg],
+                    },
+                    "processing_time_ms": 0.0,
+                    "patterns_applied": 0,
+                    "pii_redacted": False,
+                    "errors": [error_msg],
+                    "success": False,
+                }
+
+            # Response is already a dict (EventizerResponse.model_dump())
+            return response
+
+        except Exception as e:
+            logger.exception(f"Eventizer processing failed: {e}")
+            # Return error response matching EventizerResponse structure
+            return {
+                "original_text": payload.get("text", ""),
+                "processed_text": payload.get("text", ""),
+                "event_tags": {
+                    "event_types": [],
+                    "keywords": [],
+                    "entities": [],
+                    "patterns": [],
+                    "priority": 0,
+                    "urgency": "normal",
+                },
+                "attributes": {},
+                "confidence": {
+                    "overall_confidence": 0.0,
+                    "confidence_level": "low",
+                    "needs_ml_fallback": True,
+                    "fallback_reasons": ["exception"],
+                    "processing_notes": [str(e)],
+                },
+                "processing_time_ms": 0.0,
+                "patterns_applied": 0,
+                "pii_redacted": False,
+                "errors": [str(e)],
+                "success": False,
+            }
+
+    async def health(self) -> Dict[str, Any]:
+        """Health check."""
+        return {
+            "status": "healthy",
+            "service": "eventizer",
+            "initialized": self._initialized,
+        }
