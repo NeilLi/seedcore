@@ -6,22 +6,6 @@
 seedcore:
   organism:
     organs:
-      # =============================================================
-      #  META-CONTROL & GLOBAL REASONING ORGAN
-      # =============================================================
-      # Oversees high-level planning, cross-organ coordination, and
-      # global reasoning. Acts as the organism’s executive cortex.
-      - id: "meta_control_organ"
-        description: "High-level planning, cross-organ routing, intent synthesis."
-        agents:
-          - specialization: "CONTEXTUAL_PLANNER"
-            count: 1
-          - specialization: "GOAL_SYNTHESIZER"
-            count: 1
-          - specialization: "ROUTING_META_AGENT"
-            count: 1
-          - specialization: "GENERALIST"
-            count: 1
 
       # =============================================================
       #  USER EXPERIENCE & INTERACTION ORGAN
@@ -136,7 +120,7 @@ seedcore:
       # =============================================================
       # Hosts pre-built or prototype agents used for testing,
       # debugging, and rapid insertion of new experimental roles.
-      - id: "specialist"
+      - id: "utility_organ"
         description: "Specialized agents for pre-development and experimentation."
         agents:
           - specialization: "OBSERVER"
@@ -146,5 +130,5 @@ seedcore:
             count: 1
             class: "UtilityLearningAgent"
           - specialization: "GENERALIST"
-            count: 2
-            class: "RayAgent"
+            count: 1
+

@@ -5,19 +5,11 @@ import json
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator  # pyright: ignore[reportMissingImports]
+# from seedcore.models.task import TaskType
 
 # ------------------------------------------------------------------------
 # ENUMS & CONSTANTS
 # ------------------------------------------------------------------------
-
-# If TaskType is defined elsewhere in your project, keep the import.
-# from seedcore.models.task import TaskType
-
-# Placeholder if not imported:
-class TaskType(str, Enum):
-    CHAT = "chat"
-    GRAPH = "graph"
-    # ... add others as needed
 
 class GraphOperationKind(str, Enum):
     EMBED = "embed"
@@ -78,19 +70,19 @@ class TaskPayload(BaseModel):
     assigned_agent_id: Optional[str] = None         # Pre-assigned agent (e.g. tunnel)
 
     # --- 2. ROUTER INBOX (params.routing) ---
-    routing_required_specialization: Optional[str] = None  # HARD constraint
-    routing_specialization: Optional[str] = None           # SOFT hint
-    routing_skills: Dict[str, float] = Field(default_factory=dict)
+    required_specialization: Optional[str] = None  # HARD constraint
+    specialization: Optional[str] = None           # SOFT hint
+    skills: Dict[str, float] = Field(default_factory=dict)
     
     # Hints (flattened)
     priority: int = 0
     deadline_at: Optional[str] = None
     ttl_seconds: Optional[int] = None
     
-    tool_calls: List[ToolCallPayload] = Field(default_factory=list)
+    tools: List[ToolCallPayload] = Field(default_factory=list)
 
     # --- 3. COGNITIVE METADATA (params.cognitive) ---
-    cognitive_agent_id: Optional[str] = None        # The agent actually executing the task
+    agent_id: Optional[str] = None        # The agent actually executing the task
     cog_type: Optional[str] = None                  # chat, task_planning, hgnn
     decision_kind: Optional[str] = None             # fast, planner
     
@@ -102,6 +94,7 @@ class TaskPayload(BaseModel):
     
     force_rag: Optional[bool] = None
     force_deep_reasoning: Optional[bool] = None
+    force_fast: Optional[bool] = None
 
     # --- 4. CHAT ENVELOPE (params.chat) ---
     chat_message: Optional[str] = None
@@ -171,8 +164,8 @@ class TaskPayload(BaseModel):
         router_output = self.params.get("_router") or {}
         router_agent_id = router_output.get("agent_id")
         
-        if router_agent_id and not self.cognitive_agent_id:
-            self.cognitive_agent_id = router_agent_id
+        if router_agent_id and not self.agent_id:
+            self.agent_id = router_agent_id
         
         return self
 
@@ -204,12 +197,12 @@ class TaskPayload(BaseModel):
         # 2. ROUTING
         # Note: We prioritize specialized fields over generic ones
         routing_env = {
-            "required_specialization": self.routing_required_specialization, # Hard
-            "specialization": self.routing_specialization,                   # Soft
-            "skills": self.routing_skills or {},
+            "required_specialization": self.required_specialization, # Hard
+            "specialization": self.specialization,                   # Soft
+            "skills": self.skills or {},
             "tools": [
                 tc.model_dump() if hasattr(tc, 'model_dump') else tc
-                for tc in self.tool_calls
+                for tc in self.tools
             ],
             "hints": {
                 "priority": self.priority,
@@ -241,7 +234,7 @@ class TaskPayload(BaseModel):
 
         # 3. COGNITIVE
         cognitive_env = {
-            "agent_id": self.cognitive_agent_id,
+            "agent_id": self.agent_id,
             "cog_type": self.cog_type,
             "decision_kind": self.decision_kind,
             "llm_provider_override": self.llm_provider_override,
@@ -250,6 +243,7 @@ class TaskPayload(BaseModel):
             "disable_memory_write": self.disable_memory_write,
             "force_rag": self.force_rag,
             "force_deep_reasoning": self.force_deep_reasoning,
+            "force_fast": self.force_fast,
         }
         cognitive_dict = {k: v for k, v in cognitive_env.items() if v is not None}
         if cognitive_dict:
@@ -332,8 +326,8 @@ class TaskPayload(BaseModel):
             g_kind = GraphOperationKind.UNKNOWN
 
         # Tools conversion
-        raw_tools = routing.get("tools") or routing.get("tool_calls") or []
-        tools = [
+        raw_tools = routing.get("tools") or []
+        tools_objs = [
             (t if isinstance(t, ToolCallPayload) else ToolCallPayload(**t)) 
             for t in raw_tools if isinstance(t, dict)
         ]
@@ -353,16 +347,16 @@ class TaskPayload(BaseModel):
             assigned_agent_id=interaction.get("assigned_agent_id"),
 
             # Routing
-            routing_required_specialization=routing.get("required_specialization"),
-            routing_specialization=routing.get("specialization"),
-            routing_skills=routing.get("skills") or {},
+            required_specialization=routing.get("required_specialization"),
+            specialization=routing.get("specialization"),
+            skills=routing.get("skills") or {},
             priority=int(hints.get("priority") or 0),
             deadline_at=hints.get("deadline_at"),
             ttl_seconds=hints.get("ttl_seconds"),
-            tool_calls=tools,
+            tools=tools_objs,
 
             # Cognitive
-            cognitive_agent_id=cognitive.get("agent_id"),
+            agent_id=cognitive.get("agent_id"),
             cog_type=cognitive.get("cog_type"),
             decision_kind=cognitive.get("decision_kind"),
             llm_provider_override=cognitive.get("llm_provider_override"),
@@ -371,6 +365,7 @@ class TaskPayload(BaseModel):
             disable_memory_write=cognitive.get("disable_memory_write"),
             force_rag=cognitive.get("force_rag"),
             force_deep_reasoning=cognitive.get("force_deep_reasoning"),
+            force_fast=cognitive.get("force_fast"),
 
             # Chat
             chat_message=chat.get("message"),

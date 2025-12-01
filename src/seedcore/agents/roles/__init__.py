@@ -20,13 +20,12 @@ from .specialization import (
     RoleProfile,
     RoleRegistry,
     AgentSpec,
-    OrganSpec,
     GraphClient,
     MockGraphClient,
 )
 from .generic_defaults import (
     DEFAULT_ROLE_REGISTRY,
-    build_default_role_registry,
+    create_default_registry,
 )
 from .role_registry_hospitality import (
     HOSPITALITY_ROLE_REGISTRY,
@@ -59,12 +58,11 @@ __all__ = [
     "RoleProfile",
     "RoleRegistry",
     "AgentSpec",
-    "OrganSpec",
     "GraphClient",
     "MockGraphClient",
     # generic defaults
     "DEFAULT_ROLE_REGISTRY",
-    "build_default_role_registry",
+    "create_default_registry",
     # hospitality registry
     "HOSPITALITY_ROLE_REGISTRY",
     "build_hospitality_role_registry",

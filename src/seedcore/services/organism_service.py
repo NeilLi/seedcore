@@ -258,128 +258,6 @@ class OrganismService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    @app.post("/execute-on-organ")
-    async def execute_on_organ(self, request: Dict[str, Any]):
-        """Execute a task on a specific organ."""
-        try:
-            start_time = time.time()
-            self.logger.info(f"[execute-on-organ] ▶️ request keys={list(request.keys())}")
-            if not self._initialized:
-                return {"success": False, "error": "Organism not initialized"}
-
-            organ_id = request.get("organ_id")
-            task_raw = request.get("task", {}) or {}
-            organ_timeout_s = request.get("organ_timeout_s", 30.0)
-
-            if not organ_id:
-                return {"success": False, "error": "organ_id is required"}
-
-            # Add timeout to task if provided
-            if isinstance(task_raw, dict):
-                raw_timeout = task_raw.get("organ_timeout_s")
-                if raw_timeout is not None:
-                    organ_timeout_s = raw_timeout
-
-            try:
-                task_payload = TaskPayload.from_db(task_raw)
-            except Exception as exc:
-                self.logger.warning(
-                    "[execute-on-organ] TaskPayload.from_db fallback due to %s; attempting direct construction",
-                    exc,
-                )
-                fallback_id = task_raw.get("task_id") or task_raw.get("id") or str(uuid.uuid4())
-                task_payload = TaskPayload(
-                    task_id=str(fallback_id),
-                    type=task_raw.get("type") or "unknown_task",
-                    params=task_raw.get("params") or {},
-                    description=task_raw.get("description") or "",
-                    domain=task_raw.get("domain"),
-                    drift_score=float(task_raw.get("drift_score") or 0.0),
-                )
-
-            task_id = task_payload.task_id or str(uuid.uuid4())
-            if not task_payload.task_id or task_payload.task_id in ("", "None"):
-                task_payload = task_payload.copy(update={"task_id": task_id})
-            else:
-                task_id = task_payload.task_id
-
-            task_data = task_payload.model_dump()
-
-            # Retain any extra keys from the raw task that the payload model doesn't surface
-            if isinstance(task_raw, dict):
-                for key, value in task_raw.items():
-                    if key not in task_data:
-                        task_data[key] = value
-
-            task_data["organ_timeout_s"] = organ_timeout_s
-            task_data.setdefault("id", task_id)
-
-            self.logger.info(
-                "[execute-on-organ] ⏩ organ_id=%s task_id=%s task.type=%s domain=%s priority=%s timeout=%ss",
-                organ_id,
-                task_id,
-                task_payload.type,
-                task_payload.domain,
-                getattr(task_payload, "priority", None),
-                organ_timeout_s,
-            )
-            # Use router to get agent_id, then execute
-            if not self._initialized or not getattr(self, "organism_core", None):
-                return {"success": False, "error": "OrganismCore not initialized"}
-            
-            router = getattr(self.organism_core, "router", None)
-            if router is None:
-                return {"success": False, "error": "Router not available"}
-            
-            # Route to get agent_id for the organ
-            # Set required_specialization to hint the router about the organ
-            task_payload.params = task_payload.params or {}
-            task_payload.params["preferred_organ_id"] = organ_id
-            
-            decision = await router.route_only(payload=task_payload, current_epoch=None)
-            
-            # Execute on the selected agent
-            result = await self.organism_core.execute_on_agent(
-                organ_id=decision.organ_id,
-                agent_id=decision.agent_id,
-                payload=task_payload,
-            )
-            
-            duration = time.time() - start_time
-            self.logger.info(
-                f"[execute-on-organ] ✅ completed organ_id={organ_id} success={result.get('success', True)} in {duration:.2f}s"
-            )
-            return {"success": True, **result}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    @app.post("/execute-on-random")
-    async def execute_on_random(self, request: Dict[str, Any]):
-        """Execute a task using router (deprecated endpoint - use /route-and-execute instead)."""
-        try:
-            if not self._initialized:
-                return {"success": False, "error": "Organism not initialized"}
-
-            task = request.get("task", {})
-            organ_timeout_s = request.get("organ_timeout_s", 30.0)
-
-            # Add timeout to task if provided
-            if organ_timeout_s:
-                task["organ_timeout_s"] = organ_timeout_s
-
-            # Convert task to TaskPayload
-            task_payload = TaskPayload.from_db(task) if not isinstance(task, TaskPayload) else task
-            
-            # Use router.route_and_execute() instead
-            router = getattr(self.organism_core, "router", None)
-            if router is None:
-                return {"success": False, "error": "Router not available"}
-            
-            result = await router.route_and_execute(payload=task_payload, current_epoch=None)
-            return {"success": True, **result}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
     # --- Routing Endpoints ---
 
     @app.post("/route-only", response_model=RouterDecisionResponse)
@@ -571,7 +449,7 @@ class OrganismService:
 
     # --- State Service Integration ---
 
-    async def get_all_agent_handles(self) -> Dict[str, Any]:
+    async def rpc_get_all_agent_handles(self) -> Dict[str, Any]:
         """
         Get all agent handles from all organs.
         

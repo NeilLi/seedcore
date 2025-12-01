@@ -1,56 +1,46 @@
 # agents/roles/specialization.py
 """
-Specialization taxonomy, role profiles, and a simple in-memory RoleRegistry.
-
-This module formalizes "roles" (specializations) as first-class operational policy:
-- Default skill priors (0..1) that combine with per-agent skill deltas
-- RBAC for tools and data visibility
-- Routing hints for the meta-controller
-- Safety envelopes for autonomy/cost/risk constraints
-
-Usage:
-    from rayagent.roles.specialization import Specialization, RoleProfile, RoleRegistry
+Specialization taxonomy, role profiles, and RoleRegistry.
+Aligned with SeedCore v2 TaskPayload and Organism Configuration.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Set, Iterable, Optional, List, Any
 import json
 
+# Define keys here to avoid circular imports with state.py
+ROLE_KEYS = ["E", "S", "O"]
 
 class Specialization(str, Enum):
-    """Agent specialization taxonomy for AI-driven smart habitats."""
+    """
+    Agent specialization taxonomy for AI-driven smart habitats.
+    Aligned with SeedCore v2 Organ Configuration.
+    """
 
-    # -------------------------------------------------------------
-    # META-CONTROL & GLOBAL PLANNING
-    # -------------------------------------------------------------
-    CONTEXTUAL_PLANNER = "contextual_planner"
-    GOAL_SYNTHESIZER = "goal_synthesizer"              # translates user intent → actionable goals
-    ROUTING_META_AGENT = "routing_meta_agent"          # organ-level routing / cross-organ coordination
+    # =============================================================
+    #  USER EXPERIENCE & INTERACTION
+    # =============================================================
+    USER_LIAISON = "user_liaison"
+    MOOD_INFERENCE_AGENT = "mood_inference_agent"
+    SCHEDULE_ORACLE = "schedule_oracle"
+    PREFERENCE_MODEL = "preference_model"
 
-    # -------------------------------------------------------------
-    # USER INTERACTION & PREFERENCE MANAGEMENT
-    # -------------------------------------------------------------
-    USER_LIAISON = "user_liaison"                      # natural dialog, clarification, negotiation
-    MOOD_INFERENCE_AGENT = "mood_inference_agent"      # detects user state from sensors
-    SCHEDULE_ORACLE = "schedule_oracle"                # plans around calendars, routines, guests
-    PREFERENCE_MODEL = "preference_model"              # long-term user preference learning
+    # =============================================================
+    #  ENVIRONMENT UNDERSTANDING
+    # =============================================================
+    ENVIRONMENT_MODEL = "environment_model"
+    ANOMALY_DETECTOR = "anomaly_detector"
+    FORECASTER = "forecaster"
+    SAFETY_MONITOR = "safety_monitor"
 
-    # -------------------------------------------------------------
-    # ENVIRONMENT MODELING & UNDERSTANDING
-    # -------------------------------------------------------------
-    ENVIRONMENT_MODEL = "environment_model"            # unified world state from multi-sensor fusion
-    ANOMALY_DETECTOR = "anomaly_detector"              # detects unusual patterns, failures, risks
-    FORECASTER = "forecaster"                          # predicts air quality, energy, occupancy
-    SAFETY_MONITOR = "safety_monitor"                  # detects hazards, emergencies
-
-    # -------------------------------------------------------------
-    # DEVICE & ROBOT ORCHESTRATION
-    # -------------------------------------------------------------
-    DEVICE_ORCHESTRATOR = "device_orchestrator"        # maps goals → device commands
-    ROBOT_COORDINATOR = "robot_coordinator"            # multi-robot path & task orchestration
+    # =============================================================
+    #  DEVICE & ROBOT ORCHESTRATION
+    # =============================================================
+    DEVICE_ORCHESTRATOR = "device_orchestrator"
+    ROBOT_COORDINATOR = "robot_coordinator"
     HVAC_CONTROLLER = "hvac_controller"
     LIGHTING_CONTROLLER = "lighting_controller"
     ENERGY_MANAGER = "energy_manager"
@@ -58,33 +48,33 @@ class Specialization(str, Enum):
     SECURITY_DRONE_MANAGER = "security_drone_manager"
     MAINTENANCE_MANAGER = "maintenance_manager"
 
-    # -------------------------------------------------------------
-    # EXECUTION AGENTS (physical robots / device drivers)
-    # -------------------------------------------------------------
-    EXECUTION_ROBOT = "execution_robot"                # base type
+    # =============================================================
+    #  ROBOT EXECUTION (Physical Layer)
+    # =============================================================
+    EXECUTION_ROBOT = "execution_robot" # Base/Abstract
     CLEANING_ROBOT = "cleaning_robot"
     DELIVERY_ROBOT = "delivery_robot"
     SECURITY_DRONE = "security_drone"
     INSPECTION_ROBOT = "inspection_robot"
 
-    # -------------------------------------------------------------
-    # VERIFICATION, QA, SELF-CORRECTION
-    # -------------------------------------------------------------
-    ENVIRONMENT_VERIFIER = "environment_verifier"      # compares goals vs reality
-    RESULT_VALIDATOR = "result_validator"              # checks "was task done properly?"
-    FEEDBACK_INTEGRATOR = "feedback_integrator"        # integrates user or sensor feedback
+    # =============================================================
+    #  VERIFICATION & FEEDBACK
+    # =============================================================
+    ENVIRONMENT_VERIFIER = "environment_verifier"
+    RESULT_VALIDATOR = "result_validator"
+    FEEDBACK_INTEGRATOR = "feedback_integrator"
 
-    # -------------------------------------------------------------
-    # LEARNING, CRITIC, ADAPTATION
-    # -------------------------------------------------------------
-    CRITIC = "critic"                                  # identifies suboptimal plans
-    ADAPTIVE_LEARNER = "adaptive_learner"              # improves future strategies
+    # =============================================================
+    #  LEARNING & ADAPTATION
+    # =============================================================
+    CRITIC = "critic"
+    ADAPTIVE_LEARNER = "adaptive_learner"
     FAILURE_ANALYZER = "failure_analyzer"
     PLAN_REFINER = "plan_refiner"
 
-    # -------------------------------------------------------------
-    # GENERALIST / FLEX ROLES
-    # -------------------------------------------------------------
+    # =============================================================
+    #  SPECIALIST / UTILITY
+    # =============================================================
     GENERALIST = "generalist"
     OBSERVER = "observer"
     UTILITY = "utility"
@@ -94,19 +84,7 @@ class Specialization(str, Enum):
 class RoleProfile:
     """
     RoleProfile encodes the operational policy for a specialization.
-
-    Fields:
-        name: Specialization enum
-        default_skills: Baseline skills (0..1). Agent-specific deltas will be added and clamped.
-        allowed_tools: Tool identifiers permitted for this role (RBAC).
-        visibility_scopes: Data partitions/indices this role can read/write.
-        routing_tags: Meta-controller hints for task routing.
-        safety_policies: Soft/hard limits (e.g., max_autonomy, review thresholds).
-
-    Methods:
-        materialize_skills(deltas): Combine default_skills with agent deltas, clamped to [0,1].
-        has_tool(tool): Quick RBAC check.
-        to_context(...): Compact context dict for cognition/ML calls.
+    Used by Router to check if an agent has the default skills/tools required.
     """
     name: Specialization
     default_skills: Dict[str, float] = field(default_factory=dict)
@@ -116,13 +94,12 @@ class RoleProfile:
     safety_policies: Dict[str, float] = field(default_factory=dict)
 
     def materialize_skills(self, deltas: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+        """Combine default_skills with agent deltas, clamped to [0,1]."""
         deltas = deltas or {}
-        # Merge defaults + deltas (additive), clamp to [0,1]
         out: Dict[str, float] = {}
         for k, base in self.default_skills.items():
             val = float(base) + float(deltas.get(k, 0.0))
             out[k] = max(0.0, min(1.0, val))
-        # Include new skills that don't exist in defaults
         for k, d in deltas.items():
             if k not in out:
                 out[k] = max(0.0, min(1.0, float(d)))
@@ -132,55 +109,9 @@ class RoleProfile:
         return tool in self.allowed_tools
 
     def to_p_dict(self) -> Dict[str, float]:
-        """
-        Convert RoleProfile to a role probability dictionary with keys E, S, O.
-        This is a bridge method that converts the specialization-based profile
-        into the E/S/O probability format required by AgentSnapshot.
-        
-        NOTE: The actual mapping logic is centralized in RoleRegistry.specialization_to_p_dict()
-        to avoid drift. This method delegates to the registry if available, otherwise
-        uses a fallback heuristic.
-        
-        Returns:
-            Dict[str, float]: Dictionary with keys "E", "S", "O" and their probabilities.
-        """
-        # If we have access to a registry, use it (centralized logic)
-        # Otherwise, fall back to heuristic (for backward compatibility)
-        # In practice, BaseAgent should use role_registry.specialization_to_p_dict() directly
-        from seedcore.models.state import ROLE_KEYS
-        
-        # Fallback heuristic (same as before, but ideally this should be in RoleRegistry)
-        spec_name = self.name.value.lower()
-        
-        execution_keywords = ["execution", "robot", "device", "orchestrator", "controller", 
-                             "manager", "coordinator", "drone", "actuator"]
-        synthesis_keywords = ["planner", "synthesizer", "critic", "analyzer", "refiner",
-                             "learner", "model", "preference", "liaison"]
-        observation_keywords = ["observer", "monitor", "detector", "forecaster", "verifier",
-                               "validator", "inference", "oracle"]
-        
-        e_score = sum(1.0 for kw in execution_keywords if kw in spec_name)
-        s_score = sum(1.0 for kw in synthesis_keywords if kw in spec_name)
-        o_score = sum(1.0 for kw in observation_keywords if kw in spec_name)
-        
-        if e_score == 0 and s_score == 0 and o_score == 0:
-            e_score, s_score, o_score = 1.0, 1.0, 1.0
-        
-        total = e_score + s_score + o_score
-        p_dict = {
-            "E": float(e_score / total),
-            "S": float(s_score / total),
-            "O": float(o_score / total),
-        }
-        
-        result = {key: p_dict.get(key, 0.0) for key in ROLE_KEYS}
-        total = sum(result.values())
-        if total > 0:
-            result = {key: val / total for key, val in result.items()}
-        else:
-            result = {key: 1.0 / len(ROLE_KEYS) for key in ROLE_KEYS}
-        
-        return result
+        """Bridge method to E/S/O probability format."""
+        # This logic is usually centralized in RoleRegistry, but provided here for convenience
+        return RoleRegistry.specialization_to_p_dict_static(self.name)
 
     def to_context(
         self,
@@ -190,7 +121,7 @@ class RoleProfile:
         capability: Optional[float] = None,
         mem_util: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Compact role context for ML/LLM calls."""
+        """Compact context for ML/LLM calls."""
         return {
             "agent_id": agent_id,
             "organ_id": organ_id,
@@ -205,82 +136,58 @@ class RoleProfile:
 
 class RoleRegistry:
     """
-    Simple in-memory registry for RoleProfile objects.
-
-    - get(spec): retrieve profile (raises KeyError if missing)
-    - get_safe(spec): retrieve profile or None
-    - register(profile): add/replace a RoleProfile
-    - update(spec, **fields): shallow update to an existing profile
-    - all_profiles(): iterate over all RoleProfile
-    - to_json(): export registry to JSON (for debugging/telemetry)
-    - specialization_to_p_dict(spec): centralized E/S/O mapping
+    In-memory registry for RoleProfile objects.
+    Acts as the source of truth for Agent Capabilities before they report their own.
     """
     def __init__(self, profiles: Optional[Iterable[RoleProfile]] = None) -> None:
         self._profiles: Dict[Specialization, RoleProfile] = {}
         if profiles:
             for p in profiles:
                 self.register(p)
-    
-    def specialization_to_p_dict(self, spec: Specialization) -> Dict[str, float]:
+
+    @staticmethod
+    def specialization_to_p_dict_static(spec: Specialization) -> Dict[str, float]:
         """
-        Centralized mapping from Specialization to E/S/O role probabilities.
-        This is the canonical source of truth for role probability mapping,
-        avoiding drift and ensuring consistency across the system.
-        
-        Args:
-            spec: The specialization enum
-            
-        Returns:
-            Dict[str, float]: Dictionary with keys "E", "S", "O" and their probabilities.
+        Static helper for E/S/O mapping to allow usage without a registry instance.
         """
-        from seedcore.models.state import ROLE_KEYS
-        
-        # Use the RoleProfile's to_p_dict() if available
-        profile = self.get_safe(spec)
-        if profile:
-            return profile.to_p_dict()
-        
-        # Fallback: heuristic mapping based on specialization name
         spec_name = spec.value.lower()
         
-        # Execution-oriented specializations (high E)
-        execution_keywords = ["execution", "robot", "device", "orchestrator", "controller", 
-                             "manager", "coordinator", "drone", "actuator"]
-        # Synthesis-oriented specializations (high S)
-        synthesis_keywords = ["planner", "synthesizer", "critic", "analyzer", "refiner",
-                             "learner", "model", "preference", "liaison"]
-        # Observation-oriented specializations (high O)
-        observation_keywords = ["observer", "monitor", "detector", "forecaster", "verifier",
-                               "validator", "inference", "oracle"]
+        # 1. Execution (Action, Physical, Control)
+        execution_kw = [
+            "execution", "robot", "device", "orchestrator", "controller", 
+            "manager", "coordinator", "drone", "actuator", "action"
+        ]
+        # 2. Synthesis (Planning, Reasoning, Learning, Social)
+        synthesis_kw = [
+            "planner", "synthesizer", "critic", "analyzer", "refiner",
+            "learner", "model", "preference", "liaison", "reasoning", "social"
+        ]
+        # 3. Observation (Sensing, Verification, Prediction)
+        observation_kw = [
+            "observer", "monitor", "detector", "forecaster", "verifier",
+            "validator", "inference", "oracle", "integrator"
+        ]
         
-        # Determine base probabilities
-        e_score = sum(1.0 for kw in execution_keywords if kw in spec_name)
-        s_score = sum(1.0 for kw in synthesis_keywords if kw in spec_name)
-        o_score = sum(1.0 for kw in observation_keywords if kw in spec_name)
+        e_score = sum(1.0 for kw in execution_kw if kw in spec_name)
+        s_score = sum(1.0 for kw in synthesis_kw if kw in spec_name)
+        o_score = sum(1.0 for kw in observation_kw if kw in spec_name)
         
-        # If no matches, use balanced distribution
+        # Fallback
         if e_score == 0 and s_score == 0 and o_score == 0:
             e_score, s_score, o_score = 1.0, 1.0, 1.0
         
-        # Normalize to probabilities
         total = e_score + s_score + o_score
         p_dict = {
-            "E": float(e_score / total),
-            "S": float(s_score / total),
-            "O": float(o_score / total),
+            "E": e_score / total,
+            "S": s_score / total,
+            "O": o_score / total,
         }
         
-        # Ensure all ROLE_KEYS are present
-        result = {key: p_dict.get(key, 0.0) for key in ROLE_KEYS}
-        
-        # Normalize again to ensure sum = 1.0
-        total = sum(result.values())
-        if total > 0:
-            result = {key: val / total for key, val in result.items()}
-        else:
-            result = {key: 1.0 / len(ROLE_KEYS) for key in ROLE_KEYS}
-        
-        return result
+        return {k: p_dict.get(k, 0.0) for k in ROLE_KEYS}
+
+    def specialization_to_p_dict(self, spec: Specialization) -> Dict[str, float]:
+        """Instance method wrapper."""
+        return self.specialization_to_p_dict_static(spec)
 
     def get(self, spec: Specialization) -> RoleProfile:
         if spec not in self._profiles:
@@ -293,33 +200,11 @@ class RoleRegistry:
     def register(self, profile: RoleProfile) -> None:
         self._profiles[profile.name] = profile
 
-    def update(self, spec: Specialization, **fields: Any) -> RoleProfile:
-        existing = self.get(spec)
-        # dataclasses are frozen? RoleProfile is frozen=True, so rebuild
-        merged_kwargs = asdict(existing)
-        merged_kwargs.update(fields)
-        updated = RoleProfile(
-            name=existing.name,
-            default_skills=dict(merged_kwargs["default_skills"]),
-            allowed_tools=set(merged_kwargs["allowed_tools"]),
-            visibility_scopes=set(merged_kwargs["visibility_scopes"]),
-            routing_tags=set(merged_kwargs["routing_tags"]),
-            safety_policies=dict(merged_kwargs["safety_policies"]),
-        )
-        self.register(updated)
-        return updated
-
-    def all_profiles(self) -> List[RoleProfile]:
-        return list(self._profiles.values())
-
     def to_json(self, indent: Optional[int] = 2) -> str:
         payload = {
             p.name.value: {
                 "default_skills": p.default_skills,
                 "allowed_tools": sorted(p.allowed_tools),
-                "visibility_scopes": sorted(p.visibility_scopes),
-                "routing_tags": sorted(p.routing_tags),
-                "safety_policies": p.safety_policies,
             }
             for p in self._profiles.values()
         }
@@ -327,64 +212,26 @@ class RoleRegistry:
 
 
 # ---------------------------------------------------------------------
-# Graph-aware specifications for Tier 0 Memory Manager
+# Graph-aware specifications (Future V2 / Legacy)
 # ---------------------------------------------------------------------
 
 @dataclass
 class AgentSpec:
-    """Specification for a Ray agent based on graph state."""
+    """
+    Specification for a Ray agent based on graph state.
+    Used for Graph-Driven Deployment (alternative to Config-Driven).
+    """
     agent_id: str
     organ_id: Optional[str] = None
     skills: List[str] = field(default_factory=list)
     models: List[str] = field(default_factory=list)
     services: List[str] = field(default_factory=list)
-    resources: Dict[str, float] = field(default_factory=dict)   # {"num_cpus":1, "num_gpus":0}
+    resources: Dict[str, float] = field(default_factory=dict)
     namespace: Optional[str] = None
     lifetime: str = "detached"
     name: Optional[str] = None
-    metadata: Dict[str, str] = field(default_factory=dict)      # freeform labels
-
-
-@dataclass
-class OrganSpec:
-    """Specification for an organ based on graph state."""
-    organ_id: str
-    provides_skills: List[str] = field(default_factory=list)
-    uses_services: List[str] = field(default_factory=list)
-    governed_by_policies: List[str] = field(default_factory=list)
-
+    metadata: Dict[str, str] = field(default_factory=dict)
 
 class GraphClient:
-    """Abstract graph interface; implement for Neo4j, etc."""
-    
     def list_agent_specs(self) -> List[AgentSpec]:
-        """Return all agent specifications from the graph."""
         raise NotImplementedError
-
-    def list_organ_specs(self) -> List[OrganSpec]:
-        """Return all organ specifications from the graph."""
-        raise NotImplementedError
-
-
-class MockGraphClient(GraphClient):
-    """Mock implementation for testing and development."""
-    
-    def __init__(self, agent_specs: List[AgentSpec] = None, organ_specs: List[OrganSpec] = None):
-        self.agent_specs = agent_specs or []
-        self.organ_specs = organ_specs or []
-    
-    def list_agent_specs(self) -> List[AgentSpec]:
-        """Return mock agent specifications."""
-        return self.agent_specs.copy()
-    
-    def list_organ_specs(self) -> List[OrganSpec]:
-        """Return mock organ specifications."""
-        return self.organ_specs.copy()
-    
-    def add_agent_spec(self, spec: AgentSpec):
-        """Add an agent specification to the mock."""
-        self.agent_specs.append(spec)
-    
-    def add_organ_spec(self, spec: OrganSpec):
-        """Add an organ specification to the mock."""
-        self.organ_specs.append(spec)

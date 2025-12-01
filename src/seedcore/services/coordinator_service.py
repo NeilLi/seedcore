@@ -319,38 +319,68 @@ class Coordinator:
                 "X-Correlation-ID": c,
             }
         
-        async def organism_execute(organ_id, task_dict, timeout, cid_local):
-            # Inject Routing Hint if Coordinator picked a specific organ
-            task_dict = dict(task_dict)
-            if organ_id and organ_id not in ("organism", "random"):
-                task_dict.setdefault("params", {})
-                task_dict["params"].setdefault("routing", {})
-                task_dict["params"]["routing"]["target_organ_hint"] = organ_id
+        async def organism_execute(self, organ_id: str, task_dict: dict, timeout: int, cid_local: str) -> dict:
+            """
+            Executes a task on a specific Organism (via HTTP/RPC) using TaskPayload v2 semantics.
+            """
+            # 1. Prepare Payload (Shallow Copy to avoid mutation side-effects)
+            payload = task_dict.copy()
+            params = payload.setdefault("params", {})
             
+            # 2. V2 Interaction Setup
+            # Ensure the receiving Organism knows this was routed by Coordinator
+            # and that it needs to perform internal agent selection.
+            interaction = params.setdefault("interaction", {})
+            if not interaction.get("mode"):
+                interaction["mode"] = "coordinator_routed"
+
+            # (Optional) If you map Organ IDs to Specializations, you could enforce it here:
+            # params.setdefault("routing", {})["required_specialization"] = _map_organ_to_spec(organ_id)
+
             try:
-                # Call Unified Organism Endpoint
+                # 3. Call Unified Organism Endpoint
+                # Note: The network routing to 'organ_id' happens here via the client
                 res = await self.organism_client.post(
                     "/route-and-execute",
-                    json={"task": task_dict},
+                    json={"task": payload},
                     headers=_corr_headers("organism", cid_local),
                     timeout=timeout
                 )
                 
+                # 4. Handle Result & Back-fill V2 Metadata
                 if isinstance(res, dict):
-                    # Back-fill organ_id from result
+                    # STRATEGY: Look in V2 locations for the executing organ
+                    # Priority A: result.meta.routing_decision.selected_organ_id (The official telemetry)
+                    # Priority B: params._router.organ_id (The router's internal write-only record)
+                    # Priority C: Fallback to the requested organ_id
+                    
+                    result_meta = res.get("result", {}).get("meta", {})
+                    router_out = res.get("params", {}).get("_router", {})
+                    
                     final_organ = (
-                        res.get("result", {}).get("routing", {}).get("router_decision", {}).get("organ_id")
-                        or res.get("result", {}).get("organ_id")
+                        result_meta.get("routing_decision", {}).get("selected_organ_id")
+                        or router_out.get("organ_id")
                         or organ_id
                     )
-                    res.setdefault("organ_id", final_organ)
+
+                    # Ensure top-level consistency for the Coordinator's return
+                    res["organ_id"] = final_organ
+                    
+                    # Ensure the result block also carries it (if needed for downstream)
                     if "result" in res and isinstance(res["result"], dict):
-                         res["result"].setdefault("organ_id", final_organ)
-                
+                        res["result"]["organ_id"] = final_organ
+                        
                 return res
+
             except Exception as e:
-                logger.error(f"Organism execution failed: {e}")
-                return {"success": False, "error": str(e), "organ_id": organ_id}
+                logger.error(f"Organism execution failed for {organ_id}: {e}")
+                # Return a structure that mimics a failed TaskPayload result
+                return {
+                    "success": False, 
+                    "error": str(e), 
+                    "organ_id": organ_id,
+                    "task_id": payload.get("task_id")
+                }
 
         async def persist_proto_plan_func(repo, tid, kind, plan):
             await self._persist_proto_plan(repo, tid, kind, plan)

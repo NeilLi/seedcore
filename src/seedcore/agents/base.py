@@ -128,7 +128,9 @@ class BaseAgent:
         self,
         agent_id: str,
         *,
-        tool_handler: Optional[Any] = None,  # Can be ToolManager or List[ToolManagerShard]
+        tool_handler: Optional[
+            Any
+        ] = None,  # Can be ToolManager or List[ToolManagerShard]
         specialization: Specialization = Specialization.GENERALIST,
         role_registry: Optional[RoleRegistry] = None,
         skill_store: Optional[SkillStoreProtocol] = None,
@@ -173,7 +175,6 @@ class BaseAgent:
         else:
             self.tool_handler = tool_handler
 
-
         # --------------------------------------------------------------
         # Optional dependency injection for single-instance ToolManager
         # --------------------------------------------------------------
@@ -191,7 +192,6 @@ class BaseAgent:
 
         # (Sharded mode: ToolManagerShard already received clients during creation)
 
-
         # Skills (deltas) + optional persistence
         self.skills: SkillVector = SkillVector()
         if skill_store:
@@ -202,7 +202,7 @@ class BaseAgent:
             c=float(initial_capability),
             mem_util=float(initial_mem_util),
         )
-        
+
         # Initialize state.p with role probabilities from RoleProfile
         # This ensures state.p exists for role smoothing in update_state()
         self.state.p = self.role_profile.to_p_dict()
@@ -213,7 +213,7 @@ class BaseAgent:
         # NOTE: _get_current_embedding() prioritizes privmem.h, so this is a fallback/override
         if np is None:
             raise ImportError("numpy is required for BaseAgent")
-        
+
         # Initialize h from state.h if available (for consistency)
         if hasattr(self.state, "h") and self.state.h:
             try:
@@ -222,20 +222,22 @@ class BaseAgent:
                 self.h = np.zeros(128, dtype=np.float32)
         else:
             self.h = np.zeros(128, dtype=np.float32)
-        
+
         # lifecycle: The agent's current status
         # This is the "live" version of AgentSnapshot.lifecycle
         self.lifecycle: str = "initializing"
-        
+
         # load: Operational activity load (for RL signals, scheduling, resource allocation)
         # Incremented on task start, decremented on task completion
         # Protected against overflow and negative values
         self.load: float = 0.0
         self._load_max: float = 10000.0  # Fail-safe overflow protection
-        
+
         # Role update throttling (to prevent destabilization from frequent role changes)
         self._last_role_update_time: float = 0.0
-        self._role_update_min_interval: float = 5.0  # Minimum seconds between role updates
+        self._role_update_min_interval: float = (
+            5.0  # Minimum seconds between role updates
+        )
         self._role_smoothing_alpha: float = 0.3  # EMA smoothing factor for role changes
 
         # Agent-private vector memory (F/S/P blocks)
@@ -255,7 +257,7 @@ class BaseAgent:
 
         # Set lifecycle to active after initialization
         self.lifecycle = "active"
-        
+
         logger.info(
             "✅ BaseAgent %s (%s) online. org=%s, mcp=%s",
             self.agent_id,
@@ -275,40 +277,40 @@ class BaseAgent:
         """
         if np is None:
             raise ImportError("numpy is required")
-        
+
         arr = np.asarray(arr, dtype=np.float32)
-        
+
         # Handle scalar or 0-dim
         if arr.ndim == 0:
             arr = np.zeros(128, dtype=np.float32)
         # Handle multi-dimensional arrays (flatten first)
         elif arr.ndim > 1:
             arr = arr.flatten()
-        
+
         # Now arr is guaranteed to be 1D
         if arr.size == 0:
             arr = np.zeros(128, dtype=np.float32)
         elif arr.size < 128:
-            arr = np.pad(arr, (0, 128 - arr.size), mode='constant')
+            arr = np.pad(arr, (0, 128 - arr.size), mode="constant")
         elif arr.size > 128:
             arr = arr[:128]
-        
+
         return arr.astype(np.float32, copy=False)
 
     async def _get_current_embedding(self) -> "np.ndarray":
         """
         Get the agent's current state embedding (h vector).
-        
+
         Priority order:
         1. Use privmem.get_vector() if available (most up-to-date, includes task/skill/peer/feat blocks)
         2. Fall back to self.h (maintained separately for compatibility)
-        
+
         This avoids duplication - privmem is the source of truth for the agent's
         internal state embedding, while self.h can be updated by the controller.
         """
         if np is None:
             raise ImportError("numpy is required")
-        
+
         # Priority 1: Use privmem embedding if available (most comprehensive)
         if hasattr(self._privmem, "get_vector"):
             try:
@@ -318,27 +320,27 @@ class BaseAgent:
             except Exception:
                 # Fall through to self.h if privmem fails
                 pass
-        
+
         # Priority 2: Fall back to self.h (can be updated by controller)
         self.h = self._force_128d(self.h)
         return self.h
 
     async def get_snapshot(self) -> "AgentSnapshot":
         """
-        Gathers the agent's live state and formats it into the theoretical 
+        Gathers the agent's live state and formats it into the theoretical
         AgentSnapshot dataclass. This is the "bridge" method that connects
         the production actor to the theoretical state model.
-        
+
         Returns:
             AgentSnapshot: The agent's current state in the format expected
                           by UnifiedState and the energy calculator.
         """
         # Import here to avoid circular dependencies
         from seedcore.models.state import AgentSnapshot
-        
+
         # 1. Get embedding (h)
         current_h = await self._get_current_embedding()
-        
+
         # 2. Get role probabilities (p) - convert RoleProfile to E/S/O dict
         # Use centralized mapping from RoleRegistry if available
         if hasattr(self._role_registry, "specialization_to_p_dict"):
@@ -346,16 +348,16 @@ class BaseAgent:
         else:
             # Fallback to RoleProfile method
             p_dict = self.role_profile.to_p_dict()
-        
+
         # 3. Get learned skills - convert SkillVector to simple dict
         skills_dict = self.skills.to_dict()
-        
+
         # 4. Get mem_util (already in self.state.mem_util)
         # 5. Get capacity (c) - already in self.state.c
         # 6. Get lifecycle - already in self.lifecycle
         # 7. Get load - operational activity load
         # 8. Get timestamp - when this snapshot was taken
-        
+
         # Assemble the snapshot
         return AgentSnapshot(
             h=current_h,
@@ -368,16 +370,36 @@ class BaseAgent:
             timestamp=time.time(),
         )
 
+    async def update_role_profile(self, profile: RoleProfile) -> None:
+        """
+        Hot-swap the role profile at runtime.
+        Called by the parent Organ when a policy update occurs.
+        """
+        # 1. Update internal registry (Keep it consistent for future lookups)
+        self._role_registry.register(profile)
+
+        # 2. Check if this update applies to ME
+        if profile.name == self.specialization:
+            logger.info(f"[{self.agent_id}] 🔄 Hot-swapping RoleProfile: {profile.name.value}")
+            
+            # 3. Apply the new profile
+            self.role_profile = profile
+            
+            # 4. (Optional) Immediate Side Effects
+            # If the update changed 'allowed_tools', we might want to log it
+            # or clear any RBAC caches if you implemented caching.
+            # logger.debug(f"New allowed tools: {self.role_profile.allowed_tools}")
+
     async def update_state(
         self,
         new_h: Optional["np.ndarray"] = None,
         new_p_dict: Optional[Dict[str, float]] = None,
     ) -> None:
         """
-        Receives updates from the system-level controller and updates the 
+        Receives updates from the system-level controller and updates the
         agent's live state. This implements the "feedback loop" where the
         theoretical state model (s_{t+1}) is fed back into the production actor.
-        
+
         Args:
             new_h: Optional new state embedding to update self.h
             new_p_dict: Optional new role probabilities dict (E/S/O) to update role_profile
@@ -392,7 +414,7 @@ class BaseAgent:
             # Throttle role updates to prevent destabilization
             current_time = time.time()
             time_since_last_update = current_time - self._last_role_update_time
-            
+
             if time_since_last_update < self._role_update_min_interval:
                 logger.debug(
                     f"Agent {self.agent_id} role update throttled "
@@ -403,9 +425,10 @@ class BaseAgent:
             else:
                 should_smooth = False
                 self._last_role_update_time = current_time
-            
+
             # Validate that it's a valid E/S/O dict
             from seedcore.models.state import ROLE_KEYS
+
             validated_p = {}
             for key in ROLE_KEYS:
                 validated_p[key] = float(new_p_dict.get(key, 0.0))
@@ -416,9 +439,9 @@ class BaseAgent:
             else:
                 # Default uniform distribution
                 validated_p = {k: 1.0 / len(ROLE_KEYS) for k in ROLE_KEYS}
-            
+
             # Apply smoothing if throttled (exponential moving average)
-            if should_smooth and hasattr(self.state, 'p') and self.state.p:
+            if should_smooth and hasattr(self.state, "p") and self.state.p:
                 current_p = self.state.p.copy()
                 # Smooth each role probability
                 for key in ROLE_KEYS:
@@ -426,8 +449,8 @@ class BaseAgent:
                     new_val = float(validated_p.get(key, 1.0 / len(ROLE_KEYS)))
                     # EMA: smoothed = alpha * new + (1 - alpha) * old
                     validated_p[key] = (
-                        self._role_smoothing_alpha * new_val +
-                        (1.0 - self._role_smoothing_alpha) * old_val
+                        self._role_smoothing_alpha * new_val
+                        + (1.0 - self._role_smoothing_alpha) * old_val
                     )
                     # Enforce minimum floor to prevent roles from vanishing
                     validated_p[key] = max(validated_p[key], 0.001)
@@ -435,15 +458,15 @@ class BaseAgent:
                 total = sum(validated_p.values())
                 if total > 0:
                     validated_p = {k: v / total for k, v in validated_p.items()}
-            
+
             # Update AgentState.p for compatibility
             self.state.p = validated_p.copy()
-            
+
             # Note: We don't change the specialization or role_profile here,
             # as that would require reconstructing the RoleProfile from the p_dict.
             # The role_profile remains tied to the specialization, but the
             # actual role probabilities used in calculations come from self.state.p.
-            
+
         logger.debug(f"Agent {self.agent_id} state updated.")
 
     # ============================================================================
@@ -454,7 +477,7 @@ class BaseAgent:
         """
         Minimal async heartbeat used by feature extraction & health probes.
         Override if you have richer telemetry.
-        
+
         **UPDATED**: Now includes 'learned_skills' for the StateService.
         """
         await asyncio.sleep(0)
@@ -463,7 +486,7 @@ class BaseAgent:
             pm = self._privmem.telemetry()
         except Exception:
             pm = None
-            
+
         # --- CRITICAL ADDITION ---
         # The StateService's aggregator *requires* this
         # to build the SystemSpecializationVector.
@@ -482,7 +505,7 @@ class BaseAgent:
         """
         Canonical context dict passed to cognition/ML.
         Includes specialization, materialized skills, and basic KPIs.
-        
+
         NOTE: This uses role_profile (static specialization-based) for RBAC/routing.
         For dynamic role probabilities updated by the controller, use self.state.p.
         The role_profile represents the agent's "long-term class" while state.p
@@ -499,10 +522,14 @@ class BaseAgent:
             }
         except Exception:
             pm_summary = None
-        
+
         # Include both role_profile (for RBAC/routing) and state.p (for behavioral context)
-        effective_p = self.state.p if hasattr(self.state, 'p') and self.state.p else self.role_profile.to_p_dict()
-        
+        effective_p = (
+            self.state.p
+            if hasattr(self.state, "p") and self.state.p
+            else self.role_profile.to_p_dict()
+        )
+
         return {
             "agent_id": self.agent_id,
             "organ_id": self.organ_id,
@@ -537,8 +564,16 @@ class BaseAgent:
             context=context,
         )
 
-    def authorize_scope(self, scope_name: str, *, mode: str = "read", context: Optional[Dict[str, Any]] = None):
-        return self._rbac.authorize_scope(self.role_profile, scope_name, mode=mode, context=context)
+    def authorize_scope(
+        self,
+        scope_name: str,
+        *,
+        mode: str = "read",
+        context: Optional[Dict[str, Any]] = None,
+    ):
+        return self._rbac.authorize_scope(
+            self.role_profile, scope_name, mode=mode, context=context
+        )
 
     # ============================================================================
     # Routing advertisement
@@ -547,7 +582,7 @@ class BaseAgent:
     def advertise_capabilities(self) -> Dict[str, Any]:
         """
         Build a routing advertisement payload for the meta-controller.
-        
+
         NOTE: This is PASSIVE advertisement only. BaseAgent does NOT make routing
         decisions - it only advertises its current capabilities. The meta-controller
         uses these advertisements to make routing decisions.
@@ -596,7 +631,7 @@ class BaseAgent:
     async def _get_ml_client(self):
         """
         Async-safe lazy init of MLServiceClient.
-        
+
         Uses the ML base URL derived from ray_utils (SERVE_GATEWAY + /ml),
         which is independent of the cognitive client (/cognitive).
         ML and Cognitive share the gateway but have different base paths.
@@ -614,7 +649,9 @@ class BaseAgent:
                 self._ml_client = client
         return self._ml_client
 
-    async def _extract_salience_features(self, task_info: Dict[str, Any], error_context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _extract_salience_features(
+        self, task_info: Dict[str, Any], error_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Extract features for salience scoring (non-blocking; resilient).
         """
@@ -641,7 +678,7 @@ class BaseAgent:
         risk_val = task_info.get("risk_score")
         if risk_val is None:
             risk_val = task_info.get("risk", 0.5)
-        
+
         features = {
             # Task-related
             "task_risk": float(risk_val),
@@ -650,8 +687,12 @@ class BaseAgent:
             "user_impact": float(task_info.get("user_impact", 0.5)),
             "business_criticality": float(task_info.get("business_criticality", 0.5)),
             # Agent-related
-            "agent_capability": float(performance_metrics.get("capability_score_c", self.state.c)),
-            "agent_memory_util": float(performance_metrics.get("mem_util", self.state.mem_util)),
+            "agent_capability": float(
+                performance_metrics.get("capability_score_c", self.state.c)
+            ),
+            "agent_memory_util": float(
+                performance_metrics.get("mem_util", self.state.mem_util)
+            ),
             # Agent-local metrics (renamed from system metrics)
             "agent_load": float(agent_load),
             "agent_memory_usage": float(agent_memory_usage),
@@ -664,24 +705,30 @@ class BaseAgent:
         }
         return features
 
-    async def _calculate_ml_salience_score(self, task_info: Dict[str, Any], error_context: Dict[str, Any]) -> float:
+    async def _calculate_ml_salience_score(
+        self, task_info: Dict[str, Any], error_context: Dict[str, Any]
+    ) -> float:
         """
         Compute salience using ML service with a robust fallback.
         """
         features = None
         async with self._salience_sema:
             try:
-                features = await self._extract_salience_features(task_info, error_context)
+                features = await self._extract_salience_features(
+                    task_info, error_context
+                )
 
-                text_to_score = (error_context.get("reason") or "High-stakes task failure")[: self.MAX_TEXT_LEN]
-                
+                text_to_score = (
+                    error_context.get("reason") or "High-stakes task failure"
+                )[: self.MAX_TEXT_LEN]
+
                 # Trim context to essentials (avoid sending large skill vectors, blocks, norms, peers, etc.)
                 light_ctx = {
                     "agent_capability": features.get("agent_capability", self.state.c),
                     "mem_util": features.get("agent_memory_util", self.state.mem_util),
                     "role": self.specialization.value,
                 }
-                
+
                 # Add task_embed_norm if available
                 task_embed = task_info.get("task_embed")
                 if task_embed is not None and np is not None:
@@ -693,7 +740,7 @@ class BaseAgent:
                         light_ctx["task_embed_norm"] = 0.0
                 else:
                     light_ctx["task_embed_norm"] = 0.0
-                
+
                 context_data = {**features, **light_ctx}
 
                 client = await self._get_ml_client()
@@ -701,7 +748,9 @@ class BaseAgent:
                     raise RuntimeError("MLServiceClient unavailable")
 
                 response = await asyncio.wait_for(
-                    client.compute_salience_score(text=text_to_score, context=context_data),
+                    client.compute_salience_score(
+                        text=text_to_score, context=context_data
+                    ),
                     timeout=self.REQUEST_TIMEOUT_S,
                 )
 
@@ -715,28 +764,45 @@ class BaseAgent:
                 if isinstance(score, (int, float)):
                     s = float(score)
                     if not (0.0 <= s <= 1.0):
-                        logger.warning("[%s] Out-of-range salience %.3f; clamping.", self.agent_id, s)
+                        logger.warning(
+                            "[%s] Out-of-range salience %.3f; clamping.",
+                            self.agent_id,
+                            s,
+                        )
                         s = max(0.0, min(1.0, s))
                     return s
 
-                logger.warning("[%s] Invalid ML response; using fallback. type=%s", self.agent_id, type(response))
+                logger.warning(
+                    "[%s] Invalid ML response; using fallback. type=%s",
+                    self.agent_id,
+                    type(response),
+                )
 
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error("[%s] ML salience error: %s. Fallback.", self.agent_id, e, exc_info=True)
+                logger.error(
+                    "[%s] ML salience error: %s. Fallback.",
+                    self.agent_id,
+                    e,
+                    exc_info=True,
+                )
 
         # Fallback path (run directly, no executor needed - already protected by semaphore)
         if features is None:
             try:
-                features = await self._extract_salience_features(task_info, error_context)
+                features = await self._extract_salience_features(
+                    task_info, error_context
+                )
             except Exception:
                 features = {}
         try:
             val = self._fallback_salience_scorer([features])[0]
             return max(0.0, min(1.0, float(val)))
         except Exception as e:
-            logger.error("[%s] Fallback scorer failed: %s. Default=0.5", self.agent_id, e)
+            logger.error(
+                "[%s] Fallback scorer failed: %s. Default=0.5", self.agent_id, e
+            )
             return 0.5
 
     # ============================================================================
@@ -760,9 +826,7 @@ class BaseAgent:
                 raise RuntimeError("Sharded tool_handler is empty.")
 
             shard = hash(self.agent_id) % len(handler)
-            return await handler[shard].execute_tool.remote(
-                self.agent_id, name, args
-            )
+            return await handler[shard].execute_tool.remote(self.agent_id, name, args)
 
         # -------------------------------------------
         # Single ToolManager instance
@@ -772,26 +836,35 @@ class BaseAgent:
     # ============================================================================
     # Generic task execution (routing-aware, RBAC-enforced)
     # ============================================================================
-
     async def execute_task(self, task) -> Dict[str, Any]:
         """
         Normalize inbound task payloads and orchestrate tool execution with RBAC.
+        Compatible with TaskPayload v2 logic.
         """
         started_ts = self._utc_now_iso()
         started_monotonic = self._now_monotonic()
 
+        # Coerce to V2 TaskView
         tv = self._coerce_task_view(task)
 
-        # --- 0) Fast guardrails --------------------------------------------------
+        # --- 0) Fast guardrails & Routing Constraints ----------------------------
+
+        my_spec = str(getattr(self.specialization, "value", self.specialization))
+
+        # A. Required Specialization (Hard Constraint)
         if tv.required_specialization:
-            my_spec = getattr(self.specialization, "value", self.specialization)
-            if str(my_spec) != str(tv.required_specialization):
+            if my_spec != str(tv.required_specialization):
+                # This should have been caught by Router, but serves as a safety net
                 raise ValueError(
-                    f"Agent {self.agent_id} specialization {my_spec} != task requirement {tv.required_specialization}"
+                    f"Agent {self.agent_id} specialization '{my_spec}' != required '{tv.required_specialization}'"
                 )
 
+        # B. Capability & Load Checks
         if tv.min_capability is not None:
-            if float(getattr(self.state, "capability_score", getattr(self.state, "c", 0.0))) < float(tv.min_capability):
+            curr_cap = float(
+                getattr(self.state, "capability_score", getattr(self.state, "c", 0.0))
+            )
+            if curr_cap < float(tv.min_capability):
                 return self._reject_result(
                     tv,
                     reason=f"capability<{tv.min_capability}",
@@ -800,7 +873,8 @@ class BaseAgent:
                 )
 
         if tv.max_mem_util is not None:
-            if float(getattr(self.state, "mem_util", 0.0)) > float(tv.max_mem_util):
+            curr_mem = float(getattr(self.state, "mem_util", 0.0))
+            if curr_mem > float(tv.max_mem_util):
                 return self._reject_result(
                     tv,
                     reason=f"mem_util>{tv.max_mem_util}",
@@ -808,6 +882,7 @@ class BaseAgent:
                     started_monotonic=started_monotonic,
                 )
 
+        # C. Timing Checks
         if tv.deadline_at_iso and self._is_past_iso(tv.deadline_at_iso):
             return self._reject_result(
                 tv,
@@ -827,27 +902,27 @@ class BaseAgent:
 
         # --- 1) Skill materialization (telemetry only) ---------------------------
         try:
-            mat_skills = self.role_profile.materialize_skills(getattr(self.skills, "deltas", {}))
+            mat_skills = self.role_profile.materialize_skills(
+                getattr(self.skills, "deltas", {})
+            )
         except Exception:
             mat_skills = {}
-        skill_fit = self._score_skill_match(mat_skills, tv.desired_skills)
+        skill_fit = self._score_skill_match(mat_skills, tv.skills)
 
         # --- 2) Tool execution ---------------------------------------------------
-        # Increment load counter (for activity tracking)
         self.load = min(self.load + 1.0, self._load_max)
-        
+
         results: List[Dict[str, Any]] = []
         tool_errors: List[Dict[str, Any]] = []
-
         default_tool_timeout_s = float(getattr(self, "default_tool_timeout_s", 20.0))
 
-        for call in tv.tool_calls:
+        for call in tv.tools:
             tool_name = call.get("name")
             if not tool_name:
                 tool_errors.append({"tool": "?", "error": "invalid_tool_entry"})
                 continue
 
-            # (a) RBAC
+            # (a) RBAC Check
             try:
                 decision = self.authorize_tool(
                     tool_name,
@@ -855,42 +930,47 @@ class BaseAgent:
                     context={"task_id": tv.task_id, "agent_id": self.agent_id},
                 )
                 if not decision.allowed:
-                    tool_errors.append({"tool": tool_name, "error": f"rbac_denied:{decision.reason or 'policy_block'}"})
+                    tool_errors.append(
+                        {
+                            "tool": tool_name,
+                            "error": f"rbac_denied:{decision.reason or 'policy_block'}",
+                        }
+                    )
                     continue
             except Exception as exc:
                 tool_errors.append({"tool": tool_name, "error": f"rbac_error:{exc}"})
                 continue
 
-            # (b) Tool availability
-            # In sharded mode, we skip availability checks (shards handle it)
-            # In single ToolManager mode, check availability
+            # (b) Tool Availability (Single Manager Mode)
             if not isinstance(self.tool_handler, list):
-                if not self.tool_handler:
-                    tool_errors.append({"tool": tool_name, "error": "tool_handler_missing"})
-                    continue
-
-                has_attr = getattr(self.tool_handler, "has", None)
-                if not callable(has_attr):
-                    tool_errors.append({"tool": tool_name, "error": "tool_handler_missing"})
+                if not self.tool_handler or not hasattr(self.tool_handler, "has"):
+                    tool_errors.append(
+                        {"tool": tool_name, "error": "tool_handler_missing"}
+                    )
                     continue
 
                 try:
-                    has_result = has_attr(tool_name)
+                    has_result = self.tool_handler.has(tool_name)
                     if inspect.isawaitable(has_result):
                         has_result = await has_result
                     if not has_result:
                         tool_errors.append({"tool": tool_name, "error": "tool_missing"})
                         continue
                 except Exception as exc:
-                    tool_errors.append({"tool": tool_name, "error": f"tool_has_error:{exc}"})
+                    tool_errors.append(
+                        {"tool": tool_name, "error": f"tool_check_error:{exc}"}
+                    )
                     continue
 
-            # (c) Execution with timeout
+            # (c) Execution
             args = dict(call.get("args") or {})
             tool_timeout = float(args.pop("_timeout_s", default_tool_timeout_s))
+
             try:
-                output = await asyncio.wait_for(self.use_tool(tool_name, args), timeout=tool_timeout)
-                # Ensure output is JSON-serializable (handle numpy arrays, etc.)
+                # Execute tool
+                output = await asyncio.wait_for(
+                    self.use_tool(tool_name, args), timeout=tool_timeout
+                )
                 output = self._make_json_safe(output)
                 results.append({"tool": tool_name, "ok": True, "output": output})
             except asyncio.TimeoutError:
@@ -903,89 +983,94 @@ class BaseAgent:
 
             self.last_heartbeat = time.time()
 
-        # --- 3) Quality & salience ------------------------------------------------
-        success = len(tool_errors) == 0
+        # --- 3) Quality & Salience ------------------------------------------------
+        success = (len(tool_errors) == 0) and (len(results) > 0 or len(tv.tools) == 0)
+        # Note: If no tools were requested, success depends on prompt handling (not shown here)
+        # but defaulting to True if no errors occured is safe for tool-centric logic.
+
         quality = self._estimate_quality(results, tool_errors, tv)
         salience = await self._maybe_salience(tv, results, tool_errors)
 
-        # --- 4) State & memory updates -------------------------------------------
+        # --- 4) State & Memory Updates -------------------------------------------
+        duration_s = self._elapsed_ms(started_monotonic) / 1000.0
+
         try:
             self.state.record_task_outcome(
                 success=success,
                 quality=quality,
                 salience=salience,
-                duration_s=self._elapsed_ms(started_monotonic) / 1000.0,
+                duration_s=duration_s,
                 capability_observed=None,
             )
         except Exception:
             pass
 
         try:
-            task_embed = tv.embedding if tv.embedding is not None else None
+            # Memory update (Private)
+            # Only if not disabled by V2 cognitive flag (though TaskView might not expose it yet)
             self.update_private_memory(
-                task_embed=task_embed,
+                task_embed=tv.embedding,
                 peers=None,
                 success=success,
                 quality=quality,
-                latency_s=self._elapsed_ms(started_monotonic) / 1000.0,
+                latency_s=duration_s,
                 energy=None,
                 delta_e=None,
             )
         except Exception:
             pass
 
-        # Decrement load counter (task completed)
-        # Protected against negative and overflow
         self.load = max(0.0, min(self.load - 1.0, self._load_max))
-        # Fail-safe: reset if somehow overflowed
         if self.load > self._load_max:
-            logger.warning(f"Agent {self.agent_id} load overflow detected, resetting")
             self.load = 0.0
-        
-        # --- 5) Result envelope ---------------------------------------------------
-        result = {
+
+        # --- 5) Result Construction (V2 Schema Compliant) ------------------------
+
+        # Populate result.meta.exec
+        exec_meta = {
+            "started_at": started_ts,
+            "finished_at": self._utc_now_iso(),
+            "latency_ms": self._elapsed_ms(started_monotonic),
+            "attempt": 1,
+        }
+
+        # Populate routing hints utilized
+        routing_hints_meta = {
+            "min_capability": tv.min_capability,
+            "max_mem_util": tv.max_mem_util,
+            "priority": tv.priority,
+            "deadline_at": tv.deadline_at_iso,
+            "ttl_seconds": tv.ttl_seconds,
+        }
+
+        result_payload = {
             "agent_id": self.agent_id,
             "task_id": tv.task_id,
-            "specialization": getattr(self.specialization, "value", self.specialization),
-            "skill_fit": skill_fit,
             "success": success,
-            "results": results,
-            "errors": tool_errors,
-            "quality": quality,
-            "salience": salience,
+            "data": {
+                "results": results,
+                "errors": tool_errors,
+                "skill_fit": skill_fit,
+                "quality": quality,
+                "salience": salience,
+            },
+            # Strict V2 'meta' structure
             "meta": {
-                "exec": {
-                    "started_at": started_ts,
-                    "finished_at": self._utc_now_iso(),
-                    "latency_ms": self._elapsed_ms(started_monotonic),
-                    "attempt": 1,
-                },
-                "routing_hints": {
-                    "min_capability": tv.min_capability,
-                    "max_mem_util": tv.max_mem_util,
-                    "priority": tv.priority,
-                    "deadline_at": tv.deadline_at_iso,
-                    "ttl_seconds": tv.ttl_seconds,
+                "exec": exec_meta,
+                "routing_hints": routing_hints_meta,
+                # Interaction context useful for Router sticky logic
+                "interaction": {
+                    "mode": tv.interaction_mode,
+                    "conversation_id": None,  # TaskView doesn't store this, but we preserve structure
                 },
             },
         }
 
-        # --- 6) Agent-side tunnel request signals --------------------------------
-        try:
-            tunnel = tv.tunnel or {}
-            if isinstance(tunnel, dict):
-                if tunnel.get("activate") is True:
-                    result["activate_tunnel"] = True
-                if "intent" in tunnel:
-                    result["intent"] = tunnel["intent"]
-                if "continuation_prob" in tunnel:
-                    result["continuation_prob"] = float(tunnel["continuation_prob"])
-                if "conversation_id" in tunnel:
-                    result["conversation_id"] = tunnel["conversation_id"]
-        except Exception:
-            pass
+        # Backward compatibility for flat fields if your system expects them top-level
+        result_payload["results"] = results
+        result_payload["errors"] = tool_errors
 
-        return result
+        return result_payload
 
     def _estimate_quality(self, results, errors, _task_view) -> float:
         """Baseline quality estimate based on tool success ratio."""
@@ -998,20 +1083,24 @@ class BaseAgent:
     async def _maybe_salience(self, tv, results, errors) -> float:
         """
         Optional salience scoring via ML service.
-        
+
         NOTE: Salience is only computed for active agents. Suspended/degraded
         agents should not escalate tasks.
         """
         # Only compute salience for active agents
         if self.lifecycle != "active":
-            logger.debug(f"Agent {self.agent_id} lifecycle={self.lifecycle}, skipping salience")
+            logger.debug(
+                f"Agent {self.agent_id} lifecycle={self.lifecycle}, skipping salience"
+            )
             return 0.0
-        
+
         # Skip salience for rejected tasks (no tool calls executed)
         if not results and not errors:
-            logger.debug(f"Agent {self.agent_id} no tool calls executed, skipping salience")
+            logger.debug(
+                f"Agent {self.agent_id} no tool calls executed, skipping salience"
+            )
             return 0.0
-        
+
         try:
             # Extract real error reason from first error if available
             if errors:
@@ -1020,7 +1109,9 @@ class BaseAgent:
                 # Map common error patterns to semantic reasons
                 if "timeout" in str(reason).lower():
                     reason = "timeout"
-                elif "rbac" in str(reason).lower() or "permission" in str(reason).lower():
+                elif (
+                    "rbac" in str(reason).lower() or "permission" in str(reason).lower()
+                ):
                     reason = "authorization_failure"
                 elif "validation" in str(reason).lower():
                     reason = "validation_error"
@@ -1028,13 +1119,13 @@ class BaseAgent:
                     reason = str(reason)
             else:
                 reason = "ok"
-            
+
             # Infer risk metadata from task context
             risk = 1.0 if errors else 0.2
-            complexity = min(1.0, len(tv.tool_calls) / 5.0) if tv.tool_calls else 0.0
+            complexity = min(1.0, len(tv.tools) / 5.0) if tv.tools else 0.0
             business_criticality = 1.0 if tv.priority > 5 else 0.3
             user_impact = min(1.0, tv.priority / 10.0) if tv.priority else 0.5
-            
+
             # Build comprehensive task_info
             task_info = {
                 "task": tv.task_id,
@@ -1045,15 +1136,15 @@ class BaseAgent:
                 "user_impact": user_impact,
                 "task_embed": tv.embedding,  # Include embedding for task_embed_norm calculation
             }
-            
+
             # Build error_context with semantic reason
             error_context = {
                 "reason": reason,
                 "code": self._map_reason_to_code(reason),
             }
-            
+
             salience = await self._calculate_ml_salience_score(task_info, error_context)
-            
+
             # Load shedding: degrade lifecycle when overloaded
             if salience > 0.85 and self.load > 5:
                 logger.warning(
@@ -1061,17 +1152,21 @@ class BaseAgent:
                     "entering degraded mode"
                 )
                 self.lifecycle = "degraded"
-            
+
             return salience
         except Exception:
             return 0.0
 
-    def _reject_result(self, tv, reason: str, *, started_ts: str, started_monotonic: float) -> Dict[str, Any]:
+    def _reject_result(
+        self, tv, reason: str, *, started_ts: str, started_monotonic: float
+    ) -> Dict[str, Any]:
         """Return a structured rejection envelope."""
         return {
             "agent_id": self.agent_id,
             "task_id": tv.task_id,
-            "specialization": getattr(self.specialization, "value", self.specialization),
+            "specialization": getattr(
+                self.specialization, "value", self.specialization
+            ),
             "success": False,
             "results": [],
             "errors": [{"error": reason}],
@@ -1088,7 +1183,9 @@ class BaseAgent:
             },
         }
 
-    def _score_skill_match(self, materialized: Dict[str, float], desired: Dict[str, float]) -> float:
+    def _score_skill_match(
+        self, materialized: Dict[str, float], desired: Dict[str, float]
+    ) -> float:
         """Cosine-like similarity between desired and materialized skills."""
         if not desired:
             return 0.0
@@ -1098,23 +1195,30 @@ class BaseAgent:
         a = [float(materialized[k]) for k in keys]
         b = [float(desired[k]) for k in keys]
         numerator = sum(x * y for x, y in zip(a, b))
-        denominator = (sum(x * x for x in a) ** 0.5) * (sum(y * y for y in b) ** 0.5) or 1.0
+        denominator = (sum(x * x for x in a) ** 0.5) * (
+            sum(y * y for y in b) ** 0.5
+        ) or 1.0
         return max(0.0, min(1.0, numerator / denominator))
-    
+
     def _normalize_task_payload(
         self, task: Union[TaskPayload, Dict[str, Any], Any]
     ) -> Tuple[TaskPayload, Dict[str, Any]]:
         """
-        Normalize incoming task representations to TaskPayload while preserving original fields.
-        Returns the TaskPayload and a merged dict that includes any extra keys from the input.
+        Normalize incoming task representations to TaskPayload v2.
+
+        Ensures strict Pydantic validation while preserving extra fields
+        from the raw input in the returned merged dictionary.
         """
-        raw_dict: Dict[str, Any]
+        raw_dict: Dict[str, Any] = {}
         payload: TaskPayload
 
+        # 1. Extract Raw Dictionary
         if isinstance(task, TaskPayload):
             payload = task
+            # Ensure we get the DB-ready structure (params packed)
             raw_dict = task.model_dump()
         else:
+            # Handle standard dict, objects with .model_dump(), or .to_dict()
             if hasattr(task, "model_dump"):
                 try:
                     raw_dict = task.model_dump()
@@ -1133,67 +1237,116 @@ class BaseAgent:
                 except Exception:
                     raw_dict = {}
 
+            # 2. Attempt Hydration (The "V2 Happy Path")
             try:
+                # Priority: Try treating it as a DB row (params envelopes already exist)
                 payload = TaskPayload.from_db(raw_dict)
             except Exception:
-                fallback_id = raw_dict.get("task_id") or raw_dict.get("id") or uuid.uuid4().hex
-                tool_calls_raw = raw_dict.get("tool_calls") or []
+                # 3. Fallback Hydration (The "Legacy/Loose Path")
+                # If from_db fails, we construct manually.
+                # We must map loose top-level keys to V2 Pydantic fields.
+
+                fallback_id = (
+                    raw_dict.get("task_id") or raw_dict.get("id") or uuid.uuid4().hex
+                )
+
+                # Normalize Tools: Handle both 'tools'
+                raw_tools = raw_dict.get("tools") or []
+
                 payload = TaskPayload(
                     task_id=str(fallback_id),
-                    type=raw_dict.get("type") or raw_dict.get("task_type") or "unknown_task",
-                    params=raw_dict.get("params") or {},
-                    description=raw_dict.get("description") or raw_dict.get("prompt") or "",
+                    type=raw_dict.get("type")
+                    or raw_dict.get("task_type")
+                    or "unknown_task",
+                    description=raw_dict.get("description")
+                    or raw_dict.get("prompt")
+                    or "",
                     domain=raw_dict.get("domain"),
                     drift_score=float(raw_dict.get("drift_score") or 0.0),
-                    required_specialization=raw_dict.get("required_specialization"),
-                    desired_skills=raw_dict.get("desired_skills") or {},
-                    tool_calls=tool_calls_raw,
+                    params=raw_dict.get("params") or {},  # Keep existing params
+                    # --- V2 Routing Mirrors ---
+                    required_specialization=raw_dict.get(
+                        "required_specialization"
+                    ),
+                    specialization=raw_dict.get("specialization"),
+                    skills=raw_dict.get("skills") or {},
+                    tools=raw_tools,
+                    # --- V2 Hint Mirrors ---
                     min_capability=raw_dict.get("min_capability"),
                     max_mem_util=raw_dict.get("max_mem_util"),
                     priority=int(raw_dict.get("priority") or 0),
                     deadline_at=raw_dict.get("deadline_at"),
                     ttl_seconds=raw_dict.get("ttl_seconds"),
+                    # --- V2 Interaction Mirrors ---
+                    interaction_mode=raw_dict.get("interaction_mode")
+                    or raw_dict.get("mode"),
                 )
 
-        if not payload.task_id or payload.task_id in ("", "None"):
-            payload = payload.copy(update={"task_id": uuid.uuid4().hex})
+        # 4. ID Safety Check
+        if not payload.task_id or payload.task_id in ("", "None", "null"):
+            # Use copy mechanism to update immutable Pydantic models safely if needed
+            # (Though our model is standard, this is safer)
+            new_id = uuid.uuid4().hex
+            payload = payload.model_copy(update={"task_id": new_id})
 
-        normalized_dict = payload.model_dump()
+        # 5. Advanced Merging Logic
+        # We need to merge the Authoritative Payload (Pydantic) with the Raw Input (Extras)
+
+        # 'canonical_dict' contains the correctly packed params (via .to_db_params())
+        canonical_dict = payload.model_dump()
         merged_dict = dict(raw_dict)
 
-        normalized_params = dict(normalized_dict.get("params") or {})
-        raw_params = dict(merged_dict.get("params") or {})
-        if normalized_params:
-            routing = normalized_params.get("routing")
-            if routing is not None:
-                raw_params["routing"] = routing
-            for key, value in normalized_params.items():
-                if key == "routing":
-                    continue
-                raw_params.setdefault(key, value)
-            merged_dict["params"] = raw_params
+        # Update top-level fields (excluding params for a moment)
+        for k, v in canonical_dict.items():
+            if k != "params" and v is not None:
+                merged_dict[k] = v
 
-        for key, value in normalized_dict.items():
-            if key == "params":
-                continue
-            if key not in merged_dict or merged_dict[key] in (None, "", {}):
-                merged_dict[key] = value
+        # Deep Merge Params
+        # We want to keep 'extra' envelopes from raw_dict (like 'risk')
+        # while ensuring 'routing', 'cognitive', etc. come from the Payload.
+        raw_params = merged_dict.get("params") or {}
+        canonical_params = canonical_dict.get("params") or {}
 
+        # Start with raw params to preserve unknown keys/envelopes
+        final_params = dict(raw_params)
+
+        # Overlay canonical envelopes
+        # We iterate known V2 envelopes to ensure clean merging
+        v2_envelopes = ["routing", "interaction", "cognitive", "chat", "graph"]
+
+        for env in v2_envelopes:
+            c_data = canonical_params.get(env)
+            r_data = final_params.get(env)
+
+            if c_data:
+                if isinstance(r_data, dict) and isinstance(c_data, dict):
+                    # If both exist, merge them (Canonical wins conflicts)
+                    final_params[env] = {**r_data, **c_data}
+                else:
+                    # Otherwise, just take canonical
+                    final_params[env] = c_data
+
+        # Ensure params is set back
+        merged_dict["params"] = final_params
+
+        # Final ID consistency
         merged_dict["task_id"] = payload.task_id
         merged_dict.setdefault("id", payload.task_id)
 
         return payload, merged_dict
 
     class _TaskView:
-        """Lightweight normalized task representation."""
+        """Lightweight normalized task representation for Agent Execution."""
 
         __slots__ = (
             "task_id",
             "prompt",
+            "interaction_mode",  # NEW: Critical for agent behavior
             "embedding",
             "required_specialization",
-            "desired_skills",
-            "tool_calls",
+            "specialization",  # NEW: Soft hint
+            "skills",
+            "tools",
             "min_capability",
             "max_mem_util",
             "priority",
@@ -1203,59 +1356,122 @@ class BaseAgent:
         )
 
     def _coerce_task_view(self, task) -> "_TaskView":
-        """Normalize Task/TaskPayload/dict inputs into a TaskView."""
+        """
+        Normalize Task/TaskPayload/dict inputs into a TaskView.
+        Compatible with TaskPayload v2 (params.routing, params.chat).
+        """
+        # Assumes _normalize_task_payload returns (TaskPayload_Pydantic, raw_dict)
         payload, merged = self._normalize_task_payload(task)
         tv = self._TaskView()
 
+        # 1. Identity & Core
         tv.task_id = payload.task_id
-        tv.prompt = payload.description or merged.get("prompt") or ""
 
+        # 2. Extract Params & Envelopes safely
+        # 'merged' is the dict representation, 'payload' is the Pydantic model
+        params = merged.get("params") or {}
+        routing = params.get("routing") or {}
+        chat = params.get("chat") or {}
+        interaction = params.get("interaction") or {}
+        hints = routing.get("hints") or {}
+
+        # 3. Intelligent Prompt Extraction
+        # Priority: Chat Message > Description > "prompt" key
+        tv.prompt = (
+            chat.get("message") or payload.description or merged.get("prompt") or ""
+        )
+
+        # 4. Interaction Mode
+        # Use Pydantic field if available, else dict lookup
+        tv.interaction_mode = getattr(
+            payload, "interaction_mode", None
+        ) or interaction.get("mode")
+
+        # 5. Vectors
         meta = merged.get("meta") or {}
         tv.embedding = meta.get("embedding")
 
-        params = merged.get("params") or {}
-        routing = params.get("routing") or {}
+        # 6. Routing: Specialization (Hard vs Soft)
+        # Check Pydantic model attributes first (flattened mirrors), then dict
+        tv.required_specialization = getattr(
+            payload, "required_specialization", None
+        ) or routing.get("required_specialization")
+        tv.specialization = getattr(
+            payload, "specialization", None
+        ) or routing.get("specialization")
 
-        tv.required_specialization = payload.required_specialization or routing.get("required_specialization")
-        tv.desired_skills = dict(payload.desired_skills or {}) or routing.get("desired_skills") or {}
+        # 7. Routing: Skills
+        # Pydantic field is 'skills', dict path is params.routing.skills
+        pydantic_skills = getattr(payload, "skills", None)
+        tv.skills = (
+            pydantic_skills
+            if pydantic_skills is not None
+            else (routing.get("skills") or {})
+        )
 
-        tool_calls: List[Dict[str, Any]] = []
-        for item in payload.tool_calls or []:
+        # 8. Routing: Tools
+        # Pydantic field is 'tools', dict path is params.routing.tools
+        tv.tools = []
+
+        # Source 1: Pydantic 'tools'
+        raw_tools = getattr(payload, "tools", []) or []
+        # Source 2: Dict 'tools' (V2)
+        if not raw_tools:
+            raw_tools = routing.get("tools") or []
+
+        for item in raw_tools:
+            # Handle Dict
             if isinstance(item, dict):
                 name = item.get("name")
-                if not name:
-                    continue
-                tool_calls.append({"name": name, "args": dict(item.get("args") or {})})
-            else:
+                if name:
+                    tv.tools.append({"name": name, "args": item.get("args") or {}})
+            # Handle Pydantic/Object
+            elif hasattr(item, "name"):
                 name = getattr(item, "name", None)
-                if not name:
-                    continue
-                tool_calls.append({"name": name, "args": dict(getattr(item, "args", {}) or {})})
-        tv.tool_calls = tool_calls
+                if name:
+                    # generic getattr for safety if args is missing
+                    args = getattr(item, "args", {})
+                    # If args is a Pydantic model, dump it, else use as dict
+                    if hasattr(args, "model_dump"):
+                        args = args.model_dump()
+                    tv.tools.append({"name": name, "args": dict(args or {})})
 
-        hints = routing.get("hints") or {}
-        tv.min_capability = payload.min_capability if payload.min_capability is not None else hints.get("min_capability")
-        tv.max_mem_util = payload.max_mem_util if payload.max_mem_util is not None else hints.get("max_mem_util")
-        tv.priority = int(payload.priority or hints.get("priority", 0) or 0)
+        # 9. Hints & Constraints
+        # Priority: Pydantic Field > Routing Hint
+        tv.min_capability = (
+            payload.min_capability
+            if payload.min_capability is not None
+            else hints.get("min_capability")
+        )
+        tv.max_mem_util = (
+            payload.max_mem_util
+            if payload.max_mem_util is not None
+            else hints.get("max_mem_util")
+        )
+        tv.priority = int(
+            payload.priority
+            if payload.priority is not None
+            else hints.get("priority", 0)
+        )
         tv.deadline_at_iso = payload.deadline_at or hints.get("deadline_at")
-        tv.ttl_seconds = payload.ttl_seconds if payload.ttl_seconds is not None else hints.get("ttl_seconds")
+        tv.ttl_seconds = (
+            payload.ttl_seconds
+            if payload.ttl_seconds is not None
+            else hints.get("ttl_seconds")
+        )
 
+        # 10. Timestamp Normalization
         created_at = merged.get("created_at")
         tv.created_at_ts = None
         try:
             if isinstance(created_at, str):
                 tv.created_at_ts = self._iso_to_ts(created_at)
+            elif isinstance(created_at, (int, float)):
+                tv.created_at_ts = float(created_at)
+            elif hasattr(created_at, "timestamp") and callable(created_at.timestamp):
+                tv.created_at_ts = created_at.timestamp()
             elif isinstance(created_at, (time.struct_time,)):
-                # Handle time.struct_time
-                from datetime import datetime
-                tv.created_at_ts = datetime.fromtimestamp(time.mktime(created_at)).timestamp()
-            elif hasattr(created_at, "timestamp") and callable(getattr(created_at, "timestamp", None)):
-                # Only datetime/date objects have timestamp() method
-                from datetime import datetime, date
-                if isinstance(created_at, (datetime, date)):
-                    ts_method = getattr(created_at, "timestamp", None)
-                    if callable(ts_method):
-                        tv.created_at_ts = ts_method()
+                tv.created_at_ts = time.mktime(created_at)
         except Exception:
             tv.created_at_ts = None
 
@@ -1266,7 +1482,7 @@ class BaseAgent:
         Convert non-serializable objects (numpy arrays, etc.) to JSON-safe primitives.
         This prevents serialization errors when tool outputs contain numpy arrays or other
         non-standard types.
-        
+
         Blacklists internal attributes that may contain unserializable objects (coroutines,
         locks, Ray refs, etc.).
         """
@@ -1277,21 +1493,30 @@ class BaseAgent:
                 return obj.item()
             elif isinstance(obj, (np.integer, np.floating)):
                 return float(obj)
-        
+
         if isinstance(obj, dict):
             return {k: self._make_json_safe(v) for k, v in obj.items()}
         elif isinstance(obj, (list, tuple)):
             return [self._make_json_safe(item) for item in obj]
-        elif hasattr(obj, '__dict__'):
+        elif hasattr(obj, "__dict__"):
             # Blacklist internal attributes that may be unserializable
             blacklist = {
-                '__weakref__', '__slots__', '_rbac', '_privmem', '_ml_client',
-                '_ml_client_lock', '_salience_sema', '_role_registry', 'tools'
+                "__weakref__",
+                "__slots__",
+                "_rbac",
+                "_privmem",
+                "_ml_client",
+                "_ml_client_lock",
+                "_salience_sema",
+                "_role_registry",
+                "tools",
             }
             # Only serialize public attributes (not starting with _)
             safe_dict = {}
             for key, value in obj.__dict__.items():
-                if key not in blacklist and not (key.startswith('_') and key not in {'_ToolManager'}):
+                if key not in blacklist and not (
+                    key.startswith("_") and key not in {"_ToolManager"}
+                ):
                     try:
                         safe_dict[key] = self._make_json_safe(value)
                     except Exception:
@@ -1326,10 +1551,11 @@ class BaseAgent:
                 return dt_parser.isoparse(iso).timestamp()
             except Exception:
                 pass
-        
+
         # Fallback to datetime.fromisoformat
         try:
             from datetime import datetime
+
             return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
         except Exception:
             return None
@@ -1342,7 +1568,9 @@ class BaseAgent:
     # Example task flow (async) showing salience-aware behavior
     # ============================================================================
 
-    async def execute_high_stakes_task(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_high_stakes_task(
+        self, task_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Demonstration of a salience-aware task lifecycle.
         Replace with your organ-specific behavior.
@@ -1473,7 +1701,12 @@ class BaseAgent:
         r = reason.lower()
         if "timeout" in r:
             return 504
-        if "authorization" in r or "permission" in r or "forbidden" in r or "unauthorized" in r:
+        if (
+            "authorization" in r
+            or "permission" in r
+            or "forbidden" in r
+            or "unauthorized" in r
+        ):
             return 403
         if "validation" in r or "schema" in r or "not found" in r:
             return 400
@@ -1532,7 +1765,7 @@ class BaseAgent:
         """
         Deterministic local scorer for resilience. Replace with your heuristic/XGBoost.
         Very simple baseline: weighted sum of a few risk features, clamped to [0,1].
-        
+
         Includes agent capability: low-capability agents produce higher salience scores
         (which may result in local_flag_high_risk intents, but BaseAgent does not escalate).
         Also includes privmem allocation as a weak signal of memory saturation.
@@ -1546,19 +1779,27 @@ class BaseAgent:
             agent_load = float(f.get("agent_load", 0.0))
             agent_error_rate = float(f.get("agent_error_rate", 0.0))
             sys = 0.25 * agent_load + 0.25 * agent_error_rate
-            
+
             # Factor in agent capability: low capability increases salience score
             # (higher salience may lead to local_flag_high_risk intent, but BaseAgent does not escalate)
             agent_capability = float(f.get("agent_capability", self.state.c))
             capability_penalty = 0.1 * (1.0 - agent_capability)  # 0.0 to 0.1
-            
+
             # Add privmem allocation signal (weak signal for memory saturation)
             try:
                 privmem_norm = self._privmem.telemetry().get("allocation") or 0.0
             except Exception:
                 privmem_norm = 0.0
-            
-            score = 0.30 * risk + 0.25 * sev + 0.2 * imp + 0.15 * crit + 0.05 * sys + capability_penalty + 0.05 * privmem_norm
+
+            score = (
+                0.30 * risk
+                + 0.25 * sev
+                + 0.2 * imp
+                + 0.15 * crit
+                + 0.05 * sys
+                + capability_penalty
+                + 0.05 * privmem_norm
+            )
             score = max(0.0, min(1.0, score))
             out.append(score)
         return out

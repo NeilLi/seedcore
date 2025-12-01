@@ -31,6 +31,8 @@ import random
 import time
 from typing import Dict, Any, Optional, List, TYPE_CHECKING, Tuple
 
+from seedcore.agents.roles import RoleProfile
+
 # --- Core SeedCore Imports ---
 from ..logging_setup import ensure_serve_logger
 
@@ -333,36 +335,87 @@ class Organ:
         """
         Register an existing agent handle into this organ.
         
-        Used by OrganismCore during organ merge/retire operations to transfer
-        agents between organs without recreating them.
-        
-        Args:
-            agent_id: Unique identifier for the agent
-            handle: Ray actor handle for the existing agent
-            info: Optional metadata dict. If not provided, a minimal stub is created.
+        Ensures metadata is normalized for v2 routing (skills, lowercase specs).
         """
-        if agent_id in self.agents:
+        is_overwrite = agent_id in self.agents
+        if is_overwrite:
             logger.warning(
-                f"[{self.organ_id}] Agent {agent_id} already exists, overwriting registration."
+                f"[{self.organ_id}] Agent {agent_id} already exists, merging metadata."
             )
         
+        # 1. Store the Ray Handle
         self.agents[agent_id] = handle
 
-        # Preserve existing info if provided, otherwise create a stub.
-        existing = self.agent_info.get(agent_id, {})
-        info = info or existing or {
+        # 2. Prepare Metadata Defaults
+        # We need these keys guaranteed for the Router to work
+        defaults = {
             "agent_id": agent_id,
             "specialization": "GENERALIST",
-            "specialization_value": "generalist",
+            "specialization_value": "generalist", # Router relies on this
+            "skills": {},                         # Router relies on this
             "class": "BaseAgent",
             "created_at": time.time(),
-            "status": "registered",
+            "status": "idle",                     # Ready for work
+            "organ_id": self.organ_id
         }
-        self.agent_info[agent_id] = info
+
+        # 3. Merge Logic: Defaults -> Existing -> New Info
+        # This preserves learned skills if we are just re-registering the handle
+        final_info = defaults.copy()
+        
+        if is_overwrite:
+            final_info.update(self.agent_info.get(agent_id, {}))
+            
+        if info:
+            final_info.update(info)
+
+        # 4. Critical: Normalize Specialization for Router Lookup
+        # Ensure 'specialization_value' matches 'specialization' in lowercase
+        if "specialization" in final_info:
+            raw_spec = str(final_info["specialization"])
+            final_info["specialization_value"] = raw_spec.lower()
+        
+        # 5. Save to State
+        self.agent_info[agent_id] = final_info
 
         logger.info(
-            f"[{self.organ_id}] Registered existing agent {agent_id} via register_agent()"
+            f"[{self.organ_id}] Registered agent {agent_id}. "
+            f"Spec: {final_info.get('specialization_value')}, "
+            f"Skills: {len(final_info.get('skills', {}))}"
         )
+        
+    async def update_role_registry(self, profile: RoleProfile) -> None:
+        """
+        Receive a role definition update from OrganismCore and propagate to Agents.
+        """
+        # 1. Update the Organ's LOCAL copy
+        self.role_registry.register(profile)
+        logger.info(f"[{self.organ_id}] 📥 Synced role definition: {profile.name.value}")
+
+        # 2. Broadcast to relevant Agents
+        # We only need to notify agents that actually HOLD this specialization.
+        target_spec_val = profile.name.value.lower()
+        
+        futures = []
+        for agent_id, handle in self.agents.items():
+            info = self.agent_info.get(agent_id, {})
+            
+            # Check if this agent matches the updated specialization
+            # (Use the normalized value we stored during register_agent)
+            agent_spec = info.get("specialization_value", "").lower()
+            
+            if agent_spec == target_spec_val:
+                # 3. Remote Call to Agent
+                # Fire-and-forget logic usually, or gather if you want confirmation
+                ref = handle.update_role_profile.remote(profile)
+                futures.append(ref)
+
+        # 4. Wait for propagation (Optional but recommended for consistency)
+        if futures:
+            await asyncio.gather(*futures)
+            logger.info(
+                f"[{self.organ_id}] ⚡ Hot-swapped profile on {len(futures)} agents."
+            )
         
     # ==========================================================
     # Introspection (Called by OrganismCore & StateService)
@@ -431,6 +484,44 @@ class Organ:
             "agent_count": len(self.agents),
             "agents": agent_statuses,
         }
+        
+    # ==========================================================
+    # Lifecycle & Metadata (Runtime Updates)
+    # ==========================================================
+
+    async def heartbeat(self, agent_id: str, metrics: Dict[str, Any]) -> None:
+        """
+        Lightweight runtime update. 
+        Agents call this periodically to report status, load, and new skills.
+        """
+        # 1. Fast existence check
+        if agent_id not in self.agent_info:
+            # Agent might have crashed and organ restarted. 
+            # In a robust system, we might ask it to re-register.
+            logger.warning(f"[{self.organ_id}] Received heartbeat from unknown agent {agent_id}")
+            return
+
+        # 2. Get reference to mutable metadata dict
+        info = self.agent_info[agent_id]
+        
+        # 3. Update Dynamic Metrics (Load, Status)
+        if "load" in metrics:
+            info["load"] = metrics["load"]
+        if "status" in metrics:
+            info["status"] = metrics["status"]
+
+        # 4. Update Skills (Crucial for Router V2)
+        # If the agent learned something new since startup, we capture it here.
+        if "skills" in metrics and isinstance(metrics["skills"], dict):
+            # We merge updates rather than strict overwrite if you want to support partial updates,
+            # but usually replacing the skill dict is safer to remove stale skills.
+            info["skills"] = metrics["skills"]
+
+        # 5. Update Timestamp
+        info["last_heartbeat"] = time.time()
+        
+        # (Optional) Log if debug mode is on
+        # logger.debug(f"[{self.organ_id}] Heartbeat processed for {agent_id}")
 
     # ==========================================================
     # Telemetry & Stats (Per-Organ Agent Statistics)
@@ -538,7 +629,8 @@ class Organ:
             h_ref = handle.get_private_memory_vector.remote()
             tel_ref = handle.get_private_memory_telemetry.remote()
             # Fetch both concurrently to reduce latency (single RPC instead of two sequential)
-            h, tel = await asyncio.to_thread(lambda: ray.get(h_ref, tel_ref))
+            # ray.get([ref1, ref2]) returns [res1, res2]
+            h, tel = await asyncio.to_thread(lambda: ray.get([h_ref, tel_ref]))
             return {"h": h, "telemetry": tel}
         except Exception:
             # Legacy fallback
@@ -624,9 +716,9 @@ class Organ:
         # Fallback: simple ID generation if factory not available
         unique_id = uuid.uuid4().hex[:12]
         return f"agent_{self.organ_id}_{specialization.value}_{unique_id}"
-
+    
     # ==========================================================
-    # Routing (Called by OrganismCore)
+    # Routing (Called by OrganismCore/Router)
     # ==========================================================
 
     async def pick_random_agent(self) -> Tuple[Optional[str], Optional[AgentHandle]]:
@@ -634,35 +726,108 @@ class Organ:
         if not self.agents:
             return None, None
         try:
+            # Efficiently pick random key
             agent_id = random.choice(list(self.agents.keys()))
             return agent_id, self.agents[agent_id]
         except Exception:
-            return None, None  # Race condition if dict empty
+            return None, None
 
-    async def pick_agent_by_specialization(self, spec_name: str) -> Tuple[Optional[str], Optional[AgentHandle]]:
+    async def pick_agent_by_skills(
+        self, 
+        required_skills: Dict[str, float]
+    ) -> Tuple[Optional[str], Optional[AgentHandle]]:
+        """
+        Finds the agent with the highest skill match score.
+        Uses a simple weighted sum intersection strategy.
+        """
+        if not self.agents:
+            return None, None
+            
+        best_agent_id = None
+        best_score = -1.0
+        
+        # Iterate all known agents
+        for agent_id, info in self.agent_info.items():
+            # info['skills'] should be a dict like {'python': 0.9, 'writing': 0.5}
+            # If agent hasn't reported skills yet, assume empty
+            agent_skills = info.get("skills", {})
+            
+            current_score = 0.0
+            
+            # Calculate match score
+            for req_skill, req_level in required_skills.items():
+                # Get agent's level (default 0.0)
+                agent_level = agent_skills.get(req_skill, 0.0)
+                # Simple additive scoring: reward possession of skill
+                current_score += agent_level
+            
+            # Update best
+            if current_score > best_score:
+                best_score = current_score
+                best_agent_id = agent_id
+
+        # If we found a winner with a score > 0
+        if best_agent_id and best_score > 0:
+            return best_agent_id, self.agents[best_agent_id]
+            
+        # Fallback: If no skills match (or no skills known), pick random
+        return await self.pick_random_agent()
+
+    async def pick_agent_by_specialization(
+        self, 
+        spec_name: str, 
+        required_skills: Optional[Dict[str, float]] = None
+    ) -> Tuple[Optional[str], Optional[AgentHandle]]:
         """
         Finds an agent matching the specialization.
         
-        Accepts either enum name (e.g., "DEVICE_ORCHESTRATOR") or value (e.g., "device_orchestrator").
-        Matching is case-insensitive for robustness.
-        
-        This is a simple, non-load-balanced lookup.
+        Args:
+            spec_name: Enum value or name (e.g. "contextual_planner")
+            required_skills: Optional dict to break ties if multiple agents match spec.
         """
         spec_norm = spec_name.lower()
-        
-        # Try to match against stored specialization name (enum name)
+        candidates = []
+
+        # 1. Filter candidates by Specialization
         for agent_id, info in self.agent_info.items():
             stored_name = info.get("specialization", "").lower()
             stored_value = info.get("specialization_value", "").lower()
             
-            # Match against either name or value (case-insensitive)
             if stored_name == spec_norm or stored_value == spec_norm:
-                handle = self.agents.get(agent_id)
-                if handle:
-                    return agent_id, handle
+                candidates.append(agent_id)
         
-        # Fallback if no specific agent matches
-        return await self.pick_random_agent()
+        if not candidates:
+            # Fallback if no specific agent matches the spec
+            return await self.pick_random_agent()
+
+        # 2. If only one candidate, return it
+        if len(candidates) == 1:
+            aid = candidates[0]
+            return aid, self.agents.get(aid)
+
+        # 3. If multiple candidates AND skills provided, pick best skill match
+        if required_skills and len(candidates) > 1:
+            best_agent_id = candidates[0] # Default to first
+            best_score = -1.0
+
+            for aid in candidates:
+                info = self.agent_info.get(aid, {})
+                agent_skills = info.get("skills", {})
+                
+                # Calculate simple score
+                score = 0.0
+                for skill, _ in required_skills.items():
+                    score += agent_skills.get(skill, 0.0)
+                
+                if score > best_score:
+                    best_score = score
+                    best_agent_id = aid
+            
+            return best_agent_id, self.agents.get(best_agent_id)
+
+        # 4. Otherwise pick random from valid candidates (Load Balancing)
+        chosen_id = random.choice(candidates)
+        return chosen_id, self.agents.get(chosen_id)
 
     # ==========================================================
     # Shutdown

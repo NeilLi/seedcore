@@ -114,7 +114,7 @@ class AgentAggregator:
                 # 1. Discover all live agents from the global router
                 # This call uses the new OrganismService (v2) which wraps OrganismCore.
                 # OrganismCore aggregates handles from all organs.
-                agent_handles_ref = self.organism_router.get_all_agent_handles.remote()
+                agent_handles_ref = self.organism_router.rpc_get_all_agent_handles.remote()
                 agent_handles: Dict[str, Any] = await self._async_ray_get(agent_handles_ref)
 
                 if not agent_handles:
