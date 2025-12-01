@@ -123,44 +123,54 @@ class TaskResult(BaseModel):
 
 # Convenience constructors for common result types
 def create_fast_path_result(
-    routed_to: str,
-    organ_id: str,
-    result: JSONValue,
+    target_organ_id: Optional[str] = None,
+    routing_params: Optional[Dict[str, Any]] = None,
+    interaction_mode: str = "coordinator_routed",
     processing_time_ms: Optional[float] = None,
     **metadata
 ) -> TaskResult:
     """
-    Create a fast path result for Coordinator routing.
+    Create a Fast Path decision (System 1) for the Coordinator.
     
-    CoordinatorHttpRouter checks kind == DecisionKind.FAST_PATH.value ("fast")
-    and then delegates task_data to OrganismRouter for execution.
+    This signals that the Coordinator has decided NOT to perform deep planning,
+    and is delegating execution to the Organism Service.
     
-    The organ_id indicates the target organ where the task should be routed.
-    This result is returned as a routing decision; actual execution happens downstream.
+    V2 Refactor:
+    - Supports injecting 'routing_params' (specialization, skills) into the TaskPayload.
+    - Supports setting 'interaction_mode' (e.g., to 'agent_tunnel' if sticky).
     
     Args:
-        routed_to: Organ that processed the task (e.g., "random", "hotel_ops", "organism")
-        organ_id: ID of the organ that handled the task (e.g., "random", "hotel_ops")
-        result: Result payload (typically {"status": "routed"} for routing decisions)
-        processing_time_ms: Optional processing time in milliseconds
-        **metadata: Additional metadata (decision, surprise, proto_plan, etc.)
+        target_organ_id: Optional hint for the specific organ (e.g., "utility_organ").
+                         If None, OrganismRouter will resolve based on specialization.
+        routing_params: Dictionary to merge into TaskPayload.params.routing 
+                        (e.g. {"required_specialization": "USER_LIAISON"}).
+        interaction_mode: V2 Interaction mode (default: "coordinator_routed").
+        processing_time_ms: Policy evaluation time.
+        **metadata: Additional context (surprise scores, rule_id matched, etc.)
     
     Returns:
-        TaskResult with kind=DecisionKind.FAST_PATH suitable for router delegation
+        TaskResult with kind=DecisionKind.FAST_PATH.
     """
-    fast_path = FastPathResult(
-        routed_to=routed_to,
-        organ_id=organ_id,
-        result=result,
-        processing_time_ms=processing_time_ms,
+    # 1. Construct the Payload
+    # The handler will merge these into the TaskPayload before calling OrganismClient.
+    fast_path_payload = FastPathResult(
+        routed_to="organism",          # The Service
+        organ_id=target_organ_id,      # The Internal Component (Hint)
+        routing_params=routing_params or {},
+        interaction_mode=interaction_mode,
         metadata=metadata
     )
     
+    # 2. Wrap in TaskResult
     return TaskResult(
         kind=DecisionKind.FAST_PATH,
         success=True,
-        payload=fast_path,
-        metadata={"path": "direct_routing"}
+        payload=fast_path_payload,
+        metadata={
+            "path": "fast_path",
+            "target": target_organ_id or "dynamic_resolution",
+            "exec_time_ms": processing_time_ms
+        }
     )
 
 
@@ -193,41 +203,38 @@ def create_escalated_result(
 
 
 def create_cognitive_result(
-    agent_id: str,
     task_type: str,
-    result: JSONValue,
+    result: Dict[str, Any],
     confidence_score: Optional[float] = None,
     **metadata
 ) -> TaskResult:
     """
-    Create a cognitive reasoning result for Coordinator routing.
+    Create a System 2 Escalation Result (Cognitive Reasoning).
     
-    CoordinatorHttpRouter checks kind == DecisionKind.COGNITIVE.value ("cognitive")
-    and then delegates to CognitiveRouter with both task_data and execute_result.
+    This signals that the Coordinator has detected high entropy or complexity (OCPS),
+    and is delegating the task to the Intelligence Plane (Cognitive Service) 
+    for decomposition, planning, or deep analysis.
     
-    CognitiveRouter extracts proto_plan from:
-      - prior_result["payload"]["result"]["proto_plan"] (primary)
-      - prior_result["payload"]["metadata"]["proto_plan"] (fallback)
-      - task_data["proto_plan"] (fallback)
-    
-    The result field should contain {"proto_plan": <proto_plan_dict>} to seed
-    the cognitive planner with Coordinator's initial analysis.
+    Refactored for V2:
+    - Removed 'agent_id': Routing target is the Cognitive Service, not an Agent.
+    - 'result' expected to contain seed data like {'proto_plan': ...}
     
     Args:
-        agent_id: Agent ID for cognitive processing (e.g., "planner")
-        task_type: Actual task type being processed (e.g., "ping", "general_query", "execute",
-                   "fact_search", "unknown_task", etc.). Should NOT be routing metadata like
-                   "planner" or "fast" - those are routing decisions, not task types.
-        result: Result payload containing proto_plan and other hints
-                Expected shape: {"proto_plan": {...}, ...}
-        confidence_score: Optional confidence score
-        **metadata: Additional metadata (decision, surprise, etc.)
+        task_type: The semantic task type (e.g., "anomaly_triage", "complex_query").
+        result: Initial payload to seed the planner (e.g. PKG evaluation results).
+                Expected shape: {"proto_plan": {...}, "context": {...}}
+        confidence_score: Optional confidence in the decision to escalate.
+        **metadata: Context (OCPS drift scores, trace IDs, etc.).
     
     Returns:
-        TaskResult with kind=DecisionKind.COGNITIVE suitable for router escalation
+        TaskResult with kind=DecisionKind.COGNITIVE.
     """
-    cognitive = CognitiveResult(
-        agent_id=agent_id,
+    
+    # Construct the payload.
+    # We set internal routing fields to point to the Service Layer.
+    cognitive_payload = CognitiveResult(
+        # Sentinel ID: Signals this is a service-level request, not an actor-level task
+        agent_id="system_2_core", 
         task_type=task_type,
         result=result,
         confidence_score=confidence_score,
@@ -237,8 +244,11 @@ def create_cognitive_result(
     return TaskResult(
         kind=DecisionKind.COGNITIVE,
         success=True,
-        payload=cognitive,
-        metadata={"path": "cognitive_reasoning"}
+        payload=cognitive_payload,
+        metadata={
+            "path": "system_2_escalation",
+            "target": "cognitive_service"
+        }
     )
 
 

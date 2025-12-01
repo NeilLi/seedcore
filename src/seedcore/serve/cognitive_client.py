@@ -37,7 +37,7 @@ class CognitiveServiceClient(BaseServiceClient):
 
     This client uses TaskPayload as the unified schema, ensuring system-wide
     consistency across Router, Coordinator, Agents, and Cognitive Service.
-    
+
     The main method 'execute_async' accepts a TaskPayload (or compatible dict)
     and injects cognitive metadata into params.cognitive before sending to
     the server's /execute endpoint.
@@ -46,12 +46,12 @@ class CognitiveServiceClient(BaseServiceClient):
     # Translation map: Router Intent (TaskType) -> Cognitive Mode (CognitiveType)
     # This decouples the Routing Layer vocabulary from the Cognitive Layer vocabulary
     TASK_TO_COG_MAP = {
-        "general_query": "problem_solving",      # General queries usually require problem solving
-        "chat": "chat",                          # Direct map - chat tasks use CHAT cognitive type
-        "execute": "task_planning",              # Execution often implies planning/decomposition
-        "test_query": "capability_assessment",   # Test queries assess system capabilities
-        "fact_search": "fact_search",            # Direct map (exists in both)
-        "unknown_task": "failure_analysis",      # If unknown, analyze why
+        "general_query": "problem_solving",  # General queries usually require problem solving
+        "chat": "chat",  # Direct map - chat tasks use CHAT cognitive type
+        "execute": "task_planning",  # Execution often implies planning/decomposition
+        "test_query": "capability_assessment",  # Test queries assess system capabilities
+        "fact_search": "fact_search",  # Direct map (exists in both)
+        "unknown_task": "failure_analysis",  # If unknown, analyze why
         # Graph tasks map directly (no translation needed)
         "graph_embed": "graph_embed",
         "graph_rag_query": "graph_rag_query",
@@ -71,6 +71,7 @@ class CognitiveServiceClient(BaseServiceClient):
         if base_url is None:
             try:
                 from seedcore.utils.ray_utils import COG
+
                 base_url = COG  # already includes /cognitive
             except Exception:
                 base_url = "http://127.0.0.1:8000/cognitive"
@@ -107,19 +108,21 @@ class CognitiveServiceClient(BaseServiceClient):
         )
 
     @staticmethod
-    def _resolve_cog_type(task_type: Union[str, CognitiveType, TaskType]) -> CognitiveType:
+    def _resolve_cog_type(
+        task_type: Union[str, CognitiveType, TaskType],
+    ) -> CognitiveType:
         """
         Helper to safely convert a string/Enum to a CognitiveType enum.
-        
+
         Includes an adapter layer to map TaskTypes to CognitiveTypes, decoupling
         the Routing Layer vocabulary from the Cognitive Layer vocabulary.
-        
+
         Args:
             task_type: Can be a CognitiveType, TaskType, or string value
-            
+
         Returns:
             CognitiveType enum instance
-            
+
         Raises:
             ValueError: If the task_type cannot be resolved to a valid CognitiveType
             TypeError: If the task_type is an unsupported type
@@ -133,9 +136,9 @@ class CognitiveServiceClient(BaseServiceClient):
             raw_str = task_type.value
         else:
             raw_str = str(task_type)
-        
+
         normalized = raw_str.strip().lower()
-        
+
         if not normalized:
             raise ValueError("cog_type must not be empty")
 
@@ -158,10 +161,6 @@ class CognitiveServiceClient(BaseServiceClient):
                     f"Ensure it is mapped in TASK_TO_COG_MAP or exists in CognitiveType."
                 ) from exc
 
-    # ---------------------------
-    # The New, Unified Execute Method
-    # ---------------------------
-
     async def execute_async(
         self,
         *,
@@ -175,7 +174,7 @@ class CognitiveServiceClient(BaseServiceClient):
     ) -> Dict[str, Any]:
         """
         Unified cognitive interface using TaskPayload schema.
-        
+
         Ensures cognitive jobs consume exactly the same structured inputs
         as the router/agents/organs.
 
@@ -193,43 +192,63 @@ class CognitiveServiceClient(BaseServiceClient):
         """
         resolved_type = self._resolve_cog_type(cog_type)
 
-        # --- Normalize to TaskPayload ---
+        # ------------------------------------------------------------------
+        # 1. Normalize and Prepare Payload
+        # ------------------------------------------------------------------
         if isinstance(task, TaskPayload):
             payload = task
         else:
             # Use from_db factory to properly unpack params.routing into top-level fields
-            # This preserves priority, tool_calls, hints, and other routing info
-            # that might be stored in params.routing
             payload = TaskPayload.from_db(dict(task or {}))
 
-        # Ensure params exists and get a mutable copy
-        params = dict(payload.params or {})
-        
-        # Inject cognitive metadata under a structured namespace
+        # Get the current state as a dictionary for modification
+        payload_dict = payload.model_dump()
+
+        # Ensure params exists and get a mutable copy of the dictionary
+        params = dict(payload_dict.get("params", {}))
+
+        # ------------------------------------------------------------------
+        # 2. Inject Cognitive Metadata (params.cognitive)
+        # ------------------------------------------------------------------
         cognitive_section = dict(params.get("cognitive", {}))
 
-        cognitive_section.update({
-            "agent_id": agent_id,
-            "cog_type": resolved_type.value,
-            "decision_kind": decision_kind.value,
-        })
+        cognitive_section.update(
+            {
+                "agent_id": agent_id,
+                "cog_type": resolved_type.value,
+                "decision_kind": decision_kind.value,
+            }
+        )
 
         # Optional overrides
         if llm_provider_override:
-            cognitive_section["llm_provider_override"] = llm_provider_override.strip().lower()
+            cognitive_section["llm_provider_override"] = (
+                llm_provider_override.strip().lower()
+            )
         if llm_model_override:
             cognitive_section["llm_model_override"] = llm_model_override
 
         params["cognitive"] = cognitive_section
-        
-        # Create updated TaskPayload with modified params using model_copy()
-        # This ensures proper validation and routing info packing via to_db_params()
-        updated_payload = payload.model_copy(update={"params": params})
 
-        # Use model_dump() to get the properly serialized payload with routing info
-        payload_dict = updated_payload.model_dump()
+        # ------------------------------------------------------------------
+        # 3. Reconstruct Payload (Fixing model_copy absence)
+        # ------------------------------------------------------------------
+        # Start with the full dictionary state (including all top-level mirror fields)
+        updated_data = payload_dict
 
-        # Timeout resolution
+        # Overwrite the 'params' key with our newly modified dictionary
+        updated_data["params"] = params
+
+        # Instantiate a new TaskPayload object with the updated data.
+        # This ensures proper V2 validation and correct internal state.
+        updated_payload = TaskPayload(**updated_data)
+
+        # Use model_dump() on the new object to get the properly serialized payload
+        payload_dict_final = updated_payload.model_dump()
+
+        # ------------------------------------------------------------------
+        # 4. Execute Service Call
+        # ------------------------------------------------------------------
         effective_timeout = timeout if timeout is not None else self.timeout
 
         logger.debug(
@@ -239,9 +258,7 @@ class CognitiveServiceClient(BaseServiceClient):
 
         # Single unified endpoint
         return await self.post(
-            "/execute",
-            json=payload_dict,
-            timeout=effective_timeout
+            "/execute", json=payload_dict_final, timeout=effective_timeout
         )
 
     # ---------------------------
@@ -281,14 +298,14 @@ class CognitiveServiceClient(BaseServiceClient):
     ) -> Dict[str, Any]:
         """
         Synchronous wrapper for execute_async.
-        
+
         This method is safe to call from both sync and async code.
         """
-        
+
         # We need a new, clean event loop to run our async call.
         # Submitting `asyncio.run()` to a thread pool is the
         # safest way to do this from any context (sync or async).
-        
+
         async def _runner():
             return await self.execute_async(
                 agent_id=agent_id,
@@ -303,13 +320,13 @@ class CognitiveServiceClient(BaseServiceClient):
         try:
             # Check if we're *already* in a running event loop
             asyncio.get_running_loop()
-            
+
             # If so, we MUST run asyncio.run() in a new thread
             # to avoid 'cannot run nested event loops' error.
             future = _SYNC_EXECUTOR.submit(lambda: asyncio.run(_runner()))
             # Use the client's default timeout as a safety net
             return future.result(timeout=self.timeout + 5.0)
-            
+
         except RuntimeError:
             # No event loop is running. We are in a sync context.
             # It's safe to create a new event loop right here.

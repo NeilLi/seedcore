@@ -29,6 +29,8 @@ import uuid
 from functools import lru_cache
 from typing import Dict, Any, Optional, NamedTuple, Tuple, List, TYPE_CHECKING
 
+from numpy import random
+
 import ray  # pyright: ignore[reportMissingImports]
 
 from seedcore.logging_setup import ensure_serve_logger
@@ -64,6 +66,85 @@ class RouteEntry(NamedTuple):
     resolved_from: str
     instance_id: Optional[str] = None
     cached_at: float = 0.0
+
+
+class RouteCache:
+    """Thread-safe route cache with TTL and jitter."""
+
+    def __init__(self, ttl_s: float = 3.0, jitter_s: float = 0.5):
+        self.ttl_s = ttl_s
+        self.jitter_s = jitter_s
+        self._cache: Dict[Tuple[str, Optional[str]], Tuple[RouteEntry, float]] = {}
+        self._lock = asyncio.Lock()
+        self._inflight: Dict[Tuple[str, Optional[str]], asyncio.Future] = {}
+
+    def _expired(self, expires_at: float) -> bool:
+        return time.monotonic() > expires_at
+
+    def _expires_at(self) -> float:
+        return time.monotonic() + self.ttl_s + random.uniform(0, self.jitter_s)
+
+    def get(self, key: Tuple[str, Optional[str]]) -> Optional[RouteEntry]:
+        """Get cached route entry if not expired."""
+        v = self._cache.get(key)
+        if not v:
+            return None
+        entry, expires_at = v
+        if self._expired(expires_at):
+            self._cache.pop(key, None)
+            return None
+        return entry
+
+    def set(self, key: Tuple[str, Optional[str]], entry: RouteEntry) -> None:
+        """Set cached route entry with TTL."""
+        self._cache[key] = (entry, self._expires_at())
+
+    async def singleflight(self, key: Tuple[str, Optional[str]]):
+        """Ensure only one resolve for a given key at a time (prevents dogpiles).
+
+        Yields a tuple (future, is_leader). Exactly one caller per key will
+        have is_leader=True and is responsible for computing the result and
+        completing the future. All others should await the future result.
+        """
+        async with self._lock:
+            fut = self._inflight.get(key)
+            is_leader = False
+            if fut is None:
+                fut = asyncio.get_event_loop().create_future()
+                self._inflight[key] = fut
+                is_leader = True
+        try:
+            yield fut, is_leader
+        finally:
+            # Only the leader clears the inflight map entry after completion
+            if is_leader:
+                async with self._lock:
+                    self._inflight.pop(key, None)
+
+    def clear(self):
+        """Clear all cached entries."""
+        self._cache.clear()
+
+    def stats(self) -> Dict[str, Any]:
+        """Get cache statistics for observability."""
+        now = time.monotonic()
+        active_entries = 0
+        expired_entries = 0
+
+        for entry, expires_at in self._cache.values():
+            if now > expires_at:
+                expired_entries += 1
+            else:
+                active_entries += 1
+
+        return {
+            "active_entries": active_entries,
+            "expired_entries": expired_entries,
+            "total_entries": len(self._cache),
+            "inflight_requests": len(self._inflight),
+            "ttl_s": self.ttl_s,
+            "jitter_s": self.jitter_s,
+        }
 
 
 class RoutingDirectory:
@@ -149,6 +230,10 @@ class RoutingDirectory:
             5.0  # seconds between log messages per logical_id
         )
 
+        # Instantiate the cache locally
+        # 3.0s TTL is a safe baseline for stable routing policies
+        self.route_cache = RouteCache(ttl_s=3.0, jitter_s=0.5)
+
     @staticmethod
     def _normalize(x: Optional[str]) -> Optional[str]:
         """Normalize string for consistent matching."""
@@ -217,13 +302,13 @@ class RoutingDirectory:
     def set_rule(self, task_type: str, logical_id: str, domain: Optional[str] = None):
         """
         Set a static routing rule (Configuration Phase).
-        
+
         Used by Stage 3 (Domain) and Stage 5 (Task-Type) of the resolver.
         Note: logical_id must be a local Organ ID, not an upstream Dispatcher.
         """
         tt = self._normalize(task_type)
         dm = self._normalize(domain)
-        
+
         if tt is None:
             return
 
@@ -248,7 +333,7 @@ class RoutingDirectory:
         """Remove a static routing rule."""
         tt = self._normalize(task_type)
         dm = self._normalize(domain)
-        
+
         if tt is None:
             return
 
@@ -664,60 +749,98 @@ class RoutingDirectory:
         tt = self._normalize(task_type)
         dm = self._normalize(domain)
 
-        # Ensure input_meta is usable
-        # In V2, input_meta is the dictionary returned by extract_router_inputs
-        input_meta = input_meta or {}
+        # ----------------------------------------
+        # 1. Define Cache Key (Based on minimum inputs needed for lookup)
+        # ----------------------------------------
+        cache_key = (
+            input_meta.get("required_specialization"),
+            input_meta.get("specialization"),
+            tt,
+            dm,  # Include domain for domain-specific rules
+        )
 
-        # ----------------------------------------
-        # Stage 0 — High-Stakes Override
-        # ----------------------------------------
-        # Logic: If high-stakes, force to a safe/audit organ (if configured)
+        # 2. Check Cache (FAST PATH - Cache Hit)
+        cached_entry = self.route_cache.get(cache_key)
+        if cached_entry:
+            return cached_entry.organ_id, "cache_hit"  # Returns instantly
+
+        # 3. Cache Miss: Run complex logic using singleflight lock
+        async with self.route_cache.singleflight(cache_key) as (fut, is_leader):
+            if is_leader:
+                # 4. LEADER: Perform the expensive lookup (Stages 0 - 6)
+                final_organ_id, final_reason = await self._run_full_resolve_logic(
+                    tt, dm, preferred_logical_id, input_meta
+                )
+
+                # 5. Store Result and Complete Future
+                if final_organ_id:
+                    entry = RouteEntry(organ_id=final_organ_id, reason=final_reason)
+                    self.route_cache.set(cache_key, entry)
+                    fut.set_result(entry)
+                    return final_organ_id, final_reason
+                else:
+                    # Handle failure/fallback before caching
+                    fallback_id = getattr(self, "default_organ_id", "utility_organ")
+                    entry = RouteEntry(organ_id=fallback_id, reason="fallback")
+                    self.route_cache.set(cache_key, entry)
+                    fut.set_result(entry)
+                    return fallback_id, "fallback"
+
+            else:
+                # 6. FOLLOWER: Await the leader's result
+                entry = await fut
+                return entry.organ_id, "cache_wait"
+
+    # --- Full Resolve Logic Helper ---
+    async def _run_full_resolve_logic(
+        self,
+        tt: str,
+        dm: Optional[str],
+        preferred_id: Optional[str],
+        input_meta: Dict[str, Any],
+    ) -> Tuple[Optional[str], str]:
+        """
+        Executes the comprehensive, multi-stage routing lookup when the cache misses.
+        This function contains the core business logic of the Organism Router.
+        """
+
+        # --- Stage 0 — High-Stakes Override ---
+        # Logic: If high-stakes, force to a safe/audit organ (if configured).
         if input_meta.get("is_high_stakes"):
             override_id = self.rules_by_task.get("high_stakes_organ")
+            # We assume the destination is valid and let downstream handle failure.
             if override_id:
-                # We don't check _get_active_instance every time for speed;
-                # we assume router config is valid or let downstream handle failure.
                 return override_id, "high-stakes"
 
-        # ----------------------------------------
-        # Stage 1 — Preferred Organ (Explicit Hint)
-        # ----------------------------------------
+        # --- Stage 1 — Preferred Organ (Explicit Hint) ---
         # Logic: Coordinator or Caller explicitly asked for this Organ ID.
-        if preferred_logical_id:
+        if preferred_id:
             # Simple existence check (optional, but good for safety)
-            if preferred_logical_id in self.organ_handles:
-                return preferred_logical_id, "preferred"
+            if preferred_id in self.organ_handles:
+                return preferred_id, "preferred"
 
-        # ----------------------------------------
-        # Stage 2 — Required Specialization (HARD - V2)
-        # ----------------------------------------
-        # Logic: TaskPayload said "Must be done by a GuestEmpathy agent".
-        # We assume one of our organs hosts this specialization.
+        # --- Stage 2 — Required Specialization (HARD V2 Constraint) ---
+        # Logic: TaskPayload said "Must be done by X agent."
         required_spec = input_meta.get("required_specialization")
         if required_spec:
-            # Use the direct map we built in OrganismCore
+            # Use the direct specialization map (organ_specs)
             lid = self._find_organ_by_spec(required_spec.lower())
             if lid:
                 return lid, "required-specialization"
             else:
+                # Note: We warn and fall through, allowing softer rules to match.
                 logger.warning(
                     f"[Router] Required spec '{required_spec}' not found in any local organ."
                 )
-                # We do NOT fallback here if it's a hard constraint?
-                # Actually, strictly speaking we should fail, but for robustness we fall through.
 
-        # ----------------------------------------
-        # Stage 3 — Domain Rule (task_type + domain)
-        # ----------------------------------------
-        # Logic: "All hospitality.guest tasks go to GuestCareOrgan"
+        # --- Stage 3 — Domain Rule (task_type + domain) ---
+        # Logic: "All hospitality.guest tasks go to GuestCareOrgan" (Highly specific config).
         if dm:
             lid = self.rules_by_domain.get((tt, dm))
             if lid:
                 return lid, "domain"
 
-        # ----------------------------------------
-        # Stage 4 — Specialization Hint (SOFT - V2)
-        # ----------------------------------------
+        # --- Stage 4 — Specialization Hint (SOFT V2 Hint) ---
         # Logic: "Preferably done by Generalist, but okay if not."
         soft_spec = input_meta.get("specialization")
         if soft_spec:
@@ -725,20 +848,14 @@ class RoutingDirectory:
             if lid:
                 return lid, "specialization-hint"
 
-        # ----------------------------------------
-        # Stage 5 — Task-Type Rule (Config Map)
-        # ----------------------------------------
-        # Logic: "All 'graph_embed' tasks go to MemoryOrgan"
-        # This replaces your old hardcoded Stage 7.
-        # You should load these mappings from YAML into self.rules_by_task.
+        # --- Stage 5 — Task-Type Rule (Config Map) ---
+        # Logic: "All 'graph' tasks go to MemoryOrgan" (General config default).
         lid = self.rules_by_task.get(tt)
         if lid:
             return lid, "task-type-rule"
 
-        # ----------------------------------------
-        # Stage 6 — Candidate Group Selection (Load Balancing)
-        # ----------------------------------------
-        # Logic: If multiple organs handle "query" tasks, pick the least loaded.
+        # --- Stage 6 — Candidate Group Selection (Load Balancing) ---
+        # Logic: Pick the least loaded/best-skilled organ from a pool of candidates (e.g., all QUERY handlers).
         candidates = self.logical_groups.get(tt, [])
         if candidates:
             selected = await self._pick_best_candidate(
@@ -748,13 +865,12 @@ class RoutingDirectory:
             if selected:
                 return selected, "candidate-selection"
 
-        # ----------------------------------------
-        # Stage 7 — Fallback
-        # ----------------------------------------
-        # Default to the "Brain" of the organism.
+        # --- Stage 7 — Hard Fallback ---
+        # Default to the primary utility/system services organ.
         fallback_id = getattr(self, "default_organ_id", "utility_organ")
         return fallback_id, "fallback"
 
+    # --- Route Only Helper ---
     async def route_only(
         self,
         payload: Any,  # TaskPayload or dict
@@ -1050,4 +1166,3 @@ class RoutingDirectory:
             "instance_cache_size": len(self._instance_cache),
             "lru_cache_info": self._cached_route_key.cache_info()._asdict(),
         }
-

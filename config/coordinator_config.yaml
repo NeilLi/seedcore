@@ -1,0 +1,20 @@
+# coordinator_config.yaml
+seedcore:
+  coordinator:
+    # System 2 Logic (Entropy/Surprise)
+    surprise_logic:
+      tau_fast: 0.35          # Fast path confidence threshold
+      tau_plan: 0.60          # Planning/Deep path threshold
+      tau_fast_exit: 0.38     # Hysteresis exit (Optional, defaults to tau_fast + 0.03)
+      tau_plan_exit: 0.57     # Hysteresis exit (Optional, defaults to tau_plan - 0.03)
+
+    # OCPS (Drift Detection)
+    ocps_cusum:
+      baseline_drift: 0.1
+      min_change: 0.2
+      threshold: 2.5
+      sigma_noise: 0.15
+
+    # General Service Settings
+    timeouts:
+      serve_call_s: 2

@@ -14,9 +14,12 @@ but delegates HOW (Cognitive) and ACTION (Organism).
 import asyncio
 import json
 import os
+from pathlib import Path
 import uuid
 from enum import Enum
 from typing import Any, Dict, Union
+
+import yaml  # pyright: ignore[reportMissingModuleSource]
 
 import redis  # pyright: ignore[reportMissingImports]
 from fastapi import FastAPI, Request  # pyright: ignore[reportMissingImports]
@@ -37,16 +40,14 @@ from ..coordinator.models import AnomalyTriageRequest, AnomalyTriageResponse, Tu
 from ..coordinator.core.policies import (
     compute_drift_score, 
     SurpriseComputer,
-    OCPSValve
 )
+from ..coordinator.core.ocps_valve import NeuralCUSUMValve
 from ..coordinator.core.execute import (
     route_and_execute as core_route_and_execute,
     RouteConfig,
     ExecutionConfig
 )
 from ..coordinator.core.routing import (
-    RouteCache,
-    resolve_route_cached_async,
     static_route_fallback,
 )
 from ..coordinator.utils import (
@@ -62,7 +63,6 @@ from ..coordinator.dao import TaskOutboxDAO, TaskProtoPlanDAO, TaskRouterTelemet
 from ..graph.task_metadata_repository import TaskMetadataRepository
 
 # Predicates (Policy)
-from ..predicates import PredicateRouter, load_predicates
 from ..predicates.safe_storage import SafeStorage
 
 # Operations
@@ -81,7 +81,7 @@ setup_logging(app_name="seedcore.coordinator_service.driver")
 logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
 
 # --- Constants ---
-PREDICATES_CONFIG_PATH = os.getenv("PREDICATES_CONFIG_PATH", "/app/config/predicates.yaml")
+COORDINATOR_CONFIG_PATH = os.getenv("COORDINATOR_CONFIG_PATH", "/app/config/coordinator_config.yaml")
 FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 router_prefix = ""
@@ -122,32 +122,68 @@ class Coordinator:
         self.outbox_dao = TaskOutboxDAO()
         self.proto_plan_dao = TaskProtoPlanDAO()
         
-        # 3. Policy Engines (System 2: Anomaly Detection)
-        tau_fast = float(os.getenv("SURPRISE_TAU_FAST", "0.35"))
-        tau_plan = float(os.getenv("SURPRISE_TAU_PLAN", "0.60"))
-        self.surprise_computer = SurpriseComputer(tau_fast=tau_fast, tau_plan=tau_plan)
-        self.ocps = OCPSValve() # Neural accumulator
+        # ------------------------------------------------------------------
+        # 1. CENTRAL CONFIG LOADING
+        # ------------------------------------------------------------------
+        # Load once, use everywhere.
+        full_cfg = self._load_cfg()
+        coord_cfg = full_cfg.get("coordinator", {})
         
-        # Predicates (Static Rules)
-        try:
-            self.predicate_config = load_predicates(PREDICATES_CONFIG_PATH)
-            self.predicate_router = PredicateRouter(self.predicate_config)
-        except Exception:
-            from ..predicates.loader import create_default_config
-            self.predicate_config = create_default_config()
-            self.predicate_router = PredicateRouter(self.predicate_config)
+        # Extract sub-sections with safety defaults
+        surprise_cfg = coord_cfg.get("surprise_logic", {})
+        cusum_cfg = coord_cfg.get("ocps_cusum", {})
+        timeout_cfg = coord_cfg.get("timeouts", {})
 
-        # Routing Cache
-        self.route_cache = RouteCache(ttl_s=3.0)
-        self._last_seen_epoch = None
+        # ------------------------------------------------------------------
+        # 2. SURPRISE COMPUTER (System 2 Thresholds)
+        # ------------------------------------------------------------------
+        # Priority: Config YAML -> Env Var -> Default
+        tau_fast = float(surprise_cfg.get("tau_fast") or os.getenv("SURPRISE_TAU_FAST", "0.35"))
+        tau_plan = float(surprise_cfg.get("tau_plan") or os.getenv("SURPRISE_TAU_PLAN", "0.60"))
+        
+        self.surprise_computer = SurpriseComputer(tau_fast=tau_fast, tau_plan=tau_plan)
 
-        # Hysteresis Thresholds
-        self.tau_fast_exit = float(os.getenv("SURPRISE_TAU_FAST_EXIT", str(tau_fast + 0.03)))
-        self.tau_plan_exit = float(os.getenv("SURPRISE_TAU_PLAN_EXIT", str(tau_plan - 0.03)))
-        self.ood_to01 = None # Configurable mapping function
-        self.timeout_s = int(os.getenv("SERVE_CALL_TIMEOUT_S", "2"))
+        # Hysteresis Thresholds (Derived or Configured)
+        # Allows explicit override in YAML, otherwise calculates standard hysteresis
+        self.tau_fast_exit = float(
+            surprise_cfg.get("tau_fast_exit") 
+            or os.getenv("SURPRISE_TAU_FAST_EXIT") 
+            or (tau_fast + 0.03)
+        )
+        self.tau_plan_exit = float(
+            surprise_cfg.get("tau_plan_exit") 
+            or os.getenv("SURPRISE_TAU_PLAN_EXIT") 
+            or (tau_plan - 0.03)
+        )
 
-        # 4. Storage (Redis)
+        # ------------------------------------------------------------------
+        # 3. OCPS VALVE (Drift Detection)
+        # ------------------------------------------------------------------
+        if not cusum_cfg:
+            logger.warning("⚠️ OCPS config missing in YAML; using hardcoded defaults.")
+
+        self.ocps_valve = NeuralCUSUMValve(
+            expected_baseline=float(cusum_cfg.get("baseline_drift", 0.1)),
+            min_detectable_change=float(cusum_cfg.get("min_change", 0.2)),
+            threshold=float(cusum_cfg.get("threshold", 2.5)),
+            sigma=float(cusum_cfg.get("sigma_noise", 0.15))
+        )
+
+        # ------------------------------------------------------------------
+        # 4. SERVICE PARAMETERS
+        # ------------------------------------------------------------------
+        self.timeout_s = int(
+            timeout_cfg.get("serve_call_s") 
+            or os.getenv("SERVE_CALL_TIMEOUT_S", "2")
+        )
+        self.ood_to01 = None 
+
+        logger.info(
+            f"🧠 Coordinator Init: Tau[F={tau_fast}/P={tau_plan}], "
+            f"OCPS[Th={self.ocps_valve.h}], Timeout={self.timeout_s}s"
+        )
+
+        # 5. Storage (Redis)
         try:
             redis_client = redis.from_url(REDIS_URL, decode_responses=True)
             self.storage = SafeStorage(redis_client)
@@ -170,6 +206,7 @@ class Coordinator:
         self._register_routes()
         logger.info("✅ Coordinator (Tier-0) initialized")
 
+
     def _register_routes(self) -> None:
         """Unified Route Registration."""
         # Business Endpoint
@@ -185,10 +222,6 @@ class Coordinator:
         self.app.add_api_route("/health", self.health, methods=["GET"], include_in_schema=False)
         self.app.add_api_route("/readyz", self.ready, methods=["GET"], include_in_schema=False)
         self.app.add_api_route(f"{router_prefix}/metrics", self.get_metrics, methods=["GET"], include_in_schema=False)
-        
-        # Predicate Admin
-        self.app.add_api_route(f"{router_prefix}/predicates/status", self.get_predicate_status, methods=["GET"], include_in_schema=False)
-        self.app.add_api_route(f"{router_prefix}/predicates/reload", self.reload_predicates, methods=["POST"], include_in_schema=False)
 
     async def __call__(self, request: Request):
         """Direct ASGI call for Ray Serve."""
@@ -246,6 +279,45 @@ class Coordinator:
         except Exception as e:
             logger.exception(f"Coordinator Route/Execute Failed: {e}")
             return create_error_result(str(e), "coordinator_fatal").model_dump()
+
+
+
+    # Assuming logger is defined and available in the CoordinatorService scope
+    # Assuming COORDINATOR_CONFIG_PATH is globally defined/imported
+
+    def _load_cfg(self) -> Dict[str, Any]:
+        """
+        Loads configuration settings from the YAML file specified by
+        COORDINATOR_CONFIG_PATH environment variable.
+        
+        Returns:
+            The loaded configuration dictionary.
+        """
+        config_path = COORDINATOR_CONFIG_PATH
+        path = Path(config_path)
+
+        if not path.exists():
+            logger.critical(
+                f"❌ [CoordinatorService] CRITICAL: Configuration file not found at {path}. "
+                "Using empty configuration."
+            )
+            return {}
+            
+        try:
+            with open(path, "r") as f:
+                # Use safe_load to prevent arbitrary code execution from malicious YAML
+                cfg = yaml.safe_load(f)
+                logger.info(f"✅ [CoordinatorService] Loaded configuration from {path}.")
+                
+                # The configuration is nested under 'seedcore'. Return the relevant dictionary.
+                return cfg.get("seedcore", {})
+                
+        except Exception as e:
+            logger.error(
+                f"❌ [CoordinatorService] Failed to parse configuration file at {path}: {e}", 
+                exc_info=True
+            )
+            return {}
 
     # ------------------------------------------------------------------
     # 2. Adapters & Config Builders
@@ -397,34 +469,14 @@ class Coordinator:
             organism_execute=organism_execute,
             graph_task_repo=self.graph_task_repo,
             ml_client=self.ml_client,
-            predicate_router=self.predicate_router,
             metrics=self.metrics,
             cid=cid,
-            resolve_route_cached=self._resolve_route_cached_adapter,
-            static_route_fallback=static_route_fallback,
-            normalize_type=normalize_string,
             normalize_domain=normalize_domain,
             cognitive_client=self.cognitive_client,
             persist_proto_plan_func=persist_proto_plan_func,
             record_router_telemetry_func=record_router_telemetry_func,
             resolve_session_factory_func=resolve_session_factory,
             fast_path_latency_slo_ms=self.fast_path_latency_slo_ms
-        )
-
-    async def _resolve_route_cached_adapter(self, task_type, domain, preferred, cid_local):
-        return await resolve_route_cached_async(
-            task_type=task_type,
-            domain=domain,
-            route_cache=self.route_cache,
-            normalize_func=normalize_string,
-            static_route_fallback_func=static_route_fallback,
-            organism_client=self.organism_client,
-            routing_remote_enabled=self.routing_remote_enabled,
-            routing_remote_types=self.routing_remote_types,
-            preferred_logical_id=preferred,
-            cid=cid_local,
-            metrics=self.metrics,
-            last_seen_epoch=self._last_seen_epoch,
         )
 
     # ------------------------------------------------------------------
@@ -620,10 +672,6 @@ class Coordinator:
     async def get_metrics(self): return self.metrics.get_metrics()
     async def get_predicate_status(self): return {"rules": len(self.predicate_config.routing)}
     async def get_predicate_config(self): return self.predicate_config.dict()
-    async def reload_predicates(self):
-        self.predicate_config = load_predicates(PREDICATES_CONFIG_PATH)
-        self.predicate_router = PredicateRouter(self.predicate_config)
-        return {"status": "reloaded"}
 
     def _normalize(self, x): return normalize_string(x)
     def _norm_domain(self, x): return normalize_domain(x)

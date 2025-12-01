@@ -141,39 +141,6 @@ class SurpriseComputer:
             },
         }
 
-
-class OCPSValve:
-    """
-    Neural-CUSUM accumulator for drift detection.
-    """
-
-    def __init__(self, nu: float = 0.1, h: float = None):
-        self.nu = nu
-        self.h = _env_float("OCPS_DRIFT_THRESHOLD", 0.5) if h is None else h
-        self.S = 0.0
-        self.fast_hits = 0
-        self.esc_hits = 0
-
-    def update(self, drift: float) -> bool:
-        """Update CUSUM statistic. Resets ONLY on escalation."""
-        drift = max(0.0, min(1.0, drift))
-        self.S = max(0.0, self.S + drift - self.nu)
-        esc = self.S > self.h
-
-        if esc:
-            self.esc_hits += 1
-            self.S = 0.0  # Reset on escalation
-        else:
-            self.fast_hits += 1
-
-        return esc
-
-    @property
-    def p_fast(self) -> float:
-        tot = self.fast_hits + self.esc_hits
-        return (self.fast_hits / tot) if tot else 1.0
-
-
 def decide_route_with_hysteresis(
     surprise_score: float,
     last_decision: Optional[str] = None,
