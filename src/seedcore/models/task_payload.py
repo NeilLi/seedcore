@@ -382,3 +382,52 @@ class TaskPayload(BaseModel):
             # Legacy
             conversation_history=params.get("conversation_history"),
         )
+    
+    # ====================================================================
+    #                       UTILITIES
+    # ====================================================================
+
+    def model_copy(self, *, update: Optional[Dict[str, Any]] = None, deep: bool = False) -> "TaskPayload":
+        """
+        Create a new instance of the TaskPayload with modified data.
+        
+        This mimics Pydantic V2's model_copy but ensures that our custom
+        params packing/unpacking logic is respected.
+        
+        Args:
+            update: A dictionary of fields to change in the new copy.
+            deep: If True, performs a deep copy of the original data first.
+        """
+        # 1. Extract current state
+        # We prefer model_dump() if available (Pydantic V2), else dict() (V1)
+        if hasattr(self, "model_dump"):
+            data = self.model_dump()
+        elif hasattr(self, "dict"):
+            data = self.dict()
+        else:
+            # Fallback for standard classes or weird edge cases
+            data = self.__dict__.copy()
+
+        # 2. Handle Deep Copy
+        # Critical for 'params' which contains nested dicts/lists
+        if deep:
+            import copy
+            data = copy.deepcopy(data)
+
+        # 3. Apply Updates
+        if update:
+            # Special handling for 'params': 
+            # If the user updates a top-level field (e.g. 'interaction_mode'),
+            # we rely on the constructor/validators to sync it back to 'params'.
+            # If the user updates 'params' directly, it overrides everything.
+            data.update(update)
+
+        # 4. Re-instantiate
+        # This triggers __init__ and validation, ensuring that if you updated
+        # 'params' directly, the mirrors (like self.interaction_mode) get
+        # re-populated correctly via the constructor logic (if you used from_db logic)
+        # OR if you updated top-level fields, to_db_params will pack them later.
+        
+        # Note: Since Pydantic models are usually instantiated via keywords,
+        # we pass the data dict as kwargs.
+        return self.__class__(**data)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Union
 import numpy as np
 import time
 
@@ -150,6 +150,70 @@ class AgentSnapshot:
         vec = np.asarray([float(self.p.get(k, 0.0)) for k in ROLE_KEYS], dtype=np.float32)
         vec = _project_row_to_simplex(vec)
         self.p = {k: float(vec[i]) for i, k in enumerate(ROLE_KEYS)}
+
+
+@dataclass
+class Response:
+    """
+    Standardized API response envelope for StateService.
+    Consistent with the 'success/metrics/meta' pattern used in the Hot Path.
+    """
+    success: bool
+    timestamp: float = field(default_factory=time.time)
+    
+    # Primary Data Slots
+    metrics: Optional[Dict[str, Any]] = None  # Distilled metrics (Hot Path)
+    meta: Optional[Dict[str, Any]] = None     # Processing metadata (latency, status)
+    error: Optional[str] = None               # Error message if success=False
+    
+    # Optional: Full State Payload (Cold Path / Debugging)
+    payload: Optional[Union[Dict[str, Any], UnifiedState]] = None
+
+    @classmethod
+    def ok(
+        cls, 
+        metrics: Optional[Dict[str, Any]] = None, 
+        meta: Optional[Dict[str, Any]] = None, 
+        payload: Any = None
+    ) -> "Response":
+        """Factory for successful responses."""
+        return cls(success=True, metrics=metrics, meta=meta, payload=payload)
+
+    @classmethod
+    def fail(
+        cls, 
+        error: str, 
+        meta: Optional[Dict[str, Any]] = None
+    ) -> "Response":
+        """Factory for failed responses."""
+        return cls(success=False, error=error, meta=meta)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Serializes the response to a JSON-ready dictionary.
+        Handles nested UnifiedState objects automatically.
+        """
+        out: Dict[str, Any] = {
+            "success": self.success,
+            "timestamp": self.timestamp,
+        }
+        
+        if self.metrics is not None:
+            out["metrics"] = self.metrics
+            
+        if self.meta is not None:
+            out["meta"] = self.meta
+            
+        if self.error is not None:
+            out["error"] = self.error
+            
+        if self.payload is not None:
+            if isinstance(self.payload, UnifiedState):
+                out["payload"] = self.payload.to_payload()
+            else:
+                out["payload"] = self.payload
+                
+        return out
 
 
 @dataclass
@@ -373,3 +437,67 @@ class UnifiedState:
         memd = payload.get("memory") or {}
         memory = MemoryVector(ma=memd.get("ma", {}), mw=memd.get("mw", {}), mlt=memd.get("mlt", {}), mfb=memd.get("mfb", {}))
         return cls(agents=agents, organs=organs, system=system, memory=memory)
+    
+@dataclass
+class Response:  # noqa: F811
+    """
+    Standardized API response envelope for StateService.
+    Consistent with the 'success/metrics/meta' pattern used in the Hot Path.
+    """
+    success: bool
+    timestamp: float = field(default_factory=time.time)
+    
+    # Primary Data Slots
+    metrics: Optional[Dict[str, Any]] = None  # Distilled metrics (Hot Path)
+    meta: Optional[Dict[str, Any]] = None     # Processing metadata (latency, status)
+    error: Optional[str] = None               # Error message if success=False
+    
+    # Optional: Full State Payload (Cold Path / Debugging)
+    payload: Optional[Union[Dict[str, Any], Any]] = None
+
+    @classmethod
+    def ok(
+        cls, 
+        metrics: Optional[Dict[str, Any]] = None, 
+        meta: Optional[Dict[str, Any]] = None, 
+        payload: Any = None
+    ) -> "Response":
+        """Factory for successful responses."""
+        return cls(success=True, metrics=metrics, meta=meta, payload=payload)
+
+    @classmethod
+    def fail(
+        cls, 
+        error: str, 
+        meta: Optional[Dict[str, Any]] = None
+    ) -> "Response":
+        """Factory for failed responses."""
+        return cls(success=False, error=error, meta=meta)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Serializes the response to a JSON-ready dictionary.
+        Handles nested UnifiedState objects automatically if present.
+        """
+        out: Dict[str, Any] = {
+            "success": self.success,
+            "timestamp": self.timestamp,
+        }
+        
+        if self.metrics is not None:
+            out["metrics"] = self.metrics
+            
+        if self.meta is not None:
+            out["meta"] = self.meta
+            
+        if self.error is not None:
+            out["error"] = self.error
+            
+        if self.payload is not None:
+            # Handle UnifiedState specifically, otherwise assume dict/JSON-safe
+            if hasattr(self.payload, "to_payload"):
+                out["payload"] = self.payload.to_payload()
+            else:
+                out["payload"] = self.payload
+                
+        return out

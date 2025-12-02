@@ -12,17 +12,15 @@ The energy model provides:
 """
 
 from .calculator import (
-    calculate_pair_energy,
-    calculate_entropy_energy,
-    calculate_reg_energy,
-    calculate_mem_energy,
-    calculate_total_energy,
+    compute_energy_unified,
+    SystemParameters,
+    EnergyResult,
+    EnergyWeights,
 )
-from .ledger import EnergyLedger
+from .ledger import EnergyTerms, EnergyLedger
 
 from .optimizer import (
     calculate_agent_suitability_score,
-    select_best_agent,
     rank_agents_by_suitability,
     get_ideal_role_for_task,
     estimate_task_complexity
@@ -30,16 +28,17 @@ from .optimizer import (
 
 __all__ = [
     # Calculator functions
-    'calculate_pair_energy',
-    'calculate_entropy_energy', 
-    'calculate_reg_energy',
-    'calculate_mem_energy',
-    'calculate_total_energy',
+    'compute_energy_unified',
+    'SystemParameters',
+    'EnergyResult',
+    'EnergyWeights',
+
+    # Ledger functions
+    'EnergyTerms',
     'EnergyLedger',
     
     # Optimizer functions
     'calculate_agent_suitability_score',
-    'select_best_agent',
     'rank_agents_by_suitability',
     'get_ideal_role_for_task',
     'estimate_task_complexity'

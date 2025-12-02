@@ -18,7 +18,7 @@ except ImportError:
     from typing_extensions import NotRequired  # pyright: ignore[reportMissingModuleSource]
 
 from seedcore.models.cognitive import DecisionKind
-from ._features import compute_all_features
+from .features import compute_all_features
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +228,3 @@ def _compute_fallback_drift_score(task: Dict[str, Any]) -> float:
 
     return max(0.0, min(1.0, score))
 
-
-# --- Removed: get_current_energy_state (Moved to Organism/Energy Service) ---
-# --- Removed: create_ocps_valve (Use OCPSValve directly) ---
-# --- Removed: generate_proto_subtasks (Redundant with PKG) ---

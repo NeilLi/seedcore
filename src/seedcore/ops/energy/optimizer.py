@@ -1,316 +1,145 @@
 """
-Energy-Aware Agent Selection Optimizer
+Energy-Aware Agent Selection Optimizer (V2).
 
-This module implements the energy gradient proxy system for intelligent agent selection
-based on the Cognitive Organism Architecture (COA) specifications.
+This module implements the logic to select the optimal agent for a task
+by minimizing the predicted system energy ΔE.
+
+It operates on 'AgentSnapshot' data (from StateService), NOT live Ray actors.
+This ensures O(1) decision making without network fan-out.
 """
 
-import ray  # pyright: ignore[reportMissingImports]
-from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
-if TYPE_CHECKING:  # Avoid circular imports at runtime
-    from seedcore.agents.persistent_agent import PersistentAgent  # pragma: no cover
-else:
-    PersistentAgent = Any  # type: ignore
-import numpy as np
+from typing import Dict, List, Any, Union
 import logging
 
+from seedcore.models.task_payload import TaskPayload
+
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-logger.propagate = True
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
-    logger.addHandler(handler)
-class GlobalClippedOpt:
-    """Shared global-clipped optimizer for meta-parameters.
 
-    Keeps updates within a global norm and projects to a radius to preserve
-    non-expansiveness of the mapping, per Lemma 4.
-    """
-
-    def __init__(self, lr: float = 1e-3, clip_norm: float = 1.0, radius: float = 0.99):
-        self.lr = lr
-        self.clip_norm = clip_norm
-        self.radius = radius
-
-    def step(self, params: Dict[str, np.ndarray], grads: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-        # 1) global clip
-        g2 = 0.0
-        for g in grads.values():
-            g2 += float(np.linalg.norm(g) ** 2)
-        scale = min(1.0, self.clip_norm / (np.sqrt(g2) + 1e-8))
-        # 2) update
-        for k in params:
-            params[k] = params[k] - self.lr * scale * grads[k]
-        # 3) projection to radius
-        for k in params:
-            n = float(np.linalg.norm(params[k]))
-            if n > self.radius and n > 1e-8:
-                params[k] = params[k] * (self.radius / n)
-        return params
-
-
-
-def score_agent(agent: PersistentAgent, task: Dict[str, Any]) -> float:
-    """
-    Scores an agent for a task based on the energy gradient proxy.
-    score = w_pair * ΔE_pair + w_hyper * ΔE_hyper - w_explore * ΔH
-    
-    Args:
-        agent: The agent to evaluate
-        task: Task information and requirements
-    
-    Returns:
-        Suitability score (lower is better)
-    """
-    try:
-        # Get energy proxy from agent
-        proxy = ray.get(agent.get_energy_proxy.remote())
-        
-        # Expected change in pairwise energy (simplified)
-        # Lower is better, so high capability leads to a better score
-        epair_delta = 1.0 - proxy['capability']
-        
-        # Expected gain in entropy (higher is better)
-        # This encourages exploration by favoring agents that increase diversity
-        entropy_gain = proxy['entropy_contribution']
-        
-        # Memory utilization penalty
-        mem_penalty = proxy['mem_util'] * 0.3
-        
-        # State complexity penalty
-        state_penalty = proxy['state_norm'] * 0.01
-        
-        # Weights for each term (could be dynamic)
-        w_pair = 1.0
-        w_explore = 0.2
-        w_mem = 0.3
-        w_state = 0.01
-        
-        # Final score to be minimized
-        score = (w_pair * epair_delta) - (w_explore * entropy_gain) + (w_mem * mem_penalty) + (w_state * state_penalty)
-        
-        return score
-        
-    except Exception as e:
-        logger.error(f"Error scoring agent: {e}")
-        return float('inf')  # Worst possible score
-
-
-def select_best_agent(agent_pool: List[PersistentAgent], task: Dict[str, Any]) -> Tuple[Optional[PersistentAgent], float]:
-    """
-    Selects the best agent from a pool by finding the one with the
-    minimum energy score (arg-min).
-    
-    Args:
-        agent_pool: List of available agents
-        task: Task information and requirements
-    
-    Returns:
-        Tuple of (best_agent, predicted_delta_e)
-    """
-    if not agent_pool:
-        return None, float('inf')
-    
-    # Filter for agents that meet the basic requirements for the task
-    available_agents = []
-    for agent in agent_pool:
-        try:
-            # Check if agent is available (basic requirement)
-            if hasattr(agent, 'is_available') and callable(getattr(agent, 'is_available')):
-                is_available = ray.get(agent.is_available.remote())
-            else:
-                is_available = True  # Assume available if method doesn't exist
-            
-            # Check capability requirement if specified
-            required_capability = task.get('required_capability', 0.0)
-            if required_capability > 0:
-                proxy = ray.get(agent.get_energy_proxy.remote())
-                has_capability = proxy['capability'] >= required_capability
-            else:
-                has_capability = True
-            
-            if is_available and has_capability:
-                available_agents.append(agent)
-                
-        except Exception as e:
-            logger.warning(f"Error checking agent availability: {e}")
-            continue
-
-    if not available_agents:
-        logger.warning("No available agents meet task requirements")
-        return None, float('inf')
-
-    # Score all available agents
-    agent_scores = []
-    for agent in available_agents:
-        try:
-            score = score_agent(agent, task)
-            agent_scores.append((agent, score))
-        except Exception as e:
-            logger.error(f"Error scoring agent: {e}")
-            continue
-    
-    if not agent_scores:
-        logger.error("No agents could be scored")
-        return None, float('inf')
-    
-    # Find the agent with minimum score
-    best_agent, min_score = min(agent_scores, key=lambda x: x[1])
-    
-    # Predicted ΔE is approximated by the score
-    predicted_delta_e = min_score
-    
-    return best_agent, predicted_delta_e
-
+# ----------------------------------------------------------------------
+# 1. CORE SCORING LOGIC (Stateless)
+# ----------------------------------------------------------------------
 
 def calculate_agent_suitability_score(
-    agent: PersistentAgent, 
-    task_data: Dict[str, Any],
-    weights: Dict[str, float]
+    agent_data: Dict[str, Any], 
+    task_dict: Dict[str, Any]
 ) -> float:
     """
-    Legacy function for backward compatibility.
-    Calculates an agent's suitability for a task based on an energy gradient proxy.
-    """
-    
-    try:
-        # Get energy proxy from agent
-        proxy = ray.get(agent.get_energy_proxy.remote())
-        
-        # 1. Capability Score: Higher capability is better (lower energy cost)
-        capability = proxy['capability']
-        
-        # 2. Role Match: Better role match for the task is better
-        task_type = task_data.get("type", "general")
-        ideal_role = get_ideal_role_for_task(task_type)
-        heartbeat = ray.get(agent.get_heartbeat.remote())
-        role_match = heartbeat["role_probs"].get(ideal_role, 0.0)
-        
-        # 3. Current Energy State: Consider agent's current energy contribution
-        energy_state = ray.get(agent.get_energy_state.remote())
-        current_energy = energy_state.get("total", 0.0)
-        
-        # 4. Task Complexity Estimation
-        task_complexity = estimate_task_complexity(task_data)
-        
-        # 5. Memory Utilization: Consider current memory pressure
-        mem_util = proxy['mem_util']
-        
-        # Calculate the suitability score
-        # Lower score = better suitability (will minimize energy increase)
-        capability_penalty = (1.0 - capability) * task_complexity
-        role_mismatch_penalty = (1.0 - role_match) * 0.5
-        energy_penalty = current_energy * 0.1  # Small penalty for high current energy
-        memory_penalty = mem_util * 0.3  # Penalty for high memory utilization
-        
-        score = (capability_penalty + 
-                 role_mismatch_penalty + 
-                 energy_penalty + 
-                 memory_penalty)
-        
-        agent_id = ray.get(agent.get_id.remote())
-        logger.debug(f"Agent {agent_id} suitability score: {score:.4f} "
-                    f"(capability: {capability:.3f}, role_match: {role_match:.3f}, "
-                    f"energy: {current_energy:.3f}, mem_util: {mem_util:.3f})")
-        
-        return score
-        
-    except Exception as e:
-        logger.error(f"Error calculating suitability score: {e}")
-        return float('inf')
-
-
-def get_ideal_role_for_task(task_type: str) -> str:
-    """
-    Maps task types to ideal agent roles.
+    Calculate an energy-proxy score for an agent based on its snapshot state.
+    Lower Score = Better Fit (Lower System Energy).
     
     Args:
-        task_type: Type of task to be performed
-    
-    Returns:
-        Ideal role for the task
+        agent_data: Dict representation of AgentSnapshot (h, p, c, mem_util).
+        task_dict: TaskPayload dictionary.
     """
-    role_mapping = {
-        "optimization": "S",      # Specialist for optimization tasks
-        "exploration": "E",       # Explorer for exploration tasks
-        "analysis": "S",          # Specialist for analysis
-        "discovery": "E",         # Explorer for discovery
-        "execution": "S",         # Specialist for execution
-        "research": "E",          # Explorer for research
-        "general": "E",           # Default to explorer for general tasks
-    }
+    # 1. Extract Agent Metrics
+    capability = float(agent_data.get("c", 0.0))
+    mem_util = float(agent_data.get("mem_util", 0.0))
     
-    return role_mapping.get(task_type, "E")
+    # 2. Extract Task Requirements
+    params = task_dict.get("params", {})
+    routing = params.get("routing", {})
+    required_spec = routing.get("required_specialization")
+    required_skills = routing.get("skills", {})
+    
+    # 3. Term 1: Capability Match (Primary)
+    # Higher capability reduces energy cost of execution.
+    # Score penalty: (1.0 - capability)
+    cap_penalty = (1.0 - capability) * 1.0
 
+    # 4. Term 2: Specialization Match (Hard Constraint Proxy)
+    # If the agent is the wrong type, massive penalty.
+    agent_spec = str(agent_data.get("specialization", "unknown")).lower()
+    spec_penalty = 0.0
+    if required_spec and agent_spec != required_spec.lower():
+        spec_penalty = 5.0 # Huge penalty for mismatch
 
-def estimate_task_complexity(task_data: Dict[str, Any]) -> float:
-    """
-    Estimates the complexity of a task based on its characteristics.
-    
-    Args:
-        task_data: Task information
-    
-    Returns:
-        Complexity score (0.0 to 1.0)
-    """
-    complexity = 0.5  # Base complexity
-    
-    # Adjust based on task type
-    task_type = task_data.get("type", "general")
-    if task_type in ["optimization", "analysis"]:
-        complexity += 0.3
-    elif task_type in ["exploration", "discovery"]:
-        complexity += 0.2
-    
-    # Adjust based on task size/scope
-    task_size = task_data.get("size", "medium")
-    if task_size == "large":
-        complexity += 0.2
-    elif task_size == "small":
-        complexity -= 0.1
-    
-    # Adjust based on urgency
-    if task_data.get("urgent", False):
-        complexity += 0.1
-    
-    # Clamp to [0.1, 1.0]
-    return max(0.1, min(1.0, complexity))
+    # 5. Term 3: Skill Match (Soft Constraint)
+    # We want the agent whose skills overlap most with requirements.
+    skill_penalty = 0.0
+    if required_skills:
+        agent_skills = agent_data.get("learned_skills", {})
+        match_score = 0.0
+        total_req = 0.0
+        for skill, level in required_skills.items():
+            agent_level = agent_skills.get(skill, 0.0)
+            match_score += min(agent_level, level)
+            total_req += level
+        
+        if total_req > 0:
+            # 0.0 = Perfect match, 1.0 = No skills match
+            skill_penalty = 1.0 - (match_score / total_req)
+
+    # 6. Term 4: Load / Memory Pressure
+    # High memory util means higher risk of OOM or latency (Regularization term).
+    load_penalty = mem_util * 0.3
+
+    # 7. Total Score (Proxy for ΔE)
+    total_score = cap_penalty + spec_penalty + skill_penalty + load_penalty
+    return total_score
 
 
 def rank_agents_by_suitability(
-    agents: List[PersistentAgent],
-    task_data: Dict[str, Any],
-    weights: Optional[Dict[str, float]] = None
-) -> List[tuple[PersistentAgent, float]]:
+    suitability_scores: Dict[str, float]
+) -> List[str]:
     """
-    Ranks agents by their suitability for a task.
-    
-    Args:
-        agents: List of available agents
-        task_data: Task information and requirements
-        weights: Energy weights for scoring
-    
-    Returns:
-        List of (agent, score) tuples, sorted by score (ascending)
+    Sort agent IDs by score (ascending = best first).
     """
-    if not agents:
-        return []
+    # Sort dict items by value
+    sorted_items = sorted(suitability_scores.items(), key=lambda item: item[1])
+    return [agent_id for agent_id, score in sorted_items]
+
+
+# ----------------------------------------------------------------------
+# 2. HELPER UTILITIES
+# ----------------------------------------------------------------------
+
+def estimate_task_complexity(task_payload: Union[Dict[str, Any], TaskPayload]) -> float:
+    """
+    Estimates task complexity (0.0 - 1.0) based on type and description length.
+    Used to scale the regularization penalty.
+    """
+    if hasattr(task_payload, "model_dump"):
+        t = task_payload.model_dump()
+    else:
+        t = task_payload
+
+    base = 0.5
     
-    if weights is None:
-        weights = {}
+    # Type modifiers
+    tt = str(t.get("type", "")).lower()
+    if "plan" in tt or "reason" in tt or "graph" in tt:
+        base += 0.3
+    elif "chat" in tt:
+        base -= 0.1
+        
+    # Text length modifier
+    desc = str(t.get("description", ""))
+    if len(desc) > 500:
+        base += 0.2
+        
+    return max(0.1, min(1.0, base))
+
+
+def get_ideal_role_for_task(
+    agent_data: Dict[str, Any], 
+    task_dict: Dict[str, Any]
+) -> str:
+    """
+    Predicts the ideal role (E/S/O) an agent should adopt for this task.
+    This helps the 'Flywheel' adjust agent role probabilities.
+    """
+    tt = str(task_dict.get("type", "")).lower()
     
-    agent_scores = []
-    
-    for agent in agents:
-        try:
-            score = calculate_agent_suitability_score(agent, task_data, weights)
-            agent_scores.append((agent, score))
-        except Exception as e:
-            logger.error(f"Error evaluating agent {agent.get_id()}: {e}")
-            continue
-    
-    # Sort by score (ascending - lower is better)
-    agent_scores.sort(key=lambda x: x[1])
-    
-    return agent_scores 
+    # Simple Heuristic Map
+    if "exec" in tt or "action" in tt or "robot" in tt:
+        return "E" # Execution
+    elif "plan" in tt or "reason" in tt or "chat" in tt:
+        return "S" # Synthesis/Social
+    elif "sensor" in tt or "monitor" in tt or "graph" in tt:
+        return "O" # Observation
+        
+    # Fallback: Stick to agent's current dominant role
+    p = agent_data.get("p", {})
+    if p:
+        return max(p, key=p.get)
+    return "S"

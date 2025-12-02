@@ -13,8 +13,8 @@ import logging
 import uuid
 from typing import Optional, Dict, Any
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
@@ -45,16 +45,16 @@ class AgentGraphRepository:
         # If missing, create one implicitly
         new_epoch = str(uuid.uuid4())
         await session.execute(
-            text("SELECT set_current_epoch(:epoch)"),
-            {"epoch": uuid.UUID(new_epoch)}
+            text("SELECT set_current_epoch(:epoch)"), {"epoch": uuid.UUID(new_epoch)}
         )
         return new_epoch
 
-    async def set_current_cluster_epoch(self, session: AsyncSession, epoch: str) -> None:
+    async def set_current_cluster_epoch(
+        self, session: AsyncSession, epoch: str
+    ) -> None:
         """Rotate/set the current epoch."""
         await session.execute(
-            text("SELECT set_current_epoch(:epoch)"),
-            {"epoch": uuid.UUID(str(epoch))}
+            text("SELECT set_current_epoch(:epoch)"), {"epoch": uuid.UUID(str(epoch))}
         )
 
     async def register_instance(
@@ -74,6 +74,7 @@ class AgentGraphRepository:
         # Convert string UUIDs to UUID objects for PostgreSQL
         # and convert IP address string for INET type
         import uuid as uuid_module
+
         q = """
         SELECT register_instance(
             :instance_id, :logical_id, :cluster_epoch,
@@ -98,17 +99,19 @@ class AgentGraphRepository:
     ) -> None:
         """Set the status for a runtime instance (starting/alive/draining/dead)."""
         import uuid as uuid_module
+
         await session.execute(
             text("SELECT set_instance_status(:instance_id, :status)"),
-            {"instance_id": uuid_module.UUID(instance_id), "status": status}
+            {"instance_id": uuid_module.UUID(instance_id), "status": status},
         )
 
     async def beat(self, session: AsyncSession, instance_id: str) -> None:
         """Update last_heartbeat for the given instance."""
         import uuid as uuid_module
+
         await session.execute(
             text("SELECT beat(:instance_id)"),
-            {"instance_id": uuid_module.UUID(instance_id)}
+            {"instance_id": uuid_module.UUID(instance_id)},
         )
 
     async def expire_stale_instances(
@@ -117,7 +120,7 @@ class AgentGraphRepository:
         """Mark stale instances as dead; returns number of rows affected."""
         result = await session.execute(
             text("SELECT expire_stale_instances(:timeout)"),
-            {"timeout": timeout_seconds}
+            {"timeout": timeout_seconds},
         )
         return result.scalar_one_or_none() or 0
 
@@ -153,8 +156,7 @@ class AgentGraphRepository:
             {"organ_id": organ_id, "kind": kind, "props": props},
         )
         await session.execute(
-            text("SELECT ensure_organ_node(:organ_id)"),
-            {"organ_id": organ_id}
+            text("SELECT ensure_organ_node(:organ_id)"), {"organ_id": organ_id}
         )
 
     async def ensure_agent(
@@ -184,8 +186,7 @@ class AgentGraphRepository:
             {"agent_id": agent_id, "display_name": display_name, "props": props},
         )
         await session.execute(
-            text("SELECT ensure_agent_node(:agent_id)"),
-            {"agent_id": agent_id}
+            text("SELECT ensure_agent_node(:agent_id)"), {"agent_id": agent_id}
         )
 
     async def link_agent_to_organ(
@@ -200,11 +201,15 @@ class AgentGraphRepository:
         """
         # Ensure endpoints exist first (idempotent)
         await session.execute(
-            text("INSERT INTO agent_registry (agent_id) VALUES (:agent_id) ON CONFLICT DO NOTHING"),
+            text(
+                "INSERT INTO agent_registry (agent_id) VALUES (:agent_id) ON CONFLICT DO NOTHING"
+            ),
             {"agent_id": agent_id},
         )
         await session.execute(
-            text("INSERT INTO organ_registry (organ_id) VALUES (:organ_id) ON CONFLICT DO NOTHING"),
+            text(
+                "INSERT INTO organ_registry (organ_id) VALUES (:organ_id) ON CONFLICT DO NOTHING"
+            ),
             {"organ_id": organ_id},
         )
         # Create the relationship
@@ -279,12 +284,16 @@ class AgentGraphRepository:
         """
         # Ensure organ exists
         await session.execute(
-            text("INSERT INTO organ_registry (organ_id) VALUES (:organ_id) ON CONFLICT DO NOTHING"),
+            text(
+                "INSERT INTO organ_registry (organ_id) VALUES (:organ_id) ON CONFLICT DO NOTHING"
+            ),
             {"organ_id": organ_id},
         )
         # Ensure skill exists
         await session.execute(
-            text("INSERT INTO skill (skill_name) VALUES (:skill_name) ON CONFLICT DO NOTHING"),
+            text(
+                "INSERT INTO skill (skill_name) VALUES (:skill_name) ON CONFLICT DO NOTHING"
+            ),
             {"skill_name": skill_name},
         )
         # Create the relationship
@@ -309,12 +318,16 @@ class AgentGraphRepository:
         """
         # Ensure organ exists
         await session.execute(
-            text("INSERT INTO organ_registry (organ_id) VALUES (:organ_id) ON CONFLICT DO NOTHING"),
+            text(
+                "INSERT INTO organ_registry (organ_id) VALUES (:organ_id) ON CONFLICT DO NOTHING"
+            ),
             {"organ_id": organ_id},
         )
         # Ensure service exists
         await session.execute(
-            text("INSERT INTO service (service_name) VALUES (:service_name) ON CONFLICT DO NOTHING"),
+            text(
+                "INSERT INTO service (service_name) VALUES (:service_name) ON CONFLICT DO NOTHING"
+            ),
             {"service_name": service_name},
         )
         # Create the relationship
@@ -326,3 +339,182 @@ class AgentGraphRepository:
             """),
             {"organ_id": organ_id, "service_name": service_name},
         )
+
+    async def upsert_agent_collab_bond(
+        self,
+        session: AsyncSession,
+        *,
+        src_agent: str,
+        dst_agent: str,
+        weight: float = 0.5,
+        bond_kind: str = "functional",
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Create or update a collaboration bond between two agents.
+
+        Symmetry is enforced at the overlay level: we store both (src,dst) and (dst,src)
+        so that queries remain simple. The energy layer can still treat this as undirected.
+        """
+        meta = meta or {}
+
+        # Ensure both endpoints exist
+        await session.execute(
+            text(
+                "INSERT INTO agent_registry (agent_id) VALUES (:aid) "
+                "ON CONFLICT DO NOTHING"
+            ),
+            {"aid": src_agent},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO agent_registry (agent_id) VALUES (:aid) "
+                "ON CONFLICT DO NOTHING"
+            ),
+            {"aid": dst_agent},
+        )
+
+        q = """
+        INSERT INTO agent_collab_agent (src_agent, dst_agent, weight, bond_kind, meta)
+        VALUES (:src, :dst, :weight, :bond_kind, COALESCE(:meta, '{}'::jsonb))
+        ON CONFLICT (src_agent, dst_agent) DO UPDATE
+        SET weight    = EXCLUDED.weight,
+            bond_kind = EXCLUDED.bond_kind,
+            meta      = COALESCE(EXCLUDED.meta, agent_collab_agent.meta)
+        """
+
+        params = {
+            "src": src_agent,
+            "dst": dst_agent,
+            "weight": float(weight),
+            "bond_kind": bond_kind,
+            "meta": meta,
+        }
+
+        # Upsert both directions to keep the table effectively undirected
+        await session.execute(text(q), params)
+        await session.execute(
+            text(q),
+            {
+                **params,
+                "src": dst_agent,
+                "dst": src_agent,
+            },
+        )
+
+    async def get_agent_collab_neighbors(
+        self,
+        session: AsyncSession,
+        *,
+        agent_id: str,
+        min_weight: float = 0.0,
+        bond_kinds: Optional[list[str]] = None,
+        limit: Optional[int] = None,
+    ) -> list[dict[str, Any]]:
+        """Return neighbors of an agent in the virtual overlay.
+
+        Each result is:
+        {
+          "agent_id": <neighbor_id>,
+          "weight": <float>,
+          "bond_kind": <str>,
+          "meta": <dict>
+        }
+        """
+        filters = ["c.src_agent = :agent_id", "c.weight >= :min_weight"]
+        params: Dict[str, Any] = {
+            "agent_id": agent_id,
+            "min_weight": float(min_weight),
+        }
+
+        if bond_kinds:
+            filters.append("c.bond_kind = ANY(:bond_kinds)")
+            params["bond_kinds"] = bond_kinds
+
+        where_clause = " AND ".join(filters)
+        limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
+
+        q = f"""
+        SELECT c.dst_agent, c.weight, c.bond_kind, c.meta
+          FROM agent_collab_agent c
+         WHERE {where_clause}
+         ORDER BY c.weight DESC
+         {limit_clause}
+        """
+
+        result = await session.execute(text(q), params)
+        rows = result.fetchall()
+        return [
+            {
+                "agent_id": r.dst_agent,
+                "weight": float(r.weight),
+                "bond_kind": r.bond_kind,
+                "meta": r.meta or {},
+            }
+            for r in rows
+        ]
+
+    async def load_agent_overlay_matrix(
+        self,
+        session: AsyncSession,
+        *,
+        organ_ids: Optional[list[str]] = None,
+        min_weight: float = 0.0,
+    ) -> tuple[list[str], "list[list[float]]"]:
+        """Build a dense adjacency/weight matrix W for agents in the given organ scope.
+
+        Returns:
+            (agent_ids, W) where:
+              - agent_ids[i] is the agent at index i
+              - W[i][j] is the weight from agent i to agent j
+        """
+        # 1) Determine the agent set (scope)
+        if organ_ids:
+            q_agents = """
+            SELECT DISTINCT amo.agent_id
+              FROM agent_member_of_organ amo
+              JOIN organ_registry o ON o.organ_id = amo.organ_id
+             WHERE amo.organ_id = ANY(:organ_ids)
+             ORDER BY amo.agent_id
+            """
+            result = await session.execute(text(q_agents), {"organ_ids": organ_ids})
+        else:
+            q_agents = """
+            SELECT DISTINCT a.agent_id
+              FROM agent_registry a
+             ORDER BY a.agent_id
+            """
+            result = await session.execute(text(q_agents))
+
+        agent_ids = [row.agent_id for row in result.fetchall()]
+        n = len(agent_ids)
+        if n == 0:
+            return [], []
+
+        # index mapping
+        index_of = {aid: idx for idx, aid in enumerate(agent_ids)}
+
+        # 2) Initialize W with a small self-loop
+        W = [[0.1 if i == j else 0.0 for j in range(n)] for i in range(n)]
+
+        # 3) Load bonds within this scope
+        q_bonds = """
+        SELECT src_agent, dst_agent, weight
+          FROM agent_collab_agent
+         WHERE weight >= :min_weight
+           AND src_agent = ANY(:agent_ids)
+           AND dst_agent = ANY(:agent_ids)
+        """
+        result = await session.execute(
+            text(q_bonds), {"min_weight": float(min_weight), "agent_ids": agent_ids}
+        )
+        for row in result.fetchall():
+            i = index_of[row.src_agent]
+            j = index_of[row.dst_agent]
+            if i == j:
+                continue
+            w = float(row.weight)
+            # symmetric assignment, in case DB lacks both directions
+            W[i][j] = w
+            W[j][i] = w
+
+        return agent_ids, W

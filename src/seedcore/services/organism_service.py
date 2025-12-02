@@ -6,6 +6,7 @@ services/organism_service.py
 This module defines the FastAPI app, pydantic models, and the Serve deployment
 class that exposes the organism manager over HTTP via Ray Serve.
 """
+from __future__ import annotations
 
 import os
 import time

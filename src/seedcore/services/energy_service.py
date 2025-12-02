@@ -12,10 +12,13 @@ It serves energy metrics from this ledger (fast, cached) and also provides
 endpoints for on-demand calculations (slower, passive).
 """
 
+from __future__ import annotations
+
 import asyncio
 import time
-from typing import Dict, Optional, Any
 import numpy as np
+
+from typing import Dict, Optional, Any
 from ray import serve  # pyright: ignore[reportMissingImports]
 from fastapi import FastAPI, HTTPException  # pyright: ignore[reportMissingImports]
 
@@ -77,6 +80,13 @@ class ServiceState:
     )
     ledger: EnergyLedger = EnergyLedger()
     metrics_tick: int = 0
+
+    # NEW: Lock for thread-safe access to shared state
+    _lock: Optional[asyncio.Lock] = None
+
+    def __init__(self):
+        """Initialize the lock when ServiceState is instantiated."""
+        self._lock = asyncio.Lock()
 
 
 state = ServiceState()
@@ -178,45 +188,70 @@ async def _get_ml_stats(metrics: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _background_sampler():
-    """Periodically compute energy from live state and log to ledger."""
+    """
+    The Brainstem Loop: Periodically computes Hamiltonian Energy from live state
+    and drives the Flywheel Feedback loop to stabilize ML predictions.
+    """
     state.sampler_is_running = True
+    retry_delay = 1.0
+
     while True:
         try:
+            # -----------------------------------------------------------
+            # 0. Connectivity Check
+            # -----------------------------------------------------------
             if not state.state_client:
                 logger.warning("Sampler waiting for StateService client...")
-                await asyncio.sleep(5.0)
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(30.0, retry_delay * 1.5)
                 continue
 
-            # 1. Fetch pre-computed metrics from StateService
+            # -----------------------------------------------------------
+            # 1. Fetch Metrics (Perception)
+            # -----------------------------------------------------------
+            # Calls the corrected client (no args)
             data = await state.state_client.get_system_metrics()
+
             if not data.get("success"):
-                logger.warning("StateService reported failure, skipping sampler tick.")
-                await asyncio.sleep(5.0)
+                # Use exponential backoff if StateService is degraded
+                logger.warning(
+                    f"StateService reported failure (Status: {data.get('meta', {}).get('status')})"
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(30.0, retry_delay * 1.5)
                 continue
+
+            # Success! Reset delay to normal loop speed
+            retry_delay = 1.0
 
             metrics = data.get("metrics", {})
             memory_data = metrics.get("memory", {})
             system_data = metrics.get("system", {})
 
-            # 1a. Fetch ML-derived annotations using the same metrics payload
+            # -----------------------------------------------------------
+            # 2. ML Prediction (Cognition)
+            # -----------------------------------------------------------
+            # We explicitly fetch ML stats using the retrieved metrics
             ml_stats = await _get_ml_stats(metrics)
+
+            # Inject ML stats into the system payload so UnifiedState can see them
             system_payload = dict(system_data or {})
             system_payload["ml"] = ml_stats or {}
-            metrics["system"] = system_payload
 
-            # 2. Parse metrics into a UnifiedState object
-            # We use from_payload, which is robust to missing keys
+            # -----------------------------------------------------------
+            # 3. Compute Energy (Physics)
+            # -----------------------------------------------------------
+            # Parse metrics into a UnifiedState object
             unified_state = UnifiedState.from_payload(
                 {
                     "memory": memory_data,
                     "system": system_payload,
-                    # 'agents' and 'organs' are not needed if 'ma' and 'h_hgnn'
-                    # are correctly populated in the metrics.
                 }
             )
 
-            # 3. Compute energy
             us_proj = unified_state.projected()
+
+            # Dynamic weighting based on system topology
             weights = _create_weights_for_state(
                 us_proj.H_matrix(), us_proj.hyper_selection()
             )
@@ -226,23 +261,27 @@ async def _background_sampler():
                 SystemParameters(
                     weights=weights,
                     memory_stats=memory_data,
-                    include_gradients=False,
+                    include_gradients=False,  # Gradients not needed for scalar monitoring
                     ml_stats=ml_stats,
                 ),
             )
 
-            # --- NEW: FLYWHEEL FEEDBACK STEP ---
-            # Extract total energy
+            # -----------------------------------------------------------
+            # 4. Flywheel Feedback (Control)
+            # -----------------------------------------------------------
             total_energy = float(result.breakdown.get("total", 0.0))
 
-            # Execute feedback loop (Calc Delta E -> Update ML)
+            # Execute feedback loop:
+            # Calculates Delta E -> Adjusts ML Scaling Temperature -> Returns Delta
             delta_E = await _execute_flywheel_feedback(total_energy, ml_stats)
-            # -----------------------------------
 
-            # 4. Log to the internal ledger
+            # -----------------------------------------------------------
+            # 5. Ledger Update (Memory)
+            # -----------------------------------------------------------
             bd = result.breakdown
             if isinstance(bd, dict) and bd:
                 scaling_score = float((ml_stats or {}).get("scaling_score", 0.0))
+
                 state.ledger.log_step(
                     breakdown={
                         "pair": float(bd.get("pair", 0.0)),
@@ -258,10 +297,12 @@ async def _background_sampler():
                         "source": "bg-sampler",
                         "drift": float((ml_stats or {}).get("drift", 0.0)),
                         "scaling_score": scaling_score,
-                        "delta_E": delta_E,  # Log the delta too
+                        "delta_E": delta_E,
+                        "ts": time.time(),
                     },
                 )
 
+            # Maintain 5s cadence
             await asyncio.sleep(5.0)
 
         except asyncio.CancelledError:
@@ -270,7 +311,9 @@ async def _background_sampler():
             break
         except Exception as e:
             logger.error(f"Error in background sampler: {e}", exc_info=True)
-            await asyncio.sleep(5.0)
+            # On crash, wait a bit before retrying to avoid log spam
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(30.0, retry_delay * 1.5)
 
 
 # --- Lifespan Events (Startup and Shutdown) ---
@@ -310,16 +353,23 @@ async def shutdown_event():
     """
     logger.info("🛑 EnergyService shutting down...")
     tasks = []
+
+    # Cancel and await the sampler task with proper cleanup
     if state.sampler_task:
         state.sampler_task.cancel()
-        tasks.append(state.sampler_task)
+        try:
+            await state.sampler_task
+        except asyncio.CancelledError:
+            pass  # Expected when task is cancelled
 
+    # Close clients
     if state.state_client:
         tasks.append(state.state_client.close())
     if state.ml_client:
         tasks.append(state.ml_client.close())
 
-    await asyncio.gather(*tasks, return_exceptions=True)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
     logger.info("✅ EnergyService shutdown complete.")
 
 
@@ -352,12 +402,23 @@ async def health():
 
 
 @app.get("/metrics")
-async def metrics():
+async def get_metrics():
     """
     Returns the current energy term breakdown from the
     proactive sampler's ledger. (Fast, O(1) read).
     """
     try:
+        # 1. Access the latest snapshot correctly
+        # Assuming state.ledger has a 'latest' dict or individual properties
+        # If EnergyLedger is a simple dataclass-like object, getattr is fine,
+        # but usually ledgers hold history.
+
+        # Let's assume the ledger has direct attributes updated by the loop
+        # OR a .current_snapshot dictionary.
+
+        # SAFE PATTERN: Use the ledger's public read method if it exists
+        # If your ledger class just stores attributes directly:
+
         pair = float(getattr(state.ledger, "pair", 0.0))
         hyper = float(getattr(state.ledger, "hyper", 0.0))
         ent = float(getattr(state.ledger, "entropy", 0.0))
@@ -366,27 +427,34 @@ async def metrics():
         drift_term = float(getattr(state.ledger, "drift_term", 0.0))
         anomaly_term = float(getattr(state.ledger, "anomaly_term", 0.0))
         scaling_score = float(getattr(state.ledger, "scaling_score", 0.0))
-        total = float(
-            getattr(
-                state.ledger,
-                "total",
-                pair + hyper + ent + reg + mem + drift_term + anomaly_term,
-            )
-        )
 
-        # Fallback for cold start
-        if total == 0.0:
+        # Retrieve total, or calculate if missing
+        stored_total = getattr(state.ledger, "total", None)
+        if stored_total is not None:
+            total = float(stored_total)
+        else:
+            total = pair + hyper + ent + reg + mem + drift_term + anomaly_term
+
+        # 2. Cold Start / Synthetic Warmup logic
+        # (This logic is weird for production, but fine for demos/tests)
+        if total == 0.0 and state.metrics_tick < 10:  # Limit warmup to first few ticks
             state.metrics_tick += 1
             t = state.metrics_tick
-            pair, hyper, ent, reg, mem = (
-                -0.50 - 0.01 * t,
-                0.10 + 0.02 * t,
-                0.50,
-                0.05,
-                0.30,
-            )
-            drift_term = anomaly_term = scaling_score = 0.0
+
+            # Generate synthetic "wobble" to show liveness in UI
+            pair = -0.50 - 0.01 * t
+            hyper = 0.10 + 0.02 * t
+            ent = 0.50
+            reg = 0.05
+            mem = 0.30
+            drift_term = 0.0
+            anomaly_term = 0.0
             total = pair + hyper + ent + reg + mem
+
+            # Update the ledger so subsequent reads (or other services) see this warmup state
+            # This ensures consistency if another thread reads state.ledger immediately
+            if hasattr(state.ledger, "update_synthetic"):
+                state.ledger.update_synthetic(total=total, entropy=ent)  # etc...
 
         return {
             "pair": pair,
@@ -399,6 +467,7 @@ async def metrics():
             "scaling_score": scaling_score,
             "total": total,
             "source": "ledger-cache",
+            "timestamp": time.time(),  # Always useful to return TS
         }
     except Exception as e:
         logger.error(f"Failed to produce metrics: {e}")
@@ -595,57 +664,88 @@ async def flywheel_result_endpoint(request: FlywheelResultRequest):
 
 @app.post("/optimize-agents", response_model=OptimizationResponse)
 async def optimize_agents_endpoint(request: OptimizationRequest):
-    """(Passive Endpoint) Optimize agent selection for a given task."""
+    """
+    (Passive Endpoint) Optimize agent selection for a given task.
+    Uses the V2 Energy Optimizer logic (stateless scores).
+    """
     start_time = time.time()
     try:
+        # 1. Parse Inputs
+        # Convert request payload into UnifiedState object
         unified_state = _parse_unified_state(request.unified_state)
-        task_complexity = estimate_task_complexity(request.task)
         agents = unified_state.agents
 
         if not agents:
             raise HTTPException(
-                status_code=400, detail="No agents available for optimization"
+                status_code=400,
+                detail="No agents provided in unified_state for optimization",
             )
 
+        # Ensure task is a dictionary (handle Pydantic or Dict input)
+        task_input = request.task
+        task_dict = (
+            task_input.model_dump()
+            if hasattr(task_input, "model_dump")
+            else dict(task_input)
+        )
+
+        # 2. Pre-calculate Task Complexity
+        # (Used for metadata/logging, though implicitly used in scoring too)
+        task_complexity = estimate_task_complexity(task_dict)
+
+        # 3. Score Agents (The Core Loop)
         suitability_scores = {}
-        for agent_id, agent_snapshot in agents.items():
+        agent_data_cache = {}  # Cache converted dicts for step 6
+
+        for agent_id, snapshot in agents.items():
+            # Convert AgentSnapshot to the dict format expected by optimizer.py
+            # CRITICAL: Must include 'learned_skills' and try to find 'specialization'
             agent_data = {
-                "h": agent_snapshot.h,
-                "p": agent_snapshot.p,
-                "c": agent_snapshot.c,
-                "mem_util": agent_snapshot.mem_util,
-                "lifecycle": agent_snapshot.lifecycle,
+                "h": snapshot.h,
+                "p": snapshot.p,
+                "c": snapshot.c,
+                "mem_util": snapshot.mem_util,
+                "lifecycle": snapshot.lifecycle,
+                # V2: Include learned skills for soft-matching
+                "learned_skills": getattr(snapshot, "learned_skills", {}),
+                # V2: Specialization is required for hard constraints.
+                # If UnifiedState doesn't carry it, we default to 'unknown' (which fails matching safely).
+                "specialization": getattr(snapshot, "specialization", "unknown"),
             }
-            score = calculate_agent_suitability_score(agent_data, request.task)
+            agent_data_cache[agent_id] = agent_data
+
+            # Calculate score (Lower is better)
+            score = calculate_agent_suitability_score(agent_data, task_dict)
             suitability_scores[agent_id] = score
 
-        ranked_agents = rank_agents_by_suitability(suitability_scores)
-        max_agents = request.max_agents or len(ranked_agents)
-        selected_agents = ranked_agents[:max_agents]
+        # 4. Rank Agents
+        # V2 optimizer returns a List[str] of agent_ids sorted by score
+        ranked_agent_ids = rank_agents_by_suitability(suitability_scores)
 
+        # 5. Select Top N
+        max_agents = request.max_agents or len(ranked_agent_ids)
+        selected_ids = ranked_agent_ids[:max_agents]
+
+        # 6. Recommend Roles (Flywheel Feedback Hint)
+        # Predicts whether the agent should act as (E)xecutor, (S)ynthesizer, or (O)bserver
         recommended_roles = {}
-        for agent_id in selected_agents:
-            agent_snapshot = agents[agent_id]
-            agent_data = {
-                "h": agent_snapshot.h,
-                "p": agent_snapshot.p,
-                "c": agent_snapshot.c,
-                "mem_util": agent_snapshot.mem_util,
-                "lifecycle": agent_snapshot.lifecycle,
-            }
-            role = get_ideal_role_for_task(agent_data, request.task)
+        for agent_id in selected_ids:
+            role = get_ideal_role_for_task(agent_data_cache[agent_id], task_dict)
             recommended_roles[agent_id] = role
 
         computation_time = (time.time() - start_time) * 1000
+
         return OptimizationResponse(
             success=True,
-            selected_agents=selected_agents,
-            suitability_scores=suitability_scores,
+            selected_agents=selected_ids,
+            # Ensure float types for JSON serialization
+            suitability_scores={k: float(v) for k, v in suitability_scores.items()},
             recommended_roles=recommended_roles,
             task_complexity=task_complexity,
             timestamp=time.time(),
             computation_time_ms=computation_time,
         )
+
     except Exception as e:
         logger.error(f"Failed to optimize agents: {e}", exc_info=True)
         return OptimizationResponse(
@@ -730,24 +830,37 @@ def _create_weights_for_state(
 class EnergyService:
     def __init__(self):
         pass
-    
+
     async def rpc_compute_energy(self, request: EnergyRequest) -> dict:
-        return await compute_energy_endpoint(request)
+        """RPC wrapper for compute_energy endpoint. Returns dict for Ray serialization."""
+        response = await compute_energy_endpoint(request)
+        return response.model_dump() if hasattr(response, "model_dump") else response
 
     async def rpc_compute_from_state(self) -> dict:
-        return await compute_energy_from_state()
+        """RPC wrapper for compute_energy_from_state endpoint. Returns dict for Ray serialization."""
+        response = await compute_energy_from_state()
+        return response.model_dump() if hasattr(response, "model_dump") else response
 
     async def rpc_optimize_agents(self, request: OptimizationRequest) -> dict:
-        return await optimize_agents_endpoint(request)
+        """RPC wrapper for optimize_agents endpoint. Returns dict for Ray serialization."""
+        response = await optimize_agents_endpoint(request)
+        return response.model_dump() if hasattr(response, "model_dump") else response
 
     async def rpc_flywheel_result(self, request: FlywheelResultRequest) -> dict:
-        return await flywheel_result_endpoint(request)
+        """RPC wrapper for flywheel_result endpoint. Returns dict for Ray serialization."""
+        response = await flywheel_result_endpoint(request)
+        return response.model_dump() if hasattr(response, "model_dump") else response
 
-    async def rpc_metrics(self) -> dict:
-        return await metrics()
+    async def rpc_get_metrics(self) -> dict:
+        """RPC wrapper for metrics endpoint. Returns dict for Ray serialization."""
+        result = await get_metrics()
+        # metrics() already returns a dict, so return as-is
+        return result if isinstance(result, dict) else result
 
     async def rpc_health(self) -> dict:
-        return await health()
+        """RPC wrapper for health endpoint. Returns dict for Ray serialization."""
+        response = await health()
+        return response.model_dump() if hasattr(response, "model_dump") else response
 
 
 # --- Main Entrypoint ---

@@ -8,7 +8,6 @@ Role:
 - Distills complex objects into 'UnifiedState' vectors.
 - Serves as the Single Source of Truth for Energy and ML services.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -20,10 +19,11 @@ from ray import serve  # pyright: ignore[reportMissingImports]
 from fastapi import FastAPI, HTTPException, Body  # pyright: ignore[reportMissingImports]
 
 # Import the proactive aggregators
+from seedcore.graph.agent_repository import AgentGraphRepository
 from seedcore.ops.state.agent_aggregator import AgentAggregator
 from seedcore.ops.state.memory_aggregator import MemoryAggregator
 from seedcore.ops.state.system_aggregator import SystemAggregator
-from ..models.state import SystemState, MemoryVector
+from ..models.state import Response, SystemState, MemoryVector
 
 # Import organism client helper
 from seedcore.serve.organism_client import get_organism_service_handle
@@ -91,8 +91,13 @@ async def startup_event():
         organism_router = get_organism_service_handle()
 
         # 1. Start Agent Aggregator (Fast poll for dynamics)
-        state.agent_aggregator = AgentAggregator(organism_router, poll_interval=2.0)
-        await state.agent_aggregator.start()
+        graph_repo = AgentGraphRepository()
+
+        state.agent_aggregator = AgentAggregator(
+            organism_router=organism_router,
+            graph_repo=graph_repo,           # ← inject repository here
+            poll_interval=2.0,
+        )
 
         # 2. Start Memory Aggregator (Slower poll for stability)
         state.memory_aggregator = MemoryAggregator(poll_interval=5.0)
@@ -155,25 +160,57 @@ async def health():
 
 
 @app.get("/system-metrics")
-async def get_system_metrics():
+async def get_system_metrics(response: Optional[Response] = None):
     """
     Returns the Distilled Unified State.
     Input for: EnergyService (to compute H) and MLService (to predict drift).
     Complexity: O(1) - Returns pre-computed cached data.
     """
+    start_ts = time.perf_counter()
+
+    # 1. Check Vital Aggregator
     if not state.agent_aggregator:
-        raise HTTPException(status_code=503, detail="Aggregators not ready")
+        raise HTTPException(status_code=503, detail="Agent Aggregator not initialized")
 
-    # 1. Gather data from aggregators
-    agent_metrics = await state.agent_aggregator.get_system_metrics()
-    mem_stats = await state.memory_aggregator.get_memory_stats()
-    e_patterns = await state.system_aggregator.get_E_patterns()
+    # 2. Parallel Fetch (Fail-Safe)
+    # We gather data concurrently. If Memory/System aggregators fail, 
+    # we continue in DEGRADED mode so the Coordinator/Energy services don't crash.
+    results = await asyncio.gather(
+        state.agent_aggregator.get_system_metrics(),
+        state.memory_aggregator.get_memory_stats(),
+        state.system_aggregator.get_E_patterns(),
+        state.agent_aggregator.get_last_update_time(),
+        state.memory_aggregator.get_last_update_time(),
+        return_exceptions=True
+    )
 
-    # 2. Construct Data Transfer Objects (DTOs)
+    # 3. Unpack Safely
+    # Agent Metrics are CRITICAL. If this failed, we must error out.
+    if isinstance(results[0], Exception) or not results[0]:
+        logger.error(f"Agent Aggregator failed: {results[0]}")
+        raise HTTPException(status_code=503, detail="Agent Aggregator unavailable")
+    
+    agent_metrics = results[0]
+    
+    # Memory/System are OPTIONAL (Degraded Mode).
+    mem_stats = results[1] if not isinstance(results[1], Exception) else {}
+    e_patterns = results[2] if not isinstance(results[2], Exception) else []
+    
+    ts_agent = results[3] if not isinstance(results[3], Exception) else 0.0
+    ts_memory = results[4] if not isinstance(results[4], Exception) else 0.0
 
-    # Unified Memory Vector: Combining Agent stats (ma) with Memory Manager stats (mw...)
+    # Determine Health Status
+    # Degraded if memory stats are missing (Coordinator can still route, but Energy calc will be approx)
+    is_degraded = isinstance(results[1], Exception) or not mem_stats
+    status_label = "degraded" if is_degraded else "healthy"
+
+    # 4. Construct Data Transfer Objects (DTOs)
+
+    # Unified Memory Vector
+    # CRITICAL V2: 'ma' (agent_metrics) includes 'specialization_distribution' 
+    # which the Coordinator's SignalEnricher needs for Capability Gap calculation.
     unified_memory = MemoryVector(
-        ma=agent_metrics,  # 'ma' comes from agent aggregator
+        ma=agent_metrics,  
         mw=mem_stats.get("mw", {}),
         mlt=mem_stats.get("mlt", {}),
         mfb=mem_stats.get("mfb", {}),
@@ -181,30 +218,47 @@ async def get_system_metrics():
 
     # System State Vector
     system_state_obj = SystemState(
-        h_hgnn=agent_metrics.get("h_hgnn"),  # HGNN centroid
-        E_patterns=e_patterns,  # Historical energy patterns
-        w_mode=state.w_mode,  # Current global weight configuration
+        h_hgnn=agent_metrics.get("h_hgnn"),  # HGNN centroid from Agent Aggregator
+        E_patterns=e_patterns,               # Historical energy patterns
+        w_mode=state.w_mode,                 # Current global weight config
     )
 
-    # 3. Synchronize Timestamp
-    # Use the oldest timestamp to ensure data consistency across services
-    ts = min(
-        await state.agent_aggregator.get_last_update_time(),
-        await state.memory_aggregator.get_last_update_time(),
-    )
+    # 5. Construct Metadata & Response
+    latency_ms = (time.perf_counter() - start_ts) * 1000.0
+    
+    # Use the freshest timestamp available
+    final_ts = max(ts_agent, ts_memory)
 
-    # 4. Return serialized response
-    response_payload = {
-        "success": True,
-        "metrics": {
-            "memory": unified_memory.model_dump(),
-            "system": system_state_obj.model_dump(),
-        },
-        "timestamp": ts,
+    # Build meta dictionary
+    meta = {
+        "status": status_label,
+        "ts_agent": ts_agent,
+        "ts_memory": ts_memory,
+        "latency_ms": latency_ms
     }
 
-    # Ensure JSON safety (NumPy float32 -> Python float)
-    return _numpy_to_python(response_payload)
+    # Build metrics dictionary
+    metrics = {
+        "memory": unified_memory.model_dump(),
+        "system": system_state_obj.model_dump(),
+    }
+
+    # 6. Return Serialized Response using the new Model
+    response_obj = Response.ok(
+        metrics=metrics,
+        meta=meta
+    )
+    # Set timestamp for backward compatibility
+    response_obj.timestamp = final_ts
+
+    # 7. Set Observability Headers (Using the injected 'response' object)
+    response.headers["X-System-Status"] = status_label
+    response.headers["X-Processing-Time"] = f"{latency_ms:.3f}ms"
+    if is_degraded:
+        response.headers["X-Degraded-Reason"] = "memory_aggregator_unavailable"
+
+    # Ensure JSON safety (NumPy -> Python)
+    return _numpy_to_python(response_obj.to_dict())
 
 
 @app.post("/config/w_mode")
@@ -276,7 +330,7 @@ class StateService:
 
     async def rpc_system_metrics(self):
         """Internal RPC wrapper for the distilled system metrics."""
-        return await get_system_metrics()   # calls FastAPI endpoint
+        return await get_system_metrics(response=None)   # calls FastAPI endpoint
 
     async def rpc_agent_snapshots(self):
         """Internal RPC wrapper for raw agent snapshot dump."""

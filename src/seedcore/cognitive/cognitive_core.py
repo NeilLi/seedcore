@@ -41,6 +41,7 @@ Architecture Notes:
 - Memory bridge initialization is lazy (on-demand per agent)
 - ContextBroker is deprecated in favor of CognitiveMemoryBridge + HolonFabricRetrieval
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -105,9 +106,11 @@ class CachedResultFound(Exception):
         self.cached_result = cached_result
         super().__init__("Cached result found, aborting pipeline.")
 
+
 # Optional Mw dependencies (episodic memory)
 try:
     from src.seedcore.memory.mw_manager import MwManager
+
     _MW_AVAILABLE = True
 except Exception:
     MwManager = None  # type: ignore
@@ -127,9 +130,13 @@ try:
 except ImportError:
     HolonClient = None  # type: ignore
 
+
 class DefaultScopeResolver:
     """Default implementation of ScopeResolver protocol."""
-    def resolve(self, *, agent_id: str, organ_id: Optional[str], task_params: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+
+    def resolve(
+        self, *, agent_id: str, organ_id: Optional[str], task_params: Dict[str, Any]
+    ) -> Tuple[List[str], List[str]]:
         """Return (scopes, entity_ids). Scopes are Holon scopes like ["GLOBAL", "ORGAN", "ENTITY"]."""
         scopes = ["GLOBAL"]
 
@@ -144,6 +151,7 @@ class DefaultScopeResolver:
             scopes.append("ENTITY")
 
         return scopes, entity_ids
+
 
 class HolonFabricRetrieval:
     def __init__(self, fabric: HolonFabric, embedder):
@@ -161,7 +169,6 @@ class HolonFabricRetrieval:
         agent_id: Optional[str] = None,
         ocps: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-
         vec = self.embedder.embed(text)
         holons = await self.fabric.query_context(
             query_vec=vec,
@@ -182,19 +189,21 @@ class HolonFabricRetrieval:
             "scope": h.scope.value,
         }
 
+
 # =============================================================================
 # Cognitive Service
 # =============================================================================
 
+
 class CognitiveCore(dspy.Module):
     """
     Enhanced cognitive core with OCPS integration, cache governance, and post-condition checks.
-    
+
     This module integrates with SeedCore's memory, energy, and lifecycle systems
     to provide intelligent reasoning capabilities for agents with OCPS fast/planner path routing
     (where planner path may use deep profile internally).
     """
-    
+
     def __init__(
         self,
         llm_provider: Optional[str] = "openai",
@@ -214,7 +223,7 @@ class CognitiveCore(dspy.Module):
         self.schema_version = "v2.0"
         self._state_lock = threading.RLock()
         self._last_sufficiency: Dict[str, Any] = {}
-        
+
         # Initialize Mw support (episodic memory)
         self._mw_enabled = bool(MW_ENABLED and _MW_AVAILABLE)
         self._mw_by_agent: Dict[str, MwManager] = {} if self._mw_enabled else {}
@@ -226,20 +235,36 @@ class CognitiveCore(dspy.Module):
             "trust_score": 0.4,
         }
         self._synopsis_embedding_backend = (
-            os.getenv("SYNOPSIS_EMBEDDING_BACKEND")
-            or ("nim" if os.getenv("SYNOPSIS_EMBEDDING_BASE_URL") or os.getenv("NIM_RETRIEVAL_BASE_URL") else "sentence-transformer")
-        ).lower().replace("_", "-")
-        self._synopsis_embedding_model = os.getenv("SYNOPSIS_EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
+            (
+                os.getenv("SYNOPSIS_EMBEDDING_BACKEND")
+                or (
+                    "nim"
+                    if os.getenv("SYNOPSIS_EMBEDDING_BASE_URL")
+                    or os.getenv("NIM_RETRIEVAL_BASE_URL")
+                    else "sentence-transformer"
+                )
+            )
+            .lower()
+            .replace("_", "-")
+        )
+        self._synopsis_embedding_model = os.getenv(
+            "SYNOPSIS_EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"
+        )
         self._synopsis_embedding_dim = int(os.getenv("SYNOPSIS_EMBEDDING_DIM", "768"))
         self._synopsis_embedding_base_url = (
-            os.getenv("SYNOPSIS_EMBEDDING_BASE_URL") or os.getenv("NIM_RETRIEVAL_BASE_URL", "")
+            os.getenv("SYNOPSIS_EMBEDDING_BASE_URL")
+            or os.getenv("NIM_RETRIEVAL_BASE_URL", "")
         ).lstrip("@")
-        self._synopsis_embedding_api_key = os.getenv("SYNOPSIS_EMBEDDING_API_KEY") or os.getenv("NIM_RETRIEVAL_API_KEY")
-        self._synopsis_embedding_timeout = float(os.getenv("SYNOPSIS_EMBEDDING_TIMEOUT", "10"))
+        self._synopsis_embedding_api_key = os.getenv(
+            "SYNOPSIS_EMBEDDING_API_KEY"
+        ) or os.getenv("NIM_RETRIEVAL_API_KEY")
+        self._synopsis_embedding_timeout = float(
+            os.getenv("SYNOPSIS_EMBEDDING_TIMEOUT", "10")
+        )
         self._synopsis_embedder: Optional[Any] = None
         self._synopsis_embedder_failed = False
         self._synopsis_embedder_lock = threading.Lock()
-        
+
         # Create ContextBroker with Mw search functions if none provided
         # NOTE: ContextBroker is deprecated in favor of CognitiveMemoryBridge + HolonFabricRetrieval
         # Kept for backward compatibility with legacy handlers that may still use it
@@ -247,14 +272,24 @@ class CognitiveCore(dspy.Module):
         if context_broker is None:
             # Create lambda functions that will be bound to agent_id at call time
             def text_fn(query, k):
-                return self._mw_first_text_search("", query, k)  # Will be overridden in process()
+                return self._mw_first_text_search(
+                    "", query, k
+                )  # Will be overridden in process()
+
             def vec_fn(query, k):
-                return self._mw_first_vector_search("", query, k)  # Will be overridden in process()
-            self.context_broker = ContextBroker(text_fn, vec_fn, token_budget=1500, ocps_client=self.ocps_client)
-            logger.debug("ContextBroker initialized (legacy mode - consider migrating to CognitiveMemoryBridge)")
+                return self._mw_first_vector_search(
+                    "", query, k
+                )  # Will be overridden in process()
+
+            self.context_broker = ContextBroker(
+                text_fn, vec_fn, token_budget=1500, ocps_client=self.ocps_client
+            )
+            logger.debug(
+                "ContextBroker initialized (legacy mode - consider migrating to CognitiveMemoryBridge)"
+            )
         else:
             self.context_broker = context_broker
-        
+
         # Initialize specialized cognitive modules with post-condition checks
         self.failure_analyzer = dspy.ChainOfThought(AnalyzeFailureSignature)
         self.task_planner = dspy.ChainOfThought(TaskPlanningSignature)
@@ -266,7 +301,7 @@ class CognitiveCore(dspy.Module):
         self.capability_assessor = dspy.ChainOfThought(CapabilityAssessmentSignature)
         self.hgnn_reasoner = dspy.ChainOfThought(HGNNReasoningSignature)
         self.causal_decomposer = dspy.ChainOfThought(CausalDecompositionSignature)
-        
+
         # Task mapping
         self.task_handlers = {
             CognitiveType.FAILURE_ANALYSIS: self.failure_analyzer,
@@ -277,67 +312,61 @@ class CognitiveCore(dspy.Module):
             CognitiveType.MEMORY_SYNTHESIS: self.memory_synthesizer,
             CognitiveType.CAPABILITY_ASSESSMENT: self.capability_assessor,
             CognitiveType.CAUSAL_DECOMPOSITION: self.causal_decomposer,
-            
             # Graph task handlers (Migration 007+)
             CognitiveType.GRAPH_EMBED: self._handle_graph_embed,
             CognitiveType.GRAPH_RAG_QUERY: self._handle_graph_rag_query,
             CognitiveType.GRAPH_SYNC_NODES: self._handle_graph_sync_nodes,
-            
             # Facts system handlers (Migration 009)
             CognitiveType.GRAPH_FACT_EMBED: self._handle_graph_fact_embed,
             CognitiveType.GRAPH_FACT_QUERY: self._handle_graph_fact_query,
             CognitiveType.FACT_SEARCH: self._handle_fact_search,
             CognitiveType.FACT_STORE: self._handle_fact_store,
-            
             # Resource management handlers (Migration 007)
             CognitiveType.ARTIFACT_MANAGE: self._handle_artifact_manage,
             CognitiveType.CAPABILITY_MANAGE: self._handle_capability_manage,
             CognitiveType.MEMORY_CELL_MANAGE: self._handle_memory_cell_manage,
-            
             # Agent layer handlers (Migration 008)
             CognitiveType.MODEL_MANAGE: self._handle_model_manage,
             CognitiveType.POLICY_MANAGE: self._handle_policy_manage,
             CognitiveType.SERVICE_MANAGE: self._handle_service_manage,
             CognitiveType.SKILL_MANAGE: self._handle_skill_manage,
         }
-        
+
         # Cache governance settings - shorter TTLs for sufficiency-bearing results
         self.cache_ttl_by_task = {
             CognitiveType.FAILURE_ANALYSIS: 300,  # 5 minutes (volatile analysis)
-            CognitiveType.TASK_PLANNING: 600,     # 10 minutes (sufficiency data)
-            CognitiveType.DECISION_MAKING: 600,   # 10 minutes (sufficiency data)
-            CognitiveType.PROBLEM_SOLVING: 600,   # 10 minutes (sufficiency data)
-            CognitiveType.CHAT: 300,              # 5 minutes (lightweight conversational, volatile)
-            CognitiveType.MEMORY_SYNTHESIS: 1800, # 30 minutes (no sufficiency)
-            CognitiveType.CAPABILITY_ASSESSMENT: 600, # 10 minutes (sufficiency data)
-            CognitiveType.CAUSAL_DECOMPOSITION: 900, # 15 minutes (structural reasoning output)
-            
+            CognitiveType.TASK_PLANNING: 600,  # 10 minutes (sufficiency data)
+            CognitiveType.DECISION_MAKING: 600,  # 10 minutes (sufficiency data)
+            CognitiveType.PROBLEM_SOLVING: 600,  # 10 minutes (sufficiency data)
+            CognitiveType.CHAT: 300,  # 5 minutes (lightweight conversational, volatile)
+            CognitiveType.MEMORY_SYNTHESIS: 1800,  # 30 minutes (no sufficiency)
+            CognitiveType.CAPABILITY_ASSESSMENT: 600,  # 10 minutes (sufficiency data)
+            CognitiveType.CAUSAL_DECOMPOSITION: 900,  # 15 minutes (structural reasoning output)
             # Graph task TTLs (Migration 007+) - shorter for sufficiency-bearing
-            CognitiveType.GRAPH_EMBED: 600,        # 10 minutes (sufficiency data)
-            CognitiveType.GRAPH_RAG_QUERY: 600,    # 10 minutes (sufficiency data)
-            CognitiveType.GRAPH_EMBED_V2: 600,     # 10 minutes (sufficiency data)
-            CognitiveType.GRAPH_RAG_QUERY_V2: 600, # 10 minutes (sufficiency data)
+            CognitiveType.GRAPH_EMBED: 600,  # 10 minutes (sufficiency data)
+            CognitiveType.GRAPH_RAG_QUERY: 600,  # 10 minutes (sufficiency data)
+            CognitiveType.GRAPH_EMBED_V2: 600,  # 10 minutes (sufficiency data)
+            CognitiveType.GRAPH_RAG_QUERY_V2: 600,  # 10 minutes (sufficiency data)
             CognitiveType.GRAPH_SYNC_NODES: 1800,  # 30 minutes (no sufficiency)
-            
             # Facts system TTLs (Migration 009) - shorter for sufficiency-bearing
-            CognitiveType.GRAPH_FACT_EMBED: 600,   # 10 minutes (sufficiency data)
-            CognitiveType.GRAPH_FACT_QUERY: 600,   # 10 minutes (sufficiency data)
-            CognitiveType.FACT_SEARCH: 600,        # 10 minutes (sufficiency data)
-            CognitiveType.FACT_STORE: 300,         # 5 minutes (storage is immediate)
-            
+            CognitiveType.GRAPH_FACT_EMBED: 600,  # 10 minutes (sufficiency data)
+            CognitiveType.GRAPH_FACT_QUERY: 600,  # 10 minutes (sufficiency data)
+            CognitiveType.FACT_SEARCH: 600,  # 10 minutes (sufficiency data)
+            CognitiveType.FACT_STORE: 300,  # 5 minutes (storage is immediate)
             # Resource management TTLs (Migration 007)
-            CognitiveType.ARTIFACT_MANAGE: 1800,   # 30 minutes (artifacts are stable)
-            CognitiveType.CAPABILITY_MANAGE: 1800, # 30 minutes (capabilities are stable)
-            CognitiveType.MEMORY_CELL_MANAGE: 1800, # 30 minutes (memory cells are stable)
-            
+            CognitiveType.ARTIFACT_MANAGE: 1800,  # 30 minutes (artifacts are stable)
+            CognitiveType.CAPABILITY_MANAGE: 1800,  # 30 minutes (capabilities are stable)
+            CognitiveType.MEMORY_CELL_MANAGE: 1800,  # 30 minutes (memory cells are stable)
             # Agent layer TTLs (Migration 008)
-            CognitiveType.MODEL_MANAGE: 3600,      # 1 hour (models are stable)
-            CognitiveType.POLICY_MANAGE: 1800,     # 30 minutes (policies may change)
-            CognitiveType.SERVICE_MANAGE: 1800,    # 30 minutes (services may change)
-            CognitiveType.SKILL_MANAGE: 1800,      # 30 minutes (skills may change)
+            CognitiveType.MODEL_MANAGE: 3600,  # 1 hour (models are stable)
+            CognitiveType.POLICY_MANAGE: 1800,  # 30 minutes (policies may change)
+            CognitiveType.SERVICE_MANAGE: 1800,  # 30 minutes (services may change)
+            CognitiveType.SKILL_MANAGE: 1800,  # 30 minutes (skills may change)
         }
-        
-        logger.info(f"Initialized CognitiveCore with {self.llm_provider} and model {self.model}")
+
+        logger.info(
+            f"Initialized CognitiveCore with {self.llm_provider} and model {self.model}"
+        )
 
         # Log Mw integration status
         if self._mw_enabled:
@@ -346,9 +375,13 @@ class CognitiveCore(dspy.Module):
             logger.info("MwManager integration: DISABLED (missing module or env)")
 
         # Log synopsis embedding status
-        synopsis_enabled = (
-            self._synopsis_embedding_backend in {"nim", "nim-retrieval", "sentence-transformer"}
-            and (self._synopsis_embedding_base_url or self._synopsis_embedding_backend == "sentence-transformer")
+        synopsis_enabled = self._synopsis_embedding_backend in {
+            "nim",
+            "nim-retrieval",
+            "sentence-transformer",
+        } and (
+            self._synopsis_embedding_base_url
+            or self._synopsis_embedding_backend == "sentence-transformer"
         )
         if synopsis_enabled:
             logger.info(
@@ -359,27 +392,35 @@ class CognitiveCore(dspy.Module):
             logger.info(
                 "Synopsis embedding: DISABLED (backend not configured or dependencies unavailable)"
             )
-        
+
         # Memory bridges (per-agent) - supports multi-agent and global/coordinator modes
         # Global/coordinator requests (no agent_id) don't use memory bridges
         # Personal/agent requests get per-agent bridges for scoped retrieval and memory writes
         self.memory_bridges: Dict[str, CognitiveMemoryBridge] = {}
-        
+
         # Per-agent memory components (for future multi-agent memory isolation)
         # Currently uses shared instances with fallback to defaults, but prepared for per-agent injection
-        self.scope_resolvers: Dict[str, Any] = {}  # Dict[str, ScopeResolver] - per-agent scope resolution
-        self.cognitive_retrievals: Dict[str, Any] = {}  # Dict[str, CognitiveRetrieval] - per-agent retrieval
-        
+        self.scope_resolvers: Dict[
+            str, Any
+        ] = {}  # Dict[str, ScopeResolver] - per-agent scope resolution
+        self.cognitive_retrievals: Dict[
+            str, Any
+        ] = {}  # Dict[str, CognitiveRetrieval] - per-agent retrieval
+
         # Shared memory components (used by all agents, can be overridden per-agent)
         # These are set externally or lazily initialized
         self.holon_client: Optional[Any] = None  # HolonClient instance
-        self.holon_fabric: Optional[Any] = None  # HolonFabric instance (for HolonFabricRetrieval)
+        self.holon_fabric: Optional[Any] = (
+            None  # HolonFabric instance (for HolonFabricRetrieval)
+        )
         self.scope_resolver: Optional[Any] = None  # Default ScopeResolver (fallback)
-        self.cognitive_retrieval: Optional[Any] = None  # Default CognitiveRetrieval (fallback)
+        self.cognitive_retrieval: Optional[Any] = (
+            None  # Default CognitiveRetrieval (fallback)
+        )
 
     def set_memory_bridge(self, memory_bridge: CognitiveMemoryBridge) -> None:
         """Set the memory bridge instance for a specific agent.
-        
+
         This should be called when all required dependencies are available:
         - agent_id, organ_id (from context)
         - MwManager (from _mw_by_agent)
@@ -387,47 +428,54 @@ class CognitiveCore(dspy.Module):
         """
         agent_id = memory_bridge.agent_id
         if agent_id in self.memory_bridges:
-            logger.warning(f"Overwriting existing memory bridge for agent_id={agent_id}")
+            logger.warning(
+                f"Overwriting existing memory bridge for agent_id={agent_id}"
+            )
         self.memory_bridges[agent_id] = memory_bridge
         logger.info(
             f"Memory bridge configured for agent_id={agent_id}, organ_id={memory_bridge.organ_id}"
         )
-    
+
     def set_scope_resolver(self, agent_id: str, scope_resolver: Any) -> None:
         """Set a per-agent scope resolver.
-        
+
         If not set, will fall back to shared scope_resolver or DefaultScopeResolver.
         """
         self.scope_resolvers[agent_id] = scope_resolver
         logger.debug(f"Scope resolver configured for agent_id={agent_id}")
-    
+
     def set_cognitive_retrieval(self, agent_id: str, cognitive_retrieval: Any) -> None:
         """Set a per-agent cognitive retrieval instance.
-        
+
         If not set, will fall back to shared cognitive_retrieval or attempt to create HolonFabricRetrieval.
         """
         self.cognitive_retrievals[agent_id] = cognitive_retrieval
         logger.debug(f"Cognitive retrieval configured for agent_id={agent_id}")
 
-    def _get_memory_bridge(self, agent_id: Optional[str]) -> Optional[CognitiveMemoryBridge]:
+    def _get_memory_bridge(
+        self, agent_id: Optional[str]
+    ) -> Optional[CognitiveMemoryBridge]:
         """Get the memory bridge for a specific agent.
-        
+
         Returns None for global/coordinator requests (no agent_id) or if bridge doesn't exist.
         """
         if not agent_id:
             return None
         return self.memory_bridges.get(agent_id)
 
-
-    def _try_initialize_memory_bridge(self, agent_id: Optional[str], organ_id: Optional[str] = None) -> bool:
+    def _try_initialize_memory_bridge(
+        self, agent_id: Optional[str], organ_id: Optional[str] = None
+    ) -> bool:
         """Attempt to lazily initialize a per-agent memory bridge.
-        
+
         Returns True if initialization was successful, False otherwise.
         Global/coordinator requests (no agent_id) return False immediately.
         """
         # 0) Global / coordinator requests: skip bridge entirely
         if not agent_id:
-            logger.debug("Memory bridge initialization skipped: no agent_id (global/coordinator request).")
+            logger.debug(
+                "Memory bridge initialization skipped: no agent_id (global/coordinator request)."
+            )
             return False
 
         # Already initialized for this agent
@@ -449,24 +497,28 @@ class CognitiveCore(dspy.Module):
 
         # 2) External dependencies: HolonClient, ScopeResolver, CognitiveRetrieval
         # Note: HolonClient from memory.holon_client implements the Protocol from memory_bridge
-        
+
         # HolonClient: shared across all agents (set externally)
         holon_client = self.holon_client
-        
+
         # ScopeResolver: per-agent if available, otherwise shared, otherwise default
         scope_resolver = self.scope_resolvers.get(agent_id) or self.scope_resolver
         if scope_resolver is None:
             scope_resolver = DefaultScopeResolver()
             logger.debug(f"Using DefaultScopeResolver for agent_id={agent_id}")
-        
+
         # CognitiveRetrieval: per-agent if available, otherwise shared, otherwise try to create
-        cognitive_retrieval = self.cognitive_retrievals.get(agent_id) or self.cognitive_retrieval
+        cognitive_retrieval = (
+            self.cognitive_retrievals.get(agent_id) or self.cognitive_retrieval
+        )
         if cognitive_retrieval is None:
             holon_fabric = self.holon_fabric
             embedder = self._ensure_synopsis_embedder()
-            
+
             if holon_fabric is not None and embedder is not None:
-                cognitive_retrieval = HolonFabricRetrieval(fabric=holon_fabric, embedder=embedder)
+                cognitive_retrieval = HolonFabricRetrieval(
+                    fabric=holon_fabric, embedder=embedder
+                )
                 logger.debug(f"Using HolonFabricRetrieval for agent_id={agent_id}")
             else:
                 missing_components = []
@@ -481,11 +533,17 @@ class CognitiveCore(dspy.Module):
         missing = []
         if holon_client is None:
             if HolonClient is None:
-                missing.append("HolonClient (module not available - install from memory.holon_client)")
+                missing.append(
+                    "HolonClient (module not available - install from memory.holon_client)"
+                )
             else:
-                missing.append("HolonClient (self.holon_client - set an instance of memory.holon_client.HolonClient)")
+                missing.append(
+                    "HolonClient (self.holon_client - set an instance of memory.holon_client.HolonClient)"
+                )
         if cognitive_retrieval is None:
-            missing.append("CognitiveRetrieval (self.cognitive_retrieval or set self.holon_fabric + embedder for HolonFabricRetrieval)")
+            missing.append(
+                "CognitiveRetrieval (self.cognitive_retrieval or set self.holon_fabric + embedder for HolonFabricRetrieval)"
+            )
 
         if missing:
             logger.debug(
@@ -517,28 +575,17 @@ class CognitiveCore(dspy.Module):
             logger.exception(f"Memory bridge initialization failed: {e}")
             return False
 
-
     def process(self, context: CognitiveContext) -> Dict[str, Any]:
         """
-        Executes the task based on:
-        - Strategy (DecisionKind): FAST_PATH / COGNITIVE / ESCALATED
-        - Data availability (knowledge_context, hgnn_embedding, etc.)
-
-        v2 semantics:
-        - If decision_kind == ESCALATED and knowledge_context.hgnn_embedding is present:
-                → use HGNN path (vector → graph → LLM)
-        - Otherwise:
-                → delegate PRE-EXECUTION hydration to CognitiveMemoryBridge
-                (Holon Fabric retrieval + episodic memory + token budgeting),
-                optionally skipping retrieval if requested.
+        Main entry point (Orchestrator).
+        Executes the task by coordinating hydration, decision logic, and execution handlers.
         """
         task_id = self._extract_task_id(context.input_data)
         input_data = context.input_data or {}
-        decision_kind = context.decision_kind
 
         logger.debug(
             f"CognitiveCore.process: cog_type={context.cog_type.value} "
-            f"decision_kind={decision_kind.value} "
+            f"decision_kind={context.decision_kind.value} "
             f"agent_id={context.agent_id} task_id={task_id or 'n/a'}"
         )
 
@@ -547,215 +594,31 @@ class CognitiveCore(dspy.Module):
         )
 
         try:
-            # ------------------------------------------------------------------
-            # 1. Normalize params + basic flags
-            # ------------------------------------------------------------------
+            # 1. Configuration & Setup
             params = input_data.get("params") or {}
-            skip_retrieval = bool(input_data.get("skip_retrieval", False))
+            cog_flags = self._resolve_cognitive_flags(input_data, params)
 
-            # ------------------------------------------------------------------
-            # 2. PRE-EXECUTION hydration via CognitiveMemoryBridge (Holon Fabric)
-            # ------------------------------------------------------------------
-            # Detect personal vs global mode
-            is_personal = bool(context.agent_id)
+            # 2. Hydration (The heavy lifting)
+            knowledge_context = self._hydrate_knowledge_context(
+                context, input_data, params, cog_flags
+            )
 
-            # For CHAT mode: Extract conversation_history from input_data BEFORE hydration
-            # PersistentAgent injects conversation_history into task_data.params and top-level
-            # This ensures ChatSignature receives the correct conversation context
-            conversation_history_from_input = None
-            if context.cog_type == CognitiveType.CHAT:
-                # Priority: top-level conversation_history > params.conversation_history > params.chat.history
-                conversation_history_from_input = (
-                    input_data.get("conversation_history")
-                    or params.get("conversation_history")
-                    or params.get("chat", {}).get("history")
-                    or []
-                )
-                # Ensure it's a list
-                if not isinstance(conversation_history_from_input, list):
-                    conversation_history_from_input = []
+            # 3. Decision Branching: ESCALATED + HGNN Path
+            # v2 semantics: If ESCALATED and HGNN embedding exists, shortcut to HGNN pipeline
+            if (
+                context.decision_kind == DecisionKind.ESCALATED
+                and knowledge_context.get("hgnn_embedding") is not None
+            ):
                 logger.debug(
-                    f"Chat mode: Extracted conversation_history from input "
-                    f"({len(conversation_history_from_input)} turns)"
+                    f"Task {task_id}: Escalated + HGNN detected. Running HGNN pipeline."
+                )
+                return self._run_hgnn_pipeline(
+                    context=context,
+                    hgnn_embedding=knowledge_context["hgnn_embedding"],
+                    knowledge_context=knowledge_context,
                 )
 
-            # Attempt lazy bridge initialization only for personal mode
-            memory_bridge = None
-            if is_personal:
-                organ_id = input_data.get("organ_id") or params.get("organ_id")
-                self._try_initialize_memory_bridge(context.agent_id, organ_id)
-                memory_bridge = self._get_memory_bridge(context.agent_id)
-            else:
-                logger.debug("Global/coordinator request detected: skipping memory bridge init.")
-
-            # We'll build a unified knowledge_context in all branches
-            knowledge_context: Dict[str, Any]
-
-            # ------------------------------------------------------------------
-            # 2a. No memory bridge → minimal / global-only hydration
-            # ------------------------------------------------------------------
-            if not memory_bridge:
-                logger.debug(
-                    f"CognitiveCore.memory_bridge is not configured for agent {context.agent_id}. "
-                    "Proceeding with empty or global-only hydration context."
-                )
-
-                params.setdefault("context", {})
-                # For CHAT mode: use conversation_history from input if available
-                chat_history_for_context = (
-                    conversation_history_from_input
-                    if context.cog_type == CognitiveType.CHAT and conversation_history_from_input
-                    else []
-                )
-                params["context"].update({
-                    "holons": [],
-                    "chat_history": chat_history_for_context,
-                    "token_budget": 0,
-                })
-                input_data["params"] = params
-
-                knowledge_context = {
-                    "facts": [],
-                    "holons": [],
-                    "chat_history": chat_history_for_context,
-                    "token_budget": 0,
-                    "summary": "Memory bridge unavailable; retrieval skipped.",
-                    "sufficiency": {
-                        "token_budget": 0,
-                        "holon_count": 0,
-                        "chat_turns": len(chat_history_for_context),
-                    },
-                    # v2: ensure HGNN key is always present (even if None)
-                    "hgnn_embedding": None,
-                }
-
-            else:
-                # ------------------------------------------------------------------
-                # 2b. Normal hydration path with MemoryBridge (personal mode)
-                # ------------------------------------------------------------------
-                base_task: Dict[str, Any] = {
-                    "id": task_id,
-                    "type": context.cog_type.value,
-                    "description": input_data.get("description") or "",
-                    "goal": input_data.get("goal") or "",
-                    "params": dict(params),
-                }
-
-                ocps = input_data.get("ocps") or None
-
-                try:
-                    # Use _run_coro_sync instead of asyncio.run() to avoid nested event loop issues
-                    hydrated_task = self._run_coro_sync(
-                        memory_bridge.hydrate_task(
-                            task=base_task,
-                            ocps=ocps,
-                            skip_retrieval=skip_retrieval,
-                        ),
-                        timeout=10.0,
-                    )
-
-                    # Update input_data with hydrated task (merge back)
-                    input_data.update(hydrated_task)
-
-                    # Extract context block from hydrated params
-                    ctx_section = hydrated_task.get("params", {}).get("context", {})
-
-                    holons = ctx_section.get("holons", [])
-                    chat_history_from_hydration = ctx_section.get("chat_history", [])
-                    token_budget = ctx_section.get("token_budget", 0)
-                    hgnn_embedding = ctx_section.get("hgnn_embedding")  # <-- v2 HGNN source
-
-                    # For CHAT mode: Prefer conversation_history from input (PersistentAgent)
-                    # over chat_history from hydration, as PersistentAgent owns the conversation state
-                    if context.cog_type == CognitiveType.CHAT and conversation_history_from_input:
-                        chat_history = conversation_history_from_input
-                        logger.debug(
-                            f"Chat mode: Using conversation_history from PersistentAgent "
-                            f"({len(chat_history)} turns) over hydration "
-                            f"({len(chat_history_from_hydration)} turns)"
-                        )
-                    else:
-                        chat_history = chat_history_from_hydration
-
-                    # Build knowledge_context compatible with existing handler
-                    # For backward compatibility, we present holons as "facts".
-                    facts = [self._holon_to_fact(h) for h in holons]
-
-                    knowledge_context = {
-                        "facts": facts,
-                        "holons": holons,
-                        "chat_history": chat_history,
-                        "token_budget": token_budget,
-                        "summary": "Hydrated via Holon Memory Fabric",
-                        "sufficiency": {
-                            "token_budget": token_budget,
-                            "holon_count": len(holons),
-                            "chat_turns": len(chat_history),
-                        },
-                        "bridge_context": ctx_section,  # Full bridge context for advanced planners
-                        "memory_context": ctx_section,  # Standardized key for DSPy compatibility
-                        # v2 HGNN location:
-                        "hgnn_embedding": hgnn_embedding,
-                    }
-
-                except Exception as e:
-                    logger.exception(f"Memory bridge hydration failed: {e}")
-                    # Safe fallback
-                    params.setdefault("context", {})
-                    chat_history_fallback = (
-                        conversation_history_from_input
-                        if context.cog_type == CognitiveType.CHAT and conversation_history_from_input
-                        else []
-                    )
-                    params["context"].update({
-                        "holons": [],
-                        "chat_history": chat_history_fallback,
-                        "token_budget": 0,
-                    })
-                    input_data["params"] = params
-
-                    knowledge_context = {
-                        "facts": [],
-                        "holons": [],
-                        "chat_history": chat_history_fallback,
-                        "token_budget": 0,
-                        "summary": "Hydration failed",
-                        "sufficiency": {
-                            "token_budget": 0,
-                            "holon_count": 0,
-                            "chat_turns": len(chat_history_fallback),
-                        },
-                        "hgnn_embedding": None,
-                    }
-
-            # ------------------------------------------------------------------
-            # 3. ESCALATED / HGNN path (DecisionKind + knowledge_context)
-            # ------------------------------------------------------------------
-            hgnn_embedding = knowledge_context.get("hgnn_embedding")
-
-            if decision_kind is DecisionKind.ESCALATED:
-                if hgnn_embedding is not None:
-                    logger.debug(
-                        f"Task {task_id}: decision_kind=ESCALATED with hgnn_embedding "
-                        f"→ running HGNN pipeline"
-                    )
-                    return self._run_hgnn_pipeline(
-                        context=context,
-                        hgnn_embedding=hgnn_embedding,
-                        knowledge_context=knowledge_context,
-                    )
-                else:
-                    logger.warning(
-                        f"Task {task_id}: decision_kind=ESCALATED but no hgnn_embedding in "
-                        f"knowledge_context → falling back to normal cognitive pipeline"
-                    )
-
-            # ------------------------------------------------------------------
-            # 4. Execution: run handler + POST-EXECUTION consolidation
-            # ------------------------------------------------------------------
-            # _run_handler_and_postprocess is assumed to:
-            #   - invoke DSPy / LLM pipeline
-            #   - possibly be extended to call memory_bridge.process_post_execution(...)
+            # 4. Standard Execution
             return self._run_handler_and_postprocess(
                 context,
                 knowledge_context,
@@ -769,24 +632,229 @@ class CognitiveCore(dspy.Module):
             logger.exception(f"Processing error: {e}")
             return create_error_result(str(e), "PROCESSING_ERROR").model_dump()
 
-    def _run_hgnn_pipeline(self, context: CognitiveContext, embedding: List[float]) -> Dict[str, Any]:
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_cognitive_flags(
+        self, input_data: Dict, params: Dict
+    ) -> Dict[str, bool]:
+        """
+        Normalizes flags like 'skip_retrieval' or 'force_rag' from top-level or params.
+        """
+        cognitive_cfg = params.get("cognitive") or {}
+
+        def _flag(name: str, default: bool = False) -> bool:
+            # Prefer top-level, fall back to params.cognitive
+            if name in input_data:
+                return bool(input_data.get(name))
+            return bool(cognitive_cfg.get(name, default))
+
+        return {
+            "skip_retrieval": _flag("skip_retrieval", False),
+            "force_fast": _flag("force_fast", False),
+            "force_deep_reasoning": _flag("force_deep_reasoning", False),
+            "force_rag": _flag("force_rag", False),
+        }
+
+    def _resolve_initial_chat_history(
+        self, context: CognitiveContext, input_data: Dict, params: Dict
+    ) -> List[Any]:
+        """
+        Extracts conversation history from input inputs (PersistentAgent priority) before hydration.
+        """
+        if context.cog_type != CognitiveType.CHAT:
+            return []
+
+        # Priority: top-level conversation_history > params.conversation_history > params.chat.history
+        history = (
+            input_data.get("conversation_history")
+            or params.get("conversation_history")
+            or params.get("chat", {}).get("history")
+            or []
+        )
+
+        if not isinstance(history, list):
+            history = []
+
+        logger.debug(f"Chat mode: Extracted initial history ({len(history)} turns)")
+        return history
+
+    def _hydrate_knowledge_context(
+        self, context: CognitiveContext, input_data: Dict, params: Dict, cog_flags: Dict
+    ) -> Dict[str, Any]:
+        """
+        Handles the logic for Memory Bridge vs Global fallback.
+        Returns a standardized knowledge_context dictionary.
+        """
+        is_personal = bool(context.agent_id)
+        initial_chat_history = self._resolve_initial_chat_history(
+            context, input_data, params
+        )
+
+        # 1. Initialize Bridge (if personal)
+        memory_bridge = None
+        if is_personal:
+            organ_id = input_data.get("organ_id") or params.get("organ_id")
+            self._try_initialize_memory_bridge(context.agent_id, organ_id)
+            memory_bridge = self._get_memory_bridge(context.agent_id)
+        else:
+            logger.debug(
+                "Global/coordinator request detected: skipping memory bridge init."
+            )
+
+        # 2. Execute Hydration Strategy
+        if not memory_bridge:
+            return self._build_fallback_knowledge_context(
+                context,
+                params,
+                initial_chat_history,
+                cog_flags,
+                reason="Memory bridge unavailable; retrieval skipped.",
+            )
+
+        try:
+            # Prepare task for bridge
+            base_task = {
+                "id": self._extract_task_id(input_data),
+                "type": context.cog_type.value,
+                "description": input_data.get("description") or "",
+                "goal": input_data.get("goal") or "",
+                "params": dict(params),
+            }
+            ocps = input_data.get("ocps")
+
+            # Sync execution of async hydration
+            hydrated_task = self._run_coro_sync(
+                memory_bridge.hydrate_task(
+                    task=base_task,
+                    ocps=ocps,
+                    skip_retrieval=cog_flags["skip_retrieval"],
+                ),
+                timeout=10.0,
+            )
+
+            # Merge hydration back into input_data (side-effect maintenance for handlers)
+            input_data.update(hydrated_task)
+
+            # Construct context
+            return self._construct_bridged_knowledge_context(
+                context, hydrated_task, initial_chat_history, cog_flags
+            )
+
+        except Exception as e:
+            logger.exception(f"Memory bridge hydration failed: {e}")
+            return self._build_fallback_knowledge_context(
+                context,
+                params,
+                initial_chat_history,
+                cog_flags,
+                reason="Hydration failed",
+            )
+
+    def _construct_bridged_knowledge_context(
+        self,
+        context: CognitiveContext,
+        hydrated_task: Dict,
+        initial_chat_history: List,
+        cog_flags: Dict,
+    ) -> Dict[str, Any]:
+        """
+        Builds the knowledge context from a successful Memory Bridge response.
+        """
+        ctx_section = hydrated_task.get("params", {}).get("context", {})
+        holons = ctx_section.get("holons", [])
+        hydrated_history = ctx_section.get("chat_history", [])
+        token_budget = ctx_section.get("token_budget", 0)
+        hgnn_embedding = ctx_section.get("hgnn_embedding")
+
+        # Merge Logic: PersistentAgent history overrides hydration history in CHAT mode
+        if context.cog_type == CognitiveType.CHAT and initial_chat_history:
+            final_chat_history = initial_chat_history
+            logger.debug(
+                f"Chat mode: Using input history ({len(final_chat_history)} turns) "
+                f"over hydration ({len(hydrated_history)} turns)"
+            )
+        else:
+            final_chat_history = hydrated_history
+
+        return {
+            "facts": [self._holon_to_fact(h) for h in holons],
+            "holons": holons,
+            "chat_history": final_chat_history,
+            "token_budget": token_budget,
+            "summary": "Hydrated via Holon Memory Fabric",
+            "sufficiency": {
+                "token_budget": token_budget,
+                "holon_count": len(holons),
+                "chat_turns": len(final_chat_history),
+            },
+            "bridge_context": ctx_section,
+            "memory_context": ctx_section,
+            "hgnn_embedding": hgnn_embedding,
+            "cognitive_flags": cog_flags,
+        }
+
+    def _build_fallback_knowledge_context(
+        self,
+        context: CognitiveContext,
+        params: Dict,
+        chat_history: List,
+        cog_flags: Dict,
+        reason: str,
+    ) -> Dict[str, Any]:
+        """
+        Constructs a minimal context when the bridge is missing or errors out.
+        Updates input_data['params'] in place to ensure downstream compatibility.
+        """
+        params.setdefault("context", {})
+        params["context"].update(
+            {
+                "holons": [],
+                "chat_history": chat_history,
+                "token_budget": 0,
+            }
+        )
+
+        # Ensure context.input_data reflects these fallbacks
+        if context.input_data:
+            context.input_data["params"] = params
+
+        return {
+            "facts": [],
+            "holons": [],
+            "chat_history": chat_history,
+            "token_budget": 0,
+            "summary": reason,
+            "sufficiency": {
+                "token_budget": 0,
+                "holon_count": 0,
+                "chat_turns": len(chat_history),
+            },
+            "hgnn_embedding": None,
+            "cognitive_flags": cog_flags,
+        }
+
+    def _run_hgnn_pipeline(
+        self, context: CognitiveContext, embedding: List[float]
+    ) -> Dict[str, Any]:
         """
         The 'Deep Reasoning' Pipeline: Vector -> Graph -> LLM
-        
+
         This method implements the Neuro-Symbolic Bridge:
         1. Translates the mathematical vector back into human-readable graph nodes
         2. Uses DSPy to reason about structural relationships
         3. Returns a structured diagnosis and mitigation plan
-        
+
         Args:
             context: The cognitive context containing task information
             embedding: The HGNN embedding vector from ML Service
-            
+
         Returns:
             Dictionary with analysis, root_cause, solution_steps, and metadata
         """
         logger.info(f"🧠 Starting HGNN Deep Reasoning for {context.agent_id}")
-        
+
         # Step A: Vector Translation (Hydration)
         graph_neighbors = []
         if self.graph_repo and self.session_maker:
@@ -794,22 +862,25 @@ class CognitiveCore(dspy.Module):
             async def _fetch():
                 async with self.session_maker() as session:
                     return await self.graph_repo.find_hgnn_neighbors(session, embedding)
-            
+
             try:
                 graph_neighbors = self._run_coro_sync(_fetch())
             except Exception as e:
                 logger.warning(f"HGNN neighbor fetch failed: {e}")
-        
+
         context_str = json.dumps(graph_neighbors, indent=2)
-        anomaly_desc = str(context.input_data.get("description", "Unknown Anomaly detected via system drift."))
-        
+        anomaly_desc = str(
+            context.input_data.get(
+                "description", "Unknown Anomaly detected via system drift."
+            )
+        )
+
         # Step B: DSPy Execution
         # Note: No 'with dspy.context' here. The Orchestrator already set the DEEP profile.
         prediction = self.hgnn_reasoner(
-            structural_context=context_str,
-            anomaly_description=anomaly_desc
+            structural_context=context_str, anomaly_description=anomaly_desc
         )
-            
+
         # Step C: Structuring
         return {
             "success": True,
@@ -820,18 +891,18 @@ class CognitiveCore(dspy.Module):
                 "solution_steps": self._parse_plan_text(prediction.mitigation_plan),
                 "meta": {
                     "source": "hgnn_deep_reasoning",
-                    "neighbors_found": len(graph_neighbors)
-                }
-            }
+                    "neighbors_found": len(graph_neighbors),
+                },
+            },
         }
 
     def _parse_plan_text(self, text: str) -> List[Dict[str, Any]]:
         """Simple helper to convert LLM text block into step list."""
         # Basic heuristic: split by newlines or numbers
         steps = []
-        for line in text.split('\n'):
+        for line in text.split("\n"):
             clean = line.strip()
-            if clean and (clean[0].isdigit() or clean.startswith('-')):
+            if clean and (clean[0].isdigit() or clean.startswith("-")):
                 steps.append({"type": "execute", "description": clean})
         return steps or [{"type": "unknown", "description": text}]
 
@@ -869,7 +940,11 @@ class CognitiveCore(dspy.Module):
                         self._synopsis_embedding_model,
                     )
                 except Exception as exc:  # pragma: no cover - defensive logging
-                    logger.warning("Failed to initialize NimRetrievalHTTP for synopsis embeddings: %s", exc, exc_info=True)
+                    logger.warning(
+                        "Failed to initialize NimRetrievalHTTP for synopsis embeddings: %s",
+                        exc,
+                        exc_info=True,
+                    )
                     self._synopsis_embedder_failed = True
             else:
                 if SentenceTransformer is None:
@@ -880,7 +955,9 @@ class CognitiveCore(dspy.Module):
                     self._synopsis_embedder_failed = True
                     return None
                 try:
-                    self._synopsis_embedder = SentenceTransformer(self._synopsis_embedding_model)
+                    self._synopsis_embedder = SentenceTransformer(
+                        self._synopsis_embedding_model
+                    )
                     logger.debug(
                         "Loaded SentenceTransformer model '%s' for synopsis embeddings.",
                         self._synopsis_embedding_model,
@@ -895,7 +972,9 @@ class CognitiveCore(dspy.Module):
 
         return self._synopsis_embedder
 
-    def _generate_synopsis_embedding(self, synopsis: Dict[str, Any]) -> Optional[np.ndarray]:
+    def _generate_synopsis_embedding(
+        self, synopsis: Dict[str, Any]
+    ) -> Optional[np.ndarray]:
         embedder = self._ensure_synopsis_embedder()
         if embedder is None:
             return None
@@ -915,7 +994,9 @@ class CognitiveCore(dspy.Module):
                     normalize_embeddings=True,
                 )
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("Failed to generate synopsis embedding: %s", exc, exc_info=True)
+            logger.warning(
+                "Failed to generate synopsis embedding: %s", exc, exc_info=True
+            )
             return None
 
         vec = np.asarray(vector, dtype=np.float32).reshape(-1)
@@ -951,8 +1032,8 @@ class CognitiveCore(dspy.Module):
                 f"Unknown task type: {context.cog_type}", "INVALID_COG_TYPE"
             ).model_dump()
 
-        payload, planner_timings, plan_build_start, plan_build_end = self._invoke_handler(
-            handler, context, knowledge_context, task_id
+        payload, planner_timings, plan_build_start, plan_build_end = (
+            self._invoke_handler(handler, context, knowledge_context, task_id)
         )
         processed_payload, suff_dict, violations = self._apply_post_processing(
             payload=payload,
@@ -992,28 +1073,30 @@ class CognitiveCore(dspy.Module):
         if context.cog_type == CognitiveType.CHAT:
             # Extract message from multiple possible locations
             message = (
-                enhanced_input.get("message") or
-                enhanced_input.get("description") or
-                enhanced_input.get("params", {}).get("chat", {}).get("message") or
-                ""
+                enhanced_input.get("message")
+                or enhanced_input.get("description")
+                or enhanced_input.get("params", {}).get("chat", {}).get("message")
+                or ""
             )
             enhanced_input["message"] = message
-            
+
             # Extract conversation_history from knowledge_context (which was set from input)
             # or fallback to input_data
             chat_history = knowledge_context.get("chat_history", [])
             if not chat_history:
                 # Fallback to input_data if not in knowledge_context
                 chat_history = (
-                    enhanced_input.get("conversation_history") or
-                    enhanced_input.get("params", {}).get("conversation_history") or
-                    enhanced_input.get("params", {}).get("chat", {}).get("history") or
-                    []
+                    enhanced_input.get("conversation_history")
+                    or enhanced_input.get("params", {}).get("conversation_history")
+                    or enhanced_input.get("params", {}).get("chat", {}).get("history")
+                    or []
                 )
             enhanced_input["conversation_history"] = chat_history
 
         enhanced_input["knowledge_context"] = json.dumps(working_context)
-        enhanced_input = self._format_input_for_signature(enhanced_input, context.cog_type)
+        enhanced_input = self._format_input_for_signature(
+            enhanced_input, context.cog_type
+        )
         filtered_input = self._filter_to_signature(handler, enhanced_input)
 
         logger.debug(
@@ -1081,7 +1164,9 @@ class CognitiveCore(dspy.Module):
         if "meta" not in payload:
             payload["meta"] = {}
         payload["meta"].setdefault("planner_timings_ms", planner_timings)
-        payload["meta"].setdefault("sufficiency_thresholds", dict(self._sufficiency_thresholds))
+        payload["meta"].setdefault(
+            "sufficiency_thresholds", dict(self._sufficiency_thresholds)
+        )
         payload["meta"].setdefault("sufficiency_snapshot", suff_dict)
         payload["meta"].setdefault(
             "escalation_reasons",
@@ -1100,29 +1185,39 @@ class CognitiveCore(dspy.Module):
             memory_bridge = self._get_memory_bridge(context.agent_id)
         else:
             memory_bridge = None
-        
+
         if memory_bridge:
             try:
                 # Extract ocps from context input_data
                 ocps = context.input_data.get("ocps") if context.input_data else None
-                
+
                 # Build task dict for memory bridge (matches what was used in hydration)
                 # Extract task_id consistently (Issue 4 fix)
                 task_id_for_memory = (
                     self._extract_task_id(context.input_data)
                     or payload.get("task_id")
-                    or (context.input_data.get("task_id") if context.input_data else None)
+                    or (
+                        context.input_data.get("task_id")
+                        if context.input_data
+                        else None
+                    )
                     or f"ad-hoc:{int(time.time() * 1000)}"
                 )
-                
+
                 task_dict: Dict[str, Any] = {
                     "id": task_id_for_memory,
                     "type": context.cog_type.value,
-                    "description": context.input_data.get("description", "") if context.input_data else "",
-                    "goal": context.input_data.get("goal", "") if context.input_data else "",
-                    "params": context.input_data.get("params", {}) if context.input_data else {},
+                    "description": context.input_data.get("description", "")
+                    if context.input_data
+                    else "",
+                    "goal": context.input_data.get("goal", "")
+                    if context.input_data
+                    else "",
+                    "params": context.input_data.get("params", {})
+                    if context.input_data
+                    else {},
                 }
-                
+
                 # Call memory bridge post-execution consolidation
                 memory_event = self._run_coro_sync(
                     memory_bridge.process_post_execution(
@@ -1130,9 +1225,9 @@ class CognitiveCore(dspy.Module):
                         result=payload,
                         ocps=ocps,
                     ),
-                    timeout=5.0
+                    timeout=5.0,
                 )
-                
+
                 # Store memory event ID in payload metadata for telemetry
                 payload.setdefault("meta", {})["memory_event_id"] = memory_event.id
                 logger.debug(
@@ -1140,8 +1235,7 @@ class CognitiveCore(dspy.Module):
                 )
             except Exception as e:
                 logger.warning(
-                    f"Memory bridge post-execution failed: {e}",
-                    exc_info=True
+                    f"Memory bridge post-execution failed: {e}", exc_info=True
                 )
                 # Continue execution even if memory bridge fails
         elif is_personal:
@@ -1178,7 +1272,9 @@ class CognitiveCore(dspy.Module):
             "payload": out.payload.result if hasattr(out.payload, "result") else {},
             "error": None,
             "metadata": out.metadata,
-            "cog_type": out.payload.cog_type if hasattr(out.payload, "cog_type") else context.cog_type.value,
+            "cog_type": out.payload.cog_type
+            if hasattr(out.payload, "cog_type")
+            else context.cog_type.value,
         }
 
         self._cache_result(
@@ -1197,7 +1293,9 @@ class CognitiveCore(dspy.Module):
         """Expose the enhanced planning pipeline via the dspy.Module interface."""
         return self.process(context)
 
-    def build_fragments_for_synthesis(self, context: CognitiveContext, facts: List[Fact], summary: str) -> List[Dict[str, Any]]:
+    def build_fragments_for_synthesis(
+        self, context: CognitiveContext, facts: List[Fact], summary: str
+    ) -> List[Dict[str, Any]]:
         """Build memory-synthesis fragments for Coordinator."""
         return [
             {"agent_id": context.agent_id},
@@ -1209,13 +1307,13 @@ class CognitiveCore(dspy.Module):
     # ------------------------ Helper Methods ------------------------
     def _holon_to_fact(self, h: Dict[str, Any]) -> Dict[str, Any]:
         """Convert a Holon dict to a Fact-like dict for backward compatibility with handlers.
-        
+
         HolonFabric holons have a different structure than RAG facts, so we normalize them
         to match the expected fact schema used by DSPy handlers.
-        
+
         Args:
             h: Holon dict from HolonFabric with keys: id, summary, content, confidence, scope, etc.
-            
+
         Returns:
             Fact-like dict with normalized structure
         """
@@ -1228,25 +1326,36 @@ class CognitiveCore(dspy.Module):
             "content": h.get("content", {}),
             "scope": h.get("scope"),  # GLOBAL, ORGAN, ENTITY
         }
-    
-    def _generate_cache_key(self, cog_type: CognitiveType, agent_id: str, input_data: Dict[str, Any]) -> str:
+
+    def _generate_cache_key(
+        self, cog_type: CognitiveType, agent_id: str, input_data: Dict[str, Any]
+    ) -> str:
         """Generate hardened cache key with provider, model, and schema version."""
         stable_hash = self._stable_hash(cog_type, agent_id, input_data)
         return f"cc:res:{cog_type.value}:{self.model}:{self.llm_provider}:{self.schema_version}:{stable_hash}"
 
-    def _stable_hash(self, cog_type: CognitiveType, agent_id: str, input_data: Dict[str, Any]) -> str:
+    def _stable_hash(
+        self, cog_type: CognitiveType, agent_id: str, input_data: Dict[str, Any]
+    ) -> str:
         """Stable hash of inputs (drop obviously-ephemeral fields if present)."""
         # Shallow sanitize to improve cache hit rate.
         sanitized = dict(input_data)
         # Drop ephemeral fields that shouldn't affect caching
         for key in ["timestamp", "created_at", "updated_at", "id", "request_id"]:
             sanitized.pop(key, None)
-        
+
         # Create stable hash
         content = f"{cog_type.value}:{agent_id}:{json.dumps(sanitized, sort_keys=True)}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
-    def _get_cached_result(self, cache_key: str, cog_type: CognitiveType, *, agent_id: str, task_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def _get_cached_result(
+        self,
+        cache_key: str,
+        cog_type: CognitiveType,
+        *,
+        agent_id: str,
+        task_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Get cached result with TTL check."""
         if not self._mw_enabled:
             return None
@@ -1255,16 +1364,18 @@ class CognitiveCore(dspy.Module):
             mw = self._mw(agent_id)
             if not mw:
                 return None
-            
+
             # Use async get_item_async via helper to avoid nested loop issues
             try:
-                cached_data = self._run_coro_sync(mw.get_item_async(cache_key), timeout=2.0)
+                cached_data = self._run_coro_sync(
+                    mw.get_item_async(cache_key), timeout=2.0
+                )
             except Exception:
                 cached_data = None
-                
+
             if not cached_data:
                 return None
-            
+
             normalized = self._normalize_cached_result_shape(cached_data)
 
             if isinstance(cached_data, dict) and "cached_at" in cached_data:
@@ -1281,47 +1392,63 @@ class CognitiveCore(dspy.Module):
                     except Exception:
                         pass
                     return None
-                logger.info(f"Cache hit: {cache_key} (age: {cache_age:.1f}s) task_id={task_id or 'n/a'}")
+                logger.info(
+                    f"Cache hit: {cache_key} (age: {cache_age:.1f}s) task_id={task_id or 'n/a'}"
+                )
             else:
-                logger.info(f"Cache hit: {cache_key} (unexpected format) task_id={task_id or 'n/a'}")
+                logger.info(
+                    f"Cache hit: {cache_key} (unexpected format) task_id={task_id or 'n/a'}"
+                )
 
             return normalized
-            
+
         except Exception as e:
             logger.warning(f"Cache retrieval error: {e}")
             return None
 
-    def _cache_result(self, cache_key: str, result: Dict[str, Any], cog_type: CognitiveType, *, agent_id: str, task_id: Optional[str] = None):
+    def _cache_result(
+        self,
+        cache_key: str,
+        result: Dict[str, Any],
+        cog_type: CognitiveType,
+        *,
+        agent_id: str,
+        task_id: Optional[str] = None,
+    ):
         """Cache result with metadata."""
         if not self._mw_enabled:
             return
-        
+
         try:
             mw = self._mw(agent_id)
             if not mw:
                 return
-            
+
             cache_data = {
                 "result": result,
                 "cached_at": time.time(),
                 "cog_type": cog_type.value,
-                "schema_version": self.schema_version
+                "schema_version": self.schema_version,
             }
-            
+
             # Use set_global_item instead of set
             mw.set_global_item(cache_key, cache_data)
             logger.info(f"Cached result: {cache_key} task_id={task_id or 'n/a'}")
-            
+
         except Exception as e:
             logger.warning(f"Cache storage error: {e}")
 
-    def _normalize_cached_result_shape(self, cached_data: Any) -> Optional[Dict[str, Any]]:
+    def _normalize_cached_result_shape(
+        self, cached_data: Any
+    ) -> Optional[Dict[str, Any]]:
         """Ensure cached payloads conform to the canonical out_dict structure."""
         if not cached_data:
             return None
 
         source = cached_data
-        if isinstance(cached_data, dict) and isinstance(cached_data.get("result"), dict):
+        if isinstance(cached_data, dict) and isinstance(
+            cached_data.get("result"), dict
+        ):
             source = cached_data["result"]
 
         if not isinstance(source, dict):
@@ -1346,11 +1473,19 @@ class CognitiveCore(dspy.Module):
             normalized["payload"] = {}
             normalized["result"] = {}
 
-        normalized.setdefault("cog_type", (cached_data.get("cog_type") if isinstance(cached_data, dict) else None) or "unknown")
+        normalized.setdefault(
+            "cog_type",
+            (cached_data.get("cog_type") if isinstance(cached_data, dict) else None)
+            or "unknown",
+        )
         metadata = normalized.get("metadata")
         if not isinstance(metadata, dict):
             metadata = {}
-        if isinstance(cached_data, dict) and "cached_at" in cached_data and "cached_at" not in metadata:
+        if (
+            isinstance(cached_data, dict)
+            and "cached_at" in cached_data
+            and "cached_at" not in metadata
+        ):
             metadata = dict(metadata)
             metadata["cached_at"] = cached_data["cached_at"]
         if metadata:
@@ -1383,13 +1518,15 @@ class CognitiveCore(dspy.Module):
             except Exception:
                 pass
         # Mock objects - extract attributes directly
-        if hasattr(raw, '_mock_name'):  # This is a Mock object
+        if hasattr(raw, "_mock_name"):  # This is a Mock object
             result = {}
             for attr_name in dir(raw):
-                if not attr_name.startswith('_') and not callable(getattr(raw, attr_name)):
+                if not attr_name.startswith("_") and not callable(
+                    getattr(raw, attr_name)
+                ):
                     try:
                         value = getattr(raw, attr_name)
-                        if not hasattr(value, '_mock_name'):  # Not a nested Mock
+                        if not hasattr(value, "_mock_name"):  # Not a nested Mock
                             result[attr_name] = value
                     except Exception:
                         pass
@@ -1402,23 +1539,23 @@ class CognitiveCore(dspy.Module):
 
     def _extract_task_id(self, input_data: Dict[str, Any]) -> Optional[str]:
         """Best-effort extraction of a task id from input data for logging.
-        
+
         Supports unified TaskPayload format (task_id at top level) and legacy formats.
-        
+
         Priority order:
         1. Top-level task_id (TaskPayload standard format)
         2. params.task_id (alternative location)
         3. Legacy keys: id, request_id, job_id, run_id
-        
+
         Args:
             input_data: The input data dictionary, typically from TaskPayload.model_dump()
-            
+
         Returns:
             Task ID as string, or None if not found
         """
         if not input_data:
             return None
-        
+
         # 1. Check top-level task_id first (TaskPayload standard format)
         # TaskPayload.model_dump() puts task_id at the top level
         task_id = input_data.get("task_id")
@@ -1428,7 +1565,7 @@ class CognitiveCore(dspy.Module):
                 return task_id.strip()
             elif isinstance(task_id, (int, float)) and task_id != 0:
                 return str(int(task_id))
-        
+
         # 2. Check params.task_id (alternative TaskPayload location)
         params = input_data.get("params")
         if isinstance(params, dict):
@@ -1438,7 +1575,7 @@ class CognitiveCore(dspy.Module):
                     return task_id.strip()
                 elif isinstance(task_id, (int, float)) and task_id != 0:
                     return str(int(task_id))
-        
+
         # 3. Legacy fallback: check common keys
         for key in ("id", "request_id", "job_id", "run_id"):
             value = input_data.get(key)
@@ -1447,26 +1584,26 @@ class CognitiveCore(dspy.Module):
                     return value.strip()
                 elif isinstance(value, (int, float)) and value != 0:
                     return str(int(value))
-        
+
         return None
 
     def _normalize_failure_analysis(self, payload: dict) -> dict:
         """
         Normalize failure analysis specific fields.
-        
+
         Handles:
         - confidence_score: Ensures it's a float in [0.0, 1.0]
         - Nested task structures: Normalizes any TaskPayload-like structures
-        
+
         Args:
             payload: The raw payload dict from DSPy handler output
-            
+
         Returns:
             Normalized payload dict
         """
         if not isinstance(payload, dict):
             return payload
-        
+
         # Normalize confidence_score
         if "confidence_score" in payload:
             try:
@@ -1478,17 +1615,19 @@ class CognitiveCore(dspy.Module):
                     conf = float(conf)
                 else:
                     conf = 0.0
-                
+
                 # Clamp to valid range [0.0, 1.0]
                 payload["confidence_score"] = max(0.0, min(conf, 1.0))
             except (ValueError, TypeError) as e:
-                logger.warning(f"Invalid confidence_score '{payload.get('confidence_score')}': {e}. Defaulting to 0.0")
+                logger.warning(
+                    f"Invalid confidence_score '{payload.get('confidence_score')}': {e}. Defaulting to 0.0"
+                )
                 payload["confidence_score"] = 0.0
-        
+
         # Normalize nested task structure if present (TaskPayload format)
         if "task" in payload and isinstance(payload["task"], dict):
             payload["task"] = normalize_task_payloads(payload["task"])
-        
+
         # Normalize solution_steps if present (may contain TaskPayload-like structures)
         if "solution_steps" in payload and isinstance(payload["solution_steps"], list):
             normalized_steps = []
@@ -1501,27 +1640,27 @@ class CognitiveCore(dspy.Module):
                 else:
                     normalized_steps.append(step)
             payload["solution_steps"] = normalized_steps
-        
+
         return payload
 
     def _normalize_task_planning(self, payload: dict) -> dict:
         """
         Normalize task planning fields, especially estimated_complexity.
-        
+
         Handles:
         - estimated_complexity: Ensures it's a float in [1.0, 10.0]
         - step_by_step_plan: Backward compatibility alias for solution_steps
         - Nested task structures: Normalizes any TaskPayload-like structures in solution_steps
-        
+
         Args:
             payload: The raw payload dict from DSPy handler output
-            
+
         Returns:
             Normalized payload dict
         """
         if not isinstance(payload, dict):
             return payload
-        
+
         # Back-compat: Some downstream consumers expect 'step_by_step_plan'.
         # If we produced a uniform plan in 'solution_steps', mirror it.
         if "step_by_step_plan" not in payload and "solution_steps" in payload:
@@ -1539,18 +1678,24 @@ class CognitiveCore(dspy.Module):
                 text = val.replace(",", ".").strip()
 
                 # Broader numeric extraction: find any number in the string
-                match = re.search(r'([0-9]+(?:\.[0-9]+)?)', text)
+                match = re.search(r"([0-9]+(?:\.[0-9]+)?)", text)
                 if match:
                     try:
                         num = float(match.group(1))
                         # Clamp to valid range [1.0, 10.0]
                         payload["estimated_complexity"] = max(1.0, min(num, 10.0))
-                        logger.debug(f"Extracted numeric complexity from '{val}': {payload['estimated_complexity']}")
+                        logger.debug(
+                            f"Extracted numeric complexity from '{val}': {payload['estimated_complexity']}"
+                        )
                     except ValueError:
-                        logger.warning(f"Could not convert extracted complexity: {match.group(1)}")
+                        logger.warning(
+                            f"Could not convert extracted complexity: {match.group(1)}"
+                        )
                         payload["estimated_complexity"] = 5.0
                 else:
-                    logger.warning(f"Could not extract numeric value from estimated_complexity: '{val}'")
+                    logger.warning(
+                        f"Could not extract numeric value from estimated_complexity: '{val}'"
+                    )
                     payload["estimated_complexity"] = 5.0
             else:
                 logger.warning(f"Unexpected type for estimated_complexity: {type(val)}")
@@ -1570,28 +1715,32 @@ class CognitiveCore(dspy.Module):
                     if "type" not in step:
                         logger.warning(f"solution_steps[{idx}] missing 'type' field")
                         step["type"] = "unknown_task"
-                    
+
                     if "params" not in step:
                         step["params"] = {}
-                    
+
                     # Normalize any nested task structures in steps
                     if "task" in step and isinstance(step["task"], dict):
                         step["task"] = normalize_task_payloads(step["task"])
-                    
+
                     # Normalize params if it contains TaskPayload-like structures
                     if "params" in step and isinstance(step["params"], dict):
                         # Check if params contains nested routing or cognitive sections
                         # that might need normalization
-                        if "routing" in step["params"] and isinstance(step["params"]["routing"], dict):
+                        if "routing" in step["params"] and isinstance(
+                            step["params"]["routing"], dict
+                        ):
                             # Already normalized by TaskPayload structure
                             pass
-                    
+
                     normalized_steps.append(step)
                 else:
-                    logger.warning(f"solution_steps[{idx}] is not a dict, skipping normalization")
+                    logger.warning(
+                        f"solution_steps[{idx}] is not a dict, skipping normalization"
+                    )
                     normalized_steps.append(step)
             payload["solution_steps"] = normalized_steps
-            
+
             # Update step_by_step_plan if it was set earlier
             if "step_by_step_plan" in payload:
                 payload["step_by_step_plan"] = normalized_steps
@@ -1601,20 +1750,20 @@ class CognitiveCore(dspy.Module):
     def _normalize_chat(self, payload: dict) -> dict:
         """
         Normalize chat-specific fields.
-        
+
         Handles:
         - confidence: Ensures it's a float in [0.0, 1.0] and maps to confidence_score for consistency
         - response: Ensures it's a string
-        
+
         Args:
             payload: The raw payload dict from DSPy handler output
-            
+
         Returns:
             Normalized payload dict
         """
         if not isinstance(payload, dict):
             return payload
-        
+
         # Normalize confidence field (ChatSignature outputs 'confidence', not 'confidence_score')
         if "confidence" in payload:
             try:
@@ -1626,24 +1775,28 @@ class CognitiveCore(dspy.Module):
                     conf = float(conf)
                 else:
                     conf = 0.0
-                
+
                 # Clamp to valid range [0.0, 1.0]
                 conf_normalized = max(0.0, min(conf, 1.0))
                 payload["confidence"] = conf_normalized
                 # Also set confidence_score for consistency with other cognitive types
                 payload["confidence_score"] = conf_normalized
             except (ValueError, TypeError) as e:
-                logger.warning(f"Invalid confidence '{payload.get('confidence')}': {e}. Defaulting to 0.0")
+                logger.warning(
+                    f"Invalid confidence '{payload.get('confidence')}': {e}. Defaulting to 0.0"
+                )
                 payload["confidence"] = 0.0
                 payload["confidence_score"] = 0.0
-        
+
         # Ensure response is a string
         if "response" in payload and not isinstance(payload["response"], str):
             payload["response"] = str(payload.get("response", ""))
-        
+
         return payload
 
-    def _validate_solution_steps(self, payload: Dict[str, Any], violations: List[str]) -> None:
+    def _validate_solution_steps(
+        self, payload: Dict[str, Any], violations: List[str]
+    ) -> None:
         steps = payload.get("solution_steps")
         if steps is None:
             return
@@ -1659,10 +1812,12 @@ class CognitiveCore(dspy.Module):
                 if required not in step:
                     violations.append(f"solution_steps[{idx}] missing '{required}'")
 
-    def _check_post_conditions(self, result: Dict[str, Any], cog_type: CognitiveType) -> Tuple[bool, List[str]]:
+    def _check_post_conditions(
+        self, result: Dict[str, Any], cog_type: CognitiveType
+    ) -> Tuple[bool, List[str]]:
         """Check post-conditions for DSPy outputs to ensure policy compliance."""
         violations = []
-        
+
         # Check confidence score bounds
         if "confidence_score" in result:
             conf = result["confidence_score"]
@@ -1673,41 +1828,52 @@ class CognitiveCore(dspy.Module):
                     conf = 0.0
             if not (0.0 <= conf <= 1.0):
                 violations.append(f"Confidence score {conf} out of bounds [0.0, 1.0]")
-        
+
         # Check for PII patterns
-        text_fields = ["thought", "proposed_solution", "reasoning", "decision", "solution_approach"]
+        text_fields = [
+            "thought",
+            "proposed_solution",
+            "reasoning",
+            "decision",
+            "solution_approach",
+        ]
         for field in text_fields:
             if field in result and isinstance(result[field], str):
                 text = result[field].lower()
                 # Simple PII detection
-                if any(pattern in text for pattern in ["ssn", "social security", "credit card", "password"]):
+                if any(
+                    pattern in text
+                    for pattern in ["ssn", "social security", "credit card", "password"]
+                ):
                     violations.append(f"Potential PII detected in {field}")
-        
+
         # Check for executable content
         for field in text_fields:
             if field in result and isinstance(result[field], str):
                 text = result[field]
-                if re.search(r'```[\s\S]*?```', text) or re.search(r'`[^`]+`', text):
+                if re.search(r"```[\s\S]*?```", text) or re.search(r"`[^`]+`", text):
                     violations.append(f"Code blocks detected in {field}")
-        
+
         # Check numeric ranges for specific fields
         if cog_type == CognitiveType.TASK_PLANNING and "estimated_complexity" in result:
             try:
                 complexity = float(result["estimated_complexity"])
                 if not (1.0 <= complexity <= 10.0):
-                    violations.append(f"Complexity score {complexity} out of bounds [1.0, 10.0]")
+                    violations.append(
+                        f"Complexity score {complexity} out of bounds [1.0, 10.0]"
+                    )
             except (ValueError, TypeError):
                 violations.append("Invalid complexity score format")
 
         self._validate_solution_steps(result, violations)
-        
+
         return len(violations) == 0, violations
 
     def _build_query(self, context: CognitiveContext) -> str:
         """Build search query from context."""
         # Extract key information for search
         query_parts = []
-        
+
         if context.cog_type == CognitiveType.FAILURE_ANALYSIS:
             incident = context.input_data.get("incident_context", {})
             query_parts.append(f"failure analysis {incident.get('error_type', '')}")
@@ -1724,97 +1890,167 @@ class CognitiveCore(dspy.Module):
             structural = context.input_data.get("structural_context", "")
             incident = context.input_data.get("incident_report", "")
             query_parts.append(f"causal decomposition {structural} {incident[:80]}")
-        elif context.cog_type in (CognitiveType.GRAPH_EMBED, CognitiveType.GRAPH_EMBED_V2):
+        elif context.cog_type in (
+            CognitiveType.GRAPH_EMBED,
+            CognitiveType.GRAPH_EMBED_V2,
+        ):
             start_node_ids = context.input_data.get("start_node_ids", [])
-            query_parts.append(f"graph embedding nodes {self._format_id_list(start_node_ids)}")
-        elif context.cog_type in (CognitiveType.GRAPH_RAG_QUERY, CognitiveType.GRAPH_RAG_QUERY_V2):
+            query_parts.append(
+                f"graph embedding nodes {self._format_id_list(start_node_ids)}"
+            )
+        elif context.cog_type in (
+            CognitiveType.GRAPH_RAG_QUERY,
+            CognitiveType.GRAPH_RAG_QUERY_V2,
+        ):
             start_node_ids = context.input_data.get("start_node_ids", [])
-            query_parts.append(f"graph RAG query nodes {self._format_id_list(start_node_ids)}")
+            query_parts.append(
+                f"graph RAG query nodes {self._format_id_list(start_node_ids)}"
+            )
         elif context.cog_type == CognitiveType.GRAPH_SYNC_NODES:
             node_ids = context.input_data.get("node_ids", [])
             query_parts.append(f"graph sync nodes {self._format_id_list(node_ids)}")
-        elif context.cog_type in (CognitiveType.GRAPH_FACT_EMBED, CognitiveType.GRAPH_FACT_QUERY):
+        elif context.cog_type in (
+            CognitiveType.GRAPH_FACT_EMBED,
+            CognitiveType.GRAPH_FACT_QUERY,
+        ):
             start_fact_ids = context.input_data.get("start_fact_ids", [])
-            query_parts.append(f"fact operations {self._format_id_list(start_fact_ids)}")
+            query_parts.append(
+                f"fact operations {self._format_id_list(start_fact_ids)}"
+            )
         elif context.cog_type == CognitiveType.FACT_SEARCH:
             query = context.input_data.get("query", "")
             query_parts.append(f"fact search {query}")
         elif context.cog_type == CognitiveType.FACT_STORE:
             text = context.input_data.get("text", "")
             query_parts.append(f"fact store {text[:100]}")
-        elif context.cog_type in (CognitiveType.ARTIFACT_MANAGE, CognitiveType.CAPABILITY_MANAGE, 
-                                  CognitiveType.MEMORY_CELL_MANAGE):
+        elif context.cog_type in (
+            CognitiveType.ARTIFACT_MANAGE,
+            CognitiveType.CAPABILITY_MANAGE,
+            CognitiveType.MEMORY_CELL_MANAGE,
+        ):
             action = context.input_data.get("action", "")
             query_parts.append(f"resource management {action}")
-        elif context.cog_type in (CognitiveType.MODEL_MANAGE, CognitiveType.POLICY_MANAGE, 
-                                  CognitiveType.SERVICE_MANAGE, CognitiveType.SKILL_MANAGE):
+        elif context.cog_type in (
+            CognitiveType.MODEL_MANAGE,
+            CognitiveType.POLICY_MANAGE,
+            CognitiveType.SERVICE_MANAGE,
+            CognitiveType.SKILL_MANAGE,
+        ):
             action = context.input_data.get("action", "")
             query_parts.append(f"agent layer management {action}")
         else:
             query_parts.append(context.cog_type.value)
-        
+
         return " ".join(query_parts)
 
-    def _format_input_for_signature(self, input_data: Dict[str, Any], cog_type: CognitiveType) -> Dict[str, Any]:
+    def _format_input_for_signature(
+        self, input_data: Dict[str, Any], cog_type: CognitiveType
+    ) -> Dict[str, Any]:
         """
         Convert dict fields to JSON strings for DSPy signatures that expect JSON strings.
         This handles the mismatch between dict inputs and signature field expectations.
         """
         formatted = dict(input_data)
-        
+
         # Map task types to fields that need JSON string conversion
         if cog_type == CognitiveType.FAILURE_ANALYSIS:
             # AnalyzeFailureSignature expects JSON strings
-            if "incident_context" in formatted and isinstance(formatted["incident_context"], dict):
-                formatted["incident_context"] = json.dumps(formatted["incident_context"])
+            if "incident_context" in formatted and isinstance(
+                formatted["incident_context"], dict
+            ):
+                formatted["incident_context"] = json.dumps(
+                    formatted["incident_context"]
+                )
         elif cog_type == CognitiveType.TASK_PLANNING:
             # TaskPlanningSignature expects JSON strings
-            if "agent_capabilities" in formatted and isinstance(formatted["agent_capabilities"], dict):
-                formatted["agent_capabilities"] = json.dumps(formatted["agent_capabilities"])
-            if "available_resources" in formatted and isinstance(formatted["available_resources"], dict):
-                formatted["available_resources"] = json.dumps(formatted["available_resources"])
+            if "agent_capabilities" in formatted and isinstance(
+                formatted["agent_capabilities"], dict
+            ):
+                formatted["agent_capabilities"] = json.dumps(
+                    formatted["agent_capabilities"]
+                )
+            if "available_resources" in formatted and isinstance(
+                formatted["available_resources"], dict
+            ):
+                formatted["available_resources"] = json.dumps(
+                    formatted["available_resources"]
+                )
         elif cog_type == CognitiveType.DECISION_MAKING:
             # DecisionMakingSignature expects JSON strings
-            if "decision_context" in formatted and isinstance(formatted["decision_context"], dict):
-                formatted["decision_context"] = json.dumps(formatted["decision_context"])
-            if "historical_data" in formatted and isinstance(formatted["historical_data"], dict):
+            if "decision_context" in formatted and isinstance(
+                formatted["decision_context"], dict
+            ):
+                formatted["decision_context"] = json.dumps(
+                    formatted["decision_context"]
+                )
+            if "historical_data" in formatted and isinstance(
+                formatted["historical_data"], dict
+            ):
                 formatted["historical_data"] = json.dumps(formatted["historical_data"])
         elif cog_type == CognitiveType.PROBLEM_SOLVING:
             # ProblemSolvingSignature expects JSON strings
-            if "constraints" in formatted and isinstance(formatted["constraints"], dict):
+            if "constraints" in formatted and isinstance(
+                formatted["constraints"], dict
+            ):
                 formatted["constraints"] = json.dumps(formatted["constraints"])
-            if "available_tools" in formatted and isinstance(formatted["available_tools"], dict):
+            if "available_tools" in formatted and isinstance(
+                formatted["available_tools"], dict
+            ):
                 formatted["available_tools"] = json.dumps(formatted["available_tools"])
         elif cog_type == CognitiveType.CAUSAL_DECOMPOSITION:
             # CausalDecompositionSignature expects structured context blocks
-            if "structural_context" in formatted and isinstance(formatted["structural_context"], (list, dict)):
-                formatted["structural_context"] = json.dumps(formatted["structural_context"])
-            if "incident_report" in formatted and isinstance(formatted["incident_report"], (list, dict)):
+            if "structural_context" in formatted and isinstance(
+                formatted["structural_context"], (list, dict)
+            ):
+                formatted["structural_context"] = json.dumps(
+                    formatted["structural_context"]
+                )
+            if "incident_report" in formatted and isinstance(
+                formatted["incident_report"], (list, dict)
+            ):
                 formatted["incident_report"] = json.dumps(formatted["incident_report"])
         elif cog_type == CognitiveType.CHAT:
             # ChatSignature expects conversation_history as JSON string
             if "conversation_history" in formatted:
                 if isinstance(formatted["conversation_history"], (list, dict)):
-                    formatted["conversation_history"] = json.dumps(formatted["conversation_history"])
+                    formatted["conversation_history"] = json.dumps(
+                        formatted["conversation_history"]
+                    )
                 elif formatted["conversation_history"] is None:
                     formatted["conversation_history"] = "[]"
         elif cog_type == CognitiveType.MEMORY_SYNTHESIS:
             # MemorySynthesisSignature expects JSON strings
             if "memory_fragments" in formatted:
                 if isinstance(formatted["memory_fragments"], (list, dict)):
-                    formatted["memory_fragments"] = json.dumps(formatted["memory_fragments"])
+                    formatted["memory_fragments"] = json.dumps(
+                        formatted["memory_fragments"]
+                    )
         elif cog_type == CognitiveType.CAPABILITY_ASSESSMENT:
             # CapabilityAssessmentSignature expects JSON strings
-            if "performance_data" in formatted and isinstance(formatted["performance_data"], dict):
-                formatted["agent_performance_data"] = json.dumps(formatted.pop("performance_data"))
-            if "current_capabilities" in formatted and isinstance(formatted["current_capabilities"], dict):
-                formatted["current_capabilities"] = json.dumps(formatted["current_capabilities"])
-            if "target_capabilities" in formatted and isinstance(formatted["target_capabilities"], dict):
-                formatted["target_capabilities"] = json.dumps(formatted["target_capabilities"])
-        
+            if "performance_data" in formatted and isinstance(
+                formatted["performance_data"], dict
+            ):
+                formatted["agent_performance_data"] = json.dumps(
+                    formatted.pop("performance_data")
+                )
+            if "current_capabilities" in formatted and isinstance(
+                formatted["current_capabilities"], dict
+            ):
+                formatted["current_capabilities"] = json.dumps(
+                    formatted["current_capabilities"]
+                )
+            if "target_capabilities" in formatted and isinstance(
+                formatted["target_capabilities"], dict
+            ):
+                formatted["target_capabilities"] = json.dumps(
+                    formatted["target_capabilities"]
+                )
+
         return formatted
 
-    def _build_knowledge_context(self, facts: List[Fact], summary: str, sufficiency: RetrievalSufficiency) -> Dict[str, Any]:
+    def _build_knowledge_context(
+        self, facts: List[Fact], summary: str, sufficiency: RetrievalSufficiency
+    ) -> Dict[str, Any]:
         """Build knowledge context for DSPy signatures."""
         return {
             "facts": [_fact_to_context_dict(fact) for fact in facts],
@@ -1825,13 +2061,13 @@ class CognitiveCore(dspy.Module):
                 "agreement": sufficiency.agreement,
                 "conflict_count": sufficiency.conflict_count,
                 "staleness_ratio": sufficiency.staleness_ratio,
-                "trust_score": sufficiency.trust_score
+                "trust_score": sufficiency.trust_score,
             },
             "policy": {
                 "facts_only": True,
                 "no_executable_content": True,
-                "sanitized": True
-            }
+                "sanitized": True,
+            },
         }
 
     def _mw(self, agent_id: str) -> Optional[MwManager]:
@@ -1859,7 +2095,6 @@ class CognitiveCore(dspy.Module):
         # Text search should use CognitiveMemoryBridge + HolonFabricRetrieval instead
         return []
 
-
     def _mw_vector_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
         """Search vectors in Mw for agent."""
         mw = self._mw(agent_id)
@@ -1869,8 +2104,9 @@ class CognitiveCore(dspy.Module):
         # Vector search should use CognitiveMemoryBridge + HolonFabricRetrieval instead
         return []
 
-
-    def _run_coro_sync(self, coro: Awaitable[Any], *, timeout: Optional[float] = None) -> Any:
+    def _run_coro_sync(
+        self, coro: Awaitable[Any], *, timeout: Optional[float] = None
+    ) -> Any:
         """Run an async coroutine from sync context without nesting event loops."""
         try:
             loop = asyncio.get_running_loop()
@@ -1889,25 +2125,39 @@ class CognitiveCore(dspy.Module):
 
     def _bind_broker(self, agent_id: str) -> ContextBroker:
         """Return a ContextBroker instance with Mw search bindings for the given agent."""
+
         def text_fn(query, k):
             return self._mw_first_text_search(agent_id, query, k)
+
         def vec_fn(query, k):
             return self._mw_first_vector_search(agent_id, query, k)
 
         base = self.context_broker
         if base is None:
-            return ContextBroker(text_fn, vec_fn, token_budget=1500, ocps_client=self.ocps_client)
+            return ContextBroker(
+                text_fn, vec_fn, token_budget=1500, ocps_client=self.ocps_client
+            )
 
         if hasattr(base, "clone_with_search"):
             try:
                 return base.clone_with_search(text_fn, vec_fn)  # type: ignore[attr-defined]
             except Exception:
-                logger.debug("clone_with_search failed; falling back to new ContextBroker.")
+                logger.debug(
+                    "clone_with_search failed; falling back to new ContextBroker."
+                )
 
-        token_budget = getattr(base, "base_token_budget", getattr(base, "token_budget", 1500))
+        token_budget = getattr(
+            base, "base_token_budget", getattr(base, "token_budget", 1500)
+        )
         ocps_client = getattr(base, "ocps_client", self.ocps_client)
         energy_client = getattr(base, "energy_client", None)
-        return ContextBroker(text_fn, vec_fn, token_budget=token_budget, ocps_client=ocps_client, energy_client=energy_client)
+        return ContextBroker(
+            text_fn,
+            vec_fn,
+            token_budget=token_budget,
+            ocps_client=ocps_client,
+            energy_client=energy_client,
+        )
 
     def _update_last_sufficiency(self, sufficiency_dict: Dict[str, Any]) -> None:
         with self._state_lock:
@@ -1917,7 +2167,9 @@ class CognitiveCore(dspy.Module):
         with self._state_lock:
             return dict(self._last_sufficiency)
 
-    def _filter_to_signature(self, handler: Any, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _filter_to_signature(
+        self, handler: Any, data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Filter kwargs to the declared DSPy signature inputs to avoid unexpected kwargs."""
         signature = getattr(handler, "signature", None)
         if not signature:
@@ -1939,25 +2191,33 @@ class CognitiveCore(dspy.Module):
             return ",".join(str(item) for item in ids)
         return str(ids)
 
-    def _mw_first_text_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
+    def _mw_first_text_search(
+        self, agent_id: str, q: str, k: int
+    ) -> List[Dict[str, Any]]:
         """Search Mw for text queries.
-        
+
         NOTE: This method is deprecated. Use CognitiveMemoryBridge + HolonFabricRetrieval
         for proper scoped retrieval with HolonFabric.
         """
         return self._mw_text_search(agent_id, q, k)
 
-    def _mw_first_vector_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
+    def _mw_first_vector_search(
+        self, agent_id: str, q: str, k: int
+    ) -> List[Dict[str, Any]]:
         """Search Mw for vector queries.
-        
+
         NOTE: This method is deprecated. Use CognitiveMemoryBridge + HolonFabricRetrieval
         for proper scoped vector search with HolonFabric.
         """
         return self._mw_vector_search(agent_id, q, k)
 
-    def _create_plan_from_steps(self, steps: List[Dict[str, Any]], escalate_hint: bool = False, 
-                               sufficiency: Optional[Dict[str, Any]] = None, 
-                               confidence: Optional[float] = None) -> Dict[str, Any]:
+    def _create_plan_from_steps(
+        self,
+        steps: List[Dict[str, Any]],
+        escalate_hint: bool = False,
+        sufficiency: Optional[Dict[str, Any]] = None,
+        confidence: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """Create a uniform plan format from task steps."""
         return {
             "solution_steps": steps,
@@ -1966,16 +2226,22 @@ class CognitiveCore(dspy.Module):
                 "sufficiency": sufficiency or {},
                 "confidence": confidence,
                 "plan_type": "cognitive_proposal",
-                "step_count": len(steps)
-            }
+                "step_count": len(steps),
+            },
         }
-    
-    def _wrap_single_step_as_plan(self, task: Dict[str, Any], escalate_hint: bool = False,
-                                 sufficiency: Optional[Dict[str, Any]] = None,
-                                 confidence: Optional[float] = None) -> Dict[str, Any]:
+
+    def _wrap_single_step_as_plan(
+        self,
+        task: Dict[str, Any],
+        escalate_hint: bool = False,
+        sufficiency: Optional[Dict[str, Any]] = None,
+        confidence: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """Wrap a single task as a 1-step plan."""
-        return self._create_plan_from_steps([task], escalate_hint, sufficiency, confidence)
-    
+        return self._create_plan_from_steps(
+            [task], escalate_hint, sufficiency, confidence
+        )
+
     def _norm_domain(self, domain: Optional[str]) -> Optional[str]:
         """Normalize domain to standard taxonomy."""
         if not domain:
@@ -1984,18 +2250,20 @@ class CognitiveCore(dspy.Module):
         # Map common variations to standard domains
         domain_map = {
             "fact": "facts",
-            "admin": "management", 
+            "admin": "management",
             "mgmt": "management",
-            "util": "utility"
+            "util": "utility",
         }
         return domain_map.get(domain, domain)
-    
+
     def _assert_no_routing_awareness(self, result: Dict[str, Any]) -> None:
         """Assert that Cognitive output doesn't contain routing decisions."""
         result_str = json.dumps(result).lower()
         forbidden = ("organ_id", "instance_id")
         if any(k in result_str for k in forbidden):
-            raise ValueError("Cognitive must not select organs/instances - routing decisions belong to Coordinator/Organism")
+            raise ValueError(
+                "Cognitive must not select organs/instances - routing decisions belong to Coordinator/Organism"
+            )
         # Extra: forbid router-specific fields accidentally leaking
         if '"resolve-route"' in result_str or '"resolve-routes"' in result_str:
             raise ValueError("Cognitive must not call routing APIs")
@@ -2005,89 +2273,238 @@ class CognitiveCore(dspy.Module):
         start_node_ids = kwargs.get("start_node_ids", [])
         k = kwargs.get("k", 2)
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "graph_embed", "domain": self._norm_domain("graph"), "params": {"start_node_ids": start_node_ids, "k": k, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+        return {
+            "task": {
+                "type": "graph_embed",
+                "domain": self._norm_domain("graph"),
+                "params": {
+                    "start_node_ids": start_node_ids,
+                    "k": k,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.8,
+        }
 
     def _handle_graph_rag_query(self, **kwargs) -> Dict[str, Any]:
         start_node_ids = kwargs.get("start_node_ids", [])
         k = kwargs.get("k", 2)
         topk = kwargs.get("topk", 10)
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "graph_rag_query", "domain": self._norm_domain("graph"), "params": {"start_node_ids": start_node_ids, "k": k, "topk": topk, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
-
+        return {
+            "task": {
+                "type": "graph_rag_query",
+                "domain": self._norm_domain("graph"),
+                "params": {
+                    "start_node_ids": start_node_ids,
+                    "k": k,
+                    "topk": topk,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.8,
+        }
 
     def _handle_graph_sync_nodes(self, **kwargs) -> Dict[str, Any]:
         node_ids = kwargs.get("node_ids", [])
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "graph_sync_nodes", "domain": self._norm_domain("graph"), "params": {"node_ids": node_ids, "knowledge_context": knowledge_context}}, "confidence_score": 0.7}
+        return {
+            "task": {
+                "type": "graph_sync_nodes",
+                "domain": self._norm_domain("graph"),
+                "params": {
+                    "node_ids": node_ids,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.7,
+        }
 
     def _handle_graph_fact_embed(self, **kwargs) -> Dict[str, Any]:
         start_fact_ids = kwargs.get("start_fact_ids", [])
         k = kwargs.get("k", 2)
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "graph_fact_embed", "domain": self._norm_domain("facts"), "params": {"start_fact_ids": start_fact_ids, "k": k, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+        return {
+            "task": {
+                "type": "graph_fact_embed",
+                "domain": self._norm_domain("facts"),
+                "params": {
+                    "start_fact_ids": start_fact_ids,
+                    "k": k,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.8,
+        }
 
     def _handle_graph_fact_query(self, **kwargs) -> Dict[str, Any]:
         start_fact_ids = kwargs.get("start_fact_ids", [])
         k = kwargs.get("k", 2)
         topk = kwargs.get("topk", 10)
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "graph_fact_query", "domain": self._norm_domain("facts"), "params": {"start_fact_ids": start_fact_ids, "k": k, "topk": topk, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+        return {
+            "task": {
+                "type": "graph_fact_query",
+                "domain": self._norm_domain("facts"),
+                "params": {
+                    "start_fact_ids": start_fact_ids,
+                    "k": k,
+                    "topk": topk,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.8,
+        }
 
     def _handle_fact_search(self, **kwargs) -> Dict[str, Any]:
         query = kwargs.get("query", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "fact_search", "domain": self._norm_domain("facts"), "params": {"query": query, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+        return {
+            "task": {
+                "type": "fact_search",
+                "domain": self._norm_domain("facts"),
+                "params": {"query": query, "knowledge_context": knowledge_context},
+            },
+            "confidence_score": 0.8,
+        }
 
     def _handle_fact_store(self, **kwargs) -> Dict[str, Any]:
         text = kwargs.get("text", "")
         tags = kwargs.get("tags", [])
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "fact_store", "domain": self._norm_domain("facts"), "params": {"text": text, "tags": tags, "knowledge_context": knowledge_context}}, "confidence_score": 0.9}
+        return {
+            "task": {
+                "type": "fact_store",
+                "domain": self._norm_domain("facts"),
+                "params": {
+                    "text": text,
+                    "tags": tags,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.9,
+        }
 
     def _handle_artifact_manage(self, **kwargs) -> Dict[str, Any]:
         action = kwargs.get("action", "")
         uri = kwargs.get("uri", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "artifact_manage", "domain": self._norm_domain("management"), "params": {"action": action, "uri": uri, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+        return {
+            "task": {
+                "type": "artifact_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "uri": uri,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.8,
+        }
 
     def _handle_capability_manage(self, **kwargs) -> Dict[str, Any]:
         action = kwargs.get("action", "")
         name = kwargs.get("name", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "capability_manage", "domain": self._norm_domain("management"), "params": {"action": action, "name": name, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+        return {
+            "task": {
+                "type": "capability_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "name": name,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.8,
+        }
 
     def _handle_memory_cell_manage(self, **kwargs) -> Dict[str, Any]:
         action = kwargs.get("action", "")
         cell_id = kwargs.get("cell_id", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "memory_cell_manage", "domain": self._norm_domain("management"), "params": {"action": action, "cell_id": cell_id, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+        return {
+            "task": {
+                "type": "memory_cell_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "cell_id": cell_id,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.8,
+        }
 
     def _handle_model_manage(self, **kwargs) -> Dict[str, Any]:
         action = kwargs.get("action", "")
         name = kwargs.get("name", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "model_manage", "domain": self._norm_domain("management"), "params": {"action": action, "name": name, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+        return {
+            "task": {
+                "type": "model_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "name": name,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.8,
+        }
 
     def _handle_policy_manage(self, **kwargs) -> Dict[str, Any]:
         action = kwargs.get("action", "")
         policy_id = kwargs.get("policy_id", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "policy_manage", "domain": self._norm_domain("management"), "params": {"action": action, "policy_id": policy_id, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+        return {
+            "task": {
+                "type": "policy_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "policy_id": policy_id,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.8,
+        }
 
     def _handle_service_manage(self, **kwargs) -> Dict[str, Any]:
         action = kwargs.get("action", "")
         service_id = kwargs.get("service_id", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "service_manage", "domain": self._norm_domain("management"), "params": {"action": action, "service_id": service_id, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+        return {
+            "task": {
+                "type": "service_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "service_id": service_id,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.8,
+        }
 
     def _handle_skill_manage(self, **kwargs) -> Dict[str, Any]:
         action = kwargs.get("action", "")
         skill_id = kwargs.get("skill_id", "")
         knowledge_context = kwargs.get("knowledge_context", "{}")
-        return {"task": {"type": "skill_manage", "domain": self._norm_domain("management"), "params": {"action": action, "skill_id": skill_id, "knowledge_context": knowledge_context}}, "confidence_score": 0.8}
+        return {
+            "task": {
+                "type": "skill_manage",
+                "domain": self._norm_domain("management"),
+                "params": {
+                    "action": action,
+                    "skill_id": skill_id,
+                    "knowledge_context": knowledge_context,
+                },
+            },
+            "confidence_score": 0.8,
+        }
 
 
 # =============================================================================
 # Global Cognitive Core Instance Management
 # =============================================================================
-

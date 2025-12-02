@@ -171,6 +171,10 @@ class CognitiveServiceClient(BaseServiceClient):
         timeout: Optional[float] = None,
         llm_provider_override: Optional[str] = None,
         llm_model_override: Optional[str] = None,
+        # NEW: coordinator / PKG metadata
+        proto_plan: Optional[Dict[str, Any]] = None,
+        pkg_meta: Optional[Dict[str, Any]] = None,
+        ocps: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Unified cognitive interface using TaskPayload schema.
@@ -178,40 +182,28 @@ class CognitiveServiceClient(BaseServiceClient):
         Ensures cognitive jobs consume exactly the same structured inputs
         as the router/agents/organs.
 
-        Args:
-            agent_id: The agent invoking the cognitive service.
-            cog_type: The specific cognitive operation (TASK_PLANNING, etc.).
-            decision_kind: The decision workflow pipeline.
-            task: A fully structured TaskPayload or raw dict compatible with it.
-            timeout: Optional override for this call.
-            llm_provider_override: Optional LLM provider override.
-            llm_model_override: Optional LLM model override.
-
-        Returns:
-            dict: The full cognitive service response.
+        NEW:
+          - proto_plan: Optional PKG- or router-generated DAG / plan scaffold
+          - pkg_meta:   Optional PKG metadata (version, snapshot, tags, etc.)
+          - ocps:       Optional OCPS / drift state payload
         """
         resolved_type = self._resolve_cog_type(cog_type)
 
         # ------------------------------------------------------------------
-        # 1. Normalize and Prepare Payload
+        # 1. Normalize to TaskPayload
         # ------------------------------------------------------------------
         if isinstance(task, TaskPayload):
             payload = task
         else:
-            # Use from_db factory to properly unpack params.routing into top-level fields
             payload = TaskPayload.from_db(dict(task or {}))
 
-        # Get the current state as a dictionary for modification
-        payload_dict = payload.model_dump()
-
-        # Ensure params exists and get a mutable copy of the dictionary
-        params = dict(payload_dict.get("params", {}))
-
         # ------------------------------------------------------------------
-        # 2. Inject Cognitive Metadata (params.cognitive)
+        # 2. Prepare Modified Params
         # ------------------------------------------------------------------
+        params = dict(payload.params or {})
         cognitive_section = dict(params.get("cognitive", {}))
 
+        # Base cognitive envelope (shared by agents + coordinator)
         cognitive_section.update(
             {
                 "agent_id": agent_id,
@@ -220,7 +212,6 @@ class CognitiveServiceClient(BaseServiceClient):
             }
         )
 
-        # Optional overrides
         if llm_provider_override:
             cognitive_section["llm_provider_override"] = (
                 llm_provider_override.strip().lower()
@@ -228,23 +219,22 @@ class CognitiveServiceClient(BaseServiceClient):
         if llm_model_override:
             cognitive_section["llm_model_override"] = llm_model_override
 
+        # ------------------------------------------------------------------
+        # 2b. NEW: Coordinator / PKG-specific metadata
+        # ------------------------------------------------------------------
+        if proto_plan is not None:
+            cognitive_section["proto_plan"] = proto_plan
+        if pkg_meta is not None:
+            cognitive_section["pkg_meta"] = pkg_meta
+        if ocps is not None:
+            cognitive_section["ocps"] = ocps
+
         params["cognitive"] = cognitive_section
 
         # ------------------------------------------------------------------
-        # 3. Reconstruct Payload (Fixing model_copy absence)
+        # 3. Create Updated Payload
         # ------------------------------------------------------------------
-        # Start with the full dictionary state (including all top-level mirror fields)
-        updated_data = payload_dict
-
-        # Overwrite the 'params' key with our newly modified dictionary
-        updated_data["params"] = params
-
-        # Instantiate a new TaskPayload object with the updated data.
-        # This ensures proper V2 validation and correct internal state.
-        updated_payload = TaskPayload(**updated_data)
-
-        # Use model_dump() on the new object to get the properly serialized payload
-        payload_dict_final = updated_payload.model_dump()
+        updated_payload = payload.model_copy(update={"params": params})
 
         # ------------------------------------------------------------------
         # 4. Execute Service Call
@@ -256,9 +246,8 @@ class CognitiveServiceClient(BaseServiceClient):
             f"type={resolved_type.value}, pipeline={decision_kind.value}"
         )
 
-        # Single unified endpoint
         return await self.post(
-            "/execute", json=payload_dict_final, timeout=effective_timeout
+            "/execute", json=updated_payload.model_dump(), timeout=effective_timeout
         )
 
     # ---------------------------
@@ -295,16 +284,16 @@ class CognitiveServiceClient(BaseServiceClient):
         timeout: Optional[float] = None,
         llm_provider_override: Optional[str] = None,
         llm_model_override: Optional[str] = None,
+        # NEW: coordinator / PKG metadata
+        proto_plan: Optional[Dict[str, Any]] = None,
+        pkg_meta: Optional[Dict[str, Any]] = None,
+        ocps: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Synchronous wrapper for execute_async.
 
         This method is safe to call from both sync and async code.
         """
-
-        # We need a new, clean event loop to run our async call.
-        # Submitting `asyncio.run()` to a thread pool is the
-        # safest way to do this from any context (sync or async).
 
         async def _runner():
             return await self.execute_async(
@@ -315,19 +304,14 @@ class CognitiveServiceClient(BaseServiceClient):
                 timeout=timeout,
                 llm_provider_override=llm_provider_override,
                 llm_model_override=llm_model_override,
+                proto_plan=proto_plan,
+                pkg_meta=pkg_meta,
+                ocps=ocps,
             )
 
         try:
-            # Check if we're *already* in a running event loop
             asyncio.get_running_loop()
-
-            # If so, we MUST run asyncio.run() in a new thread
-            # to avoid 'cannot run nested event loops' error.
             future = _SYNC_EXECUTOR.submit(lambda: asyncio.run(_runner()))
-            # Use the client's default timeout as a safety net
             return future.result(timeout=self.timeout + 5.0)
-
         except RuntimeError:
-            # No event loop is running. We are in a sync context.
-            # It's safe to create a new event loop right here.
             return asyncio.run(_runner())

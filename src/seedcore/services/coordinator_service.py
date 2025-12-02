@@ -10,6 +10,7 @@ Responsibilities:
 This service is the "Cortex" of the organism. It decides WHAT to do,
 but delegates HOW (Cognitive) and ACTION (Organism).
 """
+from __future__ import annotations
 
 import asyncio
 import json
@@ -75,6 +76,9 @@ from ..serve.ml_client import MLServiceClient
 from ..serve.organism_client import OrganismServiceClient
 # CHANGED: Import Client instead of Service
 from ..serve.eventizer_client import EventizerServiceClient
+from ..serve.state_client import StateServiceClient
+from ..serve.energy_client import EnergyServiceClient
+from ..coordinator.core.signals import SignalEnricher
 
 
 setup_logging(app_name="seedcore.coordinator_service.driver")
@@ -106,6 +110,17 @@ class Coordinator:
         # CHANGED: Initialize Remote Client for System 1 Perception
         # This connects to the Ops module where Eventizer is running
         self.eventizer = EventizerServiceClient()
+
+        # Global SLO configuration
+        self.fast_path_latency_slo_ms = FAST_PATH_LATENCY_SLO_MS
+
+        # State/Energy clients for contextual signals
+        self.state_client = StateServiceClient()
+        self.energy_client = EnergyServiceClient()
+        self.signal_enricher = SignalEnricher(
+            state_client=self.state_client,
+            energy_client=self.energy_client,
+        )
         
         # 2. Infrastructure & DAOs
         self.metrics = get_global_metrics_tracker()
@@ -338,7 +353,7 @@ class Coordinator:
                 "domain": task_dict.get("domain"),
                 "task_type": task_dict.get("type")
             }
-            resp = await self.eventizer.process_eventizer_request(payload)
+            resp = await self.eventizer.process(payload)
             
             # Client already returns dict format, just extract relevant fields
             return {
@@ -374,6 +389,8 @@ class Coordinator:
             surprise_computer=self.surprise_computer,
             tau_fast_exit=self.tau_fast_exit,
             tau_plan_exit=self.tau_plan_exit,
+            ocps_valve=self.ocps_valve,
+            signal_enricher=self.signal_enricher,
             evaluate_pkg_func=evaluate_pkg_func,
             ood_to01=self.ood_to01,
             pkg_timeout_s=self.timeout_s,

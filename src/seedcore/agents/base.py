@@ -380,11 +380,13 @@ class BaseAgent:
 
         # 2. Check if this update applies to ME
         if profile.name == self.specialization:
-            logger.info(f"[{self.agent_id}] 🔄 Hot-swapping RoleProfile: {profile.name.value}")
-            
+            logger.info(
+                f"[{self.agent_id}] 🔄 Hot-swapping RoleProfile: {profile.name.value}"
+            )
+
             # 3. Apply the new profile
             self.role_profile = profile
-            
+
             # 4. (Optional) Immediate Side Effects
             # If the update changed 'allowed_tools', we might want to log it
             # or clear any RBAC caches if you implemented caching.
@@ -1265,9 +1267,7 @@ class BaseAgent:
                     drift_score=float(raw_dict.get("drift_score") or 0.0),
                     params=raw_dict.get("params") or {},  # Keep existing params
                     # --- V2 Routing Mirrors ---
-                    required_specialization=raw_dict.get(
-                        "required_specialization"
-                    ),
+                    required_specialization=raw_dict.get("required_specialization"),
                     specialization=raw_dict.get("specialization"),
                     skills=raw_dict.get("skills") or {},
                     tools=raw_tools,
@@ -1396,9 +1396,9 @@ class BaseAgent:
         tv.required_specialization = getattr(
             payload, "required_specialization", None
         ) or routing.get("required_specialization")
-        tv.specialization = getattr(
-            payload, "specialization", None
-        ) or routing.get("specialization")
+        tv.specialization = getattr(payload, "specialization", None) or routing.get(
+            "specialization"
+        )
 
         # 7. Routing: Skills
         # Pydantic field is 'skills', dict path is params.routing.skills

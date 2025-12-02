@@ -18,8 +18,9 @@ Agent implementations for SeedCore.
 
 # Core agent classes
 from .base import BaseAgent
-from .persistent_agent import PersistentAgent
+from .chat_agent import ChatAgent
 from .observer_agent import ObserverAgent
+from .utility_agent import UtilityAgent
 
 # Lifecycle management
 from .lifecycle import evaluate_lifecycle, LifecycleDecision
@@ -32,8 +33,9 @@ from .checkpoint import CheckpointStore, CheckpointStoreFactory
 __all__ = [
     # Core agent classes
     'BaseAgent',
-    'PersistentAgent', 
+    'ChatAgent', 
     'ObserverAgent',
+    'UtilityAgent',
     
     # Lifecycle management
     'evaluate_lifecycle',

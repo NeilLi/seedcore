@@ -14,7 +14,8 @@
 
 """Organs subpackage for COA framework."""
 
-from .base import Organ
-from .organism_manager import OrganismManager, organism_manager
+from .organ import Organ
+from .organism_core import OrganismCore
+from .router import RoutingDirectory
 
-__all__ = ['Organ', 'OrganismManager', 'organism_manager']
+__all__ = ['Organ', 'OrganismCore', 'RoutingDirectory']

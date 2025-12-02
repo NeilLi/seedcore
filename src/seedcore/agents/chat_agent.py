@@ -6,7 +6,7 @@ from seedcore.agents.roles import DEFAULT_ROLE_REGISTRY, NullSkillStore, Special
 
 
 @ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
-class PersistentAgent(BaseAgent):
+class ChatAgent(BaseAgent):
     """
     Stateful agent with conversational memory (TaskPayload v2.0 compliant):
     - BaseAgent handles tool execution + stateless logic
@@ -15,7 +15,7 @@ class PersistentAgent(BaseAgent):
     - Chat history management (short-term conversational memory)
     
     Architecture:
-    - PersistentAgent owns chat_history (short-term, per conversation)
+    - ChatAgent owns chat_history (short-term, per conversation)
     - CognitiveCore owns long-term holons + episodic consolidation
     - QueryTools remain stateless and receive history from agent
     
@@ -184,7 +184,7 @@ class PersistentAgent(BaseAgent):
         - Normalize TaskPayload v2 envelopes (chat, interaction, cognitive)
         - Manage conversation history window
         - Inject chat.message + chat.history + top-level conversation_history
-        - Maintain PersistentAgent's local episodic memory buffer
+        - Maintain ChatAgent's local episodic memory buffer
         - Extract assistant messages after LLM execution
         - Do not write long-term memory here (CognitiveMemoryBridge handles that)
 

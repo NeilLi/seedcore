@@ -63,6 +63,8 @@ from seedcore.models import TaskPayload
 from seedcore.organs.organ import Organ, AgentIDFactory  # ← NEW ORGAN CLASS
 from seedcore.organs.router import RoutingDirectory
 from seedcore.organs.tunnel_policy import TunnelActivationPolicy
+from seedcore.organs.registry import OrganRegistry
+from seedcore.graph.agent_repository import AgentGraphRepository
 
 # Long-term memory backend (HolonFabric replaces LongTermMemoryManager)
 from seedcore.memory.holon_fabric import HolonFabric
@@ -198,6 +200,9 @@ class OrganismCore:
         self.cognitive_client: Optional[CognitiveServiceClient] = None
         self.energy_client: Optional[EnergyServiceClient] = None
         self.holon_fabric: Optional[HolonFabric] = None
+        
+        # --- Organ Registry (Tier-1) ---
+        self.organ_registry: Optional[OrganRegistry] = None
         
         # --- Stateful dependencies for PersistentAgent ---
         self.mw_manager: Optional[MwManager] = None
@@ -336,6 +341,18 @@ class OrganismCore:
         # 2. Create SkillStore adapter
         # --------------------------------------------------------------
         self.skill_store = HolonFabricSkillStoreAdapter(self.holon_fabric)
+
+        # --------------------------------------------------------------
+        # 2.5. Initialize OrganRegistry (Tier-1 registry)
+        # --------------------------------------------------------------
+        try:
+            logger.info("🔌 Initializing OrganRegistry...")
+            agent_repo = AgentGraphRepository()
+            self.organ_registry = OrganRegistry(agent_repo)
+            logger.info("✅ OrganRegistry ready.")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize OrganRegistry: {e}")
+            self.organ_registry = None
 
         # --------------------------------------------------------------
         # 3. RoleRegistry (already set in __init__ via DEFAULT_ROLE_REGISTRY)
@@ -482,6 +499,8 @@ class OrganismCore:
                     mw_manager=self.mw_manager,
                     holon_fabric=self.holon_fabric,
                     checkpoint_cfg=self.checkpoint_cfg,
+                    # OrganRegistry for Tier-1 registration
+                    organ_registry=self.organ_registry,
                 )
 
                 # Sanity check
@@ -491,6 +510,10 @@ class OrganismCore:
                     raise RuntimeError(f"Organ {organ_id} failed health check.")
 
                 self.organs[organ_id] = organ
+                
+                # Register organ in Tier-1 registry
+                if self.organ_registry:
+                    self.organ_registry.record_organ(organ_id, organ)
 
             except Exception as e:
                 logger.error(
@@ -1697,12 +1720,19 @@ class OrganismCore:
                 mw_manager=self.mw_manager,
                 holon_fabric=self.holon_fabric,
                 checkpoint_cfg=self.checkpoint_cfg,
+                # OrganRegistry for Tier-1 registration
+                organ_registry=self.organ_registry,
             )
         except Exception as e:
             logger.error(f"[OrganismCore] Failed to recreate organ: {e}")
             return
 
         self.organs[organ_id] = new_organ
+        
+        # Register organ in Tier-1 registry
+        if self.organ_registry:
+            self.organ_registry.record_organ(organ_id, new_organ)
+        
         logger.info(f"[OrganismCore] Organ `{organ_id}` recreated")
 
         # Respawn agents

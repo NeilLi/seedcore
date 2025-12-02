@@ -107,11 +107,6 @@ Notes
 """
 
 from __future__ import annotations
-# 0) Must be first: patch hooks
-try:
-    from seedcore.cognitive import dsp_patch  # type: ignore  # noqa: F401
-except Exception:
-    pass
 
 # 1) Standard library
 import asyncio

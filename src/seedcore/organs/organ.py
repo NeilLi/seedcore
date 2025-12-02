@@ -49,6 +49,8 @@ if TYPE_CHECKING:
     # --- Add imports for stateful dependencies ---
     from ..memory.mw_manager import MwManager
     from ..memory.holon_fabric import HolonFabric
+    from ..organs.registry import OrganRegistry
+    from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 logger = ensure_serve_logger("seedcore.Organ", level="DEBUG")
 
@@ -119,6 +121,8 @@ class Organ:
         checkpoint_cfg: Optional[Dict[str, Any]] = None,
         # --- Optional AgentIDFactory for ID generation ---
         agent_id_factory: Optional[AgentIDFactory] = None,
+        # --- Optional OrganRegistry for Tier-1 registration ---
+        organ_registry: Optional["OrganRegistry"] = None,
     ):
         self.organ_id = organ_id
         
@@ -138,6 +142,9 @@ class Organ:
         # NOTE: Currently unused - OrganismCore generates IDs before calling create_agent().
         # This is kept for future use cases where Organ might need to generate IDs dynamically.
         self.agent_id_factory = agent_id_factory
+
+        # --- Optional OrganRegistry for Tier-1 registration ---
+        self.organ_registry = organ_registry
 
         # Agent registry: { agent_id -> ActorHandle }
         self.agents: Dict[str, AgentHandle] = {}
@@ -170,6 +177,7 @@ class Organ:
         specialization: "Specialization",
         organ_id: str,  # Passed for verification
         agent_class_name: str = "BaseAgent",
+        session: Optional["AsyncSession"] = None,
         **agent_actor_options
     ) -> None:
         """
@@ -198,8 +206,8 @@ class Organ:
             logger.info(f"🚀 [{self.organ_id}] Creating {agent_class_name} '{agent_id}'...")
             
             # --- Dynamically choose agent class and params ---
-            if agent_class_name == "PersistentAgent":
-                from ..agents.persistent_agent import PersistentAgent as AgentToCreate
+            if agent_class_name == "ChatAgent":
+                from ..agents.chat_agent import ChatAgent as AgentToCreate
                 
                 # Parameters for the STATEFUL PersistentAgent
                 agent_params = {
@@ -228,7 +236,7 @@ class Organ:
                     "organ_id": self.organ_id
                 }
             elif agent_class_name == "UtilityLearningAgent":
-                from ..agents.ula_agent import UtilityLearningAgent as AgentToCreate
+                from ..agents.utility_agent import UtilityAgent as AgentToCreate
                 
                 # Parameters for UtilityLearningAgent (extends BaseAgent)
                 agent_params = {
@@ -273,6 +281,15 @@ class Organ:
                 "status": "initializing",
             }
             logger.info(f"✅ [{self.organ_id}] Registered agent {agent_id} (class: {agent_class_name}).")
+            
+            # Register agent in Tier-1 registry if available
+            if self.organ_registry and session:
+                await self.organ_registry.register_agent(
+                    session,
+                    agent_id=agent_id,
+                    organ_id=self.organ_id,
+                    specialization=specialization.value,
+                )
         except Exception as e:
             logger.error(f"[{self.organ_id}] Failed to create agent {agent_id}: {e}")
             raise
@@ -325,64 +342,6 @@ class Organ:
         # Update status to indicate this is a respawned agent
         if agent_id in self.agent_info:
             self.agent_info[agent_id]["status"] = "respawned"
-
-    async def register_agent(
-        self,
-        agent_id: str,
-        handle: AgentHandle,
-        info: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """
-        Register an existing agent handle into this organ.
-        
-        Ensures metadata is normalized for v2 routing (skills, lowercase specs).
-        """
-        is_overwrite = agent_id in self.agents
-        if is_overwrite:
-            logger.warning(
-                f"[{self.organ_id}] Agent {agent_id} already exists, merging metadata."
-            )
-        
-        # 1. Store the Ray Handle
-        self.agents[agent_id] = handle
-
-        # 2. Prepare Metadata Defaults
-        # We need these keys guaranteed for the Router to work
-        defaults = {
-            "agent_id": agent_id,
-            "specialization": "GENERALIST",
-            "specialization_value": "generalist", # Router relies on this
-            "skills": {},                         # Router relies on this
-            "class": "BaseAgent",
-            "created_at": time.time(),
-            "status": "idle",                     # Ready for work
-            "organ_id": self.organ_id
-        }
-
-        # 3. Merge Logic: Defaults -> Existing -> New Info
-        # This preserves learned skills if we are just re-registering the handle
-        final_info = defaults.copy()
-        
-        if is_overwrite:
-            final_info.update(self.agent_info.get(agent_id, {}))
-            
-        if info:
-            final_info.update(info)
-
-        # 4. Critical: Normalize Specialization for Router Lookup
-        # Ensure 'specialization_value' matches 'specialization' in lowercase
-        if "specialization" in final_info:
-            raw_spec = str(final_info["specialization"])
-            final_info["specialization_value"] = raw_spec.lower()
-        
-        # 5. Save to State
-        self.agent_info[agent_id] = final_info
-
-        logger.info(
-            f"[{self.organ_id}] Registered agent {agent_id}. "
-            f"Spec: {final_info.get('specialization_value')}, "
-            f"Skills: {len(final_info.get('skills', {}))}"
-        )
         
     async def update_role_registry(self, profile: RoleProfile) -> None:
         """

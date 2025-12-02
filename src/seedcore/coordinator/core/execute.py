@@ -13,11 +13,21 @@ from __future__ import annotations
 import inspect
 import logging
 import time
-import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple, Callable, Awaitable, Sequence, Mapping, Optional
+from typing import (
+    Any,
+    Dict,
+    List,
+    Tuple,
+    Callable,
+    Awaitable,
+    Sequence,
+    Mapping,
+    Optional,
+)
 
 from seedcore.agents.roles import Specialization
+from seedcore.coordinator.core.ocps_valve import NeuralCUSUMValve
 from seedcore.models.cognitive import CognitiveType, DecisionKind
 from seedcore.models.task import TaskType
 from seedcore.models.task_payload import TaskPayload
@@ -31,6 +41,7 @@ from ..utils import extract_from_nested
 from .policies import (
     SurpriseComputer,
 )
+from .signals import SignalEnricher
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +101,11 @@ class RouteConfig:
     """Routing decision_kind configuration."""
 
     surprise_computer: SurpriseComputer
+    ocps_valve: NeuralCUSUMValve
     tau_fast_exit: float
     tau_plan_exit: float
-    evaluate_pkg_func: PkgEvalFn
+    signal_enricher: SignalEnricher | None = None
+    evaluate_pkg_func: PkgEvalFn | None = None
     ood_to01: Callable[[float], float] | None = None
     pkg_timeout_s: int = 2
 
@@ -124,17 +137,20 @@ class ExecutionConfig:
     tunnel_lookup: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None
     tunnel_store: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
 
+
 @dataclass
 class RoutingIntent:
     """Internal DTO to hold the derived routing instructions."""
+
     specialization: Optional[str] = None  # The V2 'required_specialization'
-    organ_hint: Optional[str] = None      # Optional 'target_organ_id'
-    skills: Dict[str, float] = None       # V2 'skills'
+    organ_hint: Optional[str] = None  # Optional 'target_organ_id'
+    skills: Dict[str, float] = None  # V2 'skills'
+
 
 def _derive_routing_intent(ctx: TaskContext) -> RoutingIntent:
     """
     Static Rule Engine: Maps Task Context -> Specialization/Skills.
-    
+
     This replaces the complex PredicateRouter. It aligns with OrganismRouter's
     expectation for 'required_specialization' or 'specialization' keys.
     """
@@ -149,7 +165,7 @@ def _derive_routing_intent(ctx: TaskContext) -> RoutingIntent:
         # Default: The User Liaison handles chat
         intent.specialization = Specialization.USER_LIAISON.value
         intent.skills = {"dialogue": 1.0, "empathy": 0.9}
-        
+
         # Nuance: If domain is purely scheduling
         if "calendar" in domain or "schedule" in domain:
             intent.specialization = Specialization.SCHEDULE_ORACLE.value
@@ -186,7 +202,7 @@ def _derive_routing_intent(ctx: TaskContext) -> RoutingIntent:
     # 4. MAINTENANCE (System)
     # =========================================================
     elif tt == TaskType.MAINTENANCE.value:
-        intent.specialization = Specialization.UTILITY.value # or OBSERVER
+        intent.specialization = Specialization.UTILITY.value  # or OBSERVER
 
     # =========================================================
     # 5. FALLBACK
@@ -194,12 +210,14 @@ def _derive_routing_intent(ctx: TaskContext) -> RoutingIntent:
     else:
         # Unknown types go to Generalist
         intent.specialization = Specialization.GENERALIST.value
-    
+
     return intent
+
 
 # ---------------------------------------------------------------------------
 # Internal Helpers (Extraction)
 # ---------------------------------------------------------------------------
+
 
 def _extract_decision(route_result: Dict[str, Any]) -> Optional[str]:
     """
@@ -208,12 +226,12 @@ def _extract_decision(route_result: Dict[str, Any]) -> Optional[str]:
     return extract_from_nested(
         route_result,
         key_paths=[
-            ("decision_kind",),                 # Primary
-            ("decision",),                      # Fallback
-            ("payload", "metadata", "decision"), # Legacy
-            ("payload", "decision"),            # Legacy
+            ("decision_kind",),  # Primary
+            ("decision",),  # Fallback
+            ("payload", "metadata", "decision"),  # Legacy
+            ("payload", "decision"),  # Legacy
         ],
-        value_type=str
+        value_type=str,
     )
 
 
@@ -225,16 +243,12 @@ def _extract_proto_plan(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         payload,
         key_paths=[
             ("result", "proto_plan"),  # Standard Cognitive Result wrapper
-            ("proto_plan",),           # Direct return
+            ("proto_plan",),  # Direct return
             ("metadata", "proto_plan"),
         ],
-        value_type=dict
+        value_type=dict,
     )
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 async def route_and_execute(
     *,
@@ -245,43 +259,40 @@ async def route_and_execute(
 ) -> Dict[str, Any]:
     """
     Unified route and execute: computes routing decision and executes accordingly.
-    
-    Args:
-        task: Strongly typed TaskPayload (already normalized by upstream service).
     """
-    # 0. Tunnel Fast-Path (conversation affinity override)
     correlation_id = execution_config.cid
     conversation_id = task.conversation_id
 
+    # ---------------------------------------------------------
+    # 0. TUNNEL FAST-PATH (System 0: Sticky Session)
+    # ---------------------------------------------------------
     if conversation_id and execution_config.tunnel_lookup:
         tunnel = await execution_config.tunnel_lookup(conversation_id)
         if tunnel:
-            
-            # 🚇 Force routing: Use tunnel's agent & organ directly
-            organ_id = tunnel["organ_id"]
-            agent_id = tunnel["agent_id"]
-            logger.info(f"[Coordinator] 🚇 Tunnel hit: {conversation_id} → {agent_id} in {organ_id}")
-
-            # Execute directly via Organism
-            task_dict = task.model_dump()
-            execution_response = await execution_config.organism_execute(
-                organ_id=organ_id,
-                task_dict=task_dict,
-                timeout=execution_config.fast_path_latency_slo_ms / 1000.0 * 2,
-                cid_local=conversation_id,
+            logger.info(
+                f"[Coordinator] 🚇 Tunnel hit: {conversation_id} -> {tunnel.get('agent_id')}"
             )
 
-            # If Organism returns updated tunnel info, store it
-            if execution_response.get("tunnel_active"):
-                if execution_config.tunnel_store:
-                    await execution_config.tunnel_store(conversation_id, execution_response)
+            # Clone the task to avoid mutating input
+            tunnel_task = task.model_copy(
+                update={
+                    "interaction_mode": "agent_tunnel",
+                    "assigned_agent_id": tunnel.get("agent_id"),
+                }
+            )
 
-            return execution_response
+            # Execute immediately via Fast Path logic (bypassing OCPS/PKG)
+            return await _handle_fast_path(
+                task=tunnel_task,
+                target_organ=tunnel.get("organ_id"),
+                routing_hints={},  # No routing needed for tunnel
+                config=execution_config,
+            )
 
-    # 1. Context Processing
-    # We generate the dict representation once for Eventizer/Helpers
+    # ---------------------------------------------------------
+    # 1. CONTEXT PROCESSING
+    # ---------------------------------------------------------
     task_dict = task.model_dump()
-
     task_ctx_data = await _process_task_input(
         payload=task,
         merged_dict=task_dict,
@@ -289,184 +300,208 @@ async def route_and_execute(
     )
     ctx = TaskContext.from_dict(task_ctx_data)
 
-    # 2. Compute Routing Decision (System 2)
-    routing_result = await _compute_routing_decision(
+    # ---------------------------------------------------------
+    # 2. COMPUTE DECISION (System 1 vs System 2)
+    # ---------------------------------------------------------
+    routing_dec = await _compute_routing_decision(
         ctx=ctx,
         cfg=routing_config,
         correlation_id=correlation_id,
     )
 
-    decision_kind = _extract_decision(routing_result)
-    if not decision_kind:
-        decision_kind = routing_result.get("decision_kind", DecisionKind.ERROR.value)
+    decision_kind = routing_dec.get("decision_kind")
+    # This is the TaskResult.payload (FastPathResult/CognitiveResult payload)
+    decision_payload = routing_dec.get("result", {}) or {}
 
-    # Extract agent_id for cognitive calls
-    agent_id = task.agent_id or None
+    # ---------------------------------------------------------
+    # 3. EXECUTE DECISION
+    # ---------------------------------------------------------
 
-    # 3. Handle Decision Execution
-
-    # --- PATH A: Cognitive / Escalated Path ---
-    if decision_kind in [DecisionKind.COGNITIVE.value, DecisionKind.ESCALATED.value]:
-        if not execution_config.cognitive_client:
-            logger.error("[route] Cognitive client not available.")
-            return routing_result["result"]
-
-        try:
-            # A1. THINK (Call Cognitive Service)
-            decision_enum = DecisionKind(decision_kind)
-            cog_type = CognitiveType.TASK_PLANNING
-            if decision_kind == DecisionKind.ESCALATED.value:
-                # Escalated means we need deep problem solving/HGNN
-                cog_type = CognitiveType.PROBLEM_SOLVING
-
-            # Pass the strongly typed TaskPayload object
-            plan_res = await execution_config.cognitive_client.execute_async(
-                agent_id=agent_id,
-                cog_type=cog_type,
-                decision_kind=decision_enum,
-                task=task,
-            )
-
-            # A2. PERSIST (Save Proto-Plan)
-            proto_plan = _extract_proto_plan(plan_res)
-            if proto_plan and execution_config.persist_proto_plan_func:
-                try:
-                    await execution_config.persist_proto_plan_func(
-                        execution_config.graph_task_repo,
-                        task.task_id,
-                        decision_kind,
-                        proto_plan,
-                    )
-                except Exception as exc:
-                    logger.warning(f"[route] Failed to persist proto-plan: {exc}")
-
-            # A3. ACT (Execute Steps)
-            solution_steps = _extract_solution_steps(plan_res)
-
-            if solution_steps:
-                logger.info(
-                    f"[route] Executing {len(solution_steps)} steps for {task.task_id}"
-                )
-                step_results = []
-
-                for i, step in enumerate(solution_steps):
-                    try:
-                        # Prepare Sub-Task with Inheritance
-                        step_task, organ_hint = _prepare_step_task_payload(
-                            parent_task=task, 
-                            step=step, 
-                            index=i, 
-                            cid=correlation_id
-                        )
-
-                        # Execute via Organism (Fast Path)
-                        timeout = execution_config.fast_path_latency_slo_ms / 1000.0 * 2
-
-                        step_result = await execution_config.organism_execute(
-                            organ_id=organ_hint,
-                            task_dict=step_task,
-                            timeout=timeout,
-                            cid_local=correlation_id or str(uuid.uuid4()),
-                        )
-
-                        step_results.append(
-                            {"step_index": i, "step": step, "result": step_result}
-                        )
-
-                        # Stop on failure (Strict consistency)
-                        if not step_result.get("success", False):
-                            logger.error(f"[route] Step {i} failed. Aborting plan.")
-                            break
-
-                    except Exception as step_exc:
-                        logger.error(f"[route] Step {i} exception: {step_exc}")
-                        step_results.append({"step_index": i, "error": str(step_exc)})
-                        break
-
-                # Aggregate Final Result
-                planner_meta = (
-                    plan_res.get("metadata", {}) if isinstance(plan_res, dict) else {}
-                )
-                res = _aggregate_execution_results(
-                    parent_task_id=task.task_id,
-                    solution_steps=solution_steps,
-                    step_results=step_results,
-                    decision_kind=decision_kind,
-                    original_meta=planner_meta,
-                )
-
-                # 🚇 Check for tunnel activation
-                if conversation_id and res.get("tunnel_active"):
-                    if execution_config.tunnel_store:
-                        await execution_config.tunnel_store(conversation_id, res)
-
-                return res
-
-            # If no steps, just return the plan (Thought without Action)
-            plan_res_final = plan_res
-            
-            # 🚇 Check for tunnel activation
-            if conversation_id and plan_res_final.get("tunnel_active"):
-                if execution_config.tunnel_store:
-                    await execution_config.tunnel_store(conversation_id, plan_res_final)
-            
-            return plan_res_final
-
-        except Exception as exc:
-            logger.error(f"[route] Cognitive path failed: {exc}", exc_info=True)
-            return routing_result["result"]
-
-    # --- PATH B: Fast Path (Reflex) ---
-    if decision_kind == DecisionKind.FAST_PATH.value:
-        result_data = routing_result.get("result", {})
-        target_organ = (
-            result_data.get("organ_id") or routing_result.get("organ_id") or "organism"
+    # --- PATH A: Cognitive (System 2) ---
+    if decision_kind in (DecisionKind.COGNITIVE.value, DecisionKind.ESCALATED.value):
+        return await _handle_cognitive_path(
+            task=task,
+            decision_payload=decision_payload,
+            decision_kind=decision_kind,
+            config=execution_config,
         )
 
-        try:
-            # Inject hint if specific organ was resolved
-            # We use task_dict (dict form) for the organism call
-            task_dict_copy = dict(task_dict)
-            if target_organ and target_organ not in ("organism", "random"):
-                task_dict_copy.setdefault("params", {})
-                task_dict_copy["params"].setdefault("routing", {})
-                task_dict_copy["params"]["routing"]["target_organ_hint"] = target_organ
+    # --- PATH B: Fast Path (System 1) ---
+    elif decision_kind == DecisionKind.FAST_PATH.value:
+        target_organ = decision_payload.get("organ_id")
+        routing_params = decision_payload.get("routing_params", {})
 
-            timeout = execution_config.fast_path_latency_slo_ms / 1000.0 * 2
+        return await _handle_fast_path(
+            task=task,
+            target_organ=target_organ,
+            routing_hints=routing_params,
+            config=execution_config,
+        )
 
-            # Execute via Organism
-            execution_response = await execution_config.organism_execute(
-                organ_id=target_organ,
-                task_dict=task_dict_copy,
-                timeout=timeout,
-                cid_local=correlation_id or str(uuid.uuid4()),
+    # --- PATH C: Fallback / Error ---
+    else:
+        # Whatever the router produced; likely an error TaskResult
+        return decision_payload
+
+
+# =========================================================================
+# HELPER: FAST PATH (System 1)
+# =========================================================================
+
+
+async def _handle_fast_path(
+    task: TaskPayload,
+    target_organ: Optional[str],
+    routing_hints: Dict[str, Any],
+    config: ExecutionConfig,
+) -> Dict[str, Any]:
+    """Executes a task on the Organism (Execution Plane)."""
+
+    # 1. Inject V2 Routing Hints (Specialization/Skills)
+    task_dict = task.model_dump()
+
+    if routing_hints:
+        params = task_dict.setdefault("params", {})
+        routing = params.setdefault("routing", {})
+        routing.update(routing_hints)
+
+    # 2. Execute via Organism Client
+    try:
+        timeout = config.fast_path_latency_slo_ms / 1000.0 * 2.0
+
+        response = await config.organism_execute(
+            organ_id=target_organ or "organism",
+            task_dict=task_dict,
+            timeout=timeout,
+            cid_local=config.cid,
+        )
+
+        # 3. Tunnel Storage (Sticky session)
+        if (
+            task.conversation_id
+            and response.get("tunnel_active")
+            and config.tunnel_store
+        ):
+            await config.tunnel_store(task.conversation_id, response)
+
+        return response
+
+    except Exception as e:
+        logger.error(f"[Coordinator] Fast Path failed: {e}")
+        return create_error_result(str(e), "execution_error").model_dump()
+
+
+# =========================================================================
+# HELPER: COGNITIVE PATH (System 2)
+# =========================================================================
+
+
+async def _handle_cognitive_path(
+    task: TaskPayload,
+    decision_payload: Dict[str, Any],
+    decision_kind: DecisionKind,
+    config: ExecutionConfig,
+) -> Dict[str, Any]:
+    """
+    Orchestrates the Cognitive Loop: Plan -> Persist -> Execute Subtasks.
+
+    decision_payload is the CognitiveResult payload produced by the router, and
+    is expected to contain:
+      - "proto_plan": PKG-generated DAG (if any)
+      - "pkg_meta": metadata about PKG evaluation (version, etc.)
+      - "ocps": OCPS valve payload (drift, severity, etc.)
+      - plus whatever else create_cognitive_result included.
+    """
+    if not config.cognitive_client:
+        logger.error("[Coordinator] Cognitive Client missing.")
+        return create_error_result("System 2 unavailable", "config_error").model_dump()
+
+    try:
+        # Extract router-provided meta
+        proto_plan_from_router = decision_payload.get("proto_plan") or {}
+        pkg_meta = decision_payload.get("pkg_meta") or {}
+        ocps_payload = decision_payload.get("ocps") or decision_payload.get(
+            "ocps_payload", {}
+        )
+
+        # 1. Call Cognitive Service (The "Think" Step)
+        # ---------------------------------------------
+        # We forward the PKG proto-plan + OCPS so the cognitive service
+        # can refine or expand it instead of planning from scratch.
+        plan_res = await config.cognitive_client.execute_async(
+            agent_id="system_2_core",  # Virtual ID
+            cog_type=CognitiveType.TASK_PLANNING,
+            decision_kind=decision_kind,
+            task=task,
+            proto_plan=proto_plan_from_router or None,
+            pkg_meta=pkg_meta or None,
+            ocps=ocps_payload or None,
+        )
+
+        # 2. Persist Proto-Plan (PKG-first, fallback to Cognitive plan)
+        # ---------------------------------------------
+        proto_plan_to_persist = (
+            proto_plan_from_router
+            if proto_plan_from_router
+            else _extract_proto_plan(plan_res)
+        )
+
+        if proto_plan_to_persist and config.persist_proto_plan_func:
+            await config.persist_proto_plan_func(
+                config.graph_task_repo,
+                task.task_id,
+                decision_kind,
+                proto_plan_to_persist,
             )
-            final_result = execution_response
 
-            # 🚇 Check for tunnel activation
-            if conversation_id and execution_response.get("tunnel_active"):
-                if execution_config.tunnel_store:
-                    await execution_config.tunnel_store(conversation_id, execution_response)
+        # 3. Execute Solution Steps (The "Act" Step)
+        # ---------------------------------------------
+        solution_steps = _extract_solution_steps(plan_res)
 
-        except Exception as e:
-            logger.error(f"[route] Fast path execution failed: {e}")
-            final_result = create_error_result(
-                f"Execution failed: {str(e)}", "execution_error"
-            ).model_dump()
+        if not solution_steps:
+            # No executable steps (maybe cognitive agent returned a direct answer)
+            return plan_res
 
-        # Persist Telemetry (Routing Decision vs Execution Result)
-        if execution_config.record_router_telemetry_func:
-            try:
-                await execution_config.record_router_telemetry_func(
-                    execution_config.graph_task_repo, task.task_id, routing_result
+        logger.info(
+            f"[Coordinator] System 2 executing {len(solution_steps)} steps for task {task.task_id}."
+        )
+        step_results = []
+
+        for i, step in enumerate(solution_steps):
+            # Convert step -> child task payload
+            step_task_dict, organ_hint = _prepare_step_task_payload(
+                parent_task=task, step=step, index=i, cid=config.cid
+            )
+
+            step_res = await config.organism_execute(
+                organ_id=organ_hint or "organism",
+                task_dict=step_task_dict,
+                timeout=config.fast_path_latency_slo_ms / 1000.0 * 2.0,
+                cid_local=config.cid,
+            )
+
+            step_results.append({"step": i, "result": step_res})
+
+            if not step_res.get("success"):
+                logger.error(
+                    f"[Coordinator] Step {i} failed for task {task.task_id}. Stopping plan."
                 )
-            except Exception as exc:
-                logger.warning(f"[route] Telemetry failed: {exc}")
+                break
 
-        return final_result
+        # 4. Aggregate & Return
+        # ---------------------------------------------
+        final_res = _aggregate_execution_results(
+            parent_task_id=task.task_id,
+            solution_steps=solution_steps,
+            step_results=step_results,
+            decision_kind=decision_kind,
+        )
 
-    # --- PATH C: Fallback ---
-    return routing_result["result"]
+        return final_res
+
+    except Exception as e:
+        logger.error(f"[Coordinator] Cognitive Path failed: {e}", exc_info=True)
+        return create_error_result(str(e), "cognitive_error").model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -475,54 +510,63 @@ async def route_and_execute(
 
 
 def _extract_solution_steps(plan_res: Any) -> List[Dict[str, Any]]:
-    """Safely extract solution steps from a cognitive planning result."""
-    if not isinstance(plan_res, dict):
-        return []
-    result_data = plan_res.get("result", {})
-    if not isinstance(result_data, dict):
-        # Handle cases where plan_res IS the result data
-        result_data = plan_res 
-        
-    steps = result_data.get("solution_steps") or result_data.get("steps")
-    return steps if isinstance(steps, list) else []
+    return (
+        extract_from_nested(
+            plan_res,
+            key_paths=[
+                ("result", "solution_steps"),
+                ("result", "steps"),
+                ("solution_steps",),
+                ("steps",),
+                ("metadata", "solution_steps"),
+            ],
+            value_type=list,
+        )
+        or []
+    )
 
 
 def _prepare_step_task_payload(
     parent_task: TaskPayload, step: Dict[str, Any], index: int, cid: str | None
 ) -> Tuple[Dict[str, Any], str]:
-    """Prepares a single sub-task payload with full context inheritance."""
+    """Prepares a single sub-task payload (DICT) with full context inheritance."""
 
-    # 1. Unwrap Step
+    # 1. Unwrap Step (Child is always a dict from JSON)
     raw_task = step.get("task", step)
     step_task = dict(raw_task)
+
+    # Ensure params exists in child
     if "params" not in step_task:
         step_task["params"] = {}
 
-    # 2. Resolve Parent Context
-    parent_params = parent_task.params
+    # 2. Resolve Parent Context (Parent is TaskPayload Object)
+    # We must dump the parent params to a dict to merge them safely
+    parent_params = dict(parent_task.params or {})
     parent_id = parent_task.task_id
 
     # 3. Inherit Routing (Policy)
-    parent_routing = parent_params.get("routing", {})
+    parent_routing = dict(parent_params.get("routing", {}))
     child_routing = step_task["params"].get("routing", {})
+    # Child routing overrides parent routing
     step_task["params"]["routing"] = {**parent_routing, **child_routing}
 
     # 4. Inherit Interaction (Sticky Sessions)
-    parent_interaction = parent_params.get("interaction", {})
+    parent_interaction = dict(parent_params.get("interaction", {}))
     child_interaction = step_task["params"].get("interaction", {})
     step_task["params"]["interaction"] = {**parent_interaction, **child_interaction}
 
-    # 5. Context
+    # 5. Context Injection
     step_task["params"]["parent_task_id"] = parent_id
     step_task["params"]["step_index"] = index
     if cid:
         step_task.setdefault("correlation_id", cid)
-        
-    # Ensure type is set
+
+    # Ensure type is set (default to action if missing)
     if "type" not in step_task and "task_type" not in step_task:
         step_task["type"] = "action"
 
-    # 6. Target
+    # 6. Target Resolution
+    # Priority: Step explicit organ -> Routing hint -> Fallback
     organ_hint = (
         step.get("organ_id")
         or step_task["params"]["routing"].get("target_organ_hint")
@@ -567,6 +611,7 @@ def _aggregate_execution_results(
 # Internal Logic (Surprise / PKG)
 # ---------------------------------------------------------------------------
 
+
 async def _compute_routing_decision(
     *,
     ctx: TaskContext,
@@ -575,93 +620,186 @@ async def _compute_routing_decision(
 ) -> Dict[str, Any]:
     """
     Compute routing decision using OCPS (Valve) and Static Intent Mapping.
+
+    Key invariants:
+      - OCPS valve (drift) decides FAST_PATH vs COGNITIVE (System 1 vs System 2).
+      - PKG is only evaluated in the COGNITIVE path (when escalation is warranted).
+      - PKG receives OCPS-derived signals (and optionally extra contextual signals).
     """
     t0 = time.perf_counter()
-    params = ctx.params
+    params = ctx.params or {}
 
     # ------------------------------------------------------------------
     # 1. OCPS Update (System 1 vs 2 Valve)
     # ------------------------------------------------------------------
-    # Extract uncertainty (default 0.0 if cold start)
     raw_drift = float(params.get("ocps", {}).get("uncertainty_score", 0.0))
-    
+
     # Update Neural Accumulator
     drift_state = cfg.ocps_valve.update(raw_drift)
-    
+
     # ------------------------------------------------------------------
     # 2. Determine Decision Kind
     # ------------------------------------------------------------------
     if drift_state.is_breached:
-        # High Entropy -> System 2 (Deep Reasoning / Planner)
-        decision_kind = DecisionKind.COGNITIVE_ROUTED.value
+        # High entropy -> System 2 (Deep Reasoning / Planner)
+        decision_kind = DecisionKind.COGNITIVE.value
         path_label = "system_2_escalation"
     else:
-        # Low Entropy -> System 1 (Fast Path)
+        # Low entropy -> System 1 (Fast Path Reflex)
         decision_kind = DecisionKind.FAST_PATH.value
         path_label = "system_1_reflex"
 
     # ------------------------------------------------------------------
     # 3. Derive Routing Intent (The "Who")
     # ------------------------------------------------------------------
-    # Maps TaskType/Domain -> Specialization/Skills
     intent = _derive_routing_intent(ctx)
-    
-    # Hints for the OrganismRouter (used only if Fast Path)
+
     routing_hints = {
         "required_specialization": intent.specialization,
         "skills": intent.skills or {},
     }
-    target_organ = intent.organ_hint 
+    target_organ = intent.organ_hint
 
     # ------------------------------------------------------------------
-    # 4. Result Construction
+    # 4. Build OCPS Payload (used in both paths)
     # ------------------------------------------------------------------
-    router_latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
-
-    # Common telemetry for both paths
-    payload_common = {
-        "task_id": ctx.task_id,
-        "decision": decision_kind,
-        "path": path_label,
-        "ocps": {
-            "drift": raw_drift,
-            "cusum_score": drift_state.score,
-            "breached": drift_state.is_breached,
-            "severity": drift_state.severity
-        },
-        "latency_ms": router_latency_ms,
-        "cid": correlation_id
+    ocps_payload = {
+        "drift": raw_drift,
+        "cusum_score": drift_state.score,
+        "breached": drift_state.is_breached,
+        "severity": drift_state.severity,
     }
 
+    # Router latency (for both branches)
+    router_latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
+
+    # Base PKG metadata & proto_plan
+    pkg_meta: Dict[str, Any] = {"evaluated": False}
+    proto_plan: Dict[str, Any] = {}
+
+    # ------------------------------------------------------------------
+    # 5A. FAST PATH: System 1 (No PKG)
+    # ------------------------------------------------------------------
     if decision_kind == DecisionKind.FAST_PATH.value:
-        # Path A: System 1 (Direct Execution)
+        # We intentionally DO NOT call PKG here.
+        # The whole point of System 1 is low-latency reflex routing.
+        payload_common = _create_payload_common(
+            task_id=ctx.task_id,
+            decision_kind=decision_kind,
+            path_label=path_label,
+            pkg_meta=pkg_meta,
+            proto_plan=proto_plan,
+            router_latency_ms=router_latency_ms,
+            correlation_id=correlation_id,
+            ocps_payload=ocps_payload,
+        )
+
         res = create_fast_path_result(
             target_organ_id=target_organ,
             routing_params=routing_hints,
-            interaction_mode="coordinator_routed", 
+            interaction_mode="coordinator_routed",
             processing_time_ms=router_latency_ms,
-            **payload_common
+            **payload_common,
         ).model_dump()
-    else:
-        # Path B: System 2 (Cognitive Service)
-        # FIX: Removed 'rule_meta' reference.
-        # We pass the intent specs so the Planner knows what KIND of agent was intended,
-        # which helps it generate a better plan.
-        res = create_cognitive_result(
-            task_type=ctx.task_type,
-            result={
-                "status": "escalated_by_ocps",
-                "drift_severity": drift_state.severity,
-                "intended_specialization": intent.specialization 
-            },
-            **payload_common
-        ).model_dump()
+
+        return {
+            "decision_kind": decision_kind,
+            "result": res,
+            "organ_id": target_organ or "organism",
+        }
+
+    # ------------------------------------------------------------------
+    # 5B. COGNITIVE PATH: System 2 (PKG + Planner)
+    # ------------------------------------------------------------------
+    # Only in this branch do we invoke PKG, and we give it meaningful signals.
+    try:
+        # Base task facts
+        task_facts_context = {
+            "domain": ctx.domain,
+            "type": ctx.task_type,
+            "task_id": ctx.task_id,
+            "intended_specialization": intent.specialization,
+            "organ_hint": intent.organ_hint,
+        }
+
+        # Build PKG signals payload:
+        # OCPS valve + optional contextual signals (if available via cfg)
+        pkg_signals: Dict[str, Any] = {
+            "ocps_drift": raw_drift,
+            "ocps_cusum": drift_state.score,
+            "ocps_breached": drift_state.is_breached,
+            "ocps_severity": drift_state.severity,
+        }
+
+        # OPTIONAL: enrich with capability/energy signals if configured
+        # e.g., cfg.signal_enricher: SignalEnricher
+        # Prefer the explicit attribute name, but allow a generic 'signals' alias.
+        signal_enricher = getattr(cfg, "signal_enricher", None)
+        if signal_enricher is not None:
+            try:
+                # Note: adapt this call if your SignalEnricher expects something
+                # different for `task` (e.g., ctx.task_payload).
+                extra_signals = await signal_enricher.compute_contextual_signals(
+                    intent=intent,
+                    task=ctx.task_payload
+                    if hasattr(ctx, "task_payload")
+                    else ctx,  # safe fallback
+                )
+                if isinstance(extra_signals, dict):
+                    pkg_signals.update(extra_signals)
+            except Exception as se:
+                logger.debug(
+                    f"[Router] SignalEnricher failed, continuing without: {se}"
+                )
+
+        # Invoke PKG evaluator at the correct stage:
+        #   - After OCPS decides we're in System 2
+        #   - After intent is known
+        #   - With full signals + context
+        pkg_res = await cfg.evaluate_pkg_func(
+            tags=list(ctx.tags),
+            signals=pkg_signals,
+            context=task_facts_context,
+            timeout_s=cfg.pkg_timeout_s,
+        )
+
+        proto_plan = pkg_res or {}
+        pkg_meta["evaluated"] = True
+        pkg_meta["version"] = proto_plan.get("version")
+
+    except Exception as e:
+        logger.debug(f"[Router] PKG evaluation skipped due to error: {e}")
+
+    # Recompute latency including PKG time
+    router_latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
+
+    # Common payload for cognitive path
+    payload_common = _create_payload_common(
+        task_id=ctx.task_id,
+        decision_kind=decision_kind,
+        path_label=path_label,
+        pkg_meta=pkg_meta,
+        proto_plan=proto_plan,
+        router_latency_ms=router_latency_ms,
+        correlation_id=correlation_id,
+        ocps_payload=ocps_payload,
+    )
+
+    # System 2 = Cognitive / Planner route
+    res = create_cognitive_result(
+        task_type=ctx.task_type,
+        result={
+            "status": "escalated_by_ocps",
+            "drift_severity": drift_state.severity,
+            "intended_specialization": intent.specialization,
+        },
+        **payload_common,
+    ).model_dump()
 
     return {
         "decision_kind": decision_kind,
         "result": res,
-        # Default routing target (Organism Service handles the rest)
-        "organ_id": target_organ or "organism"
+        "organ_id": target_organ or "organism",
     }
 
 
@@ -672,7 +810,7 @@ async def _process_task_input(
     eventizer_helper: Callable[[Any], Any] | None = None,
 ) -> Dict[str, Any]:
     """Extracts context, running Eventizer via helper if needed."""
-    
+
     # Run Eventizer (System 1)
     eventizer_data = {}
     if eventizer_helper:

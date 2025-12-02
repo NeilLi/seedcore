@@ -6,7 +6,7 @@ import time
 import os
 import numpy as np  # type: ignore
 
-from .calculator import energy_and_grad, compute_energy_unified, SystemParameters
+from .calculator import compute_energy_unified, SystemParameters
 from .weights import EnergyWeights
 
 

@@ -66,6 +66,16 @@ CREATE TABLE IF NOT EXISTS agent_collab_agent (
   PRIMARY KEY (src_agent, dst_agent)
 );
 
+-- Extend agent_collab_agent to be a proper virtual network overlay
+ALTER TABLE agent_collab_agent
+  ADD COLUMN IF NOT EXISTS weight      REAL   NOT NULL DEFAULT 0.5,
+  ADD COLUMN IF NOT EXISTS bond_kind   TEXT   NOT NULL DEFAULT 'functional',  -- e.g., 'strong_pair', 'cross_organ', 'learned'
+  ADD COLUMN IF NOT EXISTS meta        JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- Optional: if you want overlay per epoch/version
+-- ALTER TABLE agent_collab_agent
+--   ADD COLUMN IF NOT EXISTS overlay_epoch UUID;
+
 CREATE INDEX IF NOT EXISTS idx_agent_collab_src ON agent_collab_agent(src_agent);
 CREATE INDEX IF NOT EXISTS idx_agent_collab_dst ON agent_collab_agent(dst_agent);
 

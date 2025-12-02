@@ -17,7 +17,8 @@ import time
 from typing import Any, Dict
 
 from fastapi import APIRouter, FastAPI, HTTPException  # type: ignore[reportMissingImports]
-from ray import serve  # type: ignore[reportMissingImports]
+from ray import serve
+from seedcore.models.state import Response  # type: ignore[reportMissingImports]
 
 # Type hint for Ray Serve handles
 try:
@@ -141,13 +142,25 @@ class OpsGateway:
         # which consumes `_agent_snapshots` and refines it into `_system_metrics`.
         # The real consumer of `_agent_snapshots` is the aggregator itself.
 
+        # Inside your APIRouter definition
         @router.get("/state/system-metrics")
-        async def state_system_metrics():
+        async def state_system_metrics(self, response: Response): # <--- Inject Response here
             """
             Refined Jet Fuel — precomputed aggregates for real-time routing.
             """
             try:
-                return await self.state.rpc_system_metrics.remote()
+                # 1. Get Data from Actor (RPC)
+                data = await self.state.rpc_system_metrics.remote()
+                
+                # 2. Hydrate Headers Manually (since Actor couldn't do it)
+                # We read the 'meta' block returned by the actor logic
+                if isinstance(data, dict):
+                    meta = data.get("meta", {})
+                    response.headers["X-System-Status"] = meta.get("status", "unknown")
+                    response.headers["X-Processing-Time"] = f"{meta.get('latency_ms', 0):.3f}ms"
+                
+                return data
+
             except Exception as e:
                 logger.error(f"State system metrics retrieval failed: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
@@ -187,7 +200,7 @@ class OpsGateway:
         # --------------------------------
         @router.get("/energy/metrics")
         async def energy_metrics():
-            return await self.energy.rpc_metrics.remote()
+            return await self.energy.rpc_get_metrics.remote()
 
         @router.get("/energy/compute-from-state")
         async def energy_compute_from_state():

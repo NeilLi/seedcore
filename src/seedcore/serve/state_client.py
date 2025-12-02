@@ -16,6 +16,8 @@ agent routing and energy computation.
 
 import logging
 from typing import Dict, Any
+
+from seedcore.models.state import Response
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
 
 logger = logging.getLogger(__name__)
@@ -65,18 +67,15 @@ class StateServiceClient(BaseServiceClient):
     # HOT PATH (Production)
     # ----------------------------------------------------------------------
 
+
     async def get_system_metrics(self) -> Dict[str, Any]:
         """
         Fetch refined, pre-computed system metrics (HOT PATH).
-
-        These metrics are distilled by the AgentAggregator and used by:
-            - Coordinator
-            - EnergyService
-            - Routing logic
-
-        Returns:
-            A dictionary containing metrics, memory stats, system stats, etc.
+        
+        Note: We do NOT pass 'response' here. The client just fetches data.
+        The server endpoint sets the headers, and httpx handles receiving them.
         """
+        # The underlying self.get should handle the HTTP call
         return await self.get("/ops/state/system-metrics")
 
     # ----------------------------------------------------------------------

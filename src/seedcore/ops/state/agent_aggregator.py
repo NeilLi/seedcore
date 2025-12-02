@@ -16,10 +16,12 @@ core component of the proactive StateService.
 import asyncio
 import logging
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from collections import defaultdict
 import numpy as np
 import ray  # pyright: ignore[reportMissingImports]
+from seedcore.graph.agent_repository import AgentGraphRepository  # pyright: ignore[reportMissingImports]
+from seedcore.database import get_async_pg_session_factory
 
 # --- Model Import ---
 # AgentSnapshot is a dataclass from models.state that includes:
@@ -44,7 +46,12 @@ class AgentAggregator:
     and compute system-wide metrics.
     """
 
-    def __init__(self, organism_router: Any, poll_interval: float = 2.0):
+    def __init__(
+        self,
+        organism_router: Any,
+        graph_repo: AgentGraphRepository,
+        poll_interval: float = 2.0,
+    ):
         """
         Initialize the proactive agent state aggregator.
 
@@ -54,6 +61,7 @@ class AgentAggregator:
             poll_interval: How often (in seconds) to poll all agents.
         """
         self.organism_router = organism_router
+        self.graph_repo = graph_repo
         self.poll_interval = poll_interval
 
         # Internal state cache
@@ -111,30 +119,50 @@ class AgentAggregator:
             try:
                 start_time = time.monotonic()
 
+                async with get_async_pg_session_factory()() as session:
+                    agent_ids_W, W_pair = await self.graph_repo.load_agent_overlay_matrix(
+                        session,
+                        organ_ids=None,
+                        min_weight=0.01,
+                    )
+
                 # 1. Discover all live agents from the global router
                 # This call uses the new OrganismService (v2) which wraps OrganismCore.
                 # OrganismCore aggregates handles from all organs.
-                agent_handles_ref = self.organism_router.rpc_get_all_agent_handles.remote()
-                agent_handles: Dict[str, Any] = await self._async_ray_get(agent_handles_ref)
+                agent_handles_ref = (
+                    self.organism_router.rpc_get_all_agent_handles.remote()
+                )
+                agent_handles: Dict[str, Any] = await self._async_ray_get(
+                    agent_handles_ref
+                )
 
                 if not agent_handles:
                     logger.warning(
                         "No agent handles found. System may be scaling to zero."
                     )
-                    await self._update_state({}, {})  # Clear state
+                    empty_metrics = self._compute_system_metrics({}, {})
+                    await self._update_state({}, empty_metrics)  # Clear state
                     await asyncio.sleep(self.poll_interval)
                     continue
 
-                # 2. Batch-collect snapshots from all agents
+                # 2. Batch-collect snapshots and specializations from all agents
                 # Use get_snapshot() which directly returns AgentSnapshot (the bridge method)
                 ordered_ids = list(agent_handles.keys())
                 ordered_handles = list(agent_handles.values())
 
                 snapshot_refs = [h.get_snapshot.remote() for h in ordered_handles]
-                snapshots = await self._async_ray_get(snapshot_refs)
+                # Also fetch specializations in parallel for specialization distribution metrics
+                specialization_refs = [
+                    h.advertise_capabilities.remote() for h in ordered_handles
+                ]
 
-                # 3. Process snapshots into new_snapshots dict
+                snapshots = await self._async_ray_get(snapshot_refs)
+                specialization_data = await self._async_ray_get(specialization_refs)
+
+                # 3. Process snapshots and extract specializations
                 new_snapshots: Dict[str, AgentSnapshot] = {}
+                agent_specializations: Dict[str, str] = {}
+
                 for i, agent_id in enumerate(ordered_ids):
                     try:
                         snapshot = (
@@ -156,14 +184,35 @@ class AgentAggregator:
                             continue
 
                         new_snapshots[agent_id] = snapshot
+
+                        # Extract specialization from advertisement data
+                        spec_data = (
+                            specialization_data[i]
+                            if i < len(specialization_data)
+                            and specialization_data[i] is not None
+                            else None
+                        )
+                        if spec_data and isinstance(spec_data, dict):
+                            agent_specializations[agent_id] = spec_data.get(
+                                "specialization", "unknown"
+                            )
+                        else:
+                            # Fallback: use "unknown" if we can't get specialization
+                            agent_specializations[agent_id] = "unknown"
+
                     except Exception as e:
                         logger.warning(
                             f"Failed to process snapshot for agent {agent_id}: {e}"
                         )
                         continue
 
-                # 4. Pre-compute system-wide metrics for the Coordinator
-                new_metrics = self._compute_system_metrics(new_snapshots)
+                # 4. Pre-compute system-wide metrics for the Coordinator (topology-aware)
+                new_metrics = self._compute_system_metrics(
+                    new_snapshots,
+                    agent_specializations,
+                    agent_ids_W=agent_ids_W,
+                    W_pair=W_pair,
+                )
 
                 # 5. Atomically update the internal state
                 await self._update_state(new_snapshots, new_metrics)
@@ -232,24 +281,59 @@ class AgentAggregator:
     async def _async_ray_get(self, refs) -> Any:
         """
         Safely resolve Ray references with proper error handling.
-        (This utility function is unchanged and remains essential)
+
+        Optimized to batch ObjectRefs when possible to reduce thread overhead.
         """
         try:
             if isinstance(refs, list):
-                # Use return_exceptions=True to prevent one failure from
-                # failing the entire batch.
-                results = await asyncio.gather(
-                    *[self._async_ray_get(ref) for ref in refs], return_exceptions=True
+                if not refs:
+                    return []
+
+                # Optimization: Check if all refs are ObjectRefs (can be batched)
+                # vs DeploymentResponses (need individual handling)
+                all_object_refs = all(
+                    not hasattr(ref, "result") for ref in refs if ref is not None
                 )
-                # Process exceptions, replacing them with None or an empty dict
-                processed_results = []
-                for res in results:
-                    if isinstance(res, Exception):
-                        logger.warning(f"Failed to resolve Ray reference: {res}")
-                        processed_results.append(None)  # Use None as a poison pill
-                    else:
-                        processed_results.append(res)
-                return processed_results
+
+                if all_object_refs:
+                    # Batch get all ObjectRefs in a single executor call
+                    # This is more efficient than spinning up N threads
+                    def batch_get():
+                        try:
+                            return ray.get(refs, timeout=15.0)
+                        except Exception as e:
+                            # If batch fails, fall back to individual gets
+                            logger.debug(
+                                f"Batch ray.get failed, falling back to individual gets: {e}"
+                            )
+                            results = []
+                            for ref in refs:
+                                try:
+                                    results.append(ray.get(ref, timeout=15.0))
+                                except Exception:
+                                    results.append(None)
+                            return results
+
+                    return await asyncio.get_event_loop().run_in_executor(
+                        None, batch_get
+                    )
+                else:
+                    # Mixed types or DeploymentResponses: handle individually
+                    # Use return_exceptions=True to prevent one failure from
+                    # failing the entire batch.
+                    results = await asyncio.gather(
+                        *[self._async_ray_get(ref) for ref in refs],
+                        return_exceptions=True,
+                    )
+                    # Process exceptions, replacing them with None
+                    processed_results = []
+                    for res in results:
+                        if isinstance(res, Exception):
+                            logger.warning(f"Failed to resolve Ray reference: {res}")
+                            processed_results.append(None)  # Use None as a poison pill
+                        else:
+                            processed_results.append(res)
+                    return processed_results
             else:
                 # Single reference
                 if hasattr(refs, "result"):
@@ -269,10 +353,21 @@ class AgentAggregator:
     # In: ProactiveAgentAggregator
     # Method: _compute_system_metrics
     def _compute_system_metrics(
-        self, snapshots: Dict[str, AgentSnapshot]
+        self,
+        snapshots: Dict[str, AgentSnapshot],
+        specializations: Dict[str, str],
+        *,
+        agent_ids_W: Optional[List[str]] = None,
+        W_pair: Optional[List[List[float]]] = None,
     ) -> Dict[str, Any]:
         """
         Pre-compute the 'helpful parameters' for the Coordinator.
+
+        Args:
+            snapshots: Dict mapping agent_id -> AgentSnapshot
+            specializations: Dict mapping agent_id -> specialization string
+            agent_ids_W: Optional list of agent IDs in the topology matrix
+            W_pair: Optional adjacency matrix (list of lists) for agent collaboration graph
         """
         if not snapshots:
             return {
@@ -281,19 +376,60 @@ class AgentAggregator:
                 "avg_capability": 0.0,
                 "avg_memory_util": 0.0,
                 "lifecycle_distribution": {},
-                "h_hgnn": np.zeros(128, dtype=np.float32),  # Add this
+                "specialization_distribution": {},
+                "specialization_load": {},
+                "h_hgnn": np.zeros(128, dtype=np.float32),
+                "pair_matrix_present": False,
+                "pair_degrees": {},
+                "pair_neighbors": {},
             }
+
+        # --- Topology / Virtual Network Overlay ---
+        has_topology = (
+            agent_ids_W is not None
+            and W_pair is not None
+            and len(agent_ids_W) > 0
+            and len(W_pair) > 0
+        )
+
+        pair_degrees = {}
+        pair_neighbors = defaultdict(list)
+
+        if has_topology:
+            # Map matrix indices to agent_ids in the topology scope
+            W_index = {aid: idx for idx, aid in enumerate(agent_ids_W)}
+
+            # Precompute degree & neighbors only for agents we actually have snapshots for
+            for agent_id in snapshots.keys():
+                if agent_id not in W_index:
+                    continue
+                i = W_index[agent_id]
+                row = W_pair[i]
+
+                deg = float(sum(row))
+                pair_degrees[agent_id] = deg
+
+                for j, w in enumerate(row):
+                    if j == i:
+                        continue
+                    if w > 0.01:
+                        neighbor_id = agent_ids_W[j]
+                        pair_neighbors[agent_id].append((neighbor_id, float(w)))
 
         capabilities = []
         memory_utils = []
         lifecycles = defaultdict(int)
         skill_aggregator = defaultdict(list)
 
+        # --- New: Track Specialization Counts and Load ---
+        specialization_counts = defaultdict(int)
+        specialization_load = defaultdict(list)
+
         # --- New h_hgnn Calculation ---
         embeddings = []
         weights = []
 
-        for snapshot in snapshots.values():
+        for agent_id, snapshot in snapshots.items():
             capabilities.append(snapshot.c)
             memory_utils.append(snapshot.mem_util)
             lifecycles[snapshot.lifecycle] += 1
@@ -301,16 +437,36 @@ class AgentAggregator:
             for skill, value in snapshot.learned_skills.items():
                 skill_aggregator[skill].append(value)
 
+            # --- Aggregate Specialization Stats ---
+            spec_name = specializations.get(agent_id, "unknown")
+            specialization_counts[spec_name] += 1
+            # Use load if available and > 0, otherwise use mem_util as a proxy
+            load_value = snapshot.load if snapshot.load > 0 else snapshot.mem_util
+            specialization_load[spec_name].append(load_value)
+
             # --- Add embedding and weight for h_hgnn ---
             if snapshot.h is not None and snapshot.h.size > 0:
                 embeddings.append(snapshot.h)
-                # Replicate original logic: weight by capability and mem_util
-                weight = snapshot.c * (1.0 + snapshot.mem_util)
-                weights.append(max(0.1, weight))  # Use max to avoid zero-weight
+
+                if has_topology:
+                    # Graph-aware weighting: capability × degree
+                    deg = pair_degrees.get(agent_id, 1.0)
+                    weight = snapshot.c * deg
+                else:
+                    # Fallback: original heuristic
+                    weight = snapshot.c * (1.0 + snapshot.mem_util)
+
+                weights.append(max(0.1, weight))
 
         # Compute the final SystemSpecializationVector (average skill)
         system_spec_vector = {
             skill: float(np.mean(values)) for skill, values in skill_aggregator.items()
+        }
+
+        # --- Compute avg load per specialization ---
+        spec_avg_load = {
+            spec: float(np.mean(loads)) if loads else 0.0
+            for spec, loads in specialization_load.items()
         }
 
         # --- Compute final h_hgnn ---
@@ -325,5 +481,10 @@ class AgentAggregator:
             "avg_capability": float(np.mean(capabilities)) if capabilities else 0.0,
             "avg_memory_util": float(np.mean(memory_utils)) if memory_utils else 0.0,
             "lifecycle_distribution": dict(lifecycles),
-            "h_hgnn": h_hgnn,  # The new pre-computed parameter
+            "specialization_distribution": dict(specialization_counts),
+            "specialization_load": spec_avg_load,
+            "h_hgnn": h_hgnn,  # HGNN centroid (now topology-aware when available)
+            "pair_matrix_present": has_topology,
+            "pair_degrees": pair_degrees,
+            "pair_neighbors": dict(pair_neighbors),
         }
