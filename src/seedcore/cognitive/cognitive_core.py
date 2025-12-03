@@ -603,14 +603,15 @@ class CognitiveCore(dspy.Module):
                 context, input_data, params, cog_flags
             )
 
-            # 3. Decision Branching: ESCALATED + HGNN Path
-            # v2 semantics: If ESCALATED and HGNN embedding exists, shortcut to HGNN pipeline
+            # 3. Decision Branching: HGNN Path
+            # v2 semantics: If COGNITIVE path and HGNN embedding exists, shortcut to HGNN pipeline
+            # Note: Coordinator now creates DecisionKind.COGNITIVE (not ESCALATED) for escalated tasks
             if (
-                context.decision_kind == DecisionKind.ESCALATED
+                context.decision_kind == DecisionKind.COGNITIVE
                 and knowledge_context.get("hgnn_embedding") is not None
             ):
                 logger.debug(
-                    f"Task {task_id}: Escalated + HGNN detected. Running HGNN pipeline."
+                    f"Task {task_id}: Cognitive path + HGNN detected. Running HGNN pipeline."
                 )
                 return self._run_hgnn_pipeline(
                     context=context,

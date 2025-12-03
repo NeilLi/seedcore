@@ -32,7 +32,7 @@ from seedcore.models.cognitive import CognitiveType, DecisionKind
 from seedcore.models.task import TaskType
 from seedcore.models.task_payload import TaskPayload
 from seedcore.models.result_schema import (
-    create_cognitive_result,
+    create_cognitive_path_result,
     create_error_result,
     create_fast_path_result,
 )
@@ -309,27 +309,36 @@ async def route_and_execute(
         correlation_id=correlation_id,
     )
 
-    decision_kind = routing_dec.get("decision_kind")
-    # This is the TaskResult.payload (FastPathResult/CognitiveResult payload)
-    decision_payload = routing_dec.get("result", {}) or {}
+    # routing_dec is a dict with keys: "decision_kind", "result", "organ_id"
+    # "result" is the model_dump() of a TaskResult (dict with "kind", "payload", "metadata")
+    decision_kind_str = routing_dec["decision_kind"]
+    decision_kind = DecisionKind(decision_kind_str)  # Convert to enum
+    task_result_dict = routing_dec["result"]
+    # Extract the payload from the TaskResult dict
+    decision_payload = task_result_dict["payload"]
 
     # ---------------------------------------------------------
     # 3. EXECUTE DECISION
     # ---------------------------------------------------------
 
     # --- PATH A: Cognitive (System 2) ---
-    if decision_kind in (DecisionKind.COGNITIVE.value, DecisionKind.ESCALATED.value):
+    if decision_kind_str in (
+        DecisionKind.COGNITIVE.value,
+        DecisionKind.ESCALATED.value,
+    ):
         return await _handle_cognitive_path(
             task=task,
-            decision_payload=decision_payload,
-            decision_kind=decision_kind,
+            decision_payload=decision_payload,  # Already a dict
+            decision_kind=decision_kind,  # Pass enum
             config=execution_config,
         )
 
     # --- PATH B: Fast Path (System 1) ---
-    elif decision_kind == DecisionKind.FAST_PATH.value:
+    elif decision_kind_str == DecisionKind.FAST_PATH.value:
+        # decision_payload is a dict (FastPathResult.model_dump())
         target_organ = decision_payload.get("organ_id")
-        routing_params = decision_payload.get("routing_params", {})
+        # routing_params is stored in metadata
+        routing_params = decision_payload.get("metadata", {}).get("routing_params", {})
 
         return await _handle_fast_path(
             task=task,
@@ -619,161 +628,49 @@ async def _compute_routing_decision(
     correlation_id: str | None = None,
 ) -> Dict[str, Any]:
     """
-    Compute routing decision using OCPS (Valve) and Static Intent Mapping.
-
-    Key invariants:
-      - OCPS valve (drift) decides FAST_PATH vs COGNITIVE (System 1 vs System 2).
-      - PKG is only evaluated in the COGNITIVE path (when escalation is warranted).
-      - PKG receives OCPS-derived signals (and optionally extra contextual signals).
+    Compute routing decision (System 1 vs System 2).
     """
     t0 = time.perf_counter()
     params = ctx.params or {}
 
     # ------------------------------------------------------------------
-    # 1. OCPS Update (System 1 vs 2 Valve)
+    # 1. OCPS Valve Update (Drift Detection)
     # ------------------------------------------------------------------
     raw_drift = float(params.get("ocps", {}).get("uncertainty_score", 0.0))
-
-    # Update Neural Accumulator
     drift_state = cfg.ocps_valve.update(raw_drift)
+    is_escalated = drift_state.is_breached
+
+    # Determine kind
+    decision_kind = (
+        DecisionKind.COGNITIVE.value if is_escalated else DecisionKind.FAST_PATH.value
+    )
+    path_label = "system_2_escalation" if is_escalated else "system_1_reflex"
 
     # ------------------------------------------------------------------
-    # 2. Determine Decision Kind
-    # ------------------------------------------------------------------
-    if drift_state.is_breached:
-        # High entropy -> System 2 (Deep Reasoning / Planner)
-        decision_kind = DecisionKind.COGNITIVE.value
-        path_label = "system_2_escalation"
-    else:
-        # Low entropy -> System 1 (Fast Path Reflex)
-        decision_kind = DecisionKind.FAST_PATH.value
-        path_label = "system_1_reflex"
-
-    # ------------------------------------------------------------------
-    # 3. Derive Routing Intent (The "Who")
+    # 2. Intent Resolution
     # ------------------------------------------------------------------
     intent = _derive_routing_intent(ctx)
-
-    routing_hints = {
-        "required_specialization": intent.specialization,
-        "skills": intent.skills or {},
-    }
-    target_organ = intent.organ_hint
+    target_organ = intent.organ_hint or "organism"
 
     # ------------------------------------------------------------------
-    # 4. Build OCPS Payload (used in both paths)
+    # 3. System 2 Conditional Execution (PKG)
     # ------------------------------------------------------------------
-    ocps_payload = {
-        "drift": raw_drift,
-        "cusum_score": drift_state.score,
-        "breached": drift_state.is_breached,
-        "severity": drift_state.severity,
-    }
+    # Initialize defaults (as if Fast Path)
+    pkg_meta = {"evaluated": False}
+    proto_plan = {}
 
-    # Router latency (for both branches)
-    router_latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
-
-    # Base PKG metadata & proto_plan
-    pkg_meta: Dict[str, Any] = {"evaluated": False}
-    proto_plan: Dict[str, Any] = {}
-
-    # ------------------------------------------------------------------
-    # 5A. FAST PATH: System 1 (No PKG)
-    # ------------------------------------------------------------------
-    if decision_kind == DecisionKind.FAST_PATH.value:
-        # We intentionally DO NOT call PKG here.
-        # The whole point of System 1 is low-latency reflex routing.
-        payload_common = _create_payload_common(
-            task_id=ctx.task_id,
-            decision_kind=decision_kind,
-            path_label=path_label,
-            pkg_meta=pkg_meta,
-            proto_plan=proto_plan,
-            router_latency_ms=router_latency_ms,
-            correlation_id=correlation_id,
-            ocps_payload=ocps_payload,
+    # Only run PKG logic if escalated
+    if is_escalated:
+        pkg_meta, proto_plan = await _try_run_pkg_evaluation(
+            ctx, cfg, intent, raw_drift, drift_state
         )
 
-        res = create_fast_path_result(
-            target_organ_id=target_organ,
-            routing_params=routing_hints,
-            interaction_mode="coordinator_routed",
-            processing_time_ms=router_latency_ms,
-            **payload_common,
-        ).model_dump()
-
-        return {
-            "decision_kind": decision_kind,
-            "result": res,
-            "organ_id": target_organ or "organism",
-        }
-
     # ------------------------------------------------------------------
-    # 5B. COGNITIVE PATH: System 2 (PKG + Planner)
+    # 4. Unified Payload Construction
     # ------------------------------------------------------------------
-    # Only in this branch do we invoke PKG, and we give it meaningful signals.
-    try:
-        # Base task facts
-        task_facts_context = {
-            "domain": ctx.domain,
-            "type": ctx.task_type,
-            "task_id": ctx.task_id,
-            "intended_specialization": intent.specialization,
-            "organ_hint": intent.organ_hint,
-        }
-
-        # Build PKG signals payload:
-        # OCPS valve + optional contextual signals (if available via cfg)
-        pkg_signals: Dict[str, Any] = {
-            "ocps_drift": raw_drift,
-            "ocps_cusum": drift_state.score,
-            "ocps_breached": drift_state.is_breached,
-            "ocps_severity": drift_state.severity,
-        }
-
-        # OPTIONAL: enrich with capability/energy signals if configured
-        # e.g., cfg.signal_enricher: SignalEnricher
-        # Prefer the explicit attribute name, but allow a generic 'signals' alias.
-        signal_enricher = getattr(cfg, "signal_enricher", None)
-        if signal_enricher is not None:
-            try:
-                # Note: adapt this call if your SignalEnricher expects something
-                # different for `task` (e.g., ctx.task_payload).
-                extra_signals = await signal_enricher.compute_contextual_signals(
-                    intent=intent,
-                    task=ctx.task_payload
-                    if hasattr(ctx, "task_payload")
-                    else ctx,  # safe fallback
-                )
-                if isinstance(extra_signals, dict):
-                    pkg_signals.update(extra_signals)
-            except Exception as se:
-                logger.debug(
-                    f"[Router] SignalEnricher failed, continuing without: {se}"
-                )
-
-        # Invoke PKG evaluator at the correct stage:
-        #   - After OCPS decides we're in System 2
-        #   - After intent is known
-        #   - With full signals + context
-        pkg_res = await cfg.evaluate_pkg_func(
-            tags=list(ctx.tags),
-            signals=pkg_signals,
-            context=task_facts_context,
-            timeout_s=cfg.pkg_timeout_s,
-        )
-
-        proto_plan = pkg_res or {}
-        pkg_meta["evaluated"] = True
-        pkg_meta["version"] = proto_plan.get("version")
-
-    except Exception as e:
-        logger.debug(f"[Router] PKG evaluation skipped due to error: {e}")
-
-    # Recompute latency including PKG time
     router_latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
 
-    # Common payload for cognitive path
+    # Common metadata shared by both result types
     payload_common = _create_payload_common(
         task_id=ctx.task_id,
         decision_kind=decision_kind,
@@ -782,25 +679,103 @@ async def _compute_routing_decision(
         proto_plan=proto_plan,
         router_latency_ms=router_latency_ms,
         correlation_id=correlation_id,
-        ocps_payload=ocps_payload,
+        ocps_payload={
+            "drift": raw_drift,
+            "cusum_score": drift_state.score,
+            "breached": drift_state.is_breached,
+            "severity": drift_state.severity,
+        },
     )
 
-    # System 2 = Cognitive / Planner route
-    res = create_cognitive_result(
-        task_type=ctx.task_type,
-        result={
-            "status": "escalated_by_ocps",
-            "drift_severity": drift_state.severity,
-            "intended_specialization": intent.specialization,
-        },
-        **payload_common,
-    ).model_dump()
+    # ------------------------------------------------------------------
+    # 5. Result Factory (Polymorphic)
+    # ------------------------------------------------------------------
+    if is_escalated:
+        # System 2: Cognitive Result
+        task_result = create_cognitive_path_result(
+            task_type=ctx.task_type,
+            result={
+                "status": "escalated_by_ocps",
+                "drift_severity": drift_state.severity,
+                "intended_specialization": intent.specialization,
+            },
+            **payload_common,
+        )
+    else:
+        # System 1: Fast Path Result
+        task_result = create_fast_path_result(
+            target_organ_id=target_organ,
+            routing_params={
+                "required_specialization": intent.specialization,
+                "skills": intent.skills or {},
+            },
+            interaction_mode="coordinator_routed",
+            processing_time_ms=router_latency_ms,
+            **payload_common,
+        )
 
     return {
         "decision_kind": decision_kind,
-        "result": res,
-        "organ_id": target_organ or "organism",
+        "result": task_result.model_dump(),
+        "organ_id": target_organ,
     }
+
+
+# ------------------------------------------------------------------
+# Helper to isolate the messy PKG signal extraction
+# ------------------------------------------------------------------
+async def _try_run_pkg_evaluation(
+    ctx: TaskContext, cfg: RouteConfig, intent: Any, raw_drift: float, drift_state: Any
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Safely executes PKG evaluation. Returns (pkg_meta, proto_plan).
+    """
+    pkg_meta = {"evaluated": False}
+    proto_plan = {}
+
+    try:
+        # 1. Base Signals
+        pkg_signals = {
+            "ocps_drift": raw_drift,
+            "ocps_cusum": drift_state.score,
+            "ocps_breached": drift_state.is_breached,
+            "ocps_severity": drift_state.severity,
+        }
+
+        # 2. Enrich Signals (Optional)
+        signal_enricher = getattr(cfg, "signal_enricher", None)
+        if signal_enricher:
+            try:
+                task_obj = getattr(ctx, "task_payload", ctx)
+                extra = await signal_enricher.compute_contextual_signals(
+                    intent, task_obj
+                )
+                if isinstance(extra, dict):
+                    pkg_signals.update(extra)
+            except Exception as se:
+                logger.debug(f"[Router] SignalEnricher warning: {se}")
+
+        # 3. Evaluate PKG
+        pkg_res = await cfg.evaluate_pkg_func(
+            tags=list(ctx.tags),
+            signals=pkg_signals,
+            context={
+                "domain": ctx.domain,
+                "type": ctx.task_type,
+                "task_id": ctx.task_id,
+                "intended_specialization": intent.specialization,
+                "organ_hint": intent.organ_hint,
+            },
+            timeout_s=cfg.pkg_timeout_s,
+        )
+
+        proto_plan = pkg_res or {}
+        pkg_meta = {"evaluated": True, "version": proto_plan.get("version")}
+
+    except Exception as e:
+        logger.debug(f"[Router] PKG evaluation skipped: {e}")
+
+    return pkg_meta, proto_plan
 
 
 async def _process_task_input(

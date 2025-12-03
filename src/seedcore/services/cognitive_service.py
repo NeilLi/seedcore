@@ -656,16 +656,16 @@ class CognitiveOrchestrator:
         return _DSPyEngineShim(openai_factory(model, profile))
 
 
-    def _resolve_lm_engine(self, profile: LLMProfile, envelope: dict) -> Any:
+    def _resolve_lm_engine(self, profile: LLMProfile, params: dict) -> Any:
         """
         Determines the correct LM for the request.
         Priority:
-        1. Request Envelope Overrides (Creates fresh, temporary LM)
+        1. Request params Overrides (Creates fresh, temporary LM)
         2. Cached Default for Profile (Uses self.lms)
         """
         # --- Path A: Handle Overrides (Fresh Instance) ---
-        ov_provider = envelope.get("llm_provider_override")
-        ov_model = envelope.get("llm_model_override")
+        ov_provider = params.get("llm_provider_override")
+        ov_model = params.get("llm_model_override")
 
         if ov_provider or ov_model:
             # 1. Resolve Provider (Override -> Profile Default)
@@ -734,12 +734,12 @@ class CognitiveOrchestrator:
             "timestamp": time.time()
         })
 
-    def _determine_profile(self, decision: DecisionKind, envelope: dict) -> LLMProfile:
+    def _determine_profile(self, decision: DecisionKind, params: dict) -> LLMProfile:
         """Maps DecisionKind to Profile."""
-        # 1. Check explicit envelope override logic
-        if envelope.get("force_deep_reasoning"):
+        # 1. Check explicit params override logic
+        if params.get("force_deep_reasoning"):
             return LLMProfile.DEEP
-        if envelope.get("force_fast"):
+        if params.get("force_fast"):
             return LLMProfile.FAST
             
         # 2. Map kinds
@@ -758,8 +758,8 @@ class CognitiveOrchestrator:
         try:
             # 1. Strategy: Resolve Profile
             decision_kind = context.decision_kind
-            envelope = context.input_data.get("params", {}).get("cognitive", {})
-            profile = self._determine_profile(decision_kind, envelope)
+            params = context.input_data.get("params", {}).get("cognitive", {})
+            profile = self._determine_profile(decision_kind, params)
             profile = self._maybe_downgrade(profile)
             
             # 3. Pick next worker
@@ -772,7 +772,7 @@ class CognitiveOrchestrator:
                 ).model_dump()
 
             # 3. Resource: Resolve Engine (Handle Overrides)
-            execution_lm = self._resolve_lm_engine(profile, envelope)
+            execution_lm = self._resolve_lm_engine(profile, params)
 
             # 4. Execution: Thread-Safe Context
             # This ensures that parallel requests do not clobber global settings

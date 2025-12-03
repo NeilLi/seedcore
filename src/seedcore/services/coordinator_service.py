@@ -516,7 +516,7 @@ class Coordinator:
         retention = RetentionPolicy.FULL_ARCHIVE if is_novel else RetentionPolicy.SUMMARY_ONLY
         should_escalate = self.ocps.update(drift_score)
         
-        decision_kind = DecisionKind.ESCALATED if should_escalate else DecisionKind.FAST_PATH
+        decision_kind = DecisionKind.COGNITIVE if should_escalate else DecisionKind.FAST_PATH
         reason = {"drift_score": drift_score, "is_novel": is_novel}
         
         if should_escalate:
@@ -525,7 +525,7 @@ class Coordinator:
                 cog_res = await self.cognitive_client.execute_async(
                     agent_id=agent_id,
                     cog_type=CognitiveType.PROBLEM_SOLVING,
-                    decision_kind=DecisionKind.ESCALATED,
+                    decision_kind=DecisionKind.COGNITIVE,
                     task={"params": {"hgnn": {"embedding": payload.series}}}
                 )
                 reason = cog_res.get("result", {})

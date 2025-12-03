@@ -7,9 +7,8 @@ ensuring consistency between fast-path routing and HGNN escalation paths.
 
 import json
 import ast
-from typing import Any, Dict, List, Optional, Union, Literal
-from datetime import datetime
-from pydantic import BaseModel, Field, field_validator, model_validator  # pyright: ignore[reportMissingImports]
+from typing import Any, Dict, List, Optional, Union
+from pydantic import BaseModel, Field, field_validator  # pyright: ignore[reportMissingImports]
 
 from .cognitive import DecisionKind
 
@@ -64,7 +63,7 @@ class FastPathResult(BaseModel):
         return _maybe_parse_str(v)
 
 
-class EscalatedResult(BaseModel):
+class EscalatedPathResult(BaseModel):
     """Result from HGNN escalation and decomposition."""
     model_config = {"extra": "ignore"}
     
@@ -75,7 +74,7 @@ class EscalatedResult(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional escalation metadata")
 
 
-class CognitiveResult(BaseModel):
+class CognitivePathResult(BaseModel):
     """Result from cognitive reasoning tasks."""
     model_config = {"extra": "ignore"}
     
@@ -91,7 +90,38 @@ class CognitiveResult(BaseModel):
         return _maybe_parse_str(v)
 
 
-class ErrorResult(BaseModel):
+class CognitiveResultPayload(BaseModel):
+    """Payload structure for cognitive result used in CognitiveCore."""
+    model_config = {"extra": "ignore"}
+    
+    result: JSONValue = Field(..., description="Cognitive reasoning result")
+    cog_type: str = Field(..., description="Type of cognitive task performed")
+    agent_id: Optional[str] = Field(None, description="ID of the cognitive agent")
+    confidence_score: Optional[float] = Field(None, description="Confidence in the result")
+    cache_hit: Optional[bool] = Field(None, description="Whether this result was from cache")
+    sufficiency: Optional[Dict[str, Any]] = Field(None, description="Retrieval sufficiency metrics")
+    post_condition_violations: Optional[List[str]] = Field(None, description="Post-condition validation violations")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional cognitive metadata")
+    
+    @field_validator("result", mode="before")
+    @classmethod
+    def _coerce_result(cls, v):
+        return _maybe_parse_str(v)
+
+
+class CognitiveResult(BaseModel):
+    """Standard cognitive result structure used by CognitiveCore."""
+    model_config = {"extra": "ignore"}
+    
+    success: bool = Field(..., description="Whether the cognitive task completed successfully")
+    payload: CognitiveResultPayload = Field(..., description="The cognitive result payload")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Top-level metadata about the result"
+    )
+
+
+class ErrorPathResult(BaseModel):
     """Result when a task fails."""
     error: str = Field(..., description="Error message")
     error_type: str = Field(..., description="Type of error that occurred")
@@ -102,24 +132,13 @@ class ErrorResult(BaseModel):
 class TaskResult(BaseModel):
     """Unified envelope for all task results."""
     kind: DecisionKind = Field(..., description="Type of result processing path")
-    success: bool = Field(..., description="Whether the overall task succeeded")
-    payload: Union[FastPathResult, EscalatedResult, CognitiveResult, ErrorResult] = Field(
+    payload: Union[FastPathResult, EscalatedPathResult, CognitivePathResult, ErrorPathResult] = Field(
         ..., description="The actual result payload"
     )
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Top-level metadata about the result"
     )
-    created_at: Optional[datetime] = Field(None, description="When this result was created")
-    version: Literal["1.0"] = Field(default="1.0", description="Schema version for future compatibility")
-    
-    @model_validator(mode="after")
-    def _sync_success(self):
-        """Compute success for escalated results based on step successes."""
-        if self.kind == DecisionKind.ESCALATED and isinstance(self.payload, EscalatedResult):
-            self.success = all(step.success for step in self.payload.solution_steps)
-        return self
-
 
 # Convenience constructors for common result types
 def create_fast_path_result(
@@ -153,18 +172,21 @@ def create_fast_path_result(
     """
     # 1. Construct the Payload
     # The handler will merge these into the TaskPayload before calling OrganismClient.
+    # Store routing_params and interaction_mode in metadata since they're not FastPathResult fields
+    fast_path_metadata = {
+        **(metadata or {}),
+        "routing_params": routing_params or {},
+        "interaction_mode": interaction_mode,
+    }
     fast_path_payload = FastPathResult(
         routed_to="organism",          # The Service
         organ_id=target_organ_id,      # The Internal Component (Hint)
-        routing_params=routing_params or {},
-        interaction_mode=interaction_mode,
-        metadata=metadata
+        metadata=fast_path_metadata
     )
     
     # 2. Wrap in TaskResult
     return TaskResult(
         kind=DecisionKind.FAST_PATH,
-        success=True,
         payload=fast_path_payload,
         metadata={
             "path": "fast_path",
@@ -174,7 +196,7 @@ def create_fast_path_result(
     )
 
 
-def create_escalated_result(
+def create_escalated_path_result(
     solution_steps: List[TaskStep],
     plan_source: str = "cognitive_service",
     estimated_complexity: Optional[str] = None,
@@ -182,7 +204,7 @@ def create_escalated_result(
     **metadata
 ) -> TaskResult:
     """Create an escalated result with HGNN decomposition."""
-    escalated = EscalatedResult(
+    escalated_payload = EscalatedPathResult(
         solution_steps=solution_steps,
         plan_source=plan_source,
         estimated_complexity=estimated_complexity,
@@ -192,8 +214,7 @@ def create_escalated_result(
     
     return TaskResult(
         kind=DecisionKind.ESCALATED,
-        success=True,
-        payload=escalated,
+        payload=escalated_payload,
         metadata={
             "path": "hgnn_decomposition",
             "step_count": len(solution_steps),
@@ -202,7 +223,7 @@ def create_escalated_result(
     )
 
 
-def create_cognitive_result(
+def create_cognitive_path_result(
     task_type: str,
     result: Dict[str, Any],
     confidence_score: Optional[float] = None,
@@ -232,7 +253,7 @@ def create_cognitive_result(
     
     # Construct the payload.
     # We set internal routing fields to point to the Service Layer.
-    cognitive_payload = CognitiveResult(
+    cognitive_payload = CognitivePathResult(
         # Sentinel ID: Signals this is a service-level request, not an actor-level task
         agent_id="system_2_core", 
         task_type=task_type,
@@ -243,12 +264,78 @@ def create_cognitive_result(
     
     return TaskResult(
         kind=DecisionKind.COGNITIVE,
-        success=True,
         payload=cognitive_payload,
         metadata={
             "path": "system_2_escalation",
             "target": "cognitive_service"
         }
+    )
+
+
+def create_cognitive_result(
+    agent_id: str,
+    cog_type: Optional[str] = None,
+    task_type: Optional[str] = None,
+    result: Optional[Dict[str, Any]] = None,
+    confidence_score: Optional[float] = None,
+    cache_hit: Optional[bool] = None,
+    sufficiency: Optional[Dict[str, Any]] = None,
+    post_condition_violations: Optional[List[str]] = None,
+    **metadata
+) -> CognitiveResult:
+    """
+    Create a standard cognitive result structure for CognitiveCore.
+    
+    This function creates a CognitiveResult that matches the structure expected
+    by CognitiveCore._package_result(), which accesses:
+    - out.success
+    - out.payload.result
+    - out.payload.cog_type
+    - out.metadata
+    
+    Args:
+        agent_id: ID of the cognitive agent that processed the task
+        cog_type: Type of cognitive task (e.g., "chat", "task_planning")
+                  Takes precedence over task_type if both are provided.
+                  Required if task_type is not provided.
+        task_type: Alternative parameter name for cog_type (for backward compatibility).
+                   Used if cog_type is not provided.
+        result: The cognitive reasoning result payload (defaults to empty dict if None)
+        confidence_score: Optional confidence score for the result
+        cache_hit: Whether this result was retrieved from cache
+        sufficiency: Optional retrieval sufficiency metrics
+        post_condition_violations: Optional list of post-condition violations
+        **metadata: Additional metadata to include
+    
+    Returns:
+        CognitiveResult with success=True, payload containing result and cog_type, and metadata
+    
+    Raises:
+        ValueError: If neither cog_type nor task_type is provided
+    """
+    # Support both cog_type and task_type for compatibility
+    final_cog_type = cog_type or task_type
+    if not final_cog_type:
+        raise ValueError("Either 'cog_type' or 'task_type' must be provided")
+    
+    # Default result to empty dict if None
+    final_result = result if result is not None else {}
+    
+    payload = CognitiveResultPayload(
+        result=final_result,
+        cog_type=final_cog_type,
+        agent_id=agent_id,
+        confidence_score=confidence_score,
+        cache_hit=cache_hit,
+        sufficiency=sufficiency,
+        post_condition_violations=post_condition_violations,
+        metadata=metadata
+    )
+    
+    return CognitiveResult(
+        success=True,
+        payload=payload,
+        metadata=metadata
     )
 
 
@@ -259,7 +346,7 @@ def create_error_result(
     **metadata
 ) -> TaskResult:
     """Create an error result."""
-    error_result = ErrorResult(
+    error_result = ErrorPathResult(
         error=error,
         error_type=error_type,
         original_type=original_type,
@@ -268,7 +355,6 @@ def create_error_result(
     
     return TaskResult(
         kind=DecisionKind.ERROR,
-        success=False,
         payload=error_result,
         metadata={"path": "error_handling"}
     )
@@ -293,7 +379,7 @@ def from_legacy_result(legacy_result: Dict[str, Any]) -> TaskResult:
                         metadata={k:v for k,v in item.items() if k not in {"organ_id","success","task","result","error"}}
                     )
                     steps.append(step)
-            return create_escalated_result(solution_steps=steps, plan_source="legacy")
+            return create_escalated_path_result(solution_steps=steps, plan_source="legacy")
         # fallback to error if not list-like
         return create_error_result("Legacy raw_result unparseable", "legacy_format", metadata={"legacy_data": legacy_result})
 
@@ -306,7 +392,7 @@ def from_legacy_result(legacy_result: Dict[str, Any]) -> TaskResult:
                 if isinstance(s, dict):
                     steps.append(TaskStep(**{**s, "result": _maybe_parse_str(s.get("result"))}))
         meta = {k:v for k,v in legacy_result.items() if k not in {"solution_steps","plan","plan_source"}}
-        return create_escalated_result(solution_steps=steps, plan_source=legacy_result.get("plan_source", "unknown"), **meta)
+        return create_escalated_path_result(solution_steps=steps, plan_source=legacy_result.get("plan_source", "unknown"), **meta)
 
     # Default fast path
     meta = {k:v for k,v in legacy_result.items() if k not in {"routed_to","organ_id","result"}}
