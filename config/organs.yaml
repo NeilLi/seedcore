@@ -5,8 +5,12 @@
 
 seedcore:
   organism:
-    organs:
+    # --- Returned as 'global_settings' ---
+    settings:
+      tunnel_threshold: 0.85
+      tunnel_intents: ["clarify", "debug"]
 
+    organs:
       # =============================================================
       #  USER EXPERIENCE & INTERACTION ORGAN
       # =============================================================
@@ -170,6 +174,6 @@ seedcore:
       # --- Global defaults
       defaults:
         min_weight_threshold: 0.1
-        symmetry: true          # If true → W[i,j] = W[j,i]
-        max_partners: 4         # Prevent endless cascade
+        symmetry: true # If true → W[i,j] = W[j,i]
+        max_partners: 4 # Prevent endless cascade
         seed_missing_agents: true

@@ -54,6 +54,7 @@ from seedcore.agents.roles import RoleProfile
 from seedcore.agents.roles.specialization import Specialization, RoleRegistry
 from seedcore.agents.roles.skill_vector import SkillStoreProtocol
 from seedcore.agents.roles.generic_defaults import DEFAULT_ROLE_REGISTRY
+from seedcore.organs.tunnel_manager import TunnelManager
 from seedcore.tools.manager import ToolManager
 from seedcore.serve.cognitive_client import CognitiveServiceClient
 from seedcore.serve.energy_client import EnergyServiceClient
@@ -61,7 +62,6 @@ from seedcore.models import TaskPayload
 
 
 from seedcore.organs.organ import Organ, AgentIDFactory  # ← NEW ORGAN CLASS
-from seedcore.organs.router import RoutingDirectory
 from seedcore.organs.tunnel_policy import TunnelActivationPolicy
 from seedcore.organs.registry import OrganRegistry
 from seedcore.graph.agent_repository import AgentGraphRepository
@@ -70,11 +70,14 @@ from seedcore.graph.agent_repository import AgentGraphRepository
 from seedcore.memory.holon_fabric import HolonFabric
 from seedcore.memory.backends.pgvector_backend import PgVectorStore
 from seedcore.memory.backends.neo4j_graph import Neo4jGraph
+
 # --- Import stateful dependencies ---
 from seedcore.memory.mw_manager import MwManager
 from seedcore.tools.manager_actor import ToolManagerShard
+from seedcore.database import REDIS_URL
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
+
 setup_logging(app_name="seedcore.OrganismCore")
 logger = ensure_serve_logger("seedcore.OrganismCore", level="DEBUG")
 
@@ -97,6 +100,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 #  SkillStore Adapter — Bridge HolonFabric to SkillStoreProtocol
 # =====================================================================
 
+
 class HolonFabricSkillStoreAdapter(SkillStoreProtocol):
     """
     Wraps HolonFabric to satisfy SkillStoreProtocol.
@@ -116,7 +120,11 @@ class HolonFabricSkillStoreAdapter(SkillStoreProtocol):
                 try:
                     vec_result = await self.holon_fabric.vec.get_by_id(agent_id)
                     if vec_result and "embedding" in vec_result:
-                        return vec_result["embedding"].tolist() if hasattr(vec_result["embedding"], "tolist") else vec_result["embedding"]
+                        return (
+                            vec_result["embedding"].tolist()
+                            if hasattr(vec_result["embedding"], "tolist")
+                            else vec_result["embedding"]
+                        )
                 except Exception:
                     pass
             return None
@@ -132,7 +140,7 @@ class HolonFabricSkillStoreAdapter(SkillStoreProtocol):
         """
         try:
             from seedcore.models.holon import Holon, HolonType, HolonScope
-            
+
             holon = Holon(
                 id=agent_id,
                 type=HolonType.FACT,  # Skill vectors are facts
@@ -154,6 +162,7 @@ class HolonFabricSkillStoreAdapter(SkillStoreProtocol):
 #  OrganismCore = registry + execution; RoutingDirectory = Tier-0 router
 #  Organ = agent registry; Agent = executor; Core = registry + execution
 # =====================================================================
+
 
 class OrganismCore:
     """
@@ -182,12 +191,22 @@ class OrganismCore:
         # Agent → organ (informational only, for registry)
         self.agent_to_organ_map: Dict[str, str] = {}
 
-        self.tunnel_policy = TunnelActivationPolicy()
+        # Load Config (YAML)
+        # We assume _load_config populates self.organ_configs AND returns/sets root settings
+        # Let's say _load_config returns a dict of global settings
+        global_settings = self._load_config(config_path) or {}
+        self.router_cfgs = global_settings.get("router_config", {})
 
-        self.tunnel_registry: Dict[str, Dict[str, Any]] = {}
+        # 4. Tunnel Subsystem
+        # State: Who is assigned to whom?
+        self.tunnel_manager = TunnelManager(redis_url=REDIS_URL)
 
-        # Load config (YAML)
-        self._load_config(config_path)
+        # Policy: Should we assign?
+        # Extract thresholds from the global config, not the list of organs
+        self.tunnel_policy = TunnelActivationPolicy(
+            continuation_threshold=global_settings.get("tunnel_threshold", 0.7),
+            interactive_intents=global_settings.get("tunnel_intents", None),
+        )
 
         # Global infrastructure
         self.role_registry: RoleRegistry = DEFAULT_ROLE_REGISTRY
@@ -195,22 +214,22 @@ class OrganismCore:
         self.tool_manager: Optional[ToolManager] = None
         self.num_tool_shards: int = 0
         self.agent_threshold_for_shards: int = 1000
-        self.tool_shards: List[Any] = []   # or List["ToolManagerShard"]
+        self.tool_shards: List[Any] = []  # or List["ToolManagerShard"]
         self.tool_handler: Any = None  # Can be ToolManager or List[ToolManagerShard]
         self.cognitive_client: Optional[CognitiveServiceClient] = None
         self.energy_client: Optional[EnergyServiceClient] = None
         self.holon_fabric: Optional[HolonFabric] = None
-        
+
         # --- Organ Registry (Tier-1) ---
         self.organ_registry: Optional[OrganRegistry] = None
-        
+
         # --- Stateful dependencies for PersistentAgent ---
         self.mw_manager: Optional[MwManager] = None
         self.checkpoint_cfg: Dict[str, Any] = {
             "enabled": True,
-            "path": os.getenv("CHECKPOINT_PATH", "/app/checkpoints")
+            "path": os.getenv("CHECKPOINT_PATH", "/app/checkpoints"),
         }
-        
+
         # Evolution guardrails
         self._evolve_max_cost = float(os.getenv("EVOLVE_MAX_COST", "1e6"))
         self._evolve_min_roi = float(os.getenv("EVOLVE_MIN_ROI", "0.2"))
@@ -222,55 +241,82 @@ class OrganismCore:
         self._recon_interval = int(os.getenv("RECONCILE_INTERVAL_S", "20"))
         self._shutdown_event = asyncio.Event()
         self._reconcile_queue: List[tuple] = []
-        
+
         # State service (lazy connection)
         self._state_service: Optional[Any] = None
 
     # ------------------------------------------------------------------
     #  CONFIG LOADING
     # ------------------------------------------------------------------
-    def _load_config(self, path: Path | str):
+    # ------------------------------------------------------------------
+    #  CONFIG LOADING
+    # ------------------------------------------------------------------
+    def _load_config(self, path: Path | str) -> Dict[str, Any]:
         """
         Load Organism configuration from a YAML file.
-        
-        Extracts the list of organ definitions and initializes self.organ_configs.
+
+        Populates:
+          - self.organ_configs (List of organs)
+          - self.routing_rules (Routing logic)
+
+        Returns:
+          - global_settings (Dict): Shared settings (tunnel thresholds, intents, etc.)
+            used to initialize subsystems like TunnelPolicy.
         """
         path = Path(path)
-        
+
         if not path.exists():
-            logger.error(f"[OrganismCore] Failed to load config: File not found at {path}")
+            logger.error(f"[OrganismCore] ❌ Config file not found at {path}")
             self.organ_configs = []
-            return
-            
+            return {}
+
         try:
             with open(path, "r") as f:
-                cfg = yaml.safe_load(f)
-                
-                # --- Check essential paths for V2 consistency ---
-                organism_cfg = cfg.get("seedcore", {}).get("organism", {})
-                
-                if not organism_cfg or "organs" not in organism_cfg:
-                    raise KeyError(
-                        "YAML structure invalid. Expected path: seedcore -> organism -> organs"
-                    )
+                cfg = yaml.safe_load(f) or {}
 
-                self.organ_configs = organism_cfg["organs"]
-                
-                # --- Optional: Load defaults for router ---
-                # Though often handled by a dedicated config class, we can pull it here:
-                self.routing_rules = organism_cfg.get("routing_rules", {})
-                
-                # Log Success
-                logger.info(
-                    f"✅ [OrganismCore] Loaded {len(self.organ_configs)} organ configs."
+            # --- 1. Navigate to V2 Root ---
+            # Structure: seedcore -> organism
+            organism_cfg = cfg.get("seedcore", {}).get("organism", {})
+
+            if not organism_cfg or "organs" not in organism_cfg:
+                raise KeyError(
+                    "YAML structure invalid. Expected path: seedcore -> organism -> organs"
                 )
-                # Log Warning if general rules are missing, as they're critical for Stage 5/7 routing
-                if not self.routing_rules:
-                    logger.warning("⚠️ [OrganismCore] Routing rules block missing or empty. Using specialization/fallback only.")
+
+            # --- 2. Extract State Data (Side Effects) ---
+            self.organ_configs = organism_cfg["organs"]
+            self.routing_rules = organism_cfg.get("routing_rules", {})
+
+            logger.info(
+                f"✅ [OrganismCore] Loaded {len(self.organ_configs)} organs from {path.name}"
+            )
+
+            if not self.routing_rules:
+                logger.warning(
+                    "⚠️ [OrganismCore] Routing rules empty. Using specialization defaults."
+                )
+
+            # --- 3. Extract & Return Global Settings ---
+            # We look for a explicit 'settings' block, or fallback to the organism root
+            # This captures 'tunnel_threshold', 'tunnel_intents', etc.
+            global_settings = organism_cfg.get("settings", {})
+
+            # If settings were flat inside 'organism' instead of a sub-block,
+            # we can merge them safely:
+            if not global_settings:
+                global_settings = {
+                    k: v
+                    for k, v in organism_cfg.items()
+                    if k not in ["organs", "routing_rules"]
+                }
+
+            return global_settings
 
         except Exception as e:
-            logger.critical(f"❌ [OrganismCore] CRITICAL FAILURE loading config {path}: {e}")
+            logger.critical(f"❌ [OrganismCore] CRITICAL FAILURE loading config: {e}")
             self.organ_configs = []
+            self.routing_rules = {}
+            return {}
 
     # ------------------------------------------------------------------
     #  INIT SEQUENCE
@@ -311,12 +357,18 @@ class OrganismCore:
 
             # Create backend stores
             pg_store = PgVectorStore(
-                os.getenv("PG_DSN", "postgresql://postgres:password@postgresql:5432/seedcore"),
-                pool_size=10
+                os.getenv(
+                    "PG_DSN", "postgresql://postgres:password@postgresql:5432/seedcore"
+                ),
+                pool_size=10,
             )
             neo4j_graph = Neo4jGraph(
-                os.getenv("NEO4J_URI") or os.getenv("NEO4J_BOLT_URL", "bolt://neo4j:7687"),
-                auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "password"))
+                os.getenv("NEO4J_URI")
+                or os.getenv("NEO4J_BOLT_URL", "bolt://neo4j:7687"),
+                auth=(
+                    os.getenv("NEO4J_USER", "neo4j"),
+                    os.getenv("NEO4J_PASSWORD", "password"),
+                ),
             )
 
             # Initialize connection pools
@@ -326,7 +378,7 @@ class OrganismCore:
             self.holon_fabric = HolonFabric(
                 vec_store=pg_store,
                 graph=neo4j_graph,
-                embedder=None  # Can be set later if needed
+                embedder=None,  # Can be set later if needed
             )
 
             logger.info("✅ HolonFabric ready.")
@@ -370,14 +422,16 @@ class OrganismCore:
             self.tool_manager = ToolManager(skill_store=self.skill_store)
             self.tool_handler = self.tool_manager
         else:
-            self.num_tool_shards = min(16, max(4, num_agents // 1000 * 4))  # recommended default
+            self.num_tool_shards = min(
+                16, max(4, num_agents // 1000 * 4)
+            )  # recommended default
             self.tool_shards = [
                 ToolManagerShard.remote(
                     skill_store=self.skill_store,
                     mw_manager=self.mw_manager,
                     holon_fabric=self.holon_fabric,
                     cognitive_client=self.cognitive_client,
-                    mcp_client=getattr(self, 'mcp_client', None),
+                    mcp_client=getattr(self, "mcp_client", None),
                 )
                 for _ in range(self.num_tool_shards)
             ]
@@ -387,7 +441,7 @@ class OrganismCore:
         # 5. Cognitive service client
         # --------------------------------------------------------------
         self.cognitive_client = CognitiveServiceClient()
-        
+
         # --------------------------------------------------------------
         # 5.5. Energy service client (for evolution flywheel)
         # --------------------------------------------------------------
@@ -415,21 +469,6 @@ class OrganismCore:
         await self._create_agents_from_config()
 
         # --------------------------------------------------------------
-        # 7.5. Initialize Router with dependencies
-        # --------------------------------------------------------------
-        agent_id_factory = AgentIDFactory()
-        
-        self.router = RoutingDirectory(
-            agent_id_factory=agent_id_factory,
-            organism=self,
-            cognitive_client=self.cognitive_client,
-            role_registry=self.role_registry,
-            skill_store=self.skill_store,
-            organ_specs=self.organ_specs,
-        )
-        logger.info("✅ Router initialized with OrganismCore dependencies")
-
-        # --------------------------------------------------------------
         # 8. Background tasks
         # --------------------------------------------------------------
         if _env_bool("ORGANISM_HEALTHCHECKS", True):
@@ -447,7 +486,9 @@ class OrganismCore:
         """
         # 1. Update Core's local copy (The Source of Truth)
         self.role_registry.register(profile)
-        logger.info(f"[OrganismCore] Updated global registry for role: {profile.name.value}")
+        logger.info(
+            f"[OrganismCore] Updated global registry for role: {profile.name.value}"
+        )
 
         # 2. Push update to all distributed Organ actors
         # Because they hold their own cached copy of the registry.
@@ -455,11 +496,13 @@ class OrganismCore:
         for organ_id, organ_handle in self.organs.items():
             # Call the method on the Organ (see below)
             futures.append(organ_handle.update_role_registry.remote(profile))
-        
+
         # 3. Wait for propagation (ensures consistency)
         if futures:
             await asyncio.gather(*futures)
-            logger.info(f"[OrganismCore] ✅ Synced role update to {len(futures)} organs.")
+            logger.info(
+                f"[OrganismCore] ✅ Synced role update to {len(futures)} organs."
+            )
 
     # ==================================================================
     #  ORGAN CREATION
@@ -510,7 +553,7 @@ class OrganismCore:
                     raise RuntimeError(f"Organ {organ_id} failed health check.")
 
                 self.organs[organ_id] = organ
-                
+
                 # Register organ in Tier-1 registry
                 if self.organ_registry:
                     self.organ_registry.record_organ(organ_id, organ)
@@ -531,19 +574,21 @@ class OrganismCore:
         Create agents and build the Specialization -> Organ routing table.
         """
         total = 0
-        
+
         # We use a list because multiple organs might handle 'GENERALIST'
 
         for cfg in self.organ_configs:
-            organ_id = cfg["id"] # e.g., "user_experience_organ"
+            organ_id = cfg["id"]  # e.g., "user_experience_organ"
             organ = self.organs.get(organ_id)
 
             if not organ:
-                logger.error(f"[OrganismCore] Organ {organ_id} missing during agent creation!")
+                logger.error(
+                    f"[OrganismCore] Organ {organ_id} missing during agent creation!"
+                )
                 continue
 
             agent_defs = cfg.get("agents", [])
-            
+
             for block in agent_defs:
                 spec_str = block["specialization"]
                 count = int(block.get("count", 1))
@@ -552,13 +597,15 @@ class OrganismCore:
                 # 1. Resolve Specialization Enum
                 try:
                     # Uses .upper() to read YAML key, but spec.value is lowercase (e.g., "user_liaison")
-                    spec = Specialization[spec_str.upper()] 
+                    spec = Specialization[spec_str.upper()]
                 except KeyError:
-                    logger.error(f"❌ Invalid specialization '{spec_str}' in organ {organ_id}")
+                    logger.error(
+                        f"❌ Invalid specialization '{spec_str}' in organ {organ_id}"
+                    )
                     continue
 
                 # 2. Build Routing Map (Simple Mode)
-                spec_val = spec.value # Already lowercase string (e.g., "user_liaison")
+                spec_val = spec.value  # Already lowercase string (e.g., "user_liaison")
                 if spec_val not in self.organ_specs:
                     self.organ_specs[spec_val] = organ_id
                 else:
@@ -571,9 +618,11 @@ class OrganismCore:
                 # 3. Spawn Agents in the Organ
                 for i in range(count):
                     # Naming convention: organ_spec_index
-                    
+
                     # Ensure agent_id is fully lowercase for consistency
-                    agent_id = f"{organ_id}_{spec_val}_{i}".lower() # Enforce lowercase for safety
+                    agent_id = (
+                        f"{organ_id}_{spec_val}_{i}".lower()
+                    )  # Enforce lowercase for safety
 
                     # Async creation (fire and forget or wait)
                     await organ.create_agent.remote(
@@ -582,11 +631,11 @@ class OrganismCore:
                         organ_id=organ_id,
                         agent_class_name=agent_class_name,
                         # CRITICAL CHANGE: Ensure both name and agent_id are lowercase
-                        name=agent_id, 
+                        name=agent_id,
                         num_cpus=0.1,
                         lifetime="detached",
                     )
-                    
+
                     # Track globally in Core (optional, for monitoring)
                     self.agent_to_organ_map[agent_id] = organ_id
                     total += 1
@@ -604,20 +653,20 @@ class OrganismCore:
             if not organ:
                 continue
             total += len(cfg.get("agents", []))
-        return total   
+        return total
 
     # =====================================================================
     #  ASYNC RAY HELPER
     # =====================================================================
-    
+
     async def _ray_await(self, obj_ref, *, timeout: Optional[float] = None):
         """
         Helper to await Ray object references without blocking the event loop.
-        
+
         Args:
             obj_ref: Ray object reference
             timeout: Optional timeout in seconds
-            
+
         Returns:
             The result from ray.get()
         """
@@ -627,14 +676,16 @@ class OrganismCore:
     #  TASK EXECUTION (PURE EXECUTION, NO ROUTING DECISIONS)
     # =====================================================================
 
-    def _is_high_stakes_from_payload(self, payload: TaskPayload | Dict[str, Any]) -> bool:
+    def _is_high_stakes_from_payload(
+        self, payload: TaskPayload | Dict[str, Any]
+    ) -> bool:
         """
         Inspect payload.params.risk and return is_high_stakes flag.
-        
+
         NOTE: This is a fallback method. The primary source of truth for is_high_stakes
         is the router's decision, which is embedded in payload.params._router_metadata.is_high_stakes.
         This method is used only for backward compatibility when router metadata is not present.
-        
+
         Architecture:
         - Routing determines is_high_stakes during route_only()
         - Router embeds it in payload.params._router_metadata.is_high_stakes
@@ -657,7 +708,10 @@ class OrganismCore:
     ) -> Dict[str, Any]:
         """
         Execute task on a specific agent.
-        Includes JIT Provisioning: Spawns the agent if it doesn't exist yet.
+        Includes:
+        1. JIT Provisioning (Spawns agent if missing)
+        2. High-Stakes execution path
+        3. Tunnel Lifecycle Management (Sticky Sessions)
         """
         organ = self.organs.get(organ_id)
         if not organ:
@@ -666,7 +720,7 @@ class OrganismCore:
         try:
             # 1. Normalize payload (V2)
             task_dict = (
-                payload.model_dump() if isinstance(payload, TaskPayload) else payload
+                payload.model_dump() if hasattr(payload, "model_dump") else payload
             ) or {}
             params = task_dict.get("params", {})
 
@@ -675,27 +729,26 @@ class OrganismCore:
             agent_handle = await self._ray_await(agent_handle_ref)
 
             # =========================================================
-            # 🔧 FIX: JUST-IN-TIME PROVISIONING
+            # 🔧 JIT PROVISIONING
             # =========================================================
             if not agent_handle:
-                logger.info(f"[{organ_id}] Agent {agent_id} not found. Attempting JIT spawn...")
-                
-                # A. Determine Specialization from Payload V2
-                # We need to know what KIND of agent to spawn.
+                logger.info(
+                    f"[{organ_id}] Agent {agent_id} not found. Attempting JIT spawn..."
+                )
+
+                # A. Determine Specialization
                 routing = params.get("routing", {})
-                
-                # Priority: Hard Constraint -> Soft Hint -> Default
                 spec_str = (
-                    routing.get("required_specialization") 
-                    or routing.get("specialization") 
+                    routing.get("required_specialization")
+                    or routing.get("specialization")
                     or "GENERALIST"
                 )
-                
+
                 # B. Attempt to Spawn
                 spawned_ok = await self._jit_spawn_agent(
                     organ, organ_id, agent_id, spec_str
                 )
-                
+
                 if spawned_ok:
                     # C. Retry getting handle
                     agent_handle_ref = organ.get_agent_handle.remote(agent_id)
@@ -703,41 +756,74 @@ class OrganismCore:
                 else:
                     return {"error": f"Failed to JIT spawn agent '{agent_id}'"}
 
-            # Final check
             if not agent_handle:
                 return {"error": f"Agent '{agent_id}' could not be located or created."}
-            
-            # =========================================================
-            # END FIX - Proceed with Execution
-            # =========================================================
 
-            # 3. Detect high-stakes (V2 Router Output vs Payload)
-            router_metadata = params.get("_router", {}) # Check _router (V2) or _router_metadata (Legacy)
-            if not router_metadata:
-                 router_metadata = params.get("_router_metadata", {})
-
+            # =========================================================
+            # 3. Execution (High-Stakes Check)
+            # =========================================================
+            # Check _router (V2) or _router_metadata (Legacy)
+            router_metadata = (
+                params.get("_router") or params.get("_router_metadata") or {}
+            )
             is_high_stakes = router_metadata.get("is_high_stakes", False)
-            
+
             # Fallback to Risk envelope
             if not is_high_stakes:
                 risk = params.get("risk", {})
                 is_high_stakes = risk.get("is_high_stakes", False)
 
-            # 4. Execute
+            # Execute via Ray Actor
             if is_high_stakes:
                 if hasattr(agent_handle, "execute_high_stakes_task"):
                     ref = agent_handle.execute_high_stakes_task.remote(task_dict)
                 else:
-                    logger.warning(f"Agent {agent_id} missing high-stakes handler, degrading to normal.")
+                    logger.warning(
+                        f"Agent {agent_id} missing high-stakes handler, degrading to normal."
+                    )
                     ref = agent_handle.execute_task.remote(task_dict)
+                # Longer timeout for deep reasoning
                 result = await self._ray_await(ref, timeout=300.0)
             else:
                 ref = agent_handle.execute_task.remote(task_dict)
                 result = await self._ray_await(ref)
-            
-            # 5. Tunnel Policy (Omitted for brevity, keep your existing logic)
-            # ...
 
+            # =========================================================
+            # 5. TUNNEL LIFECYCLE MANAGEMENT (New Integration)
+            # =========================================================
+            conversation_id = task_dict.get("conversation_id")
+
+            if conversation_id:
+                try:
+                    # A. Policy Check: Does the output demand a tunnel?
+                    should_stick = self.tunnel_policy.should_activate(result)
+
+                    if should_stick:
+                        # B. Create/Refresh Affinity
+                        await self.tunnel_manager.assign(conversation_id, agent_id)
+
+                        # C. Inject Feedback (Optional but helpful for debug/UI)
+                        if isinstance(result, dict):
+                            meta = result.setdefault("metadata", {})
+                            meta["tunnel_active"] = True
+                            meta["assigned_agent"] = agent_id
+
+                    else:
+                        # D. Cleanup: If task is explicitly done, release the tunnel
+                        # We use the policy's terminal statuses (e.g., 'completed', 'finished')
+                        status = (
+                            result.get("status") if isinstance(result, dict) else None
+                        )
+                        if status in self.tunnel_policy.terminal_statuses:
+                            await self.tunnel_manager.release(conversation_id)
+
+                except Exception as e:
+                    # Don't fail the task just because tunnel logic hiccuped
+                    logger.warning(f"Tunnel logic failed for {conversation_id}: {e}")
+
+            # =========================================================
+            # Return
+            # =========================================================
             return {
                 "organ_id": organ_id,
                 "agent_id": agent_id,
@@ -752,72 +838,25 @@ class OrganismCore:
                 "error": f"Execution failure: {e}",
             }
 
-    async def _jit_spawn_agent(
-        self,
-        organ_actor,
-        organ_id: str,
-        agent_id: str,
-        spec_str: str,
-    ) -> bool:
-        """
-        Helper to spawn an agent on demand (Just-In-Time).
-        """
-        try:
-            # 1. Resolve Enum
-            try:
-                # YAML/Config is usually UPPERCASE in your system
-                spec = Specialization[spec_str.upper()]
-            except KeyError:
-                # Fallback if the payload contained a weird string
-                logger.warning(f"Unknown specialization '{spec_str}', defaulting to GENERALIST")
-                spec = Specialization.GENERALIST
-
-            logger.info(f"✨ JIT Spawning: {agent_id} as {spec.name} in {organ_id}")
-
-            # 2. Call Organ to Create Actor
-            # Note: We default to 'BaseAgent' unless we have a logic to map Spec->Class here
-            ref = organ_actor.create_agent.remote(
-                agent_id=agent_id,
-                specialization=spec,
-                organ_id=organ_id,
-                agent_class_name="BaseAgent",  # Or lookup specific class based on Spec
-                name=agent_id,
-                num_cpus=0.1,
-                lifetime="detached",
-            )
-
-            # 3. Wait for creation confirmation
-            await self._ray_await(ref)
-
-            # 4. Update Core Maps (so Router knows about this new agent later)
-            self.agent_to_organ_map[agent_id] = organ_id
-
-            # (Optional) Update Router if using specific agent tracking,
-            # though Router usually just needs Organ+Spec map.
-
-            return True
-
-        except Exception as e:
-            logger.error(f"❌ JIT Spawn failed for {agent_id}: {e}")
-            return False
-
     # =====================================================================
     #  TUNNEL MANAGEMENT
     # =====================================================================
 
-    async def ensure_tunnel(self, conversation_id: str, agent_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def ensure_tunnel(
+        self, conversation_id: str, agent_id: str, context: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Ensure a persistent tunnel exists for a conversation with an agent.
-        
+
         If a tunnel already exists for this conversation and agent, updates the
         last_active timestamp and returns the existing tunnel. Otherwise, creates
         a new tunnel entry in the registry.
-        
+
         Args:
             conversation_id: Unique identifier for the conversation
             agent_id: ID of the agent handling the conversation
             context: Context dictionary containing conversation context (text/message)
-            
+
         Returns:
             Dict containing tunnel metadata including conversation_id, agent_id,
             created_at, last_active, and context_snapshot
@@ -836,7 +875,9 @@ class OrganismCore:
             "context_snapshot": context.get("text") or context.get("message"),
         }
         self.tunnel_registry[conversation_id] = tunnel
-        logger.info(f"[Organism] 🚇 Tunnel Established: {conversation_id} -> {agent_id}")
+        logger.info(
+            f"[Organism] 🚇 Tunnel Established: {conversation_id} -> {agent_id}"
+        )
         return tunnel
 
     # =====================================================================
@@ -846,7 +887,7 @@ class OrganismCore:
     async def get_all_agents(self) -> Dict[str, Dict[str, Any]]:
         """
         Get all agents with their metadata.
-        
+
         Returns:
             Dict mapping agent_id -> agent metadata dict
         """
@@ -863,20 +904,22 @@ class OrganismCore:
                             "organ_id": organ_id,
                         }
             except Exception as e:
-                logger.debug(f"[get_all_agents] Failed to get agents from organ {organ_id}: {e}")
+                logger.debug(
+                    f"[get_all_agents] Failed to get agents from organ {organ_id}: {e}"
+                )
                 continue
         return all_agents
 
     async def get_all_agent_skills(self) -> Dict[str, Optional[List[float]]]:
         """
         Get skill vectors for all agents.
-        
+
         Returns:
             Dict mapping agent_id -> skill vector (or None if not available)
         """
         if not self.skill_store:
             return {}
-        
+
         all_agents = await self.get_all_agents()
         skills = {}
         for agent_id in all_agents.keys():
@@ -884,28 +927,30 @@ class OrganismCore:
                 skill_vector = await self.skill_store.get_skill_vector(agent_id)
                 skills[agent_id] = skill_vector
             except Exception as e:
-                logger.debug(f"[get_all_agent_skills] Failed to get skills for {agent_id}: {e}")
+                logger.debug(
+                    f"[get_all_agent_skills] Failed to get skills for {agent_id}: {e}"
+                )
                 skills[agent_id] = None
         return skills
 
     def get_specialization_map(self) -> Dict[str, str]:
         """
         Get specialization -> organ_id mapping.
-        
+
         Returns:
             Dict mapping specialization name -> organ_id
         """
         return {
-            spec.name: organ_id 
+            spec.name: organ_id
             for spec, organ_id in self.specialization_to_organ.items()
         }
-    
+
     def map_specializations(self) -> Dict[str, str]:
         """
         [DEPRECATED] Alias for get_specialization_map().
-        
+
         Use get_specialization_map() instead for consistency.
-        
+
         Returns:
             Dict mapping specialization name -> organ_id
         """
@@ -914,7 +959,7 @@ class OrganismCore:
     async def get_organ_health(self) -> Dict[str, Dict[str, Any]]:
         """
         Get health status for all organs.
-        
+
         Returns:
             Dict mapping organ_id -> health status dict
         """
@@ -938,17 +983,17 @@ class OrganismCore:
     async def list_agents(self, organ_id: Optional[str] = None) -> List[str]:
         """
         List all agent IDs from a specific organ or all organs.
-        
+
         In v2 architecture:
         - Organ = agent registry (lightweight container)
         - This queries the registry for agent IDs (not handles)
-        
+
         This method efficiently reuses get_all_agent_handles() when listing from all organs,
         avoiding code duplication.
-        
+
         Args:
             organ_id: Optional organ ID to list agents from. If None, lists from all organs.
-            
+
         Returns:
             List[str]: List of agent IDs
         """
@@ -964,7 +1009,6 @@ class OrganismCore:
             # Just extract the keys (agent IDs) from the handles dictionary
             handles = await self.get_all_agent_handles()
             return list(handles.keys())
-
 
     async def get_agent_info(self, agent_id: str) -> Dict[str, Any]:
         """
@@ -987,19 +1031,19 @@ class OrganismCore:
     async def get_all_agent_handles(self) -> Dict[str, Any]:
         """
         Get all agent handles from all organs.
-        
+
         In v2 architecture:
         - Organ = agent registry (lightweight container)
         - Agent = true execution endpoint (Ray actor handle)
-        
+
         This method queries each organ registry to get its registered agent handles,
         then aggregates them into a single dictionary.
-        
+
         Returns:
             Dict[str, Any]: Dictionary mapping agent_id -> agent_handle (Ray actor handle).
                            These are the actual BaseAgent Ray actor handles that can
                            be used to call .remote() methods like get_heartbeat().
-        
+
         Example:
             {
                 "organ1_research_0": <RayActorHandle>,
@@ -1009,22 +1053,26 @@ class OrganismCore:
             }
         """
         all_agent_handles: Dict[str, Any] = {}
-        
+
         for organ_id, organ in self.organs.items():
             try:
                 # Query the organ registry for its agent handles
                 # Organ.get_agent_handles() returns Dict[agent_id, agent_handle]
                 ref = organ.get_agent_handles.remote()
                 organ_agent_handles = await self._ray_await(ref)
-                
+
                 # Merge agent handles into the global dictionary
                 # Note: organ_agent_handles is already Dict[agent_id, agent_handle]
                 all_agent_handles.update(organ_agent_handles)
             except Exception as e:
-                logger.warning(f"[get_all_agent_handles] Failed to get agent handles from organ {organ_id}: {e}")
+                logger.warning(
+                    f"[get_all_agent_handles] Failed to get agent handles from organ {organ_id}: {e}"
+                )
                 continue
-        
-        logger.debug(f"[get_all_agent_handles] Returning {len(all_agent_handles)} agent handles from {len(self.organs)} organs")
+
+        logger.debug(
+            f"[get_all_agent_handles] Returning {len(all_agent_handles)} agent handles from {len(self.organs)} organs"
+        )
         return all_agent_handles
 
     async def get_organ_status(self, organ_id: str) -> Dict[str, Any]:
@@ -1057,18 +1105,18 @@ class OrganismCore:
     async def evolve(self, proposal: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute AGENT WORKFORCE evolution operations (v2).
-        
+
         This is the agent-centric evolution system. Instead of splitting/merging
         organs (organ-centric), we scale up/down the agent workforce for a
         given specialization.
-        
+
         Proposal format:
             {
                 "op": "scale_up" | "scale_down",
                 "target_specialization": "DeviceOrchestrator" | "Critic" | etc.,
                 "count": int  # Number of agents to add/remove
             }
-        
+
         Returns:
             Dict with evolution result including energy measurements and flywheel feedback.
         """
@@ -1080,10 +1128,16 @@ class OrganismCore:
         count = proposal.get("count", 1)
 
         if not op or not spec_name:
-            return {"success": False, "error": "Missing 'op' or 'target_specialization'"}
+            return {
+                "success": False,
+                "error": "Missing 'op' or 'target_specialization'",
+            }
 
         if op not in ["scale_up", "scale_down"]:
-            return {"success": False, "error": f"Unknown operation: {op}. Must be 'scale_up' or 'scale_down'"}
+            return {
+                "success": False,
+                "error": f"Unknown operation: {op}. Must be 'scale_up' or 'scale_down'",
+            }
 
         if count <= 0:
             return {"success": False, "error": "count must be positive"}
@@ -1163,7 +1217,9 @@ class OrganismCore:
             }
 
         except Exception as e:
-            logger.error(f"[evolve] Evolution operation {op} failed: {e}", exc_info=True)
+            logger.error(
+                f"[evolve] Evolution operation {op} failed: {e}", exc_info=True
+            )
             # Log failure to flywheel
             try:
                 if self.energy_client:
@@ -1179,31 +1235,33 @@ class OrganismCore:
     def _estimate_agent_spinup_cost(self, op: str, count: int, spec_name: str) -> float:
         """
         Estimate the cost of scaling agents.
-        
+
         This is a simple cost model. In production, you might want to:
         - Factor in agent specialization complexity
         - Consider current system load
         - Use historical data
         """
         base_cost_per_agent = 100.0  # Base cost for spinning up/down an agent
-        
+
         # Scale up is more expensive (creating resources)
         # Scale down is cheaper (releasing resources)
         multiplier = 1.0 if op == "scale_up" else 0.5
-        
+
         return base_cost_per_agent * count * multiplier
 
-    def _get_organ_for_specialization(self, spec_name: str) -> Optional[ray.actor.ActorHandle]:
+    def _get_organ_for_specialization(
+        self, spec_name: str
+    ) -> Optional[ray.actor.ActorHandle]:
         """
         Get the organ handle for a given specialization name.
-        
+
         ⚠️ NOTE: This method is used ONLY for evolution operations (scaling agents),
         NOT for routing decisions. Evolution needs to know which organ contains
         agents of a given specialization to scale them up/down.
-        
+
         Args:
             spec_name: Specialization name (e.g., "DeviceOrchestrator")
-            
+
         Returns:
             Ray actor handle for the organ, or None if not found
         """
@@ -1229,11 +1287,11 @@ class OrganismCore:
     async def _execute_scale_up(self, spec_name: str, count: int) -> Dict[str, Any]:
         """
         (v2) Creates new agent actors and registers them with their organ.
-        
+
         Args:
             spec_name: Specialization name (e.g., "DeviceOrchestrator")
             count: Number of agents to create
-            
+
         Returns:
             Dict with success status and created agent IDs
         """
@@ -1279,23 +1337,30 @@ class OrganismCore:
                 logger.info(f"[evolve] Created agent {agent_id}")
 
             except Exception as e:
-                logger.error(f"[evolve] Failed to create agent {agent_id}: {e}", exc_info=True)
+                logger.error(
+                    f"[evolve] Failed to create agent {agent_id}: {e}", exc_info=True
+                )
                 # Continue with other agents even if one fails
 
         if not new_agent_ids:
             return {"success": False, "error": "Failed to create any agents"}
 
-        logger.info(f"[evolve] Successfully scaled up {spec_name}: created {len(new_agent_ids)} agents")
-        return {"success": True, "result": {"created_agents": new_agent_ids, "count": len(new_agent_ids)}}
+        logger.info(
+            f"[evolve] Successfully scaled up {spec_name}: created {len(new_agent_ids)} agents"
+        )
+        return {
+            "success": True,
+            "result": {"created_agents": new_agent_ids, "count": len(new_agent_ids)},
+        }
 
     async def _execute_scale_down(self, spec_name: str, count: int) -> Dict[str, Any]:
         """
         (v2) Removes agent actors from their organ and cleans up.
-        
+
         Args:
             spec_name: Specialization name (e.g., "DeviceOrchestrator")
             count: Number of agents to remove
-            
+
         Returns:
             Dict with success status and removed agent IDs
         """
@@ -1311,7 +1376,7 @@ class OrganismCore:
             # Get all agents from the organ
             agents_ref = organ.get_agent_handles.remote()
             all_agents = await self._ray_await(agents_ref)
-            
+
             # Filter agents by specialization
             # Get agent info for each agent to check specialization
             agent_ids_by_spec = []
@@ -1322,9 +1387,11 @@ class OrganismCore:
                     if info.get("specialization") == spec_name:
                         agent_ids_by_spec.append(agent_id)
                 except Exception as e:
-                    logger.debug(f"[evolve] Failed to get info for agent {agent_id}: {e}")
+                    logger.debug(
+                        f"[evolve] Failed to get info for agent {agent_id}: {e}"
+                    )
                     continue
-            
+
             if len(agent_ids_by_spec) < count:
                 logger.warning(
                     f"[evolve] Only {len(agent_ids_by_spec)} agents with specialization {spec_name} available, requested {count}"
@@ -1332,13 +1399,18 @@ class OrganismCore:
                 count = len(agent_ids_by_spec)
 
             if count == 0:
-                return {"success": False, "error": f"No agents with specialization {spec_name} available to remove"}
+                return {
+                    "success": False,
+                    "error": f"No agents with specialization {spec_name} available to remove",
+                }
 
             # Select agents to remove (simple: take first N)
             agents_to_remove = agent_ids_by_spec[:count]
 
         except Exception as e:
-            logger.error(f"[evolve] Failed to get agents from organ: {e}", exc_info=True)
+            logger.error(
+                f"[evolve] Failed to get agents from organ: {e}", exc_info=True
+            )
             return {"success": False, "error": f"Failed to get agents: {e}"}
 
         # 3. Remove agents
@@ -1348,7 +1420,7 @@ class OrganismCore:
                 # Remove from organ registry
                 ref = organ.remove_agent.remote(agent_id)
                 removed = await self._ray_await(ref)
-                
+
                 if removed:
                     # Remove from global map
                     self.agent_to_organ_map.pop(agent_id, None)
@@ -1358,29 +1430,39 @@ class OrganismCore:
                     logger.warning(f"[evolve] Agent {agent_id} not found in organ")
 
             except Exception as e:
-                logger.error(f"[evolve] Failed to remove agent {agent_id}: {e}", exc_info=True)
+                logger.error(
+                    f"[evolve] Failed to remove agent {agent_id}: {e}", exc_info=True
+                )
                 # Continue with other agents even if one fails
 
         if not removed_agent_ids:
             return {"success": False, "error": "Failed to remove any agents"}
 
-        logger.info(f"[evolve] Successfully scaled down {spec_name}: removed {len(removed_agent_ids)} agents")
-        return {"success": True, "result": {"removed_agents": removed_agent_ids, "count": len(removed_agent_ids)}}
-    
+        logger.info(
+            f"[evolve] Successfully scaled down {spec_name}: removed {len(removed_agent_ids)} agents"
+        )
+        return {
+            "success": True,
+            "result": {
+                "removed_agents": removed_agent_ids,
+                "count": len(removed_agent_ids),
+            },
+        }
+
     # =====================================================================
     #  ORGAN-LEVEL EVOLUTION OPERATIONS (Ported from OrganismManager)
     # =====================================================================
-    
+
     async def evolve_organ(self, proposal: Dict[str, Any]) -> Dict[str, Any]:
         """
         [EXPERIMENTAL] Execute organ-level evolution operations (split, merge, clone, retire).
-        
+
         ⚠️ WARNING: This API is experimental and partially implemented. Only "merge" and
         "retire" operations are fully functional. "split" and "clone" are not implemented
         and will return errors.
-        
+
         This is different from agent scaling - these operations mutate organs themselves.
-        
+
         Proposal format:
             {
                 "op": "split" | "merge" | "clone" | "retire",
@@ -1389,27 +1471,27 @@ class OrganismCore:
             }
         """
         logger.warning("[evolve_organ] Experimental API - use with caution")
-        
+
         if not self._initialized:
             return {"success": False, "error": "OrganismCore not initialized"}
-        
+
         op = proposal.get("op")
         organ_id = proposal.get("organ_id")
         params = proposal.get("params", {})
-        
+
         if not op or not organ_id:
             return {"success": False, "error": "Missing required fields: op, organ_id"}
-        
+
         # Reject unimplemented operations early
         if op in ["split", "clone"]:
             return {
                 "success": False,
                 "error": f"Operation '{op}' is not fully implemented. Only 'merge' and 'retire' are supported.",
             }
-        
+
         if organ_id not in self.organs:
             return {"success": False, "error": f"Organ {organ_id} not found"}
-        
+
         try:
             if op == "split":
                 return await self._op_split(organ_id, params)
@@ -1424,126 +1506,143 @@ class OrganismCore:
         except Exception as e:
             logger.error(f"Organ evolution operation {op} failed: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
-    
+
     async def _op_split(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Split an organ into k-1 new organs and repartition agents."""
         k = params.get("k", 2)
         if k < 2:
             return {"success": False, "error": "k must be >= 2 for split operation"}
-        
+
         try:
             organ_handle = self.organs[organ_id]
             # organ_status = await asyncio.to_thread(ray.get, organ_handle.get_status.remote())
             # organ_type = organ_status.get("organ_type", "Unknown")  # Reserved for future use
-            
+
             # Get current agents
             agent_handles_ref = organ_handle.get_agent_handles.remote()
             agent_handles = await self._ray_await(agent_handles_ref)
             agent_ids = list(agent_handles.keys())
-            
+
             if len(agent_ids) < k:
-                return {"success": False, "error": f"Not enough agents ({len(agent_ids)}) to split into {k} organs"}
-            
+                return {
+                    "success": False,
+                    "error": f"Not enough agents ({len(agent_ids)}) to split into {k} organs",
+                }
+
             # Note: Organ split requires creating new organs, which needs organ config
             # This is a simplified implementation - full version would create organs properly
-            logger.warning("Organ split requires organ creation logic - not fully implemented")
-            return {"success": False, "error": "Organ split requires organ creation logic - not fully implemented"}
+            logger.warning(
+                "Organ split requires organ creation logic - not fully implemented"
+            )
+            return {
+                "success": False,
+                "error": "Organ split requires organ creation logic - not fully implemented",
+            }
         except Exception as e:
             logger.error(f"Split operation failed: {e}")
             return {"success": False, "error": str(e)}
-    
+
     async def _op_merge(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Merge source organs into the target organ."""
         src_organ_ids = params.get("src_organs", [])
         if not src_organ_ids:
             return {"success": False, "error": "No source organs specified"}
-        
+
         try:
             dst_organ_handle = self.organs[organ_id]
             total_agents_moved = 0
-            
+
             for src_organ_id in src_organ_ids:
                 if src_organ_id not in self.organs:
                     logger.warning(f"Source organ {src_organ_id} not found, skipping")
                     continue
-                
+
                 src_organ_handle = self.organs[src_organ_id]
                 agent_handles_ref = src_organ_handle.get_agent_handles.remote()
                 agent_handles = await self._ray_await(agent_handles_ref)
-                
+
                 # Move agents to destination
                 for agent_id, agent_handle in agent_handles.items():
-                    register_ref = dst_organ_handle.register_agent.remote(agent_id, agent_handle)
+                    register_ref = dst_organ_handle.register_agent.remote(
+                        agent_id, agent_handle
+                    )
                     await self._ray_await(register_ref)
                     remove_ref = src_organ_handle.remove_agent.remote(agent_id)
                     await self._ray_await(remove_ref)
                     self.agent_to_organ_map[agent_id] = organ_id
                     total_agents_moved += 1
-                
+
                 # Remove source organ from registry
                 del self.organs[src_organ_id]
-            
+
             return {
                 "success": True,
                 "result": {
                     "destination_organ": organ_id,
                     "merged_organs": src_organ_ids,
-                    "agents_moved": total_agents_moved
-                }
+                    "agents_moved": total_agents_moved,
+                },
             }
         except Exception as e:
             logger.error(f"Merge operation failed: {e}")
             return {"success": False, "error": str(e)}
-    
+
     async def _op_clone(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Clone an organ, optionally moving some agents to the new organ."""
         # move_fraction = params.get("move_fraction", 0.0)  # Reserved for future use
-        
+
         try:
             # Verify organ exists
             if organ_id not in self.organs:
                 return {"success": False, "error": f"Organ {organ_id} not found"}
-            
+
             # Note: Organ clone requires creating new organs, which needs organ config
             # This would require:
             # 1. Getting organ config/type
             # 2. Creating new organ with same config
             # 3. Optionally moving agents
-            logger.warning("Organ clone requires organ creation logic - not fully implemented")
-            return {"success": False, "error": "Organ clone requires organ creation logic - not fully implemented"}
+            logger.warning(
+                "Organ clone requires organ creation logic - not fully implemented"
+            )
+            return {
+                "success": False,
+                "error": "Organ clone requires organ creation logic - not fully implemented",
+            }
         except Exception as e:
             logger.error(f"Clone operation failed: {e}")
             return {"success": False, "error": str(e)}
-    
+
     async def _op_retire(self, organ_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Retire an organ, optionally migrating agents to another organ."""
         migrate_to = params.get("migrate_to")
-        
+
         try:
             organ_handle = self.organs[organ_id]
             agent_handles_ref = organ_handle.get_agent_handles.remote()
             agent_handles = await self._ray_await(agent_handles_ref)
             agents_migrated = 0
-            
+
             # Migrate agents if specified
             if migrate_to and migrate_to in self.organs:
                 dst_organ_handle = self.organs[migrate_to]
                 for agent_id, agent_handle in agent_handles.items():
-                    register_ref = dst_organ_handle.register_agent.remote(agent_id, agent_handle)
+                    register_ref = dst_organ_handle.register_agent.remote(
+                        agent_id, agent_handle
+                    )
                     await self._ray_await(register_ref)
                     self.agent_to_organ_map[agent_id] = migrate_to
                     agents_migrated += 1
-            
+
             # Remove organ from registry
             del self.organs[organ_id]
-            
+
             return {
                 "success": True,
                 "result": {
                     "retired_organ": organ_id,
                     "agents_migrated": agents_migrated,
-                    "migrate_to": migrate_to
-                }
+                    "migrate_to": migrate_to,
+                },
             }
         except Exception as e:
             logger.error(f"Retire operation failed: {e}")
@@ -1708,7 +1807,7 @@ class OrganismCore:
         try:
             new_organ = Organ.options(
                 name=organ_id,  # Same as initial creation, not "organ-{organ_id}"
-                namespace=AGENT_NAMESPACE
+                namespace=AGENT_NAMESPACE,
             ).remote(
                 organ_id=organ_id,
                 # Stateless dependencies
@@ -1728,11 +1827,11 @@ class OrganismCore:
             return
 
         self.organs[organ_id] = new_organ
-        
+
         # Register organ in Tier-1 registry
         if self.organ_registry:
             self.organ_registry.record_organ(organ_id, new_organ)
-        
+
         logger.info(f"[OrganismCore] Organ `{organ_id}` recreated")
 
         # Respawn agents
@@ -1740,7 +1839,9 @@ class OrganismCore:
             try:
                 spec = Specialization[agent_def["specialization"].upper()]
             except KeyError:
-                logger.error(f"Invalid specialization '{agent_def['specialization']}' in config for organ {organ_id}")
+                logger.error(
+                    f"Invalid specialization '{agent_def['specialization']}' in config for organ {organ_id}"
+                )
                 continue
             count = agent_def.get("count", 1)
             for _ in range(count):
@@ -1755,7 +1856,7 @@ class OrganismCore:
                         agent_class_name=agent_class_name,
                         name=agent_id,
                         num_cpus=0.1,
-                        lifetime="detached"
+                        lifetime="detached",
                     )
                     await self._ray_await(ref)
                     self.agent_to_organ_map[agent_id] = organ_id
@@ -1773,32 +1874,39 @@ class OrganismCore:
     async def _ensure_janitor_actor(self):
         """
         Ensure the detached Janitor actor exists in the expected namespace.
-        
+
         The Janitor is a system-wide maintenance service responsible for cleaning
         up dead actors and maintaining cluster health. This method ensures it's
         running before the organism starts processing tasks.
-        
+
         This is idempotent - if the janitor already exists, it will be reused.
         """
         try:
             if not ray.is_initialized():
-                logger.debug("[OrganismCore] Ray not initialized, skipping janitor check")
+                logger.debug(
+                    "[OrganismCore] Ray not initialized, skipping janitor check"
+                )
                 return
-            
+
             namespace = AGENT_NAMESPACE
-            
+
             try:
                 # Fast path: already exists
                 jan = await asyncio.to_thread(
                     ray.get_actor, "seedcore_janitor", namespace=namespace
                 )
-                logger.debug(f"[OrganismCore] Janitor actor already running in {namespace}")
+                logger.debug(
+                    f"[OrganismCore] Janitor actor already running in {namespace}"
+                )
                 return
             except Exception:
-                logger.info(f"[OrganismCore] Launching janitor in namespace {namespace}")
+                logger.info(
+                    f"[OrganismCore] Launching janitor in namespace {namespace}"
+                )
 
             # Create or reuse
             from seedcore.maintenance.janitor import Janitor
+
             try:
                 Janitor.options(
                     name="seedcore_janitor",
@@ -1806,7 +1914,7 @@ class OrganismCore:
                     lifetime="detached",
                     num_cpus=0,
                 ).remote(namespace)
-                
+
                 # Verify it is reachable
                 jan = await asyncio.to_thread(
                     ray.get_actor, "seedcore_janitor", namespace=namespace
@@ -1814,9 +1922,13 @@ class OrganismCore:
                 try:
                     pong_ref = jan.ping.remote()
                     pong = await self._ray_await(pong_ref)
-                    logger.info(f"✅ Janitor actor launched in {namespace} (ping={pong})")
+                    logger.info(
+                        f"✅ Janitor actor launched in {namespace} (ping={pong})"
+                    )
                 except Exception:
-                    logger.info(f"✅ Janitor actor launched in {namespace} (ping skipped)")
+                    logger.info(
+                        f"✅ Janitor actor launched in {namespace} (ping skipped)"
+                    )
             except Exception as e:
                 logger.warning(f"⚠️ Failed to launch janitor actor: {e}")
         except Exception as e:

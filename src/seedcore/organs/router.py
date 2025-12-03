@@ -35,14 +35,13 @@ import ray  # pyright: ignore[reportMissingImports]
 
 from seedcore.logging_setup import ensure_serve_logger
 from seedcore.models import TaskPayload
+from seedcore.organs import OrganismCore
 
 # Target namespace for Ray actors
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
 if TYPE_CHECKING:
     from .organ import AgentIDFactory
-    from seedcore.agents.roles import RoleRegistry, SkillStoreProtocol
-    from seedcore.serve.cognitive_client import CognitiveServiceClient
 
 logger = ensure_serve_logger("seedcore.router")
 
@@ -161,14 +160,7 @@ class RoutingDirectory:
 
     def __init__(
         self,
-        agent_id_factory: Optional["AgentIDFactory"] = None,
-        organism: Optional[Any] = None,
-        cognitive_client: Optional["CognitiveServiceClient"] = None,
-        role_registry: Optional["RoleRegistry"] = None,
-        skill_store: Optional["SkillStoreProtocol"] = None,
-        config: Optional[Dict[str, Any]] = None,
-        redis_client: Optional[Any] = None,
-        organ_specs: Optional[Dict[str, str]] = None,
+        organism: "OrganismCore"
     ):
         """
         Initialize RoutingDirectory with optional OrganismCore dependencies.
@@ -176,21 +168,12 @@ class RoutingDirectory:
         Args:
             agent_id_factory: Optional AgentIDFactory for generating agent IDs
             organism: Optional OrganismCore instance (for accessing organs/agents)
-            cognitive_client: Optional CognitiveServiceClient (for cognitive routing)
-            role_registry: Optional RoleRegistry (for specialization routing)
             skill_store: Optional SkillStoreProtocol (for skill-based routing)
             config: Optional config dict for scoring weights and routing behavior
             redis_client: Optional Redis client for sticky session storage (agent affinity)
         """
         # Scoring configuration (tunable weights)
-        self.config = {
-            "load_weight": 1000,
-            "availability_weight": 100,
-            "penalty_weight": 1000,
-            "deadline_boost": 50,
-            "priority_boost": 20,
-            **(config or {}),
-        }
+        self.config = organism.router_cfgs
 
         # Static routing rules
         self.rules_by_task: Dict[str, str] = {}
@@ -203,20 +186,16 @@ class RoutingDirectory:
         self.agent_metrics: Dict[str, Dict[str, Any]] = {}
 
         # AgentIDFactory for globally unique agent addressing
-        self.agent_id_factory = agent_id_factory
+        self.agent_id_factory = AgentIDFactory()
+
 
         # OrganismCore integration
         self.organism = organism
-        self.cognitive_client = cognitive_client
-        self.role_registry = role_registry
-        self.skill_store = skill_store
+        self.organ_handles = organism.organs
 
         # Specialization → organ mapping (string-based, populated by OrganismCore)
         # Maps specialization name (string) to organ_id for _find_organ_by_spec()
-        self.organ_specs = organ_specs
-
-        # Redis client for sticky session storage (agent affinity)
-        self.redis = redis_client
+        self.organ_specs = organism.organ_specs
 
         # Runtime cache for active Ray actor handles (short TTL)
         # Stores: logical_id -> (ActorHandle, cached_timestamp)
@@ -648,82 +627,6 @@ class RoutingDirectory:
         )
         return best_lid
 
-    # --- Sticky Session Helpers ---
-
-    async def _lookup_sticky_agent(self, conversation_id: str) -> Optional[str]:
-        """
-        Check if a conversation is already bound to a specific agent.
-
-        Args:
-            conversation_id: The conversation identifier
-
-        Returns:
-            Agent ID if found, None otherwise
-        """
-        if not self.redis:
-            return None
-
-        key = f"sticky:conv:{conversation_id}"
-        try:
-            # Handle both async and sync Redis clients
-            if hasattr(self.redis, "get"):
-                # Check if it's an async client (aioredis)
-                if asyncio.iscoroutinefunction(self.redis.get):
-                    agent_id = await self.redis.get(key)
-                else:
-                    # Sync Redis client
-                    agent_id = self.redis.get(key)
-
-                if agent_id:
-                    # Decode bytes if necessary
-                    if isinstance(agent_id, bytes):
-                        agent_id = agent_id.decode("utf-8")
-                    elif isinstance(agent_id, str):
-                        pass  # Already a string
-                    return str(agent_id)
-        except Exception as e:
-            logger.warning(f"[Router] Sticky lookup failed for {conversation_id}: {e}")
-
-        return None
-
-    async def _bind_sticky_agent(
-        self, conversation_id: str, agent_id: str, ttl: int = 3600
-    ):
-        """
-        Bind a conversation to an agent for a set duration (default 1 hour).
-
-        This enables "sticky routing" - subsequent messages in the same conversation
-        will be routed to the same agent, preserving context locality and KV cache.
-
-        Args:
-            conversation_id: The conversation identifier
-            agent_id: The agent ID to bind to
-            ttl: Time-to-live in seconds (default 3600 = 1 hour)
-        """
-        if not self.redis:
-            return
-
-        key = f"sticky:conv:{conversation_id}"
-        try:
-            # Handle both async and sync Redis clients
-            if hasattr(self.redis, "set"):
-                # Check if it's an async client (aioredis)
-                if asyncio.iscoroutinefunction(self.redis.set):
-                    await self.redis.set(key, agent_id, ex=ttl)
-                else:
-                    # Sync Redis client
-                    self.redis.set(key, agent_id, ex=ttl)
-                logger.debug(
-                    "[Router] Bound conversation %s to agent %s (TTL=%ds)",
-                    conversation_id,
-                    agent_id,
-                    ttl,
-                )
-        except Exception as e:
-            logger.warning(
-                f"[Router] Sticky bind failed for {conversation_id} -> {agent_id}: {e}"
-            )
-
     async def resolve(
         self,
         task_type: str,
@@ -968,7 +871,7 @@ class RoutingDirectory:
 
         # Priority 1: Check Sticky Session (Tunnel Mode Only)
         if not agent_id and mode == "agent_tunnel" and conv_id:
-            sticky_agent = await self._lookup_sticky_agent(conv_id)
+            sticky_agent = await self.organism.tunnel_manager.lookup_sticky_agent(conv_id)
             if sticky_agent:
                 agent_id = sticky_agent
                 resolved_from = "sticky_session"
@@ -1028,14 +931,6 @@ class RoutingDirectory:
             if not agent_id:
                 agent_id = self.new_agent_id(organ_id)
 
-        # =========================================================
-        # PHASE 3: STATE & METADATA WRITES
-        # =========================================================
-
-        # 1. Bind Sticky Session (Fire & Forget)
-        if conv_id and agent_id and mode == "agent_tunnel":
-            asyncio.create_task(self._bind_sticky_agent(conv_id, agent_id, ttl=3600))
-
         # 2. Populate Router Output (params._router) - WRITE ONLY
         is_high_stakes = routing_in.get("is_high_stakes", False)  # or from risk
 
@@ -1072,11 +967,13 @@ class RoutingDirectory:
     async def route_and_execute(
         self,
         payload: Any,  # TaskPayload or dict
+        current_epoch: str = None,
     ) -> Dict[str, Any]:
         """
         High-level one-shot:
           1. Route task to an agent
           2. Execute via OrganismCore
+          3. Validate instance against current epoch
 
         Convenience API for simple callers.
         More complex workflows should call route_only() and execute_on_agent()

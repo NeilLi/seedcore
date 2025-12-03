@@ -134,8 +134,6 @@ class ExecutionConfig:
     ) = None
     resolve_session_factory_func: Callable[[Any], Any] | None = None
     fast_path_latency_slo_ms: float = 5000.0
-    tunnel_lookup: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None
-    tunnel_store: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
 
 
 @dataclass
@@ -250,107 +248,53 @@ def _extract_proto_plan(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     )
 
 
-async def route_and_execute(
-    *,
-    task: TaskPayload,
-    eventizer_helper: Callable[[Any], Any] | None = None,
-    routing_config: RouteConfig,
-    execution_config: ExecutionConfig,
+async def execute_task(
+    self, task: TaskPayload, config: ExecutionConfig
 ) -> Dict[str, Any]:
-    """
-    Unified route and execute: computes routing decision and executes accordingly.
-    """
-    correlation_id = execution_config.cid
-    conversation_id = task.conversation_id
-
     # ---------------------------------------------------------
-    # 0. TUNNEL FAST-PATH (System 0: Sticky Session)
-    # ---------------------------------------------------------
-    if conversation_id and execution_config.tunnel_lookup:
-        tunnel = await execution_config.tunnel_lookup(conversation_id)
-        if tunnel:
-            logger.info(
-                f"[Coordinator] 🚇 Tunnel hit: {conversation_id} -> {tunnel.get('agent_id')}"
-            )
-
-            # Clone the task to avoid mutating input
-            tunnel_task = task.model_copy(
-                update={
-                    "interaction_mode": "agent_tunnel",
-                    "assigned_agent_id": tunnel.get("agent_id"),
-                }
-            )
-
-            # Execute immediately via Fast Path logic (bypassing OCPS/PKG)
-            return await _handle_fast_path(
-                task=tunnel_task,
-                target_organ=tunnel.get("organ_id"),
-                routing_hints={},  # No routing needed for tunnel
-                config=execution_config,
-            )
-
-    # ---------------------------------------------------------
-    # 1. CONTEXT PROCESSING
-    # ---------------------------------------------------------
-    task_dict = task.model_dump()
-    task_ctx_data = await _process_task_input(
-        payload=task,
-        merged_dict=task_dict,
-        eventizer_helper=eventizer_helper,
-    )
-    ctx = TaskContext.from_dict(task_ctx_data)
-
-    # ---------------------------------------------------------
-    # 2. COMPUTE DECISION (System 1 vs System 2)
+    # 1. COMPUTE DECISION (System 1 vs 2)
     # ---------------------------------------------------------
     routing_dec = await _compute_routing_decision(
-        ctx=ctx,
-        cfg=routing_config,
-        correlation_id=correlation_id,
+        ctx=TaskContext(task), cfg=self.route_config
     )
 
-    # routing_dec is a dict with keys: "decision_kind", "result", "organ_id"
-    # "result" is the model_dump() of a TaskResult (dict with "kind", "payload", "metadata")
-    decision_kind_str = routing_dec["decision_kind"]
-    decision_kind = DecisionKind(decision_kind_str)  # Convert to enum
-    task_result_dict = routing_dec["result"]
-    # Extract the payload from the TaskResult dict
-    decision_payload = task_result_dict["payload"]
+    decision_kind = routing_dec["decision_kind"]
+
+    # The router already called .model_dump(), so this is a dict
+    router_result_payload = routing_dec["result"]
 
     # ---------------------------------------------------------
-    # 3. EXECUTE DECISION
+    # 2. EXECUTE (Delegated)
     # ---------------------------------------------------------
 
-    # --- PATH A: Cognitive (System 2) ---
-    if decision_kind_str in (
-        DecisionKind.COGNITIVE.value,
-        DecisionKind.ESCALATED.value,
-    ):
-        return await _handle_cognitive_path(
-            task=task,
-            decision_payload=decision_payload,  # Already a dict
-            decision_kind=decision_kind,  # Pass enum
-            config=execution_config,
-        )
-
-    # --- PATH B: Fast Path (System 1) ---
-    elif decision_kind_str == DecisionKind.FAST_PATH.value:
-        # decision_payload is a dict (FastPathResult.model_dump())
-        target_organ = decision_payload.get("organ_id")
-        # routing_params is stored in metadata
-        routing_params = decision_payload.get("metadata", {}).get("routing_params", {})
-
+    # --- PATH A: Fast Path (System 1) ---
+    if decision_kind == DecisionKind.FAST_PATH.value:
         return await _handle_fast_path(
             task=task,
-            target_organ=target_organ,
-            routing_hints=routing_params,
-            config=execution_config,
+            routing_hints=router_result_payload.get("metadata", {}).get(
+                "routing_params"
+            ),
+            config=config,
         )
 
-    # --- PATH C: Fallback / Error ---
+    # --- PATH B: Cognitive Path (System 2) ---
+    elif decision_kind == DecisionKind.COGNITIVE.value:
+        # Note: We likely pass the router_result_payload here too if the
+        # cognitive handler needs the "Analysis/Plan" generated by the router.
+        return await _handle_cognitive_path(
+            task=task, decision_payload=router_result_payload, config=config
+        )
+
+    # --- PATH C: Fallback / Error (Defensive) ---
     else:
-        # Whatever the router produced; likely an error TaskResult
-        return decision_payload
+        # If the router explicitly returned an error kind, or an unknown kind.
+        logger.warning(
+            f"[Coordinator] Routing decision '{decision_kind}' not handled. "
+            f"Returning raw router result."
+        )
+
+        # Directly return the dict. Do not call .model_dump() again.
+        return router_result_payload
 
 
 # =========================================================================
@@ -360,43 +304,43 @@ async def route_and_execute(
 
 async def _handle_fast_path(
     task: TaskPayload,
-    target_organ: Optional[str],
     routing_hints: Dict[str, Any],
     config: ExecutionConfig,
 ) -> Dict[str, Any]:
-    """Executes a task on the Organism (Execution Plane)."""
+    """
+    Coordinator delegation:
+    Forwards task to the Organism Service. The Organism (Execution Plane)
+    is responsible for checking Tunnels (sticky sessions) or Routing (OCPS/Skills).
+    """
 
-    # 1. Inject V2 Routing Hints (Specialization/Skills)
-    task_dict = task.model_dump()
+    # 1. Prepare Payload
+    # Convert Pydantic model to dict
+    task_payload_dict = task.model_dump()
 
+    # Inject routing hints into params.routing
+    # The Organism Router will use these if no sticky tunnel exists.
     if routing_hints:
-        params = task_dict.setdefault("params", {})
-        routing = params.setdefault("routing", {})
-        routing.update(routing_hints)
+        params = task_payload_dict.setdefault("params", {})
+        params["routing"] = routing_hints
 
-    # 2. Execute via Organism Client
+    # 2. Execute via Organism Interface
     try:
+        # Use a calculated timeout (SLO * buffer)
         timeout = config.fast_path_latency_slo_ms / 1000.0 * 2.0
 
+        # We pass "organism" as the ID. The RPC layer must recognize this
+        # as a request to the Load Balancer/Router, not a specific organ.
         response = await config.organism_execute(
-            organ_id=target_organ or "organism",
-            task_dict=task_dict,
+            organ_id="organism",  # <--- Virtual ID for "Gateway"
+            task_dict=task_payload_dict,  # <--- FIX: Renamed from 'payload' to match typical client sig
             timeout=timeout,
             cid_local=config.cid,
         )
 
-        # 3. Tunnel Storage (Sticky session)
-        if (
-            task.conversation_id
-            and response.get("tunnel_active")
-            and config.tunnel_store
-        ):
-            await config.tunnel_store(task.conversation_id, response)
-
         return response
 
     except Exception as e:
-        logger.error(f"[Coordinator] Fast Path failed: {e}")
+        logger.error(f"[Coordinator] Fast Path delegation failed: {e}")
         return create_error_result(str(e), "execution_error").model_dump()
 
 

@@ -6,6 +6,7 @@ services/organism_service.py
 This module defines the FastAPI app, pydantic models, and the Serve deployment
 class that exposes the organism manager over HTTP via Ray Serve.
 """
+
 from __future__ import annotations
 
 import os
@@ -18,12 +19,10 @@ import ray  # type: ignore[reportMissingImports]
 from ray import serve  # type: ignore[reportMissingImports]
 from fastapi import FastAPI, HTTPException, status  # type: ignore[reportMissingImports]
 # Ensure project roots are importable (mirrors original file behavior)
-import sys
-sys.path.insert(0, '/app')
-sys.path.insert(0, '/app/src')
 
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.organs.organism_core import OrganismCore
+from seedcore.organs.router import RoutingDirectory
 from seedcore.models import TaskPayload
 from seedcore.models.organism import (
     OrganismResponse,
@@ -58,10 +57,13 @@ class OrganismService:
 
         self.logger.info("🚀 Creating OrganismService instance...")
         self.organism_core = OrganismCore()
+        self.router = None
         self._initialized = False
         self._init_task = None
         self._init_lock = asyncio.Lock()
-        self.logger.info("✅ OrganismService instance created (will init in background)")
+        self.logger.info(
+            "✅ OrganismService instance created (will init in background)"
+        )
 
     async def _lazy_init(self):
         # prevent duplicate inits
@@ -72,21 +74,25 @@ class OrganismService:
                 return
             try:
                 await self.organism_core.initialize_organism()
+                # Initialize Router with dependencies after organism is initialized
+                self.router = RoutingDirectory(
+                    organism=self.organism_core,
+                )
                 self._initialized = True
-                self.logger.info("✅ Organism initialized (background)")
+                self.logger.info("✅ Organism and Router initialized (background)")
             except Exception:
                 self.logger.exception("❌ Organism init failed")
-
 
     async def reconfigure(self, config: dict | None = None):
         """Never block here — just kick off (or reuse) the background task."""
         self.logger.info("⏳ reconfigure called")
-        if not self._initialized and (self._init_task is None or self._init_task.done()):
+        if not self._initialized and (
+            self._init_task is None or self._init_task.done()
+        ):
             # schedule but DO NOT await
             loop = asyncio.get_running_loop()
             self._init_task = loop.create_task(self._lazy_init())
         self.logger.info("🔁 reconfigure returned without blocking")
-
 
     # --- Health and Status Endpoints ---
 
@@ -215,6 +221,10 @@ class OrganismService:
                 return {"success": True, "message": "Organism already initialized"}
 
             await self.organism_core.initialize_organism()
+            # Initialize Router with dependencies after organism is initialized
+            self.router = RoutingDirectory(
+                organism=self.organism_core,
+            )
             self._initialized = True
             return {"success": True, "message": "Organism initialized successfully"}
         except Exception as e:
@@ -264,75 +274,53 @@ class OrganismService:
     @app.post("/route-only", response_model=RouterDecisionResponse)
     async def route_only(self, request: RouteOnlyRequest):
         """
-        Pure routing. Returns RouterDecision.
-        
-        Canonical API for Dispatcher, Coordinator, and external IoT/human/robot services.
-        Used when callers need routing decisions but not immediate execution.
+        Pure routing decision endpoint.
+
+        Canonical API for Dispatcher, Coordinator, and external actuators.
+        Returns a target Organ/Agent ID without executing the task.
         """
         try:
-            # 1) Ensure organism + router exist and are initialized
-            # Note: router is created in OrganismCore.initialize_organism() (line 351),
-            # not in __init__(), so we must check both _initialized and router existence
-            if not self._initialized or not getattr(self, "organism_core", None):
+            # 1. State Validation
+            # Fast check: if self.router exists, the core is inherently initialized.
+            if not self._initialized or not self.router:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="OrganismCore not initialized",
+                    detail="Organism Service not fully initialized (Router missing)",
                 )
-            
-            # Router is only created during initialize_organism(), so check it exists
-            router = getattr(self.organism_core, "router", None)
-            if router is None:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Router not available",
-                )
-            
-            # 2) Normalize task → TaskPayload
-            task_dict = request.task or {}
-            try:
-                task_payload = TaskPayload.from_db(task_dict)
-            except Exception:
-                self.logger.warning(
-                    "[route-only] Falling back to direct TaskPayload construction"
-                )
-                task_payload = TaskPayload(
-                    task_id=str(
-                        task_dict.get("task_id")
-                        or task_dict.get("id")
-                        or uuid.uuid4()
-                    ),
-                    type=task_dict.get("type") or "unknown_task",
-                    params=task_dict.get("params") or {},
-                    description=task_dict.get("description") or "",
-                    domain=task_dict.get("domain"),
-                    drift_score=float(task_dict.get("drift_score") or 0.0),
-                    required_specialization=task_dict.get("required_specialization"),
-                )
-            
-            # 3) Ask router for a decision
-            decision = await router.route_only(
+
+            # 2. Input Normalization
+            # Uses the shared helper to robustly convert dict -> TaskPayload
+            task_payload = self._normalize_payload(request.task or {})
+
+            # 3. Router Logic (Pure Decision)
+            decision = await self.router.route_only(
                 payload=task_payload,
                 current_epoch=request.current_epoch,
             )
-            
-            # 4) Map to API response model
+
+            # 4. Response Mapping
             return RouterDecisionResponse(
                 agent_id=decision.agent_id,
                 organ_id=decision.organ_id,
                 reason=decision.reason,
                 is_high_stakes=decision.is_high_stakes,
             )
-        
+
         except HTTPException:
-            # Pass through explicit HTTP errors
+            # Propagate explicit service availability errors (503, 400, etc.)
             raise
+
         except Exception as e:
-            self.logger.exception(f"[route-only] Error: {e}")
-            # Soft fallback if you really want a decision shape on error
+            self.logger.exception(f"[route-only] Unexpected error: {e}")
+
+            # 5. Fail-Safe Fallback
+            # Instead of crashing the caller with a 500, we route to a safe default.
+            # This allows the upstream system (e.g., Coordinator) to handle the
+            # "routing failure" gracefully (e.g., by queueing the message).
             return RouterDecisionResponse(
                 agent_id="",
-                organ_id="meta_control_organ",  # Reasonable fallback from config
-                reason="error",
+                organ_id="meta_control_organ",
+                reason="service_error_fallback",
                 is_high_stakes=False,
             )
 
@@ -340,86 +328,65 @@ class OrganismService:
     async def route_and_execute(self, request: RouteAndExecuteRequest):
         """
         Routing + execution convenience method.
-        
+
         Calls:
-            1. route_only()
-            2. organism.execute_on_agent()
-        
+            1. router.route_only() (Logic)
+            2. router.organism.execute_on_agent() (Execution)
+
         Used by simple endpoints, cognitive client, demo workflows,
-        and basic actuator interactions (IoT, robots, external systems).
-        
-        This is a convenience API that combines routing and execution in one call.
-        For more control, use route_only() followed by execute_on_agent() separately.
+        and basic actuator interactions.
         """
-        try:
-            # 1) Ensure organism + router exist and are initialized
-            # Note: router is created in OrganismCore.initialize_organism() (line 351),
-            # not in __init__(), so we must check both _initialized and router existence
-            if not self._initialized or not getattr(self, "organism_core", None):
-                return OrganismResponse(
-                    success=False,
-                    result={},
-                    error="OrganismCore not initialized",
-                    task_type=None,
-                )
-            
-            # Router is only created during initialize_organism(), so check it exists
-            router = getattr(self.organism_core, "router", None)
-            if router is None:
-                return OrganismResponse(
-                    success=False,
-                    result={},
-                    error="Router not available",
-                    task_type=None,
-                )
-            
-            # 2) Normalize task → TaskPayload
-            task_dict = request.task or {}
-            task_id = task_dict.get("task_id") or task_dict.get("id") or "unknown"
-            task_type = task_dict.get("type") or "general_query"
-            
-            self.logger.info(f"[route-and-execute] 🎯 Received task {task_id}")
-            
-            try:
-                task_payload = TaskPayload.from_db(task_dict)
-            except Exception:
-                self.logger.warning(
-                    f"[route-and-execute] Falling back to direct TaskPayload construction for {task_id}"
-                )
-                task_payload = TaskPayload(
-                    task_id=str(task_id),
-                    type=task_type,
-                    params=task_dict.get("params") or {},
-                    description=task_dict.get("description") or "",
-                    domain=task_dict.get("domain"),
-                    drift_score=float(task_dict.get("drift_score") or 0.0),
-                    required_specialization=task_dict.get("required_specialization"),
-                )
-            
-            # 3) Call router.route_and_execute() which handles both routing and execution
-            result = await router.route_and_execute(
-                payload=task_payload,
-                current_epoch=request.current_epoch,
-            )
-            
-            # 4) Check for errors and wrap in response
-            has_error = "error" in result
-            return OrganismResponse(
-                success=not has_error,
-                result=result,
-                task_type=task_type,
-                error=result.get("error") if has_error else None,
-            )
-        
-        except Exception as e:
-            task_dict = getattr(request, "task", {}) or {}
-            task_id = task_dict.get("task_id") or task_dict.get("id") or "unknown"
-            task_type = task_dict.get("type") or "general_query"
-            self.logger.exception(f"[route-and-execute] ❌ Error in task {task_id}: {e}")
+        # 1. State Validation
+        # Check router specifically since it drives this workflow
+        if not self._initialized or not self.router:
             return OrganismResponse(
                 success=False,
                 result={},
-                error=str(e),
+                error="Organism Service not fully initialized (Router missing)",
+                task_type=None,
+            )
+
+        # 2. Input Normalization
+        task_dict = request.task or {}
+
+        # Extract metadata early for logging/error handling
+        task_id = task_dict.get("task_id") or task_dict.get("id") or "unknown"
+        task_type = task_dict.get("type") or "query"
+
+        self.logger.info(
+            f"[route-and-execute] 🎯 Received task {task_id} ({task_type})"
+        )
+
+        try:
+            # Helper handles the Pydantic conversion complexity
+            task_payload = self._normalize_payload(task_dict)
+
+            # 3. Delegation (The Core Logic)
+            # Delegate entirely to the Router's orchestration method
+            result = await self.router.route_and_execute(
+                payload=task_payload,
+                current_epoch=request.current_epoch,
+            )
+
+            # 4. Response Formatting
+            # Check if the result dict contains an explicit error key
+            error_msg = result.get("error")
+
+            return OrganismResponse(
+                success=not bool(error_msg),
+                result=result,
+                task_type=task_type,
+                error=str(error_msg) if error_msg else None,
+            )
+
+        except Exception as e:
+            self.logger.exception(
+                f"[route-and-execute] ❌ Critical failure on {task_id}: {e}"
+            )
+            return OrganismResponse(
+                success=False,
+                result={},
+                error=f"Service Internal Error: {str(e)}",
                 task_type=task_type,
             )
 
@@ -453,16 +420,46 @@ class OrganismService:
     async def rpc_get_all_agent_handles(self) -> Dict[str, Any]:
         """
         Get all agent handles from all organs.
-        
+
         This method is used by the StateService's AgentAggregator to poll all agents.
         It delegates to the underlying OrganismCore.
-        
+
         Returns:
             Dict[str, Any]: Dictionary of agent_id -> agent_handle (Ray actor handle)
         """
         if not self._initialized:
             return {}
         return await self.organism_core.get_all_agent_handles()
+
+    # ------------------------------------------------------------------
+    #  HELPER METHODS
+    # ------------------------------------------------------------------
+
+    def _normalize_payload(self, task_dict: Dict[str, Any]) -> TaskPayload:
+        """
+        Robustly converts a dictionary to a TaskPayload object.
+        Handles schema mismatches by falling back to manual construction.
+        """
+        try:
+            # Try the factory method if it exists (handles DB-specific fields)
+            if hasattr(TaskPayload, "from_db"):
+                return TaskPayload.from_db(task_dict)
+            # Otherwise standard Pydantic parse
+            return TaskPayload(**task_dict)
+        except Exception:
+            # Fallback: Construct manually with safe defaults
+            self.logger.debug("Falling back to manual TaskPayload construction")
+            return TaskPayload(
+                task_id=str(
+                    task_dict.get("task_id") or task_dict.get("id") or uuid.uuid4()
+                ),
+                type=task_dict.get("type") or "unknown_task",
+                params=task_dict.get("params") or {},
+                description=task_dict.get("description") or "",
+                domain=task_dict.get("domain"),
+                drift_score=float(task_dict.get("drift_score") or 0.0),
+                required_specialization=task_dict.get("required_specialization"),
+            )
 
 
 # Expose a bound app for optional importers (mirrors the original pattern)

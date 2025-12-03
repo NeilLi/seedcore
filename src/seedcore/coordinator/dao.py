@@ -4,7 +4,7 @@ import inspect
 import json
 import logging
 import os
-from sqlalchemy import text
+from sqlalchemy import text  # pyright: ignore[reportMissingImports]
 
 
 MAX_PROTO_PLAN_BYTES = int(os.getenv("MAX_PROTO_PLAN_BYTES", str(256 * 1024)))
