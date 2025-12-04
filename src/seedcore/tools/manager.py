@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#seedcore/tools/manager.py
+# seedcore/tools/manager.py
 
 from __future__ import annotations
 from typing import Dict, Any, Optional, Protocol, List, TYPE_CHECKING, Callable
@@ -20,27 +20,32 @@ logger = logging.getLogger(__name__)
 # Tool Protocol
 # ============================================================
 
-class Tool(Protocol):
-    async def execute(self, **kwargs: Any) -> Any:
-        ...
 
-    def schema(self) -> Dict[str, Any]:
-        ...
+class Tool(Protocol):
+    async def execute(self, **kwargs: Any) -> Any: ...
+
+    def schema(self) -> Dict[str, Any]: ...
+
 
 # ============================================================
 # Errors
 # ============================================================
 
+
 class ToolError(Exception):
-    def __init__(self, tool_name: str, reason: str, original_exc: Optional[Exception] = None):
+    def __init__(
+        self, tool_name: str, reason: str, original_exc: Optional[Exception] = None
+    ):
         self.tool_name = tool_name
         self.reason = reason
         self.original_exc = original_exc
         super().__init__(f"ToolError({tool_name}): {reason}")
 
+
 # ============================================================
 # Enhanced ToolManager (v2.1)
 # ============================================================
+
 
 class ToolManager:
     """
@@ -53,17 +58,17 @@ class ToolManager:
     3. Memory: HolonFabric tools (memory.holon.*)
     4. Cognitive service tools (cog.* or reason.*)
     5. External MCP service tools
-    
+
     Query tools are registered via register_query_tools() and handled as internal tools.
     They provide high-level abstractions for general queries, knowledge finding, and
     collaborative task execution.
-    
+
     Thread Safety:
     This class is designed to be shared across multiple agents concurrently. All shared
     state (tool registry, metrics) is protected by asyncio.Lock() to ensure thread-safe
     access. The ToolManager instance can be safely passed to multiple agents running
     in parallel (e.g., via Ray actors).
-    
+
     Concurrency Model:
     - Tool registry operations (_tools dict): Protected by _lock
     - Metrics updates (_call_count, _fail_count, _latency_hist): Protected by _metrics_lock
@@ -81,11 +86,10 @@ class ToolManager:
         mcp_client: Optional["MCPServiceClient"] = None,
         cognitive_client: Optional["CognitiveServiceClient"] = None,
     ):
-
         # Internal tool registry
         self._tools: Dict[str, Tool] = {}
         self._lock = asyncio.Lock()  # Lock for tool registry operations
-        
+
         # Separate lock for metrics to reduce contention
         # Metrics are updated frequently during execution, so we use a separate lock
         self._metrics_lock = asyncio.Lock()
@@ -124,7 +128,7 @@ class ToolManager:
     async def register_internal(self, tool: Tool) -> None:
         """
         Register an internal tool (thread-safe).
-        
+
         Note: Changed to async to use proper locking. Callers should await this.
         """
         schema = tool.schema()
@@ -147,7 +151,9 @@ class ToolManager:
         schema = tool.schema()
         name = schema.get("name")
         if not name or not name.startswith(prefix):
-            raise ValueError(f"Invalid namespace tool: expected prefix '{prefix}', got '{name}'")
+            raise ValueError(
+                f"Invalid namespace tool: expected prefix '{prefix}', got '{name}'"
+            )
         await self.register(name, tool)
 
     async def unregister(self, name: str) -> bool:
@@ -179,7 +185,7 @@ class ToolManager:
 
     async def _execute_holon(self, name: str, args: Dict[str, Any], agent_id: str):
         """Execute HolonFabric operations.
-        
+
         Note: LongTermMemoryManager is deprecated. Use HolonFabric instead.
         This method provides backward compatibility for memory.ltm.* tool calls.
         """
@@ -195,10 +201,14 @@ class ToolManager:
                     raise ToolError(name, "Missing holon_id parameter")
                 # Try to get from graph store first
                 try:
-                    neighbors = await self.holon_fabric.graph.get_neighbors(holon_id, limit=1)
+                    neighbors = await self.holon_fabric.graph.get_neighbors(
+                        holon_id, limit=1
+                    )
                     if neighbors:
                         # Found in graph, construct a basic Holon from metadata
-                        node_data = neighbors[0] if isinstance(neighbors, list) else neighbors
+                        node_data = (
+                            neighbors[0] if isinstance(neighbors, list) else neighbors
+                        )
                         props = node_data.get("props", {})
                         return {
                             "id": holon_id,
@@ -218,13 +228,13 @@ class ToolManager:
                 if not embedding:
                     raise ToolError(name, "Missing embedding parameter")
                 import numpy as np
+
                 query_vec = np.array(embedding, dtype=np.float32)
                 # Use GLOBAL scope by default, can be extended with scopes parameter
                 from seedcore.models.holon import HolonScope
+
                 holons = await self.holon_fabric.query_context(
-                    query_vec=query_vec,
-                    scopes=[HolonScope.GLOBAL],
-                    limit=limit
+                    query_vec=query_vec, scopes=[HolonScope.GLOBAL], limit=limit
                 )
                 # Convert Holon objects to dicts for backward compatibility
                 return [h.dict() if hasattr(h, "dict") else h for h in holons]
@@ -235,9 +245,10 @@ class ToolManager:
                     raise ToolError(name, "Missing holon_data parameter")
                 # Convert legacy holon_data format to Holon object
                 from seedcore.models.holon import Holon, HolonType, HolonScope
+
                 vector_data = holon_data.get("vector", {})
                 graph_data = holon_data.get("graph", {})
-                
+
                 holon = Holon(
                     id=vector_data.get("id", graph_data.get("src_uuid")),
                     type=HolonType.FACT,  # Default type
@@ -278,7 +289,9 @@ class ToolManager:
     # Execution Pipeline
     # ============================================================
 
-    async def execute(self, name: str, args: Dict[str, Any], agent_id: Optional[str] = None) -> Any:
+    async def execute(
+        self, name: str, args: Dict[str, Any], agent_id: Optional[str] = None
+    ) -> Any:
         """
         Full routing logic:
         1. Internal tools (including query tools: general_query, knowledge.find, task.collaborative, cognitive.*)
@@ -289,12 +302,15 @@ class ToolManager:
         """
 
         # Detect query tool patterns for better logging
-        is_query_tool = (
-            name in ("general_query", "knowledge.find", "task.collaborative")
-            or name.startswith("cognitive.")
+        is_query_tool = name in (
+            "general_query",
+            "knowledge.find",
+            "task.collaborative",
+        ) or name.startswith("cognitive.")
+
+        logger.debug(
+            f"ToolManager executing: {name}{' [query tool]' if is_query_tool else ''}"
         )
-        
-        logger.debug(f"ToolManager executing: {name}{' [query tool]' if is_query_tool else ''}")
         start = time.perf_counter()
         failed = False
 
@@ -323,7 +339,7 @@ class ToolManager:
             # For stricter guarantees, we could use a refcount system, but that adds complexity.
             async with self._lock:
                 tool = self._tools.get(name)
-            
+
             if tool:
                 if is_query_tool:
                     logger.debug(f"Executing query tool: {name}")
@@ -358,11 +374,11 @@ class ToolManager:
             error_msg = str(e)
             if is_query_tool:
                 logger.warning(f"Query tool {name} failed: {e}", exc_info=True)
-            
+
             # Store error message before re-raising
             async with self._metrics_lock:
                 self._last_error[name] = error_msg
-            
+
             if not isinstance(e, ToolError):
                 raise ToolError(name, error_msg, e)
             raise
@@ -389,56 +405,59 @@ class ToolManager:
     # Tool Reflection (Agents learn how to use tools better)
     # ============================================================
 
-    async def _process_tool_reflection(self, agent_id: Optional[str], tool_name: str, reflection: Dict[str, Any]):
+    async def _process_tool_reflection(
+        self, agent_id: Optional[str], tool_name: str, reflection: Dict[str, Any]
+    ):
         """
-        Tools can self-report:
-            • skill deltas ("improve planning by +0.03")
-            • warnings ("agent misused device API")
-            • suggestions ("use hvac.set_mode before hvac.adjust_temp")
-        
-        This enables adaptive tool learning where tools teach agents
-        how to use them better.
-        
-        This is the critical "push" mechanism of the agent-skill micro-flywheel:
-        tools produce learning → manager consumes learning → skill store updates agent.
-        """
-        logger.info(f"🧠 Tool reflection from {tool_name} for agent {agent_id}: {reflection}")
+        Process tool-generated learning signals.
 
-        # --- IMPLEMENTATION ---
+        Tools can emit reflection payloads like:
+            { "skill": "planning", "delta": +0.03 }
+        """
+
+        logger.info(
+            f"🧠 Tool reflection from {tool_name} for agent {agent_id}: {reflection}"
+        )
+
+        # Cannot learn without both store + agent
         if not self.skill_store or not agent_id:
-            return  # Cannot learn without a store or agent context
+            return
 
-        # Check for a single skill update
         skill = reflection.get("skill")
         delta = reflection.get("delta")
-        
-        if skill and delta is not None:
-            try:
-                delta = float(delta)
-                # This is the flywheel's "push"
-                # Try update_skill_delta first (if implemented as extension)
-                if hasattr(self.skill_store, "update_skill_delta"):
-                    await self.skill_store.update_skill_delta(agent_id, skill, delta)
-                elif hasattr(self.skill_store, "apply_delta"):
-                    # Fallback to apply_delta if available
-                    await self.skill_store.apply_delta(agent_id, skill, delta)
-                else:
-                    # Standard SkillStoreProtocol pattern: load, update, save
-                    current_deltas = await self.skill_store.load(agent_id)
-                    if current_deltas is None:
-                        current_deltas = {}
-                    # Apply the delta (additive update)
-                    current_deltas[skill] = current_deltas.get(skill, 0.0) + delta
-                    # Save the updated deltas
-                    await self.skill_store.save(agent_id, current_deltas, metadata={
-                        "source": "tool_reflection",
-                        "tool": tool_name,
-                        "skill": skill,
-                        "delta": delta
-                    })
-            except Exception as e:
-                logger.warning(f"Failed to apply skill delta from {tool_name}: {e}", exc_info=True)
-        # ----------------------
+
+        if not skill or delta is None:
+            return  # Not a skill update reflection
+
+        try:
+            delta = float(delta)
+
+            # === Load current deltas ===
+            current_deltas = await self.skill_store.load(agent_id)
+            if current_deltas is None:
+                current_deltas = {}
+
+            # === Apply delta (additive update) ===
+            new_value = current_deltas.get(skill, 0.0) + delta
+            current_deltas[skill] = float(new_value)
+
+            # === Persist updated deltas ===
+            await self.skill_store.save(
+                agent_id,
+                current_deltas,
+                metadata={
+                    "source": "tool_reflection",
+                    "tool": tool_name,
+                    "skill": skill,
+                    "delta": delta,
+                    "timestamp": time.time(),
+                },
+            )
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to apply skill delta from {tool_name}: {e}", exc_info=True
+            )
 
     # ============================================================
     # Introspection
@@ -451,7 +470,7 @@ class ToolManager:
         async with self._lock:
             # Create a snapshot of tools to avoid holding lock during schema() calls
             tools = list(self._tools.values())
-        
+
         # Process tools outside the lock (schema() calls may be slow)
         for tool in tools:
             try:
@@ -485,7 +504,7 @@ class ToolManager:
     async def stats(self) -> Dict[str, Any]:
         """
         Return execution metrics for observability (thread-safe).
-        
+
         Returns:
             Dictionary with call counts, failure counts, latency histograms, and last errors
         """
@@ -494,9 +513,13 @@ class ToolManager:
             return {
                 "call_count": dict(self._call_count),
                 "fail_count": dict(self._fail_count),
-                "last_error": dict(self._last_error),  # Last error per tool for debugging
+                "last_error": dict(
+                    self._last_error
+                ),  # Last error per tool for debugging
                 "latency_ms": {
-                    name: [x * 1000 for x in hist[-50:]]  # last 50 samples in milliseconds
+                    name: [
+                        x * 1000 for x in hist[-50:]
+                    ]  # last 50 samples in milliseconds
                     for name, hist in self._latency_hist.items()
-                }
+                },
             }

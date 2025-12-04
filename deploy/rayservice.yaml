@@ -4,63 +4,101 @@ metadata:
   name: seedcore-svc
   namespace: seedcore-dev
 spec:
+  # 1. Service Unhealthy Second Threshold (Critical for High Availability)
+  # If the head node dies, KubeRay waits this long before replacing it.
+  serviceUnhealthySecondThreshold: 300 
+  deploymentUnhealthySecondThreshold: 300
   # ===================================================================
-  #  Serve Configuration
+  #  Serve Configuration (Optimized for Ray 2.33 + Py3.11)
   # ===================================================================
   serveConfigV2: |
     http_options:
       host: 0.0.0.0
       port: 8000
-      location: HeadOnly
+      location: HeadOnly  # Proxy stays on head (Ingress Controller target)
 
     applications:
+      # ----------------------------------------------------------------
+      # 1. ML Service (Compute Heavy)
+      # ----------------------------------------------------------------
       - name: ml_service
         import_path: entrypoints.ml_entrypoint:build_ml_service
         route_prefix: /ml
+        args:
+          env: "production"
         deployments:
           - name: MLService
-            num_replicas: 1
+            # AUTOSCALING: CPU intensive, scale based on load
+            autoscaling_config:
+              min_replicas: 1
+              max_replicas: 5
+              target_num_ongoing_requests_per_replica: 10
+              downscale_delay_s: 300
+            max_concurrent_queries: 20
             ray_actor_options:
-              num_cpus: 0.4
-              num_gpus: 0
-              memory: 2147483648 # 2GB
-              resources: {"head_node": 0.001}
+              num_cpus: 0.5        # Give a full core for numpy/torch logic
+              memory: 2147483648   # 2GB
+              # REMOVED: {"head_node": 0.001} -> Let this run on workers!
 
+      # ----------------------------------------------------------------
+      # 2. Cognitive Service (I/O Heavy - LLM Calls)
+      # ----------------------------------------------------------------
       - name: cognitive
         import_path: entrypoints.cognitive_entrypoint:build_cognitive_app
         route_prefix: /cognitive
+        args:
+          env: "production"
         deployments:
           - name: CognitiveService
-            num_replicas: 1
+            # AUTOSCALING: Scale on I/O wait
+            autoscaling_config:
+              min_replicas: 1
+              max_replicas: 10
+              target_num_ongoing_requests_per_replica: 50
+            max_concurrent_queries: 100  # High concurrency (Async I/O)
             ray_actor_options:
-              num_cpus: 0.2
-              num_gpus: 0
-              memory: 2147483648  # 2GB
-              resources: {"head_node": 0.001}
+              num_cpus: 0.2        # Low CPU usage (waiting for HTTP)
+              memory: 2147483648   # 2GB
 
+      # ----------------------------------------------------------------
+      # 3. Coordinator (Orchestrator - Singleton)
+      # ----------------------------------------------------------------
       - name: coordinator
         import_path: entrypoints.coordinator_entrypoint:build_coordinator
         route_prefix: /pipeline
         deployments:
           - name: Coordinator
-            num_replicas: 1
+            num_replicas: 1        # Singleton (Manages state/sequences)
+            max_concurrent_queries: 200
             ray_actor_options:
-              num_cpus: 0.2
-              num_gpus: 0
-              resources: {"head_node": 0.001}
-      
+              num_cpus: 0.5
+              resources: {"head_node": 0.001} # Keep near Proxy if latency sensitive
+
+      # ----------------------------------------------------------------
+      # 4. Organism (The Router - Critical Path)
+      # ----------------------------------------------------------------
       - name: organism
         import_path: entrypoints.organism_entrypoint:build_organism_app
         route_prefix: /organism
+        args:
+          env: "production"
         deployments:
           - name: OrganismService
-            num_replicas: 1
+            # AUTOSCALING: Vital for routing throughput
+            autoscaling_config:
+              min_replicas: 1
+              max_replicas: 5
+              target_num_ongoing_requests_per_replica: 100
+            max_concurrent_queries: 200 # Matches our Async/Lazy optimization
+            health_check_period_s: 10
+            health_check_timeout_s: 30
             ray_actor_options:
-              num_cpus: 0.3
-              num_gpus: 0
-              memory: 2147483648  # 2GB
-              resources: {"head_node": 0.001}
+              num_cpus: 0.5         # Needs CPU for routing logic/hashing
+              memory: 2147483648    # 2GB
 
+      # ----------------------------------------------------------------
+      # 5. Ops & Shared Utilities
+      # ----------------------------------------------------------------
       - name: ops
         import_path: entrypoints.ops_entrypoint:build_ops_app
         route_prefix: /ops
@@ -68,43 +106,51 @@ spec:
           - name: OpsGateway
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.05
-              resources: {"head_node": 0.001}
+              num_cpus: 0.1
+              resources: {"head_node": 0.001} # Pin ingress-like services
 
           - name: EventizerService
-            num_replicas: 1
+            autoscaling_config:
+              min_replicas: 1
+              max_replicas: 5
+              target_num_ongoing_requests_per_replica: 50
             max_concurrent_queries: 100
             ray_actor_options:
-              num_cpus: 0.05
-              memory: 2147483648    # 2GB
+              num_cpus: 0.2
+              memory: 2147483648
 
+          # --- Singletons (Stateful) ---
           - name: FactManager
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.01
-              memory: 1073741824    # 1GB
+              num_cpus: 0.1
+              memory: 1073741824 # 1GB
 
           - name: StateService
             num_replicas: 1
             ray_actor_options:
-              num_cpus: 0.1
-              memory: 1073741824    # 1GB
+              num_cpus: 0.2
+              memory: 1073741824
 
           - name: EnergyService
             num_replicas: 1
             ray_actor_options:
               num_cpus: 0.1
-              memory: 1073741824    # 1GB
+              memory: 1073741824
 
-        - name: mcp
-          import_path: entrypoints.mcp_entrypoint:build_mcp_app
-          route_prefix: /mcp
-          deployments:
-            - name: MCPService
-              num_replicas: 1
-              ray_actor_options:
-                num_cpus: 0.1
-                memory: 1073741824 #1Gi
+      # ----------------------------------------------------------------
+      # 6. MCP Protocol
+      # ----------------------------------------------------------------
+      - name: mcp
+        import_path: entrypoints.mcp_entrypoint:build_mcp_app
+        route_prefix: /mcp
+        deployments:
+          - name: MCPService
+            num_replicas: 1
+            max_concurrent_queries: 50
+            ray_actor_options:
+              num_cpus: 0.1
+              memory: 1073741824
 
   # ===================================================================
   #  Ray Cluster Configuration

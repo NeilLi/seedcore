@@ -37,6 +37,7 @@ class ChatAgent(BaseAgent):
         skill_store=None,
         tool_handler=None,
         cognitive_client=None,
+        ml_client=None,
         organ_id=None,
         initial_role_probs=None,
         mw_manager=None,
@@ -50,6 +51,7 @@ class ChatAgent(BaseAgent):
             role_registry=role_registry or DEFAULT_ROLE_REGISTRY,
             skill_store=skill_store or NullSkillStore(),
             cognitive_client=cognitive_client,
+            ml_client=ml_client,
             organ_id=organ_id,
         )
 

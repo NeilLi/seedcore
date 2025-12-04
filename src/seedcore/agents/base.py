@@ -52,13 +52,7 @@ if TYPE_CHECKING:
     from seedcore.serve.mcp_client import MCPServiceClient
 
 # ---- Cognition / ML ------------------------------------------------------------
-
-try:
-    from seedcore.serve.ml_client import MLServiceClient  # your async client
-    from seedcore.utils.ray_utils import ML  # ML service base URL
-except Exception:  # pragma: no cover
-    MLServiceClient = None  # type: ignore
-    ML = "http://127.0.0.1:8000/ml"  # fallback
+from seedcore.serve.ml_client import MLServiceClient  # your async client
 
 from seedcore.logging_setup import ensure_serve_logger
 
@@ -135,6 +129,7 @@ class BaseAgent:
         role_registry: Optional[RoleRegistry] = None,
         skill_store: Optional[SkillStoreProtocol] = None,
         cognitive_client: Optional["CognitiveServiceClient"] = None,
+        ml_client: Optional[MLServiceClient] = None,
         mcp_client: Optional["MCPServiceClient"] = None,
         initial_capability: float = 0.5,
         initial_mem_util: float = 0.0,
@@ -248,7 +243,7 @@ class BaseAgent:
 
         # Cognition / ML
         self.cognitive_client = cognitive_client
-        self._ml_client = None
+        self.ml_client = ml_client
         self._ml_client_lock = asyncio.Lock()
         self._salience_sema = asyncio.Semaphore(self.MAX_IN_FLIGHT_SALIENCE)
 
@@ -626,31 +621,6 @@ class BaseAgent:
         """
         return self.state.rolling_quality_avg()
 
-    # ============================================================================
-    # Salience scoring (async) with ML + fallback
-    # ============================================================================
-
-    async def _get_ml_client(self):
-        """
-        Async-safe lazy init of MLServiceClient.
-
-        Uses the ML base URL derived from ray_utils (SERVE_GATEWAY + /ml),
-        which is independent of the cognitive client (/cognitive).
-        ML and Cognitive share the gateway but have different base paths.
-        """
-        if self._ml_client is not None or MLServiceClient is None:
-            return self._ml_client
-        async with self._ml_client_lock:
-            if self._ml_client is None and MLServiceClient is not None:
-                # ML and Cognitive share the gateway, but have different base paths.
-                # ray_utils.ML already encodes SERVE_GATEWAY + ML base path.
-                client = MLServiceClient(base_url=ML)
-                # Handle async constructors (some HTTP clients use async __init__)
-                if inspect.isawaitable(client):
-                    client = await client
-                self._ml_client = client
-        return self._ml_client
-
     async def _extract_salience_features(
         self, task_info: Dict[str, Any], error_context: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -745,7 +715,7 @@ class BaseAgent:
 
                 context_data = {**features, **light_ctx}
 
-                client = await self._get_ml_client()
+                client = await self.ml_client
                 if client is None:
                     raise RuntimeError("MLServiceClient unavailable")
 

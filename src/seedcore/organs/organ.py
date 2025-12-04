@@ -32,6 +32,7 @@ import time
 from typing import Dict, Any, Optional, List, TYPE_CHECKING, Tuple
 
 from seedcore.agents.roles import RoleProfile
+from seedcore.serve.ml_client import MLServiceClient
 
 # --- Core SeedCore Imports ---
 from ..logging_setup import ensure_serve_logger
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
     from ..agents.roles.specialization import RoleRegistry
     from ..agents.roles.skill_vector import SkillStoreProtocol
     from ..serve.cognitive_client import CognitiveServiceClient
+
     # --- Add imports for stateful dependencies ---
     from ..memory.mw_manager import MwManager
     from ..memory.holon_fabric import HolonFabric
@@ -61,28 +63,28 @@ AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-
 class AgentIDFactory:
     """
     Factory for generating agent IDs based on organ_id and specialization.
-    
+
     Provides consistent ID generation across the system. OrganismCore typically
     uses this factory to generate IDs before calling Organ.create_agent().
-    
+
     IMPORTANT: agent_id is a permanent, immutable identity. It includes organ_id
     only as part of the creation context, but agent_id does NOT imply current organ
     residence after migration. Agents can be transferred between organs via
     register_agent() without changing their ID.
     """
-    
+
     def new(self, organ_id: str, spec: Specialization) -> str:
         """
         Generate a stable, unique agent ID.
-        
+
         NOTE: agent_id is a permanent identity. It includes organ_id only
         as part of the creation context, but agent_id does NOT imply
         current organ residence after migration.
-        
+
         Args:
             organ_id: ID of the organ this agent belongs to (at creation time)
             spec: Agent specialization
-            
+
         Returns:
             Generated agent ID string (format: agent_{organ_id}_{spec_safe}_{unique12})
         """
@@ -90,11 +92,11 @@ class AgentIDFactory:
         # Collision probability: 16^12 ≈ 2^48 space → extremely safe even at millions of agents
         # Can be swapped for actual ULID library if time-sorted IDs are needed
         unique_id = uuid.uuid4().hex[:12]
-        
+
         # Normalize specialization value to be safe in Ray actor names
         # Replace potentially unsafe characters: / . - → _
         spec_safe = spec.value.replace("/", "_").replace(".", "_").replace("-", "_")
-        
+
         return f"agent_{organ_id}_{spec_safe}_{unique_id}"
 
 
@@ -102,11 +104,11 @@ class AgentIDFactory:
 class Organ:
     """
     A Ray actor that serves as a simple agent registry and health tracker.
-    
+
     This class implements all the `.remote()` methods that the
     OrganismCore needs to manage its pool of agents.
     """
-    
+
     def __init__(
         self,
         organ_id: str,
@@ -115,6 +117,7 @@ class Organ:
         skill_store: "SkillStoreProtocol",
         tool_handler: Any,  # Can be ToolManager or List[ToolManagerShard]
         cognitive_client: "CognitiveServiceClient",
+        ml_client: "MLServiceClient",
         # --- Optional stateful dependencies (for PersistentAgent) ---
         mw_manager: Optional["MwManager"] = None,
         holon_fabric: Optional["HolonFabric"] = None,
@@ -125,19 +128,20 @@ class Organ:
         organ_registry: Optional["OrganRegistry"] = None,
     ):
         self.organ_id = organ_id
-        
+
         # Injected global singletons
         self.role_registry = role_registry
         self.skill_store = skill_store
         self.tool_handler = tool_handler
         # We store the *client*, not just the URL, for consistency
-        self.cognitive_client = cognitive_client 
+        self.cognitive_client = cognitive_client
+        self.ml_client = ml_client
 
         # --- Store stateful dependencies to pass to agents ---
         self.mw_manager = mw_manager
         self.holon_fabric = holon_fabric
         self.checkpoint_cfg = checkpoint_cfg or {"enabled": False}
-        
+
         # --- Optional AgentIDFactory for ID generation ---
         # NOTE: Currently unused - OrganismCore generates IDs before calling create_agent().
         # This is kept for future use cases where Organ might need to generate IDs dynamically.
@@ -150,7 +154,7 @@ class Organ:
         self.agents: Dict[str, AgentHandle] = {}
         # Agent metadata: { agent_id -> AgentInfo }
         self.agent_info: Dict[str, Dict[str, Any]] = {}
-        
+
         logger.info(f"✅ Organ actor {self.organ_id} created.")
 
     async def health_check(self) -> bool:
@@ -162,127 +166,116 @@ class Organ:
             and self.skill_store is not None
             and self.cognitive_client is not None
         )
-        
+
     async def ping(self) -> bool:
         """Lightweight liveness check for OrganismCore's health loop."""
         return True
 
     # ==========================================================
-    # Agent Lifecycle (Called by OrganismCore)
+    # Agent Lifecycle (Optimized Factory)
     # ==========================================================
-    
+
+    # 1. Centralized Class Registry (Can be moved to config/constants)
+    AGENT_CLASS_MAP = {
+        "BaseAgent": "seedcore.agents.base.BaseAgent",
+        "ChatAgent": "seedcore.agents.chat_agent.ChatAgent",
+        "ObserverAgent": "seedcore.agents.observer_agent.ObserverAgent",
+        "UtilityAgent": "seedcore.agents.utility_agent.UtilityAgent",
+        # Easy to add new types here without breaking logic
+    }
+
     async def create_agent(
         self,
         agent_id: str,
         specialization: "Specialization",
-        organ_id: str,  # Passed for verification
+        organ_id: str,
         agent_class_name: str = "BaseAgent",
         session: Optional["AsyncSession"] = None,
-        **agent_actor_options
+        **agent_actor_options,
     ) -> None:
         """
-        Creates, registers, and stores a new BaseAgent or PersistentAgent actor.
-        
-        Args:
-            agent_id: Unique identifier for the agent
-            specialization: Agent specialization (GEA, AAC, etc.)
-            organ_id: ID of the organ (for verification)
-            agent_class_name: Type of agent to create. Options:
-                - "BaseAgent" (default): Stateless, generic executor
-                - "PersistentAgent": Stateful wrapper with memory and checkpointing
-                - "ObserverAgent": Proactive cache warmer
-                - "UtilityLearningAgent": System observer and tuner
-            **agent_actor_options: Ray actor options (name, num_cpus, lifetime, etc.)
+        Factory method to spawn specific Agent Actors.
+        Uses a standardized context to inject dependencies into any Agent subclass.
         """
+        # 1. Validation
         if agent_id in self.agents:
-            logger.warning(f"[{self.organ_id}] Agent {agent_id} already exists.")
+            logger.warning(
+                f"[{self.organ_id}] Agent {agent_id} already exists (idempotent skip)."
+            )
             return
 
         if self.organ_id != organ_id:
-            logger.error(f"Organ ID mismatch! Expected {self.organ_id}, got {organ_id}")
-            raise ValueError("Organ ID mismatch")
+            raise ValueError(
+                f"Organ ID mismatch! Expected {self.organ_id}, got {organ_id}"
+            )
+
+        logger.info(f"🚀 [{self.organ_id}] Spawning {agent_class_name} '{agent_id}'...")
 
         try:
-            logger.info(f"🚀 [{self.organ_id}] Creating {agent_class_name} '{agent_id}'...")
-            
-            # --- Dynamically choose agent class and params ---
+            # 2. Resolve Class (Lazy Import)
+            import importlib
+
+            # Default fallback
+            classpath = self.AGENT_CLASS_MAP.get(
+                agent_class_name, self.AGENT_CLASS_MAP["BaseAgent"]
+            )
+            module_path, class_name = classpath.rsplit(".", 1)
+
+            module = importlib.import_module(module_path)
+            AgentClass = getattr(module, class_name)
+
+            # 3. Build Standard Context (Common to ALL Agents)
+            # This reduces boilerplate by 80%
+            agent_params = {
+                "agent_id": agent_id,
+                "organ_id": self.organ_id,
+                "specialization": specialization,
+                # Shared Services
+                "tool_handler": self.tool_handler,
+                "role_registry": self.role_registry,
+                "skill_store": self.skill_store,
+                "cognitive_client": self.cognitive_client,
+                "ml_client": self.ml_client,
+            }
+
+            # 4. Inject Specialized Context (Stateful vs Stateless)
+            # If the specific agent needs extra params (like Checkpointing or HolonFabric),
+            # we check if the AgentClass accepts them or just inject based on type.
             if agent_class_name == "ChatAgent":
-                from ..agents.chat_agent import ChatAgent as AgentToCreate
-                
-                # Parameters for the STATEFUL PersistentAgent
-                agent_params = {
-                    "agent_id": agent_id,
-                    "tool_handler": self.tool_handler,
-                    "specialization": specialization,
-                    "role_registry": self.role_registry,
-                    "skill_store": self.skill_store,
-                    "cognitive_client": self.cognitive_client,
-                    "organ_id": self.organ_id,
-                    "mw_manager": self.mw_manager,
-                    "holon_fabric": self.holon_fabric,
-                    "checkpoint_cfg": self.checkpoint_cfg
-                }
-            elif agent_class_name == "ObserverAgent":
-                from ..agents.observer_agent import ObserverAgent as AgentToCreate
-                
-                # Parameters for ObserverAgent (extends BaseAgent)
-                agent_params = {
-                    "agent_id": agent_id,
-                    "tool_handler": self.tool_handler,
-                    "specialization": specialization,
-                    "role_registry": self.role_registry,
-                    "skill_store": self.skill_store,
-                    "cognitive_client": self.cognitive_client,
-                    "organ_id": self.organ_id
-                }
-            elif agent_class_name == "UtilityLearningAgent":
-                from ..agents.utility_agent import UtilityAgent as AgentToCreate
-                
-                # Parameters for UtilityLearningAgent (extends BaseAgent)
-                agent_params = {
-                    "agent_id": agent_id,
-                    "tool_handler": self.tool_handler,
-                    "specialization": specialization,
-                    "role_registry": self.role_registry,
-                    "skill_store": self.skill_store,
-                    "cognitive_client": self.cognitive_client,
-                    "organ_id": self.organ_id
-                }
-            else:
-                # Default to BaseAgent
-                from ..agents.base import BaseAgent as AgentToCreate
-                
-                # Parameters for the STATELESS BaseAgent
-                agent_params = {
-                    "agent_id": agent_id,
-                    "tool_handler": self.tool_handler,
-                    "specialization": specialization,
-                    "role_registry": self.role_registry,
-                    "skill_store": self.skill_store,
-                    "cognitive_client": self.cognitive_client,
-                    "organ_id": self.organ_id
-                }
+                agent_params.update(
+                    {
+                        "mw_manager": self.mw_manager,
+                        "holon_fabric": self.holon_fabric,
+                        "checkpoint_cfg": getattr(self, "checkpoint_cfg", None),
+                    }
+                )
 
-            # Create the agent actor
-            handle = AgentToCreate.options(
-                namespace=AGENT_NAMESPACE,
-                get_if_exists=True,  # Re-attach if name already exists
-                **agent_actor_options
-            ).remote(**agent_params)
+            # 5. Spawn Actor
+            # We enforce namespace=AGENT_NAMESPACE but allow overrides via agent_actor_options
+            actor_opts = {
+                "name": agent_id,  # Name the actor for easier debugging in Ray Dashboard
+                "namespace": AGENT_NAMESPACE,
+                "get_if_exists": True,
+                **agent_actor_options,
+            }
 
-            # Store the handle and metadata
+            handle = AgentClass.options(**actor_opts).remote(**agent_params)
+
+            # 6. Verify Startup (Optional but recommended)
+            # await handle.ping.remote()
+
+            # 7. Update Local State
             self.agents[agent_id] = handle
             self.agent_info[agent_id] = {
                 "agent_id": agent_id,
-                "specialization": specialization.name,  # Store enum name for matching
-                "specialization_value": specialization.value,  # Also store value for compatibility
-                "class": agent_class_name,  # Track which class was created
+                "specialization": specialization.name,
+                "specialization_value": specialization.value,
+                "class": agent_class_name,
                 "created_at": time.time(),
-                "status": "initializing",
+                "status": "ready",  # We assume ready if Ray didn't throw
             }
-            logger.info(f"✅ [{self.organ_id}] Registered agent {agent_id} (class: {agent_class_name}).")
-            
-            # Register agent in Tier-1 registry if available
+
+            # 8. Register in Global Graph (Tier-1)
             if self.organ_registry and session:
                 await self.organ_registry.register_agent(
                     session,
@@ -290,8 +283,19 @@ class Organ:
                     organ_id=self.organ_id,
                     specialization=specialization.value,
                 )
+
+            logger.info(
+                f"✅ [{self.organ_id}] Registered {agent_class_name}: {agent_id}"
+            )
+
+        except ImportError as e:
+            logger.error(f"❌ Unknown Agent Class '{agent_class_name}': {e}")
+            raise
         except Exception as e:
-            logger.error(f"[{self.organ_id}] Failed to create agent {agent_id}: {e}")
+            logger.error(f"❌ Failed to spawn agent {agent_id}: {e}", exc_info=True)
+            # Cleanup partial state
+            self.agents.pop(agent_id, None)
+            self.agent_info.pop(agent_id, None)
             raise
 
     async def remove_agent(self, agent_id: str) -> bool:
@@ -302,7 +306,7 @@ class Organ:
         logger.info(f"[{self.organ_id}] Removing agent {agent_id}...")
         self.agent_info.pop(agent_id, None)
         agent_handle = self.agents.pop(agent_id, None)
-        
+
         if agent_handle:
             try:
                 # Asynchronously terminate the actor
@@ -323,11 +327,11 @@ class Organ:
         info = self.agent_info.get(agent_id, {})
         if not info:
             raise ValueError(f"Cannot respawn {agent_id}: no info retained.")
-            
+
         spec_name = info.get("specialization", "GENERALIST")
         spec = Specialization[spec_name.upper()]
         agent_class_name = info.get("class", "BaseAgent")  # Get the class
-        
+
         # Re-run creation logic with preserved agent class
         await self.create_agent(
             agent_id=agent_id,
@@ -336,33 +340,35 @@ class Organ:
             agent_class_name=agent_class_name,  # Pass the class
             name=agent_id,  # Re-use original name
             num_cpus=0.1,
-            lifetime="detached"
+            lifetime="detached",
         )
-        
+
         # Update status to indicate this is a respawned agent
         if agent_id in self.agent_info:
             self.agent_info[agent_id]["status"] = "respawned"
-        
+
     async def update_role_registry(self, profile: RoleProfile) -> None:
         """
         Receive a role definition update from OrganismCore and propagate to Agents.
         """
         # 1. Update the Organ's LOCAL copy
         self.role_registry.register(profile)
-        logger.info(f"[{self.organ_id}] 📥 Synced role definition: {profile.name.value}")
+        logger.info(
+            f"[{self.organ_id}] 📥 Synced role definition: {profile.name.value}"
+        )
 
         # 2. Broadcast to relevant Agents
         # We only need to notify agents that actually HOLD this specialization.
         target_spec_val = profile.name.value.lower()
-        
+
         futures = []
         for agent_id, handle in self.agents.items():
             info = self.agent_info.get(agent_id, {})
-            
+
             # Check if this agent matches the updated specialization
             # (Use the normalized value we stored during register_agent)
             agent_spec = info.get("specialization_value", "").lower()
-            
+
             if agent_spec == target_spec_val:
                 # 3. Remote Call to Agent
                 # Fire-and-forget logic usually, or gather if you want confirmation
@@ -375,11 +381,11 @@ class Organ:
             logger.info(
                 f"[{self.organ_id}] ⚡ Hot-swapped profile on {len(futures)} agents."
             )
-        
+
     # ==========================================================
     # Introspection (Called by OrganismCore & StateService)
     # ==========================================================
-    
+
     async def get_agent_handle(self, agent_id: str) -> Optional[AgentHandle]:
         """Returns the handle for a specific agent."""
         return self.agents.get(agent_id)
@@ -390,11 +396,11 @@ class Organ:
         This is the main method used by OrganismCore to poll for the StateService.
         """
         return self.agents.copy()
-        
+
     async def list_agents(self) -> List[str]:
         """Returns all agent IDs managed by this organ."""
         return list(self.agents.keys())
-        
+
     async def get_agent_info(self, agent_id: str) -> Dict[str, Any]:
         """Returns the metadata for a specific agent."""
         return self.agent_info.get(agent_id, {"error": "not_found"})
@@ -403,7 +409,7 @@ class Organ:
         """
         Returns the health status of this organ and all its agents.
         (Called by OrganismCore's health loop)
-        
+
         Actually pings agents to determine liveness, so OrganismCore's
         reconciliation loop can detect and respawn dead agents.
         """
@@ -436,33 +442,35 @@ class Organ:
                 "status": "registered" if alive else "unreachable",
                 "alive": alive,
             }
-                
+
         return {
             "organ_id": self.organ_id,
             "status": "healthy",  # organ-level; could down-rank if many agents are dead
             "agent_count": len(self.agents),
             "agents": agent_statuses,
         }
-        
+
     # ==========================================================
     # Lifecycle & Metadata (Runtime Updates)
     # ==========================================================
 
     async def heartbeat(self, agent_id: str, metrics: Dict[str, Any]) -> None:
         """
-        Lightweight runtime update. 
+        Lightweight runtime update.
         Agents call this periodically to report status, load, and new skills.
         """
         # 1. Fast existence check
         if agent_id not in self.agent_info:
-            # Agent might have crashed and organ restarted. 
+            # Agent might have crashed and organ restarted.
             # In a robust system, we might ask it to re-register.
-            logger.warning(f"[{self.organ_id}] Received heartbeat from unknown agent {agent_id}")
+            logger.warning(
+                f"[{self.organ_id}] Received heartbeat from unknown agent {agent_id}"
+            )
             return
 
         # 2. Get reference to mutable metadata dict
         info = self.agent_info[agent_id]
-        
+
         # 3. Update Dynamic Metrics (Load, Status)
         if "load" in metrics:
             info["load"] = metrics["load"]
@@ -478,7 +486,7 @@ class Organ:
 
         # 5. Update Timestamp
         info["last_heartbeat"] = time.time()
-        
+
         # (Optional) Log if debug mode is on
         # logger.debug(f"[{self.organ_id}] Heartbeat processed for {agent_id}")
 
@@ -489,7 +497,7 @@ class Organ:
     async def collect_agent_stats(self) -> Dict[str, Dict[str, Any]]:
         """
         Collect summary statistics from all agents in this organ.
-        
+
         Returns:
             Dictionary mapping agent_id -> stats dict (whatever agent.get_summary_stats() returns)
         """
@@ -515,20 +523,20 @@ class Organ:
         await asyncio.gather(*tasks, return_exceptions=True)
 
         logger.debug(f"[{self.organ_id}] ✅ Collected stats: {len(stats)}/{len(items)}")
-        
+
         # Warn if we have agents but collected no stats
         if len(items) > 0 and len(stats) == 0:
             logger.warning(
                 f"[{self.organ_id}] No stats collected from {len(items)} agents - "
                 "agents may not support get_summary_stats() or may be unreachable"
             )
-        
+
         return stats
 
     async def get_summary(self) -> Dict[str, Any]:
         """
         Compute a simple per-organ summary over agent stats.
-        
+
         Returns:
             Dictionary with organ-level aggregated statistics
         """
@@ -544,11 +552,13 @@ class Organ:
         total_tasks = sum(s.get("tasks_processed", 0) for s in stats.values())
         avg_cap = (
             sum(s.get("capability_score", 0.0) for s in stats.values()) / total_agents
-            if total_agents > 0 else 0.0
+            if total_agents > 0
+            else 0.0
         )
         avg_mem = (
             sum(s.get("mem_util", 0.0) for s in stats.values()) / total_agents
-            if total_agents > 0 else 0.0
+            if total_agents > 0
+            else 0.0
         )
 
         # Calculate organ-level metrics
@@ -571,10 +581,10 @@ class Organ:
     async def get_agent_private_memory(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """
         Fetch private memory vector & telemetry for a single agent in this organ.
-        
+
         Args:
             agent_id: Agent identifier
-            
+
         Returns:
             Dictionary with 'h' (memory vector) and 'telemetry', or None if not found
         """
@@ -608,11 +618,11 @@ class Organ:
     ) -> Optional[Any]:
         """
         Full cache → LTM fetch via the agent.
-        
+
         Args:
             agent_id: Agent identifier
             item_id: Item identifier to fetch
-            
+
         Returns:
             Fetched data or None if not found
         """
@@ -635,10 +645,10 @@ class Organ:
     async def reset_agent_metrics(self, agent_id: str) -> bool:
         """
         Reset metrics for a specific agent in this organ.
-        
+
         Args:
             agent_id: Agent identifier
-            
+
         Returns:
             True if successful, False otherwise
         """
@@ -659,14 +669,14 @@ class Organ:
     def generate_agent_id(self, specialization: "Specialization") -> str:
         """
         Generate a new agent ID using AgentIDFactory if available.
-        
+
         NOTE: Currently unused - OrganismCore generates IDs before calling create_agent(),
         and respawn_agent() reuses the same agent_id. This method is kept for future
         use cases where Organ might need to generate IDs dynamically.
-        
+
         Args:
             specialization: Agent specialization
-            
+
         Returns:
             Generated agent ID string
         """
@@ -675,7 +685,7 @@ class Organ:
         # Fallback: simple ID generation if factory not available
         unique_id = uuid.uuid4().hex[:12]
         return f"agent_{self.organ_id}_{specialization.value}_{unique_id}"
-    
+
     # ==========================================================
     # Routing (Called by OrganismCore/Router)
     # ==========================================================
@@ -692,8 +702,7 @@ class Organ:
             return None, None
 
     async def pick_agent_by_skills(
-        self, 
-        required_skills: Dict[str, float]
+        self, required_skills: Dict[str, float]
     ) -> Tuple[Optional[str], Optional[AgentHandle]]:
         """
         Finds the agent with the highest skill match score.
@@ -701,25 +710,25 @@ class Organ:
         """
         if not self.agents:
             return None, None
-            
+
         best_agent_id = None
         best_score = -1.0
-        
+
         # Iterate all known agents
         for agent_id, info in self.agent_info.items():
             # info['skills'] should be a dict like {'python': 0.9, 'writing': 0.5}
             # If agent hasn't reported skills yet, assume empty
             agent_skills = info.get("skills", {})
-            
+
             current_score = 0.0
-            
+
             # Calculate match score
             for req_skill, req_level in required_skills.items():
                 # Get agent's level (default 0.0)
                 agent_level = agent_skills.get(req_skill, 0.0)
                 # Simple additive scoring: reward possession of skill
                 current_score += agent_level
-            
+
             # Update best
             if current_score > best_score:
                 best_score = current_score
@@ -728,18 +737,16 @@ class Organ:
         # If we found a winner with a score > 0
         if best_agent_id and best_score > 0:
             return best_agent_id, self.agents[best_agent_id]
-            
+
         # Fallback: If no skills match (or no skills known), pick random
         return await self.pick_random_agent()
 
     async def pick_agent_by_specialization(
-        self, 
-        spec_name: str, 
-        required_skills: Optional[Dict[str, float]] = None
+        self, spec_name: str, required_skills: Optional[Dict[str, float]] = None
     ) -> Tuple[Optional[str], Optional[AgentHandle]]:
         """
         Finds an agent matching the specialization.
-        
+
         Args:
             spec_name: Enum value or name (e.g. "contextual_planner")
             required_skills: Optional dict to break ties if multiple agents match spec.
@@ -751,10 +758,10 @@ class Organ:
         for agent_id, info in self.agent_info.items():
             stored_name = info.get("specialization", "").lower()
             stored_value = info.get("specialization_value", "").lower()
-            
+
             if stored_name == spec_norm or stored_value == spec_norm:
                 candidates.append(agent_id)
-        
+
         if not candidates:
             # Fallback if no specific agent matches the spec
             return await self.pick_random_agent()
@@ -766,22 +773,22 @@ class Organ:
 
         # 3. If multiple candidates AND skills provided, pick best skill match
         if required_skills and len(candidates) > 1:
-            best_agent_id = candidates[0] # Default to first
+            best_agent_id = candidates[0]  # Default to first
             best_score = -1.0
 
             for aid in candidates:
                 info = self.agent_info.get(aid, {})
                 agent_skills = info.get("skills", {})
-                
+
                 # Calculate simple score
                 score = 0.0
                 for skill, _ in required_skills.items():
                     score += agent_skills.get(skill, 0.0)
-                
+
                 if score > best_score:
                     best_score = score
                     best_agent_id = aid
-            
+
             return best_agent_id, self.agents.get(best_agent_id)
 
         # 4. Otherwise pick random from valid candidates (Load Balancing)
@@ -797,14 +804,14 @@ class Organ:
         Terminates all agents owned by this organ.
         Called by OrganismCore's shutdown.
         """
-        logger.info(f"[{self.organ_id}] Shutting down, terminating {len(self.agents)} agents...")
+        logger.info(
+            f"[{self.organ_id}] Shutting down, terminating {len(self.agents)} agents..."
+        )
         agent_ids = list(self.agents.keys())
         tasks = []
 
         for agent_id in agent_ids:
             tasks.append(self.remove_agent(agent_id))
-        
+
         await asyncio.gather(*tasks)
         logger.info(f"[{self.organ_id}] Shutdown complete.")
-
-    

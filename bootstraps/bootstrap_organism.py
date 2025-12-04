@@ -14,7 +14,6 @@ import os
 import sys
 import time
 import requests  # pyright: ignore[reportMissingModuleSource]
-from ray import serve  # pyright: ignore[reportMissingImports]
 
 from seedcore.bootstrap import bootstrap_actors, bootstrap_memory_actors
 from seedcore.utils.ray_utils import (
@@ -25,6 +24,7 @@ from seedcore.utils.ray_utils import (
     shutdown_ray,
 )
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
+from seedcore.serve.organism_client import get_organism_service_handle
 
 # Configuration
 setup_logging(app_name="seedcore.bootstrap.organism")
@@ -120,7 +120,7 @@ def _trigger_via_ray_handle() -> bool:
     try:
         # Get handle to the 'OrganismService' deployment app
         # Note: 'organism' is the app name in serve_config.yaml
-        h = serve.get_deployment_handle("OrganismService", app_name="organism")
+        h = get_organism_service_handle()
 
         # Invoke remote method
         # Using a timeout prevents hanging if the actor is dead

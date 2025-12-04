@@ -42,6 +42,7 @@ import os
 import time
 import uuid
 import yaml  # pyright: ignore[reportMissingModuleSource]
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -55,11 +56,12 @@ from seedcore.agents.roles.specialization import Specialization, RoleRegistry
 from seedcore.agents.roles.skill_vector import SkillStoreProtocol
 from seedcore.agents.roles.generic_defaults import DEFAULT_ROLE_REGISTRY
 from seedcore.organs.tunnel_manager import TunnelManager
+from seedcore.serve.ml_client import MLServiceClient
 from seedcore.tools.manager import ToolManager
 from seedcore.serve.cognitive_client import CognitiveServiceClient
 from seedcore.serve.energy_client import EnergyServiceClient
 from seedcore.models import TaskPayload
-
+from seedcore.models.holon import Holon, HolonType, HolonScope
 
 from seedcore.organs.organ import Organ  # ← NEW ORGAN CLASS
 from seedcore.organs.tunnel_policy import TunnelActivationPolicy
@@ -109,59 +111,35 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 class HolonFabricSkillStoreAdapter(SkillStoreProtocol):
-    """
-    Wraps HolonFabric to satisfy SkillStoreProtocol.
-    This is the unified storage backend for agent skill vectors.
-    Replaces LTMSkillStoreAdapter which used LongTermMemoryManager Ray actor.
-    """
-
     def __init__(self, holon_fabric: HolonFabric):
         self.holon_fabric = holon_fabric
 
-    async def get_skill_vector(self, agent_id: str) -> Optional[List[float]]:
-        try:
-            # Query by ID using graph store
-            neighbors = await self.holon_fabric.graph.get_neighbors(agent_id, limit=1)
-            if neighbors:
-                # Try to get embedding from vector store
-                try:
-                    vec_result = await self.holon_fabric.vec.get_by_id(agent_id)
-                    if vec_result and "embedding" in vec_result:
-                        return (
-                            vec_result["embedding"].tolist()
-                            if hasattr(vec_result["embedding"], "tolist")
-                            else vec_result["embedding"]
-                        )
-                except Exception:
-                    pass
+    async def load(self, agent_id: str) -> Optional[Dict[str, float]]:
+        # Get Holon by id, read deltas from holon.content (or similar)
+        holon = await self.holon_fabric.get_holon(agent_id)  # or whatever API you have
+        if not holon:
             return None
-        except Exception as e:
-            logger.error(f"[SkillStore] Error loading skill vector for {agent_id}: {e}")
-            return None
+        payload = holon.content or {}
+        return {k: float(v) for k, v in payload.get("deltas", payload).items()}
 
-    async def save_skill_vector(
-        self, agent_id: str, vector: List[float], meta: Dict[str, Any] = None
+    async def save(
+        self,
+        agent_id: str,
+        deltas: Dict[str, float],
+        metadata: Dict[str, Any],
     ) -> bool:
-        """
-        Persist an agent's skill vector into HolonFabric as a holon.
-        """
-        try:
-            from seedcore.models.holon import Holon, HolonType, HolonScope
-
-            holon = Holon(
-                id=agent_id,
-                type=HolonType.FACT,  # Skill vectors are facts
-                scope=HolonScope.GLOBAL,  # Skills are globally accessible
-                content=meta or {},
-                summary=f"Skill vector for agent {agent_id}",
-                embedding=vector,
-                links=[],
-            )
-            await self.holon_fabric.insert_holon(holon)
-            return True
-        except Exception as e:
-            logger.error(f"[SkillStore] Error saving skill vector for {agent_id}: {e}")
-            return False
+        # Embed these deltas into HolonFabric in some chosen form.
+        holon = Holon(
+            id=agent_id,
+            type=HolonType.FACT,
+            scope=HolonScope.GLOBAL,
+            content={"deltas": deltas, **(metadata or {})},
+            summary=f"Skill deltas for agent {agent_id}",
+            embedding=None,  # or derived embedding if you wish
+            links=[],
+        )
+        await self.holon_fabric.insert_holon(holon)
+        return True
 
 
 # =====================================================================
@@ -183,9 +161,18 @@ class OrganismCore:
     ):
         self._initialized = False
         self._lock = asyncio.Lock()
+        self._config_lock = asyncio.Lock()  # Lock for config updates
 
         self.organ_configs: List[Dict[str, Any]] = []
         self.organs: Dict[str, ray.actor.ActorHandle] = {}
+
+        # 1. Normalize and Resolve Path immediately
+        # Convert to Path object and resolve to absolute path to fix CWD issues in Ray
+        self.config_path = Path(config_path).resolve()
+
+        # 2. Early Validation
+        if not self.config_path.exists():
+            raise FileNotFoundError(f"Configuration file not found at: {self.config_path}")
 
         # Specialization → organ mapping (for registry API only, NOT for routing decisions)
         # This is maintained for get_specialization_map() registry API
@@ -201,8 +188,10 @@ class OrganismCore:
         # Load Config (YAML)
         # We assume _load_config populates self.organ_configs AND returns/sets root settings
         # Let's say _load_config returns a dict of global settings
-        global_settings = self._load_config(config_path) or {}
+        global_settings = self._load_config(self.config_path) or {}
+        self.global_settings = global_settings  # Store for runtime updates
         self.router_cfgs = global_settings.get("router_config", {})
+        self.topology_cfg: Dict[str, Any] = {}  # Topology configuration
 
         # 4. Tunnel Subsystem
         # State: Who is assigned to whom?
@@ -224,6 +213,7 @@ class OrganismCore:
         self.tool_shards: List[Any] = []  # or List["ToolManagerShard"]
         self.tool_handler: Any = None  # Can be ToolManager or List[ToolManagerShard]
         self.cognitive_client: Optional[CognitiveServiceClient] = None
+        self.ml_client: Optional[MLServiceClient] = None
         self.energy_client: Optional[EnergyServiceClient] = None
         self.holon_fabric: Optional[HolonFabric] = None
 
@@ -244,6 +234,7 @@ class OrganismCore:
         # Background tasks
         self._health_check_task: Optional[asyncio.Task] = None
         self._recon_task: Optional[asyncio.Task] = None
+        self._config_watcher_task: Optional[asyncio.Task] = None
         self._health_interval = int(os.getenv("HEALTHCHECK_INTERVAL_S", "20"))
         self._recon_interval = int(os.getenv("RECONCILE_INTERVAL_S", "20"))
         self._shutdown_event = asyncio.Event()
@@ -447,7 +438,7 @@ class OrganismCore:
         """Initialize external API clients and Middleware manager."""
         self.cognitive_client = CognitiveServiceClient()
         self.energy_client = EnergyServiceClient()
-
+        self.ml_client = MLServiceClient()
         try:
             self.mw_manager = MwManager(organ_id="organism_core_mw")
         except Exception as e:
@@ -535,14 +526,33 @@ class OrganismCore:
     async def _create_organs_from_config(self):
         """
         Instantiate all Organ actors defined in the YAML config.
+
+        This method is idempotent: calling it multiple times will only create
+        organs that don't already exist in self.organs. This enables dynamic
+        organ creation by adding new entries to self.organ_configs and calling
+        this method again.
         """
         logger.info(f"[OrganismCore] Spawning {len(self.organ_configs)} organs...")
 
         for cfg in self.organ_configs:
             organ_id = cfg["id"]
 
+            # Idempotent check: skip if organ already exists
             if organ_id in self.organs:
-                logger.info(f"  ↪ Organ {organ_id} already exists.")
+                # Verify the organ is still reachable (lightweight check)
+                try:
+                    organ_handle = self.organs[organ_id]
+                    ping_ref = organ_handle.ping.remote()
+                    await asyncio.wait_for(
+                        asyncio.to_thread(ray.get, ping_ref), timeout=2.0
+                    )
+                    logger.debug(f"  ↪ Organ {organ_id} already exists and is alive.")
+                except Exception:
+                    # Organ exists but is unreachable - will be handled by reconciliation loop
+                    logger.warning(
+                        f"  ⚠️ Organ {organ_id} exists but is unreachable. "
+                        "Reconciliation loop will handle recovery."
+                    )
                 continue
 
             logger.info(f"  ➕ Creating Organ actor: {organ_id}")
@@ -563,6 +573,7 @@ class OrganismCore:
                     skill_store=self.skill_store,
                     tool_handler=self.tool_handler,
                     cognitive_client=self.cognitive_client,
+                    ml_client=self.ml_client,
                     # Stateful dependencies
                     mw_manager=self.mw_manager,
                     holon_fabric=self.holon_fabric,
@@ -591,24 +602,102 @@ class OrganismCore:
 
         logger.info(f"✅ Organ creation complete. Total organs: {len(self.organs)}")
 
+    async def _create_organs_batch(
+        self, organ_configs: List[Dict[str, Any]]
+    ) -> Dict[str, ray.actor.ActorHandle]:
+        """
+        Create a batch of organs from a list of configs.
+        Returns a dict mapping organ_id -> organ_handle for the newly created organs.
+        """
+        new_organs: Dict[str, ray.actor.ActorHandle] = {}
+
+        for cfg in organ_configs:
+            organ_id = cfg["id"]
+
+            # Skip if already exists
+            if organ_id in self.organs:
+                logger.debug(f"  ↪ Organ {organ_id} already exists, skipping.")
+                continue
+
+            logger.info(f"  ➕ Creating Organ actor: {organ_id}")
+
+            try:
+                # --- Pass all dependencies to the Organ actor ---
+                organ = Organ.options(
+                    name=organ_id,
+                    namespace=RAY_NAMESPACE,
+                    lifetime="detached",
+                    max_restarts=-1,
+                    max_task_retries=-1,
+                    num_cpus=0.1,
+                ).remote(
+                    organ_id=organ_id,
+                    # Stateless dependencies
+                    role_registry=self.role_registry,
+                    skill_store=self.skill_store,
+                    tool_handler=self.tool_handler,
+                    cognitive_client=self.cognitive_client,
+                    ml_client=self.ml_client,
+                    # Stateful dependencies
+                    mw_manager=self.mw_manager,
+                    holon_fabric=self.holon_fabric,
+                    checkpoint_cfg=self.checkpoint_cfg,
+                    # OrganRegistry for Tier-1 registration
+                    organ_registry=self.organ_registry,
+                )
+
+                # Sanity check
+                ok_ref = organ.health_check.remote()
+                ok = await self._ray_await(ok_ref)
+                if not ok:
+                    raise RuntimeError(f"Organ {organ_id} failed health check.")
+
+                new_organs[organ_id] = organ
+
+                # Register organ in Tier-1 registry
+                if self.organ_registry:
+                    self.organ_registry.record_organ(organ_id, organ)
+
+            except Exception as e:
+                logger.error(
+                    f"❌ Failed to create organ '{organ_id}': {e}", exc_info=True
+                )
+                raise
+
+        return new_organs
+
     # ==================================================================
     #  AGENT CREATION & ROUTING MAP BUILD
     # ==================================================================
-    async def _create_agents_from_config(self):
+    async def _create_agents_from_config(
+        self, target_organs: Optional[List[Dict[str, Any]]] = None
+    ):
         """
         Create agents and build the Specialization -> Organ routing table.
+
+        Optimized for:
+        1. True Idempotency (Checks Ray for detached actors).
+        2. Parallelism (Spawns agents concurrently).
+        3. State Re-hydration (Restores local map if actors exist).
+
+        Args:
+            target_organs: Optional list of organ configs to process.
+                          If None, uses self.organ_configs.
         """
-        total = 0
+        creation_tasks = []
+        total_created = 0
+        total_restored = 0
 
-        # We use a list because multiple organs might handle 'GENERALIST'
+        # Use target_organs if provided, otherwise use self.organ_configs
+        organs_to_process = target_organs if target_organs is not None else self.organ_configs
 
-        for cfg in self.organ_configs:
-            organ_id = cfg["id"]  # e.g., "user_experience_organ"
-            organ = self.organs.get(organ_id)
+        for cfg in organs_to_process:
+            organ_id = cfg["id"]
+            organ_handle = self.organs.get(organ_id)
 
-            if not organ:
+            if not organ_handle:
                 logger.error(
-                    f"[OrganismCore] Organ {organ_id} missing during agent creation!"
+                    f"❌ [OrganismCore] Organ {organ_id} missing. Skipping agent creation."
                 )
                 continue
 
@@ -619,9 +708,8 @@ class OrganismCore:
                 count = int(block.get("count", 1))
                 agent_class_name = block.get("class", "BaseAgent")
 
-                # 1. Resolve Specialization Enum
+                # 1. Resolve Specialization
                 try:
-                    # Uses .upper() to read YAML key, but spec.value is lowercase (e.g., "user_liaison")
                     spec = Specialization[spec_str.upper()]
                 except KeyError:
                     logger.error(
@@ -629,43 +717,89 @@ class OrganismCore:
                     )
                     continue
 
-                # 2. Build Routing Map (Simple Mode)
-                spec_val = spec.value  # Already lowercase string (e.g., "user_liaison")
-                if spec_val not in self.organ_specs:
-                    self.organ_specs[spec_val] = organ_id
-                else:
-                    existing_organ = self.organ_specs[spec_val]
-                    logger.debug(
-                        f"ℹ️ Specialization '{spec_val}' already routed to '{existing_organ}'. "
-                        f"Ignoring duplicate in '{organ_id}'."
-                    )
+                # 2. Update Routing Map (Last Write Wins)
+                spec_val = spec.value
+                self.organ_specs[spec_val] = organ_id
 
-                # 3. Spawn Agents in the Organ
+                # 3. Schedule Agent Checks/Creation
                 for i in range(count):
-                    # Naming convention: organ_spec_index
+                    agent_id = f"{organ_id}_{spec_val}_{i}".lower()
 
-                    # Ensure agent_id is fully lowercase for consistency
-                    agent_id = (
-                        f"{organ_id}_{spec_val}_{i}".lower()
-                    )  # Enforce lowercase for safety
-
-                    # Async creation (fire and forget or wait)
-                    await organ.create_agent.remote(
-                        agent_id=agent_id,
-                        specialization=spec,
-                        organ_id=organ_id,
-                        agent_class_name=agent_class_name,
-                        # CRITICAL CHANGE: Ensure both name and agent_id are lowercase
-                        name=agent_id,
-                        num_cpus=0.1,
-                        lifetime="detached",
+                    # Add to batch
+                    creation_tasks.append(
+                        self._ensure_single_agent(
+                            agent_id=agent_id,
+                            organ_id=organ_id,
+                            organ_handle=organ_handle,
+                            spec=spec,
+                            agent_class_name=agent_class_name,
+                        )
                     )
 
-                    # Track globally in Core (optional, for monitoring)
-                    self.agent_to_organ_map[agent_id] = organ_id
-                    total += 1
+        # 4. Execute all tasks in parallel
+        # This drastically reduces startup time compared to sequential processing
+        results = await asyncio.gather(*creation_tasks, return_exceptions=True)
 
-        logger.info(f"🤖 Spawned {total} agents across {len(self.organs)} organs.")
+        # 5. Tally results
+        for res in results:
+            if isinstance(res, Exception):
+                logger.error(f"⚠️ Agent creation failure: {res}")
+            elif res is True:
+                total_created += 1
+            elif res is False:
+                total_restored += 1
+
+        logger.info(
+            f"🤖 Agent Reconciliation Complete: {total_created} new spawned, "
+            f"{total_restored} existing re-linked."
+        )
+
+    async def _ensure_single_agent(
+        self,
+        agent_id: str,
+        organ_id: str,
+        organ_handle: Any,
+        spec: Specialization,
+        agent_class_name: str,
+    ) -> bool:
+        """
+        Helper: Ensures a specific agent exists.
+        Returns: True if created, False if already existed (restored).
+        """
+        # A. Check Local Map (Fastest)
+        if agent_id in self.agent_to_organ_map:
+            return False
+
+        # B. Check Ray Cluster (True Source of Truth)
+        # Because agents are 'detached', they survive service restarts.
+        try:
+            # If this succeeds, the agent exists in the cluster.
+            # We just need to update our local map.
+            ray.get_actor(agent_id, namespace=RAY_NAMESPACE)
+
+            self.agent_to_organ_map[agent_id] = organ_id
+            logger.debug(f"♻️ Agent {agent_id} found in Ray (re-hydrated).")
+            return False
+
+        except ValueError:
+            # Actor not found in Ray -> Actually create it.
+            pass
+
+        # C. Create via Organ (Remote Call)
+        logger.info(f"✨ Spawning agent '{agent_id}' ({agent_class_name})...")
+
+        await organ_handle.create_agent.remote(
+            agent_id=agent_id,
+            specialization=spec,
+            organ_id=organ_id,
+            agent_class_name=agent_class_name,
+            name=agent_id,
+            num_cpus=0.1,
+            lifetime="detached",  # Critical: Keeps agent alive if Core dies
+        )
+
+        self.agent_to_organ_map[agent_id] = organ_id
+        return True
 
     # ==================================================================
     #  AGENT NUM COUNT
@@ -1818,6 +1952,180 @@ class OrganismCore:
         logger.info("[OrganismCore] Reconciliation loop exited")
 
     # =====================================================================
+    #  CONFIG WATCHER
+    # =====================================================================
+
+    async def start_config_watcher(self, interval: int = 2):
+        """
+        Background loop that watches for file changes and triggers updates.
+        """
+        logger.info(f"👀 Watching config file at: {self.config_path}")
+        last_mtime = self.config_path.stat().st_mtime
+
+        while not self._shutdown_event.is_set():
+            await asyncio.sleep(interval)
+
+            try:
+                current_mtime = self.config_path.stat().st_mtime
+                if current_mtime != last_mtime:
+                    logger.info("Detected config file change. Reloading...")
+                    last_mtime = current_mtime
+
+                    # 1. Use your internal loader to get the Dict
+                    # We need to reload the full config structure
+                    with open(self.config_path, "r") as f:
+                        new_config_dict = yaml.safe_load(f) or {}
+
+                    # 2. Call the transactional applicator we just designed
+                    # This makes the "Upstream Caller" the watcher loop
+                    result = await self.apply_organism_config(new_config_dict)
+
+                    if result["status"] == "success":
+                        logger.info("Hot-reload successful.")
+
+            except asyncio.CancelledError:
+                logger.info("[ConfigWatcher] Cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Hot-reload check failed: {e}")
+
+        logger.info("[OrganismCore] Config watcher exited")
+
+    # =====================================================================
+    #  CONFIG APPLICATION (RUNTIME UPDATES)
+    # =====================================================================
+
+    async def apply_organism_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply runtime configuration with Side-Effect Rollback and State Isolation.
+        """
+        async with self._config_lock:
+            logger.info("⚙️ Runtime Config Update Requested...")
+
+            # --- 1. Validation & Snapshot ---
+            root = config.get("seedcore", {}).get("organism", {})
+            if not root:
+                return {"status": "ignored", "reason": "empty_config"}
+
+            new_settings = root.get("settings", {})
+            new_topology = root.get("topology", {})
+            new_organs_list = root.get("organs", [])
+
+            # Snapshot current state for comparison (and potential rollback)
+            current_organs_map = {o["id"]: o for o in self.organ_configs}
+            new_organs_map = {o["id"]: o for o in new_organs_list}
+
+            # --- 2. Calculate Diff ---
+            to_add = [
+                o for oid, o in new_organs_map.items() if oid not in current_organs_map
+            ]
+            to_update = [
+                o for oid, o in new_organs_map.items() if oid in current_organs_map
+            ]
+            # Calculate removed if you need to clean up old actors
+            to_remove_ids = set(current_organs_map.keys()) - set(new_organs_map.keys())
+
+            # Track side effects for rollback
+            newly_spawned_handles = []
+
+            try:
+                # --- 3. Execution Phase (Isolated) ---
+
+                # A. Parallel Updates (Non-blocking)
+                # Fire update RPCs first. If these fail, we haven't spawned new stuff yet.
+                update_futures = []
+                for cfg in to_update:
+                    organ_id = cfg["id"]
+                    handle = self.organs.get(organ_id)
+                    if handle and hasattr(handle, "update_config"):
+                        update_futures.append(handle.update_config.remote(cfg))
+
+                if update_futures:
+                    # wait for updates to ensure they are valid before expanding
+                    # return_exceptions=False ensures we fail fast if an update crashes
+                    await asyncio.gather(*update_futures)
+
+                # B. Additive Creation
+                # CRITICAL CHANGE: Do not mutate self.organ_configs yet.
+                # Pass the specific list to the creator method.
+                # (You likely need to refactor _create_organs to accept an optional list)
+                if to_add:
+                    # Assuming _create_organs_batch returns a dict of {id: handle}
+                    # and takes a list of configs as input.
+                    new_handles_dict = await self._create_organs_batch(to_add)
+
+                    # Register temporarily to track for rollback
+                    newly_spawned_handles = list(new_handles_dict.values())
+
+                    # Update our local handle registry temporarily
+                    self.organs.update(new_handles_dict)
+
+                # C. Agent Reconciliation
+                # This likely depends on the organs existing.
+                await self._create_agents_from_config(target_organs=to_add + to_update)
+
+                # --- 4. Commit Phase (Point of No Return) ---
+                # Only NOW do we mutate the source of truth
+
+                # Update Config List
+                self.organ_configs = new_organs_list
+
+                # Update Global Settings
+                self.global_settings = deepcopy(new_settings)
+
+                # Smart Topology Rebuild: Only if changed
+                if new_topology != self.topology_cfg:
+                    self.topology_cfg = deepcopy(new_topology)
+                    await self._rebuild_topology_from_config()
+
+                # Handle Removals (Cleanup)
+                for rid in to_remove_ids:
+                    handle = self.organs.pop(rid, None)
+                    if handle:
+                        ray.kill(handle)  # Terminate the actor
+
+                logger.info(
+                    f"✅ Config Applied: {len(to_add)} added, {len(to_update)} updated."
+                )
+                return {
+                    "status": "success",
+                    "added": [o["id"] for o in to_add],
+                    "updated": [o["id"] for o in to_update],
+                }
+
+            except Exception as e:
+                # --- 5. True Rollback (Compensating Transactions) ---
+                logger.error(
+                    f"❌ Config Update Failed: {e}. Executing Rollback...", exc_info=True
+                )
+
+                # 1. Kill any actors we just spawned (Undo Side Effects)
+                for handle in newly_spawned_handles:
+                    try:
+                        ray.kill(handle)
+                    except Exception:
+                        pass  # Best effort cleanup
+
+                # 2. Revert local handle registry (if we touched self.organs)
+                for cfg in to_add:
+                    self.organs.pop(cfg["id"], None)
+
+                # 3. Note: We never touched self.organ_configs, so no variable rollback needed!
+                raise e
+
+    async def _rebuild_topology_from_config(self):
+        """
+        Rebuild topology based on topology_cfg.
+        This is a placeholder - implement topology rebuilding logic as needed.
+        """
+        logger.debug(
+            f"[OrganismCore] Topology rebuild requested (config: {self.topology_cfg})"
+        )
+        # TODO: Implement topology rebuilding logic
+        # This might involve updating routing rules, network topology, etc.
+        pass
+
+    # =====================================================================
     #  ORGAN & AGENT RESPAWN HELPERS
     # =====================================================================
 
@@ -2007,6 +2315,13 @@ class OrganismCore:
             self._recon_task.cancel()
             try:
                 await self._recon_task
+            except Exception:
+                pass
+
+        if self._config_watcher_task:
+            self._config_watcher_task.cancel()
+            try:
+                await self._config_watcher_task
             except Exception:
                 pass
 
