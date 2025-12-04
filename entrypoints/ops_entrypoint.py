@@ -15,8 +15,8 @@ sys.path.insert(0, "/app/src")
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.services.eventizer_service import EventizerService
 from seedcore.services.fact_service import FactManagerService
-from seedcore.services.state_service import state_app
-from seedcore.services.energy_service import energy_app
+from seedcore.services.state_service import StateService
+from seedcore.services.energy_service import EnergyService
 from seedcore.models.energy import (
     EnergyRequest,
     OptimizationRequest,
@@ -44,7 +44,7 @@ class OpsGateway:
     ) -> None:
         self.app = FastAPI(
             title="SeedCore Ops App",
-            version="1.0.0",
+            version="2.0.0",
             docs_url="/docs",
         )
 
@@ -216,6 +216,8 @@ def build_ops_app(args: dict = None) -> serve.Deployment:
 
     eventizer_app = EventizerService.bind()
     fact_app = FactManagerService.bind()
+    state_app = StateService.bind()
+    energy_app = EnergyService.bind()
 
     gateway = OpsGateway.bind(
         eventizer_handle=eventizer_app,

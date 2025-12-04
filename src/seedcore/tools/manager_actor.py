@@ -3,12 +3,13 @@ from .manager import ToolManager
 
 @ray.remote(num_cpus=0.2)
 class ToolManagerShard:
-    def __init__(self, skill_store, mw_manager, holon_fabric, cognitive_client, mcp_client):
+    def __init__(self, skill_store, mw_manager, holon_fabric, cognitive_client, ml_client, mcp_client):
         self.manager = ToolManager(
             skill_store=skill_store,
             mw_manager=mw_manager,
             holon_fabric=holon_fabric,
             cognitive_client=cognitive_client,
+            ml_client=ml_client,
             mcp_client=mcp_client,
         )
 

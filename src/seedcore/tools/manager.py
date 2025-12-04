@@ -7,6 +7,8 @@ import asyncio
 import logging
 import time
 
+from seedcore.serve.ml_client import MLServiceClient
+
 if TYPE_CHECKING:
     from seedcore.agents.roles import SkillStoreProtocol
     from seedcore.serve.mcp_client import MCPServiceClient
@@ -85,6 +87,7 @@ class ToolManager:
         enable_tracing: bool = True,
         mcp_client: Optional["MCPServiceClient"] = None,
         cognitive_client: Optional["CognitiveServiceClient"] = None,
+        ml_client: Optional["MLServiceClient"] = None,
     ):
         # Internal tool registry
         self._tools: Dict[str, Tool] = {}
@@ -101,7 +104,7 @@ class ToolManager:
         self.ltm_manager = None
         self._mcp_client = mcp_client
         self.cognitive_client = cognitive_client
-
+        self.ml_client = ml_client
         self.rbac_provider = rbac_provider
         self.skill_store = skill_store
         self.enable_tracing = enable_tracing

@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
-from typing import Dict, Any, Optional, List, TYPE_CHECKING
+from typing import Dict, Any, Optional, TYPE_CHECKING
 import logging
 
 if TYPE_CHECKING:

@@ -474,6 +474,7 @@ class OrganismCore:
                     mw_manager=self.mw_manager,
                     holon_fabric=self.holon_fabric,
                     cognitive_client=self.cognitive_client,
+                    ml_client=self.ml_client,
                     mcp_client=getattr(self, "mcp_client", None),
                 )
                 for _ in range(shard_count)
