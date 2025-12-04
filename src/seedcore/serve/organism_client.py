@@ -183,7 +183,7 @@ class OrganismServiceClient(BaseServiceClient):
     
     async def initialize_organism(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
         """Initialize the organism."""
-        return await self.post("/initialize", json=config or {})
+        return await self.post("/initialize-organism", json=config or {})
     
     async def shutdown_organism(self) -> Dict[str, Any]:
         """Shutdown the organism."""

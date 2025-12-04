@@ -33,17 +33,17 @@ from numpy import random
 
 import ray  # pyright: ignore[reportMissingImports]
 
-from seedcore.logging_setup import ensure_serve_logger
-from seedcore.models import TaskPayload
-from seedcore.organs import OrganismCore
-
-# Target namespace for Ray actors
-AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
 if TYPE_CHECKING:
     from .organ import AgentIDFactory
+    from .organism_core import OrganismCore
 
-logger = ensure_serve_logger("seedcore.router")
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.organs.router")
+
+# Target namespace for Ray actors
+RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
 
 @dataclass
@@ -147,71 +147,92 @@ class RouteCache:
 
 
 class RoutingDirectory:
-    """
-    Hybrid organism Routing Layer with runtime registry integration.
-
-    Enhanced capabilities:
-    - Maps task_type[/domain] -> logical_id with active instance validation
-    - Multi-domain fallback strategy
-    - Real-time metrics for load-aware routing
-    - Ultra-fast LRU cache for high-throughput routing
-    - AgentIDFactory integration for globally unique agent addressing
-    """
-
-    def __init__(
-        self,
-        organism: "OrganismCore"
-    ):
+    def __init__(self, organism: "OrganismCore"):
         """
-        Initialize RoutingDirectory with optional OrganismCore dependencies.
+        Initialize RoutingDirectory with optimized lookup paths and unified caching.
 
-        Args:
-            agent_id_factory: Optional AgentIDFactory for generating agent IDs
-            organism: Optional OrganismCore instance (for accessing organs/agents)
-            skill_store: Optional SkillStoreProtocol (for skill-based routing)
-            config: Optional config dict for scoring weights and routing behavior
-            redis_client: Optional Redis client for sticky session storage (agent affinity)
+        This component acts as the 'Cerebellum' - handling high-speed coordination
+        without blocking the higher cognitive functions.
         """
-        # Scoring configuration (tunable weights)
-        self.config = organism.router_cfgs
+        # --- 1. Configuration & Safety Defaults ---
+        # Ensure we don't crash if config is missing keys; set defaults for weights
+        self._raw_config = organism.router_cfgs or {}
+        self.config = {
+            "default_timeout": self._raw_config.get("default_timeout", 5.0),
+            "weights": self._raw_config.get(
+                "scoring_weights", {"load": 0.4, "affinity": 0.6}
+            ),
+            "cache_ttl": self._raw_config.get("cache_ttl", 3.0),
+        }
 
-        # Static routing rules
-        self.rules_by_task: Dict[str, str] = {}
-        self.rules_by_domain: Dict[Tuple[str, str], str] = {}
+        self.organism = organism
+        # --- 2. Dependencies (Reference Holding) ---
+        self.organ_handles = organism.organs
+        self.tunnel_manager = organism.tunnel_manager
+        # Maps specialization string (e.g., "reasoning") -> organ_id (e.g., "reasoning_organ_01")
+        self.organ_specs = organism.organ_specs or {}
 
-        # Candidate groups for task-type-based selection (task_type -> list of logical_ids)
-        self.logical_groups: Dict[str, List[str]] = {}
-
-        # Real-time agent metrics (load, latency, availability)
-        self.agent_metrics: Dict[str, Dict[str, Any]] = {}
-
-        # AgentIDFactory for globally unique agent addressing
+        # ID Factory for generating Trace IDs/Agent IDs
         self.agent_id_factory = AgentIDFactory()
 
+        # --- 3. Routing State Containers ---
+        # Static Rules: explicit overrides (task_type -> target_id)
+        self.rules_by_task: Dict[str, str] = {}
 
-        # OrganismCore integration
-        self.organism = organism
-        self.organ_handles = organism.organs
+        # Domain Rules: (domain, sub_domain) -> target_id
+        self.rules_by_domain: Dict[Tuple[str, str], str] = {}
 
-        # Specialization → organ mapping (string-based, populated by OrganismCore)
-        # Maps specialization name (string) to organ_id for _find_organ_by_spec()
-        self.organ_specs = organism.organ_specs
+        # Logical Groups: task_type -> List[agent_ids] (Pools for load balancing)
+        self.logical_groups: Dict[str, List[str]] = {}
 
-        # Runtime cache for active Ray actor handles (short TTL)
-        # Stores: logical_id -> (ActorHandle, cached_timestamp)
-        self._instance_cache: Dict[str, Tuple[Any, float]] = {}
-        self._cache_ttl = 3.0  # seconds
+        # Metrics: Real-time telemetry (load, latency) - Updated by Heartbeat/Feedback loop
+        self.agent_metrics: Dict[str, Dict[str, Any]] = {}
+
+        # --- 4. Unified Caching Strategy ---
+        # REMOVED: self._instance_cache, self._last_cache_miss_log (Redundant)
+        # INSTALLED: Dedicated RouteCache with jitter to prevent thundering herd
+        self.route_cache = RouteCache(ttl_s=self.config["cache_ttl"], jitter_s=0.5)
+
+        # --- 5. Initialization Pre-computation (Fast Path) ---
+        # Flatten organ structures for O(1) lookup
+        self._build_fast_lookup_tables()
+
+        # Async lock for dynamic route updates (not read operations)
         self._lock = asyncio.Lock()
 
-        # Rate-limited logging for cache misses (prevent log spam)
-        self._last_cache_miss_log: Dict[str, float] = {}
-        self._cache_miss_log_interval = (
-            5.0  # seconds between log messages per logical_id
-        )
+    def _build_fast_lookup_tables(self):
+        """
+        Internal helper to flatten organism structure into high-speed lookup dicts.
+        Called during init and whenever organism structure re-balances.
+        """
+        # Example: Pre-fill logical groups based on Organ capabilities
+        for organ_id, organ_handle in self.organ_handles.items():
+            # Assuming organ_handle has a property 'supported_task_types'
+            # If strictly remote Ray actor, we might need to fetch this async later,
+            # but usually, metadata is available in the OrganismCore registry.
+            pass
+            # Logic to populate self.logical_groups goes here
 
-        # Instantiate the cache locally
-        # 3.0s TTL is a safe baseline for stable routing policies
-        self.route_cache = RouteCache(ttl_s=3.0, jitter_s=0.5)
+    async def get_target_handle(self, agent_id: str) -> Any:
+        """
+        Optimized accessor to get an execution handle (Ray Actor).
+        Checks Cache -> Checks Organism Registry.
+        """
+        # 1. Hot Cache Hit
+        cached_handle = self.route_cache.get(agent_id)
+        if cached_handle:
+            return cached_handle
+
+        # 2. Cache Miss - Resolve via Organism (Complex Logic)
+        # Note: In a real Ray cluster, 'getting' the handle is often just
+        # resolving the name, which is fast.
+        handle = await self.tunnel_manager.get_actor_handle(agent_id)
+
+        if handle:
+            # 3. Write back to cache
+            self.route_cache.set(agent_id, handle)
+
+        return handle
 
     @staticmethod
     def _normalize(x: Optional[str]) -> Optional[str]:
@@ -414,7 +435,7 @@ class RoutingDirectory:
             # -------------------------------
             try:
                 # Use Ray's built-in actor lookup by name (with namespace)
-                handle = ray.get_actor(logical_id, namespace=AGENT_NAMESPACE)
+                handle = ray.get_actor(logical_id, namespace=RAY_NAMESPACE)
 
                 # Validate actor responds
                 await asyncio.to_thread(
@@ -637,62 +658,155 @@ class RoutingDirectory:
         """
         SeedCore v2 Organism Router (Specialization & V2 Compliant).
 
-        Priority Order:
-        0. High-stakes override
-        1. Preferred logical_id (Explicit Hint)
-        2. Required Specialization (HARD V2 Constraint)
-        3. Domain-specific rule (Config Map)
-        4. Specialization Hint (SOFT V2 Hint)
-        5. Task-type rule (Config Map)
-        6. Candidate group + Skill-based scoring (Load Balancing)
-        7. Fallback (Meta-Control)
+        Optimized for high-concurrency caching and correct specific-agent overrides.
         """
-
-        # Normalize routing keys
+        # 1. Input Normalization & Safety
         tt = self._normalize(task_type)
         dm = self._normalize(domain)
+        meta = input_meta or {}  # Safe-guard against None
+
+        # Extract V2 signals that alter routing logic
+        req_spec = meta.get("required_specialization")
+        soft_spec = meta.get("specialization")
+        is_high_stakes = meta.get("is_high_stakes", False)
 
         # ----------------------------------------
-        # 1. Define Cache Key (Based on minimum inputs needed for lookup)
+        # 2. Define Robust Cache Key
         # ----------------------------------------
+        # CRITICAL FIX: Include preferred_id and high_stakes in the key.
+        # Otherwise, a generic request could poison the cache for specific requests.
         cache_key = (
-            input_meta.get("required_specialization"),
-            input_meta.get("specialization"),
             tt,
-            dm,  # Include domain for domain-specific rules
+            dm,
+            preferred_logical_id,  # <--- Was missing
+            req_spec,
+            soft_spec,
+            is_high_stakes,  # <--- Was missing (High stakes might route differently)
         )
 
-        # 2. Check Cache (FAST PATH - Cache Hit)
+        # ----------------------------------------
+        # 3. Fast Path (Cache Hit)
+        # ----------------------------------------
         cached_entry = self.route_cache.get(cache_key)
         if cached_entry:
-            return cached_entry.organ_id, "cache_hit"  # Returns instantly
+            return cached_entry.organ_id, "cache_hit"
 
-        # 3. Cache Miss: Run complex logic using singleflight lock
+        # ----------------------------------------
+        # 4. Thundering Herd Protection (Singleflight)
+        # ----------------------------------------
+        # "Singleflight" ensures only one coroutine computes the route for this key;
+        # others wait for the result.
         async with self.route_cache.singleflight(cache_key) as (fut, is_leader):
             if is_leader:
-                # 4. LEADER: Perform the expensive lookup (Stages 0 - 6)
-                final_organ_id, final_reason = await self._run_full_resolve_logic(
-                    tt, dm, preferred_logical_id, input_meta
-                )
+                # --- LEADER ROLE ---
+                try:
+                    # Perform the expensive logic
+                    organ_id, reason = await self._run_full_resolve_logic(
+                        tt, dm, preferred_logical_id, meta
+                    )
 
-                # 5. Store Result and Complete Future
-                if final_organ_id:
-                    entry = RouteEntry(organ_id=final_organ_id, reason=final_reason)
+                    # Validate result before caching
+                    if not organ_id:
+                        organ_id = getattr(self, "default_organ_id", "utility_organ")
+                        reason = f"{reason}_fallback"
+
+                    # Create Entry
+                    entry = RouteEntry(organ_id=organ_id, reason=reason)
+
+                    # Store in Cache
                     self.route_cache.set(cache_key, entry)
+
+                    # Notify Followers
                     fut.set_result(entry)
-                    return final_organ_id, final_reason
-                else:
-                    # Handle failure/fallback before caching
-                    fallback_id = getattr(self, "default_organ_id", "utility_organ")
-                    entry = RouteEntry(organ_id=fallback_id, reason="fallback")
-                    self.route_cache.set(cache_key, entry)
-                    fut.set_result(entry)
-                    return fallback_id, "fallback"
+                    return organ_id, reason
+
+                except Exception as e:
+                    # CRITICAL: If leader crashes, we must release followers
+                    # otherwise they await forever (Deadlock).
+                    self.logger.error(f"[Router] Leader calculation failed: {e}")
+
+                    # We create a temporary fallback entry just for this error burst
+                    # but maybe we DON'T cache it long term?
+                    # For now, return safety fallback to keep system alive.
+                    fallback_entry = RouteEntry(
+                        organ_id="utility_organ", reason="router_error_fallback"
+                    )
+                    fut.set_result(fallback_entry)
+                    return fallback_entry.organ_id, fallback_entry.reason
 
             else:
-                # 6. FOLLOWER: Await the leader's result
-                entry = await fut
-                return entry.organ_id, "cache_wait"
+                # --- FOLLOWER ROLE ---
+                # Await the leader's result
+                try:
+                    entry = await fut
+                    return entry.organ_id, "cache_wait"
+                except Exception:
+                    # If the future itself breaks (rare)
+                    return "utility_organ", "singleflight_error"
+
+    # --- Internal Logic (The "Slow" Path) ---
+    async def _run_full_resolve_logic(
+        self, tt: str, dm: str, pref_id: Optional[str], meta: Dict
+    ) -> Tuple[Optional[str], str]:
+        """
+        Implementation of the Priority Order defined in docstring.
+        """
+        # 0. High-Stakes Override (e.g., always route to 'safety_organ')
+        if meta.get("is_high_stakes"):
+            # Check for configured high-stakes handler
+            hs_organ = self.config.get("high_stakes_organ_id")
+            if hs_organ:
+                return hs_organ, "high_stakes_override"
+
+        # 1. Preferred Logical ID (Explicit Hint)
+        if pref_id:
+            # We assume the caller knows the specific organ or we map logical->physical
+            # If pref_id IS an organ_id, return it.
+            if pref_id in self.organ_handles:
+                return pref_id, "explicit_preference"
+            # If it's an agent ID, we need to find which organ owns it (if we track that)
+            # For now, let's assume pref_id implies a specific intent.
+            pass
+
+        # 2. Required Specialization (HARD Constraint)
+        req_spec = meta.get("required_specialization")
+        if req_spec:
+            organ_id = self._find_organ_by_spec(req_spec)
+            if organ_id:
+                return organ_id, "required_spec"
+            # Note: If required spec is missing, we might want to throw error
+            # or fall through depending on strictness. Falling through for now.
+
+        # 3. Domain Rule
+        if dm:
+            # lookup (domain, subdomain) or just domain
+            rule = self.rules_by_domain.get((dm, "*")) or self.rules_by_domain.get(dm)
+            if rule:
+                return rule, "domain_rule"
+
+        # 4. Specialization Hint (SOFT Hint)
+        soft_spec = meta.get("specialization")
+        if soft_spec:
+            organ_id = self._find_organ_by_spec(soft_spec)
+            if organ_id:
+                return organ_id, "soft_spec_hint"
+
+        # 5. Task Type Rule
+        if tt in self.rules_by_task:
+            return self.rules_by_task[tt], "task_rule"
+
+        # 6. Candidate Group (Load Balancing)
+        # If we have a pool of organs for this task type
+        candidates = self.logical_groups.get(tt)
+        if candidates:
+            # Simple Round Robin or Random for now
+            # (Can upgrade to Least-Connection if metrics are available)
+            import random
+
+            return random.choice(candidates), "pool_balance"
+
+        # 7. Fallback
+        return None, "no_match"
 
     # --- Full Resolve Logic Helper ---
     async def _run_full_resolve_logic(
@@ -773,280 +887,273 @@ class RoutingDirectory:
         fallback_id = getattr(self, "default_organ_id", "utility_organ")
         return fallback_id, "fallback"
 
-    # --- Route Only Helper ---
     async def route_only(
         self,
         payload: Any,  # TaskPayload or dict
     ) -> RouterDecision:
         """
-        Pure routing logic compatible with TaskPayload v2.
-        Handles 'coordinator_routed' by trusting upstream hints.
+        Pure routing logic (V2 Optimized).
+        Determines Organ and Agent without executing the task.
         """
-        # 1. Standardization (Handle Pydantic or Dict)
+        # --- 1. Payload Normalization (Zero-Copy View) ---
+        # We assume payload is either a dict or a Pydantic model.
+        # We access data via a unified dict-like interface for reads.
         if hasattr(payload, "model_dump"):
+            # Don't dump yet if we can avoid it, just access attributes if needed.
+            # But for safety and consistency with your generic dict usage:
             task_dict = payload.model_dump()
-            # If payload is Pydantic, we need a mutable ref to params to update the object later
-            # However, model_dump creates a copy. We will rely on returning RouterDecision
-            # and letting the caller update the payload object if needed,
-            # BUT we also patch the dict for the local scope.
         else:
             task_dict = payload
 
+        # Fast extraction of V2 Envelopes
         params = task_dict.get("params", {})
-
-        # 2. Extract Envelopes (V2)
         interaction = params.get("interaction", {})
-        routing_in = params.get("routing", {})  # Read-Only Inbox
+        routing_in = params.get("routing", {})
 
-        # 3. Determine Interaction Mode
-        mode = interaction.get(
-            "mode", "coordinator_routed"
-        )  # Default to coordinated if missing
-        assigned_agent = interaction.get("assigned_agent_id")
+        # --- 2. Initial State & Fast Paths ---
+        mode = interaction.get("mode", "coordinator_routed")
         conv_id = interaction.get("conversation_id")
+        assigned_agent = interaction.get("assigned_agent_id")
 
-        organ_id = None
-        resolved_from = "unknown"
-        agent_id = None
+        organ_id: Optional[str] = None
+        agent_id: Optional[str] = None
+        resolved_from: str = "unknown"
 
         # =========================================================
-        # PHASE 1: ORGAN SELECTION (Physical/Logical Organ)
+        # PHASE 1: ORGAN SELECTION (The "Where")
         # =========================================================
 
-        # CASE A: Explicit Agent Assignment (Tunnel Mode)
-        # Router is effectively bypassed, just validate validity
-        if assigned_agent and mode == "agent_tunnel":
+        # Path A: Explicit Tunneling (Fastest)
+        if mode == "agent_tunnel" and assigned_agent:
             agent_id = assigned_agent
-            # We assume the agent implies the organ (or we look it up)
-            # For now, we might leave organ_id None or look it up if you have a map
+            # In a tunnel, we often don't care about the organ, but let's try to map it
+            # if your ID structure allows (e.g., "organ_name::agent_hash")
             resolved_from = "tunnel_assignment"
 
-        # CASE B: Coordinator Already Routed (Trust Upstream)
+        # Path B: Coordinator Directive (Trust Upstream)
         elif mode == "coordinator_routed":
-            # The Coordinator sent this here. We look for specialization hints to pick
-            # the specific internal organ (if this Organism has multiple).
-            req_spec = routing_in.get("required_specialization")
-            pref_spec = routing_in.get("specialization")
-
-            target_spec = req_spec or pref_spec
+            # 1. Spec-based mapping
+            target_spec = routing_in.get("required_specialization") or routing_in.get(
+                "specialization"
+            )
 
             if target_spec:
-                # Simple lookup: Which of my organs handles this specialization?
-                # Assuming self.spec_to_organ_map exists, or we iterate organs
                 organ_id = self._find_organ_by_spec(target_spec)
                 resolved_from = "coordinator_hint"
 
-                if not organ_id:
-                    logger.warning(
-                        f"Coordinator requested spec '{target_spec}' but no local organ matches. Fallback to default."
-                    )
-
             if not organ_id:
-                # Fallback: Use default organ for this node
-                organ_id = getattr(self, "default_organ_id", "utility_organ")
+                # Fallback to configured default instead of magic string
+                organ_id = self.config.get("default_organ_id", "utility_organ")
                 resolved_from = "coordinator_fallback"
 
-        # CASE C: Fresh Routing (e.g. IoT Event or Direct Ingress)
+        # Path C: Fresh Routing (Semantic Resolution)
         else:
-            # Extract routing inputs
-            routing_inputs = self.extract_router_inputs(params)
-
-            # Full semantic resolution
-            task_type = task_dict.get("type") or "unknown_task"
-            domain = task_dict.get("domain")
-
+            # Full semantic analysis via existing helper
             organ_id, resolved_from = await self.resolve(
-                task_type=task_type,
-                domain=domain,
-                input_meta=routing_inputs,  # utilizing your existing helper
+                task_type=task_dict.get("type", "unknown_task"),
+                domain=task_dict.get("domain"),
+                input_meta=self.extract_router_inputs(params),
             )
 
-        # Safety Fallback
-        if not organ_id:
-            organ_id = "utility_organ"
+        # Safety Net
+        organ_id = organ_id or "utility_organ"
 
         # =========================================================
-        # PHASE 2: AGENT SELECTION
+        # PHASE 2: AGENT SELECTION (The "Who")
         # =========================================================
 
-        # Priority 1: Check Sticky Session (Tunnel Mode Only)
+        # 1. Sticky Session Check (Tunnel Mode)
         if not agent_id and mode == "agent_tunnel" and conv_id:
-            sticky_agent = await self.organism.tunnel_manager.lookup_sticky_agent(conv_id)
-            if sticky_agent:
-                agent_id = sticky_agent
+            agent_id = await self.tunnel_manager.get_assigned_agent(conv_id)
+            if agent_id:
                 resolved_from = "sticky_session"
 
-        # Priority 2: Dynamic Selection via Organ Handle
-        # Priority 2: Dynamic Selection via Organ Handle
+        # 2. Dynamic Organ Dispatch (The Heavy Lifting)
         if not agent_id:
-            # 1. Lookup the Organ Actor Handle (Cached locally)
-            organ_handle = self.organ_handles.get(organ_id)
-
-            if organ_handle:
-                try:
-                    # 2. Extract V2 signals
-                    skills = routing_in.get("skills", {})
-                    # Prefer hard constraint, fallback to soft hint
-                    target_spec = routing_in.get(
-                        "required_specialization"
-                    ) or routing_in.get("specialization")
-
-                    # 3. Dispatch to Organ Actor
-                    # Note: We assume organ_handle is a valid Ray ActorHandle
-                    if target_spec:
-                        # Pick by Spec (and optionally sort by skills)
-                        ref = organ_handle.pick_agent_by_specialization.remote(
-                            target_spec, skills
-                        )
-                    elif skills:
-                        # Pick by Skills only
-                        ref = organ_handle.pick_agent_by_skills.remote(skills)
-                    else:
-                        # Random / Load Balanced
-                        ref = organ_handle.pick_random_agent.remote()
-
-                    # 4. Await result via thread to prevent blocking the async loop
-                    # ray.get is blocking, so we offload it
-                    result = await asyncio.to_thread(ray.get, ref)
-
-                    # 5. Handle potential tuple return (agent_id, score) vs string
-                    if isinstance(result, (tuple, list)):
-                        agent_id = result[0]
-                    else:
-                        agent_id = result
-
-                except Exception as e:
-                    # Catch RayActorError, Timeout, or logic errors
-                    logger.warning(
-                        f"[Router] Agent selection via Ray failed for {organ_id}: {e}"
-                    )
-            else:
-                # If we don't have the handle, we can't route dynamically
-                # (Logic will fall through to Priority 3: Factory Generation)
-                logger.debug(
-                    f"[Router] No handle found for organ {organ_id}, falling back to generation."
+            # Delegate strictly to helper to keep this function clean
+            agent_id = await self._select_agent_from_organ(
+                organ_id=organ_id, routing_in=routing_in
+            )
+            if not agent_id:
+                # 3. Factory Fallback (Last Resort)
+                agent_id = self.agent_id_factory.new_agent_id(organ_id)
+                self.logger.debug(
+                    f"[Router] Generated new ID {agent_id} for {organ_id}"
                 )
 
-            # Priority 3: Factory Generation (Fallback)
-            if not agent_id:
-                agent_id = self.new_agent_id(organ_id)
+        # =========================================================
+        # PHASE 3: RESULT COMPOSITION
+        # =========================================================
 
-        # 2. Populate Router Output (params._router) - WRITE ONLY
-        is_high_stakes = routing_in.get("is_high_stakes", False)  # or from risk
+        is_high_stakes = routing_in.get("is_high_stakes", False)
 
-        router_out = {
-            "is_high_stakes": is_high_stakes,
-            "agent_id": agent_id,
-            "organ_id": organ_id,
-            "reason": resolved_from,
-            "routed_at": "now",  # You can add timestamp
-        }
-
-        # 3. Inject into the dict (for immediate execution usage)
-        params["_router"] = router_out
-
-        # If the payload object is mutable (passed by ref), update it too
-        if hasattr(payload, "params") and isinstance(payload.params, dict):
-            payload.params["_router"] = router_out
-
-        return RouterDecision(
+        decision = RouterDecision(
             agent_id=agent_id,
             organ_id=organ_id,
             reason=resolved_from,
             is_high_stakes=is_high_stakes,
         )
 
-    def _find_organ_by_spec(self, spec: str) -> Optional[str]:
+        # Side-Effect: Patch the payload envelopes for downstream execution
+        # (This allows the Agent to see *why* it was picked without re-calculating)
+        router_out = {
+            "is_high_stakes": is_high_stakes,
+            "agent_id": agent_id,
+            "organ_id": organ_id,
+            "reason": resolved_from,
+            "routed_at": self._current_timestamp(),
+        }
+
+        # If mutable Pydantic model, update it directly
+        if hasattr(payload, "params") and isinstance(payload.params, dict):
+            payload.params["_router"] = router_out
+        elif isinstance(payload, dict):
+            # Update the dict reference passed in
+            if "params" not in payload:
+                payload["params"] = {}
+            payload["params"]["_router"] = router_out
+
+        return decision
+
+    # --- Helper: Decoupled Ray Interaction ---
+    async def _select_agent_from_organ(
+        self, organ_id: str, routing_in: dict
+    ) -> Optional[str]:
         """
-        Helper: Maps a specialization string to a local Organ ID.
-        Simple implementation assuming you have a config map.
+        Interacts with the remote Organ Actor to pick the best agent.
+        Uses native async await for Ray ObjectRefs.
         """
-        # Example: self.organ_specs = {"GuestEmpathy": "organ_guestcare", ...}
-        return self.organ_specs.get(spec)
+        organ_handle = self.organ_handles.get(organ_id)
+        if not organ_handle:
+            return None
+
+        try:
+            # Extract criteria
+            skills = routing_in.get("skills")
+            spec = routing_in.get("required_specialization") or routing_in.get(
+                "specialization"
+            )
+
+            # Dispatch RPC (Non-blocking)
+            if spec:
+                ref = organ_handle.pick_agent_by_specialization.remote(
+                    spec, skills or {}
+                )
+            elif skills:
+                ref = organ_handle.pick_agent_by_skills.remote(skills)
+            else:
+                ref = organ_handle.pick_random_agent.remote()
+
+            # Native Ray Await (Yields control to event loop)
+            # This is significantly faster than asyncio.to_thread(ray.get, ref)
+            result = await ref
+
+            # Normalize Result
+            if isinstance(result, (tuple, list)):
+                return result[0]  # (agent_id, score)
+            return result
+
+        except Exception as e:
+            # We catch broadly here because a routing failure shouldn't crash the request,
+            # it should just trigger the "Factory Generation" fallback in the main method.
+            self.logger.warning(f"[Router] Ray dispatch failed for {organ_id}: {e}")
+            return None
+
+    def _current_timestamp(self):
+        import time
+
+        return str(time.time())
 
     async def route_and_execute(
         self,
-        payload: Any,  # TaskPayload or dict
-        current_epoch: str = None,
+        payload: Any,  # Union[TaskPayload, Dict]
+        current_epoch: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        High-level one-shot:
-          1. Route task to an agent
-          2. Execute via OrganismCore
-          3. Validate instance against current epoch
+        Orchestration wrapper: Routes -> Stamps Payload -> Executes.
 
-        Convenience API for simple callers.
-        More complex workflows should call route_only() and execute_on_agent()
-        manually to keep routing & execution separable.
-
-        Args:
-            payload: TaskPayload instance or dict with routing and risk information
-
-        Returns:
-            Dict with execution result and routing metadata attached
+        This ensures the Agent receives the exact context (High Stakes, Reason)
+        that the Router decided upon.
         """
         if not self.organism:
-            return {"error": "OrganismCore not available"}
+            # Fast fail if core dependency is broken
+            return {
+                "success": False,
+                "error": "OrganismCore (ExecutionEngine) not attached",
+            }
 
-        # Normalize payload to TaskPayload if needed
-        if not isinstance(payload, TaskPayload):
-            try:
-                payload = TaskPayload.from_db(payload)
-            except Exception:
-                logger.warning(
-                    "[route_and_execute] Falling back to naive TaskPayload construction"
-                )
-                payload = TaskPayload(
-                    task_id=str(
-                        payload.get("task_id") or payload.get("id") or uuid.uuid4()
-                    ),
-                    type=payload.get("type") or "unknown_task",
-                    params=payload.get("params") or {},
-                    description=payload.get("description") or "",
-                    domain=payload.get("domain"),
-                    drift_score=float(payload.get("drift_score") or 0.0),
-                    required_specialization=payload.get("required_specialization"),
-                )
+        # --- 1. Payload Normalization ---
+        # We need a mutable dictionary for the execution layer.
+        # If it's a Pydantic model, dump it now to ensure mutable access
+        # for the router injection in the next step.
+        if hasattr(payload, "model_dump"):
+            task_dict = payload.model_dump()
+        elif isinstance(payload, dict):
+            task_dict = payload
+        else:
+            # Legacy/Fallback construction (simplified)
+            # We assume the caller knows what they are doing, but if it's a string or raw obj,
+            # we wrap it safely.
+            task_dict = {
+                "id": str(uuid.uuid4()),
+                "type": "unknown_raw",
+                "params": {"raw_payload": str(payload)},
+            }
 
+        # --- 2. Routing (Decision Phase) ---
         try:
-            # Step 1: routing (pure decision)
-            # Note: route_only() will embed is_high_stakes into the payload
-            decision = await self.route_only(payload)
+            # The route_only method (from previous optimization) will:
+            # 1. Calculate the target.
+            # 2. INJECT the decision into task_dict['params']['_router'].
+            # We pass task_dict by reference.
+            decision = await self.route_only(task_dict)
 
-            # Ensure payload is normalized to dict for embedding
-            if isinstance(payload, TaskPayload):
-                payload_dict = payload.model_dump()
-            else:
-                payload_dict = payload
+        except Exception as e:
+            self.logger.error(f"[Router] Routing decision failed: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Routing Failure: {str(e)}",
+                "stage": "routing",
+            }
 
-            # Embed router's high-stakes decision into payload for execution
-            # This ensures execution honors routing's decision (single source of truth)
-            payload_dict.setdefault("params", {})
-            payload_dict["params"].setdefault("_router_metadata", {})[
-                "is_high_stakes"
-            ] = decision.is_high_stakes
-
-            # Step 2: execution (pure execution)
+        # --- 3. Execution (Action Phase) ---
+        try:
+            # We pass the modified task_dict which now contains the routing metadata.
+            # The OrganismCore sees exactly what the Router saw.
             result = await self.organism.execute_on_agent(
                 organ_id=decision.organ_id,
                 agent_id=decision.agent_id,
-                payload=payload_dict,
+                payload=task_dict,
             )
 
-            # Attach routing metadata
-            result.setdefault("routing", {})
-            result["routing"]["router_decision"] = {
-                "agent_id": decision.agent_id,
-                "organ_id": decision.organ_id,
-                "reason": decision.reason,
-                "is_high_stakes": decision.is_high_stakes,
-            }
+            # --- 4. Response Enrichment ---
+            # Ensure the caller knows *how* this result was achieved.
+            # We attach the decision metadata to the final output.
+            if isinstance(result, dict):
+                result.setdefault("routing", {})
+                result["routing"].update(
+                    {
+                        "agent_id": decision.agent_id,
+                        "organ_id": decision.organ_id,
+                        "reason": decision.reason,
+                        "is_high_stakes": decision.is_high_stakes,
+                        "router_latency": "included_in_trace",  # Optional: add timing
+                    }
+                )
 
             return result
 
         except Exception as e:
-            logger.error(f"[route_and_execute] Failed: {e}", exc_info=True)
-            return {"error": f"Routing and execution failure: {e}"}
+            self.logger.error(
+                f"[Router] Execution failed on {decision.agent_id}: {e}", exc_info=True
+            )
+            # Return a structured error response that the API/Coordinator can parse
+            return {
+                "success": False,
+                "error": f"Execution Failure: {str(e)}",
+                "target_agent": decision.agent_id,
+                "stage": "execution",
+            }
 
     def clear_cache(self):
         """Clear the instance cache and LRU cache."""

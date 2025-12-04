@@ -2,9 +2,6 @@
 """
 Organism Serve Deployment (FastAPI + Ray Serve)
 services/organism_service.py
-
-This module defines the FastAPI app, pydantic models, and the Serve deployment
-class that exposes the organism manager over HTTP via Ray Serve.
 """
 
 from __future__ import annotations
@@ -13,14 +10,13 @@ import os
 import time
 import asyncio
 import uuid
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
-import ray  # type: ignore[reportMissingImports]
-from ray import serve  # type: ignore[reportMissingImports]
-from fastapi import FastAPI, HTTPException, status  # type: ignore[reportMissingImports]
-# Ensure project roots are importable (mirrors original file behavior)
+import ray  # pyright: ignore[reportMissingImports]
+from ray import serve  # pyright: ignore[reportMissingImports]
+from fastapi import FastAPI, HTTPException, status  # pyright: ignore[reportMissingImports]
 
-from seedcore.logging_setup import ensure_serve_logger, setup_logging
+# SeedCore Imports
 from seedcore.organs.organism_core import OrganismCore
 from seedcore.organs.router import RoutingDirectory
 from seedcore.models import TaskPayload
@@ -31,120 +27,156 @@ from seedcore.models.organism import (
     RouteOnlyRequest,
     RouteAndExecuteRequest,
 )
-
-# Configure logging for driver process (script that invokes serve.run)
-setup_logging(app_name="seedcore.organism_service.driver")
-logger = ensure_serve_logger("seedcore.organism_service", level="DEBUG")
+from seedcore.logging_setup import ensure_serve_logger, setup_logging
 
 # --- Configuration ---
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
-RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
+RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
+# Configure logging
+setup_logging(app_name="seedcore.organism_service.driver")
+logger = ensure_serve_logger("seedcore.organism_service", level="DEBUG")
 
-# --- FastAPI app for ingress ---
-app = FastAPI(title="SeedCore Organism Service", version="1.0.0")
+app = FastAPI(title="SeedCore Organism Service", version="2.0.0")
 
 
 # --------------------------------------------------------------------------
-# Ray Serve Deployment: Organism Manager as Serve App
+# Ray Serve Deployment: Organism Manager
 # --------------------------------------------------------------------------
-@serve.deployment(name="OrganismService")
+@serve.deployment(
+    name="OrganismService", health_check_period_s=10, health_check_timeout_s=30
+)
 @serve.ingress(app)
 class OrganismService:
-    def __init__(self):
-        setup_logging(app_name="seedcore.organism_service.replica")
-        self.logger = ensure_serve_logger("seedcore.organism_service", level="DEBUG")
+    def __init__(self, config: Dict[str, Any] = None):
+        """
+        Initialize the service shell.
+        Kick off background initialization immediately.
+        """
+        logger.info("🚀 Creating OrganismService instance...")
+        self.config = config or {}
 
-        self.logger.info("🚀 Creating OrganismService instance...")
+        # Core Components
         self.organism_core = OrganismCore()
-        self.router = None
+        self.router: Optional[RoutingDirectory] = None
+
+        # State Management
         self._initialized = False
-        self._init_task = None
         self._init_lock = asyncio.Lock()
-        self.logger.info(
-            "✅ OrganismService instance created (will init in background)"
-        )
+
+        # Start background initialization immediately (Lazy + Warmup)
+        # We don't await it here, but we save the task so we can join it later.
+        self._init_task = asyncio.create_task(self._lazy_init())
+
+        logger.info("✅ OrganismService created (warming up in background)")
 
     async def _lazy_init(self):
-        # prevent duplicate inits
+        """
+        Idempotent initialization logic.
+        Safe to call multiple times; only runs once.
+        """
         if self._initialized:
             return
+
         async with self._init_lock:
             if self._initialized:
                 return
             try:
+                logger.info("⚙️  Running initialization sequence...")
+                # 1. Initialize Core (Parallelized in previous step)
                 await self.organism_core.initialize_organism()
-                # Initialize Router with dependencies after organism is initialized
-                self.router = RoutingDirectory(
-                    organism=self.organism_core,
-                )
+
+                # 2. Initialize Router
+                # Config is passed down if needed
+                self.router = RoutingDirectory(organism=self.organism_core)
+
                 self._initialized = True
-                self.logger.info("✅ Organism and Router initialized (background)")
-            except Exception:
-                self.logger.exception("❌ Organism init failed")
+                logger.info("✅ Organism and Router fully initialized")
+
+            except Exception as e:
+                logger.critical(f"❌ Organism init failed: {e}", exc_info=True)
+                # We don't raise here to keep the actor alive for retries
+                # but readiness checks will fail.
+
+    async def _ensure_initialized(self, timeout: float = 30.0):
+        """
+        Barrier method: Waits for initialization to complete.
+        Call this at the start of every business-critical endpoint.
+        """
+        if self._initialized:
+            return
+
+        # If the task is running, wait for it
+        if self._init_task and not self._init_task.done():
+            try:
+                # Wait for the background task to finish
+                await asyncio.wait_for(asyncio.shield(self._init_task), timeout=timeout)
+            except asyncio.TimeoutError:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Service is still initializing (Timeout)",
+                )
+
+        # If task is done but we are still not initialized, it meant it failed.
+        if not self._initialized:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Service initialization failed (Check logs)",
+            )
 
     async def reconfigure(self, config: dict | None = None):
-        """Never block here — just kick off (or reuse) the background task."""
-        self.logger.info("⏳ reconfigure called")
+        """Update config and trigger re-init if needed without blocking."""
+        logger.info(f"⏳ Reconfigure called: {config}")
+        self.config = config or {}
+
+        # Propagate config to router if it exists
+        if self.router and hasattr(self.router, "update_config"):
+            self.router.update_config(self.config)
+
+        # If failed previously or not started, try again
         if not self._initialized and (
             self._init_task is None or self._init_task.done()
         ):
-            # schedule but DO NOT await
             loop = asyncio.get_running_loop()
             self._init_task = loop.create_task(self._lazy_init())
-        self.logger.info("🔁 reconfigure returned without blocking")
+
+        logger.info("🔁 Reconfigure applied")
 
     # --- Health and Status Endpoints ---
 
+    def check_health(self):
+        """Ray Serve Health Check."""
+        # Optional: Fail health check if init crashed hard
+        # For now, we return healthy if the actor is alive,
+        # allowing /health endpoint to report "initializing" status.
+        pass
+
     @app.get("/health")
     async def health(self):
-        """Health check endpoint."""
         return {
             "status": "healthy" if self._initialized else "initializing",
-            "service": "organism-manager",
-            "route_prefix": "/organism",
-            "ray_namespace": RAY_NS,
-            "ray_address": RAY_ADDR,
+            "service": "OrganismService",
             "organism_initialized": self._initialized,
-            "endpoints": {
-                "health": "/health",
-                "status": "/status",
-                "route_only": "/route-only",
-                "route_and_execute": "/route-and-execute",
-                "get_organism_status": "/organism-status",
-                "get_organism_summary": "/organism-summary",
-                "initialize": "/initialize",
-                "initialize_organism": "/initialize-organism",
-                "shutdown": "/shutdown",
-                "shutdown_organism": "/shutdown-organism",
-            },
+            "ray_namespace": RAY_NAMESPACE,
         }
 
     @app.get("/status", response_model=OrganismStatusResponse)
     async def status(self):
-        """Get detailed status of the organism manager."""
         try:
             if not self._initialized:
                 return OrganismStatusResponse(
                     status="unhealthy",
                     organism_initialized=False,
-                    error="Organism not initialized",
+                    error="Initializing...",
                 )
-
-            # Get organism status from the core
             org_status = await self.organism_core.get_system_status()
-
             return OrganismStatusResponse(
                 status="healthy",
                 organism_initialized=True,
                 organism_info=org_status,
             )
         except Exception as e:
-            return OrganismStatusResponse(
-                status="unhealthy",
-                organism_initialized=self._initialized,
-                error=str(e),
-            )
+            return OrganismStatusResponse(status="unhealthy", error=str(e))
 
     # --- Organism Management Endpoints ---
 
@@ -208,27 +240,11 @@ class OrganismService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    @app.post("/initialize")
-    async def initialize(self):
-        """Manually trigger organism initialization (convenience endpoint)."""
-        return await self.initialize_organism()
-
     @app.post("/initialize-organism")
     async def initialize_organism(self):
-        """Manually trigger organism initialization."""
-        try:
-            if self._initialized:
-                return {"success": True, "message": "Organism already initialized"}
-
-            await self.organism_core.initialize_organism()
-            # Initialize Router with dependencies after organism is initialized
-            self.router = RoutingDirectory(
-                organism=self.organism_core,
-            )
-            self._initialized = True
-            return {"success": True, "message": "Organism initialized successfully"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        """Manually trigger init."""
+        await self._ensure_initialized()  # Reuse the barrier logic
+        return {"success": True, "message": "Organism initialized"}
 
     @app.post("/janitor/ensure")
     async def ensure_janitor(self):
@@ -243,7 +259,7 @@ class OrganismService:
     async def janitor_ping(self):
         """Ping the Janitor actor if available."""
         try:
-            ns = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+            ns = RAY_NAMESPACE
             handle = ray.get_actor("seedcore_janitor", namespace=ns)
             # Use direct ray.get instead of _async_ray_get
             pong = await asyncio.to_thread(ray.get, handle.ping.remote())
@@ -275,28 +291,16 @@ class OrganismService:
     async def route_only(self, request: RouteOnlyRequest):
         """
         Pure routing decision endpoint.
-
-        Canonical API for Dispatcher, Coordinator, and external actuators.
-        Returns a target Organ/Agent ID without executing the task.
         """
-        try:
-            # 1. State Validation
-            # Fast check: if self.router exists, the core is inherently initialized.
-            if not self._initialized or not self.router:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Organism Service not fully initialized (Router missing)",
-                )
+        # 1. Barrier: Wait for init instead of failing immediately
+        await self._ensure_initialized()
 
+        try:
             # 2. Input Normalization
-            # Uses the shared helper to robustly convert dict -> TaskPayload
             task_payload = self._normalize_payload(request.task or {})
 
-            # 3. Router Logic (Pure Decision)
-            decision = await self.router.route_only(
-                payload=task_payload,
-                current_epoch=request.current_epoch,
-            )
+            # 3. Router Logic (Optimized Call)
+            decision = await self.router.route_only(payload=task_payload)
 
             # 4. Response Mapping
             return RouterDecisionResponse(
@@ -307,16 +311,10 @@ class OrganismService:
             )
 
         except HTTPException:
-            # Propagate explicit service availability errors (503, 400, etc.)
             raise
-
         except Exception as e:
-            self.logger.exception(f"[route-only] Unexpected error: {e}")
-
-            # 5. Fail-Safe Fallback
-            # Instead of crashing the caller with a 500, we route to a safe default.
-            # This allows the upstream system (e.g., Coordinator) to handle the
-            # "routing failure" gracefully (e.g., by queueing the message).
+            logger.exception(f"[route-only] Error: {e}")
+            # Fail-Safe Fallback
             return RouterDecisionResponse(
                 agent_id="",
                 organ_id="meta_control_organ",
@@ -327,51 +325,29 @@ class OrganismService:
     @app.post("/route-and-execute", response_model=OrganismResponse)
     async def route_and_execute(self, request: RouteAndExecuteRequest):
         """
-        Routing + execution convenience method.
-
-        Calls:
-            1. router.route_only() (Logic)
-            2. router.organism.execute_on_agent() (Execution)
-
-        Used by simple endpoints, cognitive client, demo workflows,
-        and basic actuator interactions.
+        Routing + Execution endpoint.
         """
-        # 1. State Validation
-        # Check router specifically since it drives this workflow
-        if not self._initialized or not self.router:
-            return OrganismResponse(
-                success=False,
-                result={},
-                error="Organism Service not fully initialized (Router missing)",
-                task_type=None,
-            )
+        # 1. Barrier: Wait for init
+        await self._ensure_initialized()
 
-        # 2. Input Normalization
         task_dict = request.task or {}
+        task_type = task_dict.get("type", "query")
+        task_id = task_dict.get("task_id", "unknown")
 
-        # Extract metadata early for logging/error handling
-        task_id = task_dict.get("task_id") or task_dict.get("id") or "unknown"
-        task_type = task_dict.get("type") or "query"
-
-        self.logger.info(
-            f"[route-and-execute] 🎯 Received task {task_id} ({task_type})"
-        )
+        logger.info(f"[route-and-execute] 🎯 Task {task_id} ({task_type})")
 
         try:
-            # Helper handles the Pydantic conversion complexity
+            # 2. Normalize
             task_payload = self._normalize_payload(task_dict)
 
-            # 3. Delegation (The Core Logic)
-            # Delegate entirely to the Router's orchestration method
+            # 3. Delegation (Optimized Call)
             result = await self.router.route_and_execute(
                 payload=task_payload,
                 current_epoch=request.current_epoch,
             )
 
-            # 4. Response Formatting
-            # Check if the result dict contains an explicit error key
+            # 4. Response
             error_msg = result.get("error")
-
             return OrganismResponse(
                 success=not bool(error_msg),
                 result=result,
@@ -380,13 +356,11 @@ class OrganismService:
             )
 
         except Exception as e:
-            self.logger.exception(
-                f"[route-and-execute] ❌ Critical failure on {task_id}: {e}"
-            )
+            logger.exception(f"[route-and-execute] Critical: {e}")
             return OrganismResponse(
                 success=False,
                 result={},
-                error=f"Service Internal Error: {str(e)}",
+                error=f"Service Error: {str(e)}",
                 task_type=task_type,
             )
 
@@ -436,28 +410,19 @@ class OrganismService:
     # ------------------------------------------------------------------
 
     def _normalize_payload(self, task_dict: Dict[str, Any]) -> TaskPayload:
-        """
-        Robustly converts a dictionary to a TaskPayload object.
-        Handles schema mismatches by falling back to manual construction.
-        """
+        """Robust payload converter."""
         try:
-            # Try the factory method if it exists (handles DB-specific fields)
             if hasattr(TaskPayload, "from_db"):
                 return TaskPayload.from_db(task_dict)
-            # Otherwise standard Pydantic parse
             return TaskPayload(**task_dict)
         except Exception:
-            # Fallback: Construct manually with safe defaults
-            self.logger.debug("Falling back to manual TaskPayload construction")
+            # Fallback
             return TaskPayload(
-                task_id=str(
-                    task_dict.get("task_id") or task_dict.get("id") or uuid.uuid4()
-                ),
+                task_id=str(task_dict.get("id") or uuid.uuid4()),
                 type=task_dict.get("type") or "unknown_task",
                 params=task_dict.get("params") or {},
                 description=task_dict.get("description") or "",
                 domain=task_dict.get("domain"),
-                drift_score=float(task_dict.get("drift_score") or 0.0),
                 required_specialization=task_dict.get("required_specialization"),
             )
 

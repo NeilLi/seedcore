@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time
 import os
 from typing import Dict, Any, Optional
 
@@ -13,6 +13,7 @@ from seedcore.dispatcher.persistence.interfaces import TaskRepositoryProtocol
 from seedcore.dispatcher.router import CoordinatorHttpRouter
 from seedcore.models import TaskPayload
 
+from seedcore.database import PG_DSN
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
 setup_logging(app_name="seedcore.dispatcher")
@@ -36,26 +37,42 @@ class Dispatcher:
     Implements Zombie Worker Protection and Graceful Shutdown.
     """
 
-    def __init__(self, dsn: str, name: str = "dispatcher"):
-        self.dsn = dsn
+    def __init__(self, name: str = "queue_dispatcher"):
+        logger.info("🚀 QueueDispatcher '%s' initializing...", name)
+
+        # 1. Config
+        self.dsn = PG_DSN
         self.name = name
 
+        # 2. Dependencies (Injected or Lazily Loaded in run())
         self._repo: Optional[TaskRepositoryProtocol] = None
         self._router: Optional[CoordinatorHttpRouter] = None
 
+        # 3. Control Plane
         self._running = False
-        # Track background daemons
-        self._daemons: list[asyncio.Task] = []
+        self._stop_event = asyncio.Event()  # Better than bool for async loops
+        self._startup_status = "initializing"
 
-        # Track active task processing (TaskID -> Coroutine)
+        # 4. Concurrency Management
+        self._daemons: list[asyncio.Task] = []
         self._tasks_in_progress: Dict[str, asyncio.Task] = {}
 
+        # 5. Tuning parameters
         self.claim_batch = 10
-        self.lease_interval = 10  # Must be < RUN_LEASE_S
+        self.lease_interval = 10
         self.requeue_interval = 30
         self.main_interval = 0.25
 
-        self._startup_status = "initializing"
+        # 6. Observability
+        self._metrics = {
+            "tasks_processed": 0,
+            "tasks_succeeded": 0,
+            "tasks_failed": 0,
+            "active_coroutines": 0,
+            "last_heartbeat": time.time(),
+        }
+
+        logger.info("✅ QueueDispatcher '%s' initialized", name)
 
     # ----------------------------
     # ACTOR API

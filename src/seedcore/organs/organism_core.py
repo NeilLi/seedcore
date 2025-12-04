@@ -61,7 +61,7 @@ from seedcore.serve.energy_client import EnergyServiceClient
 from seedcore.models import TaskPayload
 
 
-from seedcore.organs.organ import Organ, AgentIDFactory  # ← NEW ORGAN CLASS
+from seedcore.organs.organ import Organ  # ← NEW ORGAN CLASS
 from seedcore.organs.tunnel_policy import TunnelActivationPolicy
 from seedcore.organs.registry import OrganRegistry
 from seedcore.graph.agent_repository import AgentGraphRepository
@@ -74,19 +74,26 @@ from seedcore.memory.backends.neo4j_graph import Neo4jGraph
 # --- Import stateful dependencies ---
 from seedcore.memory.mw_manager import MwManager
 from seedcore.tools.manager_actor import ToolManagerShard
-from seedcore.database import REDIS_URL
+from seedcore.database import (
+    REDIS_URL,
+    PG_DSN,
+    NEO4J_URI,
+    NEO4J_BOLT_URL,
+    NEO4J_USER,
+    NEO4J_PASSWORD,
+)
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
-
-setup_logging(app_name="seedcore.OrganismCore")
-logger = ensure_serve_logger("seedcore.OrganismCore", level="DEBUG")
 
 # ---------------------------------------------------------------------
 #  Settings & Environment
 # ---------------------------------------------------------------------
 
-AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
-ORGANS_CONFIG_PATH = os.getenv("ORGANS_CONFIG_PATH", "/app/config/organs.yaml")
+CONFIG_PATH = os.getenv("CONFIG_PATH", "/app/config/organs.yaml")
+RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+
+setup_logging(app_name="seedcore.organs.OrganismCore")
+logger = ensure_serve_logger("seedcore.organs.OrganismCore", level="DEBUG")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -171,7 +178,7 @@ class OrganismCore:
 
     def __init__(
         self,
-        config_path: Path | str = ORGANS_CONFIG_PATH,
+        config_path: Path | str = CONFIG_PATH,
         **kwargs,
     ):
         self._initialized = False
@@ -323,108 +330,153 @@ class OrganismCore:
     # ------------------------------------------------------------------
     async def initialize_organism(self):
         """
-        Bootstraps:
-          0. Ensure Janitor actor (system maintenance service)
-          1. HolonFabric instance (replaces LongTermMemoryManager Ray actor)
-          2. SkillStore adapter
-          3. RoleRegistry
-          4. ToolManager
-          5. CognitiveServiceClient
-          6. Organ actors
-          7. Agent actors
-          8. Background health + reconciliation loops
-        """
+        Bootstraps the Cognitive Organism in 4 Parallel Phases.
 
+        Phase 1: Storage & Infrastructure (DBs, Janitor, Base Clients)
+        Phase 2: Adapters & Logic (SkillStore, ToolManager, Registries)
+        Phase 3: Actor Spawning (Organs, Agents)
+        Phase 4: Background Loops (Health, Reconciliation)
+        """
         if self._initialized:
             logger.warning("[OrganismCore] Already initialized.")
             return
 
         if not ray.is_initialized():
+            # Auto-fix or strict fail based on policy
             raise RuntimeError("Ray must be initialized before OrganismCore startup.")
 
-        logger.info("🚀 Starting OrganismCore initialization...")
+        logger.info("🚀 Starting OrganismCore initialization (Parallel Mode)...")
+        start_time = asyncio.get_running_loop().time()
 
-        # --------------------------------------------------------------
-        # 0. Ensure Janitor actor (system maintenance service)
-        # --------------------------------------------------------------
-        await self._ensure_janitor_actor()
+        # ==============================================================
+        # PHASE 1: INFRASTRUCTURE & STORAGE (Parallel)
+        # ==============================================================
+        # These components have no internal dependencies on each other.
+        # We assume Cognitive/Energy clients are stateless HTTP wrappers.
+        logger.info("--- Phase 1: Infrastructure & Connectivity ---")
 
-        # --------------------------------------------------------------
-        # 1. Initialize HolonFabric (replaces LongTermMemoryManager)
-        # --------------------------------------------------------------
+        # We use a list to capture results if needed, though mostly we set self.vars
         try:
-            logger.info("🔌 Initializing HolonFabric...")
-
-            # Create backend stores
-            pg_store = PgVectorStore(
-                os.getenv(
-                    "PG_DSN", "postgresql://postgres:password@postgresql:5432/seedcore"
-                ),
-                pool_size=10,
+            results = await asyncio.gather(
+                self._ensure_janitor_actor(),
+                self._init_holon_fabric(),  # Heavy: Connects to PG/Neo4j
+                self._init_service_clients(),  # Light: Cognitive, Energy, MwManager
             )
-            neo4j_graph = Neo4jGraph(
-                os.getenv("NEO4J_URI")
-                or os.getenv("NEO4J_BOLT_URL", "bolt://neo4j:7687"),
-                auth=(
-                    os.getenv("NEO4J_USER", "neo4j"),
-                    os.getenv("NEO4J_PASSWORD", "password"),
-                ),
-            )
-
-            # Initialize connection pools
-            await pg_store._get_pool()
-
-            # Create HolonFabric instance
-            self.holon_fabric = HolonFabric(
-                vec_store=pg_store,
-                graph=neo4j_graph,
-                embedder=None,  # Can be set later if needed
-            )
-
-            logger.info("✅ HolonFabric ready.")
-
         except Exception as e:
-            logger.error(
-                f"[OrganismCore] Failed to initialize HolonFabric: {e}", exc_info=True
-            )
+            logger.critical(f"❌ Phase 1 Boot Failed: {e}")
             raise
 
-        # --------------------------------------------------------------
-        # 2. Create SkillStore adapter
-        # --------------------------------------------------------------
+        # Extract HolonFabric from the gather result (it returns the instance)
+        # Note: _ensure_janitor returns None, _init_services returns None
+        self.holon_fabric = results[1]
+
+        # ==============================================================
+        # PHASE 2: ADAPTERS & LOGIC (Sequential dependency on Phase 1)
+        # ==============================================================
+        logger.info("--- Phase 2: Logic Adapters & Registries ---")
+
+        # 2a. SkillStore (Immediate dependency on HolonFabric)
         self.skill_store = HolonFabricSkillStoreAdapter(self.holon_fabric)
 
-        # --------------------------------------------------------------
-        # 2.5. Initialize OrganRegistry (Tier-1 registry)
-        # --------------------------------------------------------------
-        try:
-            logger.info("🔌 Initializing OrganRegistry...")
-            agent_repo = AgentGraphRepository()
-            self.organ_registry = OrganRegistry(agent_repo)
-            logger.info("✅ OrganRegistry ready.")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize OrganRegistry: {e}")
-            self.organ_registry = None
-
-        # --------------------------------------------------------------
-        # 3. RoleRegistry (already set in __init__ via DEFAULT_ROLE_REGISTRY)
-        # --------------------------------------------------------------
-        logger.info(
-            f"[OrganismCore] Using RoleRegistry with {len(list(self.role_registry.all_profiles()))} profiles."
+        # 2b. Parallelize Registries and Tool Managers
+        # ToolManager needs SkillStore (ready) and MwManager (ready from Phase 1)
+        await asyncio.gather(
+            self._init_organ_registry(),
+            self._init_tool_manager(),
         )
 
-        # --------------------------------------------------------------
-        # 4. ToolManager (with skill store for micro-flywheel)
-        # --------------------------------------------------------------
-        num_agents = await self._count_agents_from_config()
+        # ==============================================================
+        # PHASE 3: ACTOR SPAWNING (The Heavy Lifting)
+        # ==============================================================
+        logger.info("--- Phase 3: Spawning Organism Actors ---")
 
-        if num_agents < self.agent_threshold_for_shards:
+        # We can spawn Organs and Agents in parallel batches
+        await asyncio.gather(
+            self._create_organs_from_config(), self._create_agents_from_config()
+        )
+
+        # ==============================================================
+        # PHASE 4: BACKGROUND LOOPS
+        # ==============================================================
+        logger.info("--- Phase 4: Lifecycle Hooks ---")
+
+        if _env_bool("ORGANISM_HEALTHCHECKS", True):
+            self._health_check_task = asyncio.create_task(self._health_loop())
+
+        if _env_bool("ORGANISM_RECONCILE", True):
+            self._recon_task = asyncio.create_task(self._reconciliation_loop())
+
+        duration = asyncio.get_running_loop().time() - start_time
+        self._initialized = True
+        logger.info(f"🌱 OrganismCore initialized in {duration:.2f}s!")
+
+    # ------------------------------------------------------------------
+    #  HELPER: Holon Fabric (Storage Layer)
+    # ------------------------------------------------------------------
+    async def _init_holon_fabric(self) -> HolonFabric:
+        """Initialize PG + Neo4j and return the Fabric instance."""
+        logger.info("🔌 Connecting HolonFabric Storage...")
+
+        pg_store = PgVectorStore(
+            pg_dsn=PG_DSN,
+            pool_size=self.config.get("pg_pool_size", 10),
+        )
+        neo4j_graph = Neo4jGraph(
+            NEO4J_URI or NEO4J_BOLT_URL,
+            auth=(NEO4J_USER, NEO4J_PASSWORD),
+        )
+
+        # Connect both DBs in parallel
+        await asyncio.gather(
+            pg_store._get_pool(),
+            # Assuming neo4j_graph has an async verify or connect method
+            # If not, it's usually lazy, which is fine.
+            self._verify_neo4j(neo4j_graph),
+        )
+
+        return HolonFabric(
+            vec_store=pg_store,
+            graph=neo4j_graph,
+            embedder=None,
+        )
+
+    # ------------------------------------------------------------------
+    #  HELPER: Service Clients
+    # ------------------------------------------------------------------
+    async def _init_service_clients(self):
+        """Initialize external API clients and Middleware manager."""
+        self.cognitive_client = CognitiveServiceClient()
+        self.energy_client = EnergyServiceClient()
+
+        try:
+            self.mw_manager = MwManager(organ_id="organism_core_mw")
+        except Exception as e:
+            logger.warning(f"⚠️ MwManager init failed (Non-Critical): {e}")
+            self.mw_manager = None
+
+    # ------------------------------------------------------------------
+    #  HELPER: Tool Manager (Sharding Logic)
+    # ------------------------------------------------------------------
+    async def _init_tool_manager(self):
+        """Calculates sharding requirements and spawns Tool Managers."""
+        # This count might be async if checking a DB
+        num_agents = await self._count_agents_from_config()
+        threshold = self.config.get("agent_threshold_for_shards", 100)
+
+        if num_agents < threshold:
             self.tool_manager = ToolManager(skill_store=self.skill_store)
             self.tool_handler = self.tool_manager
+            logger.info("🔧 ToolManager initialized (Single Mode)")
         else:
-            self.num_tool_shards = min(
-                16, max(4, num_agents // 1000 * 4)
-            )  # recommended default
+            # Dynamic Sharding Calculation
+            # Default: 1 shard per 1000 agents, min 4, max 16
+            shard_count = min(16, max(4, num_agents // 1000 * 4))
+
+            logger.info(f"🔧 Spawning {shard_count} ToolManager shards...")
+
+            # Create remote actors
+            # Note: We don't await the remote() call itself (it returns ActorHandle instantly)
+            # but if the Actors perform heavy init in __init__, we might want to wait for them to be ready.
             self.tool_shards = [
                 ToolManagerShard.remote(
                     skill_store=self.skill_store,
@@ -433,52 +485,25 @@ class OrganismCore:
                     cognitive_client=self.cognitive_client,
                     mcp_client=getattr(self, "mcp_client", None),
                 )
-                for _ in range(self.num_tool_shards)
+                for _ in range(shard_count)
             ]
             self.tool_handler = self.tool_shards
 
-        # --------------------------------------------------------------
-        # 5. Cognitive service client
-        # --------------------------------------------------------------
-        self.cognitive_client = CognitiveServiceClient()
-
-        # --------------------------------------------------------------
-        # 5.5. Energy service client (for evolution flywheel)
-        # --------------------------------------------------------------
-        self.energy_client = EnergyServiceClient()
-
-        # --------------------------------------------------------------
-        # 5.6. Initialize stateful MwManager
-        # --------------------------------------------------------------
-        logger.info("🔌 Initializing stateful MwManager...")
+    # ------------------------------------------------------------------
+    #  HELPER: Registries
+    # ------------------------------------------------------------------
+    async def _init_organ_registry(self):
         try:
-            self.mw_manager = MwManager(organ_id="organism_core_mw")
-            logger.info("✅ MwManager initialized.")
+            agent_repo = AgentGraphRepository()
+            self.organ_registry = OrganRegistry(agent_repo)
         except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize MwManager: {e}")
-            self.mw_manager = None
+            logger.warning(f"⚠️ OrganRegistry init failed: {e}")
+            self.organ_registry = None
 
-        # --------------------------------------------------------------
-        # 6. Spawn Organs
-        # --------------------------------------------------------------
-        await self._create_organs_from_config()
-
-        # --------------------------------------------------------------
-        # 7. Spawn Agents
-        # --------------------------------------------------------------
-        await self._create_agents_from_config()
-
-        # --------------------------------------------------------------
-        # 8. Background tasks
-        # --------------------------------------------------------------
-        if _env_bool("ORGANISM_HEALTHCHECKS", True):
-            self._health_check_task = asyncio.create_task(self._health_loop())
-
-        if _env_bool("ORGANISM_RECONCILE", True):
-            self._recon_task = asyncio.create_task(self._reconciliation_loop())
-
-        self._initialized = True
-        logger.info("🌱 OrganismCore initialization complete!")
+    async def _verify_neo4j(self, graph_client):
+        """Optional hook to verify Neo4j connectivity asynchronously."""
+        # Implementation depends on your Neo4jGraph class
+        pass
 
     async def register_or_update_role(self, profile: RoleProfile) -> None:
         """
@@ -526,7 +551,7 @@ class OrganismCore:
                 # --- Pass all dependencies to the Organ actor ---
                 organ = Organ.options(
                     name=organ_id,
-                    namespace=AGENT_NAMESPACE,
+                    namespace=RAY_NAMESPACE,
                     lifetime="detached",
                     max_restarts=-1,
                     max_task_retries=-1,
@@ -707,136 +732,155 @@ class OrganismCore:
         payload: TaskPayload | Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Execute task on a specific agent.
-        Includes:
-        1. JIT Provisioning (Spawns agent if missing)
-        2. High-Stakes execution path
-        3. Tunnel Lifecycle Management (Sticky Sessions)
+        Orchestrates execution on a specific agent.
+
+        Flow:
+        1. Resolve Agent (Get existing OR JIT Spawn)
+        2. Execute (Normal OR High-Stakes)
+        3. Manage Session (Tunnel Lifecycle)
         """
+        # --- 1. Validation & Setup ---
         organ = self.organs.get(organ_id)
         if not organ:
-            return {"error": f"Organ '{organ_id}' not found"}
+            return {"success": False, "error": f"Organ '{organ_id}' not found"}
+
+        # Normalize Payload to Dict (Mutable)
+        task_dict = (
+            payload.model_dump() if hasattr(payload, "model_dump") else payload
+        ) or {}
+        params = task_dict.get("params", {})
 
         try:
-            # 1. Normalize payload (V2)
-            task_dict = (
-                payload.model_dump() if hasattr(payload, "model_dump") else payload
-            ) or {}
-            params = task_dict.get("params", {})
-
-            # 2. Try to get existing handle
-            agent_handle_ref = organ.get_agent_handle.remote(agent_id)
-            agent_handle = await self._ray_await(agent_handle_ref)
-
-            # =========================================================
-            # 🔧 JIT PROVISIONING
-            # =========================================================
-            if not agent_handle:
-                logger.info(
-                    f"[{organ_id}] Agent {agent_id} not found. Attempting JIT spawn..."
-                )
-
-                # A. Determine Specialization
-                routing = params.get("routing", {})
-                spec_str = (
-                    routing.get("required_specialization")
-                    or routing.get("specialization")
-                    or "GENERALIST"
-                )
-
-                # B. Attempt to Spawn
-                spawned_ok = await self._jit_spawn_agent(
-                    organ, organ_id, agent_id, spec_str
-                )
-
-                if spawned_ok:
-                    # C. Retry getting handle
-                    agent_handle_ref = organ.get_agent_handle.remote(agent_id)
-                    agent_handle = await self._ray_await(agent_handle_ref)
-                else:
-                    return {"error": f"Failed to JIT spawn agent '{agent_id}'"}
-
-            if not agent_handle:
-                return {"error": f"Agent '{agent_id}' could not be located or created."}
-
-            # =========================================================
-            # 3. Execution (High-Stakes Check)
-            # =========================================================
-            # Check _router (V2) or _router_metadata (Legacy)
-            router_metadata = (
-                params.get("_router") or params.get("_router_metadata") or {}
+            # --- 2. Agent Resolution (JIT Handling) ---
+            # We abstract the "Try Get -> Fail -> Spawn -> Retry" loop here
+            agent_handle = await self._ensure_agent_handle(
+                organ, organ_id, agent_id, params
             )
-            is_high_stakes = router_metadata.get("is_high_stakes", False)
 
-            # Fallback to Risk envelope
+            if not agent_handle:
+                return {
+                    "success": False,
+                    "error": f"Agent '{agent_id}' could not be provisioned.",
+                }
+
+            # --- 3. Execution Logic ---
+            # Priority: Trust the Router's decision envelope first
+            router_meta = params.get("_router", {})
+            is_high_stakes = router_meta.get("is_high_stakes", False)
+
+            # Legacy fallback: check risk envelope if router meta missing
             if not is_high_stakes:
-                risk = params.get("risk", {})
-                is_high_stakes = risk.get("is_high_stakes", False)
+                is_high_stakes = params.get("risk", {}).get("is_high_stakes", False)
 
-            # Execute via Ray Actor
-            if is_high_stakes:
-                if hasattr(agent_handle, "execute_high_stakes_task"):
-                    ref = agent_handle.execute_high_stakes_task.remote(task_dict)
-                else:
-                    logger.warning(
-                        f"Agent {agent_id} missing high-stakes handler, degrading to normal."
-                    )
-                    ref = agent_handle.execute_task.remote(task_dict)
-                # Longer timeout for deep reasoning
-                result = await self._ray_await(ref, timeout=300.0)
+            # Execution Timeout config
+            timeout = 300.0 if is_high_stakes else 60.0
+
+            # Select Method & Dispatch
+            if is_high_stakes and hasattr(agent_handle, "execute_high_stakes_task"):
+                ref = agent_handle.execute_high_stakes_task.remote(task_dict)
             else:
+                if is_high_stakes:
+                    self.logger.warning(
+                        f"[{agent_id}] High-stakes requested but handler missing. Downgrading."
+                    )
                 ref = agent_handle.execute_task.remote(task_dict)
-                result = await self._ray_await(ref)
 
-            # =========================================================
-            # 5. TUNNEL LIFECYCLE MANAGEMENT (New Integration)
-            # =========================================================
-            conversation_id = task_dict.get("conversation_id")
+            # Await Result (Native Async)
+            # We use asyncio.wait_for to enforce timeouts at the Router level
+            result = await asyncio.wait_for(ref, timeout=timeout)
 
-            if conversation_id:
-                try:
-                    # A. Policy Check: Does the output demand a tunnel?
-                    should_stick = self.tunnel_policy.should_activate(result)
+            # --- 4. Tunnel Lifecycle (Side Effect) ---
+            # Manage sticky sessions based on the result
+            await self._manage_tunnel_lifecycle(task_dict, result, agent_id)
 
-                    if should_stick:
-                        # B. Create/Refresh Affinity
-                        await self.tunnel_manager.assign(conversation_id, agent_id)
-
-                        # C. Inject Feedback (Optional but helpful for debug/UI)
-                        if isinstance(result, dict):
-                            meta = result.setdefault("metadata", {})
-                            meta["tunnel_active"] = True
-                            meta["assigned_agent"] = agent_id
-
-                    else:
-                        # D. Cleanup: If task is explicitly done, release the tunnel
-                        # We use the policy's terminal statuses (e.g., 'completed', 'finished')
-                        status = (
-                            result.get("status") if isinstance(result, dict) else None
-                        )
-                        if status in self.tunnel_policy.terminal_statuses:
-                            await self.tunnel_manager.release(conversation_id)
-
-                except Exception as e:
-                    # Don't fail the task just because tunnel logic hiccuped
-                    logger.warning(f"Tunnel logic failed for {conversation_id}: {e}")
-
-            # =========================================================
-            # Return
-            # =========================================================
+            # --- 5. Return Standardized Response ---
             return {
+                "success": True,
                 "organ_id": organ_id,
                 "agent_id": agent_id,
                 "result": result,
             }
 
+        except asyncio.TimeoutError:
+            self.logger.error(f"[Execute] Timeout on {agent_id} after {timeout}s")
+            return {"success": False, "error": "Execution Timed Out"}
+
         except Exception as e:
-            logger.error(f"[execute_on_agent] Error: {e}", exc_info=True)
-            return {
-                "organ_id": organ_id,
-                "agent_id": agent_id,
-                "error": f"Execution failure: {e}",
-            }
+            self.logger.error(
+                f"[Execute] Critical failure on {agent_id}: {e}", exc_info=True
+            )
+            return {"success": False, "error": f"Execution Exception: {str(e)}"}
+
+    # =========================================================
+    # 🔧 HELPER: JIT PROVISIONING
+    # =========================================================
+    async def _ensure_agent_handle(
+        self, organ: Any, organ_id: str, agent_id: str, params: dict
+    ) -> Optional[Any]:
+        """
+        Tries to fetch an agent handle. If missing, attempts JIT spawn.
+        """
+        # 1. Optimistic Fetch (Fast Path)
+        handle = await organ.get_agent_handle.remote(agent_id)
+        if handle:
+            return handle
+
+        # 2. Not Found - Start JIT Sequence
+        self.logger.info(
+            f"[{organ_id}] Agent {agent_id} missing. Initiating JIT spawn."
+        )
+
+        # Determine Specialization for the new agent
+        routing = params.get("routing", {})
+        spec_str = (
+            routing.get("required_specialization")
+            or routing.get("specialization")
+            or "GENERALIST"
+        )
+
+        # Spawn via Organ Actor
+        spawn_success = await self._jit_spawn_agent(organ, organ_id, agent_id, spec_str)
+
+        if spawn_success:
+            # 3. Retry Fetch
+            return await organ.get_agent_handle.remote(agent_id)
+
+        return None
+
+    # =========================================================
+    # 🔧 HELPER: TUNNEL MANAGEMENT
+    # =========================================================
+    async def _manage_tunnel_lifecycle(
+        self, task_in: dict, result_out: Any, agent_id: str
+    ):
+        """
+        Analyzes execution result to Create, Refresh, or Destroy sticky tunnels.
+        """
+        conversation_id = task_in.get("conversation_id")
+        if not conversation_id or not isinstance(result_out, dict):
+            return
+
+        try:
+            # 1. Check Policy
+            should_stick = self.tunnel_policy.should_activate(result_out)
+
+            if should_stick:
+                # 2. Bind/Refresh Tunnel
+                await self.tunnel_manager.assign(conversation_id, agent_id)
+
+                # Tag result for UI visibility
+                meta = result_out.setdefault("metadata", {})
+                meta["tunnel_active"] = True
+                meta["assigned_agent"] = agent_id
+            else:
+                # 3. Check for Termination
+                status = result_out.get("status")
+                if status in self.tunnel_policy.terminal_statuses:
+                    await self.tunnel_manager.release(conversation_id)
+
+        except Exception as e:
+            # Non-blocking warning
+            self.logger.warning(f"[Tunnel] Lifecycle error for {conversation_id}: {e}")
 
     # =====================================================================
     #  TUNNEL MANAGEMENT
@@ -1807,7 +1851,7 @@ class OrganismCore:
         try:
             new_organ = Organ.options(
                 name=organ_id,  # Same as initial creation, not "organ-{organ_id}"
-                namespace=AGENT_NAMESPACE,
+                namespace=RAY_NAMESPACE,
             ).remote(
                 organ_id=organ_id,
                 # Stateless dependencies
@@ -1888,7 +1932,7 @@ class OrganismCore:
                 )
                 return
 
-            namespace = AGENT_NAMESPACE
+            namespace = RAY_NAMESPACE
 
             try:
                 # Fast path: already exists

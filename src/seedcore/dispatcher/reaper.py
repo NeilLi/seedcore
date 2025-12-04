@@ -12,8 +12,8 @@ import asyncpg  # pyright: ignore[reportMissingImports]
 from seedcore.dispatcher.config import (
     ASYNC_PG_IDLE_LIFETIME,
     ASYNC_PG_STMT_CACHE,
-    TASK_STALE_S,    # e.g., 300 seconds
-    MAX_ATTEMPTS,    # e.g., 5
+    TASK_STALE_S,  # e.g., 300 seconds
+    MAX_ATTEMPTS,  # e.g., 5
 )
 
 from .persistence.task_sql import (
@@ -21,6 +21,8 @@ from .persistence.task_sql import (
     REAP_STUCK_SQL,
     CHECK_DUPLICATE_SQL,
 )
+
+from seedcore.database import PG_DSN
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
@@ -32,6 +34,7 @@ RAY_NAMESPACE = (
     or "seedcore-dev"
 )
 
+
 @ray.remote(
     name="seedcore_reaper",
     lifetime="detached",
@@ -42,17 +45,35 @@ RAY_NAMESPACE = (
 class Reaper:
     """
     Reaper Actor (Singleton Janitor)
-    
+
     Responsible for enforcing Lease Contracts using pure SQL logic.
     """
 
-    def __init__(self, dsn: str):
-        self.dsn = dsn
+    def __init__(self, name: str = "seedcore_reaper"):
+        logger.info("💀 Reaper '%s' initializing...", name)
+
+        # 1. Config
+        self.dsn = PG_DSN
+        self.name = name
+
+        # 2. State & Resources
         self.pool: Optional[asyncpg.Pool] = None
         self._stop = asyncio.Event()
+        self._running = False
+
+        # 3. Tuning
         self.reap_interval = 15
-        self.name = "seedcore_reaper"
+
+        # 4. Observability
         self._startup_status = "initializing"
+        self._metrics = {
+            "cycles_run": 0,
+            "rows_reaped": 0,
+            "last_run": None,
+            "errors": 0,
+        }
+
+        logger.info("✅ Reaper '%s' initialized", name)
 
     async def _ensure_pool(self):
         if self.pool is None:
@@ -75,52 +96,53 @@ class Reaper:
         1. Fail tasks that have tried too many times.
         2. Recover tasks that still have a chance.
         """
-        
+
         # Phase 1: Fail Exhausted
         # $1 = Stale Seconds (used for heartbeat calc), $2 = Max Attempts
-        failed_rows = await con.fetch(
-            REAP_FAILED_SQL, 
-            str(TASK_STALE_S), 
-            MAX_ATTEMPTS
-        )
-        
+        failed_rows = await con.fetch(REAP_FAILED_SQL, str(TASK_STALE_S), MAX_ATTEMPTS)
+
         if failed_rows:
-            ids = [str(r['id']) for r in failed_rows]
-            logger.error(f"[Reaper] 💀 Permanently failed {len(ids)} tasks (Max Retries): {ids}")
+            ids = [str(r["id"]) for r in failed_rows]
+            logger.error(
+                f"[Reaper] 💀 Permanently failed {len(ids)} tasks (Max Retries): {ids}"
+            )
 
         # Phase 2: Recover Stuck
-        stuck_rows = await con.fetch(
-            REAP_STUCK_SQL, 
-            str(TASK_STALE_S), 
-            MAX_ATTEMPTS
-        )
+        stuck_rows = await con.fetch(REAP_STUCK_SQL, str(TASK_STALE_S), MAX_ATTEMPTS)
 
         if stuck_rows:
-            ids = [str(r['id']) for r in stuck_rows]
-            logger.warning(f"[Reaper] ♻️ Recovered {len(ids)} stuck tasks (Retrying): {ids}")
+            ids = [str(r["id"]) for r in stuck_rows]
+            logger.warning(
+                f"[Reaper] ♻️ Recovered {len(ids)} stuck tasks (Retrying): {ids}"
+            )
 
         return len(failed_rows) + len(stuck_rows)
 
     # ---------------------------------------------------------------------
     # UTILITY API (Can be called by other actors)
     # ---------------------------------------------------------------------
-    async def check_is_duplicate(self, type_: str, desc: str, params: dict, domain: str) -> Optional[str]:
+    async def check_is_duplicate(
+        self, type_: str, desc: str, params: dict, domain: str
+    ) -> Optional[str]:
         """
-        Check if a similar task exists. 
+        Check if a similar task exists.
         Note: Usually this logic belongs in the Dispatcher/Repository at insertion time.
         """
         if not self.pool:
             return None
-            
+
         async with self.pool.acquire() as con:
             # We assume params is passed as a Dict, but DB expects JSONB.
             # Depending on driver setup, might need json.dumps(params).
-            # asyncpg usually handles dict->jsonb automatically if configured, 
+            # asyncpg usually handles dict->jsonb automatically if configured,
             # otherwise cast explicitly:
             import json
+
             params_json = json.dumps(params)
-            
-            val = await con.fetchval(CHECK_DUPLICATE_SQL, type_, desc, params_json, domain)
+
+            val = await con.fetchval(
+                CHECK_DUPLICATE_SQL, type_, desc, params_json, domain
+            )
             return str(val) if val else None
 
     # ---------------------------------------------------------------------
@@ -134,10 +156,10 @@ class Reaper:
         while not self._stop.is_set():
             try:
                 await asyncio.sleep(self.reap_interval)
-                
+
                 async with self.pool.acquire() as con:
                     await self._run_reap_cycle(con)
-                    
+
             except asyncio.CancelledError:
                 break
             except Exception as e:

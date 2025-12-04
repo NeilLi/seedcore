@@ -144,7 +144,7 @@ def get_ray_node_ip() -> str:
     """
     # Method 1: Ray's native API (most reliable for actors running on Ray nodes)
     try:
-        from ray.util import get_node_ip_address
+        from ray.util import get_node_ip_address  # pyright: ignore[reportMissingImports]
         node_ip = get_node_ip_address()
         if node_ip and node_ip not in ("127.0.0.1", "localhost", "0.0.0.0"):
             _log.debug("Resolved Ray node IP via ray.util.get_node_ip_address(): %s", node_ip)
