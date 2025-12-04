@@ -53,7 +53,7 @@ class EnergyServiceClient(BaseServiceClient):
         )
 
         super().__init__(
-            service_name="energy_service",
+            service_name="EnergyService",
             base_url=base_url,
             timeout=timeout,
             circuit_breaker=circuit_breaker,

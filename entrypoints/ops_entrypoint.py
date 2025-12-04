@@ -1,31 +1,12 @@
 #!/usr/bin/env python3
-"""
-Ops Service Entrypoint for SeedCore - Merged Application
-
-This entrypoint creates a unified Ray Serve application that hosts:
-- EventizerService: Text processing and classification
-- FactManagerService: Policy-driven fact management with PKG integration
-- StateService: Centralized state aggregation
-- EnergyService: Energy calculations and optimization
-
-All services are exposed under a single /ops route prefix with a lightweight
-OpsGateway that fans in/out to each service via Ray Serve handles.
-"""
-
 import sys
 import time
 from typing import Any, Dict
 
-from fastapi import APIRouter, FastAPI, HTTPException  # type: ignore[reportMissingImports]
-from ray import serve
-from seedcore.models.state import Response  # type: ignore[reportMissingImports]
-
-# Type hint for Ray Serve handles
-try:
-    from ray.serve.handle import DeploymentHandle  # type: ignore[reportMissingImports]
-except ImportError:
-    # Fallback for older versions or if not available
-    DeploymentHandle = Any
+# Explicitly import FastAPI Response to avoid collision with your data models
+from fastapi import APIRouter, FastAPI, HTTPException, Response as StarletteResponse  # pyright: ignore[reportMissingImports]
+from ray import serve  # pyright: ignore[reportMissingImports]
+from ray.serve.handle import DeploymentHandle  # pyright: ignore[reportMissingImports]
 
 # Add the project root to Python path
 sys.path.insert(0, "/app")
@@ -42,18 +23,17 @@ from seedcore.models.energy import (
     FlywheelResultRequest,
 )
 
+# Configuration
 setup_logging(app_name="seedcore.ops_service.driver")
 logger = ensure_serve_logger("seedcore.ops_service", level="DEBUG")
 
-# Models are handled internally by the service
 
-# --- Configuration ---
-# ---------- Serve Deployments (wrappers) ----------
-# ---------- HTTP Gateway (single public ingress) ----------
 @serve.deployment
 @serve.ingress(FastAPI())
 class OpsGateway:
-    """Unified gateway for all ops services - SINGLE FastAPI ingress for the ops application."""
+    """
+    Unified gateway for all ops services.
+    """
 
     def __init__(
         self,
@@ -62,142 +42,106 @@ class OpsGateway:
         state_handle: DeploymentHandle,
         energy_handle: DeploymentHandle,
     ) -> None:
-        # FastAPI app with explicit docs configuration
-        # This is the ONLY ingress with docs in the ops application
         self.app = FastAPI(
             title="SeedCore Ops App",
-            description="Unified application for EventizerService, FactManagerService, StateService, and EnergyService",
             version="1.0.0",
-            docs_url="/docs",  # Explicit docs path
-            redoc_url="/redoc",  # Explicit redoc path
-            openapi_url="/openapi.json",  # Explicit OpenAPI schema path
+            docs_url="/docs",
         )
 
+        # Handles are captured here, available to closures below
         self.eventizer = eventizer_handle
         self.fact = fact_handle
         self.state = state_handle
         self.energy = energy_handle
 
-        # Create router for all ops endpoints
         router = APIRouter(prefix="")
 
-        # Eventizer endpoints (matching eventizer_client.py interface)
-        #
-        # ARCHITECTURE: Distillation Engine
-        # --------------------------------
+        # --- Eventizer ---
         @router.post("/eventizer/process")
         async def process_eventizer(payload: Dict[str, Any]):
             try:
-                result = await self.eventizer.process.remote(payload)
-                return result
+                # RPC call
+                return await self.eventizer.process.remote(payload)
             except Exception as e:
-                logger.error(f"Eventizer service call failed: {e}")
-                raise HTTPException(
-                    status_code=500, detail=f"Service unavailable: {str(e)}"
-                )
+                logger.error(f"Eventizer error: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
 
         @router.get("/eventizer/health")
         async def eventizer_health():
-            """Eventizer health check."""
             return await self.eventizer.health.remote()
 
-        # Fact endpoints (matching fact_client.py interface)
-        #
-        # ARCHITECTURE: Distillation Engine
-        # --------------------------------
+        # --- Fact Manager ---
+        # NOTE: If FactManager uses Pydantic now, we pass the dict.
+        # Ray's remote() handles arguments as python objects.
+        # If FactManager expects a Pydantic model object, you might need to construct it here,
+        # OR ensure FactManager accepts a dict and converts it internally.
         @router.post("/fact/create")
         async def fact_create(payload: Dict[str, Any]):
-            """Create a fact."""
             try:
-                result = await self.fact.create_fact.remote(payload)
-                return result
+                return await self.fact.create_fact.remote(payload)
             except Exception as e:
-                logger.error(f"Fact creation failed: {e}")
+                logger.error(f"Fact error: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @router.post("/fact/query")
         async def fact_query(payload: Dict[str, Any]):
-            """Query fact."""
             try:
-                result = await self.fact.query_fact.remote(payload)
-                return result
+                return await self.fact.query_fact.remote(payload)
             except Exception as e:
-                logger.error(f"Fact query failed: {e}")
+                logger.error(f"Fact query error: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @router.get("/fact/health")
         async def fact_health():
-            """fact health check."""
-            return await self.fact.health.remote()
+            return await self.fact.health_check.remote()
 
-        # State endpoints (matching state_client.py interface)
-        #
-        # ARCHITECTURE: Distillation Engine
-        # --------------------------------
-        # The StateService's AgentAggregator acts as a "distillation engine":
-        # - Raw Crude Oil: `_agent_snapshots` cache (multi-megabyte raw data)
-        # - Refined Jet Fuel: `_system_metrics` cache (small, pre-computed aggregates)
-        #
-        # The distillation happens in `AgentAggregator._compute_system_metrics()`,
-        # which consumes `_agent_snapshots` and refines it into `_system_metrics`.
-        # The real consumer of `_agent_snapshots` is the aggregator itself.
+        # --- State Service ---
 
-        # Inside your APIRouter definition
+        # FIX 1 & 2: Removed 'self', used StarletteResponse
         @router.get("/state/system-metrics")
-        async def state_system_metrics(self, response: Response): # <--- Inject Response here
-            """
-            Refined Jet Fuel — precomputed aggregates for real-time routing.
-            """
+        async def state_system_metrics(response: StarletteResponse):
+            """Refined Jet Fuel — precomputed aggregates."""
             try:
-                # 1. Get Data from Actor (RPC)
+                # Use self.state (captured from closure)
                 data = await self.state.rpc_system_metrics.remote()
-                
-                # 2. Hydrate Headers Manually (since Actor couldn't do it)
-                # We read the 'meta' block returned by the actor logic
+
                 if isinstance(data, dict):
                     meta = data.get("meta", {})
-                    response.headers["X-System-Status"] = meta.get("status", "unknown")
-                    response.headers["X-Processing-Time"] = f"{meta.get('latency_ms', 0):.3f}ms"
-                
-                return data
+                    # Using StarletteResponse to set headers
+                    response.headers["X-System-Status"] = str(
+                        meta.get("status", "unknown")
+                    )
+                    response.headers["X-Processing-Time"] = (
+                        f"{meta.get('latency_ms', 0):.3f}ms"
+                    )
 
+                return data
             except Exception as e:
-                logger.error(f"State system metrics retrieval failed: {e}")
+                logger.error(f"State metrics error: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
-        
+
         @router.get("/state/agent-snapshots")
         async def state_agent_snapshots():
-            """
-            Raw Crude Oil — multi-megabyte snapshots for debugging / offline analysis.
-            """
+            """Raw Crude Oil — snapshots."""
             try:
                 return await self.state.rpc_agent_snapshots.remote()
             except Exception as e:
-                logger.error(f"State agent snapshots retrieval failed: {e}")
+                logger.error(f"State snapshots error: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
-        
+
         @router.post("/state/config/w_mode")
         async def state_update_w_mode(payload: Dict[str, Any]):
-            """Update the global system weight configuration (w_mode)."""
             try:
                 return await self.state.rpc_update_w_mode.remote(payload)
             except Exception as e:
-                logger.error(f"State w_mode update failed: {e}")
+                logger.error(f"State config error: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @router.get("/state/health")
         async def state_health():
-            """StateService health check."""
-            try:
-                return await self.state.rpc_health.remote()
-            except Exception as e:
-                logger.error(f"State health check failed: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
-        
-        # Energy endpoints (matching energy_client.py interface)
-        #
-        # ARCHITECTURE: Distillation Engine
-        # --------------------------------
+            return await self.state.rpc_health.remote()
+
+        # --- Energy Service ---
         @router.get("/energy/metrics")
         async def energy_metrics():
             return await self.energy.rpc_get_metrics.remote()
@@ -208,6 +152,7 @@ class OpsGateway:
 
         @router.post("/energy/compute")
         async def energy_compute(payload: Dict[str, Any]):
+            # Re-wrap into Pydantic before sending to Actor
             req = EnergyRequest(**payload)
             return await self.energy.rpc_compute_energy.remote(req)
 
@@ -225,91 +170,61 @@ class OpsGateway:
         async def energy_health():
             return await self.energy.rpc_health.remote()
 
+        # --- Overall Health ---
         @router.get("/health")
         async def ops_health():
-            """Overall ops application health."""
             start_time = time.time()
             try:
-                # Pure RPC (no synthetic ASGI request objects)
-                eventizer_health = await self.eventizer.health.remote()
-                fact_health = await self.fact.health.remote()
-                state_health = await self.state.rpc_health.remote()
-                energy_health = await self.energy.rpc_health.remote()
+                results = await asyncio.gather(
+                    self.eventizer.health.remote(),
+                    self.fact.health_check.remote(),  # updated method name
+                    self.state.rpc_health.remote(),
+                    self.energy.rpc_health.remote(),
+                    return_exceptions=True,
+                )
+
+                # Unpack results safely
+                eventizer_h, fact_h, state_h, energy_h = [
+                    r if not isinstance(r, Exception) else str(r) for r in results
+                ]
 
                 latency_ms = (time.time() - start_time) * 1000
 
                 return {
                     "status": "healthy",
-                    "application": "ops",
-                    "version": "1.0.0",
-                    "time": time.time(),
                     "latency_ms": round(latency_ms, 2),
                     "services": {
-                        "eventizer": eventizer_health,
-                        "fact": fact_health,
-                        "state": state_health,
-                        "energy": energy_health,
+                        "eventizer": eventizer_h,
+                        "fact": fact_h,
+                        "state": state_h,
+                        "energy": energy_h,
                     },
                 }
 
             except Exception as e:
-                logger.error(f"Ops health check failed: {e}")
-                latency_ms = (time.time() - start_time) * 1000
-                return {
-                    "status": "unhealthy",
-                    "application": "ops",
-                    "version": "1.0.0",
-                    "time": time.time(),
-                    "latency_ms": round(latency_ms, 2),
-                    "error": str(e),
-                }
+                return {"status": "unhealthy", "error": str(e)}
 
-        # Include all routes
         self.app.include_router(router)
 
-    # FastAPI needs to reference the ASGI app via @serve.ingress
-    # The app is already configured in __init__
 
+# Import asyncio for the gather in health check
+import asyncio  # noqa: E402
 
-# ---------- Application Builder ----------
 
 def build_ops_app(args: dict = None) -> serve.Deployment:
-    """
-    Ray Serve application builder for the unified ops service.
-    """
+    logger.info("Building ops application...")
 
-    logger.info("Building ops application with unified services")
-
-    # Bind individual service deployments
-    # Only OpsGateway has @serve.ingress(FastAPI()) to avoid docs conflicts
     eventizer_app = EventizerService.bind()
     fact_app = FactManagerService.bind()
 
-    # Wire gateway with handles - OpsGateway is the ONLY public ingress
     gateway = OpsGateway.bind(
         eventizer_handle=eventizer_app,
         fact_handle=fact_app,
         state_handle=state_app,
         energy_handle=energy_app,
     )
-
-    logger.info("Ops application built successfully with single ingress (OpsGateway)")
     return gateway
 
 
-def main():
-    """Standalone runner for testing."""
-    logger.info("🚀 Starting Ops Application (standalone mode)...")
-
-    try:
-        # This would normally be handled by Ray Serve
-        logger.info("Ops application configured for Ray Serve deployment")
-        logger.info("Use 'ray serve start' or RayService YAML to deploy")
-
-    except Exception as e:
-        logger.error(f"Failed to start ops application: {e}")
-        raise
-
-
 if __name__ == "__main__":
-    main()
+    pass

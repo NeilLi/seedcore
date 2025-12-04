@@ -120,7 +120,7 @@ spec:
               memory: 2147483648
 
           # --- Singletons (Stateful) ---
-          - name: FactManager
+          - name: FactManagerService
             num_replicas: 1
             ray_actor_options:
               num_cpus: 0.1

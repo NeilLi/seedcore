@@ -8,29 +8,49 @@ Fact model with eventizer processing and PKG governance capabilities.
 
 from __future__ import annotations
 
-import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional, Sequence, Tuple, Union
-from fastapi import HTTPException, Request  # type: ignore[reportMissingImports]
+from fastapi import FastAPI, HTTPException  # type: ignore[reportMissingImports]
 from ray import serve  # type: ignore[reportMissingImports]
+from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
 
 from sqlalchemy import select, delete, and_, or_, text  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from ..models.fact import Fact
 from .eventizer_service import EventizerService
-from ..ops.eventizer.schemas.eventizer_models import (
+from seedcore.models.eventizer import (
     EventizerRequest,
     EventizerResponse,
     EventizerConfig,
-    PKGEnv,
 )
 
-logger = logging.getLogger(__name__)
+# Logging
+from seedcore.logging_setup import ensure_serve_logger, setup_logging
+
+setup_logging(app_name="seedcore.fact_service.driver")
+logger = ensure_serve_logger("seedcore.fact_service", level="DEBUG")
 
 
-class FactManager:
+# --- 1. Shared Pydantic Models ---
+class FactCreate(BaseModel):
+    content: str = Field(..., min_length=1, description="Raw fact content")
+    source: str = Field(default="user", description="Source of the fact")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FactQuery(BaseModel):
+    query_text: Optional[str] = None
+    limit: int = Field(default=10, ge=1, le=100)
+
+
+class FactResponse(BaseModel):
+    id: str
+    status: str
+    message: str
+
+class FactManagerImpl:
     """
     Unified fact management with PKG integration.
 
@@ -48,7 +68,7 @@ class FactManager:
         eventizer_config: Optional[EventizerConfig] = None,
     ):
         """
-        Initialize the FactManager.
+        Initialize the FactManagerImpl.
 
         Args:
             db_session: Database session for fact operations
@@ -167,10 +187,10 @@ class FactManager:
             await self._eventizer.initialize()
 
             self._initialized = True
-            logger.info("FactManager initialized successfully")
+            logger.info("FactManagerImpl initialized successfully")
 
         except Exception as e:
-            logger.error(f"Failed to initialize FactManager: {e}")
+            logger.error(f"Failed to initialize FactManagerImpl: {e}")
             raise
 
     # -----------------
@@ -179,32 +199,55 @@ class FactManager:
 
     async def create_fact(
         self,
-        text: str,
+        fact_data: Union[FactCreate, Dict[str, Any], str],
         tags: Optional[List[str]] = None,
-        meta_data: Optional[Dict[str, Any]] = None,
         namespace: str = "default",
-        created_by: str = "fact_manager",
+        created_by: Optional[str] = None,
         produced_by_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> Fact:
         """
         Create a basic fact.
 
         Args:
-            text: Fact text content
-            tags: Optional tags for the fact
-            meta_data: Optional metadata
+            fact_data: FactCreate model, dict, or text string (for backward compatibility)
+            tags: Optional tags for the fact (merged with metadata tags if present)
             namespace: Fact namespace
-            created_by: Creator identifier
+            created_by: Creator identifier (overrides fact_data.source if provided)
+            produced_by_task_id: Optional task ID that produced this fact
 
         Returns:
             Created Fact instance
         """
+        # Normalize input to FactCreate model
+        if isinstance(fact_data, str):
+            # Backward compatibility: treat string as content
+            fact_create = FactCreate(content=fact_data)
+        elif isinstance(fact_data, dict):
+            fact_create = FactCreate(**fact_data)
+        elif isinstance(fact_data, FactCreate):
+            fact_create = fact_data
+        else:
+            raise ValueError(f"Invalid fact_data type: {type(fact_data)}")
+
+        # Extract metadata and merge with tags
+        meta_data = fact_create.metadata.copy() if fact_create.metadata else {}
+        
+        # Merge tags from metadata if present
+        if tags is None:
+            tags = meta_data.pop("tags", [])
+        elif "tags" in meta_data:
+            # Merge tags from metadata with provided tags
+            tags = list(set(tags + meta_data.pop("tags", [])))
+
+        # Use source from FactCreate or provided created_by
+        creator = created_by if created_by is not None else fact_create.source
+
         fact = Fact(
-            text=text,
+            text=fact_create.content,
             tags=tags or [],
-            meta_data=meta_data or {},
+            meta_data=meta_data,
             namespace=namespace,
-            created_by=created_by,
+            created_by=creator,
         )
 
         self.db.add(fact)
@@ -278,30 +321,48 @@ class FactManager:
 
         return facts
 
-    async def search_facts(
+    async def search_fact(
         self,
-        text_query: Optional[str] = None,
+        query_data: Optional[Union[FactQuery, Dict[str, Any], str]] = None,
         tags: Optional[List[str]] = None,
         namespace: Optional[str] = None,
         subject: Optional[str] = None,
         predicate: Optional[str] = None,
-        limit: int = 100,
+        limit: Optional[int] = None,
         reading_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> List[Fact]:
         """
         Search facts with various criteria.
 
         Args:
-            text_query: Text to search for in fact content
+            query_data: FactQuery model, dict, or query string (for backward compatibility)
             tags: Tags to filter by
             namespace: Namespace to filter by
             subject: Subject to filter by
             predicate: Predicate to filter by
-            limit: Maximum number of facts to return
+            limit: Maximum number of facts to return (overrides FactQuery.limit if provided)
+            reading_task_id: Optional task ID that read these facts
 
         Returns:
             List of matching Fact instances
         """
+        # Normalize input to FactQuery model
+        if query_data is None:
+            fact_query = FactQuery()
+        elif isinstance(query_data, str):
+            # Backward compatibility: treat string as query_text
+            fact_query = FactQuery(query_text=query_data)
+        elif isinstance(query_data, dict):
+            fact_query = FactQuery(**query_data)
+        elif isinstance(query_data, FactQuery):
+            fact_query = query_data
+        else:
+            raise ValueError(f"Invalid query_data type: {type(query_data)}")
+
+        # Use limit from FactQuery unless explicitly overridden
+        search_limit = limit if limit is not None else fact_query.limit
+        text_query = fact_query.query_text
+
         query = select(Fact)
         conditions = []
 
@@ -324,7 +385,7 @@ class FactManager:
         if conditions:
             query = query.where(and_(*conditions))
 
-        query = query.order_by(Fact.created_at.desc()).limit(limit)
+        query = query.order_by(Fact.created_at.desc()).limit(search_limit)
 
         result = await self.db.execute(query)
         facts = result.scalars().all()
@@ -770,103 +831,102 @@ class FactManager:
         return facts
 
 
-# -----------------
-# Convenience Functions
-# -----------------
+# --- 2. Define the FastAPI app (Ingress) ---
+app = FastAPI()
 
 
-async def create_fact_manager(
-    db_session: AsyncSession,
-    pkg_environment: PKGEnv = PKGEnv.PROD,
-    enable_pkg_validation: bool = True,
-) -> FactManager:
-    """
-    Create a FactManager instance with default configuration.
-
-    Args:
-        db_session: Database session
-        pkg_environment: PKG environment (for eventizer config)
-        enable_pkg_validation: Whether to enable PKG validation in eventizer
-
-    Returns:
-        Initialized FactManager instance
-
-    Note:
-        PKG validation is now handled by the global PKGManager, not by FactManager.
-        This parameter only affects eventizer configuration.
-    """
-    eventizer_config = EventizerConfig(
-        pkg_validation_enabled=enable_pkg_validation, pkg_environment=pkg_environment
-    )
-
-    fact_manager = FactManager(db_session=db_session, eventizer_config=eventizer_config)
-
-    await fact_manager.initialize()
-    return fact_manager
-
-
-@serve.deployment(route_prefix=None)
+@serve.deployment(
+    name="FactManagerService", num_replicas=1, ray_actor_options={"num_cpus": 0.1}
+)
+@serve.ingress(app)
 class FactManagerService:
-    """Ray Serve wrapper for FactManager."""
+    """
+    Hybrid Service: Accepts Pydantic models via HTTP and Dicts via RPC.
+    """
 
-    def __init__(self) -> None:
-        self.impl = None
-        self._initialized = False
-
-    async def __call__(self, request: Request) -> Dict[str, Any]:
-        """Health check endpoint."""
-        return {"status": "healthy", "service": "fact_manager"}
-
-    async def initialize(self) -> None:
-        """Initialize the underlying service."""
-        if not self._initialized:
-            # Note: FactManager requires a database session
-            # This will be initialized when first used
-            self._initialized = True
-            logger.info("FactManager wrapper initialized")
-
-    async def create_fact(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a basic fact."""
+    def __init__(self, db_config: Dict[str, Any] = None):
         try:
-            if not self._initialized:
-                await self.initialize()
+            logger.info("Initializing FactManagerImpl backend...")
+            # Initialize your actual logic implementation here
+            self.impl = self._init_fact_manager(db_config)
+            self._ready = True
+            logger.info("✅ FactManagerService initialized.")
+        except Exception as e:
+            logger.error(f"Failed to initialize FactManagerImpl: {e}")
+            self._ready = False
+            raise e
 
-            # For now, return a placeholder response
-            # In a real implementation, this would use the FactManager
+    def _init_fact_manager(self, config: Dict[str, Any]) -> FactManagerImpl:
+        return FactManagerImpl(config)
+
+    # --- 3. Hybrid Handlers (RPC + HTTP) ---
+
+    @app.post("/fact/create", response_model=FactResponse)
+    async def create_fact(self, payload: Union[FactCreate, Dict[str, Any]]):
+        """
+        Handles fact creation.
+        Auto-detects if input is a Dict (from RPC) or Model (from HTTP).
+        """
+        try:
+            # 1. Normalization: Ensure we have a Pydantic Model
+            # This allows OpsGateway to pass raw Dicts safely
+            if isinstance(payload, dict):
+                fact_data = FactCreate(**payload)
+            else:
+                fact_data = payload
+
+            logger.info(
+                f"📝 Processing fact from {fact_data.source}: {fact_data.content[:20]}..."
+            )
+
+            # 2. Call Implementation
+            fact = await self.impl.create_fact(fact_data)
+
             return {
+                "id": str(fact.id),
                 "status": "created",
-                "fact_id": "placeholder-id",
-                "message": "Fact creation not yet implemented in wrapper",
+                "message": "Fact successfully stored via Manager",
             }
 
         except Exception as e:
             logger.error(f"Fact creation failed: {e}")
-            raise HTTPException(
-                status_code=500, detail=f"Fact creation failed: {str(e)}"
-            )
+            raise HTTPException(status_code=500, detail=str(e))
 
-    async def query_facts(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Query facts."""
+    @app.post("/fact/query")
+    async def query_fact(self, payload: Union[FactQuery, Dict[str, Any]]):
+        """
+        Query facts. Handles Dict (RPC) or Model (HTTP).
+        """
         try:
-            if not self._initialized:
-                await self.initialize()
+            # 1. Normalization
+            if isinstance(payload, dict):
+                query_data = FactQuery(**payload)
+            else:
+                query_data = payload
 
-            # For now, return a placeholder response
+            logger.debug(f"🔍 Querying facts: {query_data.query_text}")
+            results = await self.impl.search_fact(query_data)
+
             return {
-                "status": "success",
-                "facts": [],
-                "count": 0,
-                "message": "Fact querying not yet implemented in wrapper",
+                "results": results,
+                "count": len(results),
+                "filter": query_data.query_text,
+                "processed_by": "FactManagerService",
             }
 
         except Exception as e:
-            logger.error(f"Fact query failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Fact query failed: {str(e)}")
+            logger.error(f"Query failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
-    async def health(self) -> Dict[str, Any]:
-        """Health check."""
-        return {
-            "status": "healthy",
-            "service": "fact_manager",
-            "initialized": self._initialized,
-        }
+    # --- 4. Health & Management ---
+
+    @app.get("/fact/health")
+    async def health_check(self):
+        """Standard health check."""
+        if not getattr(self, "_ready", False):
+            raise HTTPException(status_code=503, detail="Service not initialized")
+        return {"status": "healthy", "service": "FactManagerService"}
+
+
+# Deployment Binding
+fact_app = FactManagerService.bind()

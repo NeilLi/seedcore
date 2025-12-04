@@ -16,14 +16,13 @@ Pipeline:
 from __future__ import annotations
 
 import time
-import logging
 import hashlib
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any, Tuple, Callable, Set
 from ray import serve  # pyright: ignore[reportMissingImports]
 from fastapi import Request  # pyright: ignore[reportMissingImports]
 
-from ..ops.eventizer.schemas.eventizer_models import (
+from seedcore.models.eventizer import (
     EventizerRequest,
     EventizerResponse,
     EventTags,
@@ -39,8 +38,11 @@ from ..ops.eventizer.utils.text_normalizer import TextNormalizer, SpanMap
 from ..ops.eventizer.utils.pattern_compiler import PatternCompiler
 from ..ops.eventizer.clients.pii_client import PIIClient
 
-logger = logging.getLogger(__name__)
+# Logging
+from seedcore.logging_setup import ensure_serve_logger, setup_logging
 
+setup_logging(app_name="seedcore.eventizer_service.driver")
+logger = ensure_serve_logger("seedcore.eventizer_service", level="DEBUG")
 
 # =========================
 # Metrics / hooks

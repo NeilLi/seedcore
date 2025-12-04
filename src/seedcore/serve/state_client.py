@@ -17,7 +17,6 @@ agent routing and energy computation.
 import logging
 from typing import Dict, Any
 
-from seedcore.models.state import Response
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
 
 logger = logging.getLogger(__name__)
@@ -56,7 +55,7 @@ class StateServiceClient(BaseServiceClient):
         )
 
         super().__init__(
-            service_name="state_service",
+            serviceName="StateService",
             base_url=base_url,
             timeout=timeout,
             circuit_breaker=circuit_breaker,

@@ -8,10 +8,10 @@ including temporal facts, policy validation, and eventizer integration.
 import uuid
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
-from sqlalchemy import String, DateTime, JSON, Integer
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
-from sqlalchemy.sql import func
+from sqlalchemy import String, DateTime, JSON, Integer  # pyright: ignore[reportMissingImports]
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column  # pyright: ignore[reportMissingImports]
+from sqlalchemy.dialects.postgresql import UUID, ARRAY  # pyright: ignore[reportMissingImports]
+from sqlalchemy.sql import func  # pyright: ignore[reportMissingImports]
 
 class Base(DeclarativeBase):
     pass
