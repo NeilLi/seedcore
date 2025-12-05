@@ -217,23 +217,6 @@ def _derive_routing_intent(ctx: TaskContext) -> RoutingIntent:
 # Internal Helpers (Extraction)
 # ---------------------------------------------------------------------------
 
-
-def _extract_decision(route_result: Dict[str, Any]) -> Optional[str]:
-    """
-    Extract 'decision' from a route result dict using robust nested lookup.
-    """
-    return extract_from_nested(
-        route_result,
-        key_paths=[
-            ("decision_kind",),  # Primary
-            ("decision",),  # Fallback
-            ("payload", "metadata", "decision"),  # Legacy
-            ("payload", "decision"),  # Legacy
-        ],
-        value_type=str,
-    )
-
-
 def _extract_proto_plan(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Extract 'proto_plan' from a cognitive result.
@@ -262,7 +245,7 @@ async def execute_task(
     # 1. COMPUTE DECISION (System 1 vs 2)
     # ---------------------------------------------------------
     routing_dec = await _compute_routing_decision(
-        ctx=TaskContext.from_dict(task_context), cfg=route_config
+        task=task, ctx=TaskContext.from_dict(task_context), cfg=route_config
     )
 
     decision_kind = routing_dec["decision_kind"]
@@ -577,6 +560,7 @@ def _aggregate_execution_results(
 
 async def _compute_routing_decision(
     *,
+    task: TaskPayload,
     ctx: TaskContext,
     cfg: RouteConfig,
     correlation_id: str | None = None,
@@ -585,12 +569,16 @@ async def _compute_routing_decision(
     Compute routing decision (System 1 vs System 2).
     """
     t0 = time.perf_counter()
-    params = ctx.params or {}
 
     # ------------------------------------------------------------------
     # 1. OCPS Valve Update (Drift Detection)
     # ------------------------------------------------------------------
-    raw_drift = float(params.get("ocps", {}).get("uncertainty_score", 0.0))
+    # Pass eventizer_data (dict with "text" key) or task description for drift detection
+    # The compute_drift_score function will extract the text string from the dict
+    raw_drift = await cfg.compute_drift_score(
+        task.model_dump(), 
+        ctx.eventizer_data or {}
+    )
     drift_state = cfg.ocps_valve.update(raw_drift)
     is_escalated = drift_state.is_breached
 

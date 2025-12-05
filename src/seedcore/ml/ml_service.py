@@ -372,45 +372,61 @@ async def root():
             "health": "/health",
             "llm": {
                 "chat": "/chat",
-                "embeddings": "/embeddings", 
+                "embeddings": "/embeddings",
                 "rerank": "/rerank",
                 "models": "/models"
             },
-            "salience_scoring": "/score/salience",
-            "anomaly_detection": "/detect/anomaly",
-            "drift_scoring": "/drift/score",
-            "drift_warmup": "/drift/warmup",
-            "scaling_prediction": "/predict/scaling",
+            "scoring": {
+                "salience": "/score/salience"
+            },
+            "detection": {
+                "anomaly": "/detect/anomaly"
+            },
+            "drift": {
+                "score": "/drift/score",
+                "warmup": "/drift/warmup"
+            },
+            "prediction": {
+                "scaling": "/predict/scaling"
+            },
             "integrations": {
                 "predict_all": "/integrations/predict_all",
                 "adaptive_params": {
                     "get": "/integrations/adaptive_params",
-                    "update": "/integrations/adaptive_params",
-                },
+                    "update": "/integrations/adaptive_params"
+                }
             },
             "xgboost": {
-                "train": "/xgboost/train",
-                "predict": "/xgboost/predict",
-                "batch_predict": "/xgboost/batch_predict",
-                "load_model": "/xgboost/load_model",
-                "list_models": "/xgboost/list_models",
-                "model_info": "/xgboost/model_info",
-                "delete_model": "/xgboost/delete_model",
-                "tune": "/xgboost/tune",
-                "tune_async": {
-                    "submit": "/xgboost/tune/submit",
-                    "status": "/xgboost/tune/status/{job_id}",
-                    "list_jobs": "/xgboost/tune/jobs",
+                "training": {
+                    "train": "/xgboost/train",
+                    "train_distilled": "/xgboost/train_distilled"
                 },
-                "refresh_model": "/xgboost/refresh_model",
-                "promote": "/xgboost/promote",
+                "inference": {
+                    "predict": "/xgboost/predict",
+                    "batch_predict": "/xgboost/batch_predict",
+                    "system_regime": "/xgboost/system_regime"
+                },
+                "model_management": {
+                    "load_model": "/xgboost/load_model",
+                    "list_models": "/xgboost/list_models",
+                    "model_info": "/xgboost/model_info",
+                    "delete_model": "/xgboost/delete_model",
+                    "refresh_model": "/xgboost/refresh_model",
+                    "promote": "/xgboost/promote"
+                },
+                "tuning": {
+                    "tune": "/xgboost/tune",
+                    "tune_async": {
+                        "submit": "/xgboost/tune/submit",
+                        "status": "/xgboost/tune/status/{job_id}",
+                        "list_jobs": "/xgboost/tune/jobs"
+                    }
+                },
                 "distillation": {
-                    "distill_episode": "/xgboost/distill/episode",
-                    "train_distilled": "/xgboost/train_distilled",
-                },
-                "system_regime": "/xgboost/system_regime",
-            },
-        },
+                    "distill_episode": "/xgboost/distill/episode"
+                }
+            }
+        }
     }
 
 @ml_app.get("/health")

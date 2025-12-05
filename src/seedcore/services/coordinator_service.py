@@ -23,7 +23,7 @@ from enum import Enum
 from typing import Any, Dict, Optional, Union
 
 import yaml  # pyright: ignore[reportMissingModuleSource]
-from pydantic import BaseModel, Field    # pyright: ignore[reportMissingImports]
+from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
 
 import redis  # pyright: ignore[reportMissingImports]
 from fastapi import FastAPI, Request  # pyright: ignore[reportMissingImports]
@@ -483,7 +483,7 @@ class Coordinator:
                 route_config=route_config,
                 execution_config=exec_config,
             )
-            
+
             return result
 
         except Exception as e:
@@ -658,7 +658,7 @@ class Coordinator:
             record_router_telemetry_func=record_router_telemetry_func,
             resolve_session_factory_func=resolve_session_factory,
             fast_path_latency_slo_ms=self.fast_path_latency_slo_ms,
-            eventizer_helper = self._run_eventizer
+            eventizer_helper=self._run_eventizer,
         )
 
     # ------------------------------------------------------------------
@@ -745,9 +745,14 @@ class Coordinator:
     # 4. Internal Helpers
     # ------------------------------------------------------------------
 
-    async def _compute_drift_score(self, task: Dict[str, Any]) -> float:
+    async def _compute_drift_score(
+        self, task: Dict[str, Any], text_payload: Dict[str, Any]
+    ) -> float:
         return await compute_drift_score(
-            task=task, ml_client=self.ml_client, metrics=self.metrics
+            task=task,
+            text_payload=text_payload,
+            ml_client=self.ml_client,
+            metrics=self.metrics,
         )
 
     async def _fire_and_forget_memory_synthesis(
@@ -863,7 +868,7 @@ class Coordinator:
 
     async def _ensure_background_tasks_started(self):
         """
-        Idempotent starter. Handles both infinite loops (Outbox) 
+        Idempotent starter. Handles both infinite loops (Outbox)
         and one-off warmups (Drift Detector).
         """
         # 1. Idempotency Check: Unified Flag
@@ -872,7 +877,7 @@ class Coordinator:
             return
 
         logger.info("🚀 Coordinator: Triggering background protocols & warmup...")
-        
+
         # 2. Lock the flag immediately
         self._bg_started = True
 
@@ -883,8 +888,7 @@ class Coordinator:
         # 4. Launch The Infinite Loop (Maintenance)
         # This runs forever to flush the outbox
         t_outbox = asyncio.create_task(
-            self._task_outbox_flusher_loop(), 
-            name="loop_outbox"
+            self._task_outbox_flusher_loop(), name="loop_outbox"
         )
         self._bg_tasks.append(t_outbox)
 
@@ -892,8 +896,7 @@ class Coordinator:
         # This runs once to load heavy math/matrices so the first API call isn't slow.
         if not self._warmup_started:
             t_warmup = asyncio.create_task(
-                self._warmup_drift_detector(), 
-                name="task_warmup"
+                self._warmup_drift_detector(), name="task_warmup"
             )
             self._bg_tasks.append(t_warmup)
             # Note: The warmup method itself should set self._warmup_started = True
