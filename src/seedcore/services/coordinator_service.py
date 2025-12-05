@@ -51,7 +51,7 @@ from ..coordinator.core.policies import (
 )
 from ..coordinator.core.ocps_valve import NeuralCUSUMValve
 from ..coordinator.core.execute import (
-    route_and_execute as core_route_and_execute,
+    execute_task as execute_task,
     RouteConfig,
     ExecutionConfig,
 )
@@ -398,7 +398,6 @@ class Coordinator:
 
         # State Flags
         self._bg_started = False
-        self._background_tasks_started = False
         self._warmup_started = False
         self.routing_remote_enabled = False
         self.routing_remote_types = set()
@@ -479,13 +478,12 @@ class Coordinator:
             exec_config = self._build_execution_config(correlation_id)
             route_config = self._build_route_config()
 
-            result = await core_route_and_execute(
+            result = await execute_task(
                 task=task_obj,
-                routing_config=route_config,
+                route_config=route_config,
                 execution_config=exec_config,
-                eventizer_helper=self._run_eventizer,  # <--- Wired here
             )
-
+            
             return result
 
         except Exception as e:
@@ -660,6 +658,7 @@ class Coordinator:
             record_router_telemetry_func=record_router_telemetry_func,
             resolve_session_factory_func=resolve_session_factory,
             fast_path_latency_slo_ms=self.fast_path_latency_slo_ms,
+            eventizer_helper = self._run_eventizer
         )
 
     # ------------------------------------------------------------------
@@ -861,6 +860,44 @@ class Coordinator:
         self._bg_tasks = []
         self._bg_tasks.append(asyncio.create_task(self._task_outbox_flusher_loop()))
         self._bg_tasks.append(asyncio.create_task(self._warmup_drift_detector()))
+
+    async def _ensure_background_tasks_started(self):
+        """
+        Idempotent starter. Handles both infinite loops (Outbox) 
+        and one-off warmups (Drift Detector).
+        """
+        # 1. Idempotency Check: Unified Flag
+        # We only need one flag to know if we've pulled the trigger.
+        if self._bg_started:
+            return
+
+        logger.info("🚀 Coordinator: Triggering background protocols & warmup...")
+        
+        # 2. Lock the flag immediately
+        self._bg_started = True
+
+        # 3. Initialize the task container if not exists
+        if not hasattr(self, "_bg_tasks"):
+            self._bg_tasks = []
+
+        # 4. Launch The Infinite Loop (Maintenance)
+        # This runs forever to flush the outbox
+        t_outbox = asyncio.create_task(
+            self._task_outbox_flusher_loop(), 
+            name="loop_outbox"
+        )
+        self._bg_tasks.append(t_outbox)
+
+        # 5. Launch The One-Off Warmup (Optimization)
+        # This runs once to load heavy math/matrices so the first API call isn't slow.
+        if not self._warmup_started:
+            t_warmup = asyncio.create_task(
+                self._warmup_drift_detector(), 
+                name="task_warmup"
+            )
+            self._bg_tasks.append(t_warmup)
+            # Note: The warmup method itself should set self._warmup_started = True
+            # when it finishes, or we can set it here if we just mean "started".
 
     async def _warmup_drift_detector(self):
         import random
