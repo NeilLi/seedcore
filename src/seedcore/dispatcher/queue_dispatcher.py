@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 import ray  # pyright: ignore[reportMissingImports]
 
 from seedcore.dispatcher.persistence.interfaces import TaskRepositoryProtocol
-from seedcore.dispatcher.router import CoordinatorHttpRouter
+from seedcore.dispatcher.router import CoordinatorHttpRouter, OrganismRouter
 from seedcore.models import TaskPayload
 
 from seedcore.database import PG_DSN
@@ -47,6 +47,7 @@ class Dispatcher:
         # 2. Dependencies (Injected or Lazily Loaded in run())
         self._repo: Optional[TaskRepositoryProtocol] = None
         self._router: Optional[CoordinatorHttpRouter] = None
+        self._organism_router: Optional[OrganismRouter] = None
 
         # 3. Control Plane
         self._running = False
@@ -87,6 +88,8 @@ class Dispatcher:
             await self._repo.init()
 
             self._router = CoordinatorHttpRouter()
+            # Lazy initialization of OrganismRouter (only created when needed)
+            # This avoids unnecessary initialization if no conversation tasks are processed
 
             self._startup_status = "ready"
             return True
@@ -188,9 +191,20 @@ class Dispatcher:
         try:
             # A. Parse
             payload = TaskPayload.from_db(row)
-
-            # B. Execute (Router -> Coordinator)
-            result = await self._router.route_and_execute(payload)
+            conversation_id = payload.conversation_id
+            mode = payload.interaction_mode
+            
+            # B. Route and Execute
+            # Use OrganismRouter for tasks with conversation_id (sticky sessions)
+            # Otherwise use CoordinatorHttpRouter (standard routing)
+            if mode == "agent_tunnel" or conversation_id:
+                # Lazy initialization: create OrganismRouter only when first needed
+                if self._organism_router is None:
+                    self._organism_router = OrganismRouter()
+                result = await self._organism_router.route_and_execute(payload)
+            else:
+                # Standard routing through Coordinator
+                result = await self._router.route_and_execute(payload)
 
             # C. Settle
             if result.get("success"):
