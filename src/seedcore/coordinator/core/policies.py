@@ -141,6 +141,7 @@ class SurpriseComputer:
             },
         }
 
+
 def decide_route_with_hysteresis(
     surprise_score: float,
     last_decision: Optional[str] = None,
@@ -193,7 +194,7 @@ async def compute_drift_score(
     """
     Compute drift score.
     Combines ML Service (Statistical Drift) with Task Metadata (Heuristic Drift).
-    
+
     Args:
         task: Task dictionary with metadata
         text_payload: Text string for drift detection, or dict containing "text" key, or None
@@ -205,16 +206,31 @@ async def compute_drift_score(
     if isinstance(text_payload, str):
         text_for_drift = text_payload
     elif isinstance(text_payload, dict):
-        text_for_drift = text_payload.get("text") or text_payload.get("description")
-    # If text_payload is None or empty, fallback to task description
+        preferred_fields = [
+            "summary",
+            "narrative",
+            "explanation",
+            "detected_intent",
+            "user_intent",
+            "text",
+            "description",
+        ]
+
+    for field in preferred_fields:
+        if isinstance(text_payload, dict) and text_payload.get(field):
+            text_for_drift = text_payload[field]
+            break
+
     if not text_for_drift:
         text_for_drift = task.get("description") or ""
-    
+
     # 1. ML Service Call (Remote)
     if ml_client and hasattr(ml_client, "compute_drift_score"):
         try:
             # Pass text as string to ML client
-            response = await ml_client.compute_drift_score(task=task, text=text_for_drift)
+            response = await ml_client.compute_drift_score(
+                task=task, text=text_for_drift
+            )
             if response.get("status") == "success":
                 return max(0.0, min(1.0, float(response.get("drift_score", 0.0))))
 
@@ -240,4 +256,3 @@ def _compute_fallback_drift_score(task: Dict[str, Any]) -> float:
         score += 0.2
 
     return max(0.0, min(1.0, score))
-
