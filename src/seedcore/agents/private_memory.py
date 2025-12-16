@@ -27,15 +27,17 @@ Telemetry:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
 import math
 import time
 import numpy as np
 
 from .state import AgentState
-from .base import BaseAgent
 from .roles import RoleProfile, SkillVector
 from seedcore.logging_setup import ensure_serve_logger
+
+if TYPE_CHECKING:
+    from .base import BaseAgent
 
 logger = ensure_serve_logger("seedcore.agents.private_memory", level="DEBUG")
 
@@ -313,7 +315,7 @@ class AgentPrivateMemory:
 
     def update_from_agent(
         self,
-        agent: BaseAgent,
+        agent: "BaseAgent",
         *,
         task_embed: Optional[np.ndarray],
         peers: Optional[List[PeerEvent]] = None,

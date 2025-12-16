@@ -22,6 +22,23 @@ DEFAULT_RECURSION_DEPTH = 10
 # ============================================================================
 
 
+def normalize_task_payloads(task: Any) -> Dict[str, Any]:
+    """
+    Normalize a task-like object to a standardized dictionary format.
+    
+    This is a convenience wrapper around coerce_task_payload that returns
+    only the normalized dictionary (useful when you don't need the TaskPayload object).
+    
+    Args:
+        task: Task-like object (TaskPayload, dict, or object with model_dump/dict methods)
+        
+    Returns:
+        Normalized dictionary ready for DB/API use
+    """
+    _, normalized_dict = coerce_task_payload(task)
+    return normalized_dict
+
+
 def coerce_task_payload(task: Any) -> Tuple[TaskPayload, Dict[str, Any]]:
     """
     The robust entry point for normalizing ANY task input into a TaskPayload.
@@ -273,6 +290,21 @@ def normalize_type(task_type: Optional[str]) -> str:
     return type_map.get(normalized, normalized)
 
 
+def normalize_string(value: Optional[str]) -> Optional[str]:
+    """
+    Normalize a string value by converting to lowercase and stripping whitespace.
+    
+    Args:
+        value: String to normalize, or None
+        
+    Returns:
+        Normalized string (lowercase, stripped), or None if input is None
+    """
+    if value is None:
+        return None
+    return str(value).strip().lower()
+
+
 def normalize_domain(domain: Optional[str]) -> Optional[str]:
     """Normalize domain to standard taxonomy."""
     if not domain:
@@ -403,6 +435,94 @@ def collect_record_aliases(
     return {a for a in aliases if a}
 
 
+def collect_step_aliases(step: Any) -> Set[str]:
+    """
+    Collect identifier aliases from a step dictionary.
+    
+    Extracts:
+    - step_id (if present)
+    - task.task_id (if nested task dict exists)
+    
+    Args:
+        step: Step dictionary or object with step_id and/or nested task
+        
+    Returns:
+        Set of canonicalized identifier strings
+    """
+    aliases: Set[str] = set()
+    
+    if step is None:
+        return aliases
+    
+    # Handle dict
+    if isinstance(step, dict):
+        # Extract step_id
+        if "step_id" in step:
+            step_id = canonicalize_identifier(step["step_id"])
+            if step_id:
+                aliases.add(step_id)
+        
+        # Extract nested task.task_id
+        if "task" in step and isinstance(step["task"], dict):
+            task_id = step["task"].get("task_id")
+            if task_id:
+                task_id_canon = canonicalize_identifier(task_id)
+                if task_id_canon:
+                    aliases.add(task_id_canon)
+    
+    # Handle object with attributes
+    elif hasattr(step, "step_id"):
+        step_id = canonicalize_identifier(getattr(step, "step_id", None))
+        if step_id:
+            aliases.add(step_id)
+        if hasattr(step, "task"):
+            task = getattr(step, "task")
+            if hasattr(task, "task_id"):
+                task_id = canonicalize_identifier(getattr(task, "task_id"))
+                if task_id:
+                    aliases.add(task_id)
+    
+    return {a for a in aliases if a}
+
+
+def iter_dependency_entries(dependencies: Any):
+    """
+    Iterate over dependency entries, flattening nested structures.
+    
+    Handles:
+    - Lists: [{"task_id": "1"}, {"task_id": "2"}] -> yields each dict
+    - Nested lists: [[{"task_id": "1"}], [{"task_id": "2"}]] -> yields each inner dict
+    - None: yields nothing
+    - Single dict: yields the dict
+    
+    Args:
+        dependencies: Dependency structure (list, nested list, dict, or None)
+        
+    Yields:
+        Individual dependency entries (dicts or other objects)
+    """
+    if dependencies is None:
+        return
+    
+    # Handle single dict
+    if isinstance(dependencies, dict):
+        yield dependencies
+        return
+    
+    # Handle list/iterable
+    if isinstance(dependencies, (list, tuple)):
+        for item in dependencies:
+            # If item is itself a list/tuple, recurse to flatten
+            if isinstance(item, (list, tuple)):
+                yield from iter_dependency_entries(item)
+            else:
+                yield item
+        return
+    
+    # Fallback: yield as-is
+    yield dependencies
+
+
 def resolve_child_task_id(record: Any, fallback_step: Any) -> Any:
     """Extract the task identifier for a persisted subtask."""
     t = extract_dependency_token(record, max_depth=2)
@@ -413,3 +533,60 @@ def resolve_child_task_id(record: Any, fallback_step: Any) -> Any:
 
 def _is_empty(value: Any) -> bool:
     return value in (None, "", [], {}, set())
+
+
+def extract_proto_plan(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Extract 'proto_plan' from a cognitive result.
+    
+    This function searches for proto_plan in common locations within the payload:
+    - result.proto_plan (standard Cognitive Result wrapper)
+    - proto_plan (direct return)
+    - metadata.proto_plan
+    
+    Args:
+        payload: Dictionary containing the cognitive result or task payload
+        
+    Returns:
+        The proto_plan dictionary if found, None otherwise
+    """
+    return extract_from_nested(
+        payload,
+        key_paths=[
+            ("result", "proto_plan"),  # Standard Cognitive Result wrapper
+            ("proto_plan",),  # Direct return
+            ("metadata", "proto_plan"),
+        ],
+        value_type=dict,
+    )
+
+
+def extract_decision(payload: Dict[str, Any]) -> Optional[str]:
+    """
+    Extract routing decision from a payload.
+    
+    This function searches for decision in common locations within the payload:
+    - payload.metadata.decision (nested metadata)
+    - payload.decision (nested payload)
+    - decision (top-level)
+    - routing_decision (alternative key name)
+    - route (alternative key name)
+    
+    Args:
+        payload: Dictionary containing the routing result or task payload
+        
+    Returns:
+        The decision string if found, None otherwise
+    """
+    return extract_from_nested(
+        payload,
+        key_paths=[
+            ("payload", "metadata", "decision"),  # Nested metadata
+            ("payload", "decision"),  # Nested payload
+            ("metadata", "decision"),  # Top-level metadata
+            ("decision",),  # Top-level
+            ("routing_decision",),  # Alternative key name
+            ("route",),  # Alternative key name
+        ],
+        value_type=str,
+    )

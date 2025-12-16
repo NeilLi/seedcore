@@ -1,4 +1,6 @@
 #!/bin/bash
+# SKIP_LOAD=true ./setup-ray-serve.sh
+
 set -euo pipefail
 
 # Resolve script directory for robust relative paths
@@ -63,10 +65,31 @@ print_status "INFO" "Creating namespace $NAMESPACE (if missing)..."
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 print_status "OK" "Namespace ready"
 
-# ---------- Load your image into Kind ----------
-print_status "INFO" "Loading image ${RAY_IMAGE} into Kind nodes (${CLUSTER_NAME})..."
-kind load docker-image "${RAY_IMAGE}" --name "${CLUSTER_NAME}"
-print_status "OK" "Image loaded into Kind nodes"
+# ---------- Load your image into Kind (digest-aware, avoid unnecessary reloads) ----------
+print_status "INFO" "Checking if image ${RAY_IMAGE} already exists in Kind nodes..."
+
+# Get host image ID (digest)
+HOST_IMAGE_ID=$(docker inspect --format='{{.Id}}' "${RAY_IMAGE}" 2>/dev/null || true)
+
+# Get image ID inside the Kind control-plane node (using crictl inside the node)
+NODE_IMAGE_ID=""
+if docker exec "kind-${CLUSTER_NAME}-control-plane" crictl images --digests >/dev/null 2>&1; then
+  NODE_IMAGE_ID=$(docker exec "kind-${CLUSTER_NAME}-control-plane" \
+    crictl images --digests 2>/dev/null | grep "${RAY_IMAGE}" | awk '{print $3}' || true)
+fi
+
+# 1. Check for manual skip flag first
+if [ "${SKIP_LOAD:-false}" = "true" ]; then
+  print_status "WARN" "Skipping image load (manually requested via SKIP_LOAD=true)"
+# 2. Fallback to digest check (which we know usually fails, but good to keep)
+elif [[ -n "${HOST_IMAGE_ID}" && -n "${NODE_IMAGE_ID}" && "${HOST_IMAGE_ID}" == "${NODE_IMAGE_ID}" ]]; then
+  print_status "OK" "Image ${RAY_IMAGE} already present in Kind node (digest match), skipping load"
+# 3. If neither, load the image
+else
+  print_status "INFO" "Loading image ${RAY_IMAGE} into Kind nodes (${CLUSTER_NAME})..."
+  kind load docker-image "${RAY_IMAGE}" --name "${CLUSTER_NAME}"
+  print_status "OK" "Image loaded into Kind nodes"
+fi
 
 # ---------- Host data dir (mounted via hostPath for pods) ----------
 print_status "INFO" "Setting up /tmp/seedcore-data on host..."
@@ -158,8 +181,8 @@ print_status "INFO" "Setting up PKG WASM file in Ray head pod..."
 HEAD_POD=$(kubectl -n "${NAMESPACE}" get pods -l "ray.io/node-type=head" --no-headers | head -n1 | awk '{print $1}')
 if [ -n "${HEAD_POD}" ]; then
   # Wait for Ray services to be fully ready before attempting file operations
-  print_status "INFO" "Waiting for Ray services to be fully ready (30s)..."
-  sleep 30
+  print_status "INFO" "Waiting for Ray services to be fully ready (10s)..."
+  sleep 10
   
   # Retry logic for WASM file creation
   WASM_CREATED=false

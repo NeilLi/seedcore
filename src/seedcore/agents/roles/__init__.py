@@ -21,7 +21,6 @@ from .specialization import (
     RoleRegistry,
     AgentSpec,
     GraphClient,
-    MockGraphClient,
 )
 from .generic_defaults import (
     DEFAULT_ROLE_REGISTRY,
@@ -59,7 +58,6 @@ __all__ = [
     "RoleRegistry",
     "AgentSpec",
     "GraphClient",
-    "MockGraphClient",
     # generic defaults
     "DEFAULT_ROLE_REGISTRY",
     "create_default_registry",

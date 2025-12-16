@@ -27,9 +27,16 @@ from seedcore.models.energy import (
 setup_logging(app_name="seedcore.ops_service.driver")
 logger = ensure_serve_logger("seedcore.ops_service", level="DEBUG")
 
+# Create FastAPI app before the class
+ops_app = FastAPI(
+    title="SeedCore Ops App",
+    version="2.0.0",
+    docs_url="/docs",
+)
+
 
 @serve.deployment
-@serve.ingress(FastAPI())
+@serve.ingress(ops_app)
 class OpsGateway:
     """
     Unified gateway for all ops services.
@@ -42,11 +49,7 @@ class OpsGateway:
         state_handle: DeploymentHandle,
         energy_handle: DeploymentHandle,
     ) -> None:
-        self.app = FastAPI(
-            title="SeedCore Ops App",
-            version="2.0.0",
-            docs_url="/docs",
-        )
+        self.app = ops_app
 
         # Handles are captured here, available to closures below
         self.eventizer = eventizer_handle

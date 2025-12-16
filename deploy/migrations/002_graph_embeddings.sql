@@ -156,6 +156,8 @@ DECLARE
     dim_128 TEXT;
     dim_1024 TEXT;
     old_table_exists BOOLEAN;
+    dim_128_check INT;
+    dim_1024_check INT;
 BEGIN
     -- Check if old table still exists (shouldn't)
     SELECT EXISTS (
@@ -190,5 +192,25 @@ BEGIN
     
     RAISE NOTICE '';
     RAISE NOTICE '💡 Note: Views are created in migration 017';
+    
+    -- CI-grade safety: Assert correct dimensions (fail fast if schema drift)
+    -- Only check if tables have data (skip on fresh install)
+    BEGIN
+        SELECT vector_dims(emb) INTO dim_128_check FROM graph_embeddings_128 LIMIT 1;
+        IF dim_128_check != 128 THEN
+            RAISE EXCEPTION 'graph_embeddings_128 dimension mismatch: expected 128, got %', dim_128_check;
+        END IF;
+        
+        SELECT vector_dims(emb) INTO dim_1024_check FROM graph_embeddings_1024 LIMIT 1;
+        IF dim_1024_check != 1024 THEN
+            RAISE EXCEPTION 'graph_embeddings_1024 dimension mismatch: expected 1024, got %', dim_1024_check;
+        END IF;
+        
+        RAISE NOTICE '   • Vector dimension verification: ✅ Passed (128-d and 1024-d)';
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            -- Tables are empty, skip dimension check (expected on fresh install)
+            RAISE NOTICE '   • Vector dimension verification: ⏭️  Skipped (tables empty)';
+    END;
 END;
 $$;

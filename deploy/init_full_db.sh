@@ -101,13 +101,18 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 # 4) Holons table (kept from your baseline)
+# NOTE: Holons use 768-dimensional embeddings (e.g., OpenAI text-embedding-3-large, CLIP-style)
+# This is INTENTIONAL and separate from graph embeddings:
+#   - graph_embeddings_128: 128-d for fast HGNN routing
+#   - graph_embeddings_1024: 1024-d for deep graph semantics
+#   - holons.embedding: 768-d for cognitive memory objects (not graph nodes)
 echo "🏗️  Creating holons table..."
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -c "
 CREATE TABLE IF NOT EXISTS holons (
     id           SERIAL PRIMARY KEY,
     uuid         UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
-    embedding    VECTOR(768),
+    embedding    VECTOR(768),  -- 768-d for cognitive memory (separate from graph embeddings)
     meta         JSONB,
     created_at   TIMESTAMPTZ DEFAULT now()
 );
@@ -216,29 +221,11 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 echo "📊 Verifying graph embeddings vector dimensions:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -c "
-    SELECT 
-      'graph_embeddings_128' AS table_name,
-      a.attname AS column_name,
-      CASE 
-        WHEN t.typname = 'vector' AND a.atttypmod > 0 THEN (a.atttypmod - 4)::text || '-dimensional'
-        ELSE t.typname
-      END AS type_info
-    FROM pg_attribute a
-    JOIN pg_type t ON a.atttypid = t.oid
-    WHERE a.attrelid = 'graph_embeddings_128'::regclass
-      AND a.attname = 'emb'
+    SELECT 'graph_embeddings_128' AS table_name, vector_dims(emb) AS dims
+    FROM (SELECT emb FROM graph_embeddings_128 LIMIT 1) t
     UNION ALL
-    SELECT 
-      'graph_embeddings_1024' AS table_name,
-      a.attname AS column_name,
-      CASE 
-        WHEN t.typname = 'vector' AND a.atttypmod > 0 THEN (a.atttypmod - 4)::text || '-dimensional'
-        ELSE t.typname
-      END AS type_info
-    FROM pg_attribute a
-    JOIN pg_type t ON a.atttypid = t.oid
-    WHERE a.attrelid = 'graph_embeddings_1024'::regclass
-      AND a.attname = 'emb';
+    SELECT 'graph_embeddings_1024' AS table_name, vector_dims(emb) AS dims
+    FROM (SELECT emb FROM graph_embeddings_1024 LIMIT 1) t;
   "
 
 echo "📊 Holons table structure:"

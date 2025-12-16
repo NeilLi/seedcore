@@ -61,8 +61,10 @@ logger = ensure_serve_logger("seedcore.agents.base", level="DEBUG")
 # Ray import for actor decorator
 try:
     import ray  # pyright: ignore[reportMissingImports]
+    ray_available = True
 except ImportError:
     ray = None  # type: ignore
+    ray_available = False
 
 # Runtime numpy import (moved from inside methods for performance)
 try:
@@ -77,7 +79,8 @@ except ImportError:
     dt_parser = None  # type: ignore
 
 
-@ray.remote  # type: ignore
+# BaseAgent is NOT an actor - it's a regular class that subclasses can inherit from
+# Subclasses (ChatAgent, ObserverAgent, UtilityAgent) should be decorated with @ray.remote
 class BaseAgent:
     """
     Production-ready base agent.

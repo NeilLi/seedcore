@@ -22,13 +22,26 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
+try:
+    import ray  # pyright: ignore[reportMissingImports]
+except ImportError:
+    ray = None  # type: ignore
+
 from .base import BaseAgent
 from .roles.specialization import Specialization
-from .roles.rbac import authorize_tool
 
 logger = logging.getLogger(__name__)
 
 
+# Conditional decorator: use ray.remote if available, otherwise no-op
+if ray is not None:
+    UtilityAgentDecorator = ray.remote  # type: ignore
+else:
+    def UtilityAgentDecorator(cls):
+        return cls
+
+
+@UtilityAgentDecorator
 class UtilityAgent(BaseAgent):
     """
     ULA observes the system and tunes parameters.
@@ -395,13 +408,12 @@ class UtilityAgent(BaseAgent):
     def _authorize(self, tool_name: str, context: Dict[str, Any]) -> bool:
         """Delegate to RBAC; ULA typically has read access to metrics/router/policy."""
         try:
-            dec = authorize_tool(
-                role_profile=self.role_profile,
+            dec = self.authorize_tool(
                 tool_name=tool_name,
                 cost_usd=0.0,
                 context={"agent_id": self.agent_id, **(context or {})},
             )
-            return bool(dec.allow)
+            return bool(dec.allowed)
         except Exception:
             return False
 

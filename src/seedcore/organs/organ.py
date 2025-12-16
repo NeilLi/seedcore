@@ -51,7 +51,7 @@ if TYPE_CHECKING:
     # --- Add imports for stateful dependencies ---
     from ..memory.mw_manager import MwManager
     from ..memory.holon_fabric import HolonFabric
-    from ..organs.registry import OrganRegistry
+    from .registry import OrganRegistry
     from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 logger = ensure_serve_logger("seedcore.Organ", level="DEBUG")

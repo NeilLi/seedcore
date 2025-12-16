@@ -10,7 +10,10 @@ BEGIN;
 -- 1) Monitoring View (from graph_tasks migration)
 COMMENT ON COLUMN tasks.type IS 'Type/category of the task (e.g., graph_embed, graph_rag_query)';
 
-CREATE OR REPLACE VIEW graph_tasks AS
+-- Drop view first to allow column changes (CREATE OR REPLACE cannot drop columns)
+DROP VIEW IF EXISTS graph_tasks;
+
+CREATE VIEW graph_tasks AS
 SELECT
     id,
     type,
@@ -24,6 +27,7 @@ SELECT
     error,
     created_at,
     updated_at,
+    drift_score,
     CASE
         WHEN status = 'completed' THEN '✅'
         WHEN status = 'running' THEN '🔄'
@@ -459,8 +463,9 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- 13) Comments
-COMMENT ON FUNCTION create_graph_embed_task IS 'Helper function to create graph embedding tasks, optionally linking them to an agent/organ';
-COMMENT ON FUNCTION create_graph_rag_task IS 'Helper function to create graph RAG query tasks, optionally linking them to an agent/organ';
+-- Specify full function signatures to disambiguate from migration 001 versions
+COMMENT ON FUNCTION create_graph_embed_task(INTEGER[], INTEGER, TEXT, TEXT, TEXT) IS 'Helper function to create graph embedding tasks, optionally linking them to an agent/organ';
+COMMENT ON FUNCTION create_graph_rag_task(INTEGER[], INTEGER, INTEGER, TEXT, TEXT, TEXT) IS 'Helper function to create graph RAG query tasks, optionally linking them to an agent/organ';
 COMMENT ON VIEW hgnn_edges IS 'Flattened hetero-graph edges (numeric src/dst + type) for DGL export';
 COMMENT ON VIEW task_embeddings_128 IS 'Convenience join: tasks ↔ graph_node_map ↔ graph_embeddings_128 (128d embeddings)';
 COMMENT ON VIEW task_embeddings_1024 IS 'Convenience join: tasks ↔ graph_node_map ↔ graph_embeddings_1024 (1024d embeddings)';

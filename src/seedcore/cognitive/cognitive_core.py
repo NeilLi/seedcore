@@ -213,6 +213,8 @@ class CognitiveCore(dspy.Module):
         # --- NEW: Hydration Dependencies ---
         graph_repo: Optional[Any] = None,
         session_maker: Optional[Any] = None,
+        # --- Backward compatibility: profile parameter (ignored) ---
+        profile: Optional[Any] = None,  # Deprecated: kept for backward compatibility
     ):
         super().__init__()
         self.llm_provider = llm_provider or "unknown"
@@ -302,66 +304,33 @@ class CognitiveCore(dspy.Module):
         self.hgnn_reasoner = dspy.ChainOfThought(HGNNReasoningSignature)
         self.causal_decomposer = dspy.ChainOfThought(CausalDecompositionSignature)
 
-        # Task mapping
+        # Task mapping - updated to match CognitiveType enum from cognitive.py
         self.task_handlers = {
-            CognitiveType.FAILURE_ANALYSIS: self.failure_analyzer,
+            # Core reasoning
+            CognitiveType.CHAT: self.chat_handler,
+            CognitiveType.PROBLEM_SOLVING: self.problem_solver,
             CognitiveType.TASK_PLANNING: self.task_planner,
             CognitiveType.DECISION_MAKING: self.decision_maker,
-            CognitiveType.PROBLEM_SOLVING: self.problem_solver,
-            CognitiveType.CHAT: self.chat_handler,
+            CognitiveType.FAILURE_ANALYSIS: self.failure_analyzer,
+            CognitiveType.CAUSAL_DECOMPOSITION: self.causal_decomposer,
+            # Memory-based reasoning
             CognitiveType.MEMORY_SYNTHESIS: self.memory_synthesizer,
             CognitiveType.CAPABILITY_ASSESSMENT: self.capability_assessor,
-            CognitiveType.CAUSAL_DECOMPOSITION: self.causal_decomposer,
-            # Graph task handlers (Migration 007+)
-            CognitiveType.GRAPH_EMBED: self._handle_graph_embed,
-            CognitiveType.GRAPH_RAG_QUERY: self._handle_graph_rag_query,
-            CognitiveType.GRAPH_SYNC_NODES: self._handle_graph_sync_nodes,
-            # Facts system handlers (Migration 009)
-            CognitiveType.GRAPH_FACT_EMBED: self._handle_graph_fact_embed,
-            CognitiveType.GRAPH_FACT_QUERY: self._handle_graph_fact_query,
-            CognitiveType.FACT_SEARCH: self._handle_fact_search,
-            CognitiveType.FACT_STORE: self._handle_fact_store,
-            # Resource management handlers (Migration 007)
-            CognitiveType.ARTIFACT_MANAGE: self._handle_artifact_manage,
-            CognitiveType.CAPABILITY_MANAGE: self._handle_capability_manage,
-            CognitiveType.MEMORY_CELL_MANAGE: self._handle_memory_cell_manage,
-            # Agent layer handlers (Migration 008)
-            CognitiveType.MODEL_MANAGE: self._handle_model_manage,
-            CognitiveType.POLICY_MANAGE: self._handle_policy_manage,
-            CognitiveType.SERVICE_MANAGE: self._handle_service_manage,
-            CognitiveType.SKILL_MANAGE: self._handle_skill_manage,
         }
 
         # Cache governance settings - shorter TTLs for sufficiency-bearing results
+        # Updated to match CognitiveType enum from cognitive.py
         self.cache_ttl_by_task = {
-            CognitiveType.FAILURE_ANALYSIS: 300,  # 5 minutes (volatile analysis)
+            # Core reasoning
+            CognitiveType.CHAT: 300,  # 5 minutes (lightweight conversational, volatile)
+            CognitiveType.PROBLEM_SOLVING: 600,  # 10 minutes (sufficiency data)
             CognitiveType.TASK_PLANNING: 600,  # 10 minutes (sufficiency data)
             CognitiveType.DECISION_MAKING: 600,  # 10 minutes (sufficiency data)
-            CognitiveType.PROBLEM_SOLVING: 600,  # 10 minutes (sufficiency data)
-            CognitiveType.CHAT: 300,  # 5 minutes (lightweight conversational, volatile)
+            CognitiveType.FAILURE_ANALYSIS: 300,  # 5 minutes (volatile analysis)
+            CognitiveType.CAUSAL_DECOMPOSITION: 900,  # 15 minutes (structural reasoning output)
+            # Memory-based reasoning
             CognitiveType.MEMORY_SYNTHESIS: 1800,  # 30 minutes (no sufficiency)
             CognitiveType.CAPABILITY_ASSESSMENT: 600,  # 10 minutes (sufficiency data)
-            CognitiveType.CAUSAL_DECOMPOSITION: 900,  # 15 minutes (structural reasoning output)
-            # Graph task TTLs (Migration 007+) - shorter for sufficiency-bearing
-            CognitiveType.GRAPH_EMBED: 600,  # 10 minutes (sufficiency data)
-            CognitiveType.GRAPH_RAG_QUERY: 600,  # 10 minutes (sufficiency data)
-            CognitiveType.GRAPH_EMBED_V2: 600,  # 10 minutes (sufficiency data)
-            CognitiveType.GRAPH_RAG_QUERY_V2: 600,  # 10 minutes (sufficiency data)
-            CognitiveType.GRAPH_SYNC_NODES: 1800,  # 30 minutes (no sufficiency)
-            # Facts system TTLs (Migration 009) - shorter for sufficiency-bearing
-            CognitiveType.GRAPH_FACT_EMBED: 600,  # 10 minutes (sufficiency data)
-            CognitiveType.GRAPH_FACT_QUERY: 600,  # 10 minutes (sufficiency data)
-            CognitiveType.FACT_SEARCH: 600,  # 10 minutes (sufficiency data)
-            CognitiveType.FACT_STORE: 300,  # 5 minutes (storage is immediate)
-            # Resource management TTLs (Migration 007)
-            CognitiveType.ARTIFACT_MANAGE: 1800,  # 30 minutes (artifacts are stable)
-            CognitiveType.CAPABILITY_MANAGE: 1800,  # 30 minutes (capabilities are stable)
-            CognitiveType.MEMORY_CELL_MANAGE: 1800,  # 30 minutes (memory cells are stable)
-            # Agent layer TTLs (Migration 008)
-            CognitiveType.MODEL_MANAGE: 3600,  # 1 hour (models are stable)
-            CognitiveType.POLICY_MANAGE: 1800,  # 30 minutes (policies may change)
-            CognitiveType.SERVICE_MANAGE: 1800,  # 30 minutes (services may change)
-            CognitiveType.SKILL_MANAGE: 1800,  # 30 minutes (skills may change)
         }
 
         logger.info(
@@ -1871,78 +1840,57 @@ class CognitiveCore(dspy.Module):
         return len(violations) == 0, violations
 
     def _build_query(self, context: CognitiveContext) -> str:
-        """Build search query from context."""
+        """
+        Build search query from context.
+        
+        Updated to match CognitiveType enum from cognitive.py:
+        - CHAT
+        - PROBLEM_SOLVING
+        - TASK_PLANNING
+        - DECISION_MAKING
+        - FAILURE_ANALYSIS
+        - CAUSAL_DECOMPOSITION
+        - MEMORY_SYNTHESIS
+        - CAPABILITY_ASSESSMENT
+        """
         # Extract key information for search
         query_parts = []
 
-        if context.cog_type == CognitiveType.FAILURE_ANALYSIS:
-            incident = context.input_data.get("incident_context", {})
-            query_parts.append(f"failure analysis {incident.get('error_type', '')}")
+        if context.cog_type == CognitiveType.CHAT:
+            message = context.input_data.get("message", "") or context.input_data.get("chat_message", "")
+            query_parts.append(f"chat {message[:100]}")
+        elif context.cog_type == CognitiveType.PROBLEM_SOLVING:
+            problem = context.input_data.get("problem_description", "") or context.input_data.get("task_description", "")
+            query_parts.append(f"problem solving {problem[:100]}")
         elif context.cog_type == CognitiveType.TASK_PLANNING:
             task_desc = context.input_data.get("task_description", "")
-            query_parts.append(f"task planning {task_desc}")
+            query_parts.append(f"task planning {task_desc[:100]}")
         elif context.cog_type == CognitiveType.DECISION_MAKING:
             decision_ctx = context.input_data.get("decision_context", {})
-            query_parts.append(f"decision making {decision_ctx.get('options', '')}")
-        elif context.cog_type == CognitiveType.CHAT:
-            message = context.input_data.get("message", "")
-            query_parts.append(f"chat {message[:100]}")
+            options = decision_ctx.get("options", "") if isinstance(decision_ctx, dict) else str(decision_ctx)
+            query_parts.append(f"decision making {options[:100]}")
+        elif context.cog_type == CognitiveType.FAILURE_ANALYSIS:
+            incident = context.input_data.get("incident_context", {}) or context.input_data.get("failure_context", {})
+            error_type = incident.get("error_type", "") if isinstance(incident, dict) else str(incident)
+            query_parts.append(f"failure analysis {error_type[:100]}")
         elif context.cog_type == CognitiveType.CAUSAL_DECOMPOSITION:
             structural = context.input_data.get("structural_context", "")
-            incident = context.input_data.get("incident_report", "")
-            query_parts.append(f"causal decomposition {structural} {incident[:80]}")
-        elif context.cog_type in (
-            CognitiveType.GRAPH_EMBED,
-            CognitiveType.GRAPH_EMBED_V2,
-        ):
-            start_node_ids = context.input_data.get("start_node_ids", [])
-            query_parts.append(
-                f"graph embedding nodes {self._format_id_list(start_node_ids)}"
-            )
-        elif context.cog_type in (
-            CognitiveType.GRAPH_RAG_QUERY,
-            CognitiveType.GRAPH_RAG_QUERY_V2,
-        ):
-            start_node_ids = context.input_data.get("start_node_ids", [])
-            query_parts.append(
-                f"graph RAG query nodes {self._format_id_list(start_node_ids)}"
-            )
-        elif context.cog_type == CognitiveType.GRAPH_SYNC_NODES:
-            node_ids = context.input_data.get("node_ids", [])
-            query_parts.append(f"graph sync nodes {self._format_id_list(node_ids)}")
-        elif context.cog_type in (
-            CognitiveType.GRAPH_FACT_EMBED,
-            CognitiveType.GRAPH_FACT_QUERY,
-        ):
-            start_fact_ids = context.input_data.get("start_fact_ids", [])
-            query_parts.append(
-                f"fact operations {self._format_id_list(start_fact_ids)}"
-            )
-        elif context.cog_type == CognitiveType.FACT_SEARCH:
-            query = context.input_data.get("query", "")
-            query_parts.append(f"fact search {query}")
-        elif context.cog_type == CognitiveType.FACT_STORE:
-            text = context.input_data.get("text", "")
-            query_parts.append(f"fact store {text[:100]}")
-        elif context.cog_type in (
-            CognitiveType.ARTIFACT_MANAGE,
-            CognitiveType.CAPABILITY_MANAGE,
-            CognitiveType.MEMORY_CELL_MANAGE,
-        ):
-            action = context.input_data.get("action", "")
-            query_parts.append(f"resource management {action}")
-        elif context.cog_type in (
-            CognitiveType.MODEL_MANAGE,
-            CognitiveType.POLICY_MANAGE,
-            CognitiveType.SERVICE_MANAGE,
-            CognitiveType.SKILL_MANAGE,
-        ):
-            action = context.input_data.get("action", "")
-            query_parts.append(f"agent layer management {action}")
+            incident = context.input_data.get("incident_report", "") or context.input_data.get("incident_context", "")
+            query_parts.append(f"causal decomposition {structural[:80]} {incident[:80]}")
+        elif context.cog_type == CognitiveType.MEMORY_SYNTHESIS:
+            memory_context = context.input_data.get("memory_context", {}) or context.memory_context or {}
+            query = memory_context.get("query", "") if isinstance(memory_context, dict) else str(memory_context)
+            query_parts.append(f"memory synthesis {query[:100]}")
+        elif context.cog_type == CognitiveType.CAPABILITY_ASSESSMENT:
+            capability_context = context.input_data.get("capability_context", {}) or context.input_data.get("assessment_context", {})
+            agent_id = capability_context.get("agent_id", "") if isinstance(capability_context, dict) else ""
+            task_type = capability_context.get("task_type", "") if isinstance(capability_context, dict) else ""
+            query_parts.append(f"capability assessment {agent_id} {task_type}")
         else:
+            # Fallback: use the enum value as query
             query_parts.append(context.cog_type.value)
 
-        return " ".join(query_parts)
+        return " ".join(query_parts).strip()
 
     def _format_input_for_signature(
         self, input_data: Dict[str, Any], cog_type: CognitiveType

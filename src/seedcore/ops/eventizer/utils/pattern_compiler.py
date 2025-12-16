@@ -23,7 +23,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from seedcore.ops.eventizer.utils.json_schema_validator import EventizerPatternsValidator
 
-from ..schemas.eventizer_models import EventizerConfig, PatternMatch
+from seedcore.models.eventizer import EventizerConfig, PatternMatch
 from .aho_corasick import create_keyword_matcher, OptimizedAhoCorasickMatcher
 
 logger = logging.getLogger(__name__)

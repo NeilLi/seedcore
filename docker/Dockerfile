@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # ---- Python Environment Setup ----
 USER ray
 # Upgrade pip first
-RUN pip install --upgrade pip wheel setuptools
+RUN python -m pip install --upgrade pip wheel setuptools
 
 # ---- Clean Pre-installed DGL/CUDA (Crucial for CPU images) ----
 RUN set -eux; \
@@ -48,21 +48,21 @@ PY
 
 # ---- Core Numerical Stack ----
 # Pin NumPy < 2.0.0 (1.26.4 is the gold standard for Py3.11 + Torch 2.x compatibility)
-RUN --mount=type=cache,target=/home/ray/.cache/pip \
-    pip install "numpy==1.26.4"
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    python -m pip install "numpy==1.26.4"
 
 # ---- Torch & DGL (CPU Optimized) ----
 # 1. Install PyTorch CPU first from official index
-RUN --mount=type=cache,target=/home/ray/.cache/pip \
-    pip install \
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    python -m pip install \
       torch==2.2.2+cpu \
       --index-url https://download.pytorch.org/whl/cpu
 
 # 2. Install torchdata and DGL
 # Note: torchdata 0.7.1 is compatible with torch 2.2.x
-RUN --mount=type=cache,target=/home/ray/.cache/pip \
-    pip install torchdata==0.7.1 && \
-    pip install --no-index \
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    python -m pip install torchdata==0.7.1 && \
+    python -m pip install --no-index \
       -f https://data.dgl.ai/wheels/torch-2.2/repo.html \
       dgl==2.2.1
 
@@ -83,8 +83,8 @@ PY
 
 # ---- Application Requirements ----
 COPY docker/requirements-minimal.txt /tmp/requirements.txt
-RUN --mount=type=cache,target=/home/ray/.cache/pip \
-    pip install -r /tmp/requirements.txt
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    python -m pip install -r /tmp/requirements.txt
 
 # ---- Application Code ----
 # Switch to root to copy files (preserves permissions), then switch back

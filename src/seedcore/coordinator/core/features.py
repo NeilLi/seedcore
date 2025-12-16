@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Literal
 from dataclasses import dataclass
 
 # Integration with the new Eventizer Schema
-from seedcore.ops.eventizer.schemas.eventizer_models import EventTags, Urgency
+from seedcore.models.eventizer import EventTags, Urgency
 
 logger = logging.getLogger(__name__)
 

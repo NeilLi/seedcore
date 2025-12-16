@@ -8,10 +8,15 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Create the holons table
+-- NOTE: Holons use 768-dimensional embeddings (e.g., OpenAI text-embedding-3-large, CLIP-style)
+-- This is INTENTIONAL and separate from graph embeddings:
+--   - graph_embeddings_128: 128-d for fast HGNN routing
+--   - graph_embeddings_1024: 1024-d for deep graph semantics
+--   - holons.embedding: 768-d for cognitive memory objects (not graph nodes)
 CREATE TABLE IF NOT EXISTS holons (
     id           SERIAL PRIMARY KEY,
     uuid         UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
-    embedding    VECTOR(768),
+    embedding    VECTOR(768),  -- 768-d for cognitive memory (separate from graph embeddings)
     meta         JSONB,
     created_at   TIMESTAMPTZ DEFAULT now()
 );

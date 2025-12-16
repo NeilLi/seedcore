@@ -20,13 +20,26 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
+try:
+    import ray  # pyright: ignore[reportMissingImports]
+except ImportError:
+    ray = None  # type: ignore
+
 from .base import BaseAgent
-from .roles.rbac import authorize_tool
 from .roles.specialization import Specialization
 
 logger = logging.getLogger(__name__)
 
 
+# Conditional decorator: use ray.remote if available, otherwise no-op
+if ray is not None:
+    ObserverAgentDecorator = ray.remote  # type: ignore
+else:
+    def ObserverAgentDecorator(cls):
+        return cls
+
+
+@ObserverAgentDecorator
 class ObserverAgent(BaseAgent):
     """
     Monitors working-memory miss patterns and proactively warms the cache
@@ -243,13 +256,12 @@ class ObserverAgent(BaseAgent):
 
     def _authorize(self, tool_name: str, context: Dict[str, Any]) -> bool:
         try:
-            dec = authorize_tool(
-                role_profile=self.role_profile,
+            dec = self.authorize_tool(
                 tool_name=tool_name,
                 cost_usd=0.0,
                 context={"agent_id": self.agent_id, **(context or {})},
             )
-            return bool(dec.allow)
+            return bool(dec.allowed)
         except Exception:
             return False
 

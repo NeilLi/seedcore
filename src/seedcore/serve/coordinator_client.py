@@ -181,14 +181,6 @@ class CoordinatorServiceClient(BaseServiceClient):
         """
         return await self.get("/predicates/config")
     
-    async def reload_predicates(self) -> Dict[str, Any]:
-        """
-        Reload predicate configuration from file.
-        
-        Note: This is an operational/admin endpoint (hidden from OpenAPI schema).
-        """
-        return await self.post("/predicates/reload", json={})
-    
     # Energy Management
     async def get_energy_state(self, agent_id: str) -> Dict[str, Any]:
         """

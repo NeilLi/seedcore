@@ -55,7 +55,7 @@ class StateServiceClient(BaseServiceClient):
         )
 
         super().__init__(
-            serviceName="StateService",
+            service_name="StateService",
             base_url=base_url,
             timeout=timeout,
             circuit_breaker=circuit_breaker,

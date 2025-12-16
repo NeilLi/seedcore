@@ -20,12 +20,12 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple
 
 # Import enhanced schemas for better integration
-from ..schemas.eventizer_models import (
-    EntitySpan,
+from seedcore.models.eventizer import (
     PIIAudit,
-    RedactMode
+    RedactMode,
+    EntitySpan,
 )
-from ..utils.text_normalizer import SpanMap
+from seedcore.ops.eventizer.utils.text_normalizer import SpanMap
 
 logger = logging.getLogger(__name__)
 

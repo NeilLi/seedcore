@@ -832,7 +832,7 @@ class FactManagerImpl:
 
 
 # --- 2. Define the FastAPI app (Ingress) ---
-app = FastAPI()
+app = FastAPI(docs_url=None, redoc_url=None)  # Disable docs - only accessed via RPC
 
 
 @serve.deployment(

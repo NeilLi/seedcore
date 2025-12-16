@@ -558,16 +558,21 @@ class CognitiveOrchestrator:
     # ============================================================================
     def _make_cores(self, profile: LLMProfile, count: int) -> List[CognitiveCore]:
         """Create a pool of CognitiveCore instances for a given profile."""
+        # Resolve provider and model for this profile
+        provider = _default_provider_deep() if profile == LLMProfile.DEEP else _default_provider_fast()
+        model = _model_for(provider, profile)
+        
         pool = []
         for i in range(count):
             core = CognitiveCore(
-                profile=profile,
+                llm_provider=provider,
+                model=model,
                 ocps_client=self.ocps_client,
                 graph_repo=self.graph_repo,
                 session_maker=self.session_maker,
             )
             pool.append(core)
-            logger.info(f"🧠 Initialized {profile.value} worker #{i+1}")
+            logger.info(f"🧠 Initialized {profile.value} worker #{i+1} ({provider}/{model})")
         return pool
 
     # ============================================================================

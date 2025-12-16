@@ -42,6 +42,25 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- Add lease-related columns if they don't exist (for idempotency)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'tasks' AND column_name = 'owner_id') THEN
+        ALTER TABLE tasks ADD COLUMN owner_id TEXT NULL;
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'tasks' AND column_name = 'lease_expires_at') THEN
+        ALTER TABLE tasks ADD COLUMN lease_expires_at TIMESTAMP WITH TIME ZONE NULL;
+    END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'tasks' AND column_name = 'last_heartbeat') THEN
+        ALTER TABLE tasks ADD COLUMN last_heartbeat TIMESTAMP WITH TIME ZONE NULL;
+    END IF;
+END $$;
+
 -- Create indexes for performance (matching model specification)
 CREATE INDEX IF NOT EXISTS ix_tasks_status_runafter ON tasks (status, run_after);
 CREATE INDEX IF NOT EXISTS ix_tasks_created_at_desc ON tasks (created_at);
@@ -52,8 +71,9 @@ CREATE INDEX IF NOT EXISTS ix_tasks_domain ON tasks (domain);
 CREATE INDEX IF NOT EXISTS ix_tasks_params_gin ON tasks USING gin (params);
 
 -- Create targeted JSONB path indexes to accelerate routing filters
+-- Note: Use -> instead of ->> to keep JSONB type for GIN index
 CREATE INDEX IF NOT EXISTS ix_tasks_params_routing_spec ON tasks
-USING gin ((params -> 'routing' ->> 'required_specialization'));
+USING gin ((params -> 'routing' -> 'required_specialization'));
 
 CREATE INDEX IF NOT EXISTS ix_tasks_params_routing_priority ON tasks
 USING gin ((params #> '{routing,hints,priority}'));
@@ -74,9 +94,15 @@ WHERE status = 'running';
 CREATE INDEX IF NOT EXISTS idx_tasks_owner_status ON tasks(owner_id, status, last_heartbeat) 
 WHERE owner_id IS NOT NULL;
 
--- Add check constraint for attempts >= 0
-ALTER TABLE tasks
-ADD CONSTRAINT ck_tasks_attempts_nonneg CHECK (attempts >= 0);
+-- Add check constraint for attempts >= 0 (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint 
+                   WHERE conname = 'ck_tasks_attempts_nonneg') THEN
+        ALTER TABLE tasks
+        ADD CONSTRAINT ck_tasks_attempts_nonneg CHECK (attempts >= 0);
+    END IF;
+END $$;
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_tasks_updated_at()

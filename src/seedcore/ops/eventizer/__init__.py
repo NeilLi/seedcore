@@ -15,22 +15,10 @@ Architecture:
 Note: EventizerService is exported from seedcore.services, not from this package.
 """
 
-from .schemas.eventizer_models import (
-    EventizerRequest,
-    EventizerResponse,
-    EventTags,
-    EventAttributes,
-    EventizerConfig,
-)
 from .fact_dao import FactDAO
 from .eventizer_features import features_from_payload
 
 __all__ = [
-    "EventizerRequest", 
-    "EventizerResponse",
-    "EventTags",
-    "EventAttributes",
-    "EventizerConfig",
     "FactDAO",
     "features_from_payload",
 ]

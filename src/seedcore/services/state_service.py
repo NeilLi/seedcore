@@ -35,7 +35,7 @@ setup_logging(app_name="seedcore.state_service.driver")
 logger = ensure_serve_logger("seedcore.state_service", level="DEBUG")
 
 # --- FastAPI app for ingress ---
-app = FastAPI(title="SeedCore Proactive State Service", version="2.1.0")
+app = FastAPI(title="SeedCore Proactive State Service", version="2.1.0", docs_url=None, redoc_url=None)  # Disable docs - only accessed via RPC
 
 
 # --- Service State ---
@@ -87,34 +87,65 @@ async def startup_event():
             state.w_mode = np.array([0.4, 0.3, 0.3], dtype=np.float32)
         logger.info(f"✅ Loaded w_mode: {state.w_mode}")
 
-        # Connect to Organism Service
-        organism_router = get_organism_service_handle()
+        # Connect to Organism Service (with error handling)
+        try:
+            organism_router = get_organism_service_handle()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to get organism service handle: {e} - will retry during polling")
+            organism_router = None
 
         # 1. Start Agent Aggregator (Fast poll for dynamics)
-        graph_repo = AgentGraphRepository()
-
-        state.agent_aggregator = AgentAggregator(
-            organism_router=organism_router,
-            graph_repo=graph_repo,           # ← inject repository here
-            poll_interval=2.0,
-        )
+        try:
+            graph_repo = AgentGraphRepository()
+            state.agent_aggregator = AgentAggregator(
+                organism_router=organism_router,
+                graph_repo=graph_repo,           # ← inject repository here
+                poll_interval=2.0,
+            )
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize AgentAggregator: {e}", exc_info=True)
+            raise  # AgentAggregator is critical, fail fast
 
         # 2. Start Memory Aggregator (Slower poll for stability)
-        state.memory_aggregator = MemoryAggregator(poll_interval=5.0)
-        await state.memory_aggregator.start()
+        try:
+            state.memory_aggregator = MemoryAggregator(poll_interval=5.0)
+            await state.memory_aggregator.start()
+        except Exception as e:
+            logger.error(f"❌ Failed to start MemoryAggregator: {e}", exc_info=True)
+            raise  # MemoryAggregator is critical, fail fast
 
         # 3. Start System Aggregator (Pattern tracking)
-        state.system_aggregator = SystemAggregator(poll_interval=5.0)
-        await state.system_aggregator.start()
+        try:
+            state.system_aggregator = SystemAggregator(poll_interval=5.0)
+            await state.system_aggregator.start()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to start SystemAggregator: {e} - continuing without it")
+            state.system_aggregator = None  # SystemAggregator is optional
 
-        # 4. Warmup: Wait for first data
-        await asyncio.gather(
+        # 4. Warmup: Wait for first data (with timeout to prevent startup failure)
+        # Note: We don't fail startup if aggregators can't get initial data immediately
+        # They will continue polling in the background and data will be available soon
+        wait_tasks = [
             state.agent_aggregator.wait_for_first_poll(),
             state.memory_aggregator.wait_for_first_poll(),
-            state.system_aggregator.wait_for_first_poll(),
-        )
-
-        logger.info("✅ All proactive aggregators are running and have data.")
+        ]
+        if state.system_aggregator:
+            wait_tasks.append(state.system_aggregator.wait_for_first_poll())
+        
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*wait_tasks, return_exceptions=True),
+                timeout=30.0,  # 30 second timeout for initial data
+            )
+            # Check for exceptions in results
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.warning(f"⚠️ Aggregator {i} had error during first poll: {result}")
+            logger.info("✅ Proactive aggregators are running (some may still be gathering initial data).")
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ Timeout waiting for first poll data - aggregators will continue in background")
+        except Exception as e:
+            logger.warning(f"⚠️ Error waiting for first poll data: {e} - aggregators will continue in background")
 
     except Exception as e:
         logger.error(

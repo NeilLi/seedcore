@@ -319,7 +319,7 @@ async def _background_sampler():
 # --- Lifespan Events (Startup and Shutdown) ---
 
 # --- FastAPI App ---
-app = FastAPI(title="SeedCore Proactive Energy Service", version="2.0.0")
+app = FastAPI(title="SeedCore Proactive Energy Service", version="2.0.0", docs_url=None, redoc_url=None)  # Disable docs - only accessed via RPC
 
 
 @app.on_event("startup")

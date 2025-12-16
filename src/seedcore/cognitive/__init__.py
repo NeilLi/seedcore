@@ -21,11 +21,7 @@ from .dspy_client import DSpyCognitiveClient
 # Import the moved modules
 from .cognitive_core import (
     CognitiveCore, 
-    CognitiveContext, 
-    CognitiveTaskType,
-    initialize_cognitive_core,
-    get_cognitive_core,
-    reset_cognitive_core
+    CognitiveContext,
 )
 from .cognitive_registry import (
     cognitive_signature,
@@ -44,11 +40,7 @@ __all__ = [
     'for_env',
     # Cognitive core exports
     'CognitiveCore',
-    'CognitiveContext', 
-    'CognitiveTaskType',
-    'initialize_cognitive_core',
-    'get_cognitive_core',
-    'reset_cognitive_core',
+    'CognitiveContext',
     # Cognitive registry exports
     'cognitive_signature',
     'cognitive_handler',

@@ -1,6 +1,43 @@
 -- 008_hgnn_agent_layer.sql
 BEGIN;
 
+-- Ensure update_timestamps() function exists (created in 007, but ensure it's here for idempotency)
+CREATE OR REPLACE FUNCTION update_timestamps()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+-- Ensure agent_registry and organ_registry exist (created in 007, but ensure here for idempotency)
+CREATE TABLE IF NOT EXISTS agent_registry (
+  agent_id    TEXT PRIMARY KEY,
+  display_name TEXT NULL,
+  props       JSONB NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS organ_registry (
+  organ_id    TEXT PRIMARY KEY,
+  agent_id    TEXT NULL REFERENCES agent_registry(agent_id) ON UPDATE CASCADE ON DELETE SET NULL,
+  kind        TEXT NULL,
+  props       JSONB NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Create triggers for agent_registry and organ_registry if they don't exist
+DROP TRIGGER IF EXISTS trg_agent_registry_updated_at ON agent_registry;
+CREATE TRIGGER trg_agent_registry_updated_at
+BEFORE UPDATE ON agent_registry
+FOR EACH ROW EXECUTE FUNCTION update_timestamps();
+
+DROP TRIGGER IF EXISTS trg_organ_registry_updated_at ON organ_registry;
+CREATE TRIGGER trg_organ_registry_updated_at
+BEFORE UPDATE ON organ_registry
+FOR EACH ROW EXECUTE FUNCTION update_timestamps();
+
 -- === Dimension tables (TEXT natural keys) ===
 CREATE TABLE IF NOT EXISTS model (
   model_name   TEXT PRIMARY KEY,
@@ -30,7 +67,7 @@ CREATE TABLE IF NOT EXISTS skill (
   updated_at   TIMESTAMPTZ DEFAULT now()
 );
 
--- Reuse the update_timestamps() from 007 for updated_at maintenance
+-- Reuse the update_timestamps() function (created earlier in this migration) for updated_at maintenance
 DROP TRIGGER IF EXISTS trg_model_updated_at   ON model;
 DROP TRIGGER IF EXISTS trg_policy_updated_at  ON policy;
 DROP TRIGGER IF EXISTS trg_service_updated_at ON service;
