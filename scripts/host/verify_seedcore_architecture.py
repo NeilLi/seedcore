@@ -12,6 +12,7 @@ import ast
 import argparse
 import asyncio
 import requests
+import re
 
 # Import simplified TaskType enum
 from seedcore.models.task import TaskType
@@ -1249,21 +1250,27 @@ def verify_database_schema(conn):
                     schema_ok = False
             
             # Verify vector dimension is 128
+            # Use format_type to get the full type string (e.g., "vector(128)")
             cur.execute("""
-                SELECT EXISTS (
-                    SELECT 1 FROM pg_attribute a
-                    JOIN pg_type t ON a.atttypid = t.oid
-                    WHERE a.attrelid = 'graph_embeddings_128'::regclass
-                    AND a.attname = 'emb'
-                    AND t.typname = 'vector'
-                    AND (a.atttypmod - 4) / 4 = 128
-                )
+                SELECT format_type(a.atttypid, a.atttypmod) as type_str
+                FROM pg_attribute a
+                JOIN pg_type t ON a.atttypid = t.oid
+                WHERE a.attrelid = 'graph_embeddings_128'::regclass
+                AND a.attname = 'emb'
+                AND t.typname = 'vector'
             """)
-            dim_128_ok = cur.fetchone()[0]
-            if dim_128_ok:
-                log.info("   ✅ graph_embeddings_128.emb is VECTOR(128)")
+            dim_result = cur.fetchone()
+            if dim_result:
+                type_str = dim_result[0]
+                # Extract dimension from type string like "vector(128)"
+                match = re.search(r'vector\((\d+)\)', type_str.lower())
+                if match and int(match.group(1)) == 128:
+                    log.info(f"   ✅ graph_embeddings_128.emb is {type_str}")
+                else:
+                    log.error(f"   ❌ graph_embeddings_128.emb dimension incorrect: got {type_str}, expected vector(128)")
+                    schema_ok = False
             else:
-                log.error("   ❌ graph_embeddings_128.emb dimension incorrect or missing")
+                log.error("   ❌ graph_embeddings_128.emb column not found or not of type vector")
                 schema_ok = False
             
             # Check graph_embeddings_1024 table structure
@@ -1287,21 +1294,27 @@ def verify_database_schema(conn):
                     schema_ok = False
             
             # Verify vector dimension is 1024
+            # Use format_type to get the full type string (e.g., "vector(1024)")
             cur.execute("""
-                SELECT EXISTS (
-                    SELECT 1 FROM pg_attribute a
-                    JOIN pg_type t ON a.atttypid = t.oid
-                    WHERE a.attrelid = 'graph_embeddings_1024'::regclass
-                    AND a.attname = 'emb'
-                    AND t.typname = 'vector'
-                    AND (a.atttypmod - 4) / 4 = 1024
-                )
+                SELECT format_type(a.atttypid, a.atttypmod) as type_str
+                FROM pg_attribute a
+                JOIN pg_type t ON a.atttypid = t.oid
+                WHERE a.attrelid = 'graph_embeddings_1024'::regclass
+                AND a.attname = 'emb'
+                AND t.typname = 'vector'
             """)
-            dim_1024_ok = cur.fetchone()[0]
-            if dim_1024_ok:
-                log.info("   ✅ graph_embeddings_1024.emb is VECTOR(1024)")
+            dim_result = cur.fetchone()
+            if dim_result:
+                type_str = dim_result[0]
+                # Extract dimension from type string like "vector(1024)"
+                match = re.search(r'vector\((\d+)\)', type_str.lower())
+                if match and int(match.group(1)) == 1024:
+                    log.info(f"   ✅ graph_embeddings_1024.emb is {type_str}")
+                else:
+                    log.error(f"   ❌ graph_embeddings_1024.emb dimension incorrect: got {type_str}, expected vector(1024)")
+                    schema_ok = False
             else:
-                log.error("   ❌ graph_embeddings_1024.emb dimension incorrect or missing")
+                log.error("   ❌ graph_embeddings_1024.emb column not found or not of type vector")
                 schema_ok = False
             
             # Verify old graph_embeddings table does NOT exist (migration 019 should have removed it)

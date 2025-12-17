@@ -187,12 +187,12 @@ def intelligent_task_creation(prompt: str):
     p = prompt.lower()
     payload = {"description": prompt, "run_immediately": True, "params": {}}
     if "plan" in p or "create a plan" in p:
-        payload["type"] = "dspy.plan"
+        payload["type"] = "query"  # TaskType.QUERY
         payload["drift_score"] = 0.1
         payload["params"]["task_description"] = prompt
         print("🔍 Interpreted as a 'planning' task (low drift).")
     elif "analyze" in p or "reason about" in p:
-        payload["type"] = "dspy.reason"
+        payload["type"] = "query"  # TaskType.QUERY
         payload["drift_score"] = 0.2
         if "incident" in p:
             parts = prompt.split()
@@ -203,7 +203,7 @@ def intelligent_task_creation(prompt: str):
                 pass
         print("🔍 Interpreted as a 'reasoning' task (low drift).")
     else:
-        payload["type"] = "general_query"
+        payload["type"] = "query"  # TaskType.QUERY
         payload["drift_score"] = 0.9
         print("⚠️ Unrecognized pattern. Escalating with high drift score.")
 

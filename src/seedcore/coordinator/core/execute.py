@@ -245,7 +245,8 @@ async def execute_task(
     # 1. COMPUTE DECISION (System 1 vs 2)
     # ---------------------------------------------------------
     routing_dec = await _compute_routing_decision(
-        task=task, ctx=TaskContext.from_dict(task_context), cfg=route_config
+        task=task, ctx=TaskContext.from_dict(task_context), 
+        route_cfg=route_config, exec_cfg=execution_config
     )
 
     decision_kind = routing_dec["decision_kind"]
@@ -562,7 +563,8 @@ async def _compute_routing_decision(
     *,
     task: TaskPayload,
     ctx: TaskContext,
-    cfg: RouteConfig,
+    route_cfg: RouteConfig,
+    exec_cfg: ExecutionConfig,
     correlation_id: str | None = None,
 ) -> Dict[str, Any]:
     """
@@ -575,11 +577,11 @@ async def _compute_routing_decision(
     # ------------------------------------------------------------------
     # Pass eventizer_data (dict with "text" key) or task description for drift detection
     # The compute_drift_score function will extract the text string from the dict
-    raw_drift = await cfg.compute_drift_score(
+    raw_drift = await exec_cfg.compute_drift_score(
         task.model_dump(), 
         ctx.eventizer_data or {}
     )
-    drift_state = cfg.ocps_valve.update(raw_drift)
+    drift_state = route_cfg.ocps_valve.update(raw_drift)
     is_escalated = drift_state.is_breached
 
     # Determine kind
@@ -604,7 +606,7 @@ async def _compute_routing_decision(
     # Only run PKG logic if escalated
     if is_escalated:
         pkg_meta, proto_plan = await _try_run_pkg_evaluation(
-            ctx, cfg, intent, raw_drift, drift_state
+            ctx, route_cfg, intent, raw_drift, drift_state
         )
 
     # ------------------------------------------------------------------

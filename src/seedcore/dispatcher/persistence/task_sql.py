@@ -34,8 +34,7 @@ SET status = 'completed',
     locked_by = NULL,
     lease_expires_at = NULL,
     updated_at = NOW(),
-    result = $3::jsonb,   -- Optional: Save output if you have it
-    completed_at = NOW()  -- Optional: Good for analytics
+    result = $3::jsonb   -- Optional: Save output if you have it
 WHERE id = $1 
   AND locked_by = $2;     -- CRITICAL: Only complete if I still own it
 """

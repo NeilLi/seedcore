@@ -156,6 +156,9 @@ class RoutingDirectory:
         This component acts as the 'Cerebellum' - handling high-speed coordination
         without blocking the higher cognitive functions.
         """
+        # Initialize logger (CRITICAL: must be set before any logging calls)
+        self.logger = logger
+        
         # --- 1. Configuration & Safety Defaults ---
         # Ensure we don't crash if config is missing keys; set defaults for weights
         self._raw_config = organism.router_cfgs or {}

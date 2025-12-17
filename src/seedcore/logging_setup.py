@@ -1,8 +1,37 @@
 from __future__ import annotations
 import os, sys, logging
 from logging.config import dictConfig
+from logging import Filter
 
 DEFAULT_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+
+class RayServeMetricsFilter(Filter):
+    """
+    Filter to suppress non-critical Ray Serve metrics errors and Ray Client cleanup noise.
+    
+    Ray Serve's internal metrics system sometimes tries to use Ray Client API
+    which can fail when using ray:// addresses. This is non-critical and doesn't
+    affect functionality, so we suppress the error to reduce log noise.
+    
+    Also suppresses Ray Client streaming RPC cleanup errors that occur during shutdown.
+    """
+    def filter(self, record):
+        # Suppress "Ray Client is not connected" errors from metrics_utils
+        if "metrics_utils.py" in record.pathname or "router.py" in record.pathname:
+            if "Ray Client is not connected" in record.getMessage():
+                return False
+            if "push_metrics_to_controller" in record.getMessage():
+                return False
+        
+        # Suppress Ray Client cleanup errors (harmless threading exceptions)
+        if "ray_client_streaming_rpc" in record.getMessage():
+            return False
+        if "ray/util/client" in record.pathname:
+            if "InvalidStateError" in record.getMessage() or "CANCELLED" in record.getMessage():
+                return False
+        
+        return True
 
 _STDOUT_ONLY = {
     "version": 1,
@@ -16,6 +45,12 @@ _STDOUT_ONLY = {
             "stream": "ext://sys.stdout",  # This is crucial for Ray
             "formatter": "std",
             "level": DEFAULT_LEVEL,
+            "filters": ["ray_serve_metrics_filter"],
+        }
+    },
+    "filters": {
+        "ray_serve_metrics_filter": {
+            "()": "seedcore.logging_setup.RayServeMetricsFilter",
         }
     },
     "root": {"level": DEFAULT_LEVEL, "handlers": ["stdout"]},
@@ -79,6 +114,42 @@ def setup_logging(app_name: str = "", config_path_env: str = "SEEDCORE_LOGCFG"):
     # No external config → enforce stdout-only and remove any file handlers
     _nuke_file_handlers()
     dictConfig(_STDOUT_ONLY)
+    
+    # Apply filter to suppress non-critical Ray Serve metrics errors
+    metrics_filter = RayServeMetricsFilter()
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        handler.addFilter(metrics_filter)
+    
+    # Also apply to Ray's internal loggers
+    ray_loggers = [
+        logging.getLogger("ray.serve"),
+        logging.getLogger("ray.serve._private"),
+        logging.getLogger("ray.serve._private.metrics_utils"),
+        logging.getLogger("ray.serve._private.router"),
+        logging.getLogger("ray.util.client"),
+        logging.getLogger("ray.util.client.dataclient"),
+    ]
+    for logger in ray_loggers:
+        logger.addFilter(metrics_filter)
+    
+    # Suppress unhandled exceptions in Ray Client background threads
+    # This is a known Ray issue where cleanup threads try to set exceptions on cancelled futures
+    import sys
+    import threading
+    
+    original_excepthook = threading.excepthook
+    
+    def filtered_excepthook(args):
+        # Suppress harmless Ray Client cleanup errors
+        if "ray_client_streaming_rpc" in str(args.thread) or "ray/util/client" in str(args.exc_type):
+            if "InvalidStateError" in str(args.exc_value) or "CANCELLED" in str(args.exc_value):
+                # This is a harmless cleanup race condition, suppress it
+                return
+        # Call original handler for all other exceptions
+        original_excepthook(args)
+    
+    threading.excepthook = filtered_excepthook
     
     # ***REMOVED BUGGY BASICCONFIG CALL***
     # The dictConfig call above is sufficient and correct.

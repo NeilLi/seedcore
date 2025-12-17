@@ -22,6 +22,9 @@ cd "$SCRIPT_DIR"
 bash "${SCRIPT_DIR}/setup-ray-serve.sh" "$@"
 echo
 
+echo "Waiting for Ray services to be fully ready (30s)..."
+sleep 30
+
 # Step 2: Bootstrap Organism
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📍 Step 2/3: Bootstrapping Organism and Dispatchers"

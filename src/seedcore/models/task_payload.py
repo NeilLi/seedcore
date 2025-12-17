@@ -2,9 +2,12 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, List
 from enum import Enum
 import json
+import logging
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator  # pyright: ignore[reportMissingImports]
+
+logger = logging.getLogger(__name__)
 # from seedcore.models.task import TaskType
 
 # ------------------------------------------------------------------------
@@ -308,9 +311,55 @@ class TaskPayload(BaseModel):
     def from_db(cls, row: Dict[str, Any]) -> "TaskPayload":
         """
         Hydrates the object from a DB row, unpacking JSONB envelopes into mirrors.
-        """
-        params = row.get("params") or {}
         
+        This method normalizes types at the DB boundary to handle cases where
+        JSONB columns might be returned as strings instead of dicts.
+        """
+        # ====================================================================
+        # DB BOUNDARY NORMALIZATION (Critical Safety Layer)
+        # ====================================================================
+        # Never assume JSONB columns are already dicts - normalize at the boundary
+        raw_params = row.get("params")
+        
+        # Handle None case
+        if raw_params is None:
+            logger.warning(
+                "Task %s has missing params field, using empty dict",
+                row.get("id") or row.get("task_id") or "unknown"
+            )
+            params = {}
+        # Handle string case (JSONB sometimes returned as string by some drivers)
+        elif isinstance(raw_params, str):
+            logger.debug(
+                "Parsing JSON params string for task %s",
+                row.get("id") or row.get("task_id") or "unknown"
+            )
+            try:
+                params = json.loads(raw_params)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Invalid JSON in params field for task {row.get('id') or row.get('task_id') or 'unknown'}: {e}"
+                ) from e
+        # Handle dict case (normal case)
+        elif isinstance(raw_params, dict):
+            params = raw_params
+        # Handle invalid type
+        else:
+            raise TypeError(
+                f"Task params must be dict or JSON string, got {type(raw_params).__name__} "
+                f"for task {row.get('id') or row.get('task_id') or 'unknown'}"
+            )
+        
+        # Final validation: ensure params is a dict after normalization
+        if not isinstance(params, dict):
+            raise TypeError(
+                f"Task params must be dict after normalization, got {type(params).__name__} "
+                f"for task {row.get('id') or row.get('task_id') or 'unknown'}"
+            )
+        
+        # ====================================================================
+        # UNPACK ENVELOPES (existing logic)
+        # ====================================================================
         # Unpack Envelopes
         routing = params.get("routing") or {}
         hints = routing.get("hints") or {}

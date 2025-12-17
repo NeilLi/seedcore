@@ -67,7 +67,10 @@ class UtilityAgent(BaseAgent):
             apply_changes: If False, operate in dry-run (recommendations only)
             **kwargs: Forwarded to BaseAgent (role_profile, tool_manager, etc.)
         """
-        super().__init__(agent_id=agent_id, specialization=Specialization.ULA, **kwargs)
+        # Remove specialization from kwargs if present to avoid conflict
+        # UtilityAgent always uses UTILITY specialization
+        kwargs.pop("specialization", None)
+        super().__init__(agent_id=agent_id, specialization=Specialization.UTILITY, **kwargs)
 
         self.interval_s = float(interval_s)
         self.max_consecutive_errors = int(max_consecutive_errors)

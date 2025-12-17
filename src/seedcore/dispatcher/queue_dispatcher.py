@@ -146,17 +146,24 @@ class Dispatcher:
         if self._running:
             return "already_running"
 
+        # Try to initialize if not ready, but don't fail if it doesn't succeed immediately
+        # The main loop will retry initialization and skip task processing until ready
         if self._startup_status != "ready":
-            # Auto-initialize if not ready
-            if not await self.ready():
-                return "failed_init"
+            logger.info("[%s] Initializing before starting loop...", self.name)
+            # Try initialization, but don't block - main loop will retry if needed
+            try:
+                await self.ready()
+            except Exception as e:
+                logger.warning("[%s] Initial initialization attempt failed, main loop will retry: %s", self.name, e)
+                self._startup_status = "initializing"
 
         self._running = True
-        logger.info("[%s] 🚀 Dispatcher loop starting", self.name)
+        logger.info("[%s] 🚀 Dispatcher loop starting (status: %s)", self.name, self._startup_status)
 
         loop = asyncio.get_event_loop()
 
         # Create daemons
+        # Main loop will skip task processing until _startup_status == "ready"
         self._daemons = [
             loop.create_task(self._main_loop()),
             loop.create_task(self._lease_daemon()),
@@ -171,7 +178,28 @@ class Dispatcher:
     async def _main_loop(self):
         while self._running:
             try:
-                # 1. Claim Batch
+                # Skip task processing until fully initialized
+                if self._startup_status != "ready":
+                    # Try to initialize if not already attempted
+                    if self._startup_status == "initializing":
+                        logger.debug("[%s] Still initializing, skipping task processing...", self.name)
+                        await asyncio.sleep(2.0)  # Check every 2 seconds
+                        continue
+                    # If initialization failed, try again periodically
+                    elif self._startup_status.startswith("error"):
+                        logger.warning("[%s] Initialization failed (%s), retrying...", self.name, self._startup_status)
+                        self._startup_status = "initializing"
+                        if not await self.ready():
+                            await asyncio.sleep(5.0)  # Wait longer before retry
+                            continue
+                    else:
+                        # Unknown status, try to initialize
+                        self._startup_status = "initializing"
+                        if not await self.ready():
+                            await asyncio.sleep(2.0)
+                            continue
+
+                # 1. Claim Batch (only if ready)
                 batch = await self._repo.claim_batch(batch_size=self.claim_batch)
 
                 if not batch:
@@ -216,26 +244,89 @@ class Dispatcher:
             # B. Route and Execute
             # Use OrganismRouter for tasks with conversation_id (sticky sessions)
             # Otherwise use CoordinatorHttpRouter (standard routing)
-            if mode == "agent_tunnel" or conversation_id:
-                # Lazy initialization: create OrganismRouter only when first needed
-                if self._organism_router is None:
-                    self._organism_router = OrganismRouter()
-                result = await self._organism_router.route_and_execute(payload)
-            else:
-                # Standard routing through Coordinator
-                result = await self._router.route_and_execute(payload)
+            try:
+                if mode == "agent_tunnel" or conversation_id:
+                    # Lazy initialization: create OrganismRouter only when first needed
+                    if self._organism_router is None:
+                        self._organism_router = OrganismRouter()
+                    result = await self._organism_router.route_and_execute(payload)
+                else:
+                    # Standard routing through Coordinator
+                    result = await self._router.route_and_execute(payload)
+            except Exception as router_error:
+                # Catch any exceptions from routers and convert to error result
+                # This ensures the dispatcher never crashes due to router errors
+                logger.error(
+                    "[%s] ❌ Router exception for task %s: %s",
+                    self.name, task_id, router_error, exc_info=True
+                )
+                result = {
+                    "success": False,
+                    "error": f"Router exception: {str(router_error)}",
+                    "kind": "error",
+                    "path": "router_exception"
+                }
 
-            # C. Settle
-            if result.get("success"):
-                # Use updated method name 'complete_task'
-                await self._repo.complete_task(task_id, result)
+            # C. Normalize result to dict (defensive check)
+            # Handle case where router returns a string, None, or other non-dict type
+            # This is a critical safety check to prevent AttributeError on .get() calls
+            # The router should always return a dict, but we defensively handle edge cases
+            if not isinstance(result, dict):
+                logger.error(
+                    "[%s] ❌ Router returned non-dict result (type=%s, value=%s) for task %s",
+                    self.name, type(result).__name__, str(result)[:200], task_id
+                )
+                # Convert any non-dict result to proper error dict format
+                result = {
+                    "success": False,
+                    "error": str(result) if result is not None else "Router returned None",
+                    "kind": "error",
+                    "path": "router_type_error"
+                }
+            
+            # D. Settle - Additional safeguard: ensure result is dict before accessing
+            # This final check protects against any edge cases where result might not be a dict
+            if not isinstance(result, dict):
+                # This should never happen after normalization, but handle it defensively
+                logger.critical(
+                    "[%s] ❌ CRITICAL: Result is not a dict before access (type=%s) for task %s",
+                    self.name, type(result).__name__, task_id
+                )
+                result = {
+                    "success": False,
+                    "error": f"Critical: Result is not a dict (type={type(result).__name__})",
+                    "kind": "error",
+                    "path": "result_type_critical_error"
+                }
+            
+            # Now safely access result.get() - we've guaranteed result is a dict
+            success = result.get("success")
+            
+            # Defensive check: log if success field is missing or invalid
+            if success is None:
+                logger.error(
+                    "[%s] ❌ Coordinator returned result without 'success' field for task %s. "
+                    "Result keys: %s, Result sample: %s",
+                    self.name, task_id, list(result.keys())[:10], str(result)[:500]
+                )
+                # Treat missing success as failure
+                success = False
+                result["success"] = False
+                if "error" not in result:
+                    result["error"] = "coordinator_response_missing_success_field"
+            
+            if success:
+                # Mark task as completed with result
+                await self._repo.complete(task_id, result)
                 logger.info("[%s] ✅ Task %s done", self.name, task_id)
             else:
                 err = str(result.get("error") or "unknown_error")
-                await self._repo.retry(task_id, err, delay_seconds=15)
+                # Log the full result structure when retrying for debugging
                 logger.warning(
-                    "[%s] 🔁 Task %s failed logic: %s", self.name, task_id, err
+                    "[%s] 🔁 Task %s failed logic: %s (result keys: %s)",
+                    self.name, task_id, err, list(result.keys())[:10]
                 )
+                await self._repo.retry(task_id, err, delay_seconds=15)
 
         except asyncio.CancelledError:
             logger.warning("[%s] 🛑 Task %s cancelled (Lease Lost)", self.name, task_id)
@@ -266,6 +357,10 @@ class Dispatcher:
         while self._running:
             try:
                 await asyncio.sleep(self.lease_interval)
+
+                # Skip lease renewal if not ready (no repo available)
+                if self._startup_status != "ready" or self._repo is None:
+                    continue
 
                 # Copy keys to avoid 'dictionary changed size during iteration'
                 active_ids = list(self._tasks_in_progress.keys())
@@ -298,6 +393,11 @@ class Dispatcher:
         while self._running:
             try:
                 await asyncio.sleep(self.requeue_interval)
+                
+                # Skip requeue if not ready (no repo available)
+                if self._startup_status != "ready" or self._repo is None:
+                    continue
+                
                 # timeout_s parameter removed based on SQL review
                 count = await self._repo.requeue_stuck()
                 if count:

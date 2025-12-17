@@ -207,6 +207,11 @@ def _ensure_actor_pool(
     """
     Generic logic to ensure a pool of actors (Graph or Queue Dispatchers).
     """
+    # If count is 0, skip bootstrap (feature disabled)
+    if count == 0:
+        logger.info(f"ℹ️ {base_name} count is 0, skipping bootstrap (feature disabled)")
+        return True
+    
     ready_count = 0
 
     for i in range(count):
@@ -252,25 +257,47 @@ def _ensure_actor_pool(
             is_ready = True  # Default to ready if no ready() method
             try:
                 # Try to call ready() - only Dispatcher (queue_dispatcher) has this
-                # Use a shorter timeout to avoid hanging on gRPC issues
-                is_ready = ray.get(actor.ready.remote(timeout_s=20.0), timeout=25.0)
+                # Use a longer timeout to allow DB connection pool initialization
+                # The ready() method itself has a 30s timeout, so we give it 40s total
+                is_ready = ray.get(actor.ready.remote(timeout_s=30.0), timeout=40.0)
             except AttributeError:
                 # GraphDispatcher doesn't have ready() method - that's OK, skip the check
                 logger.debug(f"  ℹ️ {name} doesn't have ready() method, skipping readiness check")
                 is_ready = True
             except ray.exceptions.RayActorError as ray_err:
-                # Actor died or session was cleaned up - this is recoverable
+                # Actor died or session was cleaned up - check if it's still pingable
                 logger.warning(f"⚠️ {name} actor error during ready() check: {ray_err}")
-                is_ready = False
+                # If actor is still pingable, consider it ready (ready() might have failed but actor is alive)
+                try:
+                    ray.get(actor.ping.remote(), timeout=5)
+                    logger.info(f"  ℹ️ {name} is pingable despite ready() error, considering ready")
+                    is_ready = True
+                except Exception:
+                    is_ready = False
             except Exception as ready_err:
-                # Check if it's a gRPC connection error (common during startup)
+                # Check if it's a timeout or gRPC connection error (common during startup)
                 err_str = str(ready_err)
-                if "cleaned up" in err_str or "NOT_FOUND" in err_str or "reconnect" in err_str:
+                if "timeout" in err_str.lower() or "Timeout" in err_str:
+                    # Timeout on ready() - check if actor is still alive and pingable
+                    logger.warning(f"⚠️ {name} ready() check timed out, checking if actor is alive...")
+                    try:
+                        ray.get(actor.ping.remote(), timeout=5)
+                        logger.info(f"  ℹ️ {name} is pingable despite ready() timeout, considering ready")
+                        is_ready = True
+                    except Exception:
+                        is_ready = False
+                elif "cleaned up" in err_str or "NOT_FOUND" in err_str or "reconnect" in err_str:
                     logger.debug(f"  ℹ️ {name} gRPC connection issue during ready() (may retry): {ready_err}")
                     is_ready = False  # Will retry on next cycle
                 else:
                     logger.warning(f"⚠️ {name} ready() check failed: {ready_err}")
-                    is_ready = False
+                    # Still check if actor is pingable as fallback
+                    try:
+                        ray.get(actor.ping.remote(), timeout=5)
+                        logger.info(f"  ℹ️ {name} is pingable despite ready() error, considering ready")
+                        is_ready = True
+                    except Exception:
+                        is_ready = False
             
             if is_ready:
                 ready_count += 1
@@ -279,17 +306,46 @@ def _ensure_actor_pool(
                 except ray.exceptions.RayActorError:
                     logger.warning(f"⚠️ {name} actor died before run() could be called")
             else:
-                logger.warning(f"⚠️ {name} reported not ready")
+                logger.warning(f"⚠️ {name} reported not ready (will not be counted)")
         except Exception as e:
             logger.warning(f"⚠️ {name} warmup/run failed: {e}")
 
     logger.info(f"📊 {base_name} Pool: {ready_count}/{count} ready")
 
+    # If count is 0, this is intentional (feature disabled) - return success
+    if count == 0:
+        logger.info(f"✅ {base_name} bootstrap succeeded: Feature disabled (count=0)")
+        return True
+
     if strict and ready_count < count:
         logger.error(f"❌ Strict mode enabled: Expected {count}, got {ready_count}")
         return False
 
-    return ready_count > 0
+    # Success if at least one dispatcher is ready
+    # Even if some fail ready() check, if they're pingable and running, they'll work
+    if ready_count > 0:
+        logger.info(f"✅ {base_name} bootstrap succeeded: {ready_count}/{count} dispatchers ready")
+        return True
+    else:
+        logger.warning(f"⚠️ {base_name} bootstrap: No dispatchers passed ready() check, but actors may still be functional")
+        # If no dispatchers passed ready() but they exist and are pingable, still consider success
+        # This handles cases where DB connection is slow but dispatchers are otherwise healthy
+        pingable_count = 0
+        for i in range(count):
+            name = f"{base_name}_{i}"
+            try:
+                actor = ray.get_actor(name, namespace=RAY_NAMESPACE)
+                ray.get(actor.ping.remote(), timeout=5)
+                pingable_count += 1
+            except Exception:
+                pass
+        
+        if pingable_count > 0:
+            logger.info(f"✅ {base_name} bootstrap succeeded: {pingable_count}/{count} dispatchers are pingable (ready() check may have timed out)")
+            return True
+        
+        logger.error(f"❌ {base_name} bootstrap failed: No dispatchers are ready or pingable")
+        return False
 
 
 def _wait_for_startup(actor: Any, name: str, timeout: int = 20):

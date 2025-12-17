@@ -178,6 +178,7 @@ class BaseAgent:
 
         # 6. Operational Metrics & Locks
         self.load: float = 0.0
+        self._load_max: float = self._LOAD_MAX  # Initialize from class constant
         self._last_role_update_time: float = 0.0
         self._role_update_min_interval: float = 5.0
         self._role_smoothing_alpha: float = 0.3
@@ -1614,17 +1615,10 @@ class BaseAgent:
                     tv.tools.append({"name": name, "args": dict(args or {})})
 
         # 9. Hints & Constraints
-        # Priority: Pydantic Field > Routing Hint
-        tv.min_capability = (
-            payload.min_capability
-            if payload.min_capability is not None
-            else hints.get("min_capability")
-        )
-        tv.max_mem_util = (
-            payload.max_mem_util
-            if payload.max_mem_util is not None
-            else hints.get("max_mem_util")
-        )
+        # Note: TaskPayload doesn't have min_capability/max_mem_util as direct fields,
+        # they're only available via params.routing.hints, so use hints.get() directly
+        tv.min_capability = hints.get("min_capability")
+        tv.max_mem_util = hints.get("max_mem_util")
         tv.priority = int(
             payload.priority
             if payload.priority is not None

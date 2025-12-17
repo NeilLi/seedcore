@@ -117,7 +117,6 @@ class EventizerServiceClient:
             if not self._client:
                 self._client = httpx.AsyncClient(
                     base_url=self.base_url,
-                    http2=True,
                     timeout=DEFAULT_TIMEOUT,
                     limits=DEFAULT_LIMITS,
                 )

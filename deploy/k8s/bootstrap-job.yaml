@@ -9,7 +9,7 @@ metadata:
 spec:
   completions: 1
   parallelism: 1
-  backoffLimit: 3
+  backoffLimit: 2
   ttlSecondsAfterFinished: 600
   template:
     metadata:
@@ -47,9 +47,9 @@ spec:
             - name: FORCE_REPLACE_DISPATCHERS
               value: "true"
             - name: DISPATCHER_COUNT
-              value: "2"
-            - name: SEEDCORE_GRAPH_DISPATCHERS
               value: "1"
+            - name: SEEDCORE_GRAPH_DISPATCHERS
+              value: "0"
 
             - name: DGLBACKEND
               value: "pytorch"

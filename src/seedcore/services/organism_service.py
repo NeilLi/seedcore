@@ -302,27 +302,32 @@ class OrganismService:
     async def rpc_initialize_organism(self):
         """
         RPC method for initialization (called via Ray remote handle).
-        Raises regular exceptions instead of HTTPException for proper serialization.
+        
+        This method starts initialization asynchronously and returns immediately.
+        The bootstrap should then poll /health or /init-status to check completion.
+        This avoids Ray RPC timeouts for long-running initialization.
         """
         if self._initialized:
             return {"success": True, "message": "Organism already initialized"}
 
+        # Check if initialization is already in progress
+        if self._init_task is not None and not self._init_task.done():
+            return {
+                "success": True, 
+                "message": "Initialization already in progress",
+                "status": "initializing"
+            }
+
         # Trigger init if needed (will restart if previously failed)
         self._start_init_if_needed()
 
-        # Wait for background initialization to complete
-        timeout = float(os.getenv("ORG_INIT_TIMEOUT_S", "180"))
-        try:
-            await asyncio.wait_for(asyncio.shield(self._init_task), timeout=timeout)
-        except asyncio.TimeoutError:
-            raise RuntimeError(f"Service initialization timeout ({timeout}s)")
-
-        # If task is done but we are still not initialized, it meant it failed
-        if not self._initialized:
-            error_msg = self._init_error or "Service initialization failed (Check logs)"
-            raise RuntimeError(error_msg)
-
-        return {"success": True, "message": "Organism initialized"}
+        # Return immediately - don't wait for completion
+        # Bootstrap should poll /health or /init-status to check when done
+        return {
+            "success": True,
+            "message": "Initialization started",
+            "status": "initializing"
+        }
 
     @app.post("/janitor/ensure")
     async def ensure_janitor(self):

@@ -39,8 +39,11 @@ echo "📦 Applying job..."
 kubectl apply -f "$JOB_FILE" -n "$NAMESPACE"
 
 # Wait for completion
-echo "⏳ Waiting for job to complete (timeout: 600s)..."
-if ! kubectl wait --for=condition=complete job/$JOB_NAME -n "$NAMESPACE" --timeout=600s; then
+# Increased timeout to 900s (15 minutes) to allow for slow initialization
+# Dispatchers need to connect to DB, initialize pools, etc.
+TIMEOUT="${BOOTSTRAP_TIMEOUT:-900}"
+echo "⏳ Waiting for job to complete (timeout: ${TIMEOUT}s)..."
+if ! kubectl wait --for=condition=complete job/$JOB_NAME -n "$NAMESPACE" --timeout="${TIMEOUT}s"; then
   echo "❌ Job $JOB_NAME did not complete successfully."
 
   echo "🔍 Job describe:"

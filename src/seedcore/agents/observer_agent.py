@@ -58,9 +58,10 @@ class ObserverAgent(BaseAgent):
         apply_changes: bool = True,
         **kwargs: Any,
     ):
-        # You can introduce a dedicated specialization like Specialization.ONLOOKER
-        # if it exists in your enum. Otherwise, ULA is acceptable for infra agents.
-        super().__init__(agent_id=agent_id, specialization=Specialization.OBS, **kwargs)
+        # Remove specialization from kwargs if present to avoid conflict
+        # ObserverAgent always uses OBSERVER specialization
+        kwargs.pop("specialization", None)
+        super().__init__(agent_id=agent_id, specialization=Specialization.OBSERVER, **kwargs)
 
         self.miss_threshold = int(miss_threshold)
         self.interval_s = float(interval_s)

@@ -410,13 +410,44 @@ class OrganismRouter(Router):
                 json={"task": task_data},
             )
 
-            # Ensure response is dict
+            # Ensure response is dict (handle case where JSON response is a string or other type)
             if not isinstance(response, dict):
-                raise ValueError("OrganismService returned non-dict response")
+                if isinstance(response, str):
+                    # If response is a JSON string, try to parse it
+                    try:
+                        import json
+                        parsed = json.loads(response)
+                        if isinstance(parsed, dict):
+                            response = parsed
+                        else:
+                            # Parsed JSON is not a dict (e.g., list, number, string)
+                            raise ValueError(f"OrganismService returned non-dict JSON (type={type(parsed).__name__})")
+                    except json.JSONDecodeError:
+                        # Not valid JSON, treat as error message
+                        raise ValueError(f"OrganismService returned non-dict response (string value: {response[:200]})")
+                    except Exception as e:
+                        raise ValueError(f"OrganismService returned non-dict response: {e}")
+                else:
+                    raise ValueError(f"OrganismService returned non-dict response (type={type(response).__name__})")
 
             # Extract result from OrganismResponse format
             # OrganismResponse: { success, result, error, task_type }
             result = response.get("result", {})
+            
+            # Ensure result is always a dict (defensive check)
+            # The server's "result" field might be a string or other type, which would cause
+            # AttributeError when calling .setdefault() or .get() methods
+            if not isinstance(result, dict):
+                logger.warning(
+                    f"[OrganismRouter] Server returned non-dict result (type={type(result).__name__}), "
+                    f"wrapping in error dict for task {task_id}"
+                )
+                result = {
+                    "success": False,
+                    "error": str(result) if result is not None else "Server returned None in result field",
+                    "kind": DecisionKind.ERROR.value,
+                    "path": "organism_result_type_error"
+                }
 
             # Add warnings if success=False
             if not response.get("success", True):
@@ -469,7 +500,8 @@ class OrganismRouter(Router):
 
         except Exception as e:
             logger.error(
-                f"[OrganismRouter] Failed to route task {task_payload.task_id}: {e}"
+                f"[OrganismRouter] Failed to route task {task_payload.task_id}: {e}",
+                exc_info=True
             )
             result = {
                 "kind": DecisionKind.ERROR.value,
@@ -562,9 +594,16 @@ class CoordinatorHttpRouter(Router):
         try:
             # 1. Prepare Payload
             task_payload = _coerce_task_payload(payload)
-            task_data = task_payload.model_dump()
-
             task_id = task_payload.task_id
+            
+            # Serialize to dict with JSON-compatible types
+            # Use mode='json' if available (Pydantic v2) to handle Enums, datetime, etc.
+            # Otherwise use regular model_dump() - httpx will handle JSON serialization
+            try:
+                task_data = task_payload.model_dump(mode='json', exclude_none=False)
+            except (TypeError, ValueError):
+                # Fallback for Pydantic v1 or if mode='json' is not supported
+                task_data = task_payload.model_dump(exclude_none=False)
 
             # 2. Standard Coordinator Routing (Unified Endpoint)
             logger.debug(f"[Router] 📡 Routing via Coordinator HTTP: {task_id}")
@@ -572,9 +611,25 @@ class CoordinatorHttpRouter(Router):
             # We assume self.client handles network errors and returns Dict
             result = await self.client.post("/route-and-execute", json=task_data)
 
-            # Validation
+            # Validation (handle case where JSON response is a string or other type)
             if not isinstance(result, dict):
-                raise ValueError(f"Coordinator returned invalid type: {type(result)}")
+                if isinstance(result, str):
+                    # If result is a JSON string, try to parse it
+                    try:
+                        import json
+                        parsed = json.loads(result)
+                        if isinstance(parsed, dict):
+                            result = parsed
+                        else:
+                            # Parsed JSON is not a dict (e.g., list, number, string)
+                            raise ValueError(f"Coordinator returned non-dict JSON (type={type(parsed).__name__})")
+                    except json.JSONDecodeError:
+                        # Not valid JSON, treat as error message
+                        raise ValueError(f"Coordinator returned non-dict response (string value: {result[:200]})")
+                    except Exception as e:
+                        raise ValueError(f"Coordinator returned non-dict response: {e}")
+                else:
+                    raise ValueError(f"Coordinator returned invalid type: {type(result).__name__}")
 
         except Exception as e:
             logger.error(f"[Router] ❌ Routing failed: {e}", exc_info=True)

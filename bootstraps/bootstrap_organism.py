@@ -161,9 +161,15 @@ def _trigger_via_ray_handle() -> bool:
         h = get_organism_service_handle()
         if hasattr(h, "rpc_initialize_organism"):
             ref = h.rpc_initialize_organism.remote()
-            ref.result(timeout_s=10)
-            logger.info("✅ Initialization triggered via Ray RPC.")
-            return True
+            try:
+                # RPC now returns immediately after starting initialization
+                result = ref.result(timeout_s=10)  # Short timeout since it returns immediately
+                logger.info(f"✅ Initialization triggered via Ray RPC: {result}")
+                # Success if we got a response (even if status is "initializing")
+                return result.get("success", False) or result.get("status") == "initializing"
+            except Exception as timeout_error:
+                logger.warning(f"Ray init RPC timed out or failed: {timeout_error}")
+                return False
     except Exception as e:
         logger.debug(f"Ray init attempt failed: {e}")
     return False
@@ -171,14 +177,18 @@ def _trigger_via_ray_handle() -> bool:
 
 def _trigger_via_http() -> bool:
     try:
-        r = requests.post(f"{ORGANISM_URL}/initialize-organism", timeout=5)
+        r = requests.post(f"{ORGANISM_URL}/initialize-organism", timeout=30)  # Increased timeout
         if r.status_code == 200:
-            logger.info("✅ Initialization triggered via HTTP.")
+            logger.info(f"✅ Initialization triggered via HTTP: {r.json()}")
             return True
         if r.status_code == 503:
-            logger.debug("HTTP init endpoint not ready yet (503).")
-    except Exception:
-        pass
+            logger.debug(f"HTTP init endpoint not ready yet (503): {r.text[:200]}")
+        else:
+            logger.debug(f"HTTP init endpoint returned {r.status_code}: {r.text[:200]}")
+    except requests.exceptions.Timeout:
+        logger.warning("HTTP init endpoint timed out")
+    except Exception as e:
+        logger.debug(f"HTTP init attempt failed: {e}")
     return False
 
 

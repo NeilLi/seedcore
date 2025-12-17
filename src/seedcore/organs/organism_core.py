@@ -160,6 +160,9 @@ class OrganismCore:
         config: Dict[str, Any] | None = None,
         **kwargs,
     ):
+        # Initialize logger (CRITICAL: must be set before any logging calls)
+        self.logger = logger
+        
         self._initialized = False
         self._lock = asyncio.Lock()
         self._config_lock = asyncio.Lock()  # Lock for config updates

@@ -117,6 +117,7 @@ class Organ:
         "ChatAgent": "seedcore.agents.chat_agent.ChatAgent",
         "ObserverAgent": "seedcore.agents.observer_agent.ObserverAgent",
         "UtilityAgent": "seedcore.agents.utility_agent.UtilityAgent",
+        "UtilityLearningAgent": "seedcore.agents.utility_agent.UtilityAgent",  # Alias for UtilityAgent
     }
 
     def __init__(
@@ -374,14 +375,55 @@ class Organ:
             import importlib
             classpath = self.AGENT_CLASS_MAP.get(agent_class_name, self.AGENT_CLASS_MAP["BaseAgent"])
             module_path, class_name = classpath.rsplit(".", 1)
-            AgentClass = getattr(importlib.import_module(module_path), class_name)
+            
+            # Import module and get class
+            try:
+                module = importlib.import_module(module_path)
+            except ImportError as e:
+                raise ImportError(
+                    f"Failed to import module '{module_path}' for agent class '{agent_class_name}': {e}"
+                ) from e
+            
+            AgentClass = getattr(module, class_name, None)
+            if AgentClass is None:
+                raise AttributeError(
+                    f"Class '{class_name}' not found in module '{module_path}' "
+                    f"for agent class '{agent_class_name}'"
+                )
+            
+            # Validate that AgentClass is either a regular class or a Ray actor class
+            # Some agents are already decorated with @ray.remote, which wraps them in ActorClass
+            is_regular_class = isinstance(AgentClass, type)
+            # Check if it's already a Ray actor by looking for the 'remote' method
+            # This is the standard way Ray actors are identified
+            is_ray_actor = hasattr(AgentClass, 'remote') and callable(getattr(AgentClass, 'remote', None))
+            
+            if not (is_regular_class or is_ray_actor):
+                raise TypeError(
+                    f"'{agent_class_name}' resolved to '{AgentClass}' which is not a class or Ray actor "
+                    f"(type: {type(AgentClass).__name__}, has_remote: {hasattr(AgentClass, 'remote')})"
+                )
 
             # 1a. Wrap non-actor classes (like BaseAgent) as actors
             # Ray doesn't allow actor inheritance, so BaseAgent is a regular class
             # that needs to be wrapped when used directly
-            if not hasattr(AgentClass, '_ray_actor'):
+            # Note: Some agents (ObserverAgent, UtilityAgent) are already Ray actors
+            if not is_ray_actor:
                 # Class is not already a Ray actor, wrap it
-                AgentClass = ray.remote(max_restarts=2, max_task_retries=0)(AgentClass)
+                if is_regular_class:
+                    AgentClass = ray.remote(max_restarts=2, max_task_retries=0)(AgentClass)
+                    logger.debug(
+                        f"[{self.organ_id}] Wrapped '{agent_class_name}' with @ray.remote"
+                    )
+                else:
+                    raise TypeError(
+                        f"'{agent_class_name}' is neither a regular class nor a Ray actor "
+                        f"(type: {type(AgentClass).__name__})"
+                    )
+            else:
+                logger.debug(
+                    f"[{self.organ_id}] Agent class '{agent_class_name}' is already a Ray actor, using as-is"
+                )
 
             # 2. Prepare Config-Based Context
             # We must ensure OUR local deps are ready so we can pass data derived from them (like role snapshots)

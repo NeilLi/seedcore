@@ -27,6 +27,12 @@ try:
 except ImportError:
     asyncpg = None  # type: ignore
 
+# ✅ Redis client (optional)
+try:
+    import redis  # pyright: ignore[reportMissingImports]
+except ImportError:
+    redis = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -66,6 +72,9 @@ __all__ = [
     # Legacy
     "get_db_session",
     "get_mysql_session",
+    
+    # Redis
+    "get_redis_client",
 ]
 
 # ─────────────────────────────────────────────────────────────────────
@@ -117,8 +126,8 @@ MYSQL_DSN = get_env_setting(
     f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}",
 )
 
-# Redis (not used here, but kept for completeness)
-REDIS_HOST = get_env_setting("REDIS_HOST", "redis-master")
+# Redis (optional, falls back to in-memory storage if unavailable)
+REDIS_HOST = get_env_setting("REDIS_HOST", "localhost")
 REDIS_PORT = get_env_int_setting("REDIS_PORT", 6379)
 REDIS_DB = get_env_int_setting("REDIS_DB", 0)
 REDIS_URL = get_env_setting("REDIS_URL", f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
@@ -511,3 +520,32 @@ def get_pg_pool_stats():
 def get_mysql_pool_stats():
     engine = get_sync_mysql_engine()
     return _safe_pool_stats(engine.pool)
+
+# ─────────────────────────────────────────────────────────────────────
+# Redis Client (New Addition)
+# ─────────────────────────────────────────────────────────────────────
+
+@lru_cache
+def get_redis_client():
+    """
+    Get a cached Redis client using centralized settings.
+    Returns None if redis library is missing.
+    """
+    if redis is None:
+        logger.warning("Redis library not installed. Install via 'pip install redis'.")
+        return None
+
+    try:
+        # Create client (lazy connection)
+        client = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            db=REDIS_DB,
+            decode_responses=True,  # Returns strings instead of bytes
+            socket_connect_timeout=5,
+            socket_timeout=5
+        )
+        return client
+    except Exception as e:
+        logger.error(f"Failed to create Redis client: {e}")
+        return None

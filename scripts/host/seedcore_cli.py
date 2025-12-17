@@ -147,7 +147,7 @@ def api_eventizer_test(text: str, task_type: str = "", domain: str = "", preserv
             print(f"⚠️ /ops endpoint failed ({ops_error}), trying fallback...")
             # Fallback: create a task and check the enriched params
             task_payload = {
-                "type": task_type or "test",
+                "type": task_type or "query",  # Default to TaskType.QUERY
                 "description": text,
                 "domain": domain,
                 "preserve_original_text": preserve_original,
@@ -315,7 +315,7 @@ def api_ask(prompt: str, agent_id: str | None = None, organ_id: str | None = Non
         # that uses create_graph_rag_task with agent/organ parameters
         payload = {
             "description": prompt,
-            "type": "graph_rag_task",
+            "type": "graph",  # TaskType.GRAPH
             "drift_score": 0.1,  # Lower drift for graph-aware tasks
             "run_immediately": True,
             "params": {
@@ -339,7 +339,7 @@ def api_ask(prompt: str, agent_id: str | None = None, organ_id: str | None = Non
                 enhanced_prompt = f"{prompt} (working with artifact: {selected_artifact['text'][:100]})"
                 payload = {
                     "description": enhanced_prompt,
-                    "type": "artifact_task",
+                    "type": "query",  # TaskType.QUERY
                     "drift_score": 0.3,
                     "run_immediately": True,
                     "params": {
@@ -353,12 +353,12 @@ def api_ask(prompt: str, agent_id: str | None = None, organ_id: str | None = Non
                 return
         
         # Original fuzzy logic for general queries
-        payload = {"description": prompt, "type": "general_query", "drift_score": 0.9, "run_immediately": True, "params": {}}
+        payload = {"description": prompt, "type": "query", "drift_score": 0.9, "run_immediately": True, "params": {}}  # TaskType.QUERY
         p = prompt.lower()
         if "plan" in p:
-            payload["type"] = "dspy.plan";   payload["drift_score"] = 0.1
+            payload["type"] = "query";   payload["drift_score"] = 0.1  # TaskType.QUERY
         elif "analyze" in p or "reason" in p:
-            payload["type"] = "dspy.reason"; payload["drift_score"] = 0.2
+            payload["type"] = "query"; payload["drift_score"] = 0.2  # TaskType.QUERY
         t = _http_post(f"{API_V1_BASE}/tasks", payload)
         print(f"🚀 Task {t['id'][:8]} [{t['type']}] → {t['status']}")
 
@@ -548,7 +548,7 @@ def build_parser():
     # ─── Tasks / Facts ───
     tp = sub.add_parser("tasks", help="List tasks with optional filters")
     tp.add_argument("--status", help="Filter by status (queued, running, completed, failed)")
-    tp.add_argument("--type", help="Filter by task type (general_query, dspy.plan, etc.)")
+    tp.add_argument("--type", help="Filter by task type (chat, query, action, graph, maintenance, unknown)")
     tp.add_argument("--since", help="Filter by updated time (e.g., 1h, 24h, 2d, 2024-01-01)")
     tp.add_argument("--limit", type=int, help="Limit number of tasks shown")
 

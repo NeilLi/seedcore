@@ -25,13 +25,12 @@ from typing import Any, Dict, Optional, Union
 import yaml  # pyright: ignore[reportMissingModuleSource]
 from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
 
-import redis  # pyright: ignore[reportMissingImports]
-from fastapi import FastAPI, Request  # pyright: ignore[reportMissingImports]
+from fastapi import FastAPI, Request, Body  # pyright: ignore[reportMissingImports]
 from ray import serve  # pyright: ignore[reportMissingImports]
 
 # --- Internal Imports ---
 from ..logging_setup import ensure_serve_logger, setup_logging
-from ..database import REDIS_URL, get_async_pg_session_factory
+from ..database import get_async_pg_session_factory, get_redis_client
 from ..utils.ray_utils import COG, ML, ORG
 
 # Models
@@ -62,7 +61,6 @@ from ..coordinator.utils import (
     coerce_task_payload,
     normalize_string,
     normalize_domain,
-    normalize_task_dict,
     redact_sensitive_data,
 )
 
@@ -386,12 +384,12 @@ class Coordinator:
         """Setup web server, storage, runtime context, and routes."""
         self.app = FastAPI(title="SeedCore Coordinator (Control Plane)")
 
-        # Storage (Redis)
-        try:
-            redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-            self.storage = SafeStorage(redis_client)
-        except Exception:
-            self.storage = SafeStorage(None)
+        # Storage (Redis) - Optional, falls back to in-memory if unavailable
+        # Use centralized factory from database.py to respect REDIS_HOST env var
+        redis_client = get_redis_client()
+        # Note: SafeStorage will test the connection with ping()
+        # and fall back to in-memory if it fails
+        self.storage = SafeStorage(redis_client)
 
         # Runtime Context for Workers
         self.runtime_ctx = {"storage": self.storage, "metrics": self.metrics}
@@ -441,16 +439,27 @@ class Coordinator:
     # 1. The Universal Router
     # ------------------------------------------------------------------
     async def route_and_execute(
-        self, payload: Union[TaskPayload, Dict[str, Any]]
+        self, payload: Dict[str, Any] = Body(...)
     ) -> Dict[str, Any]:
         """
         The Main Loop of the Control Plane.
+        
+        Accepts POST requests with JSON body containing the task payload.
         """
         await self._ensure_background_tasks_started()
 
         try:
-            # A. Ingest
-            task_obj, task_dict = coerce_task_payload(payload)
+            # A. Ingest - Handle different body formats:
+            # 1. Direct dict (most common)
+            # 2. Wrapped in {"payload": {...}}
+            # 3. Wrapped in {"task": {...}} (for consistency with OrganismRouter)
+            if isinstance(payload, dict):
+                task_data = payload.get("payload") or payload.get("task") or payload
+            else:
+                task_data = payload
+            
+            # Coerce to TaskPayload
+            task_obj, task_dict = coerce_task_payload(task_data)
             task_type = task_obj.type.lower()
 
             # B. Special Workflows
@@ -483,6 +492,91 @@ class Coordinator:
                 route_config=route_config,
                 execution_config=exec_config,
             )
+
+            # CRITICAL: Normalize result to dispatcher-compatible format
+            # Dispatcher expects: {success: bool, error: Optional[str], ...}
+            # Coordinator must always return this format, never raw domain objects
+            task_id = task_dict.get("task_id") or task_obj.task_id
+            
+            if not isinstance(result, dict):
+                logger.error(
+                    f"Coordinator returned non-dict result (type={type(result).__name__}) for task {task_id}"
+                )
+                result = {
+                    "success": False,
+                    "error": f"Invalid result type: {type(result).__name__}",
+                    "kind": "error",
+                    "path": "coordinator_type_error"
+                }
+            else:
+                # Normalize success field - handle different result formats
+                if "success" not in result:
+                    # Case 1: TaskResult format: {kind: "error", payload: {error: ...}}
+                    result_kind = result.get("kind")
+                    if result_kind == "error" or result_kind == DecisionKind.ERROR.value:
+                        # TaskResult error format - extract error from payload
+                        payload = result.get("payload", {})
+                        if isinstance(payload, dict):
+                            result["success"] = False
+                            # Extract error message from payload if not at top level
+                            if "error" not in result and "error" in payload:
+                                result["error"] = payload.get("error")
+                            elif "error_type" in payload:
+                                result["error"] = payload.get("error_type", "unknown_error")
+                        else:
+                            result["success"] = False
+                            result["error"] = result.get("error") or "TaskResult error without payload"
+                    
+                    # Case 2: OrganismResponse format: {success: bool, result: {...}, error: ...}
+                    # Note: OrganismResponse should already have success, but handle edge cases
+                    elif "result" in result:
+                        # This looks like OrganismResponse - it should have success, but if missing, infer it
+                        if "success" not in result:
+                            # Infer from error field (OrganismResponse.success = not bool(error))
+                            result["success"] = not bool(result.get("error"))
+                            logger.debug(
+                                f"Coordinator inferred success from OrganismResponse format "
+                                f"for task {task_id}: success={result['success']}"
+                            )
+                    
+                    # Case 3: Raw domain object (no success/error fields)
+                    else:
+                        # Check if it looks like an error (has 'error' field)
+                        has_error = bool(result.get("error"))
+                        if has_error:
+                            result["success"] = False
+                        else:
+                            # Assume success for raw domain objects (they're usually results)
+                            result["success"] = True
+                            logger.debug(
+                                f"Coordinator inferred success=True for raw domain object "
+                                f"(task {task_id}, keys: {list(result.keys())[:5]})"
+                            )
+                    
+                    logger.debug(
+                        f"Coordinator normalized result for task {task_id}: "
+                        f"success={result.get('success')}, kind={result.get('kind')}, "
+                        f"has_error={bool(result.get('error'))}, keys={list(result.keys())[:10]}"
+                    )
+                
+                # Ensure 'error' field exists for consistency (even if None)
+                if "error" not in result:
+                    result["error"] = None
+                
+                # Ensure 'kind' field for consistency
+                if "kind" not in result:
+                    result["kind"] = task_type
+                
+                # Ensure 'path' field for traceability
+                if "path" not in result:
+                    result["path"] = "coordinator"
+                
+                # Log final normalized result structure
+                logger.debug(
+                    f"Coordinator final result for task {task_id}: "
+                    f"success={result.get('success')}, error={result.get('error')}, "
+                    f"kind={result.get('kind')}, path={result.get('path')}"
+                )
 
             return result
 
@@ -571,10 +665,12 @@ class Coordinator:
             }
 
         async def organism_execute(
-            self, organ_id: str, task_dict: dict, timeout: int, cid_local: str
+            organ_id: str, task_dict: dict, timeout: int, cid_local: str
         ) -> dict:
             """
             Executes a task on a specific Organism (via HTTP/RPC) using TaskPayload v2 semantics.
+            
+            Note: This is a nested function that captures 'self' from the closure.
             """
             # 1. Prepare Payload (Shallow Copy to avoid mutation side-effects)
             payload = task_dict.copy()
@@ -593,6 +689,7 @@ class Coordinator:
             try:
                 # 3. Call Unified Organism Endpoint
                 # Note: The network routing to 'organ_id' happens here via the client
+                # 'self' is captured from the closure (outer scope)
                 res = await self.organism_client.post(
                     "/route-and-execute",
                     json={"task": payload},
@@ -645,7 +742,6 @@ class Coordinator:
             return self._session_factory
 
         return ExecutionConfig(
-            normalize_task_dict=normalize_task_dict,
             compute_drift_score=self._compute_drift_score,
             organism_execute=organism_execute,
             graph_task_repo=self.graph_task_repo,

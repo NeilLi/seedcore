@@ -180,7 +180,9 @@ def create_fast_path_result(
     }
     fast_path_payload = FastPathResult(
         routed_to="organism",          # The Service
-        organ_id=target_organ_id,      # The Internal Component (Hint)
+        organ_id=target_organ_id or "organism",  # The Internal Component (Hint), default to "organism"
+        processing_time_ms=processing_time_ms,
+        result={"status": "routed", "pending_execution": True},  # Placeholder result for routing decisions
         metadata=fast_path_metadata
     )
     

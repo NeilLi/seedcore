@@ -217,6 +217,29 @@ class BaseServiceClient:
                 response = await self.http.post(url, json=json, **kwargs)
                 response.raise_for_status()
                 return response.json()
+            except httpx.HTTPStatusError as e:
+                # Capture validation errors (422) with response body
+                if e.response.status_code == 422:
+                    try:
+                        error_detail = e.response.json()
+                        logger.error(
+                            f"HTTP 422 Validation Error for {self.service_name} POST {endpoint}: {error_detail}"
+                        )
+                        # Re-raise with more context
+                        raise ValueError(
+                            f"Validation error: {error_detail.get('detail', error_detail)}"
+                        ) from e
+                    except Exception:
+                        # If response isn't JSON, use text
+                        error_text = e.response.text[:500]
+                        logger.error(
+                            f"HTTP 422 Validation Error for {self.service_name} POST {endpoint}: {error_text}"
+                        )
+                        raise ValueError(f"Validation error: {error_text}") from e
+                # Log timeout errors with more context
+                if hasattr(e, '__class__') and 'Timeout' in e.__class__.__name__:
+                    logger.warning(f"HTTP timeout for {self.service_name} POST {endpoint}: {e.__class__.__name__}: {e}")
+                raise e
             except Exception as e:
                 # Log timeout errors with more context
                 if hasattr(e, '__class__') and 'Timeout' in e.__class__.__name__:

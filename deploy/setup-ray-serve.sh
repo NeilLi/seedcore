@@ -181,8 +181,8 @@ print_status "INFO" "Setting up PKG WASM file in Ray head pod..."
 HEAD_POD=$(kubectl -n "${NAMESPACE}" get pods -l "ray.io/node-type=head" --no-headers | head -n1 | awk '{print $1}')
 if [ -n "${HEAD_POD}" ]; then
   # Wait for Ray services to be fully ready before attempting file operations
-  print_status "INFO" "Waiting for Ray services to be fully ready (10s)..."
-  sleep 10
+  print_status "INFO" "Waiting for Ray services to be fully ready (30s)..."
+  sleep 30
   
   # Retry logic for WASM file creation
   WASM_CREATED=false

@@ -170,12 +170,32 @@ class SafeStorage:
         """Initialize the storage backend."""
         if self.redis_client:
             try:
-                # Test Redis connection
+                # Test Redis connection with timeout
+                # Use a short timeout to fail fast if Redis is unavailable
                 self.redis_client.ping()
                 self._backend = RedisStorage(self.redis_client)
                 logger.info("✅ Using Redis storage backend")
             except Exception as e:
-                logger.warning(f"Redis connection failed: {e}, falling back to in-memory storage")
+                # Check error type to provide better diagnostics
+                error_msg = str(e)
+                error_type = type(e).__name__
+                
+                # DNS resolution errors suggest Redis service doesn't exist
+                if "name resolution" in error_msg.lower() or "temporary failure" in error_msg.lower():
+                    logger.info(
+                        f"Redis unavailable (DNS resolution failed: {error_msg[:100]}). "
+                        "Using in-memory storage (Redis is optional)."
+                    )
+                elif "Connection refused" in error_msg or "ConnectionError" in error_type:
+                    logger.info(
+                        f"Redis unavailable (connection refused). "
+                        "Using in-memory storage (Redis is optional)."
+                    )
+                else:
+                    logger.warning(
+                        f"Redis connection failed ({error_type}): {error_msg[:100]}, "
+                        "falling back to in-memory storage"
+                    )
                 self._backend = InMemoryStorage()
         else:
             logger.info("No Redis client provided, using in-memory storage")
