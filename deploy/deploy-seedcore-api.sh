@@ -27,6 +27,19 @@ SKIP_LOAD="${SKIP_LOAD:-0}"
 PORT_FORWARD="${PORT_FORWARD:-0}"
 LOCAL_PORT="${LOCAL_PORT:-8002}"
 
+# Normalize boolean-ish env vars to 0/1
+case "${SKIP_LOAD}" in
+  1|true|TRUE|yes|YES|y|Y) SKIP_LOAD=1 ;;
+  0|false|FALSE|no|NO|n|N|"") SKIP_LOAD=0 ;;
+  *) echo "Invalid SKIP_LOAD='${SKIP_LOAD}' (use 0/1/true/false)"; exit 1 ;;
+esac
+
+case "${PORT_FORWARD}" in
+  1|true|TRUE|yes|YES|y|Y) PORT_FORWARD=1 ;;
+  0|false|FALSE|no|NO|n|N|"") PORT_FORWARD=0 ;;
+  *) echo "Invalid PORT_FORWARD='${PORT_FORWARD}' (use 0/1/true/false)"; exit 1 ;;
+esac
+
 # Ray + misc
 RAY_HEAD_SVC="${RAY_HEAD_SVC:-seedcore-svc-head-svc}"
 RAY_HEAD_PORT="${RAY_HEAD_PORT:-10001}"
@@ -74,7 +87,7 @@ log INFO "NS=$NAMESPACE | cluster=kind-$CLUSTER_NAME | image=$API_IMAGE | env-mo
 
 # ---- Tool checks
 command -v kubectl >/dev/null || { log ERR "kubectl not found"; exit 1; }
-if [[ "$SKIP_LOAD" -eq 0 ]]; then command -v kind >/dev/null || { log ERR "kind not found (or set SKIP_LOAD=1)"; exit 1; }; fi
+if [[ "${SKIP_LOAD:-0}" -eq 0 ]]; then command -v kind >/dev/null || { log ERR "kind not found (or set SKIP_LOAD=1)"; exit 1; }; fi
 command -v envsubst >/dev/null || { log ERR "envsubst not found (install gettext)"; exit 1; }
 
 # ---- Smart Kind image load
@@ -85,7 +98,7 @@ smart_kind_load() {
     log WARN "Kind cluster '$cluster' not found. Skipping image load."
     return 0
   fi
-  local digest; digest=$(docker inspect --format='{{.Id}}' "$img" 2>/dev/null || true)
+  local digest; digest=$(docker inspect --format='{{.Id}}' "$img" 2>/dev/null || :)
   [[ -z "$digest" ]] && { log ERR "Local image '$img' not found. Build it first."; exit 1; }
   local need_load=1
   for n in $(kind get nodes --name "$cluster"); do
@@ -125,21 +138,29 @@ elif [[ "$ENV_MODE" == "file" ]]; then
   use_file_cm=true
 else
   # auto
-  kubectl -n "$NAMESPACE" get configmap seedcore-env >/dev/null 2>&1 && use_shared_cm=true || true
-  kubectl -n "$NAMESPACE" get configmap seedcore-client-env >/dev/null 2>&1 && use_client_cm=true || true
-  if ! $use_shared_cm && ! $use_client_cm; then
-    kubectl -n "$NAMESPACE" get secret seedcore-env-secret >/dev/null 2>&1 && use_secret=true || use_file_cm=true
+  if kubectl -n "$NAMESPACE" get configmap seedcore-env >/dev/null 2>&1; then
+    use_shared_cm=true
+  fi
+  if kubectl -n "$NAMESPACE" get configmap seedcore-client-env >/dev/null 2>&1; then
+    use_client_cm=true
+  fi
+  if [[ "$use_shared_cm" != "true" ]] && [[ "$use_client_cm" != "true" ]]; then
+    if kubectl -n "$NAMESPACE" get secret seedcore-env-secret >/dev/null 2>&1; then
+      use_secret=true
+    else
+      use_file_cm=true
+    fi
   fi
 fi
 
 # ---- Create/Update env sources when needed
-if $use_shared_cm && [[ -f "$ENV_FILE" ]]; then
+if [[ "$use_shared_cm" == "true" ]] && [[ -f "$ENV_FILE" ]]; then
   log INFO "Updating shared ConfigMap seedcore-env from $ENV_FILE ..."
   kubectl -n "$NAMESPACE" create configmap seedcore-env --from-env-file="$ENV_FILE" -o yaml --dry-run=client | kubectl apply -f -
   log OK "ConfigMap seedcore-env updated"
 fi
 
-if $use_file_cm; then
+if [[ "$use_file_cm" == "true" ]]; then
   if [[ -f "$ENV_FILE" ]]; then
     log INFO "Creating/Updating ${SERVICE_NAME}-config from $ENV_FILE ..."
     kubectl -n "$NAMESPACE" create configmap "${SERVICE_NAME}-config" --from-env-file="$ENV_FILE" -o yaml --dry-run=client | kubectl apply -f -
@@ -162,20 +183,20 @@ rm -f "$tmpfile"
 
 # ---- Rollout + info
 log INFO "Waiting for Deployment rollout ..."
-kubectl -n "$NAMESPACE" rollout status deploy/"$DEPLOY_NAME" --timeout=180s || true
+kubectl -n "$NAMESPACE" rollout status deploy/"$DEPLOY_NAME" --timeout=180s || :
 
 log INFO "Pods:"
-kubectl -n "$NAMESPACE" get pods -l app="${SERVICE_NAME}" -o wide || true
+kubectl -n "$NAMESPACE" get pods -l app="${SERVICE_NAME}" -o wide || :
 
 log INFO "Service:"
-kubectl -n "$NAMESPACE" get svc "${SERVICE_NAME}" || true
+kubectl -n "$NAMESPACE" get svc "${SERVICE_NAME}" || :
 
 echo
 log OK "API deployed as svc/${SERVICE_NAME} in ns/${NAMESPACE}"
 echo "  - Tail logs:    kubectl -n ${NAMESPACE} logs deploy/${DEPLOY_NAME} -f --tail=200"
 echo "  - Exec shell:   kubectl -n ${NAMESPACE} exec -it deploy/${DEPLOY_NAME} -- /bin/bash || /bin/sh"
 echo "  - Port-forward: kubectl -n ${NAMESPACE} port-forward svc/${SERVICE_NAME} ${LOCAL_PORT}:8002"
-echo "  - Health:       curl -sf http://127.0.0.1:${LOCAL_PORT}/health || true"
+echo "  - Health:       curl -sf http://127.0.0.1:${LOCAL_PORT}/health || :"
 echo "  - Ready:        curl -si http://127.0.0.1:${LOCAL_PORT}/readyz | head -n1"
 echo "  - Delete:       $(basename "$0") --delete -n ${NAMESPACE}"
 echo
