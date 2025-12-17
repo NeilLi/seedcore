@@ -15,8 +15,14 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Import path setup
 # ---------------------------------------------------------------------------
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
+# Add project root to path for namespaced imports (bootstraps.*, seedcore.*)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC = PROJECT_ROOT / "src"
+
+# Add project root first (enables bootstraps.* imports)
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+# Add src to path for seedcore imports (if not already covered by root)
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
@@ -49,10 +55,11 @@ def main() -> int:
         log.error(f"Invalid BOOTSTRAP_MODE={mode!r}. Expected {valid_modes}.")
         return 1
 
-    from .bootstrap_organism import bootstrap_organism
-    from .bootstrap_dispatchers import bootstrap_dispatchers
-
+    # Lazy import organism bootstrap first (ensures proper sequence)
+    # Use namespaced absolute imports (matches seedcore.* pattern)
+    # (relative imports fail when script is run directly)
     if mode in ("all", "organism"):
+        from bootstraps.bootstrap_organism import bootstrap_organism
         log.info("🚀 Step 1/2: Initializing organism...")
         try:
             if not bootstrap_organism():
@@ -64,6 +71,9 @@ def main() -> int:
         log.info("✅ Organism initialized")
 
     if mode in ("all", "dispatchers"):
+        # Lazy import dispatcher bootstrap after organism is initialized
+        from bootstraps.bootstrap_dispatchers import bootstrap_dispatchers
+        
         log.info("🚀 Step 2/2: Initializing dispatchers...")
         try:
             if not bootstrap_dispatchers():

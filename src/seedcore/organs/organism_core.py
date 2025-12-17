@@ -44,7 +44,7 @@ import uuid
 import yaml  # pyright: ignore[reportMissingModuleSource]
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable, Set
 
 import ray  # type: ignore
 
@@ -157,6 +157,7 @@ class OrganismCore:
     def __init__(
         self,
         config_path: Path | str = CONFIG_PATH,
+        config: Dict[str, Any] | None = None,
         **kwargs,
     ):
         self._initialized = False
@@ -192,6 +193,10 @@ class OrganismCore:
         self.global_settings = global_settings  # Store for runtime updates
         self.router_cfgs = global_settings.get("router_config", {})
         self.topology_cfg: Dict[str, Any] = {}  # Topology configuration
+        
+        # Set self.config: use passed config if provided, otherwise use global_settings
+        # This ensures self.config always exists for backward compatibility
+        self.config = config if config is not None else global_settings
 
         # 4. Tunnel Subsystem
         # State: Who is assigned to whom?
@@ -381,10 +386,18 @@ class OrganismCore:
         # ==============================================================
         logger.info("--- Phase 3: Spawning Organism Actors ---")
 
-        # We can spawn Organs and Agents in parallel batches
-        await asyncio.gather(
-            self._create_organs_from_config(), self._create_agents_from_config()
-        )
+        # 3a. Register all role profiles BEFORE creating agents (Option A: Strict Ordering)
+        # This ensures all specializations are registered before any agent tries to access them
+        await self._register_all_role_profiles_from_config()
+
+        # 3b. Organs must be created before agents (agents depend on organs)
+        await self._create_organs_from_config()
+        
+        # 3c. Propagate role registry to all organs (ensures consistency)
+        await self._sync_role_registry_to_organs()
+        
+        # 3d. Now create agents (they can be created in parallel batches)
+        await self._create_agents_from_config()
 
         # ==============================================================
         # PHASE 4: BACKGROUND LOOPS
@@ -402,15 +415,303 @@ class OrganismCore:
         logger.info(f"🌱 OrganismCore initialized in {duration:.2f}s!")
 
     # ------------------------------------------------------------------
+    #  HELPER: Actor Deployment Configuration
+    # ------------------------------------------------------------------
+    def _get_organ_actor_options(self, organ_id: str) -> Dict[str, Any]:
+        """
+        Builds dynamic Ray Actor options for Organ actors based on environment variables.
+        Allows tuning CPU/Memory/Retries without code changes.
+        
+        Args:
+            organ_id: The organ identifier (used as actor name)
+        
+        Returns:
+            Dict of Ray actor options ready for ** unpacking
+        """
+        # 1. Load Tunables from Env (with sensible defaults)
+        # Use a tiny default (0.01) for lightweight actors, or 0.1+ for heavy ones
+        cpu_request = float(os.getenv("SEEDCORE_ORGAN_CPU", "0.01"))
+        
+        # -1 means infinite restarts (standard for long-running services)
+        max_restarts = int(os.getenv("SEEDCORE_ORGAN_MAX_RESTARTS", "-1"))
+        
+        # "detached" keeps the actor alive if the driver script exits
+        # "non_detached" is better for unit tests to clean up automatically
+        lifetime = os.getenv("SEEDCORE_ACTOR_LIFETIME", "detached")
+        
+        # Task retries: -1 means infinite (usually bad), 0 means no retries, 3 is reasonable
+        max_task_retries = int(os.getenv("SEEDCORE_ORGAN_MAX_TASK_RETRIES", "-1"))
+
+        return {
+            "name": organ_id,
+            "namespace": RAY_NAMESPACE,
+            "lifetime": lifetime,
+            "max_restarts": max_restarts,
+            "max_task_retries": max_task_retries,
+            "num_cpus": cpu_request,
+            # "resources": {"custom_resource": 1}  # easy to add later
+        }
+
+    def _get_agent_actor_options(self, agent_id: str) -> Dict[str, Any]:
+        """
+        Builds dynamic Ray Actor options for Agent actors based on environment variables.
+        These options are passed as kwargs to create_agent.remote().
+        
+        Args:
+            agent_id: The agent identifier (used as actor name)
+        
+        Returns:
+            Dict of agent actor options ready for ** unpacking
+        """
+        # Agent-specific tunables
+        cpu_request = float(os.getenv("SEEDCORE_AGENT_CPU", "0.02"))
+        lifetime = os.getenv("SEEDCORE_ACTOR_LIFETIME", "detached")
+        
+        return {
+            "name": agent_id,
+            "num_cpus": cpu_request,
+            "lifetime": lifetime,
+        }
+
+    def _get_tool_shard_actor_options(self) -> Dict[str, Any]:
+        """
+        Builds dynamic Ray Actor options for ToolManagerShard actors.
+        Note: ToolManagerShard has @ray.remote(num_cpus=0.2) in class definition,
+        but we can override with .options() if needed.
+        
+        Returns:
+            Dict of tool shard actor options (currently empty, can be extended)
+        """
+        # Tool shards are heavier, so they might need more CPU
+        cpu_request = float(os.getenv("SEEDCORE_TOOL_SHARD_CPU", "0.1"))
+        max_restarts = int(os.getenv("SEEDCORE_TOOL_SHARD_MAX_RESTARTS", "-1"))
+        lifetime = os.getenv("SEEDCORE_ACTOR_LIFETIME", "detached")
+        
+        return {
+            "max_restarts": max_restarts,
+            "lifetime": lifetime,
+            "num_cpus": cpu_request,
+        }
+
+    def _get_janitor_actor_options(self) -> Dict[str, Any]:
+        """
+        Builds dynamic Ray Actor options for Janitor actor.
+        
+        Returns:
+            Dict of janitor actor options
+        """
+        cpu_request = float(os.getenv("SEEDCORE_JANITOR_CPU", "0"))
+        lifetime = os.getenv("SEEDCORE_ACTOR_LIFETIME", "detached")
+        
+        return {
+            "name": "seedcore_janitor",
+            "namespace": RAY_NAMESPACE,
+            "lifetime": lifetime,
+            "num_cpus": cpu_request,
+        }
+
+    # ------------------------------------------------------------------
+    #  HELPER: Holon Fabric Config (for passing to remote actors)
+    # ------------------------------------------------------------------
+    def _get_holon_fabric_config(self) -> Dict[str, Any]:
+        """
+        Build config dict for HolonFabric initialization in remote actors.
+        This avoids serialization issues by passing config instead of live connections.
+        
+        Returns a structured config dict with explicit pg/neo4j sections to avoid
+        positional ambiguity and enable future schema evolution.
+        """
+        default_pool_size = int(os.getenv("PG_POOL_SIZE", "2"))
+        pool_size = self.config.get("pg_pool_size", default_pool_size)
+        
+        return {
+            "pg": {
+                "dsn": PG_DSN,
+                "pool_size": pool_size,
+            },
+            "neo4j": {
+                "uri": NEO4J_URI or NEO4J_BOLT_URL,
+                "user": NEO4J_USER,
+                "password": NEO4J_PASSWORD,
+            },
+        }
+
+    # ------------------------------------------------------------------
+    #  HELPER: Cognitive Client Config (for passing to remote actors)
+    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    #  HELPER: Shared Configuration Builder
+    # ------------------------------------------------------------------
+    def _build_service_config(
+        self,
+        config_key: str,
+        client_attr: str,
+        env_base_url: str,
+        fallback_url_fn: Callable[[], str],
+        env_timeout: str,
+        default_timeout: float,
+        env_retries: Optional[str] = None,
+        default_retries: int = 1,
+        extra_fields: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generic builder for service client configurations.
+        Priority: Live Client Object > Config Dict > Environment Variables > Defaults
+        """
+        # 1. Try to extract from live client (Best-effort optimization)
+        client = getattr(self, client_attr, None)
+        if client:
+            config = {
+                "base_url": client.base_url,
+                "timeout": client.timeout,
+                "circuit_breaker": {
+                    "failure_threshold": client.circuit_breaker.failure_threshold,
+                    "recovery_timeout": client.circuit_breaker.recovery_timeout,
+                },
+                "retry_config": {
+                    "max_attempts": client.retry_config.max_attempts,
+                    "base_delay": client.retry_config.base_delay,
+                    "max_delay": client.retry_config.max_delay,
+                }
+            }
+            # Add any extra fields if they exist on the client
+            if extra_fields:
+                for field in extra_fields:
+                    val = getattr(client, field, extra_fields[field])
+                    config[field] = val
+            return config
+
+        # 2. Fallback to Config / Env / Defaults
+        cfg = self.config.get(config_key, {})
+        
+        # Resolve Base URL
+        base_url = cfg.get("base_url")
+        if not base_url:
+            base_url = os.getenv(env_base_url)
+        if not base_url:
+            base_url = fallback_url_fn()
+            
+        # Resolve Timeout
+        timeout = cfg.get("timeout")
+        if timeout is None:
+            timeout = float(os.getenv(env_timeout, str(default_timeout)))
+
+        # Resolve Retries (for retry_config)
+        retries = cfg.get("retries")
+        if retries is None:
+            if env_retries:
+                retries = int(os.getenv(env_retries, str(default_retries)))
+            else:
+                retries = default_retries
+
+        # Construct Final Config
+        result = {
+            "base_url": base_url.rstrip("/") if base_url else "",
+            "timeout": timeout,
+            "circuit_breaker": cfg.get("circuit_breaker", {
+                "failure_threshold": 5,
+                "recovery_timeout": 30.0,
+            }),
+            "retry_config": cfg.get("retry_config", {
+                "max_attempts": max(1, retries),
+                "base_delay": 1.0,
+                "max_delay": 5.0,
+            }),
+        }
+        
+        # Merge extra fields (like warmup_timeout)
+        if extra_fields:
+            for k, v in extra_fields.items():
+                result[k] = cfg.get(k, v)
+        
+        return result
+
+    # ------------------------------------------------------------------
+    #  Refactored Client Config Getters
+    # ------------------------------------------------------------------
+    def _get_cognitive_client_config(self) -> Dict[str, Any]:
+        def _get_cog_url():
+            try:
+                from seedcore.utils.ray_utils import COG
+                return COG
+            except ImportError:
+                return "http://127.0.0.1:8000/cognitive"
+
+        return self._build_service_config(
+            config_key="cognitive_client",
+            client_attr="cognitive_client",
+            env_base_url="COG_BASE_URL",
+            fallback_url_fn=_get_cog_url,
+            env_timeout="COG_CLIENT_TIMEOUT",
+            default_timeout=75.0,
+            env_retries="COG_CLIENT_RETRIES",
+            default_retries=1
+        )
+
+    def _get_ml_client_config(self) -> Dict[str, Any]:
+        def _get_ml_url():
+            try:
+                from seedcore.utils.ray_utils import ML
+                return ML
+            except ImportError:
+                return os.getenv("ML_BASE_URL", "http://127.0.0.1:8000/ml")
+
+        return self._build_service_config(
+            config_key="ml_client",
+            client_attr="ml_client",
+            env_base_url="ML_BASE_URL",  # Note: logic handles redundant env check safely
+            fallback_url_fn=_get_ml_url,
+            env_timeout="ML_CLIENT_TIMEOUT",
+            default_timeout=10.0,
+            default_retries=2,  # ML client defaults to 2 retries
+            extra_fields={
+                "warmup_timeout": float(os.getenv("ML_WARMUP_TIMEOUT", "30.0"))
+            }
+        )
+
+    def _get_mcp_client_config(self) -> Optional[Dict[str, Any]]:
+        def _get_mcp_url():
+            try:
+                from seedcore.utils.ray_utils import SERVE_GATEWAY
+                return f"{SERVE_GATEWAY}/mcp"
+            except ImportError:
+                return "http://127.0.0.1:8000/mcp"
+
+        return self._build_service_config(
+            config_key="mcp_client",
+            client_attr="mcp_client",
+            env_base_url="MCP_BASE_URL",
+            fallback_url_fn=_get_mcp_url,
+            env_timeout="MCP_CLIENT_TIMEOUT",
+            default_timeout=30.0,
+            default_retries=1
+        )
+
+    def _get_mw_manager_config(self) -> Dict[str, Any]:
+        """Simple config for MwManager."""
+        return {"organ_id": "tool_manager_shard"}
+
+    # ------------------------------------------------------------------
     #  HELPER: Holon Fabric (Storage Layer)
     # ------------------------------------------------------------------
     async def _init_holon_fabric(self) -> HolonFabric:
         """Initialize PG + Neo4j and return the Fabric instance."""
         logger.info("🔌 Connecting HolonFabric Storage...")
 
+        # Pool size calculation:
+        # - OrganismService can have up to 5 replicas (see rayservice.yaml)
+        # - Each replica creates its own pool
+        # - PostgreSQL default max_connections is usually 100
+        # - Other services (Reaper, dispatchers, etc.) also need connections
+        # - Default: 2 connections per replica (5 replicas × 2 = 10 connections)
+        # - Configurable via PG_POOL_SIZE env var or config.pg_pool_size
+        default_pool_size = int(os.getenv("PG_POOL_SIZE", "2"))
+        pool_size = self.config.get("pg_pool_size", default_pool_size)
+        
         pg_store = PgVectorStore(
-            pg_dsn=PG_DSN,
-            pool_size=self.config.get("pg_pool_size", 10),
+            dsn=PG_DSN,
+            pool_size=pool_size,
+            pool_min_size=1,  # Minimum 1 connection per replica
         )
         neo4j_graph = Neo4jGraph(
             NEO4J_URI or NEO4J_BOLT_URL,
@@ -435,7 +736,15 @@ class OrganismCore:
     #  HELPER: Service Clients
     # ------------------------------------------------------------------
     async def _init_service_clients(self):
-        """Initialize external API clients and Middleware manager."""
+        """
+        Initialize external API clients and Middleware manager.
+        
+        ⚠️ CRITICAL RAY SAFETY RULE:
+        These clients MUST NOT be passed to Ray actors via .remote() calls.
+        Actors must reconstruct clients from *_config helper methods.
+        
+        These clients are ONLY for use within OrganismCore (driver process).
+        """
         self.cognitive_client = CognitiveServiceClient()
         self.energy_client = EnergyServiceClient()
         self.ml_client = MLServiceClient()
@@ -468,14 +777,24 @@ class OrganismCore:
             # Create remote actors
             # Note: We don't await the remote() call itself (it returns ActorHandle instantly)
             # but if the Actors perform heavy init in __init__, we might want to wait for them to be ready.
+            # Build configs for ToolManagerShard (avoids serialization issues)
+            # CRITICAL: Pass configs, NOT live instances (locks, pools, sessions are non-serializable)
+            holon_fabric_config = self._get_holon_fabric_config()
+            cognitive_client_cfg = self._get_cognitive_client_config()
+            ml_client_cfg = self._get_ml_client_config()
+            mw_manager_cfg = self._get_mw_manager_config()
+            mcp_client_cfg = self._get_mcp_client_config()
+            
+            # Get configuration-driven actor options for tool shards
+            tool_shard_opts = self._get_tool_shard_actor_options()
+            
             self.tool_shards = [
-                ToolManagerShard.remote(
-                    skill_store=self.skill_store,
-                    mw_manager=self.mw_manager,
-                    holon_fabric=self.holon_fabric,
-                    cognitive_client=self.cognitive_client,
-                    ml_client=self.ml_client,
-                    mcp_client=getattr(self, "mcp_client", None),
+                ToolManagerShard.options(**tool_shard_opts).remote(
+                    holon_fabric_config=holon_fabric_config,
+                    mw_manager_cfg=mw_manager_cfg,
+                    cognitive_client_cfg=cognitive_client_cfg,
+                    ml_client_cfg=ml_client_cfg,
+                    mcp_client_cfg=mcp_client_cfg,
                 )
                 for _ in range(shard_count)
             ]
@@ -496,6 +815,94 @@ class OrganismCore:
         """Optional hook to verify Neo4j connectivity asynchronously."""
         # Implementation depends on your Neo4jGraph class
         pass
+
+    async def _register_all_role_profiles_from_config(self) -> None:
+        """
+        Extract all specializations from config and ensure they're registered in RoleRegistry.
+        This implements Option A: Strict Ordering - all roles must be registered before agents are created.
+        """
+        logger.info("--- Registering all role profiles from config ---")
+        
+        # Collect all unique specializations from config
+        specializations_needed: Set[Specialization] = set()
+        
+        for cfg in self.organ_configs:
+            agent_defs = cfg.get("agents", [])
+            for block in agent_defs:
+                spec_str = block.get("specialization")
+                if spec_str:
+                    try:
+                        spec = Specialization[spec_str.upper()]
+                        specializations_needed.add(spec)
+                    except KeyError:
+                        logger.warning(
+                            f"⚠️ Unknown specialization '{spec_str}' in config, skipping"
+                        )
+        
+        # Register missing specializations with default profiles
+        registered_count = 0
+        for spec in specializations_needed:
+            # Check if already registered
+            if self.role_registry.get_safe(spec) is None:
+                # Try to get from DEFAULT_ROLE_REGISTRY first (may have better defaults)
+                default_profile = DEFAULT_ROLE_REGISTRY.get_safe(spec)
+                if default_profile:
+                    # Use the default profile from DEFAULT_ROLE_REGISTRY
+                    self.role_registry.register(default_profile)
+                    logger.debug(f"  ✅ Registered profile for {spec.value} from DEFAULT_ROLE_REGISTRY")
+                else:
+                    # Create a minimal default RoleProfile for this specialization
+                    profile = RoleProfile(
+                        name=spec,
+                        default_skills={},  # Empty defaults - can be customized later
+                        allowed_tools=set(),  # Empty defaults - can be customized later
+                        routing_tags=set(),
+                        safety_policies={},
+                    )
+                    self.role_registry.register(profile)
+                    logger.debug(f"  ✅ Registered minimal default profile for {spec.value}")
+                registered_count += 1
+        
+        if registered_count > 0:
+            logger.info(
+                f"✅ Registered {registered_count} new role profiles. "
+                f"Total specializations: {len(specializations_needed)}"
+            )
+        else:
+            logger.info(
+                f"✅ All {len(specializations_needed)} specializations already registered"
+            )
+
+    async def _sync_role_registry_to_organs(self) -> None:
+        """
+        Propagate all role profiles from the global registry to all organ actors.
+        This ensures organs have the complete registry before agents are created.
+        """
+        if not self.organs:
+            logger.debug("No organs to sync role registry to")
+            return
+        
+        logger.info(f"--- Syncing role registry to {len(self.organs)} organs ---")
+        
+        # Get all registered profiles
+        all_profiles = list(self.role_registry._profiles.values())
+        
+        if not all_profiles:
+            logger.warning("⚠️ No role profiles to sync")
+            return
+        
+        # Propagate each profile to all organs
+        futures = []
+        for organ_id, organ_handle in self.organs.items():
+            for profile in all_profiles:
+                futures.append(organ_handle.update_role_registry.remote(profile))
+        
+        # Wait for all propagations to complete
+        if futures:
+            await asyncio.gather(*futures, return_exceptions=True)
+            logger.info(
+                f"✅ Synced {len(all_profiles)} role profiles to {len(self.organs)} organs"
+            )
 
     async def register_or_update_role(self, profile: RoleProfile) -> None:
         """
@@ -559,27 +966,24 @@ class OrganismCore:
             logger.info(f"  ➕ Creating Organ actor: {organ_id}")
 
             try:
+                # --- Get configuration-driven actor options ---
+                actor_opts = self._get_organ_actor_options(organ_id)
+                
                 # --- Pass all dependencies to the Organ actor ---
-                organ = Organ.options(
-                    name=organ_id,
-                    namespace=RAY_NAMESPACE,
-                    lifetime="detached",
-                    max_restarts=-1,
-                    max_task_retries=-1,
-                    num_cpus=0.1,
-                ).remote(
+                organ = Organ.options(**actor_opts).remote(
                     organ_id=organ_id,
                     # Stateless dependencies
                     role_registry=self.role_registry,
-                    skill_store=self.skill_store,
-                    tool_handler=self.tool_handler,
-                    cognitive_client=self.cognitive_client,
-                    ml_client=self.ml_client,
-                    # Stateful dependencies
-                    mw_manager=self.mw_manager,
-                    holon_fabric=self.holon_fabric,
+                    cognitive_client_cfg=self._get_cognitive_client_config(),
+                    ml_client_cfg=self._get_ml_client_config(),
+                    # Config for creating connections (avoids serialization)
+                    holon_fabric_config=self._get_holon_fabric_config(),
+                    # Tool handler: pass shard handles if sharded, None if single mode (creates locally)
+                    tool_handler_shards=self.tool_shards if hasattr(self, 'tool_shards') and self.tool_shards else None,
+                    # Stateful dependencies (pass config/ID instead of instances)
+                    mw_manager_organ_id=organ_id,  # Pass organ_id, create MwManager locally in actor
                     checkpoint_cfg=self.checkpoint_cfg,
-                    # OrganRegistry for Tier-1 registration
+                    # OrganRegistry for Tier-1 registration (currently kept for backward compatibility)
                     organ_registry=self.organ_registry,
                 )
 
@@ -623,27 +1027,24 @@ class OrganismCore:
             logger.info(f"  ➕ Creating Organ actor: {organ_id}")
 
             try:
+                # --- Get configuration-driven actor options ---
+                actor_opts = self._get_organ_actor_options(organ_id)
+                
                 # --- Pass all dependencies to the Organ actor ---
-                organ = Organ.options(
-                    name=organ_id,
-                    namespace=RAY_NAMESPACE,
-                    lifetime="detached",
-                    max_restarts=-1,
-                    max_task_retries=-1,
-                    num_cpus=0.1,
-                ).remote(
+                organ = Organ.options(**actor_opts).remote(
                     organ_id=organ_id,
                     # Stateless dependencies
                     role_registry=self.role_registry,
-                    skill_store=self.skill_store,
-                    tool_handler=self.tool_handler,
-                    cognitive_client=self.cognitive_client,
-                    ml_client=self.ml_client,
-                    # Stateful dependencies
-                    mw_manager=self.mw_manager,
-                    holon_fabric=self.holon_fabric,
+                    cognitive_client_cfg=self._get_cognitive_client_config(),
+                    ml_client_cfg=self._get_ml_client_config(),
+                    # Config for creating connections (avoids serialization)
+                    holon_fabric_config=self._get_holon_fabric_config(),
+                    # Tool handler: pass shard handles if sharded, None if single mode (creates locally)
+                    tool_handler_shards=self.tool_shards if hasattr(self, 'tool_shards') and self.tool_shards else None,
+                    # Stateful dependencies (pass config/ID instead of instances)
+                    mw_manager_organ_id=organ_id,  # Pass organ_id, create MwManager locally in actor
                     checkpoint_cfg=self.checkpoint_cfg,
-                    # OrganRegistry for Tier-1 registration
+                    # OrganRegistry for Tier-1 registration (currently kept for backward compatibility)
                     organ_registry=self.organ_registry,
                 )
 
@@ -789,14 +1190,15 @@ class OrganismCore:
         # C. Create via Organ (Remote Call)
         logger.info(f"✨ Spawning agent '{agent_id}' ({agent_class_name})...")
 
+        # Get configuration-driven agent actor options
+        agent_opts = self._get_agent_actor_options(agent_id)
+
         await organ_handle.create_agent.remote(
             agent_id=agent_id,
             specialization=spec,
             organ_id=organ_id,
             agent_class_name=agent_class_name,
-            name=agent_id,
-            num_cpus=0.1,
-            lifetime="detached",  # Critical: Keeps agent alive if Core dies
+            **agent_opts,  # Unpack: name, num_cpus, lifetime
         )
 
         self.agent_to_organ_map[agent_id] = organ_id
@@ -1499,15 +1901,16 @@ class OrganismCore:
             agent_id = f"{organ_id}_{spec.value}_{int(time.time())}_{i}"
 
             try:
+                # Get configuration-driven agent actor options
+                agent_opts = self._get_agent_actor_options(agent_id)
+                
                 # Create agent via organ (default to BaseAgent for evolution)
                 ref = organ.create_agent.remote(
                     agent_id=agent_id,
                     specialization=spec,
                     organ_id=organ_id,
                     agent_class_name="BaseAgent",  # Default for evolution-created agents
-                    name=agent_id,
-                    num_cpus=0.1,
-                    lifetime="detached",
+                    **agent_opts,  # Unpack: name, num_cpus, lifetime
                 )
 
                 await self._ray_await(ref)
@@ -2158,21 +2561,23 @@ class OrganismCore:
 
         # Create new organ actor (use same name as initial creation for consistency)
         try:
-            new_organ = Organ.options(
-                name=organ_id,  # Same as initial creation, not "organ-{organ_id}"
-                namespace=RAY_NAMESPACE,
-            ).remote(
+            # Get configuration-driven actor options
+            actor_opts = self._get_organ_actor_options(organ_id)
+            
+            new_organ = Organ.options(**actor_opts).remote(
                 organ_id=organ_id,
                 # Stateless dependencies
                 role_registry=self.role_registry,
-                skill_store=self.skill_store,
-                tool_handler=self.tool_handler,
-                cognitive_client=self.cognitive_client,
-                # Stateful dependencies
-                mw_manager=self.mw_manager,
-                holon_fabric=self.holon_fabric,
+                cognitive_client_cfg=self._get_cognitive_client_config(),
+                ml_client_cfg=self._get_ml_client_config(),
+                # Config for creating connections (avoids serialization)
+                holon_fabric_config=self._get_holon_fabric_config(),
+                # Tool handler: pass shard handles if sharded, None if single mode (creates locally)
+                tool_handler_shards=self.tool_shards if hasattr(self, 'tool_shards') and self.tool_shards else None,
+                # Stateful dependencies (pass config/ID instead of instances)
+                mw_manager_organ_id=organ_id,  # Pass organ_id, create MwManager locally in actor
                 checkpoint_cfg=self.checkpoint_cfg,
-                # OrganRegistry for Tier-1 registration
+                # OrganRegistry for Tier-1 registration (currently kept for backward compatibility)
                 organ_registry=self.organ_registry,
             )
         except Exception as e:
@@ -2202,14 +2607,16 @@ class OrganismCore:
                 try:
                     # Get agent class from config if available, default to BaseAgent
                     agent_class_name = agent_def.get("class", "BaseAgent")
+                    
+                    # Get configuration-driven agent actor options
+                    agent_opts = self._get_agent_actor_options(agent_id)
+                    
                     ref = new_organ.create_agent.remote(
                         agent_id=agent_id,
                         specialization=spec,
                         organ_id=organ_id,
                         agent_class_name=agent_class_name,
-                        name=agent_id,
-                        num_cpus=0.1,
-                        lifetime="detached",
+                        **agent_opts,  # Unpack: name, num_cpus, lifetime
                     )
                     await self._ray_await(ref)
                     self.agent_to_organ_map[agent_id] = organ_id
@@ -2261,12 +2668,13 @@ class OrganismCore:
             from seedcore.maintenance.janitor import Janitor
 
             try:
-                Janitor.options(
-                    name="seedcore_janitor",
-                    namespace=namespace,
-                    lifetime="detached",
-                    num_cpus=0,
-                ).remote(namespace)
+                # Get configuration-driven janitor actor options
+                janitor_opts = self._get_janitor_actor_options()
+                # Override namespace if different from RAY_NAMESPACE
+                if namespace != RAY_NAMESPACE:
+                    janitor_opts["namespace"] = namespace
+                
+                Janitor.options(**janitor_opts).remote(namespace)
 
                 # Verify it is reachable
                 jan = await asyncio.to_thread(

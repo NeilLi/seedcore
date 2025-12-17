@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # Import graph modules FIRST before logging setup (prevents logger hijacking)
-from seedcore.graph import NimRetrievalEmbedder, upsert_embeddings
+from seedcore.graph import GraphEmbedder, NimRetrievalEmbedder, upsert_embeddings
 
 import os
 import json
@@ -116,6 +116,90 @@ class GraphDispatcher:
 
         # Initialize Actors here (Async/Lazy)
         await self._ensure_actors()
+        
+        # Mark as ready
+        self._startup_status = "ready"
+        logger.info("✅ GraphDispatcher '%s' ready and running", self.name)
+
+    # ---------------- Actor Initialization ----------------
+
+    async def _ensure_actors(self):
+        """Initialize embedder actors (lazy, on first use)."""
+        try:
+            # Initialize NimRetrievalEmbedder
+            if self.nim_embedder is None:
+                self.nim_embedder = await self._get_or_create_generic(
+                    name=self._nim_embedder_name,
+                    actor_cls=NimRetrievalEmbedder,
+                    label="NimRetrievalEmbedder"
+                )
+            
+            # Initialize GraphEmbedder
+            if self.embedder is None:
+                self.embedder = await self._get_or_create_generic(
+                    name=self._embedder_name,
+                    actor_cls=GraphEmbedder,
+                    label="GraphEmbedder"
+                )
+                
+        except Exception as e:
+            logger.error("[%s] Failed to initialize embedder actors: %s", self.name, e)
+            raise
+
+    async def _get_or_create_generic(self, name: str, actor_cls: type, label: str):
+        """
+        Generic async factory that handles:
+        1. Reuse of existing actors
+        2. Dead actor cleanup (ray.kill)
+        3. Race conditions (creation conflicts)
+        4. Async/Non-blocking execution
+        """
+        import asyncio
+        
+        # 1. Try to recover existing actor
+        try:
+            actor = ray.get_actor(name, namespace=RAY_NAMESPACE)
+            try:
+                # Use await instead of ray.get to avoid blocking the loop
+                await actor.ping.remote()
+                logger.debug("✅ Reusing existing %s: %s", label, name)
+                return actor
+            except Exception:
+                logger.warning("⚠️ Found %s '%s' but it is unresponsive. Killing it...", label, name)
+                # CRITICAL FIX: Kill the zombie before trying to reuse the name
+                ray.kill(actor, no_restart=True)
+                # Give GCS a moment to register the death
+                await asyncio.sleep(0.5) 
+        except ValueError:
+            # Actor does not exist, safe to proceed
+            pass
+
+        # 2. Create new actor (with race condition protection)
+        try:
+            logger.info("[%s] Creating new %s '%s'...", self.name, label, name)
+            actor = actor_cls.options(
+                name=name,
+                lifetime="detached",
+                namespace=RAY_NAMESPACE,
+                max_restarts=-1,
+                max_task_retries=-1,
+            ).remote()
+            
+            # Verify readiness asynchronously
+            await actor.ping.remote()
+            logger.info("✅ Created new %s: %s", label, name)
+            return actor
+
+        except ValueError:
+            # Race condition: Someone else created it while we were preparing
+            logger.info("🔄 Race detected for %s '%s', retrieving the winner...", label, name)
+            actor = ray.get_actor(name, namespace=RAY_NAMESPACE)
+            await actor.ping.remote()
+            return actor
+            
+        except Exception as e:
+            logger.error("❌ Failed to create %s '%s': %s", label, name, e)
+            raise
 
     # ---------------- Utils ----------------
 
@@ -305,50 +389,6 @@ class GraphDispatcher:
                 if row and row["node_id"] is not None:
                     node_ids.append(int(row["node_id"]))
         return node_ids
-
-    @staticmethod
-    def _get_or_create_nim_embedder(self, name: str):
-        """
-        Get or create a NimRetrievalEmbedder actor.
-        Returns the actor handle or raises if creation fails.
-        """
-        try:
-            # Try to get existing actor
-            actor = ray.get_actor(name, namespace=RAY_NAMESPACE)
-            # Verify it's alive with a ping
-            try:
-                ray.get(actor.ping.remote(), timeout=10)
-                logger.debug("✅ Reusing existing NimRetrievalEmbedder: %s", name)
-                return actor
-            except Exception:
-                logger.debug(
-                    "⚠️ Existing actor '%s' not responding, will create new one", name
-                )
-                # Actor exists but is unhealthy - continue to create new one
-                pass
-        except ValueError:
-            # Actor doesn't exist - this is expected, continue to create
-            pass
-        except Exception as e:
-            logger.warning("Unexpected error getting actor '%s': %s", name, e)
-            # Continue to try creating
-
-        # Create actor if not existing or unhealthy
-        try:
-            actor = NimRetrievalEmbedder.options(
-                name=name,
-                lifetime="detached",  # Use 'lifetime' (not 'lifespan') for compatibility
-                namespace=RAY_NAMESPACE,
-                max_restarts=-1,
-                max_task_retries=-1,
-            ).remote()
-            # Verify it's ready
-            ray.get(actor.ping.remote(), timeout=10)
-            logger.info("✅ Created new NimRetrievalEmbedder: %s", name)
-            return actor
-        except Exception as e:
-            logger.error("❌ Failed to create NimRetrievalEmbedder '%s': %s", name, e)
-            raise
 
     def _resolve_start_node_ids(
         self, params: Dict[str, Any]

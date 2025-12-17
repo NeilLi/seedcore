@@ -79,8 +79,7 @@ deploy_ray_services() {
 
 bootstrap_components() {
   log "Bootstrapping organism and dispatchers"
-  "${DEPLOY_DIR}/bootstrap_organism.sh"
-  "${DEPLOY_DIR}/bootstrap_dispatchers.sh"
+  "${DEPLOY_DIR}/bootstrap.sh"
 }
 
 deploy_seedcore_api() {

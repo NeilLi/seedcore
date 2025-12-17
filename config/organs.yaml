@@ -20,13 +20,13 @@ seedcore:
         description: "User dialog, mood inference, preference management."
         agents:
           - specialization: "USER_LIAISON"
-            count: 2
+            count: 1
           - specialization: "MOOD_INFERENCE_AGENT"
             count: 1
           - specialization: "SCHEDULE_ORACLE"
-            count: 1
+            count: 0
           - specialization: "PREFERENCE_MODEL"
-            count: 1
+            count: 0
 
       # =============================================================
       #  ENVIRONMENT UNDERSTANDING ORGAN
@@ -37,13 +37,13 @@ seedcore:
         description: "World modeling, predictions, anomalies, emergency detection."
         agents:
           - specialization: "ENVIRONMENT_MODEL"
-            count: 2
+            count: 1
           - specialization: "ANOMALY_DETECTOR"
-            count: 1
+            count: 0
           - specialization: "FORECASTER"
-            count: 1
+            count: 0
           - specialization: "SAFETY_MONITOR"
-            count: 1
+            count: 0
 
       # =============================================================
       #  DEVICE & ROBOT ORCHESTRATION ORGAN
@@ -54,21 +54,21 @@ seedcore:
         description: "Device control, robot task coordination, energy optimization."
         agents:
           - specialization: "DEVICE_ORCHESTRATOR"
-            count: 2
+            count: 1
           - specialization: "ROBOT_COORDINATOR"
-            count: 2
+            count: 1
           - specialization: "HVAC_CONTROLLER"
             count: 1
           - specialization: "LIGHTING_CONTROLLER"
-            count: 1
+            count: 0
           - specialization: "ENERGY_MANAGER"
-            count: 1
+            count: 0
           - specialization: "CLEANING_MANAGER"
-            count: 1
+            count: 0
           - specialization: "SECURITY_DRONE_MANAGER"
-            count: 1
+            count: 0
           - specialization: "MAINTENANCE_MANAGER"
-            count: 1
+            count: 0
 
       # =============================================================
       #  ROBOT EXECUTION ORGAN (PHYSICAL ACTUATION)
@@ -79,13 +79,13 @@ seedcore:
         description: "Autonomous physical robots: movement, cleaning, delivery."
         agents:
           - specialization: "CLEANING_ROBOT"
-            count: 2
+            count: 1
           - specialization: "DELIVERY_ROBOT"
-            count: 1
+            count: 0
           - specialization: "SECURITY_DRONE"
-            count: 1
+            count: 0
           - specialization: "INSPECTION_ROBOT"
-            count: 1
+            count: 0
 
       # =============================================================
       #  VERIFICATION & FEEDBACK ORGAN
@@ -96,11 +96,11 @@ seedcore:
         description: "Real-world verification, QA, feedback integration."
         agents:
           - specialization: "ENVIRONMENT_VERIFIER"
-            count: 2
+            count: 1
           - specialization: "RESULT_VALIDATOR"
-            count: 1
+            count: 0
           - specialization: "FEEDBACK_INTEGRATOR"
-            count: 1
+            count: 0
 
       # =============================================================
       #  LEARNING & ADAPTATION ORGAN
@@ -115,9 +115,9 @@ seedcore:
           - specialization: "ADAPTIVE_LEARNER"
             count: 1
           - specialization: "FAILURE_ANALYZER"
-            count: 1
+            count: 0
           - specialization: "PLAN_REFINER"
-            count: 1
+            count: 0
 
       # =============================================================
       #  SPECIALIST & PREDEVELOPED ORGAN

@@ -67,20 +67,39 @@ class TaskRepository:
     # -------------------------------------------
     # Claiming
     # -------------------------------------------
-    async def _claim_batch(self, con) -> List[Dict[str, Any]]:
+    async def claim_batch(self, batch_size: int = None, exclusions: List[str] = None) -> List[Dict[str, Any]]:
         """
-        Claim tasks, skipping in-batch duplicates.
+        Public method to claim a batch of tasks.
+        
+        Args:
+            batch_size: Number of tasks to claim (defaults to CLAIM_BATCH_SIZE)
+            exclusions: List of task types to exclude (defaults to GRAPH_TASK_TYPES_EXCLUSION)
+        
+        Returns:
+            List of claimed task dictionaries
+        """
+        batch_size = batch_size or CLAIM_BATCH_SIZE
+        exclusions = exclusions or list(GRAPH_TASK_TYPES_EXCLUSION)
+        
+        async with self.pool.acquire() as con:
+            return await self._claim_batch_internal(con, batch_size, exclusions)
+    
+    async def _claim_batch_internal(self, con, batch_size: int, exclusions: List[str]) -> List[Dict[str, Any]]:
+        """
+        Internal method to claim tasks, skipping in-batch duplicates.
 
         Args:
             con: asyncpg connection
+            batch_size: Number of tasks to claim
+            exclusions: List of task types to exclude
         """
         # Pass RUN_LEASE_S as a parameter ($4)
         # Ensure exclusion list is a list, not tuple, for asyncpg
         rows = await con.fetch(
             CLAIM_BATCH_SQL,
-            CLAIM_BATCH_SIZE,
-            self.name,
-            list(GRAPH_TASK_TYPES_EXCLUSION),
+            batch_size,
+            self.dispatcher_name,
+            list(exclusions),
             str(RUN_LEASE_S),
         )
 
@@ -135,11 +154,13 @@ class TaskRepository:
             )
 
         if batch:
-            self.tasks_claimed.inc(len(batch))
+            # Only log if tasks_claimed metric exists (it might not be initialized)
+            if hasattr(self, 'tasks_claimed'):
+                self.tasks_claimed.inc(len(batch))
             task_ids = [str(task["id"]) for task in batch]
             # Consolidated logging
             logger.info(
-                f"[QueueDispatcher] 📦 Claimed {len(batch)} tasks: {', '.join(task_ids)}"
+                f"[{self.dispatcher_name}] 📦 Claimed {len(batch)} tasks: {', '.join(task_ids)}"
             )
 
         return batch

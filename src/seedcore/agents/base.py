@@ -41,6 +41,7 @@ from .roles import (
     SkillStoreProtocol,
     RbacEnforcer,
     build_advertisement,
+    NullSkillStore,
 )
 from .state import AgentState
 from .private_memory import AgentPrivateMemory, PeerEvent
@@ -78,191 +79,387 @@ try:
 except ImportError:
     dt_parser = None  # type: ignore
 
-
-# BaseAgent is NOT an actor - it's a regular class that subclasses can inherit from
-# Subclasses (ChatAgent, ObserverAgent, UtilityAgent) should be decorated with @ray.remote
+# BaseAgent is a regular class (not a Ray actor) to allow inheritance
+# Subclasses (ChatAgent, ObserverAgent, UtilityAgent) are Ray actors
+# When BaseAgent is used directly, it will be wrapped as an actor in create_agent()
 class BaseAgent:
     """
     Production-ready base agent.
-
-    Responsibilities (LOCAL ONLY):
-      - Holds identity & light state (capability, mem_util)
-      - Manages specialization and skills; passes them to cognition/ML
-      - Enforces RBAC for tool/data access
-      - Computes salience (with ML + fallback) - LOCAL scoring only
-      - Advertises capabilities for routing (passive advertisement, not routing decisions)
-      - Executes tasks locally with tool calls
-      - Returns local intents (not global escalation signals)
-
-    Architectural Boundaries - BaseAgent MUST NOT:
-      ❌ No global routing logic (routing decisions belong to meta-controller)
-      ❌ No cognitive reasoning (delegates to CognitiveServiceClient)
-      ❌ No cross-agent coordination (coordination belongs to meta-controller/HGNN)
-      ❌ No recovery FSM (recovery orchestration belongs to meta-controller)
-      ❌ No proactive planning (planning belongs to Cognitive Core/Organs)
-      ❌ No policy engine (policy enforcement is RBAC-only, policy decisions are upstream)
-      ❌ No knowledge graph writes (KG operations belong to Cognitive Core)
-      ❌ No emergent behavior scaffolding (emergence belongs to HGNN)
-      ❌ No role selection logic (role selection belongs to meta-controller)
-      ❌ No democratized salience coordination (coordination belongs to meta-controller)
-
-    BaseAgent is a LOCAL REFLEX LAYER:
-      - Reacts to incoming tasks
-      - Executes tool calls with RBAC
-      - Computes local salience scores
-      - Returns local intents for upstream interpretation
-      - Self-regulates via lifecycle (degraded mode under load)
-
-    Extend this class for organ-specific behaviors (GEA, PEA, etc.).
+    Acts as a LOCAL REFLEX LAYER: Reacts to tasks, executes tools, enforces RBAC.
     """
 
     # Tunables
     REQUEST_TIMEOUT_S = 5.0
     MAX_TEXT_LEN = 4096
     MAX_IN_FLIGHT_SALIENCE = 20
+    _LOAD_MAX = 10000.0  # Fail-safe overflow protection
 
     def __init__(
         self,
         agent_id: str,
         *,
-        tool_handler: Optional[
-            Any
-        ] = None,  # Can be ToolManager or List[ToolManagerShard]
+        # --- Modern Config-Based Parameters (Preferred) ---
+        tool_handler_shards: Optional[List[Any]] = None,
+        role_registry_snapshot: Optional[Dict[str, Any]] = None,
+        holon_fabric_config: Optional[Dict[str, Any]] = None,
+        cognitive_client_cfg: Optional[Dict[str, Any]] = None,
+        ml_client_cfg: Optional[Dict[str, Any]] = None,
+        mcp_client_cfg: Optional[Dict[str, Any]] = None,
+        # --- Identity & State ---
         specialization: Specialization = Specialization.GENERALIST,
-        role_registry: Optional[RoleRegistry] = None,
-        skill_store: Optional[SkillStoreProtocol] = None,
-        cognitive_client: Optional["CognitiveServiceClient"] = None,
-        ml_client: Optional[MLServiceClient] = None,
-        mcp_client: Optional["MCPServiceClient"] = None,
         initial_capability: float = 0.5,
         initial_mem_util: float = 0.0,
         organ_id: Optional[str] = None,
+        # --- Legacy Parameters (Deprecated) ---
+        tool_handler: Optional[Any] = None,
+        role_registry: Optional[RoleRegistry] = None,
+        skill_store: Optional[SkillStoreProtocol] = None,
+        cognitive_client: Optional[Any] = None,
+        ml_client: Optional[Any] = None,
+        mcp_client: Optional[Any] = None,
     ) -> None:
-        # Identity
+        # 1. Identity & Metadata
         self.agent_id = agent_id
         self.instance_id = uuid.uuid4().hex
         self.organ_id = organ_id or "_"
+        self.lifecycle: str = "initializing"
+        
+        # 2. Configuration Storage (Lazy Init Prep)
+        # We store configs now; actual clients/connections are created on first access properties
+        self._holon_fabric_config = holon_fabric_config
+        self._holon_fabric: Optional[Any] = None
+        self._skill_store: Optional[SkillStoreProtocol] = None
+        
+        # Extract configs from passed objects (Legacy support) or use provided dicts
+        self._cognitive_client_cfg = cognitive_client_cfg or self._extract_client_config(cognitive_client)
+        self._ml_client_cfg = ml_client_cfg or self._extract_client_config(ml_client, extra_fields=["warmup_timeout"])
+        self._mcp_client_cfg = mcp_client_cfg or self._extract_client_config(mcp_client)
+        
+        # Initialize client placeholders (properties will handle creation)
+        self._cognitive_client = cognitive_client
+        self._ml_client = ml_client
+        self._mcp_client = mcp_client
 
-        # Role registry / profile
-        self._role_registry: RoleRegistry = role_registry or DEFAULT_ROLE_REGISTRY
-        self.specialization: Specialization = specialization
-        self.role_profile: RoleProfile = self._role_registry.get(self.specialization)
-
-        # --------------------------------------------------------------
-        # Tool Handling: supports
-        #   (A) Single ToolManager
-        #   (B) Sharded ToolManager (list of ToolManagerShard actors)
-        # --------------------------------------------------------------
-
-        # Validate tool handler
-        if tool_handler is None:
-            logger.warning(
-                "BaseAgent %s started without a tool_handler. "
-                "Falling back to a dedicated ToolManager instance. "
-                "Prefer injecting a shared handler via Organism.",
-                agent_id,
-            )
-            # Dedicated fallback
-            self.tool_handler = ToolManager(
-                skill_store=skill_store,
-                mw_manager=mw_manager,
-                holon_fabric=holon_fabric,
-                cognitive_client=cognitive_client,
-                mcp_client=mcp_client,
-            )
+        # 3. Role Registry Setup
+        if role_registry_snapshot:
+            self._role_registry = self._rebuild_role_registry(role_registry_snapshot)
         else:
+            self._role_registry = role_registry or DEFAULT_ROLE_REGISTRY
+            
+        self.specialization = specialization
+        self.role_profile = self._role_registry.get(self.specialization)
+
+        # 4. Tool Handling
+        if tool_handler_shards:
+            self.tool_handler = tool_handler_shards
+        elif tool_handler:
+            logger.warning(f"⚠️ BaseAgent {agent_id} using legacy tool_handler. Prefer tool_handler_shards.")
             self.tool_handler = tool_handler
+        else:
+            logger.debug(f"BaseAgent {agent_id} initialized without tool handler (will create local fallback).")
+            self.tool_handler = None
 
-        # --------------------------------------------------------------
-        # Optional dependency injection for single-instance ToolManager
-        # --------------------------------------------------------------
-
-        if not isinstance(self.tool_handler, list):  # non-sharded mode
-            tm = self.tool_handler
-
-            # Inject MCP client only if TM does not already have one
-            if mcp_client and getattr(tm, "_mcp_client", None) is None:
-                tm._mcp_client = mcp_client
-
-            # Inject cognitive client if missing
-            if cognitive_client and getattr(tm, "cognitive_client", None) is None:
-                tm.cognitive_client = cognitive_client
-
-        # (Sharded mode: ToolManagerShard already received clients during creation)
-
-        # Skills (deltas) + optional persistence
-        self.skills: SkillVector = SkillVector()
-        if skill_store:
+        # 5. State & Memory Initialization
+        self.skills = SkillVector()
+        if skill_store:  # Legacy binding
             self.skills.bind_store(skill_store)
 
-        # Light state for cognition context & routing
-        self.state: AgentState = AgentState(
-            c=float(initial_capability),
-            mem_util=float(initial_mem_util),
-        )
+        # Light state for cognition context
+        self.state = AgentState(c=float(initial_capability), mem_util=float(initial_mem_util))
+        self.state.p = self.role_profile.to_p_dict() # Initialize role probabilities
 
-        # Initialize state.p with role probabilities from RoleProfile
-        # This ensures state.p exists for role smoothing in update_state()
-        self.state.p = self.role_profile.to_p_dict()
-
-        # --- State required by AgentSnapshot (theoretical state model) ---
-        # h: The agent's internal state embedding (numpy array)
-        # This is the "live" version of AgentSnapshot.h
-        # NOTE: _get_current_embedding() prioritizes privmem.h, so this is a fallback/override
-        if np is None:
-            raise ImportError("numpy is required for BaseAgent")
-
-        # Initialize h from state.h if available (for consistency)
-        if hasattr(self.state, "h") and self.state.h:
-            try:
-                self.h = self._force_128d(np.asarray(self.state.h, dtype=np.float32))
-            except Exception:
-                self.h = np.zeros(128, dtype=np.float32)
+        # Initialize Embedding (h) - Fallback logic if private memory isn't ready
+        if np is None: raise ImportError("numpy is required for BaseAgent")
+        
+        if hasattr(self.state, "h") and self.state.h is not None:
+             self.h = self._force_128d(np.asarray(self.state.h, dtype=np.float32))
         else:
-            self.h = np.zeros(128, dtype=np.float32)
+             self.h = np.zeros(128, dtype=np.float32)
 
-        # lifecycle: The agent's current status
-        # This is the "live" version of AgentSnapshot.lifecycle
-        self.lifecycle: str = "initializing"
-
-        # load: Operational activity load (for RL signals, scheduling, resource allocation)
-        # Incremented on task start, decremented on task completion
-        # Protected against overflow and negative values
+        # 6. Operational Metrics & Locks
         self.load: float = 0.0
-        self._load_max: float = 10000.0  # Fail-safe overflow protection
-
-        # Role update throttling (to prevent destabilization from frequent role changes)
         self._last_role_update_time: float = 0.0
-        self._role_update_min_interval: float = (
-            5.0  # Minimum seconds between role updates
-        )
-        self._role_smoothing_alpha: float = 0.3  # EMA smoothing factor for role changes
-
-        # Agent-private vector memory (F/S/P blocks)
+        self._role_update_min_interval: float = 5.0
+        self._role_smoothing_alpha: float = 0.3
+        
         self._privmem = AgentPrivateMemory(agent_id=self.agent_id, alpha=0.1)
-
-        # RBAC
         self._rbac = RbacEnforcer()
-
-        # Cognition / ML
-        self.cognitive_client = cognitive_client
-        self.ml_client = ml_client
         self._ml_client_lock = asyncio.Lock()
         self._salience_sema = asyncio.Semaphore(self.MAX_IN_FLIGHT_SALIENCE)
-
-        # Heartbeat tracking
         self.last_heartbeat: Optional[float] = None
 
-        # Set lifecycle to active after initialization
+        # 7. Go Live
         self.lifecycle = "active"
-
         logger.info(
-            "✅ BaseAgent %s (%s) online. org=%s, mcp=%s",
-            self.agent_id,
-            self.specialization.value,
-            self.organ_id,
-            "yes" if mcp_client else "no",
+            "✅ BaseAgent %s (%s) online. org=%s",
+            self.agent_id, self.specialization.value, self.organ_id
         )
+
+    # ------------------------------------------------------------------
+    #  Helpers: Logic Encapsulation
+    # ------------------------------------------------------------------
+
+    def _extract_client_config(self, client: Any, extra_fields: List[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Generic helper to extract serializable config from a live client object.
+        Used for backward compatibility to convert Objects -> Dicts.
+        """
+        if not client:
+            return None
+        try:
+            cfg = {
+                "base_url": getattr(client, "base_url", None),
+                "timeout": getattr(client, "timeout", None),
+                "circuit_breaker": {
+                    "failure_threshold": client.circuit_breaker.failure_threshold,
+                    "recovery_timeout": client.circuit_breaker.recovery_timeout,
+                } if hasattr(client, "circuit_breaker") else None,
+                "retry_config": {
+                    "max_attempts": client.retry_config.max_attempts,
+                    "base_delay": client.retry_config.base_delay,
+                    "max_delay": client.retry_config.max_delay,
+                } if hasattr(client, "retry_config") else None,
+            }
+            # Copy extra fields (e.g. 'warmup_timeout' for ML client)
+            if extra_fields:
+                for field in extra_fields:
+                    if hasattr(client, field):
+                        cfg[field] = getattr(client, field)
+            return cfg
+        except Exception as e:
+            logger.warning(f"Failed to extract config from client {type(client).__name__}: {e}")
+            return None
+
+    def _rebuild_role_registry(self, snapshot: Dict[str, Any]) -> RoleRegistry:
+        """
+        Reconstructs a RoleRegistry from a snapshot dictionary.
+        Keeps __init__ clean and handles import dependencies locally.
+        """
+        from .roles import RoleProfile, RoleRegistry  # Local import to avoid circular deps
+        registry = RoleRegistry()
+        
+        for spec_name, profile_data in snapshot.items():
+            try:
+                # Convert string key back to Enum
+                spec = Specialization[spec_name.upper()]
+                profile = RoleProfile(
+                    name=spec,
+                    default_skills=profile_data.get("default_skills", {}),
+                    allowed_tools=set(profile_data.get("allowed_tools", [])),
+                    routing_tags=set(profile_data.get("routing_tags", [])),
+                    safety_policies=dict(profile_data.get("safety_policies", {})),
+                )
+                registry.register(profile)
+            except Exception as e:
+                logger.warning(f"Failed to restore role profile for {spec_name}: {e}")
+                
+        return registry
+
+    def _force_128d(self, vector: np.ndarray) -> np.ndarray:
+        """Ensures the vector is exactly 128 dimensions (padding or truncation)."""
+        if vector.shape[0] == 128:
+            return vector
+        if vector.shape[0] > 128:
+            return vector[:128]
+        # Pad with zeros
+        return np.pad(vector, (0, 128 - vector.shape[0]), 'constant')
+    
+    def _extract_ml_client_config(self, client: Any) -> Optional[Dict[str, Any]]:
+        """Helper to extract config from a live ML client (for backward compatibility)."""
+        if not client:
+            return None
+        try:
+            cfg = self._extract_client_config(client)
+            if cfg and hasattr(client, "warmup_timeout"):
+                cfg["warmup_timeout"] = client.warmup_timeout
+            return cfg
+        except Exception:
+            return None
+    
+    def _extract_mcp_client_config(self, client: Any) -> Optional[Dict[str, Any]]:
+        """Helper to extract config from a live MCP client (for backward compatibility)."""
+        return self._extract_client_config(client)
+    
+    async def _ensure_holon_fabric(self) -> Any:
+        """Lazily create HolonFabric from config to avoid serialization issues."""
+        if self._holon_fabric is None and self._holon_fabric_config:
+            from seedcore.memory.holon_fabric import HolonFabric
+            from seedcore.memory.backends.pgvector_backend import PgVectorStore
+            from seedcore.memory.backends.neo4j_graph import Neo4jGraph
+            from seedcore.database import PG_DSN, NEO4J_URI, NEO4J_BOLT_URL, NEO4J_USER, NEO4J_PASSWORD
+            
+            # Support both structured (new) and flat (legacy) config formats
+            pg_cfg = self._holon_fabric_config.get("pg", {})
+            neo4j_cfg = self._holon_fabric_config.get("neo4j", {})
+            
+            pg_store = PgVectorStore(
+                dsn=pg_cfg.get("dsn") or self._holon_fabric_config.get("pg_dsn", PG_DSN),
+                pool_size=pg_cfg.get("pool_size") or self._holon_fabric_config.get("pg_pool_size", 2),
+                pool_min_size=1,
+            )
+            neo4j_uri = neo4j_cfg.get("uri") or self._holon_fabric_config.get("neo4j_uri") or NEO4J_URI or NEO4J_BOLT_URL
+            neo4j_graph = Neo4jGraph(
+                neo4j_uri,
+                auth=(
+                    neo4j_cfg.get("user") or self._holon_fabric_config.get("neo4j_user", NEO4J_USER),
+                    neo4j_cfg.get("password") or self._holon_fabric_config.get("neo4j_password", NEO4J_PASSWORD),
+                ),
+            )
+            
+            # Initialize connections
+            await pg_store._get_pool()
+            
+            self._holon_fabric = HolonFabric(
+                vec_store=pg_store,
+                graph=neo4j_graph,
+                embedder=None,
+            )
+            
+            # Create SkillStore adapter
+            from seedcore.organs.organism_core import HolonFabricSkillStoreAdapter
+            self._skill_store = HolonFabricSkillStoreAdapter(self._holon_fabric)
+            
+            # Bind to skills if not already bound
+            if not self.skills._store or isinstance(self.skills._store, NullSkillStore):
+                self.skills.bind_store(self._skill_store)
+            
+            logger.debug(f"✅ [{self.agent_id}] HolonFabric and SkillStore created locally")
+        
+        return self._holon_fabric
+    
+    def _get_cognitive_client(self) -> Optional["CognitiveServiceClient"]:
+        """Lazily create CognitiveServiceClient from config to avoid serialization issues."""
+        if self._cognitive_client is None and self._cognitive_client_cfg:
+            from seedcore.serve.cognitive_client import CognitiveServiceClient
+            from seedcore.serve.base_client import CircuitBreaker, RetryConfig
+            
+            cfg = self._cognitive_client_cfg
+            circuit_breaker = CircuitBreaker(
+                failure_threshold=cfg.get("circuit_breaker", {}).get("failure_threshold", 5),
+                recovery_timeout=cfg.get("circuit_breaker", {}).get("recovery_timeout", 30.0),
+            )
+            retry_config = RetryConfig(
+                max_attempts=cfg.get("retry_config", {}).get("max_attempts", 1),
+                base_delay=cfg.get("retry_config", {}).get("base_delay", 1.0),
+                max_delay=cfg.get("retry_config", {}).get("max_delay", 5.0),
+            )
+            
+            # Create client with explicit config (bypassing __init__ env var logic)
+            # ⚠️ NOTE: This bypasses CognitiveServiceClient.__init__ which may contain validation,
+            # headers, auth, or metrics setup. If that class is refactored, this may need updating.
+            # TODO: Refactor service clients to support a `from_config()` class method for cleaner encapsulation.
+            self._cognitive_client = object.__new__(CognitiveServiceClient)
+            from seedcore.serve.base_client import BaseServiceClient
+            BaseServiceClient.__init__(
+                self._cognitive_client,
+                service_name="cognitive_service",
+                base_url=cfg["base_url"],
+                timeout=cfg.get("timeout", 75.0),
+                circuit_breaker=circuit_breaker,
+                retry_config=retry_config,
+            )
+            logger.debug(f"✅ [{self.agent_id}] CognitiveServiceClient created from config")
+        
+        return self._cognitive_client
+    
+    @property
+    def cognitive_client(self) -> Optional["CognitiveServiceClient"]:
+        """Lazy accessor for cognitive_client (creates on first access)."""
+        return self._get_cognitive_client()
+    
+    def _get_ml_client(self) -> Optional[MLServiceClient]:
+        """Lazily create MLServiceClient from config to avoid serialization issues."""
+        if self._ml_client is None and self._ml_client_cfg:
+            from seedcore.serve.ml_client import MLServiceClient
+            from seedcore.serve.base_client import CircuitBreaker, RetryConfig
+            
+            cfg = self._ml_client_cfg
+            circuit_breaker = CircuitBreaker(
+                failure_threshold=cfg.get("circuit_breaker", {}).get("failure_threshold", 5),
+                recovery_timeout=cfg.get("circuit_breaker", {}).get("recovery_timeout", 30.0),
+            )
+            retry_config = RetryConfig(
+                max_attempts=cfg.get("retry_config", {}).get("max_attempts", 2),
+                base_delay=cfg.get("retry_config", {}).get("base_delay", 1.0),
+                max_delay=cfg.get("retry_config", {}).get("max_delay", 5.0),
+            )
+            
+            # Create client with explicit config
+            # ⚠️ NOTE: This bypasses MLServiceClient.__init__ which may contain validation,
+            # headers, auth, or metrics setup. If that class is refactored, this may need updating.
+            # TODO: Refactor service clients to support a `from_config()` class method for cleaner encapsulation.
+            self._ml_client = object.__new__(MLServiceClient)
+            from seedcore.serve.base_client import BaseServiceClient
+            BaseServiceClient.__init__(
+                self._ml_client,
+                service_name="ml_service",
+                base_url=cfg["base_url"],
+                timeout=cfg.get("timeout", 10.0),
+                circuit_breaker=circuit_breaker,
+                retry_config=retry_config,
+            )
+            # Set warmup_timeout if present
+            if "warmup_timeout" in cfg:
+                self._ml_client.warmup_timeout = cfg["warmup_timeout"]
+            logger.debug(f"✅ [{self.agent_id}] MLServiceClient created from config")
+        
+        return self._ml_client
+    
+    @property
+    def ml_client(self) -> Optional[MLServiceClient]:
+        """Lazy accessor for ml_client (creates on first access)."""
+        return self._get_ml_client()
+    
+    async def _ensure_tool_handler(self):
+        """Lazily create ToolManager locally if shards not available."""
+        if self.tool_handler is None:
+            # Create local ToolManager from config
+            await self._ensure_holon_fabric()
+            
+            from seedcore.tools.manager import ToolManager
+            from seedcore.memory.mw_manager import MwManager
+            
+            self.tool_handler = ToolManager(
+                skill_store=self._skill_store,
+                mw_manager=MwManager(organ_id=self.organ_id),
+                holon_fabric=self._holon_fabric,
+                cognitive_client=self._get_cognitive_client(),
+                ml_client=self._get_ml_client(),
+                mcp_client=self._get_mcp_client(),
+            )
+            logger.debug(f"✅ [{self.agent_id}] ToolManager created locally")
+    
+    def _get_mcp_client(self) -> Optional["MCPServiceClient"]:
+        """Lazily create MCPServiceClient from config to avoid serialization issues."""
+        if self._mcp_client is None and self._mcp_client_cfg:
+            from seedcore.serve.mcp_client import MCPServiceClient
+            from seedcore.serve.base_client import CircuitBreaker, RetryConfig
+            
+            cfg = self._mcp_client_cfg
+            circuit_breaker = CircuitBreaker(
+                failure_threshold=cfg.get("circuit_breaker", {}).get("failure_threshold", 5),
+                recovery_timeout=cfg.get("circuit_breaker", {}).get("recovery_timeout", 30.0),
+            )
+            retry_config = RetryConfig(
+                max_attempts=cfg.get("retry_config", {}).get("max_attempts", 1),
+                base_delay=cfg.get("retry_config", {}).get("base_delay", 1.0),
+                max_delay=cfg.get("retry_config", {}).get("max_delay", 5.0),
+            )
+            
+            # Create client with explicit config
+            self._mcp_client = object.__new__(MCPServiceClient)
+            from seedcore.serve.base_client import BaseServiceClient
+            BaseServiceClient.__init__(
+                self._mcp_client,
+                service_name="mcp_service",
+                base_url=cfg["base_url"],
+                timeout=cfg.get("timeout", 30.0),
+                circuit_breaker=circuit_breaker,
+                retry_config=retry_config,
+            )
+            logger.debug(f"✅ [{self.agent_id}] MCPServiceClient created from config")
+        
+        return self._mcp_client
 
     # ============================================================================
     # State Snapshotting (Bridge to Theoretical State Model)
@@ -718,7 +915,7 @@ class BaseAgent:
 
                 context_data = {**features, **light_ctx}
 
-                client = await self.ml_client
+                client = self._get_ml_client()
                 if client is None:
                     raise RuntimeError("MLServiceClient unavailable")
 
@@ -787,9 +984,12 @@ class BaseAgent:
     async def use_tool(self, name: str, args: dict):
         """
         Unified tool execution:
-        - Single ToolManager instance
-        - OR sharded ToolManagerShard Ray actors
+        - Sharded ToolManagerShard Ray actors (preferred)
+        - OR local ToolManager instance (created lazily)
         """
+        # Ensure tool handler is initialized
+        if self.tool_handler is None:
+            await self._ensure_tool_handler()
 
         handler = self.tool_handler
 
@@ -804,7 +1004,7 @@ class BaseAgent:
             return await handler[shard].execute_tool.remote(self.agent_id, name, args)
 
         # -------------------------------------------
-        # Single ToolManager instance
+        # Single ToolManager instance (local)
         # -------------------------------------------
         return await handler.execute(name, args, self.agent_id)
 
@@ -917,6 +1117,10 @@ class BaseAgent:
                 continue
 
             # (b) Tool Availability (Single Manager Mode)
+            # Ensure tool handler is initialized
+            if self.tool_handler is None:
+                await self._ensure_tool_handler()
+            
             if not isinstance(self.tool_handler, list):
                 if not self.tool_handler or not hasattr(self.tool_handler, "has"):
                     tool_errors.append(

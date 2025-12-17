@@ -5,7 +5,7 @@ set -euo pipefail
 # 1. setup-ray-serve.sh
 # 2. bootstrap_organism.sh
 # 3. bootstrap_dispatchers.sh
-# 4. port-forward.sh
+# 3. port-forward.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -16,7 +16,7 @@ echo
 
 # Step 1: Setup Ray Serve
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📍 Step 1/4: Setting up Ray Serve"
+echo "📍 Step 1/3: Setting up Ray Serve"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cd "$SCRIPT_DIR"
 bash "${SCRIPT_DIR}/setup-ray-serve.sh" "$@"
@@ -24,23 +24,15 @@ echo
 
 # Step 2: Bootstrap Organism
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📍 Step 2/4: Bootstrapping Organism"
+echo "📍 Step 2/3: Bootstrapping Organism and Dispatchers"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cd "$SCRIPT_DIR"
-bash "${SCRIPT_DIR}/bootstrap_organism.sh"
+bash "${SCRIPT_DIR}/bootstrap.sh"
 echo
 
-# Step 3: Bootstrap Dispatchers
+# Step 3: Port Forward
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📍 Step 3/4: Bootstrapping Dispatchers"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-cd "$SCRIPT_DIR"
-bash "${SCRIPT_DIR}/bootstrap_dispatchers.sh"
-echo
-
-# Step 4: Port Forward
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📍 Step 4/4: Starting Port Forwarding"
+echo "📍 Step 3/3: Starting Port Forwarding"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cd "$SCRIPT_DIR"
 bash "${SCRIPT_DIR}/port-forward.sh" "$@"

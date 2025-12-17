@@ -35,8 +35,10 @@ import ray  # pyright: ignore[reportMissingImports]
 
 
 if TYPE_CHECKING:
-    from .organ import AgentIDFactory
     from .organism_core import OrganismCore
+
+# Runtime import for AgentIDFactory
+from .organ import AgentIDFactory
 
 from seedcore.logging_setup import ensure_serve_logger
 

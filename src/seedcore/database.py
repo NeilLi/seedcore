@@ -21,6 +21,12 @@ from sqlalchemy.orm import sessionmaker, Session
 # ✅ Use the async Neo4j driver
 from neo4j import AsyncGraphDatabase
 
+# ✅ Use asyncpg for direct pool access (needed by TaskRepository)
+try:
+    import asyncpg  # pyright: ignore[reportMissingImports]
+except ImportError:
+    asyncpg = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -30,6 +36,7 @@ __all__ = [
     "get_async_mysql_engine",
     "get_sync_mysql_engine",
     "get_neo4j_driver",
+    "get_asyncpg_pool",  # Direct asyncpg pool for TaskRepository
 
     # Session factories
     "get_async_pg_session_factory",
@@ -134,6 +141,10 @@ PG_POOL_TIMEOUT = get_env_int_setting("POSTGRES_POOL_TIMEOUT", 30)
 PG_POOL_RECYCLE = get_env_int_setting("POSTGRES_POOL_RECYCLE", 1800)
 PG_POOL_PRE_PING = get_env_bool_setting("POSTGRES_POOL_PRE_PING", True)
 
+# AsyncPG-specific pool config (for direct asyncpg.Pool usage, e.g., TaskRepository)
+ASYNC_PG_IDLE_LIFETIME = get_env_int_setting("ASYNC_PG_IDLE_LIFETIME", 300)
+ASYNC_PG_STMT_CACHE = get_env_int_setting("ASYNC_PG_STMT_CACHE", 512)
+
 MYSQL_POOL_SIZE = get_env_int_setting("MYSQL_POOL_SIZE", 10)
 MYSQL_MAX_OVERFLOW = get_env_int_setting("MYSQL_MAX_OVERFLOW", 5)
 MYSQL_POOL_TIMEOUT = get_env_int_setting("MYSQL_POOL_TIMEOUT", 30)
@@ -200,6 +211,55 @@ def get_sync_pg_engine():
         pool_recycle=PG_POOL_RECYCLE,
         pool_pre_ping=PG_POOL_PRE_PING,
         echo_pool=False,
+    )
+
+# ─────────────────────────────────────────────────────────────────────
+# AsyncPG Pool (Direct) - for components that need raw asyncpg.Pool
+# ─────────────────────────────────────────────────────────────────────
+
+async def get_asyncpg_pool(
+    min_size: Optional[int] = None,
+    max_size: Optional[int] = None,
+    command_timeout: Optional[float] = None,
+) -> "asyncpg.Pool":
+    """
+    Create an asyncpg connection pool using centralized configuration.
+    
+    This is for components that need direct asyncpg.Pool access (e.g., TaskRepository),
+    rather than SQLAlchemy's async engine wrapper. The pool uses centralized settings
+    from database.py (PG_DSN, ASYNC_PG_IDLE_LIFETIME, ASYNC_PG_STMT_CACHE).
+    
+    Note: Callers should cache the returned pool (e.g., in self._pool) to reuse it.
+    
+    Args:
+        min_size: Minimum pool size (defaults to 1)
+        max_size: Maximum pool size (defaults to PG_POOL_SIZE)
+        command_timeout: Command timeout in seconds (defaults to 60.0)
+    
+    Returns:
+        asyncpg.Pool instance (caller should cache this)
+    """
+    if asyncpg is None:
+        raise ImportError("asyncpg is not installed. Install it with: pip install asyncpg")
+    
+    # Use defaults from centralized config
+    min_size = min_size or 1
+    max_size = max_size or PG_POOL_SIZE
+    command_timeout = command_timeout or 60.0
+    
+    hostname = urlparse(PG_DSN).hostname
+    logger.info(
+        f"Creating asyncpg pool for {hostname} "
+        f"(min={min_size}, max={max_size}, idle_lifetime={ASYNC_PG_IDLE_LIFETIME})"
+    )
+    
+    return await asyncpg.create_pool(
+        dsn=PG_DSN,
+        min_size=min_size,
+        max_size=max_size,
+        max_inactive_connection_lifetime=ASYNC_PG_IDLE_LIFETIME,
+        statement_cache_size=ASYNC_PG_STMT_CACHE,
+        command_timeout=command_timeout,
     )
 
 # ─────────────────────────────────────────────────────────────────────

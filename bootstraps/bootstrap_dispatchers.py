@@ -248,11 +248,36 @@ def _ensure_actor_pool(
 
         # 3. Warmup & Run
         try:
-            # Check readiness (DB pools etc)
-            is_ready = ray.get(actor.ready.remote(timeout_s=30.0), timeout=35.0)
+            # Check readiness (DB pools etc) - only if actor has ready() method
+            is_ready = True  # Default to ready if no ready() method
+            try:
+                # Try to call ready() - only Dispatcher (queue_dispatcher) has this
+                # Use a shorter timeout to avoid hanging on gRPC issues
+                is_ready = ray.get(actor.ready.remote(timeout_s=20.0), timeout=25.0)
+            except AttributeError:
+                # GraphDispatcher doesn't have ready() method - that's OK, skip the check
+                logger.debug(f"  ℹ️ {name} doesn't have ready() method, skipping readiness check")
+                is_ready = True
+            except ray.exceptions.RayActorError as ray_err:
+                # Actor died or session was cleaned up - this is recoverable
+                logger.warning(f"⚠️ {name} actor error during ready() check: {ray_err}")
+                is_ready = False
+            except Exception as ready_err:
+                # Check if it's a gRPC connection error (common during startup)
+                err_str = str(ready_err)
+                if "cleaned up" in err_str or "NOT_FOUND" in err_str or "reconnect" in err_str:
+                    logger.debug(f"  ℹ️ {name} gRPC connection issue during ready() (may retry): {ready_err}")
+                    is_ready = False  # Will retry on next cycle
+                else:
+                    logger.warning(f"⚠️ {name} ready() check failed: {ready_err}")
+                    is_ready = False
+            
             if is_ready:
                 ready_count += 1
-                actor.run.remote()  # Idempotent start
+                try:
+                    actor.run.remote()  # Idempotent start
+                except ray.exceptions.RayActorError:
+                    logger.warning(f"⚠️ {name} actor died before run() could be called")
             else:
                 logger.warning(f"⚠️ {name} reported not ready")
         except Exception as e:

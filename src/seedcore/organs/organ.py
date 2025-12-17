@@ -103,86 +103,249 @@ class AgentIDFactory:
 @ray.remote
 class Organ:
     """
-    A Ray actor that serves as a simple agent registry and health tracker.
-
-    This class implements all the `.remote()` methods that the
-    OrganismCore needs to manage its pool of agents.
+    A Ray actor that serves as a simple agent registry, factory, and health tracker.
+    
+    Architecture:
+      - Acts as a "Parent Node" for a specific functional group (Organ).
+      - Manages dependency injection (Configs -> Agents).
+      - Lazily initializes local resources (ToolManager, DB connections) only when needed.
     """
 
-    def __init__(
-        self,
-        organ_id: str,
-        # --- Injected Dependencies from OrganismCore ---
-        role_registry: "RoleRegistry",
-        skill_store: "SkillStoreProtocol",
-        tool_handler: Any,  # Can be ToolManager or List[ToolManagerShard]
-        cognitive_client: "CognitiveServiceClient",
-        ml_client: "MLServiceClient",
-        # --- Optional stateful dependencies (for PersistentAgent) ---
-        mw_manager: Optional["MwManager"] = None,
-        holon_fabric: Optional["HolonFabric"] = None,
-        checkpoint_cfg: Optional[Dict[str, Any]] = None,
-        # --- Optional AgentIDFactory for ID generation ---
-        agent_id_factory: Optional[AgentIDFactory] = None,
-        # --- Optional OrganRegistry for Tier-1 registration ---
-        organ_registry: Optional["OrganRegistry"] = None,
-    ):
-        self.organ_id = organ_id
-
-        # Injected global singletons
-        self.role_registry = role_registry
-        self.skill_store = skill_store
-        self.tool_handler = tool_handler
-        # We store the *client*, not just the URL, for consistency
-        self.cognitive_client = cognitive_client
-        self.ml_client = ml_client
-
-        # --- Store stateful dependencies to pass to agents ---
-        self.mw_manager = mw_manager
-        self.holon_fabric = holon_fabric
-        self.checkpoint_cfg = checkpoint_cfg or {"enabled": False}
-
-        # --- Optional AgentIDFactory for ID generation ---
-        # NOTE: Currently unused - OrganismCore generates IDs before calling create_agent().
-        # This is kept for future use cases where Organ might need to generate IDs dynamically.
-        self.agent_id_factory = agent_id_factory
-
-        # --- Optional OrganRegistry for Tier-1 registration ---
-        self.organ_registry = organ_registry
-
-        # Agent registry: { agent_id -> ActorHandle }
-        self.agents: Dict[str, AgentHandle] = {}
-        # Agent metadata: { agent_id -> AgentInfo }
-        self.agent_info: Dict[str, Dict[str, Any]] = {}
-
-        logger.info(f"✅ Organ actor {self.organ_id} created.")
-
-    async def health_check(self) -> bool:
-        """Called by OrganismCore on startup."""
-        # Check that shared dependencies are configured
-        return (
-            self.tool_handler is not None
-            and self.role_registry is not None
-            and self.skill_store is not None
-            and self.cognitive_client is not None
-        )
-
-    async def ping(self) -> bool:
-        """Lightweight liveness check for OrganismCore's health loop."""
-        return True
-
-    # ==========================================================
-    # Agent Lifecycle (Optimized Factory)
-    # ==========================================================
-
-    # 1. Centralized Class Registry (Can be moved to config/constants)
+    # Central Registry for Agent Class Resolution
     AGENT_CLASS_MAP = {
         "BaseAgent": "seedcore.agents.base.BaseAgent",
         "ChatAgent": "seedcore.agents.chat_agent.ChatAgent",
         "ObserverAgent": "seedcore.agents.observer_agent.ObserverAgent",
         "UtilityAgent": "seedcore.agents.utility_agent.UtilityAgent",
-        # Easy to add new types here without breaking logic
     }
+
+    def __init__(
+        self,
+        organ_id: str,
+        # --- Configs (Safe: Dicts/Strings) ---
+        holon_fabric_config: Optional[Dict[str, Any]] = None,
+        cognitive_client_cfg: Optional[Dict[str, Any]] = None,
+        ml_client_cfg: Optional[Dict[str, Any]] = None,
+        checkpoint_cfg: Optional[Dict[str, Any]] = None,
+        mw_manager_organ_id: Optional[str] = None,
+        # --- Pre-computed/Shared Data (Safe: Immutable/Handles) ---
+        role_registry: Optional["RoleRegistry"] = None, 
+        tool_handler_shards: Optional[List[Any]] = None, 
+        # --- Legacy / Deprecated ---
+        organ_registry: Optional[Any] = None,
+        agent_id_factory: Optional[Any] = None,
+    ):
+        self.organ_id = organ_id
+        
+        # 1. Configuration Storage
+        self._holon_fabric_config = holon_fabric_config
+        self._cognitive_client_cfg = cognitive_client_cfg
+        self._ml_client_cfg = ml_client_cfg
+        self._checkpoint_cfg = checkpoint_cfg or {"enabled": False}
+        self._mw_manager_organ_id = mw_manager_organ_id or organ_id
+
+        # 2. Dependency Storage (Lazy Init)
+        self.role_registry = role_registry
+        self.tool_handler_shards = tool_handler_shards
+        self.organ_registry = organ_registry
+        
+        # 3. Internal State
+        self.agents: Dict[str, AgentHandle] = {}
+        self.agent_info: Dict[str, Dict[str, Any]] = {}
+        
+        # 4. Lazy Resource Containers
+        self._tool_handler: Optional[Any] = None
+        self._holon_fabric: Optional["HolonFabric"] = None
+        self._skill_store: Optional["SkillStoreProtocol"] = None
+        self._mw_manager: Optional["MwManager"] = None
+        self._cognitive_client: Optional["CognitiveServiceClient"] = None
+        self._ml_client: Optional["MLServiceClient"] = None
+        
+        # 5. Concurrency Control (Prevent race conditions during lazy init)
+        self._init_lock = asyncio.Lock()
+
+        logger.info(f"✅ Organ actor {self.organ_id} created.")
+
+    # ==========================================================
+    # Lazy Initialization Helpers (Concurrency Safe)
+    # ==========================================================
+
+    async def _ensure_holon_fabric(self) -> "HolonFabric":
+        """Lazily initialize HolonFabric/SkillStore with thread safety."""
+        if self._holon_fabric:
+            return self._holon_fabric
+
+        async with self._init_lock:
+            # Double-check inside lock
+            if self._holon_fabric:
+                return self._holon_fabric
+
+            if not self._holon_fabric_config:
+                raise RuntimeError(f"Organ {self.organ_id} missing HolonFabric config")
+
+            # Import locally to avoid top-level circular deps
+            from ..memory.holon_fabric import HolonFabric
+            from ..memory.backends.pgvector_backend import PgVectorStore
+            from ..memory.backends.neo4j_graph import Neo4jGraph
+            from ..organs.organism_core import HolonFabricSkillStoreAdapter
+            from ..database import PG_DSN, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+
+            logger.info(f"⚙️ [{self.organ_id}] Initializing HolonFabric connections...")
+            
+            # 1. Setup PG
+            pg_cfg = self._holon_fabric_config.get("pg", {})
+            pg_store = PgVectorStore(
+                dsn=pg_cfg.get("dsn") or self._holon_fabric_config.get("pg_dsn", PG_DSN),
+                pool_size=pg_cfg.get("pool_size") or self._holon_fabric_config.get("pg_pool_size", 2),
+                pool_min_size=1,
+            )
+            # Verify PG connection
+            await pg_store._get_pool()
+
+            # 2. Setup Neo4j
+            neo4j_cfg = self._holon_fabric_config.get("neo4j", {})
+            neo4j_graph = Neo4jGraph(
+                neo4j_cfg.get("uri") or self._holon_fabric_config.get("neo4j_uri", NEO4J_URI),
+                auth=(
+                    neo4j_cfg.get("user") or self._holon_fabric_config.get("neo4j_user", NEO4J_USER),
+                    neo4j_cfg.get("password") or self._holon_fabric_config.get("neo4j_password", NEO4J_PASSWORD),
+                ),
+            )
+
+            # 3. Construct Fabric & Adapter
+            self._holon_fabric = HolonFabric(vec_store=pg_store, graph=neo4j_graph)
+            self._skill_store = HolonFabricSkillStoreAdapter(self._holon_fabric)
+            
+            logger.info(f"✅ [{self.organ_id}] HolonFabric initialized.")
+            return self._holon_fabric
+
+    async def _ensure_tool_handler(self) -> Any:
+        """Lazily initialize local ToolManager if shards aren't provided."""
+        if self._tool_handler:
+            return self._tool_handler
+
+        # Optimization: No lock needed if using shards (read-only access)
+        if self.tool_handler_shards:
+            self._tool_handler = self.tool_handler_shards
+            return self._tool_handler
+
+        async with self._init_lock:
+            if self._tool_handler: return self._tool_handler
+            
+            # Local ToolManager requires dependencies
+            await self._ensure_holon_fabric()
+            
+            from ..tools.manager import ToolManager
+            logger.info(f"⚙️ [{self.organ_id}] Initializing local ToolManager...")
+            
+            self._tool_handler = ToolManager(
+                skill_store=self._skill_store,
+                mw_manager=self._get_mw_manager(),
+                holon_fabric=self._holon_fabric,
+                cognitive_client=self._get_client_instance("cognitive"),
+                ml_client=self._get_client_instance("ml"),
+            )
+            logger.info(f"✅ [{self.organ_id}] Local ToolManager initialized.")
+            return self._tool_handler
+
+    def _get_mw_manager(self) -> "MwManager":
+        """Synchronous lazy loader for MwManager (low overhead)."""
+        if not self._mw_manager and self._mw_manager_organ_id:
+            from ..memory.mw_manager import MwManager
+            self._mw_manager = MwManager(organ_id=self._mw_manager_organ_id)
+        return self._mw_manager
+
+    def _get_client_instance(self, client_type: str) -> Any:
+        """
+        Generic factory for Service Clients.
+        Constructs clients from stored config without triggering side-effects.
+        """
+        # Return cached if exists
+        if client_type == "cognitive" and self._cognitive_client: return self._cognitive_client
+        if client_type == "ml" and self._ml_client: return self._ml_client
+
+        # Map type to config/class
+        if client_type == "cognitive":
+            cfg = self._cognitive_client_cfg
+            from ..serve.cognitive_client import CognitiveServiceClient as ClientCls
+            target_attr = "_cognitive_client"
+            svc_name = "cognitive_service"
+        elif client_type == "ml":
+            cfg = self._ml_client_cfg
+            from ..serve.ml_client import MLServiceClient as ClientCls
+            target_attr = "_ml_client"
+            svc_name = "ml_service"
+        else:
+            return None
+
+        if not cfg: return None
+
+        # Construction logic (Safe Bypass)
+        from ..serve.base_client import BaseServiceClient, CircuitBreaker, RetryConfig
+        
+        # 1. Build Sub-components
+        cb = CircuitBreaker(
+            failure_threshold=cfg.get("circuit_breaker", {}).get("failure_threshold", 5),
+            recovery_timeout=cfg.get("circuit_breaker", {}).get("recovery_timeout", 30.0),
+        )
+        rc = RetryConfig(
+            max_attempts=cfg.get("retry_config", {}).get("max_attempts", 1),
+            base_delay=cfg.get("retry_config", {}).get("base_delay", 1.0),
+            max_delay=cfg.get("retry_config", {}).get("max_delay", 5.0),
+        )
+
+        # 2. Instantiate (Bypass __init__ to avoid env var reads/side effects)
+        client = object.__new__(ClientCls)
+        BaseServiceClient.__init__(
+            client,
+            service_name=svc_name,
+            base_url=cfg["base_url"],
+            timeout=cfg.get("timeout", 30.0),
+            circuit_breaker=cb,
+            retry_config=rc,
+        )
+
+        # 3. Apply Extra Fields
+        if client_type == "ml" and "warmup_timeout" in cfg:
+            client.warmup_timeout = cfg["warmup_timeout"]
+
+        # Cache it
+        setattr(self, target_attr, client)
+        return client
+
+    # ==========================================================
+    # Public Interface
+    # ==========================================================
+    
+    # Expose properties for internal use (ToolManager needs these)
+    @property
+    def holon_fabric(self): return self._holon_fabric
+    @property
+    def skill_store(self): return self._skill_store
+
+    async def health_check(self) -> bool:
+        """Readiness probe: Forces full dependency materialization."""
+        try:
+            # Parallelize initialization
+            await asyncio.gather(
+                self._ensure_holon_fabric(),
+                self._ensure_tool_handler(),
+                return_exceptions=False
+            )
+            
+            # Validation
+            is_healthy = (
+                self._tool_handler is not None and
+                self.role_registry is not None and
+                self._skill_store is not None
+            )
+            return is_healthy
+        except Exception:
+            logger.exception(f"[{self.organ_id}] Health check failed")
+            return False
+
+    async def ping(self) -> bool:
+        return True
 
     async def create_agent(
         self,
@@ -190,92 +353,88 @@ class Organ:
         specialization: "Specialization",
         organ_id: str,
         agent_class_name: str = "BaseAgent",
-        session: Optional["AsyncSession"] = None,
+        session: Optional[Any] = None,
         **agent_actor_options,
     ) -> None:
         """
-        Factory method to spawn specific Agent Actors.
-        Uses a standardized context to inject dependencies into any Agent subclass.
+        Factory method to spawn Agent Actors.
+        Injects CONFIGURATION (dicts), not LIVE OBJECTS, to ensure serialization safety.
         """
-        # 1. Validation
         if agent_id in self.agents:
-            logger.warning(
-                f"[{self.organ_id}] Agent {agent_id} already exists (idempotent skip)."
-            )
+            logger.warning(f"[{self.organ_id}] Agent {agent_id} already exists.")
             return
 
         if self.organ_id != organ_id:
-            raise ValueError(
-                f"Organ ID mismatch! Expected {self.organ_id}, got {organ_id}"
-            )
+            raise ValueError(f"ID Mismatch: Organ {self.organ_id} != Req {organ_id}")
 
         logger.info(f"🚀 [{self.organ_id}] Spawning {agent_class_name} '{agent_id}'...")
 
         try:
-            # 2. Resolve Class (Lazy Import)
+            # 1. Resolve Class
             import importlib
-
-            # Default fallback
-            classpath = self.AGENT_CLASS_MAP.get(
-                agent_class_name, self.AGENT_CLASS_MAP["BaseAgent"]
-            )
+            classpath = self.AGENT_CLASS_MAP.get(agent_class_name, self.AGENT_CLASS_MAP["BaseAgent"])
             module_path, class_name = classpath.rsplit(".", 1)
+            AgentClass = getattr(importlib.import_module(module_path), class_name)
 
-            module = importlib.import_module(module_path)
-            AgentClass = getattr(module, class_name)
+            # 1a. Wrap non-actor classes (like BaseAgent) as actors
+            # Ray doesn't allow actor inheritance, so BaseAgent is a regular class
+            # that needs to be wrapped when used directly
+            if not hasattr(AgentClass, '_ray_actor'):
+                # Class is not already a Ray actor, wrap it
+                AgentClass = ray.remote(max_restarts=2, max_task_retries=0)(AgentClass)
 
-            # 3. Build Standard Context (Common to ALL Agents)
-            # This reduces boilerplate by 80%
+            # 2. Prepare Config-Based Context
+            # We must ensure OUR local deps are ready so we can pass data derived from them (like role snapshots)
+            # But we do NOT pass the deps themselves.
+            
+            # Snapshotting RoleRegistry avoids passing the whole object (safest approach)
+            role_snapshot = self._get_role_registry_snapshot()
+            
+            # Determine Tool Handler (Pass Handles if Sharded, else None)
+            # If shards exist, we pass the list. If local, we pass None (Agent creates its own local fallback).
+            th_param = self.tool_handler_shards if self.tool_handler_shards else None
+
+            # 3. Construct Params
             agent_params = {
                 "agent_id": agent_id,
                 "organ_id": self.organ_id,
                 "specialization": specialization,
-                # Shared Services
-                "tool_handler": self.tool_handler,
-                "role_registry": self.role_registry,
-                "skill_store": self.skill_store,
-                "cognitive_client": self.cognitive_client,
-                "ml_client": self.ml_client,
+                "tool_handler_shards": th_param,
+                "role_registry_snapshot": role_snapshot,
+                "holon_fabric_config": self._holon_fabric_config,
+                "cognitive_client_cfg": self._cognitive_client_cfg,
+                "ml_client_cfg": self._ml_client_cfg,
+                "mcp_client_cfg": None, # Add if you have this config in Organ
             }
 
-            # 4. Inject Specialized Context (Stateful vs Stateless)
-            # If the specific agent needs extra params (like Checkpointing or HolonFabric),
-            # we check if the AgentClass accepts them or just inject based on type.
+            # 4. Extended Params for Stateful Agents
             if agent_class_name == "ChatAgent":
-                agent_params.update(
-                    {
-                        "mw_manager": self.mw_manager,
-                        "holon_fabric": self.holon_fabric,
-                        "checkpoint_cfg": getattr(self, "checkpoint_cfg", None),
-                    }
-                )
+                agent_params.update({
+                    "mw_manager_organ_id": self.organ_id,
+                    "checkpoint_cfg": self._checkpoint_cfg,
+                })
 
             # 5. Spawn Actor
-            # We enforce namespace=AGENT_NAMESPACE but allow overrides via agent_actor_options
             actor_opts = {
-                "name": agent_id,  # Name the actor for easier debugging in Ray Dashboard
-                "namespace": AGENT_NAMESPACE,
+                "name": agent_id,
+                "namespace": "agent_namespace", # Ensure this constant is imported
                 "get_if_exists": True,
                 **agent_actor_options,
             }
-
+            
             handle = AgentClass.options(**actor_opts).remote(**agent_params)
-
-            # 6. Verify Startup (Optional but recommended)
-            # await handle.ping.remote()
-
-            # 7. Update Local State
+            
+            # 6. Update Registry
             self.agents[agent_id] = handle
             self.agent_info[agent_id] = {
                 "agent_id": agent_id,
                 "specialization": specialization.name,
-                "specialization_value": specialization.value,
                 "class": agent_class_name,
                 "created_at": time.time(),
-                "status": "ready",  # We assume ready if Ray didn't throw
+                "status": "ready",
             }
 
-            # 8. Register in Global Graph (Tier-1)
+            # 7. Tier-1 Registration (Optional)
             if self.organ_registry and session:
                 await self.organ_registry.register_agent(
                     session,
@@ -284,19 +443,31 @@ class Organ:
                     specialization=specialization.value,
                 )
 
-            logger.info(
-                f"✅ [{self.organ_id}] Registered {agent_class_name}: {agent_id}"
-            )
+            logger.info(f"✅ [{self.organ_id}] Registered {agent_id}")
 
-        except ImportError as e:
-            logger.error(f"❌ Unknown Agent Class '{agent_class_name}': {e}")
-            raise
         except Exception as e:
             logger.error(f"❌ Failed to spawn agent {agent_id}: {e}", exc_info=True)
-            # Cleanup partial state
             self.agents.pop(agent_id, None)
-            self.agent_info.pop(agent_id, None)
             raise
+
+    def _get_role_registry_snapshot(self) -> Dict[str, Any]:
+        """Extracts serializable dict from RoleRegistry."""
+        if not self.role_registry: return {}
+        snapshot = {}
+        for spec, profile in self.role_registry._profiles.items():
+            spec_key = spec.value if hasattr(spec, "value") else str(spec)
+            # Dump frozen dataclass to dict
+            if hasattr(profile, "model_dump"):
+                snapshot[spec_key] = profile.model_dump()
+            elif hasattr(profile, "__dict__"):
+                # Manual extraction for safety
+                snapshot[spec_key] = {
+                    "default_skills": dict(getattr(profile, "default_skills", {})),
+                    "allowed_tools": list(getattr(profile, "allowed_tools", [])),
+                    "routing_tags": list(getattr(profile, "routing_tags", [])),
+                    "safety_policies": dict(getattr(profile, "safety_policies", {})),
+                }
+        return snapshot
 
     async def remove_agent(self, agent_id: str) -> bool:
         """
@@ -339,7 +510,7 @@ class Organ:
             organ_id=self.organ_id,
             agent_class_name=agent_class_name,  # Pass the class
             name=agent_id,  # Re-use original name
-            num_cpus=0.1,
+            num_cpus=0.01,
             lifetime="detached",
         )
 

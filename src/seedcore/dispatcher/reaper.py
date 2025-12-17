@@ -90,33 +90,59 @@ class Reaper:
     # ---------------------------------------------------------------------
     # CORE LOGIC
     # ---------------------------------------------------------------------
+    async def _check_table_exists(self, con) -> bool:
+        """Check if the tasks table exists."""
+        try:
+            result = await con.fetchval("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name = 'tasks'
+                )
+            """)
+            return bool(result)
+        except Exception as e:
+            logger.debug("[Reaper] Error checking table existence: %s", e)
+            return False
+
     async def _run_reap_cycle(self, con):
         """
         Executes the two-phase reap strategy:
         1. Fail tasks that have tried too many times.
         2. Recover tasks that still have a chance.
         """
+        # Check if tasks table exists first
+        if not await self._check_table_exists(con):
+            logger.debug("[Reaper] Tasks table does not exist yet, skipping reap cycle")
+            return 0
 
-        # Phase 1: Fail Exhausted
-        # $1 = Stale Seconds (used for heartbeat calc), $2 = Max Attempts
-        failed_rows = await con.fetch(REAP_FAILED_SQL, str(TASK_STALE_S), MAX_ATTEMPTS)
+        try:
+            # Phase 1: Fail Exhausted
+            # $1 = Stale Seconds (used for heartbeat calc), $2 = Max Attempts
+            failed_rows = await con.fetch(REAP_FAILED_SQL, str(TASK_STALE_S), MAX_ATTEMPTS)
 
-        if failed_rows:
-            ids = [str(r["id"]) for r in failed_rows]
-            logger.error(
-                f"[Reaper] 💀 Permanently failed {len(ids)} tasks (Max Retries): {ids}"
-            )
+            if failed_rows:
+                ids = [str(r["id"]) for r in failed_rows]
+                logger.error(
+                    f"[Reaper] 💀 Permanently failed {len(ids)} tasks (Max Retries): {ids}"
+                )
 
-        # Phase 2: Recover Stuck
-        stuck_rows = await con.fetch(REAP_STUCK_SQL, str(TASK_STALE_S), MAX_ATTEMPTS)
+            # Phase 2: Recover Stuck
+            stuck_rows = await con.fetch(REAP_STUCK_SQL, str(TASK_STALE_S), MAX_ATTEMPTS)
 
-        if stuck_rows:
-            ids = [str(r["id"]) for r in stuck_rows]
-            logger.warning(
-                f"[Reaper] ♻️ Recovered {len(ids)} stuck tasks (Retrying): {ids}"
-            )
+            if stuck_rows:
+                ids = [str(r["id"]) for r in stuck_rows]
+                logger.warning(
+                    f"[Reaper] ♻️ Recovered {len(ids)} stuck tasks (Retrying): {ids}"
+                )
 
-        return len(failed_rows) + len(stuck_rows)
+            return len(failed_rows) + len(stuck_rows)
+        except asyncpg.exceptions.UndefinedTableError:
+            logger.debug("[Reaper] Tasks table does not exist, skipping reap cycle")
+            return 0
+        except Exception as e:
+            logger.warning("[Reaper] Error in reap cycle: %s", e)
+            raise
 
     # ---------------------------------------------------------------------
     # UTILITY API (Can be called by other actors)
@@ -162,8 +188,13 @@ class Reaper:
 
             except asyncio.CancelledError:
                 break
+            except asyncpg.exceptions.UndefinedTableError:
+                # Table doesn't exist yet - this is expected during initial setup
+                logger.debug("[Reaper] Tasks table does not exist yet, will retry later")
+                await asyncio.sleep(30.0)  # Wait longer before retrying
             except Exception as e:
                 logger.error("[Reaper] Cycle error: %s", e)
+                self._metrics["errors"] += 1
                 await asyncio.sleep(5.0)
 
         logger.info("[Reaper] Stopped.")

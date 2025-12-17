@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-init_organism.py
 Robust Bootstrap Driver for SeedCore Organism.
 
 Phases:
 1. Connect to Ray Cluster
 2. Bootstrap Shared Singletons (Memory, Cache, MW)
-3. Trigger OrganismService Initialization (via Serve Handle or HTTP)
-4. Block until Healthy
+3. Wait for OrganismService Serve Deployment
+4. Trigger OrganismService Initialization
+5. Block until Healthy
 """
 
 import os
@@ -26,88 +26,71 @@ from seedcore.utils.ray_utils import (
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 from seedcore.serve.organism_client import get_organism_service_handle
 
+
+# ------------------------------------------------------------------------------
 # Configuration
+# ------------------------------------------------------------------------------
 setup_logging(app_name="seedcore.bootstrap.organism")
 logger = ensure_serve_logger("seedcore.bootstrap.organism")
 
 ORGANISM_URL = ORG
 RAY_NAMESPACE = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
+
 HEALTH_TIMEOUT_S = int(os.getenv("ORGANISM_HEALTH_TIMEOUT_S", "180"))
 HEALTH_INTERVAL_S = float(os.getenv("ORGANISM_HEALTH_INTERVAL_S", "2.0"))
-ROLLING_INIT = os.getenv("SEEDCORE_ROLLING_INIT", "false").lower() == "true"
 
+INIT_TRIGGER_TIMEOUT_S = int(os.getenv("ORGANISM_INIT_TRIGGER_TIMEOUT_S", "60"))
+INIT_TRIGGER_INTERVAL_S = float(os.getenv("ORGANISM_INIT_TRIGGER_INTERVAL_S", "2.0"))
+
+
+# ------------------------------------------------------------------------------
+# Main Entry
+# ------------------------------------------------------------------------------
 
 def bootstrap_organism() -> bool:
-    """
-    Main entry point. Returns True on success, False on failure.
-    """
     logger.info("🚀 Starting SeedCore Bootstrap Sequence...")
 
-    # ---------------------------------------------------------
-    # Phase 1: Infrastructure Connectivity
-    # ---------------------------------------------------------
     if not _ensure_ray_connection():
         return False
 
-    # ---------------------------------------------------------
-    # Phase 2: Dependency Injection (Singletons)
-    # ---------------------------------------------------------
     if not _bootstrap_dependencies():
-        logger.error("❌ Critical: Failed to bootstrap singleton dependencies.")
         return False
 
-    # ---------------------------------------------------------
-    # Phase 3: Service Activation
-    # ---------------------------------------------------------
-    logger.info("🚀 Triggering OrganismService Initialization...")
-
-    # Try Ray Handle (Preferred: Fastest, Internal)
-    activated = _trigger_via_ray_handle()
-
-    # Fallback to HTTP (External)
-    if not activated:
-        logger.warning("⚠️ Ray Handle failed, attempting HTTP fallback...")
-        activated = _trigger_via_http()
-
-    if not activated:
-        logger.error("❌ Failed to trigger initialization via any method.")
+    if not _wait_for_service_reachable(INIT_TRIGGER_TIMEOUT_S):
+        logger.error("❌ OrganismService never became reachable.")
         return False
 
-    # ---------------------------------------------------------
-    # Phase 4: Readiness Check (Barrier)
-    # ---------------------------------------------------------
+    if not _trigger_initialization(INIT_TRIGGER_TIMEOUT_S):
+        logger.error("❌ Failed to trigger OrganismService initialization.")
+        return False
+
     return _wait_for_healthy_state(HEALTH_TIMEOUT_S, HEALTH_INTERVAL_S)
 
 
-# ==============================================================================
-# Helper Functions
-# ==============================================================================
-
+# ------------------------------------------------------------------------------
+# Phase Helpers
+# ------------------------------------------------------------------------------
 
 def _ensure_ray_connection() -> bool:
-    """Connects to Ray cluster idempotently."""
     try:
         if is_ray_available():
             logger.info("✅ Ray already connected.")
             return True
 
-        logger.info(f"🔌 Connecting to Ray (Namespace: {RAY_NAMESPACE})...")
+        logger.info(f"🔌 Connecting to Ray (namespace={RAY_NAMESPACE})...")
         if ensure_ray_initialized(ray_namespace=RAY_NAMESPACE, force_reinit=False):
             logger.info(f"✅ Connected: {get_ray_cluster_info()}")
             return True
     except Exception as e:
-        logger.error(f"❌ Ray connection failure: {e}")
-
+        logger.exception(f"❌ Ray connection failed: {e}")
     return False
 
 
 def _bootstrap_dependencies() -> bool:
-    """Bootstraps lower-level actors (Memory, Cache) before the main Organism."""
     try:
-        logger.info("🛠 Bootstrapping Shared Singletons...")
-        # These functions should be idempotent internally
-        bootstrap_actors()  # System actors (seedcore-dev)
-        bootstrap_memory_actors()  # Memory actors (mem-dev)
+        logger.info("🛠 Bootstrapping shared singletons...")
+        bootstrap_actors()
+        bootstrap_memory_actors()
         logger.info("✅ Singletons (MW, Cache, Memory) ready.")
         return True
     except Exception as e:
@@ -115,69 +98,119 @@ def _bootstrap_dependencies() -> bool:
         return False
 
 
-def _trigger_via_ray_handle() -> bool:
-    """Invokes initialize_organism() via Ray Serve Handle."""
-    try:
-        # Get handle to the 'OrganismService' deployment app
-        # Note: 'organism' is the app name in serve_config.yaml
-        h = get_organism_service_handle()
+# ------------------------------------------------------------------------------
+# Serve Readiness
+# ------------------------------------------------------------------------------
 
-        # Invoke remote method
-        # Using a timeout prevents hanging if the actor is dead
-        ref = h.initialize_organism.remote()
-        result = ref.result(timeout_s=30)  # Blocks safely
-
-        logger.info(f"✅ Ray Init Triggered: {result}")
-        return True
-
-    except Exception as e:
-        logger.warning(f"⚠️ Ray Handle Trigger failed: {e}")
-        return False
-
-
-def _trigger_via_http() -> bool:
-    """Invokes initialize-organism via HTTP API."""
-    url = f"{ORGANISM_URL}/initialize-organism"
-    try:
-        resp = requests.post(url, timeout=10)
-        if resp.status_code == 200:
-            logger.info(f"✅ HTTP Init Triggered: {resp.json()}")
-            return True
-        logger.error(f"❌ HTTP Error {resp.status_code}: {resp.text}")
-    except Exception as e:
-        logger.error(f"❌ HTTP Connection failed: {e}")
-    return False
-
-
-def _wait_for_healthy_state(timeout: int, interval: float) -> bool:
-    """Blocks until the /health endpoint reports initialized=True."""
-    logger.info(f"⏳ Waiting for Healthy State (Timeout: {timeout}s)...")
+def _wait_for_service_reachable(timeout: int) -> bool:
+    """
+    Wait until OrganismService Serve deployment is reachable
+    (not necessarily initialized).
+    """
+    logger.info("⏳ Waiting for OrganismService deployment to become reachable...")
 
     deadline = time.time() + timeout
 
-    # Use handle for health checks too if possible, but HTTP is fine for external validation
-    url = f"{ORGANISM_URL}/health"
+    while time.time() < deadline:
+        try:
+            # Prefer Ray handle if possible
+            handle = get_organism_service_handle()
+            handle.options(timeout_s=5)
+            logger.info("✅ OrganismService handle acquired.")
+            return True
+        except Exception:
+            pass
+
+        # Fallback: HTTP route existence
+        try:
+            r = requests.get(f"{ORGANISM_URL}/health", timeout=2)
+            if r.status_code in (200, 503):
+                logger.info("✅ OrganismService HTTP route detected.")
+                return True
+        except Exception:
+            pass
+
+        time.sleep(2)
+
+    return False
+
+
+# ------------------------------------------------------------------------------
+# Initialization Trigger
+# ------------------------------------------------------------------------------
+
+def _trigger_initialization(timeout: int) -> bool:
+    logger.info("🚀 Triggering OrganismService initialization...")
+
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        if _trigger_via_ray_handle():
+            return True
+
+        if _trigger_via_http():
+            return True
+
+        time.sleep(INIT_TRIGGER_INTERVAL_S)
+
+    return False
+
+
+def _trigger_via_ray_handle() -> bool:
+    try:
+        h = get_organism_service_handle()
+        if hasattr(h, "rpc_initialize_organism"):
+            ref = h.rpc_initialize_organism.remote()
+            ref.result(timeout_s=10)
+            logger.info("✅ Initialization triggered via Ray RPC.")
+            return True
+    except Exception as e:
+        logger.debug(f"Ray init attempt failed: {e}")
+    return False
+
+
+def _trigger_via_http() -> bool:
+    try:
+        r = requests.post(f"{ORGANISM_URL}/initialize-organism", timeout=5)
+        if r.status_code == 200:
+            logger.info("✅ Initialization triggered via HTTP.")
+            return True
+        if r.status_code == 503:
+            logger.debug("HTTP init endpoint not ready yet (503).")
+    except Exception:
+        pass
+    return False
+
+
+# ------------------------------------------------------------------------------
+# Health Barrier
+# ------------------------------------------------------------------------------
+
+def _wait_for_healthy_state(timeout: int, interval: float) -> bool:
+    logger.info(f"⏳ Waiting for healthy state (timeout={timeout}s)...")
+    deadline = time.time() + timeout
 
     while time.time() < deadline:
         try:
-            resp = requests.get(url, timeout=2)
-            if resp.status_code == 200:
-                data = resp.json()
+            r = requests.get(f"{ORGANISM_URL}/health", timeout=2)
+            if r.status_code == 200:
+                data = r.json()
                 if data.get("organism_initialized") is True:
-                    logger.info("✅ System Ready! 🚀")
+                    logger.info("✅ Organism fully initialized. System READY 🚀")
                     return True
-
-                # Still warming up
-                logger.debug(f"Still initializing... ({data.get('status')})")
-
-        except requests.RequestException:
-            # Service might be restarting or unreachable
+                logger.debug(f"Still initializing: {data}")
+        except Exception:
             pass
 
         time.sleep(interval)
 
-    logger.error("❌ Timeout waiting for OrganismService health.")
+    logger.error("❌ Timeout waiting for healthy OrganismService.")
     return False
+
+
+# ------------------------------------------------------------------------------
+# Entrypoint
+# ------------------------------------------------------------------------------
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import os
 import time
 import asyncio
 import uuid
+import traceback
 from typing import Dict, Any, Optional
 
 import ray  # pyright: ignore[reportMissingImports]
@@ -51,24 +52,47 @@ class OrganismService:
     def __init__(self, config: Dict[str, Any] = None):
         """
         Initialize the service shell.
-        Kick off background initialization immediately.
+        Initialization is triggered by bootstrap or can be auto-started via env var.
         """
         logger.info("🚀 Creating OrganismService instance...")
         self.config = config or {}
 
         # Core Components
-        self.organism_core = OrganismCore()
+        # Pass config to OrganismCore so it's available during initialization
+        self.organism_core = OrganismCore(config=self.config)
         self.router: Optional[RoutingDirectory] = None
 
         # State Management
         self._initialized = False
         self._init_lock = asyncio.Lock()
+        self._init_task: Optional[asyncio.Task] = None
+        
+        # Init error tracking
+        self._init_error: Optional[str] = None
+        self._init_error_trace: Optional[str] = None
+        self._init_started_at: Optional[float] = None
+        self._init_finished_at: Optional[float] = None
 
-        # Start background initialization immediately (Lazy + Warmup)
-        # We don't await it here, but we save the task so we can join it later.
-        self._init_task = asyncio.create_task(self._lazy_init())
+        # Auto-init is opt-in (disabled by default to allow bootstrap to complete first)
+        AUTO_INIT = os.getenv("SEEDCORE_AUTO_INIT", "false").lower() == "true"
+        if AUTO_INIT:
+            logger.info("🔧 AUTO_INIT enabled - starting initialization immediately")
+            self._start_init_if_needed()
+        else:
+            logger.info("✅ OrganismService created (waiting for manual initialization)")
 
-        logger.info("✅ OrganismService created (warming up in background)")
+    def _start_init_if_needed(self) -> None:
+        """Start (or restart) init task if not initialized and no active task running."""
+        if self._initialized:
+            return
+        if self._init_task is None or self._init_task.done():
+            self._init_error = None
+            self._init_error_trace = None
+            self._init_started_at = time.time()
+            self._init_finished_at = None
+            loop = asyncio.get_running_loop()
+            self._init_task = loop.create_task(self._lazy_init())
+            logger.info("🔄 Starting initialization task...")
 
     async def _lazy_init(self):
         """
@@ -91,37 +115,44 @@ class OrganismService:
                 self.router = RoutingDirectory(organism=self.organism_core)
 
                 self._initialized = True
+                self._init_finished_at = time.time()
                 logger.info("✅ Organism and Router fully initialized")
 
             except Exception as e:
-                logger.critical(f"❌ Organism init failed: {e}", exc_info=True)
+                self._init_error = f"{type(e).__name__}: {e}"
+                self._init_error_trace = traceback.format_exc()
+                self._init_finished_at = time.time()
+                logger.critical(f"❌ Organism init failed: {self._init_error}", exc_info=True)
                 # We don't raise here to keep the actor alive for retries
                 # but readiness checks will fail.
 
-    async def _ensure_initialized(self, timeout: float = 30.0):
+    async def _ensure_initialized(self, timeout: float = 180.0):
         """
         Barrier method: Waits for initialization to complete.
         Call this at the start of every business-critical endpoint.
+        Automatically triggers init if it hasn't started or previously failed.
         """
         if self._initialized:
             return
 
-        # If the task is running, wait for it
+        # Start init if it hasn't started or previously failed
+        self._start_init_if_needed()
+
+        # Wait for init task
         if self._init_task and not self._init_task.done():
             try:
-                # Wait for the background task to finish
                 await asyncio.wait_for(asyncio.shield(self._init_task), timeout=timeout)
             except asyncio.TimeoutError:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Service is still initializing (Timeout)",
+                    detail=f"Service is still initializing (timeout={timeout}s)",
                 )
 
-        # If task is done but we are still not initialized, it meant it failed.
         if not self._initialized:
+            detail = self._init_error or "Service initialization failed (Check logs)"
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Service initialization failed (Check logs)",
+                detail=detail,
             )
 
     async def reconfigure(self, config: dict | None = None):
@@ -153,12 +184,31 @@ class OrganismService:
 
     @app.get("/health")
     async def health(self):
-        return {
+        health_data = {
             "status": "healthy" if self._initialized else "initializing",
             "service": "OrganismService",
             "organism_initialized": self._initialized,
             "ray_namespace": RAY_NAMESPACE,
         }
+        # Include init error if initialization failed (helps with debugging)
+        if self._init_error:
+            health_data["init_error"] = self._init_error
+        return health_data
+
+    @app.get("/init-status")
+    async def init_status(self):
+        """Get detailed initialization status for debugging."""
+        status_data = {
+            "initialized": self._initialized,
+            "init_started_at": self._init_started_at,
+            "init_finished_at": self._init_finished_at,
+            "init_task_done": (self._init_task.done() if self._init_task else None),
+            "init_error": self._init_error,
+        }
+        # Include traceback only in debug mode or if explicitly requested
+        if os.getenv("SEEDCORE_DEBUG_INIT_TRACE", "false").lower() == "true":
+            status_data["init_error_trace"] = self._init_error_trace
+        return status_data
 
     @app.get("/status", response_model=OrganismStatusResponse)
     async def status(self):
@@ -242,8 +292,36 @@ class OrganismService:
 
     @app.post("/initialize-organism")
     async def initialize_organism(self):
-        """Manually trigger init."""
-        await self._ensure_initialized()  # Reuse the barrier logic
+        """Manually trigger init (HTTP endpoint)."""
+        # Trigger init if needed, then wait for completion
+        self._start_init_if_needed()
+        timeout = float(os.getenv("ORG_INIT_TIMEOUT_S", "180"))
+        await self._ensure_initialized(timeout=timeout)
+        return {"success": True, "message": "Organism initialized"}
+
+    async def rpc_initialize_organism(self):
+        """
+        RPC method for initialization (called via Ray remote handle).
+        Raises regular exceptions instead of HTTPException for proper serialization.
+        """
+        if self._initialized:
+            return {"success": True, "message": "Organism already initialized"}
+
+        # Trigger init if needed (will restart if previously failed)
+        self._start_init_if_needed()
+
+        # Wait for background initialization to complete
+        timeout = float(os.getenv("ORG_INIT_TIMEOUT_S", "180"))
+        try:
+            await asyncio.wait_for(asyncio.shield(self._init_task), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"Service initialization timeout ({timeout}s)")
+
+        # If task is done but we are still not initialized, it meant it failed
+        if not self._initialized:
+            error_msg = self._init_error or "Service initialization failed (Check logs)"
+            raise RuntimeError(error_msg)
+
         return {"success": True, "message": "Organism initialized"}
 
     @app.post("/janitor/ensure")

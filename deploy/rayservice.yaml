@@ -31,13 +31,13 @@ spec:
             # AUTOSCALING: CPU intensive, scale based on load
             autoscaling_config:
               min_replicas: 1
-              max_replicas: 5
+              max_replicas: 2
               target_num_ongoing_requests_per_replica: 10
               downscale_delay_s: 300
             max_concurrent_queries: 20
             ray_actor_options:
               num_cpus: 0.5        # Give a full core for numpy/torch logic
-              memory: 2147483648   # 2GB
+              memory: 1073741824   # 2GB
               # REMOVED: {"head_node": 0.001} -> Let this run on workers!
 
       # ----------------------------------------------------------------
@@ -53,12 +53,12 @@ spec:
             # AUTOSCALING: Scale on I/O wait
             autoscaling_config:
               min_replicas: 1
-              max_replicas: 10
+              max_replicas: 2
               target_num_ongoing_requests_per_replica: 50
             max_concurrent_queries: 100  # High concurrency (Async I/O)
             ray_actor_options:
               num_cpus: 0.2        # Low CPU usage (waiting for HTTP)
-              memory: 2147483648   # 2GB
+              memory: 1073741824   # 2GB
 
       # ----------------------------------------------------------------
       # 3. Coordinator (Orchestrator - Singleton)
@@ -87,14 +87,14 @@ spec:
             # AUTOSCALING: Vital for routing throughput
             autoscaling_config:
               min_replicas: 1
-              max_replicas: 5
+              max_replicas: 2
               target_num_ongoing_requests_per_replica: 100
             max_concurrent_queries: 200 # Matches our Async/Lazy optimization
             health_check_period_s: 10
             health_check_timeout_s: 30
             ray_actor_options:
               num_cpus: 0.5         # Needs CPU for routing logic/hashing
-              memory: 2147483648    # 2GB
+              memory: 1073741824    # 2GB
 
       # ----------------------------------------------------------------
       # 5. Ops & Shared Utilities

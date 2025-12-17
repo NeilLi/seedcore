@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone, time
+import time
+from datetime import datetime, timezone
 import os
 from typing import Dict, Any, Optional
 
@@ -12,8 +13,7 @@ import ray  # pyright: ignore[reportMissingImports]
 from seedcore.dispatcher.persistence.interfaces import TaskRepositoryProtocol
 from seedcore.dispatcher.router import CoordinatorHttpRouter, OrganismRouter
 from seedcore.models import TaskPayload
-
-from seedcore.database import PG_DSN
+from seedcore.database import get_asyncpg_pool, PG_DSN
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
 setup_logging(app_name="seedcore.dispatcher")
@@ -45,6 +45,7 @@ class Dispatcher:
         self.name = name
 
         # 2. Dependencies (Injected or Lazily Loaded in run())
+        self._pool = None  # Will be asyncpg.Pool when initialized
         self._repo: Optional[TaskRepositoryProtocol] = None
         self._router: Optional[CoordinatorHttpRouter] = None
         self._organism_router: Optional[OrganismRouter] = None
@@ -84,8 +85,26 @@ class Dispatcher:
             # Local import to avoid circular dependencies
             from seedcore.dispatcher.persistence.task_repository import TaskRepository
 
-            self._repo = TaskRepository(self.dsn, dispatcher_name=self.name)
-            await self._repo.init()
+            # Create asyncpg connection pool using centralized database utility
+            if self._pool is None:
+                logger.info("[%s] Creating database connection pool...", self.name)
+                try:
+                    self._pool = await asyncio.wait_for(
+                        get_asyncpg_pool(
+                            min_size=1,
+                            max_size=4,
+                            command_timeout=60.0,
+                        ),
+                        timeout=timeout_s
+                    )
+                    logger.info("[%s] Database connection pool created", self.name)
+                except asyncio.TimeoutError:
+                    logger.error("[%s] Timeout creating database connection pool", self.name)
+                    self._startup_status = "error: timeout creating pool"
+                    return False
+
+            # Create TaskRepository with the pool (not DSN)
+            self._repo = TaskRepository(self._pool, dispatcher_name=self.name)
 
             self._router = CoordinatorHttpRouter()
             # Lazy initialization of OrganismRouter (only created when needed)
@@ -153,7 +172,7 @@ class Dispatcher:
         while self._running:
             try:
                 # 1. Claim Batch
-                batch = await self._repo.claim_batch(self.claim_batch)
+                batch = await self._repo.claim_batch(batch_size=self.claim_batch)
 
                 if not batch:
                     await asyncio.sleep(self.main_interval)

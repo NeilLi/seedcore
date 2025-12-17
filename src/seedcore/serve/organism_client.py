@@ -23,9 +23,11 @@ def get_organism_service_handle():
     from ray import serve  # pyright: ignore[reportMissingImports]
 
     try:
+        # Ray Serve API: get_deployment_handle takes deployment_name as positional arg
+        # and app_name as keyword arg
         handle = serve.get_deployment_handle(
-            name="OrganismService",
-            app_name="organism"
+            "OrganismService",  # deployment name (positional)
+            app_name="organism"  # app name (keyword)
         )
         return handle
     except Exception as e:

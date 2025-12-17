@@ -1,106 +1,124 @@
 
 import asyncio
+from typing import Any, Awaitable, Dict, List, Optional
 import ray  # pyright: ignore[reportMissingImports]
 from seedcore.agents.base import BaseAgent
 from seedcore.agents.roles import DEFAULT_ROLE_REGISTRY, NullSkillStore, Specialization
+from seedcore.logging_setup import ensure_serve_logger
+
+logger = ensure_serve_logger("seedcore.agents.chat_agent", level="DEBUG")
 
 
 @ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
 class ChatAgent(BaseAgent):
     """
-    Stateful agent with conversational memory (TaskPayload v2.0 compliant):
-    - BaseAgent handles tool execution + stateless logic
-    - CheckpointManager handles persistence
-    - QueryToolRegistrar installs query tools
-    - Chat history management (short-term conversational memory)
+    Stateful agent with conversational memory (TaskPayload v2.0 compliant).
     
     Architecture:
-    - ChatAgent owns chat_history (short-term, per conversation)
-    - CognitiveCore owns long-term holons + episodic consolidation
-    - QueryTools remain stateless and receive history from agent
-    
-    TaskPayload v2.0 Structure:
-    - Injects params.chat.{message, history} (chat envelope)
-    - Injects params.interaction.{mode, conversation_id, assigned_agent_id} (interaction envelope)
-    - Sets top-level conversation_history for ChatSignature compatibility
-    
-    Note: Memory consolidation is now handled centrally by CognitiveCore via CognitiveMemoryBridge.
-    LongTermMemoryManager and MemoryBridge have been removed and replaced with HolonFabric + CognitiveMemoryBridge.
+      - Inherits: BaseAgent (Stateless Logic, Tool Execution, RBAC)
+      - Adds:     Chat History (Short-term Ring Buffer), Checkpointing, Query Tools
+      - Delegates: Long-term memory to CognitiveCore (via HolonFabric)
     """
 
     def __init__(
         self,
         agent_id: str,
         *,
-        specialization=Specialization.GENERALIST,
-        role_registry=None,
-        skill_store=None,
-        tool_handler=None,
-        cognitive_client=None,
-        ml_client=None,
-        organ_id=None,
-        initial_role_probs=None,
-        mw_manager=None,
-        checkpoint_cfg=None,
+        # --- Chat-Specific Configs ---
+        mw_manager_organ_id: Optional[str] = None,
+        checkpoint_cfg: Optional[Dict[str, Any]] = None,
+        initial_role_probs: Optional[Dict[str, float]] = None,
+        
+        # --- BaseAgent Configs (Passthrough) ---
+        specialization: Specialization = Specialization.GENERALIST,
+        organ_id: Optional[str] = None,
+        tool_handler_shards: Optional[List[Any]] = None,
+        role_registry_snapshot: Optional[Dict[str, Any]] = None,
+        holon_fabric_config: Optional[Dict[str, Any]] = None,
+        cognitive_client_cfg: Optional[Dict[str, Any]] = None,
+        ml_client_cfg: Optional[Dict[str, Any]] = None,
+        mcp_client_cfg: Optional[Dict[str, Any]] = None,
+        
+        # --- Legacy / Deprecated ---
         **legacy_kwargs
     ):
+        # 1. Initialize BaseAgent (Passes all configs up)
         super().__init__(
             agent_id=agent_id,
-            tool_handler=tool_handler,
             specialization=specialization,
-            role_registry=role_registry or DEFAULT_ROLE_REGISTRY,
-            skill_store=skill_store or NullSkillStore(),
-            cognitive_client=cognitive_client,
-            ml_client=ml_client,
             organ_id=organ_id,
+            tool_handler_shards=tool_handler_shards,
+            role_registry_snapshot=role_registry_snapshot,
+            holon_fabric_config=holon_fabric_config,
+            cognitive_client_cfg=cognitive_client_cfg,
+            ml_client_cfg=ml_client_cfg,
+            mcp_client_cfg=mcp_client_cfg,
+            # Handle legacy args by unpacking or specific mapping if needed
+            **legacy_kwargs 
         )
 
+        # 2. Chat State & History (Short-term Memory)
+        # Ring buffer: stores the last N messages for the active conversation context
+        self._chat_history: List[Dict[str, str]] = [] 
+        self._chat_history_limit = 50
+
+        # Apply initial role probabilities if provided (overrides BaseAgent default)
         if initial_role_probs:
             self.state.p = dict(initial_role_probs)
 
-        # Inflight task tracking for cognitive operations
-        self._inflight: dict[str, asyncio.Task] = {}
+        # 3. Concurrency Control (Inflight Tasks)
+        self._inflight: Dict[str, asyncio.Task] = {}
         self._inflight_lock = asyncio.Lock()
 
-        # Chat history storage (short-term conversational memory)
-        # Ring buffer: last N messages per agent
-        self._chat_history: list[dict[str, str]] = []
-        self._chat_history_limit = 50  # last N messages
+        # 4. Middleware Manager (Lazy Configuration)
+        # We store the ID/Config now; the connection is created on first access
+        self._mw_manager_organ_id = mw_manager_organ_id or self.organ_id
+        self._mw_manager = legacy_kwargs.get("mw_manager")  # Legacy support
 
-        # Store mw_manager for optional chat history persistence
-        self._mw_manager = mw_manager
-
-        # --- Delegated components ---
+        # 5. Checkpoint Manager (Persistence)
         from .bridges.checkpoint_manager import CheckpointManager
-        from .bridges.tool_registrar import QueryToolRegistrar
-
         self.ckpt = CheckpointManager(
             cfg=checkpoint_cfg or {"enabled": False},
             agent_id=self.agent_id,
-            privmem=self._privmem,
+            privmem=self._privmem, # Links to BaseAgent's private memory
             organ_id=self.organ_id,
         )
 
-        # Register query tools asynchronously
-        # Note: Ray actors run in an async context, so this should work
-        # If registration fails, tools will be registered lazily on first use
+        # 6. Query Tool Registration (Async Hook)
+        from .bridges.tool_registrar import QueryToolRegistrar
         self.tool_registrar = QueryToolRegistrar(self)
+        self._schedule_background_task(self.tool_registrar.register())
+
+        # 7. Restore State (if available)
+        self.ckpt.maybe_restore()
+
+    # ------------------------------------------------------------------
+    #  Lazy Properties & Helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def chat_history(self) -> List[Dict[str, str]]:
+        """Read-only access to chat history ring buffer."""
+        return self._chat_history
+
+    def _schedule_background_task(self, coro: Awaitable):
+        """
+        Safely schedules a background task during Ray Actor initialization.
+        Handles the edge case where the event loop might differ in test vs prod.
+        """
         try:
-            # Try to get running loop first (Python 3.7+)
+            # Standard Ray Actor environment (Python 3.7+)
             loop = asyncio.get_running_loop()
-            loop.create_task(self.tool_registrar.register())
+            loop.create_task(coro)
         except RuntimeError:
-            # No running loop - try get_event_loop (works in Ray actor context)
+            # Fallback for environments where init is called outside a running loop
             try:
                 loop = asyncio.get_event_loop()
-                loop.create_task(self.tool_registrar.register())
-            except RuntimeError:
-                # Fallback: registration will happen lazily or on first async call
-                # This is acceptable - tools can be registered on-demand
-                pass
-
-        # Optional checkpoint restore
-        self.ckpt.maybe_restore()
+                loop.create_task(coro)
+            except Exception as e:
+                # Critical Fallback: The task will fail to start. 
+                # In production, this should ideally raise, but we log to prevent crash on init.
+                logger.warning(f"⚠️ Could not schedule background task in ChatAgent {self.agent_id}: {e}")
 
     # ---------------------------------------------------------------------
     # Chat history management
@@ -139,11 +157,20 @@ class ChatAgent(BaseAgent):
         """
         return list(self._chat_history[-max_turns:])
 
+    def _get_mw_manager(self):
+        """Lazily create MwManager from organ_id to avoid serialization issues."""
+        if self._mw_manager is None and self._mw_manager_organ_id:
+            from seedcore.memory.mw_manager import MwManager
+            self._mw_manager = MwManager(organ_id=self._mw_manager_organ_id)
+            logger.debug(f"✅ [{self.agent_id}] MwManager created for organ_id={self._mw_manager_organ_id}")
+        return self._mw_manager
+    
     def persist_chat_history(self):
         """Optionally persist chat history via MwManager (for multi-session persistence)."""
-        if self._mw_manager:
+        mw = self._get_mw_manager()
+        if mw:
             try:
-                self._mw_manager.set_item(
+                mw.set_item(
                     f"chat_history:{self.agent_id}",
                     self._chat_history,
                     ttl_s=3600  # 1 hour TTL
