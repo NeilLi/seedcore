@@ -163,30 +163,78 @@ ln -s /path/to/seedcore/apps/edge_guardian edge_guardian
     └── tos.py
 ```
 
-#### Step 3: Initialize TuyaOpen Environment
+#### Step 3: Navigate to Project Directory
+
+Go to the Edge Guardian project directory:
 
 ```bash
-cd /path/to/TuyaOpen
-./tos.py config
+cd /path/to/TuyaOpen/apps/edge_guardian
 ```
 
-#### Step 4: Build the Application
+#### Step 4: Configure Project
+
+Run `tos.py config choice` from the project directory to select the configuration file for your hardware. For Tuya T5-AI development boards, select `T5AI.config`:
 
 ```bash
-./tos.py build apps/edge_guardian
+tos.py config choice
 ```
 
-#### Step 5: Flash Firmware
+You'll see a menu like:
+```
+[INFO]: Running tos.py ...
+[INFO]: Fullclean success.
+--------------------
+1. LN882H.config
+2. EWT103-W15.config
+3. Ubuntu.config
+4. ESP32-C3.config
+5. ESP32-S3.config
+6. ESP32.config
+7. T3.config
+8. T5AI.config    ← Select this for T5-AI boards
+9. T2.config
+10. BK7231X.config
+--------------------
+Input "q" to exit.
+Choice config file:
+```
+
+#### Step 5: Build the Application
+
+Build the project using `tos.py build` from the project directory:
 
 ```bash
-./tos.py flash
+tos.py build
 ```
 
-#### Step 6: Monitor Output
+The build output will show the generated binary path:
+```
+[INFO]: ******************************
+[INFO]: /xxx/TuyaOpen/apps/edge_guardian/.build/bin/edge_guardian_QIO_1.0.0.bin
+[INFO]: ******************************
+[INFO]: ******* Build Success ********
+[INFO]: ******************************
+```
+
+#### Step 6: Flash Firmware
+
+Flash the firmware via Type-C:
 
 ```bash
-./tos.py monitor
+tos.py flash
 ```
+
+#### Step 7: Monitor Output
+
+Monitor device output:
+
+```bash
+tos.py monitor
+```
+
+**Note:** To clear build cache, use `./tos.py clean` (standard) or `./tos.py clean -f` (force deep cleanup).
+
+> 📖 **Reference:** [TuyaOpen Project Compilation Documentation](https://tuyaopen.ai/docs/quick-start/project-compilation)
 
 ### App Template Reference
 
