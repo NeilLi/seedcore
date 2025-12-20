@@ -110,41 +110,143 @@ To demonstrate the capability of the Edge Guardian, we have implemented the **"P
 
 * **Hardware:** Tuya T5-AI Core DevKit.
 * **Toolchain:** `tos.py` (Tuya Operations System Python Tool).
-* **SDK:** TuyaOpen C/C++ SDK.
+* **SDK:** TuyaOpen C/C++ SDK (cloned separately).
 
-> ⚠️ **Note:**  
-> This repository contains **application-level code only**.  
-> The TuyaOpen SDK is pulled as a dependency and must be initialized separately.
+> ⚠️ **Important:**  
+> Tuya apps can **only be built inside the TuyaOpen workspace** using `tos.py`.  
+> This repository contains **application-level code only** and must be linked into TuyaOpen for building.
 
-### Build & Flash
+### Development Model
 
-1. Clone the repository:
+Edge Guardian follows a **symlink-based development model**:
+
+* **SeedCore repo** (`/path/to/seedcore/apps/edge_guardian`) = source of truth, product logic, docs
+* **TuyaOpen workspace** (`/path/to/TuyaOpen`) = build system, SDK root, flash environment
+
+This approach ensures:
+* ✅ No code duplication
+* ✅ Git stays clean
+* ✅ Single source of truth
+* ✅ Native TuyaOpen build compatibility
+
+### Setup Instructions
+
+#### Step 1: Clone TuyaOpen SDK
+
 ```bash
-git clone https://github.com/youruser/edge-guardian.git
-cd edge-guardian
-git submodule update --init --recursive
+git clone https://github.com/tuya/TuyaOpen.git
+cd TuyaOpen
 ```
 
+#### Step 2: Link Edge Guardian into TuyaOpen
 
-2. Initialize the TuyaOpen environment:
+Create a symbolic link so TuyaOpen sees your app as a native app:
+
 ```bash
+cd /path/to/TuyaOpen/apps
+ln -s /path/to/seedcore/apps/edge_guardian edge_guardian
+```
+
+**Resulting structure:**
+```text
+/path/to/
+├── seedcore/
+│   └── apps/
+│       └── edge_guardian/          ← Source of truth
+│           ├── src/
+│           ├── CMakeLists.txt
+│           └── README.md
+│
+└── TuyaOpen/
+    ├── apps/
+    │   └── edge_guardian →  🔗 symlink to seedcore
+    └── tos.py
+```
+
+#### Step 3: Initialize TuyaOpen Environment
+
+```bash
+cd /path/to/TuyaOpen
 ./tos.py config
-
 ```
 
+#### Step 4: Build the Application
 
-3. Compile the project:
 ```bash
 ./tos.py build apps/edge_guardian
-
 ```
 
+#### Step 5: Flash Firmware
 
-4. Flash the firmware via Type-C:
 ```bash
 ./tos.py flash
-
 ```
+
+#### Step 6: Monitor Output
+
+```bash
+./tos.py monitor
+```
+
+### App Template Reference
+
+Edge Guardian combines patterns from two TuyaOpen reference apps:
+
+| Source App               | Purpose                  | Use For                        |
+| ------------------------ | ------------------------ | ------------------------------ |
+| `tuya_cloud/switch_demo` | IoT DP / relay / button  | **Edge Guardian control plane** |
+| `tuya.ai/your_chat_bot` | AI task loop / inference | **Edge Guardian cognition plane** |
+
+**Conceptual components to adopt:**
+
+From **`switch_demo`**:
+* `tuya_main.c` structure
+* DP registration & callbacks
+* Network / activation flow
+* `reset_netcfg.c`
+
+From **`your_chat_bot`**:
+* AI task thread
+* Model loading
+* PSRAM allocation
+* Event → inference → action loop
+
+### Application Structure
+
+The Edge Guardian app follows this modular structure:
+
+```text
+src/
+├── tuya_main.c          # System entry + lifecycle
+├── edge_guardian.c     # Core AI logic
+├── edge_guardian.h
+├── camera_dvp.c        # Camera init + frame capture
+├── light_ctrl.c        # PWM light control
+├── relay_ctrl.c        # Relay / switch logic
+├── cli_cmd.c           # Debug CLI
+├── reset_netcfg.c      # Network reset utilities
+└── tuya_config.h       # Configuration constants
+```
+
+### Development Evolution Path
+
+**Phase 1** (Foundation):
+* Based on `switch_demo`
+* Button → relay → PWM light
+* Cloud DP working
+
+**Phase 2** (Camera Pipeline):
+* Add camera init (DVP)
+* Capture frames, discard (pipeline test)
+
+**Phase 3** (AI Integration):
+* Add AI loop (from `your_chat_bot`)
+* Run inference on reduced frame
+* Trigger relay/light on detection
+
+**Phase 4** (Cloud Integration):
+* Event → Tuya Cloud → AWS → SeedCore
+* Full hotel-wide coordination
 
 
 
