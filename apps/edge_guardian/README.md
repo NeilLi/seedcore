@@ -1,112 +1,171 @@
-SeedCore Edge Guardian
-A Cognitive Coordination Layer for Autonomous Smart Hotels
-Hackathon Track: Tuya × AWS
-Hardware: Tuya T5 AI Dev Board
-Cloud Stack: AWS (EKS, IoT Core, DynamoDB, Ray)
-Scenario Focus: Smart Hotel Operations
-Core Innovation: Unified State + Energy-Guided Intelligence
-1. Inspiration
-Modern hotels are rapidly becoming autonomous environments. A single hotel now operates with:
-Hundreds of smart locks, cameras, lights, and HVAC units
-Service robots and automated cleaning systems
-AI concierges and cloud-based management software
-Guests, staff, vendors, and delivery services—all with time-bound access
-The challenge is no longer connecting devices; it is coordinating behavior across many entities—often with minimal human supervision.
-Today’s hotel automation is still rule-based and device-centric:
-Each system reacts independently
-Context is fragmented across vendors
-False alerts disrupt guests and staff
-Privacy and accountability are hard to manage
-SeedCore Edge Guardian was built to solve this coordination problem at the system level.
-2. What SeedCore Does (Uniquely)
-SeedCore Edge Guardian is not a traditional security system and not a rule engine. It is a cognitive coordination layer that:
-Consolidates signals from hotel devices into a Unified State
-Reasons across guests, staff, robots, rooms, and zones
-Uses an Energy Function to decide how much intelligence is needed
-Produces explainable, system-level decisions, not raw alerts
-Instead of asking, “Did a sensor trigger?” SeedCore asks, “What is happening in the hotel right now, and how should the system respond?”
-3. Core SeedCore Concepts (Hotel-Relevant)
-Unified State (SeedCore-Specific)
-SeedCore maintains a hotel-wide state combining:
-Guest check-in / check-out status
-Staff roles and shift schedules
-Robot assignments and locations
-Room states and zone permissions
-Time, mode, and recent activity
-This allows decisions to be made at the hotel level, not per device.
-Energy-Guided Intelligence
-SeedCore computes an internal energy score based on:
-Novelty (is this unusual for this zone and role?)
-Uncertainty
-Cost and latency sensitivity
-Low-energy situations stay on the fast execution path. High-energy situations escalate to deeper cloud reasoning. This keeps the system:
-Responsive
-Cost-controlled
-Privacy-aware
-Task Graphs & Organ Graphs
-Task-level graphs: model workflows like “entry handling” or “room access”
-Organ-level graphs: represent persistent responsibilities (lobby monitoring, corridor access, housekeeping coordination)
-This makes the system extensible without rewriting logic.
-4. Flagship Demo Scenario — Smart Hotel Night Shift
-Scenario: “Is This Activity Normal?”
-Environment
-Tuya T5 devices in the lobby and corridor
-Smart door locks
-Lighting and notification systems
-Cloud-based hotel management system
-Step 1: Edge Detection (Tuya T5)
-At 23:40, a Tuya T5 camera detects a person entering a staff-only corridor. The edge device:
-Performs lightweight inference (“person detected”)
-Generates a structured event with an anomaly score
-Does not make a decision
-{
- "event_type": "person_detected",
- "zone": "staff_corridor",
- "timestamp": "23:40",
- "anomaly_score": 0.81
-}
-Step 2: Unified State Reasoning (AWS Cloud Cortex)
-SeedCore evaluates the event using hotel-wide context:
-Time: late night
-Zone: staff-only
-Staff schedule: one cleaner on duty
-Robot activity: cleaning robot active on the same floor
-Guest status: no guest access allowed
-The Control Plane computes high novelty → escalates reasoning.
-Step 3: Explainable Decision
-SeedCore produces an explanation:
-“Unrecognized person detected in staff-only corridor outside scheduled access. No matching staff role or robot assignment found.” This explanation is logged and visible to operators.
-Step 4: Coordinated Action (Tuya DP Updates)
-SeedCore issues coordinated actions:
-Turn on corridor lights
-Lock adjacent service doors
-Notify night staff quietly via the dashboard
-No alarms. No guest disturbance. Just coordinated intelligence.
-5. Why Tuya + AWS Is Essential
-Tuya
-Real-world edge hardware (T5) suitable for hotels
-Fast integration with locks, lighting, HVAC
-DP-based control for coordinated actions
-AWS
-Kubernetes (EKS) for scalable coordination
-Ray for distributed tasks and reasoning
-IoT Core for secure messaging
-DynamoDB for unified state and audit trails
-Tuya provides perception and actuation. AWS provides system-level cognition.
-6. Why This Is Different (Judge Summary)
-7. Hackathon Roadmap
-Phase 1: Cloud simulation with unified state and explanations
-Phase 2: Tuya T5 live hotel corridor demo
-Phase 3: Energy routing + operator dashboard
-Each phase is independently demoable.
-8. Market & Future Expansion
-The same coordination layer extends naturally to:
-Smart apartments
-Autonomous hotels
-Mixed-use buildings
-Smart campuses
-Hotels are the ideal starting point because they expose the full coordination problem.
-9. Closing Statement
-SeedCore Edge Guardian demonstrates how Tuya edge intelligence and AWS cloud scalability can work together to enable autonomous hotels that understand situations, not just sensors. SeedCore doesn’t add more rules. It adds coordinated intelligence.
+
+# 🛡️ SeedCore Edge Guardian
+
+> **Next-Generation AI Security Copilot powered by Tuya T5 AI + SeedCore Cloud Cortex**
+
+**SeedCore Edge Guardian** is a neuro-symbolic cognitive edge node designed for high-stakes security environments. Built on the **Tuya T5 AI Development Board**, it transforms standard CCTV streams into actionable intelligence using local inference, seamless cloud synchronization, and real-time environmental control.
+
+---
+
+## 🚀 Built on TuyaOpen
+
+Edge Guardian is built on top of **TuyaOpen**, Tuya’s open-source AI + IoT development platform powered by TuyaOS and production-proven across millions of devices.
+
+* **TuyaOpen GitHub:** [https://github.com/tuya/TuyaOpen](https://github.com/tuya/TuyaOpen)
+* **TuyaOpen Docs:** [https://tuyaopen.ai](https://tuyaopen.ai)
+* **Supported hardware:** Tuya T5 series (Wi-Fi / BLE / AI)
+
+**This project leverages TuyaOpen for:**
+
+* **Secure Connectivity:** MQTT/HTTPS communication with the SeedCore Cloud Cortex.
+* **AI Lifecycle:** Local inference execution on the T5-E1 Star-MC1 core.
+* **Peripheral Management:** Hardware-abstracted control of PWM lighting and DVP camera interfaces.
+* **OTA Updates:** Secure field deployment of new cognitive models.
+
+> **Architecture Note:**  
+> Tuya Cloud is used for secure device connectivity, DP-based actuation, OTA, and lifecycle management.  
+> SeedCore Cloud Cortex (AWS) is responsible for **cross-device reasoning**, **energy-based decision routing**, and **explainable coordination** across rooms, roles, and time.
+>
+> This separation preserves Tuya's strengths at the device layer while enabling system-level intelligence beyond single-device automation.
+
+---
+
+## 🧠 System Architecture
+
+Edge Guardian follows a "Planes of Control" design, decoupling high-level intelligence from low-level execution.
+
+```text
+┌──────────────────────────┐      ┌──────────────────────────┐
+│   SeedCore Cloud Cortex  │◄────►│      AWS Cloud / App     │
+│   (Context & Memory)     │      │   (Strategic Control)    │
+└─────────────┬────────────┘      └─────────────┬────────────┘
+              │                                 │
+              │         Tuya Cloud / MQTT       │
+              ▼                                 ▼
+┌────────────────────────────────────────────────────────────┐
+│                  SeedCore Edge Guardian (App)              │
+│  (Local Inference - Vision/Voice - Real-time Response)     │
+├────────────────────────────────────────────────────────────┤
+│                  TuyaOpen / TuyaOS Framework               │
+│  - Device OS   - Networking   - Security   - OTA / Lifecycle│
+└──────────────────────────────┬─────────────────────────────┘
+                               │
+                ┌──────────────┴──────────────┐
+                ▼                             ▼
+        [T5-E1 AI Hardware]           [Peripherals]
+        - 480MHz ARM M33F             - DVP CCTV Camera
+        - 16MB PSRAM                  - PWM AI Lighting
+        - AI NPU Accel                - Smart Relay/Switch
+
+```
+
+---
+
+## 🛠️ Hardware Design & Pin Mapping
+
+The hardware is centered around the **T5AI-Core (T5-E1 module)**. The pinmux configuration is optimized to avoid conflicts between the high-speed DVP camera interface and control peripherals.
+
+### 📍 Conflict-Free Pin Configuration
+
+| Component | Pin(s) | Function | Notes |
+| --- | --- | --- | --- |
+| **Camera Data** | P20–P27 | DVP D0–D7 | High-speed parallel bus |
+| **Camera Sync** | P31, P32, P33 | HSYNC, VSYNC, PCLK | Dedicated CIS timing |
+| **Camera I2C** | P19, P18 | SCL, SDA (I2C1) | Independent SCCB bus |
+| **AI Light** | P9 | PWM | Dimmable security lighting |
+| **AI Switch** | P6 | GPIO Input | Physical override button |
+| **Relay** | P7 | GPIO Output | Electronic lock/Siren control |
+
+> **Note:** All IO levels are 3.3V. Relays and high-power LEDs are driven via MOSFET/transistor isolation.
+
+### 🧮 Memory & Performance Notes
+
+* Camera frame buffers (e.g., 640×480 RGB565) are allocated in **external PSRAM (16MB)**.
+* Internal SRAM (~640KB) is reserved for:
+  * RTOS tasks
+  * TuyaOS networking stack
+  * Real-time control paths
+* All camera DMA and AI inference buffers must avoid internal SRAM to prevent instability.
+
+This design ensures stable real-time performance even under high event rates.
+
+---
+
+## 🏨 Flagship Scenario: Smart Hotel Night Shift
+
+To demonstrate the capability of the Edge Guardian, we have implemented the **"Presidential Suite Incident"** demo.
+
+* **Threat Detection:** AI detects unauthorized entry or prolonged loitering via the DVP camera.
+* **Coordinated Actuation (via Tuya DPs):**
+  * `switch` → Relay control (P7): secure service doors
+  * `light_pwm` → PWM output (P9): corridor illumination / deterrent strobe
+  * `event_type`, `anomaly_score` → reported upstream for audit and explanation
+* **Cloud Escalation:** Real-time event telemetry is pushed to AWS via Tuya Cloud for human-in-the-loop intervention.
+
+---
+
+## 📦 Getting Started
+
+### Prerequisites
+
+* **Hardware:** Tuya T5-AI Core DevKit.
+* **Toolchain:** `tos.py` (Tuya Operations System Python Tool).
+* **SDK:** TuyaOpen C/C++ SDK.
+
+> ⚠️ **Note:**  
+> This repository contains **application-level code only**.  
+> The TuyaOpen SDK is pulled as a dependency and must be initialized separately.
+
+### Build & Flash
+
+1. Clone the repository:
+```bash
+git clone https://github.com/youruser/edge-guardian.git
+cd edge-guardian
+git submodule update --init --recursive
+```
 
 
+2. Initialize the TuyaOpen environment:
+```bash
+./tos.py config
+
+```
+
+
+3. Compile the project:
+```bash
+./tos.py build apps/edge_guardian
+
+```
+
+
+4. Flash the firmware via Type-C:
+```bash
+./tos.py flash
+
+```
+
+
+
+---
+
+## 🤝 Acknowledgments
+
+* **Tuya Smart** for the T5-AI development hardware and TuyaOpen framework.
+* **AWS** for the cloud infrastructure powering the SeedCore Cortex.
+
+---
+
+## 🏆 Why This Project Is Different
+
+* Not a rule engine — a **coordination layer**
+* Not reactive — **context-aware**
+* Not cloud-heavy — **energy-guided escalation**
+* Not device-centric — **hotel-wide unified state**
+
+SeedCore Edge Guardian demonstrates how Tuya edge intelligence and cloud-scale reasoning can coexist to enable truly autonomous environments.
+
+---
+
+**[📄 Project Plan – Smart Hotel Edge Guardian](./docs/SeedCore_Edge_Guardian_Hotel.pdf)** | **[Hardware Schematics](https://www.google.com/search?q=./hw/SCHEMATICS.md)** | **[TuyaOpen Documentation](https://tuyaopen.ai)**
