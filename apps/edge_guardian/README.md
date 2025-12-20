@@ -168,4 +168,4 @@ SeedCore Edge Guardian demonstrates how Tuya edge intelligence and cloud-scale r
 
 ---
 
-**[📄 Project Plan – Smart Hotel Edge Guardian](./docs/SeedCore_Edge_Guardian_Hotel.pdf)** | **[Hardware Schematics](https://www.google.com/search?q=./hw/SCHEMATICS.md)** | **[TuyaOpen Documentation](https://tuyaopen.ai)**
+**[📄 Project Plan – Smart Hotel Edge Guardian](./SeedCore_Edge_Guardian_Hotel.pdf)** | **[Hardware Schematics](https://www.google.com/search?q=./hw/SCHEMATICS.md)** | **[TuyaOpen Documentation](https://tuyaopen.ai)**
