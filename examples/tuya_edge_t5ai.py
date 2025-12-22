@@ -61,19 +61,17 @@ def get_token() -> str:
 
     return data["result"]["access_token"]
 
-def control_switch(access_token: str, on: bool):
+def send_dp_action(access_token: str, code: str, value):
     """
-    Turn the device switch ON or OFF
-    Maps to:
+    Send a DP action to the device
     POST /v2.0/cloud/thing/{device_id}/shadow/actions
     """
-
     path = f"/v2.0/cloud/thing/{DEVICE_ID}/shadow/actions"
 
     payload = {
-        "code": "switch",
+        "code": code,
         "input_params": {
-            "value": on
+            "value": value
         }
     }
 
@@ -96,15 +94,13 @@ def control_switch(access_token: str, on: bool):
     }
 
     url = BASE_URL + path
-    print(f"\n=== Sending SWITCH={'ON' if on else 'OFF'} ===")
-    print("POST", url)
-    print("Payload:", body)
+    print(f"\n=== Sending DP {code} = {value} ===")
 
     r = requests.post(url, headers=headers, data=body, timeout=15)
-
     print("Status:", r.status_code)
     print("Response:", r.text)
 
+    r.raise_for_status()
     return r.json()
 
 def get_device_state(access_token: str):
@@ -149,6 +145,57 @@ def get_device_state(access_token: str):
     return None
 
 
+def verify_switch(access_token: str):
+    """🔘 Verify switch/relay simulator (DP 1)"""
+    print("\n🔘 Verifying SWITCH simulator")
+
+    send_dp_action(access_token, "switch", True)
+    time.sleep(1)
+
+    send_dp_action(access_token, "switch", False)
+    time.sleep(1)
+
+
+def verify_light(access_token: str):
+    """💡 Verify light simulator (DP 5, 6, 7)"""
+    print("\n💡 Verifying LIGHT simulator")
+
+    # Turn light on
+    send_dp_action(access_token, "light_on", True)
+    time.sleep(1)
+
+    # Set brightness
+    send_dp_action(access_token, "brightness", 80)
+    time.sleep(1)
+
+    # Set RGB color
+    send_dp_action(access_token, "rgb_color", "255,64,0")
+    time.sleep(1)
+
+    # Turn light off
+    send_dp_action(access_token, "light_on", False)
+    time.sleep(1)
+
+
+def verify_camera(access_token: str):
+    """📷 Verify camera simulator (DP 2, 3, 4)"""
+    print("\n📷 Verifying CAMERA simulator")
+
+    # Motion detected
+    send_dp_action(access_token, "motion_detected", True)
+    time.sleep(1)
+    send_dp_action(access_token, "motion_detected", False)
+    time.sleep(1)
+
+    # Person detected
+    send_dp_action(access_token, "person_detected", True)
+    time.sleep(1)
+    send_dp_action(access_token, "person_detected", False)
+    time.sleep(1)
+
+    # Anomaly score
+    send_dp_action(access_token, "anomaly_score", 72)
+    time.sleep(1)
 
 
 
@@ -161,20 +208,20 @@ if __name__ == "__main__":
     # ------------------------------------------------------------
     token = get_token()
     print("✅ Access token acquired")
-    
 
-    # Turn ON
-    print("\nTurn on switch")
-    control_switch(token, True)
+    # ------------------------------------------------------------
+    # 2. Verify simulators
+    # ------------------------------------------------------------
+    verify_switch(token)
+    verify_light(token)
+    verify_camera(token)
 
-    
-
-    # Turn OFF
-    print("\nTurn on switch")
-    control_switch(token, False)
-
+    # ------------------------------------------------------------
+    # 3. Read back device state
+    # ------------------------------------------------------------
     state = get_device_state(token)
-    print("Current State:", state)
+    print("\n📊 Final Device State:")
+    print(json.dumps(state, indent=2))
 
 
 

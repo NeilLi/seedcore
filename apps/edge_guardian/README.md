@@ -144,7 +144,7 @@ Create a symbolic link so TuyaOpen sees your app as a native app:
 
 ```bash
 cd /path/to/TuyaOpen/apps
-cp -r ../../seedcore/apps/edge_guardian edge_guardian
+cp -r /../../seedcore/apps/edge_guardian edge_guardian
 ```
 
 **Resulting structure:**
