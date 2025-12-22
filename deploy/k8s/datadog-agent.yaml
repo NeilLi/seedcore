@@ -1,0 +1,19 @@
+apiVersion: datadoghq.com/v2alpha1
+kind: DatadogAgent
+metadata:
+  name: datadog
+  namespace: datadog
+spec:
+  global:
+    site: datadoghq.com
+    credentials:
+      apiSecret:
+        secretName: datadog-secret
+        keyName: api-key
+  features:
+    logs:
+      enabled: true
+      containerCollectAll: true
+    processDiscovery:
+      enabled: true
+
