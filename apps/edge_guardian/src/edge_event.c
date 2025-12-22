@@ -3,7 +3,9 @@
 #include "tal_api.h"
 #include "tal_sw_timer.h"
 
-static void demo_timer_cb(void *arg)
+static TIMER_ID demo_timer_id = NULL;
+
+static void demo_timer_cb(TIMER_ID timer_id, void *arg)
 {
     PR_WARN("Demo Event: simulated intrusion");
     edge_guardian_on_threat_detected("demo timer");
@@ -18,12 +20,10 @@ void edge_event_start(void)
 {
     PR_NOTICE("EdgeEvent demo started");
 
-    tal_sw_timer_start(
-        NULL,
-        demo_timer_cb,
-        NULL,
-        10 * 1000,   // 10 seconds
-        TAL_TIMER_ONCE
-    );
+    // Create timer with callback and argument
+    tal_sw_timer_create(demo_timer_cb, NULL, &demo_timer_id);
+
+    // Start timer with timing parameters
+    tal_sw_timer_start(demo_timer_id, 10 * 1000, TAL_TIMER_ONCE);
 }
 
