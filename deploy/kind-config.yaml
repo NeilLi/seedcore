@@ -1,12 +1,7 @@
-# kind-config.yaml
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
-    extraMounts:
-      # This is your existing mount
-      - hostPath: /var/kind/containerd
-        containerPath: /var/lib/containerd
-      # This is the new mount for your project code
-      - hostPath: /home/ubuntu/project/seedcore # 👈 This path is now corrected
-        containerPath: /project # 👈 This is where it will appear inside the KIND node
+    image: kindest/node:v1.30.0
+  - role: worker
+    image: kindest/node:v1.30.0
