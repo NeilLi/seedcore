@@ -90,24 +90,51 @@ command -v kubectl >/dev/null || { log ERR "kubectl not found"; exit 1; }
 if [[ "${SKIP_LOAD:-0}" -eq 0 ]]; then command -v kind >/dev/null || { log ERR "kind not found (or set SKIP_LOAD=1)"; exit 1; }; fi
 command -v envsubst >/dev/null || { log ERR "envsubst not found (install gettext)"; exit 1; }
 
-# ---- Smart Kind image load
+# ---- Smart Kind image load (uses kind get nodes + ctr, works on Debian/Ubuntu/macOS)
 smart_kind_load() {
   local img="$1" cluster="$2"
   [[ "$SKIP_LOAD" -eq 1 ]] && return 0
-  if ! kind get clusters | grep -qx "$cluster"; then
+  
+  # Get actual Kind node names dynamically (works regardless of naming scheme)
+  local nodes; nodes=$(kind get nodes --name "$cluster" 2>/dev/null || :)
+  if [[ -z "$nodes" ]]; then
     log WARN "Kind cluster '$cluster' not found. Skipping image load."
     return 0
   fi
-  local digest; digest=$(docker inspect --format='{{.Id}}' "$img" 2>/dev/null || :)
-  [[ -z "$digest" ]] && { log ERR "Local image '$img' not found. Build it first."; exit 1; }
-  local need_load=1
-  for n in $(kind get nodes --name "$cluster"); do
-    if docker exec "$n" ctr -n k8s.io images ls | grep -q "$digest"; then
-      log INFO "Image already present on $n; skip load."
-      need_load=0; break
-    fi
-  done
-  if [[ $need_load -eq 1 ]]; then
+  
+  # Verify local image exists
+  if ! docker inspect "$img" >/dev/null 2>&1; then
+    log ERR "Local image '$img' not found. Build it first."
+    exit 1
+  fi
+  
+  # Prepare alternative image name (kind/containerd often uses docker.io/library/ prefix)
+  local alt_img="$img"
+  if [[ "$img" != */* ]]; then
+    alt_img="docker.io/library/$img"
+  fi
+  
+  # Check if image exists on all nodes using ctr (always available in kindest/node)
+  local node_has_image=true
+  if [[ -z "$nodes" ]]; then
+    node_has_image=false
+  else
+    for node in $nodes; do
+      if docker exec "$node" sh -lc "
+        refs=\$(ctr -n k8s.io images ls -q 2>/dev/null || true)
+        echo \"\$refs\" | grep -Fxq '${alt_img}' || echo \"\$refs\" | grep -Fxq '${img}'
+      " >/dev/null 2>&1; then
+        : # present
+      else
+        node_has_image=false
+        break
+      fi
+    done
+  fi
+  
+  if [[ "$node_has_image" == "true" ]]; then
+    log INFO "Image already present on all Kind nodes; skip load."
+  else
     log INFO "Loading image $img into Kind cluster $cluster ..."
     kind load docker-image "$img" --name "$cluster"
     log OK "Image loaded into Kind nodes"

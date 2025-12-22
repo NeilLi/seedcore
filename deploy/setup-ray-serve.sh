@@ -68,22 +68,39 @@ print_status "OK" "Namespace ready"
 # ---------- Load your image into Kind (digest-aware, avoid unnecessary reloads) ----------
 print_status "INFO" "Checking if image ${RAY_IMAGE} already exists in Kind nodes..."
 
-# Get host image ID (digest)
-HOST_IMAGE_ID=$(docker inspect --format='{{.Id}}' "${RAY_IMAGE}" 2>/dev/null || true)
+# Get actual Kind node names dynamically (works regardless of naming scheme)
+NODES=$(kind get nodes --name "${CLUSTER_NAME}" 2>/dev/null || true)
 
-# Get image ID inside the Kind control-plane node (using crictl inside the node)
-NODE_IMAGE_ID=""
-if docker exec "kind-${CLUSTER_NAME}-control-plane" crictl images --digests >/dev/null 2>&1; then
-  NODE_IMAGE_ID=$(docker exec "kind-${CLUSTER_NAME}-control-plane" \
-    crictl images --digests 2>/dev/null | grep "${RAY_IMAGE}" | awk '{print $3}' || true)
+# Prepare alternative image name (kind/containerd often uses docker.io/library/ prefix)
+ALT_IMAGE="${RAY_IMAGE}"
+if [[ "${RAY_IMAGE}" != */* ]]; then
+  ALT_IMAGE="docker.io/library/${RAY_IMAGE}"
+fi
+
+# Check if image exists on all nodes using ctr (always available in kindest/node)
+NODE_HAS_IMAGE=true
+if [[ -z "$NODES" ]]; then
+  NODE_HAS_IMAGE=false
+else
+  for node in $NODES; do
+    if docker exec "$node" sh -lc "
+      refs=\$(ctr -n k8s.io images ls -q 2>/dev/null || true)
+      echo \"\$refs\" | grep -Fxq '${ALT_IMAGE}' || echo \"\$refs\" | grep -Fxq '${RAY_IMAGE}'
+    " >/dev/null 2>&1; then
+      : # present
+    else
+      NODE_HAS_IMAGE=false
+      break
+    fi
+  done
 fi
 
 # 1. Check for manual skip flag first
 if [ "${SKIP_LOAD:-false}" = "true" ]; then
   print_status "WARN" "Skipping image load (manually requested via SKIP_LOAD=true)"
-# 2. Fallback to digest check (which we know usually fails, but good to keep)
-elif [[ -n "${HOST_IMAGE_ID}" && -n "${NODE_IMAGE_ID}" && "${HOST_IMAGE_ID}" == "${NODE_IMAGE_ID}" ]]; then
-  print_status "OK" "Image ${RAY_IMAGE} already present in Kind node (digest match), skipping load"
+# 2. Check if image already exists on all nodes
+elif [[ "$NODE_HAS_IMAGE" == "true" ]]; then
+  print_status "OK" "Image ${RAY_IMAGE} already present on all Kind nodes, skipping load"
 # 3. If neither, load the image
 else
   print_status "INFO" "Loading image ${RAY_IMAGE} into Kind nodes (${CLUSTER_NAME})..."
