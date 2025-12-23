@@ -30,7 +30,7 @@ import uuid
 from functools import lru_cache
 from typing import Dict, Any, Optional, NamedTuple, Tuple, List, TYPE_CHECKING
 
-from numpy import random
+from numpy import random  # pyright: ignore[reportMissingImports]
 
 import ray  # pyright: ignore[reportMissingImports]
 

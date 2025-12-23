@@ -1,9 +1,9 @@
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # pyright: ignore[reportMissingImports]
 import os
 import time
 import hmac
 import hashlib
-import requests
+import requests  # pyright: ignore[reportMissingModuleSource]
 import json
 
 load_dotenv()

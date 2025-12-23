@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 # ---- Cognition / ML ------------------------------------------------------------
 from seedcore.serve.ml_client import MLServiceClient  # your async client
 
-from seedcore.logging_setup import ensure_serve_logger,setup_logging
+from seedcore.logging_setup import ensure_serve_logger, setup_logging
 
 setup_logging(app_name="seedcore.agents.base")
 logger = ensure_serve_logger("seedcore.agents.base", level="DEBUG")
@@ -62,6 +62,7 @@ logger = ensure_serve_logger("seedcore.agents.base", level="DEBUG")
 # Ray import for actor decorator
 try:
     import ray  # pyright: ignore[reportMissingImports]
+
     ray_available = True
 except ImportError:
     ray = None  # type: ignore
@@ -78,6 +79,7 @@ try:
     from dateutil import parser as dt_parser
 except ImportError:
     dt_parser = None  # type: ignore
+
 
 # BaseAgent is a regular class (not a Ray actor) to allow inheritance
 # Subclasses (ConversationAgent, ObserverAgent, UtilityAgent) are Ray actors
@@ -123,18 +125,22 @@ class BaseAgent:
         self.instance_id = uuid.uuid4().hex
         self.organ_id = organ_id or "_"
         self.lifecycle: str = "initializing"
-        
+
         # 2. Configuration Storage (Lazy Init Prep)
         # We store configs now; actual clients/connections are created on first access properties
         self._holon_fabric_config = holon_fabric_config
         self._holon_fabric: Optional[Any] = None
         self._skill_store: Optional[SkillStoreProtocol] = None
-        
+
         # Extract configs from passed objects (Legacy support) or use provided dicts
-        self._cognitive_client_cfg = cognitive_client_cfg or self._extract_client_config(cognitive_client)
-        self._ml_client_cfg = ml_client_cfg or self._extract_client_config(ml_client, extra_fields=["warmup_timeout"])
+        self._cognitive_client_cfg = (
+            cognitive_client_cfg or self._extract_client_config(cognitive_client)
+        )
+        self._ml_client_cfg = ml_client_cfg or self._extract_client_config(
+            ml_client, extra_fields=["warmup_timeout"]
+        )
         self._mcp_client_cfg = mcp_client_cfg or self._extract_client_config(mcp_client)
-        
+
         # Initialize client placeholders (properties will handle creation)
         self._cognitive_client = cognitive_client
         self._ml_client = ml_client
@@ -145,7 +151,7 @@ class BaseAgent:
             self._role_registry = self._rebuild_role_registry(role_registry_snapshot)
         else:
             self._role_registry = role_registry or DEFAULT_ROLE_REGISTRY
-            
+
         self.specialization = specialization
         self.role_profile = self._role_registry.get(self.specialization)
 
@@ -153,10 +159,14 @@ class BaseAgent:
         if tool_handler_shards:
             self.tool_handler = tool_handler_shards
         elif tool_handler:
-            logger.warning(f"⚠️ BaseAgent {agent_id} using legacy tool_handler. Prefer tool_handler_shards.")
+            logger.warning(
+                f"⚠️ BaseAgent {agent_id} using legacy tool_handler. Prefer tool_handler_shards."
+            )
             self.tool_handler = tool_handler
         else:
-            logger.debug(f"BaseAgent {agent_id} initialized without tool handler (will create local fallback).")
+            logger.debug(
+                f"BaseAgent {agent_id} initialized without tool handler (will create local fallback)."
+            )
             self.tool_handler = None
 
         # 5. State & Memory Initialization
@@ -165,16 +175,19 @@ class BaseAgent:
             self.skills.bind_store(skill_store)
 
         # Light state for cognition context
-        self.state = AgentState(c=float(initial_capability), mem_util=float(initial_mem_util))
-        self.state.p = self.role_profile.to_p_dict() # Initialize role probabilities
+        self.state = AgentState(
+            c=float(initial_capability), mem_util=float(initial_mem_util)
+        )
+        self.state.p = self.role_profile.to_p_dict()  # Initialize role probabilities
 
         # Initialize Embedding (h) - Fallback logic if private memory isn't ready
-        if np is None: raise ImportError("numpy is required for BaseAgent")
-        
+        if np is None:
+            raise ImportError("numpy is required for BaseAgent")
+
         if hasattr(self.state, "h") and self.state.h is not None:
-             self.h = self._force_128d(np.asarray(self.state.h, dtype=np.float32))
+            self.h = self._force_128d(np.asarray(self.state.h, dtype=np.float32))
         else:
-             self.h = np.zeros(128, dtype=np.float32)
+            self.h = np.zeros(128, dtype=np.float32)
 
         # 6. Operational Metrics & Locks
         self.load: float = 0.0
@@ -182,7 +195,7 @@ class BaseAgent:
         self._last_role_update_time: float = 0.0
         self._role_update_min_interval: float = 5.0
         self._role_smoothing_alpha: float = 0.3
-        
+
         self._privmem = AgentPrivateMemory(agent_id=self.agent_id, alpha=0.1)
         self._rbac = RbacEnforcer()
         self._ml_client_lock = asyncio.Lock()
@@ -193,14 +206,18 @@ class BaseAgent:
         self.lifecycle = "active"
         logger.info(
             "✅ BaseAgent %s (%s) online. org=%s",
-            self.agent_id, self.specialization.value, self.organ_id
+            self.agent_id,
+            self.specialization.value,
+            self.organ_id,
         )
 
     # ------------------------------------------------------------------
     #  Helpers: Logic Encapsulation
     # ------------------------------------------------------------------
 
-    def _extract_client_config(self, client: Any, extra_fields: List[str] = None) -> Optional[Dict[str, Any]]:
+    def _extract_client_config(
+        self, client: Any, extra_fields: List[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Generic helper to extract serializable config from a live client object.
         Used for backward compatibility to convert Objects -> Dicts.
@@ -214,12 +231,16 @@ class BaseAgent:
                 "circuit_breaker": {
                     "failure_threshold": client.circuit_breaker.failure_threshold,
                     "recovery_timeout": client.circuit_breaker.recovery_timeout,
-                } if hasattr(client, "circuit_breaker") else None,
+                }
+                if hasattr(client, "circuit_breaker")
+                else None,
                 "retry_config": {
                     "max_attempts": client.retry_config.max_attempts,
                     "base_delay": client.retry_config.base_delay,
                     "max_delay": client.retry_config.max_delay,
-                } if hasattr(client, "retry_config") else None,
+                }
+                if hasattr(client, "retry_config")
+                else None,
             }
             # Copy extra fields (e.g. 'warmup_timeout' for ML client)
             if extra_fields:
@@ -228,7 +249,9 @@ class BaseAgent:
                         cfg[field] = getattr(client, field)
             return cfg
         except Exception as e:
-            logger.warning(f"Failed to extract config from client {type(client).__name__}: {e}")
+            logger.warning(
+                f"Failed to extract config from client {type(client).__name__}: {e}"
+            )
             return None
 
     def _rebuild_role_registry(self, snapshot: Dict[str, Any]) -> RoleRegistry:
@@ -236,9 +259,13 @@ class BaseAgent:
         Reconstructs a RoleRegistry from a snapshot dictionary.
         Keeps __init__ clean and handles import dependencies locally.
         """
-        from .roles import RoleProfile, RoleRegistry  # Local import to avoid circular deps
+        from .roles import (
+            RoleProfile,
+            RoleRegistry,
+        )  # Local import to avoid circular deps
+
         registry = RoleRegistry()
-        
+
         for spec_name, profile_data in snapshot.items():
             try:
                 # Convert string key back to Enum
@@ -253,7 +280,7 @@ class BaseAgent:
                 registry.register(profile)
             except Exception as e:
                 logger.warning(f"Failed to restore role profile for {spec_name}: {e}")
-                
+
         return registry
 
     def _force_128d(self, vector: np.ndarray) -> np.ndarray:
@@ -263,8 +290,8 @@ class BaseAgent:
         if vector.shape[0] > 128:
             return vector[:128]
         # Pad with zeros
-        return np.pad(vector, (0, 128 - vector.shape[0]), 'constant')
-    
+        return np.pad(vector, (0, 128 - vector.shape[0]), "constant")
+
     def _extract_ml_client_config(self, client: Any) -> Optional[Dict[str, Any]]:
         """Helper to extract config from a live ML client (for backward compatibility)."""
         if not client:
@@ -276,81 +303,104 @@ class BaseAgent:
             return cfg
         except Exception:
             return None
-    
+
     def _extract_mcp_client_config(self, client: Any) -> Optional[Dict[str, Any]]:
         """Helper to extract config from a live MCP client (for backward compatibility)."""
         return self._extract_client_config(client)
-    
+
     async def _ensure_holon_fabric(self) -> Any:
         """Lazily create HolonFabric from config to avoid serialization issues."""
         if self._holon_fabric is None and self._holon_fabric_config:
             from seedcore.memory.holon_fabric import HolonFabric
             from seedcore.memory.backends.pgvector_backend import PgVectorStore
             from seedcore.memory.backends.neo4j_graph import Neo4jGraph
-            from seedcore.database import PG_DSN, NEO4J_URI, NEO4J_BOLT_URL, NEO4J_USER, NEO4J_PASSWORD
-            
+            from seedcore.database import (
+                PG_DSN,
+                NEO4J_URI,
+                NEO4J_BOLT_URL,
+                NEO4J_USER,
+                NEO4J_PASSWORD,
+            )
+
             # Support both structured (new) and flat (legacy) config formats
             pg_cfg = self._holon_fabric_config.get("pg", {})
             neo4j_cfg = self._holon_fabric_config.get("neo4j", {})
-            
+
             pg_store = PgVectorStore(
-                dsn=pg_cfg.get("dsn") or self._holon_fabric_config.get("pg_dsn", PG_DSN),
-                pool_size=pg_cfg.get("pool_size") or self._holon_fabric_config.get("pg_pool_size", 2),
+                dsn=pg_cfg.get("dsn")
+                or self._holon_fabric_config.get("pg_dsn", PG_DSN),
+                pool_size=pg_cfg.get("pool_size")
+                or self._holon_fabric_config.get("pg_pool_size", 2),
                 pool_min_size=1,
             )
-            neo4j_uri = neo4j_cfg.get("uri") or self._holon_fabric_config.get("neo4j_uri") or NEO4J_URI or NEO4J_BOLT_URL
+            neo4j_uri = (
+                neo4j_cfg.get("uri")
+                or self._holon_fabric_config.get("neo4j_uri")
+                or NEO4J_URI
+                or NEO4J_BOLT_URL
+            )
             neo4j_graph = Neo4jGraph(
                 neo4j_uri,
                 auth=(
-                    neo4j_cfg.get("user") or self._holon_fabric_config.get("neo4j_user", NEO4J_USER),
-                    neo4j_cfg.get("password") or self._holon_fabric_config.get("neo4j_password", NEO4J_PASSWORD),
+                    neo4j_cfg.get("user")
+                    or self._holon_fabric_config.get("neo4j_user", NEO4J_USER),
+                    neo4j_cfg.get("password")
+                    or self._holon_fabric_config.get("neo4j_password", NEO4J_PASSWORD),
                 ),
             )
-            
+
             # Initialize connections
             await pg_store._get_pool()
-            
+
             self._holon_fabric = HolonFabric(
                 vec_store=pg_store,
                 graph=neo4j_graph,
                 embedder=None,
             )
-            
+
             # Create SkillStore adapter
             from seedcore.organs.organism_core import HolonFabricSkillStoreAdapter
+
             self._skill_store = HolonFabricSkillStoreAdapter(self._holon_fabric)
-            
+
             # Bind to skills if not already bound
             if not self.skills._store or isinstance(self.skills._store, NullSkillStore):
                 self.skills.bind_store(self._skill_store)
-            
-            logger.debug(f"✅ [{self.agent_id}] HolonFabric and SkillStore created locally")
-        
+
+            logger.debug(
+                f"✅ [{self.agent_id}] HolonFabric and SkillStore created locally"
+            )
+
         return self._holon_fabric
-    
+
     def _get_cognitive_client(self) -> Optional["CognitiveServiceClient"]:
         """Lazily create CognitiveServiceClient from config to avoid serialization issues."""
         if self._cognitive_client is None and self._cognitive_client_cfg:
             from seedcore.serve.cognitive_client import CognitiveServiceClient
             from seedcore.serve.base_client import CircuitBreaker, RetryConfig
-            
+
             cfg = self._cognitive_client_cfg
             circuit_breaker = CircuitBreaker(
-                failure_threshold=cfg.get("circuit_breaker", {}).get("failure_threshold", 5),
-                recovery_timeout=cfg.get("circuit_breaker", {}).get("recovery_timeout", 30.0),
+                failure_threshold=cfg.get("circuit_breaker", {}).get(
+                    "failure_threshold", 5
+                ),
+                recovery_timeout=cfg.get("circuit_breaker", {}).get(
+                    "recovery_timeout", 30.0
+                ),
             )
             retry_config = RetryConfig(
                 max_attempts=cfg.get("retry_config", {}).get("max_attempts", 1),
                 base_delay=cfg.get("retry_config", {}).get("base_delay", 1.0),
                 max_delay=cfg.get("retry_config", {}).get("max_delay", 5.0),
             )
-            
+
             # Create client with explicit config (bypassing __init__ env var logic)
             # ⚠️ NOTE: This bypasses CognitiveServiceClient.__init__ which may contain validation,
             # headers, auth, or metrics setup. If that class is refactored, this may need updating.
             # TODO: Refactor service clients to support a `from_config()` class method for cleaner encapsulation.
             self._cognitive_client = object.__new__(CognitiveServiceClient)
             from seedcore.serve.base_client import BaseServiceClient
+
             BaseServiceClient.__init__(
                 self._cognitive_client,
                 service_name="cognitive_service",
@@ -359,38 +409,45 @@ class BaseAgent:
                 circuit_breaker=circuit_breaker,
                 retry_config=retry_config,
             )
-            logger.debug(f"✅ [{self.agent_id}] CognitiveServiceClient created from config")
-        
+            logger.debug(
+                f"✅ [{self.agent_id}] CognitiveServiceClient created from config"
+            )
+
         return self._cognitive_client
-    
+
     @property
     def cognitive_client(self) -> Optional["CognitiveServiceClient"]:
         """Lazy accessor for cognitive_client (creates on first access)."""
         return self._get_cognitive_client()
-    
+
     def _get_ml_client(self) -> Optional[MLServiceClient]:
         """Lazily create MLServiceClient from config to avoid serialization issues."""
         if self._ml_client is None and self._ml_client_cfg:
             from seedcore.serve.ml_client import MLServiceClient
             from seedcore.serve.base_client import CircuitBreaker, RetryConfig
-            
+
             cfg = self._ml_client_cfg
             circuit_breaker = CircuitBreaker(
-                failure_threshold=cfg.get("circuit_breaker", {}).get("failure_threshold", 5),
-                recovery_timeout=cfg.get("circuit_breaker", {}).get("recovery_timeout", 30.0),
+                failure_threshold=cfg.get("circuit_breaker", {}).get(
+                    "failure_threshold", 5
+                ),
+                recovery_timeout=cfg.get("circuit_breaker", {}).get(
+                    "recovery_timeout", 30.0
+                ),
             )
             retry_config = RetryConfig(
                 max_attempts=cfg.get("retry_config", {}).get("max_attempts", 2),
                 base_delay=cfg.get("retry_config", {}).get("base_delay", 1.0),
                 max_delay=cfg.get("retry_config", {}).get("max_delay", 5.0),
             )
-            
+
             # Create client with explicit config
             # ⚠️ NOTE: This bypasses MLServiceClient.__init__ which may contain validation,
             # headers, auth, or metrics setup. If that class is refactored, this may need updating.
             # TODO: Refactor service clients to support a `from_config()` class method for cleaner encapsulation.
             self._ml_client = object.__new__(MLServiceClient)
             from seedcore.serve.base_client import BaseServiceClient
+
             BaseServiceClient.__init__(
                 self._ml_client,
                 service_name="ml_service",
@@ -403,23 +460,23 @@ class BaseAgent:
             if "warmup_timeout" in cfg:
                 self._ml_client.warmup_timeout = cfg["warmup_timeout"]
             logger.debug(f"✅ [{self.agent_id}] MLServiceClient created from config")
-        
+
         return self._ml_client
-    
+
     @property
     def ml_client(self) -> Optional[MLServiceClient]:
         """Lazy accessor for ml_client (creates on first access)."""
         return self._get_ml_client()
-    
+
     async def _ensure_tool_handler(self):
         """Lazily create ToolManager locally if shards not available."""
         if self.tool_handler is None:
             # Create local ToolManager from config
             await self._ensure_holon_fabric()
-            
+
             from seedcore.tools.manager import ToolManager
             from seedcore.memory.mw_manager import MwManager
-            
+
             self.tool_handler = ToolManager(
                 skill_store=self._skill_store,
                 mw_manager=MwManager(organ_id=self.organ_id),
@@ -429,27 +486,32 @@ class BaseAgent:
                 mcp_client=self._get_mcp_client(),
             )
             logger.debug(f"✅ [{self.agent_id}] ToolManager created locally")
-    
+
     def _get_mcp_client(self) -> Optional["MCPServiceClient"]:
         """Lazily create MCPServiceClient from config to avoid serialization issues."""
         if self._mcp_client is None and self._mcp_client_cfg:
             from seedcore.serve.mcp_client import MCPServiceClient
             from seedcore.serve.base_client import CircuitBreaker, RetryConfig
-            
+
             cfg = self._mcp_client_cfg
             circuit_breaker = CircuitBreaker(
-                failure_threshold=cfg.get("circuit_breaker", {}).get("failure_threshold", 5),
-                recovery_timeout=cfg.get("circuit_breaker", {}).get("recovery_timeout", 30.0),
+                failure_threshold=cfg.get("circuit_breaker", {}).get(
+                    "failure_threshold", 5
+                ),
+                recovery_timeout=cfg.get("circuit_breaker", {}).get(
+                    "recovery_timeout", 30.0
+                ),
             )
             retry_config = RetryConfig(
                 max_attempts=cfg.get("retry_config", {}).get("max_attempts", 1),
                 base_delay=cfg.get("retry_config", {}).get("base_delay", 1.0),
                 max_delay=cfg.get("retry_config", {}).get("max_delay", 5.0),
             )
-            
+
             # Create client with explicit config
             self._mcp_client = object.__new__(MCPServiceClient)
             from seedcore.serve.base_client import BaseServiceClient
+
             BaseServiceClient.__init__(
                 self._mcp_client,
                 service_name="mcp_service",
@@ -459,7 +521,7 @@ class BaseAgent:
                 retry_config=retry_config,
             )
             logger.debug(f"✅ [{self.agent_id}] MCPServiceClient created from config")
-        
+
         return self._mcp_client
 
     # ============================================================================
@@ -1019,7 +1081,7 @@ class BaseAgent:
         """
         started_ts = self._utc_now_iso()
         started_monotonic = self._now_monotonic()
-        
+
         logger.info(
             f"[{self.agent_id}] 📥 Task execution started (spec={getattr(self.specialization, 'value', self.specialization)})"
         )
@@ -1051,7 +1113,7 @@ class BaseAgent:
             getattr(self.state, "capability_score", getattr(self.state, "c", 0.0))
         )
         curr_mem = float(getattr(self.state, "mem_util", 0.0))
-        
+
         if tv.min_capability is not None:
             if curr_cap < float(tv.min_capability):
                 logger.warning(
@@ -1078,7 +1140,9 @@ class BaseAgent:
 
         # C. Timing Checks
         if tv.deadline_at_iso and self._is_past_iso(tv.deadline_at_iso):
-            logger.warning(f"[{self.agent_id}] ❌ Deadline expired: {tv.deadline_at_iso}")
+            logger.warning(
+                f"[{self.agent_id}] ❌ Deadline expired: {tv.deadline_at_iso}"
+            )
             return self._reject_result(
                 tv,
                 reason="deadline_expired",
@@ -1097,8 +1161,10 @@ class BaseAgent:
                     started_ts=started_ts,
                     started_monotonic=started_monotonic,
                 )
-        
-        logger.debug(f"[{self.agent_id}] ✅ Guardrails passed: capability={curr_cap:.2f}, mem_util={curr_mem:.2f}, load={self.load:.2f}")
+
+        logger.debug(
+            f"[{self.agent_id}] ✅ Guardrails passed: capability={curr_cap:.2f}, mem_util={curr_mem:.2f}, load={self.load:.2f}"
+        )
 
         # --- 1) Skill materialization (telemetry only) ---------------------------
         try:
@@ -1149,7 +1215,7 @@ class BaseAgent:
             # Ensure tool handler is initialized
             if self.tool_handler is None:
                 await self._ensure_tool_handler()
-            
+
             if not isinstance(self.tool_handler, list):
                 if not self.tool_handler or not hasattr(self.tool_handler, "has"):
                     tool_errors.append(
@@ -1174,7 +1240,9 @@ class BaseAgent:
             args = dict(call.get("args") or {})
             tool_timeout = float(args.pop("_timeout_s", default_tool_timeout_s))
 
-            logger.debug(f"[{self.agent_id}] ⚙️ Executing tool: {tool_name} (timeout={tool_timeout}s)")
+            logger.debug(
+                f"[{self.agent_id}] ⚙️ Executing tool: {tool_name} (timeout={tool_timeout}s)"
+            )
             try:
                 # Execute tool
                 output = await asyncio.wait_for(
@@ -1182,17 +1250,24 @@ class BaseAgent:
                 )
                 output = self._make_json_safe(output)
                 results.append({"tool": tool_name, "ok": True, "output": output})
-                logger.debug(f"[{self.agent_id}] ✅ Tool '{tool_name}' executed successfully")
+                logger.debug(
+                    f"[{self.agent_id}] ✅ Tool '{tool_name}' executed successfully"
+                )
             except asyncio.TimeoutError:
                 tool_errors.append({"tool": tool_name, "error": "timeout"})
-                logger.warning(f"[{self.agent_id}] ⏱️ Tool '{tool_name}' timed out after {tool_timeout}s")
+                logger.warning(
+                    f"[{self.agent_id}] ⏱️ Tool '{tool_name}' timed out after {tool_timeout}s"
+                )
             except asyncio.CancelledError:
                 tool_errors.append({"tool": tool_name, "error": "cancelled"})
                 logger.warning(f"[{self.agent_id}] 🚫 Tool '{tool_name}' was cancelled")
                 raise
             except Exception as exc:
                 tool_errors.append({"tool": tool_name, "error": str(exc)})
-                logger.error(f"[{self.agent_id}] ❌ Tool '{tool_name}' failed: {exc}", exc_info=True)
+                logger.error(
+                    f"[{self.agent_id}] ❌ Tool '{tool_name}' failed: {exc}",
+                    exc_info=True,
+                )
 
             self.last_heartbeat = time.time()
 
@@ -1203,7 +1278,7 @@ class BaseAgent:
 
         quality = self._estimate_quality(results, tool_errors, tv)
         salience = await self._maybe_salience(tv, results, tool_errors)
-        
+
         logger.info(
             f"[{self.agent_id}] 📊 Tool execution summary: success={success}, "
             f"results={len(results)}, errors={len(tool_errors)}, quality={quality:.2f}, salience={salience:.2f}"
@@ -1253,7 +1328,7 @@ class BaseAgent:
             "latency_ms": latency_ms,
             "attempt": 1,
         }
-        
+
         logger.info(
             f"[{self.agent_id}] ✅ Task execution completed: task_id={tv.task_id}, "
             f"success={success}, latency={latency_ms:.1f}ms"
@@ -1296,6 +1371,15 @@ class BaseAgent:
         result_payload["errors"] = tool_errors
 
         return result_payload
+
+    def emit_signal(self, **signals: Any) -> Dict[str, Any]:
+        """
+        Emit semantic execution signals for the Coordinator.
+
+        Signals are NOT routing instructions.
+        They describe observed outcomes or requests.
+        """
+        return {"signals": signals}
 
     def _estimate_quality(self, results, errors, _task_view) -> float:
         """Baseline quality estimate based on tool success ratio."""

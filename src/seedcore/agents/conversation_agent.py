@@ -20,28 +20,6 @@ class ConversationAgent(BaseAgent):
     - Owns: params.chat.history (windowed context for CognitiveCore)
     - Owns: conversation_history (top-level ChatSignature compatibility)
     - Owns: Episodic memory buffer (agent-local only, respects cognitive flags)
-
-    Does NOT own:
-    - Routing (params.routing, params._router) - Router's authority
-    - Long-term memory writes (CognitiveCore handles via HolonFabric)
-    - Interaction mode changes (preserves params.interaction.mode)
-
-    Activation Context:
-    - ConversationAgent behavior is primarily activated when 
-      params.interaction.mode == "agent_tunnel" or after routing has assigned the agent.
-    - The agent does NOT override interaction topology or hijack routing decisions.
-    - TaskPayload v2 flow remains authoritative.
-
-    Architecture:
-      - Inherits: BaseAgent (Stateless Logic, Tool Execution, RBAC)
-      - Adds:     Chat History (Short-term Ring Buffer), Checkpointing, Query Tools
-      - Delegates: Long-term memory to CognitiveCore (via HolonFabric)
-      - Respects: params.cognitive.disable_memory_write flag
-    
-    Production Rule:
-    - Should only be used for USER_LIAISON specialization.
-    - Other specializations should use BaseAgent and consume derived signals,
-      not own params.chat directly.
     """
 
     def __init__(
@@ -269,29 +247,6 @@ class ConversationAgent(BaseAgent):
         - Respect params.cognitive.disable_memory_write flag
         - Do NOT write to params.routing or params._router (Router's authority)
         - Do NOT change params.interaction.mode (preserve routing decisions)
-
-        TaskPayload v2 Envelopes (Canonical):
-            params.chat: {
-                message: str,           # Incoming user message
-                history: List[Dict],   # Windowed context for CognitiveCore
-                agent_persona?: str,    # Optional persona override
-                style?: str             # Optional style hint
-            }
-            
-            params.interaction: {
-                mode: "agent_tunnel" | "coordinator_routed" | "one_shot",
-                conversation_id?: str,
-                assigned_agent_id?: str
-            }
-            
-            params.cognitive: {
-                disable_memory_write?: bool  # If true, skip episodic memory writes
-            }
-            
-            conversation_history: List[Dict]  # Top-level (ChatSignature compatibility)
-
-        Note: ConversationAgent is the semantic owner of params.chat, not a schema owner.
-        The payload structure remains exactly as defined in TaskPayload v2.
         """
 
         # ---------------------------------------------------------

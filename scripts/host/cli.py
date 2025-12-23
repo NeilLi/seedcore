@@ -20,8 +20,7 @@ Still supports:
 import os
 import re
 import json
-import readline  # history + arrows
-import requests
+import requests  # pyright: ignore[reportMissingModuleSource]
 import difflib
 import argparse
 from datetime import datetime, timedelta, timezone

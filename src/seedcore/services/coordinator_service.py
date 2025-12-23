@@ -20,7 +20,7 @@ from pathlib import Path
 import uuid
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 import yaml  # pyright: ignore[reportMissingModuleSource]
 from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
@@ -34,7 +34,6 @@ from ..database import get_async_pg_session_factory, get_redis_client
 from ..utils.ray_utils import COG, ML, ORG
 
 # Models
-from ..models import TaskPayload
 from ..models.cognitive import DecisionKind, CognitiveType
 from ..models.result_schema import create_error_result
 from ..coordinator.models import (
@@ -620,26 +619,72 @@ class Coordinator:
             return {}
 
     def _build_route_config(self) -> RouteConfig:
-        """Builds routing policy config with global PKG manager."""
+        """
+        Build routing policy config with global PKG manager (PKG-first architecture).
+        
+        Architecture: PKG is the authoritative source of routing hints.
+        This adapter normalizes PKG output to proto_plan contract expected by core.execute.
+        """
 
         async def evaluate_pkg_func(tags, signals, context, timeout_s):
+            """
+            PKG evaluation adapter that returns proto_plan contract.
+            
+            Returns proto_plan structure compatible with core.execute._extract_routing_intent_from_proto_plan():
+            - proto_plan["routing"] (top-level routing hints)
+            - proto_plan["steps"] (list of step dicts with task.params.routing)
+            """
             pkg_mgr = get_global_pkg_manager()
             evaluator = pkg_mgr and pkg_mgr.get_active_evaluator()
             if not evaluator:
                 raise RuntimeError("PKG evaluator not available")
 
-            res = evaluator.evaluate(
-                {
-                    "tags": list(tags),
-                    "signals": signals,
-                    "context": context or {},
-                }
-            )
-            return {
-                "tasks": res.get("subtasks", []),
-                "edges": res.get("dag", []),
-                "version": res.get("snapshot") or evaluator.version,
+            payload = {
+                "tags": list(tags or []),
+                "signals": signals or {},
+                "context": context or {},
             }
+
+            # evaluator.evaluate(...) is often sync; run it in a thread w/ timeout
+            async def _run_eval():
+                return await asyncio.to_thread(evaluator.evaluate, payload)
+
+            res = await asyncio.wait_for(_run_eval(), timeout=float(timeout_s or 2))
+
+            # ---- Normalize to proto_plan contract expected by core.execute ----
+            subtasks = res.get("subtasks", []) or res.get("tasks", []) or []
+            dag = res.get("dag", []) or res.get("edges", []) or []
+            version = res.get("snapshot") or res.get("version") or getattr(evaluator, "version", None)
+
+            # IMPORTANT: "steps" is the canonical field expected downstream.
+            # Each step should be a dict with at minimum {"task": {...}}.
+            steps = []
+            for st in subtasks:
+                if isinstance(st, dict):
+                    # allow either {"task": {...}} or raw task dict
+                    if "task" in st and isinstance(st["task"], dict):
+                        steps.append(st)
+                    else:
+                        steps.append({"task": st})
+                else:
+                    # object-like fallback
+                    steps.append({"task": getattr(st, "task", st)})
+
+            proto_plan = {
+                "version": version,
+                "steps": steps,
+                "edges": dag,
+            }
+
+            # If PKG provides explicit routing intent, pass through.
+            # (Preferred: proto_plan["routing"]["required_specialization"])
+            if isinstance(res.get("routing"), dict):
+                proto_plan["routing"] = res["routing"]
+
+            return proto_plan
+
+        # NOTE: pkg_timeout_s should be a *PKG timeout*, not serve_call_s.
+        pkg_timeout = int(os.getenv("PKG_TIMEOUT_S", str(min(5, self.timeout_s or 2))))
 
         return RouteConfig(
             surprise_computer=self.surprise_computer,
@@ -649,7 +694,9 @@ class Coordinator:
             signal_enricher=self.signal_enricher,
             evaluate_pkg_func=evaluate_pkg_func,
             ood_to01=self.ood_to01,
-            pkg_timeout_s=self.timeout_s,
+            pkg_timeout_s=pkg_timeout,
+            # Keep intent_resolver unset to discourage non-PKG routing
+            intent_resolver=None,
         )
 
     def _build_execution_config(self, cid: str) -> ExecutionConfig:
@@ -665,16 +712,22 @@ class Coordinator:
             }
 
         async def organism_execute(
-            organ_id: str, task_dict: dict, timeout: int, cid_local: str
+            organ_id: str, task_dict: dict, timeout: float, cid_local: str
         ) -> dict:
             """
             Executes a task on a specific Organism (via HTTP/RPC) using TaskPayload v2 semantics.
+            
+            Architecture: Coordinator delegates execution to Organism with routing hints
+            already embedded in the payload. Organism resolves HOW to execute.
             
             Note: This is a nested function that captures 'self' from the closure.
             """
             # 1. Prepare Payload (Shallow Copy to avoid mutation side-effects)
             payload = task_dict.copy()
             params = payload.setdefault("params", {})
+
+            # Ensure correlation_id is set for cross-service tracing
+            payload.setdefault("correlation_id", cid_local)
 
             # 2. V2 Interaction Setup
             # Ensure the receiving Organism knows this was routed by Coordinator
@@ -686,15 +739,20 @@ class Coordinator:
             # (Optional) If you map Organ IDs to Specializations, you could enforce it here:
             # params.setdefault("routing", {})["required_specialization"] = _map_organ_to_spec(organ_id)
 
+            # 3. Build headers with correlation + task ID for tracing
+            headers = _corr_headers("organism", cid_local)
+            if payload.get("task_id"):
+                headers["X-Task-ID"] = str(payload["task_id"])
+
             try:
-                # 3. Call Unified Organism Endpoint
+                # 4. Call Unified Organism Endpoint
                 # Note: The network routing to 'organ_id' happens here via the client
                 # 'self' is captured from the closure (outer scope)
                 res = await self.organism_client.post(
                     "/route-and-execute",
                     json={"task": payload},
-                    headers=_corr_headers("organism", cid_local),
-                    timeout=timeout,
+                    headers=headers,
+                    timeout=float(timeout),
                 )
 
                 # 4. Handle Result & Back-fill V2 Metadata
@@ -772,12 +830,18 @@ class Coordinator:
             "context": payload.context,
         }
 
-        drift_score = await self._compute_drift_score(task_data)
+        drift_score = await self._compute_drift_score(
+            task_data,
+            text_payload={"text": task_data.get("description", "")},
+        )
         is_novel = drift_score > 0.7
         retention = (
             RetentionPolicy.FULL_ARCHIVE if is_novel else RetentionPolicy.SUMMARY_ONLY
         )
-        should_escalate = self.ocps.update(drift_score)
+        
+        # Use correct OCPS valve name (ocps_valve, not ocps)
+        drift_state = self.ocps_valve.update(drift_score)
+        should_escalate = bool(getattr(drift_state, "is_breached", False))
 
         decision_kind = (
             DecisionKind.COGNITIVE if should_escalate else DecisionKind.FAST_PATH
@@ -821,12 +885,24 @@ class Coordinator:
         )
 
     async def _handle_tune_callback(self, payload: TuneCallbackRequest):
+        """
+        Handle ML tuning callback.
+        
+        Note: predicate_router is not part of the current architecture.
+        This endpoint is kept for backward compatibility but does not update
+        predicate router state.
+        """
         try:
             logger.info(f"[Coord] Tuning callback {payload.job_id}: {payload.status}")
             success = payload.status == "completed"
-            self.predicate_router.update_gpu_job_status(
-                payload.job_id, payload.status, success=success
-            )
+            
+            # NOTE: predicate_router is not initialized in current architecture
+            # If you need GPU job status tracking, initialize it in _init_core_logic()
+            # or remove this functionality.
+            # self.predicate_router.update_gpu_job_status(
+            #     payload.job_id, payload.status, success=success
+            # )
+            
             if success:
                 logger.info(
                     f"Job {payload.job_id} success. GPU Secs: {payload.gpu_seconds}"
@@ -842,13 +918,24 @@ class Coordinator:
     # ------------------------------------------------------------------
 
     async def _compute_drift_score(
-        self, task: Dict[str, Any], text_payload: Dict[str, Any]
+        self,
+        task: Dict[str, Any],
+        text_payload: Dict[str, Any],
+        ml_client: Any = None,
+        metrics: Any = None,
+        **_: Any,
     ) -> float:
+        """
+        Compute drift score with signature-tolerant wrapper.
+        
+        Architecture: Matches core.execute._call_compute_drift_score() signature
+        to avoid signature mismatch issues. Accepts extra kwargs for future-proofing.
+        """
         return await compute_drift_score(
             task=task,
             text_payload=text_payload,
-            ml_client=self.ml_client,
-            metrics=self.metrics,
+            ml_client=ml_client or self.ml_client,
+            metrics=metrics or self.metrics,
         )
 
     async def _fire_and_forget_memory_synthesis(
@@ -1018,10 +1105,30 @@ class Coordinator:
         return self.metrics.get_metrics()
 
     async def get_predicate_status(self):
-        return {"rules": len(self.predicate_config.routing)}
+        """
+        Get predicate router status.
+        
+        Note: predicate_config is not part of the current PKG-first architecture.
+        PKG policy evaluation replaces predicate-based routing.
+        """
+        return {
+            "rules": 0,
+            "note": "predicate_config not enabled in PKG-first architecture. "
+                    "PKG policy evaluation handles routing decisions."
+        }
 
     async def get_predicate_config(self):
-        return self.predicate_config.dict()
+        """
+        Get predicate router configuration.
+        
+        Note: predicate_config is not part of the current PKG-first architecture.
+        PKG policy evaluation replaces predicate-based routing.
+        """
+        return {
+            "routing": [],
+            "note": "predicate_config not enabled in PKG-first architecture. "
+                    "PKG policy evaluation handles routing decisions."
+        }
 
     def _normalize(self, x):
         return normalize_string(x)
