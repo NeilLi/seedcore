@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import logging
 import time
 from typing import Any, Dict, List, Optional
 
@@ -30,7 +29,10 @@ except ImportError:
 from .base import BaseAgent
 from .roles.specialization import Specialization
 
-logger = logging.getLogger(__name__)
+from seedcore.logging_setup import ensure_serve_logger,setup_logging
+
+setup_logging(app_name="seedcore.agents.utility_agent")
+logger = ensure_serve_logger("seedcore.agents.utility_agent", level="DEBUG")
 
 
 # Conditional decorator: use ray.remote if available, otherwise no-op

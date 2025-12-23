@@ -29,9 +29,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple, Union
 
 # ---- Roles / Skills / RBAC / Routing -------------------------------------------
 
-from seedcore.memory import holon_fabric, mw_manager
 from seedcore.models import TaskPayload
-from seedcore.tools import ToolManager
 from .roles import (
     Specialization,
     RoleProfile,
@@ -55,9 +53,11 @@ if TYPE_CHECKING:
 # ---- Cognition / ML ------------------------------------------------------------
 from seedcore.serve.ml_client import MLServiceClient  # your async client
 
-from seedcore.logging_setup import ensure_serve_logger
+from seedcore.logging_setup import ensure_serve_logger,setup_logging
 
+setup_logging(app_name="seedcore.agents.base")
 logger = ensure_serve_logger("seedcore.agents.base", level="DEBUG")
+
 
 # Ray import for actor decorator
 try:
@@ -80,7 +80,7 @@ except ImportError:
     dt_parser = None  # type: ignore
 
 # BaseAgent is a regular class (not a Ray actor) to allow inheritance
-# Subclasses (ChatAgent, ObserverAgent, UtilityAgent) are Ray actors
+# Subclasses (ConversationAgent, ObserverAgent, UtilityAgent) are Ray actors
 # When BaseAgent is used directly, it will be wrapped as an actor in create_agent()
 class BaseAgent:
     """

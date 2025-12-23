@@ -22,7 +22,7 @@ seedcore:
           - specialization: "USER_LIAISON"
             count: 1
           - specialization: "MOOD_INFERENCE_AGENT"
-            count: 1
+            count: 0
           - specialization: "SCHEDULE_ORACLE"
             count: 0
           - specialization: "PREFERENCE_MODEL"
@@ -56,9 +56,9 @@ seedcore:
           - specialization: "DEVICE_ORCHESTRATOR"
             count: 1
           - specialization: "ROBOT_COORDINATOR"
-            count: 1
+            count: 0
           - specialization: "HVAC_CONTROLLER"
-            count: 1
+            count: 0
           - specialization: "LIGHTING_CONTROLLER"
             count: 0
           - specialization: "ENERGY_MANAGER"

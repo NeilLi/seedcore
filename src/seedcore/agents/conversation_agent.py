@@ -3,21 +3,45 @@ import asyncio
 from typing import Any, Awaitable, Dict, List, Optional
 import ray  # pyright: ignore[reportMissingImports]
 from seedcore.agents.base import BaseAgent
-from seedcore.agents.roles import DEFAULT_ROLE_REGISTRY, NullSkillStore, Specialization
-from seedcore.logging_setup import ensure_serve_logger
+from seedcore.agents.roles import Specialization
+from seedcore.logging_setup import ensure_serve_logger,setup_logging
 
-logger = ensure_serve_logger("seedcore.agents.chat_agent", level="DEBUG")
+setup_logging(app_name="seedcore.agents.conversation_agent")
+logger = ensure_serve_logger("seedcore.agents.conversation_agent", level="DEBUG")
 
 
 @ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
-class ChatAgent(BaseAgent):
+class ConversationAgent(BaseAgent):
     """
-    Stateful agent with conversational memory (TaskPayload v2.0 compliant).
-    
+    Stateful agent responsible for TaskPayload v2 conversational execution.
+
+    Semantic Owner (not schema owner):
+    - Owns: params.chat normalization and windowing
+    - Owns: params.chat.history (windowed context for CognitiveCore)
+    - Owns: conversation_history (top-level ChatSignature compatibility)
+    - Owns: Episodic memory buffer (agent-local only, respects cognitive flags)
+
+    Does NOT own:
+    - Routing (params.routing, params._router) - Router's authority
+    - Long-term memory writes (CognitiveCore handles via HolonFabric)
+    - Interaction mode changes (preserves params.interaction.mode)
+
+    Activation Context:
+    - ConversationAgent behavior is primarily activated when 
+      params.interaction.mode == "agent_tunnel" or after routing has assigned the agent.
+    - The agent does NOT override interaction topology or hijack routing decisions.
+    - TaskPayload v2 flow remains authoritative.
+
     Architecture:
       - Inherits: BaseAgent (Stateless Logic, Tool Execution, RBAC)
       - Adds:     Chat History (Short-term Ring Buffer), Checkpointing, Query Tools
       - Delegates: Long-term memory to CognitiveCore (via HolonFabric)
+      - Respects: params.cognitive.disable_memory_write flag
+    
+    Production Rule:
+    - Should only be used for USER_LIAISON specialization.
+    - Other specializations should use BaseAgent and consume derived signals,
+      not own params.chat directly.
     """
 
     def __init__(
@@ -118,20 +142,36 @@ class ChatAgent(BaseAgent):
             except Exception as e:
                 # Critical Fallback: The task will fail to start. 
                 # In production, this should ideally raise, but we log to prevent crash on init.
-                logger.warning(f"⚠️ Could not schedule background task in ChatAgent {self.agent_id}: {e}")
+                logger.warning(f"⚠️ Could not schedule background task in ConversationAgent {self.agent_id}: {e}")
 
     # ---------------------------------------------------------------------
     # Chat history management
     # ---------------------------------------------------------------------
     def add_user_message(self, content: str):
-        """Add a user message to chat history."""
+        """
+        Add a user message to chat history (episodic memory buffer).
+        
+        Note: This method does NOT check cognitive flags. The caller (execute_task)
+        is responsible for checking params.cognitive.disable_memory_write before calling.
+        
+        Args:
+            content: User message content
+        """
         self._chat_history.append({"role": "user", "content": content})
         # Maintain ring buffer size
         if len(self._chat_history) > self._chat_history_limit:
             self._chat_history = self._chat_history[-self._chat_history_limit:]
 
     def add_assistant_message(self, content: str):
-        """Add an assistant message to chat history."""
+        """
+        Add an assistant message to chat history (episodic memory buffer).
+        
+        Note: This method does NOT check cognitive flags. The caller (execute_task)
+        is responsible for checking params.cognitive.disable_memory_write before calling.
+        
+        Args:
+            content: Assistant message content
+        """
         self._chat_history.append({"role": "assistant", "content": content})
         # Maintain ring buffer size
         if len(self._chat_history) > self._chat_history_limit:
@@ -141,7 +181,7 @@ class ChatAgent(BaseAgent):
         """Get a shallow copy of the full chat history."""
         return list(self._chat_history)
     
-    def get_recent_history(self, max_turns: int = 6):
+    def get_recent_conversation_window(self, max_turns: int = 6):
         """
         Get a windowed subset of recent chat history for CognitiveCore.
         
@@ -156,6 +196,18 @@ class ChatAgent(BaseAgent):
             List of recent chat history entries (last max_turns turns)
         """
         return list(self._chat_history[-max_turns:])
+    
+    def get_recent_history(self, max_turns: int = 6):
+        """
+        Backward-compatible alias for get_recent_conversation_window.
+        
+        Args:
+            max_turns: Maximum number of recent turns to return (default: 6)
+            
+        Returns:
+            List of recent chat history entries (last max_turns turns)
+        """
+        return self.get_recent_conversation_window(max_turns)
 
     def _get_mw_manager(self):
         """Lazily create MwManager from organ_id to avoid serialization issues."""
@@ -209,42 +261,54 @@ class ChatAgent(BaseAgent):
         """
         Run stateless execution + stateful post-processing with chat history management.
 
-        Responsibilities:
-        - Normalize TaskPayload v2 envelopes (chat, interaction, cognitive)
-        - Manage conversation history window
-        - Inject chat.message + chat.history + top-level conversation_history
-        - Maintain ChatAgent's local episodic memory buffer
+        TaskPayload v2 Compliant Responsibilities:
+        - Normalize params.chat envelope (canonical location for conversational data)
+        - Manage conversation history window (params.chat.history)
+        - Maintain episodic memory buffer (agent-local, respects cognitive flags)
         - Extract assistant messages after LLM execution
-        - Do not write long-term memory here (CognitiveMemoryBridge handles that)
+        - Respect params.cognitive.disable_memory_write flag
+        - Do NOT write to params.routing or params._router (Router's authority)
+        - Do NOT change params.interaction.mode (preserve routing decisions)
 
-        Shapes enforced (TaskPayload v2):
+        TaskPayload v2 Envelopes (Canonical):
             params.chat: {
-                message,
-                history,
-                agent_persona?,
-                style?
+                message: str,           # Incoming user message
+                history: List[Dict],   # Windowed context for CognitiveCore
+                agent_persona?: str,    # Optional persona override
+                style?: str             # Optional style hint
             }
-
+            
             params.interaction: {
-                mode: "agent_tunnel",
-                conversation_id?,
-                assigned_agent_id
+                mode: "agent_tunnel" | "coordinator_routed" | "one_shot",
+                conversation_id?: str,
+                assigned_agent_id?: str
             }
+            
+            params.cognitive: {
+                disable_memory_write?: bool  # If true, skip episodic memory writes
+            }
+            
+            conversation_history: List[Dict]  # Top-level (ChatSignature compatibility)
 
-            task_data.conversation_history: top-level (ChatSignature)
+        Note: ConversationAgent is the semantic owner of params.chat, not a schema owner.
+        The payload structure remains exactly as defined in TaskPayload v2.
         """
 
         # ---------------------------------------------------------
-        # 0. Defensive normalization
+        # 0. Defensive normalization (TaskPayload v2 compliant)
         # ---------------------------------------------------------
         if not isinstance(task_data, dict):
             task_data = dict(task_data) if hasattr(task_data, "__dict__") else {}
 
         params = task_data.setdefault("params", {})
         interaction = params.setdefault("interaction", {})
-        chat = params.setdefault("chat", {})
+        chat = params.setdefault("chat", {})  # ✅ Canonical: params.chat (not params.conversation)
+        cognitive = params.get("cognitive", {})  # ✅ Check cognitive flags
 
         is_tunnel = interaction.get("mode") == "agent_tunnel"
+        
+        # Extract cognitive flag for memory write control
+        disable_memory_write = cognitive.get("disable_memory_write", False)
 
         # =========================================================
         # 1. Handle agent_tunnel chat mode
@@ -262,26 +326,33 @@ class ChatAgent(BaseAgent):
 
             if incoming_msg:
                 # Local episodic write (agent-level only)
-                self.add_user_message(incoming_msg)
+                # ✅ Respect cognitive flags: only write if disable_memory_write is False
+                if not disable_memory_write:
+                    self.add_user_message(incoming_msg)
+                else:
+                    logger.debug(f"[{self.agent_id}] Skipping user message write (disable_memory_write=true)")
 
-                # v2 Chat Envelope
+                # v2 Chat Envelope (always set, regardless of memory flags)
                 chat["message"] = incoming_msg
 
             # -----------------------------------------------------
             # 1B. Inject WINDOWED chat history for CognitiveCore
             # -----------------------------------------------------
-            recent_history = self.get_recent_history(max_turns=6)
+            recent_history = self.get_recent_conversation_window(max_turns=6)
 
-            # Canonical v2 placement
+            # Canonical v2 placement: params.chat.history (internal windowed context)
             chat["history"] = recent_history
 
-            # ChatSignature requirement (top-level)
+            # ChatSignature requirement (top-level compatibility)
             task_data["conversation_history"] = recent_history
 
             # -----------------------------------------------------
             # 1C. Canonicalize interaction envelope (v2)
             # -----------------------------------------------------
-            interaction["mode"] = "agent_tunnel"
+            # ✅ Preserve existing mode (do not overwrite Router decisions)
+            # Only set if not already present (defensive initialization)
+            if "mode" not in interaction:
+                interaction["mode"] = "agent_tunnel"
 
             # The agent that owns this tunnel
             interaction.setdefault("assigned_agent_id", self.agent_id)
@@ -323,10 +394,14 @@ class ChatAgent(BaseAgent):
                 pass
 
             # --------------------------
-            # Write assistant message
+            # Write assistant message (respect cognitive flags)
             # --------------------------
             if isinstance(assistant_msg, str) and assistant_msg.strip():
-                self.add_assistant_message(assistant_msg)
+                # ✅ Respect cognitive flags: only write if disable_memory_write is False
+                if not disable_memory_write:
+                    self.add_assistant_message(assistant_msg)
+                else:
+                    logger.debug(f"[{self.agent_id}] Skipping assistant message write (disable_memory_write=true)")
 
         # =========================================================
         # 4. Local checkpoint (not long-term memory)

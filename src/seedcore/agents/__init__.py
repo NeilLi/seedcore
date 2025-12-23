@@ -18,7 +18,7 @@ Agent implementations for SeedCore.
 
 # Core agent classes
 from .base import BaseAgent
-from .chat_agent import ChatAgent
+from .conversation_agent import ConversationAgent
 from .observer_agent import ObserverAgent
 from .utility_agent import UtilityAgent
 
@@ -33,7 +33,7 @@ from .checkpoint import CheckpointStore, CheckpointStoreFactory
 __all__ = [
     # Core agent classes
     'BaseAgent',
-    'ChatAgent', 
+    'ConversationAgent', 
     'ObserverAgent',
     'UtilityAgent',
     

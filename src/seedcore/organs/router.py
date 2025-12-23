@@ -40,9 +40,10 @@ if TYPE_CHECKING:
 # Runtime import for AgentIDFactory
 from .organ import AgentIDFactory
 
-from seedcore.logging_setup import ensure_serve_logger
+from seedcore.logging_setup import ensure_serve_logger, setup_logging
 
-logger = ensure_serve_logger("seedcore.organs.router")
+setup_logging(app_name="seedcore.organs.router")
+logger = ensure_serve_logger("seedcore.organs.router", level="DEBUG")
 
 # Target namespace for Ray actors
 RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
@@ -202,6 +203,23 @@ class RoutingDirectory:
         # Flatten organ structures for O(1) lookup
         self._build_fast_lookup_tables()
 
+        # --- 6. Default Routing Rules ---
+        # Route "query" and "general_query" tasks to user_experience_organ 
+        # (handles user dialog/conversation). This ensures conversational queries
+        # are handled by the user_experience_organ, whose USER_LIAISON agents are
+        # instantiated as ConversationAgent instances.
+        # 
+        # Architectural Note: Router routes by organ + specialization, NOT by agent class.
+        # ConversationAgent is a runtime capability wrapper applied after routing.
+        # The Router remains class-agnostic and only cares about organ/specialization.
+        if "user_experience_organ" in self.organ_handles:
+            self.set_rule("query", "user_experience_organ")
+            self.set_rule("general_query", "user_experience_organ")
+            logger.info(
+                "[Router] Default rules: 'query' and 'general_query' -> 'user_experience_organ' "
+                "(USER_LIAISON specialization)"
+            )
+
         # Async lock for dynamic route updates (not read operations)
         self._lock = asyncio.Lock()
 
@@ -243,6 +261,37 @@ class RoutingDirectory:
     def _normalize(x: Optional[str]) -> Optional[str]:
         """Normalize string for consistent matching."""
         return str(x).strip().lower() if x is not None else None
+
+    def _find_organ_by_spec(self, spec: str) -> Optional[str]:
+        """
+        Find the organ ID that hosts agents with the given specialization.
+        
+        Args:
+            spec: Specialization string (e.g., "generalist", "user_liaison")
+            
+        Returns:
+            Organ ID if found, None otherwise
+        """
+        if not spec:
+            return None
+        
+        # Normalize the specialization string
+        spec_normalized = self._normalize(spec)
+        if not spec_normalized:
+            return None
+        
+        # Look up in organ_specs map (specialization -> organ_id)
+        # This map is populated during agent creation in OrganismCore
+        organ_id = self.organ_specs.get(spec_normalized)
+        if organ_id:
+            return organ_id
+        
+        # Fallback: try matching by partial name (e.g., "generalist" matches "GENERALIST")
+        for spec_key, organ_id in self.organ_specs.items():
+            if spec_normalized in spec_key.lower() or spec_key.lower() in spec_normalized:
+                return organ_id
+        
+        return None
 
     # --- (A) AgentIDFactory Integration ---
 

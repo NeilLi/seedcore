@@ -35,7 +35,7 @@ Organism:
     from seedcore.services import OrganismService
 
 Agents:
-    from seedcore.agents import ChatAgent, BaseAgent
+    from seedcore.agents import ConversationAgent, BaseAgent
 
 Tools:
     from seedcore.tools import QueryTools, Registry

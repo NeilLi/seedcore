@@ -1122,6 +1122,27 @@ class OrganismCore:
                     )
                     continue
 
+                # 1a. Architectural Rule: USER_LIAISON → ConversationAgent (implicit)
+                # ConversationAgent is a runtime capability, not a specialization.
+                # Only USER_LIAISON agents should be ConversationAgents by default.
+                # This ensures proper ownership of params.chat and episodic conversation memory.
+                #
+                # Production semantics: Only USER_LIAISON owns params.chat and agent-tunnel
+                # interactions. YAML can override for debugging/experimentation, but this is
+                # discouraged in production.
+                if agent_class_name == "ConversationAgent" and spec != Specialization.USER_LIAISON:
+                    logger.warning(
+                        f"[OrganismCore] ConversationAgent used for non-USER_LIAISON specialization "
+                        f"({spec.value}) in {organ_id}. This is supported for development but "
+                        "discouraged in production. Only USER_LIAISON should own params.chat."
+                    )
+                
+                if spec == Specialization.USER_LIAISON and agent_class_name == "BaseAgent":
+                    agent_class_name = "ConversationAgent"
+                    logger.debug(
+                        f"[OrganismCore] Auto-assigning ConversationAgent to USER_LIAISON in {organ_id}"
+                    )
+
                 # 2. Update Routing Map (Last Write Wins)
                 spec_val = spec.value
                 self.organ_specs[spec_val] = organ_id
@@ -1296,6 +1317,11 @@ class OrganismCore:
             agent_handle = await self._ensure_agent_handle(
                 organ, organ_id, agent_id, params
             )
+
+            if agent_handle:
+                self.logger.info(
+                    f"[OrganismCore] Agent handle resolved: {agent_id} in {organ_id}"
+                )
 
             if not agent_handle:
                 return {
