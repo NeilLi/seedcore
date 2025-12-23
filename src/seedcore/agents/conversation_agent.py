@@ -10,6 +10,66 @@ setup_logging(app_name="seedcore.agents.conversation_agent")
 logger = ensure_serve_logger("seedcore.agents.conversation_agent", level="DEBUG")
 
 
+def _sanitize_task_data_for_tool(task_data: Any) -> Dict[str, Any]:
+    """
+    Safely serialize task_data for tool calls, removing circular references.
+    
+    GeneralQueryTool only needs:
+    - task_id (for deduplication)
+    - params (for interaction, chat, cognitive envelopes)
+    
+    This function extracts only these fields to avoid circular reference errors
+    when serializing to JSON for HTTP requests.
+    """
+    if task_data is None:
+        return {}
+    
+    # Case 1: Pydantic model (TaskPayload) - use model_dump with JSON mode
+    if hasattr(task_data, "model_dump"):
+        try:
+            # mode='json' handles Enums, datetime, and avoids circular refs
+            return task_data.model_dump(mode='json', exclude_none=False)
+        except (TypeError, ValueError, AttributeError):
+            # Fallback if mode='json' not supported (Pydantic v1)
+            try:
+                return task_data.model_dump(exclude_none=False)
+            except Exception:
+                pass
+    
+    # Case 2: Dict - extract only needed fields
+    if isinstance(task_data, dict):
+        sanitized = {}
+        # Extract task_id if present
+        if "task_id" in task_data:
+            sanitized["task_id"] = task_data["task_id"]
+        # Extract params if present (this is what GeneralQueryTool needs)
+        if "params" in task_data:
+            # Deep copy params to avoid circular refs
+            params = task_data["params"]
+            if isinstance(params, dict):
+                sanitized["params"] = dict(params)  # Shallow copy is fine for params
+            else:
+                sanitized["params"] = params
+        return sanitized
+    
+    # Case 3: Object with __dict__ - extract task_id and params
+    if hasattr(task_data, "__dict__"):
+        sanitized = {}
+        attrs = task_data.__dict__
+        if "task_id" in attrs:
+            sanitized["task_id"] = attrs["task_id"]
+        if "params" in attrs:
+            params = attrs["params"]
+            if isinstance(params, dict):
+                sanitized["params"] = dict(params)
+            else:
+                sanitized["params"] = params
+        return sanitized
+    
+    # Case 4: Fallback - empty dict
+    return {}
+
+
 @ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
 class ConversationAgent(BaseAgent):
     """
@@ -192,7 +252,7 @@ class ConversationAgent(BaseAgent):
         if self._mw_manager is None and self._mw_manager_organ_id:
             from seedcore.memory.mw_manager import MwManager
             self._mw_manager = MwManager(organ_id=self._mw_manager_organ_id)
-            logger.debug(f"✅ [{self.agent_id}] MwManager created for organ_id={self._mw_manager_organ_id}")
+            logger.info(f"✅ [{self.agent_id}] MwManager created for organ_id={self._mw_manager_organ_id}")
         return self._mw_manager
     
     def persist_chat_history(self):
@@ -285,7 +345,7 @@ class ConversationAgent(BaseAgent):
                 if not disable_memory_write:
                     self.add_user_message(incoming_msg)
                 else:
-                    logger.debug(f"[{self.agent_id}] Skipping user message write (disable_memory_write=true)")
+                    logger.info(f"[{self.agent_id}] Skipping user message write (disable_memory_write=true)")
 
                 # v2 Chat Envelope (always set, regardless of memory flags)
                 chat["message"] = incoming_msg
@@ -313,6 +373,108 @@ class ConversationAgent(BaseAgent):
             interaction.setdefault("assigned_agent_id", self.agent_id)
 
             # conversation_id is preserved if present; nothing to change
+
+        # =========================================================
+        # 1.5. Auto-invoke general_query tool for conversational tasks
+        # =========================================================
+        # If no tools are specified and this is a conversational task,
+        # automatically add the general_query tool to invoke CognitiveCore
+        routing = params.setdefault("routing", {})
+        
+        # Check for existing tools in multiple locations (handle both dict and TaskPayload)
+        existing_tools = (
+            routing.get("tools") or 
+            task_data.get("tools") or 
+            (getattr(task_data, "tools", None) if hasattr(task_data, "tools") else None) or
+            []
+        )
+        
+        # Normalize to list for checking
+        if existing_tools and not isinstance(existing_tools, list):
+            existing_tools = [existing_tools] if existing_tools else []
+        
+        # Get task type from multiple sources (handle both dict and TaskPayload)
+        task_type = (
+            task_data.get("type") or
+            (getattr(task_data, "type", None) if hasattr(task_data, "type") else None) or
+            ""
+        )
+        
+        # Check if this is a conversational/query task without explicit tools
+        # Include both "chat" and "query" types, as both should use general_query tool
+        is_chat_task = (
+            task_type == "chat" or
+            task_type == "query" or
+            task_type == "general_query" or
+            interaction.get("mode") == "agent_tunnel" or
+            chat.get("message") is not None or
+            task_data.get("message") is not None
+        )
+        
+        # Debug logging to understand why auto-add might not trigger
+        description = (
+            task_data.get("description") or
+            (getattr(task_data, "description", None) if hasattr(task_data, "description") else None) or
+            ""
+        )
+        logger.info(
+            f"[{self.agent_id}] Auto-add check: task_type={task_type}, "
+            f"interaction_mode={interaction.get('mode')}, "
+            f"has_chat_message={bool(chat.get('message'))}, "
+            f"has_task_message={bool(task_data.get('message'))}, "
+            f"has_description={bool(description)}, "
+            f"description_preview={description[:50] if description else 'None'}, "
+            f"existing_tools_count={len(existing_tools)}, "
+            f"is_chat_task={is_chat_task}"
+        )
+        
+        if is_chat_task and not existing_tools:
+            # Extract the message/description to pass to general_query
+            # Check multiple sources for the query text
+            query_text = (
+                chat.get("message") or
+                task_data.get("message") or
+                task_data.get("description") or
+                (getattr(task_data, "description", None) if hasattr(task_data, "description") else None) or
+                ""
+            )
+            
+            # For query/chat tasks, use description if query_text is empty
+            # The tool can handle empty descriptions (it will use the full task_data context)
+            if not query_text and task_type in ("query", "general_query", "chat"):
+                query_text = description or ""
+            
+            # Add tool if we have text OR if it's a query/chat task (tool can extract from task_data)
+            if query_text or task_type in ("query", "general_query", "chat"):
+                # Add general_query tool automatically
+                # Add to both routing.tools (V2 canonical) and top-level tools (for compatibility)
+                # Sanitize task_data to remove circular references before passing to tool
+                sanitized_task_data = _sanitize_task_data_for_tool(task_data)
+                tool_call = {
+                    "name": "general_query",
+                    "args": {
+                        "description": query_text or description or "",
+                        "task_data": sanitized_task_data
+                    }
+                }
+                routing["tools"] = [tool_call]
+                task_data["tools"] = [tool_call]  # Also set top-level for compatibility
+                logger.info(
+                    f"[{self.agent_id}] ✅ Auto-added general_query tool for {task_type} task "
+                    f"(description: {(query_text or description or 'empty')[:50]}...)"
+                )
+            else:
+                logger.info(
+                    f"[{self.agent_id}] Skipping auto-add: is_chat_task=True but no query text/description found"
+                )
+        elif is_chat_task and existing_tools:
+            logger.info(
+                f"[{self.agent_id}] Skipping auto-add: conversational task but {len(existing_tools)} tools already specified"
+            )
+        elif not is_chat_task:
+            logger.info(
+                f"[{self.agent_id}] Skipping auto-add: not a conversational task (type={task_type})"
+            )
 
         # =========================================================
         # 2. Delegate to BaseAgent or parent execution
@@ -356,7 +518,7 @@ class ConversationAgent(BaseAgent):
                 if not disable_memory_write:
                     self.add_assistant_message(assistant_msg)
                 else:
-                    logger.debug(f"[{self.agent_id}] Skipping assistant message write (disable_memory_write=true)")
+                    logger.info(f"[{self.agent_id}] Skipping assistant message write (disable_memory_write=true)")
 
         # =========================================================
         # 4. Local checkpoint (not long-term memory)

@@ -253,8 +253,35 @@ class Dispatcher:
                 else:
                     # Standard routing through Coordinator
                     result = await self._router.route_and_execute(payload)
+            except asyncio.TimeoutError as timeout_error:
+                # Router call timed out - this is a retryable error
+                logger.warning(
+                    "[%s] ⏱️ Router timeout for task %s: %s",
+                    self.name, task_id, timeout_error
+                )
+                result = {
+                    "success": False,
+                    "error": f"Router timeout: {str(timeout_error)}",
+                    "kind": "timeout",
+                    "path": "router_timeout",
+                    "retry": True,  # Timeouts are retryable
+                }
+            except asyncio.CancelledError as cancelled_error:
+                # Router call was cancelled - likely due to agent respawning or upstream cancellation
+                logger.warning(
+                    "[%s] 🛑 Router call cancelled for task %s: %s",
+                    self.name, task_id, cancelled_error
+                )
+                result = {
+                    "success": False,
+                    "error": f"Router call cancelled: {str(cancelled_error)}",
+                    "kind": "cancelled",
+                    "path": "router_cancelled",
+                    "retry": True,  # Cancellations due to respawning are retryable
+                    "agent_status": "cancelled_or_respawning",
+                }
             except Exception as router_error:
-                # Catch any exceptions from routers and convert to error result
+                # Catch any other exceptions from routers and convert to error result
                 # This ensures the dispatcher never crashes due to router errors
                 logger.error(
                     "[%s] ❌ Router exception for task %s: %s",
@@ -321,12 +348,52 @@ class Dispatcher:
                 logger.info("[%s] ✅ Task %s done", self.name, task_id)
             else:
                 err = str(result.get("error") or "unknown_error")
-                # Log the full result structure when retrying for debugging
-                logger.warning(
-                    "[%s] 🔁 Task %s failed logic: %s (result keys: %s)",
-                    self.name, task_id, err, list(result.keys())[:10]
-                )
-                await self._repo.retry(task_id, err, delay_seconds=15)
+                agent_status = result.get("agent_status")
+                should_retry = result.get("retry", True)  # Default to retry unless explicitly False
+                
+                # Determine retry delay based on error type and agent status
+                if agent_status == "respawning_or_unavailable":
+                    # Agent is respawning - use longer delay to allow respawn to complete
+                    delay_seconds = 30
+                    logger.info(
+                        "[%s] 🔁 Task %s failed: %s (agent respawning, delay=%ds)",
+                        self.name, task_id, err, delay_seconds
+                    )
+                elif agent_status == "cancelled_or_respawning":
+                    # Task was cancelled, likely due to respawning - use longer delay
+                    delay_seconds = 30
+                    logger.info(
+                        "[%s] 🔁 Task %s failed: %s (cancelled/respawning, delay=%ds)",
+                        self.name, task_id, err, delay_seconds
+                    )
+                elif result.get("kind") == "timeout":
+                    # Timeout errors - use moderate delay
+                    delay_seconds = 20
+                    logger.info(
+                        "[%s] 🔁 Task %s failed: %s (timeout, delay=%ds)",
+                        self.name, task_id, err, delay_seconds
+                    )
+                elif not should_retry:
+                    # Explicitly marked as non-retryable - fail the task
+                    logger.warning(
+                        "[%s] ❌ Task %s failed and marked as non-retryable: %s",
+                        self.name, task_id, err
+                    )
+                    await self._repo.fail(task_id, err)
+                    return  # Exit early, don't retry
+                else:
+                    # Default retry delay for other errors
+                    delay_seconds = 15
+                    logger.warning(
+                        "[%s] 🔁 Task %s failed logic: %s (result keys: %s, delay=%ds)",
+                        self.name, task_id, err, list(result.keys())[:10], delay_seconds
+                    )
+                
+                # Only retry if should_retry is True
+                if should_retry:
+                    await self._repo.retry(task_id, err, delay_seconds=delay_seconds)
+                else:
+                    await self._repo.fail(task_id, err)
 
         except asyncio.CancelledError:
             logger.warning("[%s] 🛑 Task %s cancelled (Lease Lost)", self.name, task_id)

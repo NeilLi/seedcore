@@ -4,7 +4,6 @@
 from __future__ import annotations
 from typing import Dict, Any, Optional, Protocol, List, TYPE_CHECKING, Callable
 import asyncio
-import logging
 import time
 
 from seedcore.serve.ml_client import MLServiceClient
@@ -16,7 +15,10 @@ if TYPE_CHECKING:
     from seedcore.memory.mw_manager import MwManager
     from seedcore.memory.holon_fabric import HolonFabric
 
-logger = logging.getLogger(__name__)
+from seedcore.logging_setup import setup_logging, ensure_serve_logger
+
+setup_logging(app_name="seedcore.tools.manager")
+logger = ensure_serve_logger("seedcore.tools.manager", level="DEBUG")
 
 # ============================================================
 # Tool Protocol

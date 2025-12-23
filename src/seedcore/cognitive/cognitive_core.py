@@ -1062,6 +1062,30 @@ class CognitiveCore(dspy.Module):
                     or []
                 )
             enhanced_input["conversation_history"] = chat_history
+        
+        # For PROBLEM_SOLVING mode: Extract problem_statement, constraints, and available_tools
+        # ProblemSolvingSignature expects these at top level
+        elif context.cog_type == CognitiveType.PROBLEM_SOLVING:
+            params = enhanced_input.get("params", {})
+            
+            # Extract problem_statement from multiple possible locations
+            problem_statement = (
+                enhanced_input.get("problem_statement")
+                or enhanced_input.get("description")
+                or params.get("query", {}).get("problem_statement")
+                or ""
+            )
+            enhanced_input["problem_statement"] = problem_statement
+            
+            # Extract constraints from params if not at top level
+            if "constraints" not in enhanced_input:
+                constraints = params.get("constraints") or {}
+                enhanced_input["constraints"] = constraints
+            
+            # Extract available_tools from params if not at top level
+            if "available_tools" not in enhanced_input:
+                available_tools = params.get("available_tools") or {}
+                enhanced_input["available_tools"] = available_tools
 
         enhanced_input["knowledge_context"] = json.dumps(working_context)
         enhanced_input = self._format_input_for_signature(

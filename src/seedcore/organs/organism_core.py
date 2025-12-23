@@ -852,7 +852,7 @@ class OrganismCore:
                 if default_profile:
                     # Use the default profile from DEFAULT_ROLE_REGISTRY
                     self.role_registry.register(default_profile)
-                    logger.debug(f"  ✅ Registered profile for {spec.value} from DEFAULT_ROLE_REGISTRY")
+                    logger.info(f"  ✅ Registered profile for {spec.value} from DEFAULT_ROLE_REGISTRY")
                 else:
                     # Create a minimal default RoleProfile for this specialization
                     profile = RoleProfile(
@@ -863,7 +863,7 @@ class OrganismCore:
                         safety_policies={},
                     )
                     self.role_registry.register(profile)
-                    logger.debug(f"  ✅ Registered minimal default profile for {spec.value}")
+                    logger.info(f"  ✅ Registered minimal default profile for {spec.value}")
                 registered_count += 1
         
         if registered_count > 0:
@@ -882,7 +882,7 @@ class OrganismCore:
         This ensures organs have the complete registry before agents are created.
         """
         if not self.organs:
-            logger.debug("No organs to sync role registry to")
+            logger.info("No organs to sync role registry to")
             return
         
         logger.info(f"--- Syncing role registry to {len(self.organs)} organs ---")
@@ -957,7 +957,7 @@ class OrganismCore:
                     await asyncio.wait_for(
                         asyncio.to_thread(ray.get, ping_ref), timeout=2.0
                     )
-                    logger.debug(f"  ↪ Organ {organ_id} already exists and is alive.")
+                    logger.info(f"  ↪ Organ {organ_id} already exists and is alive.")
                 except Exception:
                     # Organ exists but is unreachable - will be handled by reconciliation loop
                     logger.warning(
@@ -1024,7 +1024,7 @@ class OrganismCore:
 
             # Skip if already exists
             if organ_id in self.organs:
-                logger.debug(f"  ↪ Organ {organ_id} already exists, skipping.")
+                logger.info(f"  ↪ Organ {organ_id} already exists, skipping.")
                 continue
 
             logger.info(f"  ➕ Creating Organ actor: {organ_id}")
@@ -1139,7 +1139,7 @@ class OrganismCore:
                 
                 if spec == Specialization.USER_LIAISON and agent_class_name == "BaseAgent":
                     agent_class_name = "ConversationAgent"
-                    logger.debug(
+                    logger.info(
                         f"[OrganismCore] Auto-assigning ConversationAgent to USER_LIAISON in {organ_id}"
                     )
 
@@ -1204,7 +1204,7 @@ class OrganismCore:
             ray.get_actor(agent_id, namespace=RAY_NAMESPACE)
 
             self.agent_to_organ_map[agent_id] = organ_id
-            logger.debug(f"♻️ Agent {agent_id} found in Ray (re-hydrated).")
+            logger.info(f"♻️ Agent {agent_id} found in Ray (re-hydrated).")
             return False
 
         except ValueError:
@@ -1318,16 +1318,61 @@ class OrganismCore:
                 organ, organ_id, agent_id, params
             )
 
-            if agent_handle:
-                self.logger.info(
-                    f"[OrganismCore] Agent handle resolved: {agent_id} in {organ_id}"
-                )
-
             if not agent_handle:
                 return {
                     "success": False,
                     "error": f"Agent '{agent_id}' could not be provisioned.",
+                    "retry": True,  # Allow retry after respawn completes
                 }
+
+            # --- 2.5. Agent Readiness Check (prevent execution on respawning agents) ---
+            # Check if agent is ready by attempting a lightweight ping
+            agent_ready = False
+            max_readiness_checks = 3
+            readiness_check_delay = 0.5
+            
+            for attempt in range(max_readiness_checks):
+                try:
+                    # Try a lightweight check - if agent has get_heartbeat, use it
+                    if hasattr(agent_handle, "get_heartbeat"):
+                        heartbeat_ref = agent_handle.get_heartbeat.remote()
+                        # Use a short timeout to avoid hanging
+                        await asyncio.wait_for(
+                            asyncio.to_thread(ray.get, heartbeat_ref),
+                            timeout=2.0,
+                        )
+                        agent_ready = True
+                        break
+                    else:
+                        # No heartbeat method - assume ready if handle exists
+                        agent_ready = True
+                        break
+                except (asyncio.TimeoutError, Exception) as e:
+                    if attempt < max_readiness_checks - 1:
+                        self.logger.info(
+                            f"[{agent_id}] Agent not ready (attempt {attempt + 1}/{max_readiness_checks}): {e}. "
+                            f"Waiting {readiness_check_delay}s before retry..."
+                        )
+                        await asyncio.sleep(readiness_check_delay)
+                        readiness_check_delay *= 2  # Exponential backoff
+                    else:
+                        self.logger.warning(
+                            f"[{agent_id}] Agent handle exists but not responding after {max_readiness_checks} attempts. "
+                            f"Agent may be respawning. Error: {e}"
+                        )
+            
+            if not agent_ready:
+                return {
+                    "success": False,
+                    "error": f"Agent '{agent_id}' is not ready (may be respawning). Please retry.",
+                    "retry": True,  # Allow retry after agent becomes ready
+                    "agent_status": "respawning_or_unavailable",
+                }
+
+            if agent_handle:
+                self.logger.info(
+                    f"[OrganismCore] Agent handle resolved and ready: {agent_id} in {organ_id}"
+                )
 
             # --- 3. Execution Logic ---
             # Priority: Trust the Router's decision envelope first
@@ -1353,7 +1398,14 @@ class OrganismCore:
 
             # Await Result (Native Async)
             # We use asyncio.wait_for to enforce timeouts at the Router level
-            result = await asyncio.wait_for(ref, timeout=timeout)
+            try:
+                result = await asyncio.wait_for(ref, timeout=timeout)
+            except asyncio.CancelledError:
+                # If cancelled, check if agent is still alive
+                self.logger.warning(
+                    f"[{agent_id}] Task execution was cancelled. Agent may be respawning."
+                )
+                raise  # Re-raise to propagate cancellation
 
             # --- 4. Tunnel Lifecycle (Side Effect) ---
             # Manage sticky sessions based on the result
@@ -1367,6 +1419,18 @@ class OrganismCore:
                 "result": result,
             }
 
+        except asyncio.CancelledError:
+            # Task was cancelled - likely due to agent respawning or upstream cancellation
+            self.logger.warning(
+                f"[Execute] Task execution cancelled for {agent_id}. "
+                f"Agent may be respawning or request was cancelled upstream."
+            )
+            return {
+                "success": False,
+                "error": f"Task execution was cancelled. Agent '{agent_id}' may be respawning.",
+                "retry": True,  # Allow retry after agent becomes ready
+                "agent_status": "cancelled_or_respawning",
+            }
         except asyncio.TimeoutError:
             self.logger.error(f"[Execute] Timeout on {agent_id} after {timeout}s")
             return {"success": False, "error": "Execution Timed Out"}
@@ -1514,7 +1578,7 @@ class OrganismCore:
                             "organ_id": organ_id,
                         }
             except Exception as e:
-                logger.debug(
+                logger.info(
                     f"[get_all_agents] Failed to get agents from organ {organ_id}: {e}"
                 )
                 continue
@@ -1537,7 +1601,7 @@ class OrganismCore:
                 skill_vector = await self.skill_store.get_skill_vector(agent_id)
                 skills[agent_id] = skill_vector
             except Exception as e:
-                logger.debug(
+                logger.info(
                     f"[get_all_agent_skills] Failed to get skills for {agent_id}: {e}"
                 )
                 skills[agent_id] = None
@@ -1680,7 +1744,7 @@ class OrganismCore:
                 )
                 continue
 
-        logger.debug(
+        logger.info(
             f"[get_all_agent_handles] Returning {len(all_agent_handles)} agent handles from {len(self.organs)} organs"
         )
         return all_agent_handles
@@ -1998,7 +2062,7 @@ class OrganismCore:
                     if info.get("specialization") == spec_name:
                         agent_ids_by_spec.append(agent_id)
                 except Exception as e:
-                    logger.debug(
+                    logger.info(
                         f"[evolve] Failed to get info for agent {agent_id}: {e}"
                     )
                     continue
@@ -2551,7 +2615,7 @@ class OrganismCore:
         Rebuild topology based on topology_cfg.
         This is a placeholder - implement topology rebuilding logic as needed.
         """
-        logger.debug(
+        logger.info(
             f"[OrganismCore] Topology rebuild requested (config: {self.topology_cfg})"
         )
         # TODO: Implement topology rebuilding logic
@@ -2672,7 +2736,7 @@ class OrganismCore:
         """
         try:
             if not ray.is_initialized():
-                logger.debug(
+                logger.info(
                     "[OrganismCore] Ray not initialized, skipping janitor check"
                 )
                 return
@@ -2684,7 +2748,7 @@ class OrganismCore:
                 jan = await asyncio.to_thread(
                     ray.get_actor, "seedcore_janitor", namespace=namespace
                 )
-                logger.debug(
+                logger.info(
                     f"[OrganismCore] Janitor actor already running in {namespace}"
                 )
                 return
@@ -2722,7 +2786,7 @@ class OrganismCore:
             except Exception as e:
                 logger.warning(f"⚠️ Failed to launch janitor actor: {e}")
         except Exception as e:
-            logger.debug(f"[OrganismCore] Ensure janitor skipped: {e}")
+            logger.info(f"[OrganismCore] Ensure janitor skipped: {e}")
 
     # =====================================================================
     #  SHUTDOWN LOGIC

@@ -426,6 +426,13 @@ class Coordinator:
             methods=["GET"],
             include_in_schema=False,
         )
+        self.app.add_api_route(
+            f"{router_prefix}/pkg-status",
+            self.get_pkg_status,
+            methods=["GET"],
+            summary="Get PKG evaluator status",
+            tags=["Ops"],
+        )
 
     async def __call__(self, request: Request):
         """Direct ASGI call for Ray Serve."""
@@ -633,11 +640,24 @@ class Coordinator:
             Returns proto_plan structure compatible with core.execute._extract_routing_intent_from_proto_plan():
             - proto_plan["routing"] (top-level routing hints)
             - proto_plan["steps"] (list of step dicts with task.params.routing)
+            
+            Architecture: Option A (Quickest) - Adapts PKG output to proto_plan shape.
+            Extracts routing hints from subtask params and embeds them into proto_plan structure.
             """
             pkg_mgr = get_global_pkg_manager()
             evaluator = pkg_mgr and pkg_mgr.get_active_evaluator()
+            
+            # Verification: Log PKG evaluator status
             if not evaluator:
+                logger.warning(
+                    "[PKG] Evaluator not available - PKG manager exists but no active evaluator"
+                )
                 raise RuntimeError("PKG evaluator not available")
+            
+            logger.debug(
+                f"[PKG] Evaluator active: version={getattr(evaluator, 'version', 'unknown')}, "
+                f"engine={getattr(evaluator, 'engine_type', 'unknown')}"
+            )
 
             payload = {
                 "tags": list(tags or []),
@@ -650,22 +670,75 @@ class Coordinator:
                 return await asyncio.to_thread(evaluator.evaluate, payload)
 
             res = await asyncio.wait_for(_run_eval(), timeout=float(timeout_s or 2))
+            
+            # Verification: Log PKG output structure
+            logger.debug(
+                f"[PKG] Evaluation result keys: {list(res.keys())}, "
+                f"subtasks_count={len(res.get('subtasks', []))}, "
+                f"has_routing={bool(res.get('routing'))}"
+            )
 
             # ---- Normalize to proto_plan contract expected by core.execute ----
             subtasks = res.get("subtasks", []) or res.get("tasks", []) or []
             dag = res.get("dag", []) or res.get("edges", []) or []
             version = res.get("snapshot") or res.get("version") or getattr(evaluator, "version", None)
 
+            # Extract routing hints from PKG output (Option A: adapt wrapper)
+            # Strategy: Check top-level routing first, then extract from subtask params
+            extracted_routing = {}
+            
+            # 1. Check for top-level routing in PKG output
+            if isinstance(res.get("routing"), dict):
+                extracted_routing = dict(res["routing"])
+                logger.debug(f"[PKG] Found top-level routing: {list(extracted_routing.keys())}")
+            
+            # 2. Extract routing hints from subtask params (if PKG embeds them there)
+            # Aggregate routing hints from all subtasks (prefer first non-empty)
+            for st in subtasks:
+                if isinstance(st, dict):
+                    subtask_params = st.get("params", {})
+                    if isinstance(subtask_params, dict):
+                        subtask_routing = subtask_params.get("routing", {})
+                        if isinstance(subtask_routing, dict):
+                            # Merge routing hints (child overrides parent)
+                            if subtask_routing.get("required_specialization") and not extracted_routing.get("required_specialization"):
+                                extracted_routing["required_specialization"] = subtask_routing["required_specialization"]
+                            if subtask_routing.get("specialization") and not extracted_routing.get("specialization"):
+                                extracted_routing["specialization"] = subtask_routing["specialization"]
+                            if subtask_routing.get("skills"):
+                                existing_skills = extracted_routing.get("skills", {})
+                                extracted_routing["skills"] = {**existing_skills, **(subtask_routing["skills"] or {})}
+
             # IMPORTANT: "steps" is the canonical field expected downstream.
             # Each step should be a dict with at minimum {"task": {...}}.
+            # Embed routing hints into each step's task.params.routing
             steps = []
             for st in subtasks:
                 if isinstance(st, dict):
                     # allow either {"task": {...}} or raw task dict
                     if "task" in st and isinstance(st["task"], dict):
-                        steps.append(st)
+                        step_task = st["task"]
                     else:
-                        steps.append({"task": st})
+                        step_task = st
+                    
+                    # Ensure step has proper structure: {"task": {...}}
+                    step = {"task": dict(step_task)}
+                    
+                    # Ensure task has params dict
+                    task_params = step["task"].setdefault("params", {})
+                    
+                    # Embed routing hints into step.task.params.routing
+                    # Merge extracted routing with any existing routing in the step
+                    step_routing = task_params.setdefault("routing", {})
+                    if extracted_routing:
+                        # Merge: extracted routing (from PKG) takes precedence
+                        step_routing.update(extracted_routing)
+                        # Also merge any existing routing from the subtask
+                        if isinstance(step_task.get("params", {}).get("routing"), dict):
+                            step_routing.update(step_task["params"]["routing"])
+                        task_params["routing"] = step_routing
+                    
+                    steps.append(step)
                 else:
                     # object-like fallback
                     steps.append({"task": getattr(st, "task", st)})
@@ -676,10 +749,38 @@ class Coordinator:
                 "edges": dag,
             }
 
-            # If PKG provides explicit routing intent, pass through.
-            # (Preferred: proto_plan["routing"]["required_specialization"])
-            if isinstance(res.get("routing"), dict):
-                proto_plan["routing"] = res["routing"]
+            # Embed top-level routing hints if we extracted any
+            if extracted_routing:
+                proto_plan["routing"] = extracted_routing
+                required_spec = extracted_routing.get("required_specialization")
+                specialization = extracted_routing.get("specialization")
+                
+                # Positive confirmation signal: INFO log when PKG is active and routing is found
+                logger.info(
+                    "[PKG] Active policy snapshot=%s, routing=%s",
+                    version or "unknown",
+                    required_spec or specialization or "none",
+                )
+                
+                logger.debug(
+                    f"[PKG] Embedded routing into proto_plan: "
+                    f"required_specialization={required_spec}, "
+                    f"specialization={specialization}"
+                )
+            else:
+                logger.warning(
+                    "[PKG] No routing hints found in PKG output. "
+                    "PKG should provide routing hints via top-level 'routing' or subtask.params.routing. "
+                    "Downstream routing extraction may fall back to minimal intent."
+                )
+
+            # Verification: Log final proto_plan structure
+            logger.debug(
+                f"[PKG] Proto-plan structure: version={proto_plan.get('version')}, "
+                f"steps_count={len(proto_plan.get('steps', []))}, "
+                f"has_routing={bool(proto_plan.get('routing'))}, "
+                f"edges_count={len(proto_plan.get('edges', []))}"
+            )
 
             return proto_plan
 
@@ -1104,6 +1205,29 @@ class Coordinator:
     async def get_metrics(self):
         return self.metrics.get_metrics()
 
+    async def get_pkg_status(self):
+        """
+        Get PKG evaluator status for debugging/verification.
+        
+        Never throws - always returns a safe response even if PKG is half-initialized.
+        """
+        try:
+            status = self._verify_pkg_status()
+            # Ensure "enabled" field is present for consistency
+            status["enabled"] = status.get("active", False)
+            return status
+        except Exception as e:
+            # Extra safety net - should never happen since _verify_pkg_status catches exceptions
+            logger.warning(f"[PKG] Status check failed unexpectedly: {e}")
+            return {
+                "enabled": False,
+                "active": False,
+                "manager_exists": False,
+                "version": None,
+                "engine_type": None,
+                "error": str(e),
+            }
+
     async def get_predicate_status(self):
         """
         Get predicate router status.
@@ -1141,6 +1265,67 @@ class Coordinator:
 
     def _get_job_state(self, jid):
         return self.storage.get(f"job:{jid}")
+
+    def _verify_pkg_status(self) -> Dict[str, Any]:
+        """
+        Verify PKG evaluator status (for debugging/testing).
+        
+        Never throws - always returns a safe response even if PKG is half-initialized.
+        
+        Returns:
+            Dictionary with PKG status information:
+            - enabled: bool - whether PKG is enabled and active (alias for "active")
+            - active: bool - whether PKG evaluator is available
+            - version: str - evaluator version if available
+            - engine_type: str - engine type if available
+            - manager_exists: bool - whether PKG manager exists
+            - error: Optional[str] - error message if status check failed
+        """
+        try:
+            pkg_mgr = get_global_pkg_manager()
+            manager_exists = pkg_mgr is not None
+            
+            if not manager_exists:
+                return {
+                    "enabled": False,
+                    "active": False,
+                    "manager_exists": False,
+                    "version": None,
+                    "engine_type": None,
+                    "error": "PKG manager not available",
+                }
+            
+            evaluator = pkg_mgr.get_active_evaluator()
+            if not evaluator:
+                return {
+                    "enabled": False,
+                    "active": False,
+                    "manager_exists": True,
+                    "version": None,
+                    "engine_type": None,
+                    "error": "PKG manager exists but no active evaluator",
+                }
+            
+            version = getattr(evaluator, "version", "unknown")
+            engine_type = getattr(evaluator, "engine_type", "unknown")
+            
+            return {
+                "enabled": True,
+                "active": True,
+                "manager_exists": True,
+                "version": version,
+                "engine_type": engine_type,
+                "error": None,
+            }
+        except Exception as e:
+            return {
+                "enabled": False,
+                "active": False,
+                "manager_exists": False,
+                "version": None,
+                "engine_type": None,
+                "error": str(e),
+            }
 
 
 # Deployment Bind

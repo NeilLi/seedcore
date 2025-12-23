@@ -1,5 +1,11 @@
 # agents/bridges/tool_registrar.py
 
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class QueryToolRegistrar:
     """
     Responsible for registering query tools for agent execution.
@@ -11,18 +17,24 @@ class QueryToolRegistrar:
     def __init__(self, agent):
         self.agent = agent
 
-    async def register(self):
+    async def register(self, max_retries: int = 5, initial_delay: float = 0.5):
+        """
+        Register query tools with retry logic to handle lazy tool_handler initialization.
+        
+        Args:
+            max_retries: Maximum number of retry attempts (default: 5)
+            initial_delay: Initial delay in seconds before first retry (default: 0.5)
+        """
         try:
             from ...tools import query_tools
 
-            handler = self.agent.tool_handler
-
-            # Early return if tool_handler is not initialized yet
+            # Wait for tool_handler to become available (with retry)
+            handler = await self._wait_for_tool_handler(max_retries, initial_delay)
+            
             if handler is None:
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.warning(
-                    f"⚠️ QueryToolRegistrar: tool_handler is None for agent {getattr(self.agent, 'agent_id', 'unknown')}. "
+                    f"⚠️ QueryToolRegistrar: tool_handler still None after {max_retries} retries "
+                    f"for agent {getattr(self.agent, 'agent_id', 'unknown')}. "
                     "Skipping query tool registration. Tools will be registered when tool_handler is available."
                 )
                 return
@@ -75,13 +87,78 @@ class QueryToolRegistrar:
             )
 
         except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error(
                 "❌ QueryToolRegistrar failed for agent %s: %s",
                 getattr(self.agent, "agent_id", "unknown"), e, exc_info=True
             )
             raise
+
+    async def _wait_for_tool_handler(self, max_retries: int, initial_delay: float):
+        """
+        Wait for tool_handler to become available, triggering lazy initialization if needed.
+        
+        Strategy:
+        1. Check if tool_handler is already set (from shards or legacy)
+        2. If None, try to trigger lazy initialization via _ensure_tool_handler()
+        3. Retry with exponential backoff
+        
+        Returns:
+            tool_handler instance or None if unavailable after retries
+        """
+        handler = getattr(self.agent, "tool_handler", None)
+        
+        # Fast path: handler already available
+        if handler is not None:
+            return handler
+        
+        # Try to trigger lazy initialization
+        if hasattr(self.agent, "_ensure_tool_handler"):
+            try:
+                await self.agent._ensure_tool_handler()
+                handler = getattr(self.agent, "tool_handler", None)
+                if handler is not None:
+                    logger.debug(
+                        f"✅ QueryToolRegistrar: tool_handler initialized via _ensure_tool_handler() "
+                        f"for agent {getattr(self.agent, 'agent_id', 'unknown')}"
+                    )
+                    return handler
+            except Exception as e:
+                logger.debug(
+                    f"QueryToolRegistrar: _ensure_tool_handler() failed for agent "
+                    f"{getattr(self.agent, 'agent_id', 'unknown')}: {e}. Will retry."
+                )
+        
+        # Retry with exponential backoff
+        delay = initial_delay
+        for attempt in range(max_retries):
+            await asyncio.sleep(delay)
+            
+            handler = getattr(self.agent, "tool_handler", None)
+            if handler is not None:
+                logger.debug(
+                    f"✅ QueryToolRegistrar: tool_handler became available after {attempt + 1} retries "
+                    f"for agent {getattr(self.agent, 'agent_id', 'unknown')}"
+                )
+                return handler
+            
+            # Try lazy initialization again on each retry
+            if hasattr(self.agent, "_ensure_tool_handler"):
+                try:
+                    await self.agent._ensure_tool_handler()
+                    handler = getattr(self.agent, "tool_handler", None)
+                    if handler is not None:
+                        logger.debug(
+                            f"✅ QueryToolRegistrar: tool_handler initialized on retry {attempt + 1} "
+                            f"for agent {getattr(self.agent, 'agent_id', 'unknown')}"
+                        )
+                        return handler
+                except Exception:
+                    pass  # Continue retrying
+            
+            # Exponential backoff: 0.5s, 1s, 2s, 4s, 8s
+            delay = min(delay * 2, 8.0)
+        
+        return None
 
     # -------------------------------------------------------------
     # CAPABILITY / ENERGY / PERFORMANCE HELPERS (unchanged API)

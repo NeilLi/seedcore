@@ -38,6 +38,7 @@ from .roles import (
     SkillVector,
     SkillStoreProtocol,
     RbacEnforcer,
+    AccessDecision,
     build_advertisement,
     NullSkillStore,
 )
@@ -815,7 +816,24 @@ class BaseAgent:
         autonomy: Optional[float] = None,
         context: Optional[Dict[str, Any]] = None,
     ):
-        """Convenience wrapper around RbacEnforcer."""
+        """
+        Convenience wrapper around RbacEnforcer.
+        
+        Query tools (general_query, cognitive.*, knowledge.*, task.*) are exempt from RBAC
+        since they are agent-internal/core tools that are registered per-agent and should
+        be available to agents that have them registered.
+        """
+        # Query tools are agent-internal/core tools - exempt from RBAC checks
+        # These tools are registered per-agent via QueryToolRegistrar and should be
+        # available to agents that have them, regardless of role profile allowed_tools
+        query_tool_prefixes = ("general_query", "cognitive.", "knowledge.", "task.collaborative")
+        if any(tool_name.startswith(prefix) for prefix in query_tool_prefixes):
+            logger.debug(
+                f"[{self.agent_id}] Query tool '{tool_name}' exempt from RBAC (agent-internal tool)"
+            )
+            return AccessDecision(True, reason="query_tool_exempt")
+        
+        # All other tools go through normal RBAC checks
         return self._rbac.authorize_tool(
             self.role_profile,
             tool_name,
@@ -1200,15 +1218,24 @@ class BaseAgent:
                     context={"task_id": tv.task_id, "agent_id": self.agent_id},
                 )
                 if not decision.allowed:
+                    error_msg = f"rbac_denied:{decision.reason or 'policy_block'}"
                     tool_errors.append(
                         {
                             "tool": tool_name,
-                            "error": f"rbac_denied:{decision.reason or 'policy_block'}",
+                            "error": error_msg,
                         }
+                    )
+                    logger.warning(
+                        f"[{self.agent_id}] ❌ RBAC denied for tool '{tool_name}': {decision.reason or 'policy_block'}"
                     )
                     continue
             except Exception as exc:
-                tool_errors.append({"tool": tool_name, "error": f"rbac_error:{exc}"})
+                error_msg = f"rbac_error:{exc}"
+                tool_errors.append({"tool": tool_name, "error": error_msg})
+                logger.error(
+                    f"[{self.agent_id}] ❌ RBAC check failed for tool '{tool_name}': {exc}",
+                    exc_info=True,
+                )
                 continue
 
             # (b) Tool Availability (Single Manager Mode)
@@ -1218,8 +1245,12 @@ class BaseAgent:
 
             if not isinstance(self.tool_handler, list):
                 if not self.tool_handler or not hasattr(self.tool_handler, "has"):
+                    error_msg = "tool_handler_missing"
                     tool_errors.append(
-                        {"tool": tool_name, "error": "tool_handler_missing"}
+                        {"tool": tool_name, "error": error_msg}
+                    )
+                    logger.error(
+                        f"[{self.agent_id}] ❌ Tool handler missing or invalid for tool '{tool_name}'"
                     )
                     continue
 
@@ -1228,11 +1259,20 @@ class BaseAgent:
                     if inspect.isawaitable(has_result):
                         has_result = await has_result
                     if not has_result:
-                        tool_errors.append({"tool": tool_name, "error": "tool_missing"})
+                        error_msg = "tool_missing"
+                        tool_errors.append({"tool": tool_name, "error": error_msg})
+                        logger.warning(
+                            f"[{self.agent_id}] ❌ Tool '{tool_name}' not found in tool handler"
+                        )
                         continue
                 except Exception as exc:
+                    error_msg = f"tool_check_error:{exc}"
                     tool_errors.append(
-                        {"tool": tool_name, "error": f"tool_check_error:{exc}"}
+                        {"tool": tool_name, "error": error_msg}
+                    )
+                    logger.error(
+                        f"[{self.agent_id}] ❌ Tool availability check failed for '{tool_name}': {exc}",
+                        exc_info=True,
                     )
                     continue
 
@@ -1240,17 +1280,34 @@ class BaseAgent:
             args = dict(call.get("args") or {})
             tool_timeout = float(args.pop("_timeout_s", default_tool_timeout_s))
 
-            logger.debug(
-                f"[{self.agent_id}] ⚙️ Executing tool: {tool_name} (timeout={tool_timeout}s)"
+            # Check for cancellation before starting
+            task = asyncio.current_task()
+            is_cancelling = getattr(task, "cancelling", lambda: False)()
+            is_cancelled = task.cancelled() if task else False
+            
+            # Guard against zero/negative timeout (deadline already expired)
+            if tool_timeout <= 0:
+                error_msg = (
+                    f"Tool '{tool_name}' timeout is {tool_timeout:.6f}s (deadline already expired). "
+                    f"cancelling={is_cancelling}, cancelled={is_cancelled}"
+                )
+                logger.warning(f"[{self.agent_id}] ⚠️ {error_msg}")
+                tool_errors.append({"tool": tool_name, "error": "deadline_expired", "timeout": tool_timeout})
+                continue  # Skip this tool, don't retry
+
+            logger.info(
+                f"[{self.agent_id}] ⚙️ Executing tool: {tool_name} (timeout={tool_timeout}s, "
+                f"args_keys={list(args.keys())}, cancelling={is_cancelling}, cancelled={is_cancelled})"
             )
+            
             try:
-                # Execute tool
+                # Execute tool with timeout guard
                 output = await asyncio.wait_for(
                     self.use_tool(tool_name, args), timeout=tool_timeout
                 )
                 output = self._make_json_safe(output)
                 results.append({"tool": tool_name, "ok": True, "output": output})
-                logger.debug(
+                logger.info(
                     f"[{self.agent_id}] ✅ Tool '{tool_name}' executed successfully"
                 )
             except asyncio.TimeoutError:
@@ -1263,10 +1320,16 @@ class BaseAgent:
                 logger.warning(f"[{self.agent_id}] 🚫 Tool '{tool_name}' was cancelled")
                 raise
             except Exception as exc:
-                tool_errors.append({"tool": tool_name, "error": str(exc)})
+                error_str = str(exc)
+                tool_errors.append({"tool": tool_name, "error": error_str})
                 logger.error(
-                    f"[{self.agent_id}] ❌ Tool '{tool_name}' failed: {exc}",
+                    f"[{self.agent_id}] ❌ Tool '{tool_name}' failed: {error_str}",
                     exc_info=True,
+                )
+                # Also log the error type and first few lines of traceback for visibility
+                logger.error(
+                    f"[{self.agent_id}] Tool error details - type: {type(exc).__name__}, "
+                    f"message: {error_str[:200]}"
                 )
 
             self.last_heartbeat = time.time()
