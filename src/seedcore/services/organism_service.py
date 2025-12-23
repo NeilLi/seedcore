@@ -90,9 +90,15 @@ class OrganismService:
             self._init_error_trace = None
             self._init_started_at = time.time()
             self._init_finished_at = None
-            loop = asyncio.get_running_loop()
-            self._init_task = loop.create_task(self._lazy_init())
-            logger.info("🔄 Starting initialization task...")
+            try:
+                loop = asyncio.get_running_loop()
+                self._init_task = loop.create_task(self._lazy_init())
+                logger.info("🔄 Starting initialization task...")
+            except RuntimeError:
+                # No running event loop - defer to async context
+                # The init will be triggered when _ensure_initialized is called
+                logger.info("🔄 Deferring initialization to async context...")
+                self._init_task = None
 
     async def _lazy_init(self):
         """
@@ -168,8 +174,14 @@ class OrganismService:
         if not self._initialized and (
             self._init_task is None or self._init_task.done()
         ):
-            loop = asyncio.get_running_loop()
-            self._init_task = loop.create_task(self._lazy_init())
+            try:
+                loop = asyncio.get_running_loop()
+                self._init_task = loop.create_task(self._lazy_init())
+                logger.info("🔄 Restarting initialization task from reconfigure...")
+            except RuntimeError as e:
+                logger.error(f"❌ Failed to get running loop in reconfigure: {e}")
+                # This shouldn't happen in async context, but handle gracefully
+                raise
 
         logger.info("🔁 Reconfigure applied")
 

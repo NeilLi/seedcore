@@ -64,14 +64,19 @@ class OpsGateway:
         async def process_eventizer(payload: Dict[str, Any]):
             try:
                 # RPC call
-                return await self.eventizer.process.remote(payload)
+                result = await self.eventizer.process.remote(payload)
+                return result
             except Exception as e:
                 logger.error(f"Eventizer error: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @router.get("/eventizer/health")
         async def eventizer_health():
-            return await self.eventizer.health.remote()
+            try:
+                return await self.eventizer.health.remote()
+            except Exception as e:
+                logger.error(f"Eventizer health error: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
 
         # --- Fact Manager ---
         # NOTE: If FactManager uses Pydantic now, we pass the dict.
