@@ -22,6 +22,7 @@ to logical IDs with runtime registry integration.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import os
 import time
@@ -101,6 +102,7 @@ class RouteCache:
         """Set cached route entry with TTL."""
         self._cache[key] = (entry, self._expires_at())
 
+    @asynccontextmanager
     async def singleflight(self, key: Tuple[str, Optional[str]]):
         """Ensure only one resolve for a given key at a time (prevents dogpiles).
 
@@ -743,7 +745,7 @@ class RoutingDirectory:
         # ----------------------------------------
         cached_entry = self.route_cache.get(cache_key)
         if cached_entry:
-            return cached_entry.organ_id, "cache_hit"
+            return cached_entry.logical_id, cached_entry.resolved_from
 
         # ----------------------------------------
         # 4. Thundering Herd Protection (Singleflight)
@@ -764,8 +766,13 @@ class RoutingDirectory:
                         organ_id = getattr(self, "default_organ_id", "utility_organ")
                         reason = f"{reason}_fallback"
 
-                    # Create Entry
-                    entry = RouteEntry(organ_id=organ_id, reason=reason)
+                    # Create Entry (RouteEntry uses logical_id, not organ_id)
+                    entry = RouteEntry(
+                        logical_id=organ_id,
+                        epoch="",
+                        resolved_from=reason,
+                        cached_at=time.time()
+                    )
 
                     # Store in Cache
                     self.route_cache.set(cache_key, entry)
@@ -783,84 +790,23 @@ class RoutingDirectory:
                     # but maybe we DON'T cache it long term?
                     # For now, return safety fallback to keep system alive.
                     fallback_entry = RouteEntry(
-                        organ_id="utility_organ", reason="router_error_fallback"
+                        logical_id="utility_organ",
+                        epoch="",
+                        resolved_from="router_error_fallback",
+                        cached_at=time.time()
                     )
                     fut.set_result(fallback_entry)
-                    return fallback_entry.organ_id, fallback_entry.reason
+                    return fallback_entry.logical_id, fallback_entry.resolved_from
 
             else:
                 # --- FOLLOWER ROLE ---
                 # Await the leader's result
                 try:
                     entry = await fut
-                    return entry.organ_id, "cache_wait"
+                    return entry.logical_id, entry.resolved_from
                 except Exception:
                     # If the future itself breaks (rare)
                     return "utility_organ", "singleflight_error"
-
-    # --- Internal Logic (The "Slow" Path) ---
-    async def _run_full_resolve_logic(
-        self, tt: str, dm: str, pref_id: Optional[str], meta: Dict
-    ) -> Tuple[Optional[str], str]:
-        """
-        Implementation of the Priority Order defined in docstring.
-        """
-        # 0. High-Stakes Override (e.g., always route to 'safety_organ')
-        if meta.get("is_high_stakes"):
-            # Check for configured high-stakes handler
-            hs_organ = self.config.get("high_stakes_organ_id")
-            if hs_organ:
-                return hs_organ, "high_stakes_override"
-
-        # 1. Preferred Logical ID (Explicit Hint)
-        if pref_id:
-            # We assume the caller knows the specific organ or we map logical->physical
-            # If pref_id IS an organ_id, return it.
-            if pref_id in self.organ_handles:
-                return pref_id, "explicit_preference"
-            # If it's an agent ID, we need to find which organ owns it (if we track that)
-            # For now, let's assume pref_id implies a specific intent.
-            pass
-
-        # 2. Required Specialization (HARD Constraint)
-        req_spec = meta.get("required_specialization")
-        if req_spec:
-            organ_id = self._find_organ_by_spec(req_spec)
-            if organ_id:
-                return organ_id, "required_spec"
-            # Note: If required spec is missing, we might want to throw error
-            # or fall through depending on strictness. Falling through for now.
-
-        # 3. Domain Rule
-        if dm:
-            # lookup (domain, subdomain) or just domain
-            rule = self.rules_by_domain.get((dm, "*")) or self.rules_by_domain.get(dm)
-            if rule:
-                return rule, "domain_rule"
-
-        # 4. Specialization Hint (SOFT Hint)
-        soft_spec = meta.get("specialization")
-        if soft_spec:
-            organ_id = self._find_organ_by_spec(soft_spec)
-            if organ_id:
-                return organ_id, "soft_spec_hint"
-
-        # 5. Task Type Rule
-        if tt in self.rules_by_task:
-            return self.rules_by_task[tt], "task_rule"
-
-        # 6. Candidate Group (Load Balancing)
-        # If we have a pool of organs for this task type
-        candidates = self.logical_groups.get(tt)
-        if candidates:
-            # Simple Round Robin or Random for now
-            # (Can upgrade to Least-Connection if metrics are available)
-            import random
-
-            return random.choice(candidates), "pool_balance"
-
-        # 7. Fallback
-        return None, "no_match"
 
     # --- Full Resolve Logic Helper ---
     async def _run_full_resolve_logic(
@@ -986,17 +932,27 @@ class RoutingDirectory:
 
         # Path B: Coordinator Directive (Trust Upstream)
         elif mode == "coordinator_routed":
-            # 1. Spec-based mapping
+            # 1. Spec-based mapping (if provided)
             target_spec = routing_in.get("required_specialization") or routing_in.get(
                 "specialization"
             )
 
             if target_spec:
                 organ_id = self._find_organ_by_spec(target_spec)
-                resolved_from = "coordinator_hint"
+                if organ_id:
+                    resolved_from = "coordinator_hint"
 
+            # 2. If no spec provided, check task_type rules (e.g., "query" -> "user_experience_organ")
             if not organ_id:
-                # Fallback to configured default instead of magic string
+                task_type = task_dict.get("type", "unknown_task")
+                organ_id, resolved_from = await self.resolve(
+                    task_type=task_type,
+                    domain=task_dict.get("domain"),
+                    input_meta=self.extract_router_inputs(params),
+                )
+
+            # 3. Final fallback if still no organ found
+            if not organ_id:
                 organ_id = self.config.get("default_organ_id", "utility_organ")
                 resolved_from = "coordinator_fallback"
 
@@ -1030,7 +986,9 @@ class RoutingDirectory:
             )
             if not agent_id:
                 # 3. Factory Fallback (Last Resort)
-                agent_id = self.agent_id_factory.new_agent_id(organ_id)
+                # Extract specialization from routing hints if available
+                spec = routing_in.get("required_specialization") or routing_in.get("specialization")
+                agent_id = self.new_agent_id(organ_id, spec)
                 self.logger.debug(
                     f"[Router] Generated new ID {agent_id} for {organ_id}"
                 )

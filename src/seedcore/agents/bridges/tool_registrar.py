@@ -17,6 +17,16 @@ class QueryToolRegistrar:
 
             handler = self.agent.tool_handler
 
+            # Early return if tool_handler is not initialized yet
+            if handler is None:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"⚠️ QueryToolRegistrar: tool_handler is None for agent {getattr(self.agent, 'agent_id', 'unknown')}. "
+                    "Skipping query tool registration. Tools will be registered when tool_handler is available."
+                )
+                return
+
             # -----------------------------------------------------
             # Build agent-side capability & helper closures
             # -----------------------------------------------------
@@ -60,7 +70,7 @@ class QueryToolRegistrar:
             # SINGLE-MODE -----------------------------------------
             await query_tools.register_query_tools(
                 tool_manager=handler,
-                cognitive_client=handler.cognitive_client,
+                cognitive_client=getattr(handler, "cognitive_client", None) or getattr(self.agent, "cognitive_client", None),
                 **common_args,
             )
 

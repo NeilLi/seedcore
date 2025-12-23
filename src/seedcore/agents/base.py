@@ -1019,9 +1019,17 @@ class BaseAgent:
         """
         started_ts = self._utc_now_iso()
         started_monotonic = self._now_monotonic()
+        
+        logger.info(
+            f"[{self.agent_id}] 📥 Task execution started (spec={getattr(self.specialization, 'value', self.specialization)})"
+        )
 
         # Coerce to V2 TaskView
         tv = self._coerce_task_view(task)
+        logger.debug(
+            f"[{self.agent_id}] TaskView coerced: task_id={tv.task_id}, type={getattr(task, 'type', 'unknown')}, "
+            f"tools_count={len(tv.tools)}"
+        )
 
         # --- 0) Fast guardrails & Routing Constraints ----------------------------
 
@@ -1031,16 +1039,24 @@ class BaseAgent:
         if tv.required_specialization:
             if my_spec != str(tv.required_specialization):
                 # This should have been caught by Router, but serves as a safety net
+                logger.warning(
+                    f"[{self.agent_id}] ❌ Specialization mismatch: agent='{my_spec}' != required='{tv.required_specialization}'"
+                )
                 raise ValueError(
                     f"Agent {self.agent_id} specialization '{my_spec}' != required '{tv.required_specialization}'"
                 )
 
         # B. Capability & Load Checks
+        curr_cap = float(
+            getattr(self.state, "capability_score", getattr(self.state, "c", 0.0))
+        )
+        curr_mem = float(getattr(self.state, "mem_util", 0.0))
+        
         if tv.min_capability is not None:
-            curr_cap = float(
-                getattr(self.state, "capability_score", getattr(self.state, "c", 0.0))
-            )
             if curr_cap < float(tv.min_capability):
+                logger.warning(
+                    f"[{self.agent_id}] ❌ Capability check failed: {curr_cap:.2f} < {tv.min_capability}"
+                )
                 return self._reject_result(
                     tv,
                     reason=f"capability<{tv.min_capability}",
@@ -1049,8 +1065,10 @@ class BaseAgent:
                 )
 
         if tv.max_mem_util is not None:
-            curr_mem = float(getattr(self.state, "mem_util", 0.0))
             if curr_mem > float(tv.max_mem_util):
+                logger.warning(
+                    f"[{self.agent_id}] ❌ Memory utilization check failed: {curr_mem:.2f} > {tv.max_mem_util}"
+                )
                 return self._reject_result(
                     tv,
                     reason=f"mem_util>{tv.max_mem_util}",
@@ -1060,6 +1078,7 @@ class BaseAgent:
 
         # C. Timing Checks
         if tv.deadline_at_iso and self._is_past_iso(tv.deadline_at_iso):
+            logger.warning(f"[{self.agent_id}] ❌ Deadline expired: {tv.deadline_at_iso}")
             return self._reject_result(
                 tv,
                 reason="deadline_expired",
@@ -1069,12 +1088,17 @@ class BaseAgent:
 
         if tv.ttl_seconds is not None and tv.created_at_ts:
             if self._now_ts() - tv.created_at_ts > tv.ttl_seconds:
+                logger.warning(
+                    f"[{self.agent_id}] ❌ TTL expired: age={self._now_ts() - tv.created_at_ts:.1f}s > ttl={tv.ttl_seconds}s"
+                )
                 return self._reject_result(
                     tv,
                     reason="ttl_expired",
                     started_ts=started_ts,
                     started_monotonic=started_monotonic,
                 )
+        
+        logger.debug(f"[{self.agent_id}] ✅ Guardrails passed: capability={curr_cap:.2f}, mem_util={curr_mem:.2f}, load={self.load:.2f}")
 
         # --- 1) Skill materialization (telemetry only) ---------------------------
         try:
@@ -1091,6 +1115,10 @@ class BaseAgent:
         results: List[Dict[str, Any]] = []
         tool_errors: List[Dict[str, Any]] = []
         default_tool_timeout_s = float(getattr(self, "default_tool_timeout_s", 20.0))
+
+        logger.info(
+            f"[{self.agent_id}] 🔧 Executing {len(tv.tools)} tool(s) (load={self.load:.2f}/{self._load_max})"
+        )
 
         for call in tv.tools:
             tool_name = call.get("name")
@@ -1146,6 +1174,7 @@ class BaseAgent:
             args = dict(call.get("args") or {})
             tool_timeout = float(args.pop("_timeout_s", default_tool_timeout_s))
 
+            logger.debug(f"[{self.agent_id}] ⚙️ Executing tool: {tool_name} (timeout={tool_timeout}s)")
             try:
                 # Execute tool
                 output = await asyncio.wait_for(
@@ -1153,13 +1182,17 @@ class BaseAgent:
                 )
                 output = self._make_json_safe(output)
                 results.append({"tool": tool_name, "ok": True, "output": output})
+                logger.debug(f"[{self.agent_id}] ✅ Tool '{tool_name}' executed successfully")
             except asyncio.TimeoutError:
                 tool_errors.append({"tool": tool_name, "error": "timeout"})
+                logger.warning(f"[{self.agent_id}] ⏱️ Tool '{tool_name}' timed out after {tool_timeout}s")
             except asyncio.CancelledError:
                 tool_errors.append({"tool": tool_name, "error": "cancelled"})
+                logger.warning(f"[{self.agent_id}] 🚫 Tool '{tool_name}' was cancelled")
                 raise
             except Exception as exc:
                 tool_errors.append({"tool": tool_name, "error": str(exc)})
+                logger.error(f"[{self.agent_id}] ❌ Tool '{tool_name}' failed: {exc}", exc_info=True)
 
             self.last_heartbeat = time.time()
 
@@ -1170,6 +1203,11 @@ class BaseAgent:
 
         quality = self._estimate_quality(results, tool_errors, tv)
         salience = await self._maybe_salience(tv, results, tool_errors)
+        
+        logger.info(
+            f"[{self.agent_id}] 📊 Tool execution summary: success={success}, "
+            f"results={len(results)}, errors={len(tool_errors)}, quality={quality:.2f}, salience={salience:.2f}"
+        )
 
         # --- 4) State & Memory Updates -------------------------------------------
         duration_s = self._elapsed_ms(started_monotonic) / 1000.0
@@ -1205,14 +1243,21 @@ class BaseAgent:
             self.load = 0.0
 
         # --- 5) Result Construction (V2 Schema Compliant) ------------------------
+        finished_ts = self._utc_now_iso()
+        latency_ms = self._elapsed_ms(started_monotonic)
 
         # Populate result.meta.exec
         exec_meta = {
             "started_at": started_ts,
-            "finished_at": self._utc_now_iso(),
-            "latency_ms": self._elapsed_ms(started_monotonic),
+            "finished_at": finished_ts,
+            "latency_ms": latency_ms,
             "attempt": 1,
         }
+        
+        logger.info(
+            f"[{self.agent_id}] ✅ Task execution completed: task_id={tv.task_id}, "
+            f"success={success}, latency={latency_ms:.1f}ms"
+        )
 
         # Populate routing hints utilized
         routing_hints_meta = {
