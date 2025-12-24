@@ -134,14 +134,31 @@ async def health_check():
 
 @app.get("/readyz")
 async def ready_check():
-    # verify DB quickly to gate readiness
+    """Readiness check including database and optional vendor integrations."""
+    deps = {}
+    all_ready = True
+    
+    # 1. Database connectivity check
     try:
         eng: AsyncEngine = app.state.db_engine
         async with eng.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        return {"status": "ready", "deps": {"db": "ok"}}
+        deps["db"] = "ok"
     except Exception as e:
-        return {"status": "not_ready", "deps": {"db": f"error: {e}"}}
+        deps["db"] = f"error: {e}"
+        all_ready = False
+    
+    # 2. Optional vendor integrations (non-blocking)
+    try:
+        from seedcore.config.tuya_config import TuyaConfig
+        tuya_config = TuyaConfig()
+        deps["tuya"] = "enabled" if tuya_config.enabled else "disabled"
+    except Exception as e:
+        # Tuya config check failed - mark as unavailable but don't block readiness
+        deps["tuya"] = f"unavailable: {e}"
+    
+    status = "ready" if all_ready else "not_ready"
+    return {"status": status, "deps": deps}
 
 @app.get("/")
 async def root():

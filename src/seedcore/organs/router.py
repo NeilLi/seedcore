@@ -268,10 +268,12 @@ class RoutingDirectory:
                     "status": "active",
                 }
 
-        if len(new_logical_groups[task_type]) > 1:
-            self.logger.debug(
-                f"[Router] Multiple organs support '{task_type}': {new_logical_groups[task_type]}"
-            )
+        # 4. Log multi-organ support for task types
+        for task_type, organ_list in new_logical_groups.items():
+            if len(organ_list) > 1:
+                self.logger.debug(
+                    f"[Router] Multiple organs support '{task_type}': {organ_list}"
+                )
 
     async def get_target_handle(self, agent_id: str) -> Any:
         """

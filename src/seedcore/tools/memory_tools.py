@@ -155,7 +155,7 @@ class LtmSearchTool:
     async def execute(self, embedding: List[float], limit: int = 5):
         if not self.holon_fabric:
             raise ValueError("HolonFabric not available")
-        import numpy as np
+        import numpy as np  # pyright: ignore[reportMissingImports]
         from seedcore.models.holon import HolonScope
         
         query_vec = np.array(embedding, dtype=np.float32)

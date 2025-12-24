@@ -1,9 +1,8 @@
 import ray  # pyright: ignore[reportMissingImports]
-import asyncio
 from typing import Dict, Any, Optional
 from .manager import ToolManager
 
-@ray.remote(num_cpus=0.2)
+@ray.remote(num_cpus=0.1)
 class ToolManagerShard:
     def __init__(
         self,
@@ -198,6 +197,40 @@ class ToolManagerShard:
     async def register_tool(self, name, tool):
         manager = await self._ensure_manager()
         await manager.register(name, tool)
+    
+    async def register_tuya_tools(self):
+        """
+        Register Tuya tools if Tuya is enabled. Called internally after manager creation.
+        
+        Note: Tuya tools are designed for device control actions (domain="device").
+        They should only be used by OrchestrationAgent for device orchestration tasks.
+        """
+        try:
+            from seedcore.config.tuya_config import TuyaConfig
+            
+            tuya_config = TuyaConfig()
+            if not tuya_config.enabled:
+                return False
+            
+            manager = await self._ensure_manager()
+            
+            # Import and create tools inside the actor (avoids serialization issues)
+            from seedcore.tools.tuya.tuya_tools import TuyaGetStatusTool, TuyaSendCommandTool
+            
+            await manager.register_internal(TuyaGetStatusTool())
+            await manager.register_internal(TuyaSendCommandTool())
+            
+            # Register capability flag for feature detection
+            if hasattr(manager, "add_capability"):
+                await manager.add_capability("device.vendor.tuya")
+            
+            return True
+        except Exception as e:
+            # Log but don't fail - Tuya is optional
+            import logging
+            logger = logging.getLogger("seedcore.tools.manager_actor")
+            logger.warning(f"Failed to register Tuya tools in shard: {e}")
+            return False
 
     async def list_tools(self):
         manager = await self._ensure_manager()
@@ -206,4 +239,24 @@ class ToolManagerShard:
     async def stats(self):
         manager = await self._ensure_manager()
         return await manager.stats()
+    
+    async def add_capability(self, capability: str):
+        """Add a capability flag to the manager."""
+        manager = await self._ensure_manager()
+        if hasattr(manager, "add_capability"):
+            await manager.add_capability(capability)
+    
+    async def has_capability(self, capability: str) -> bool:
+        """Check if a capability is available."""
+        manager = await self._ensure_manager()
+        if hasattr(manager, "has_capability"):
+            return await manager.has_capability(capability)
+        return False
+    
+    async def list_capabilities(self):
+        """Get all registered capabilities."""
+        manager = await self._ensure_manager()
+        if hasattr(manager, "list_capabilities"):
+            return await manager.list_capabilities()
+        return set()
 

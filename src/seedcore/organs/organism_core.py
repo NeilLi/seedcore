@@ -98,6 +98,67 @@ setup_logging(app_name="seedcore.organs.OrganismCore")
 logger = ensure_serve_logger("seedcore.organs.OrganismCore", level="DEBUG")
 
 
+# =====================================================================
+#  TUYA INTEGRATION HELPERS
+# =====================================================================
+
+async def register_tuya_tools(tool_manager: Any) -> bool:
+    """
+    Register Tuya tools if Tuya is enabled.
+    
+    This function:
+    - Checks TuyaConfig.enabled before registering
+    - Registers tuya.get_status and tuya.send_command tools
+    - Adds "device.vendor.tuya" capability flag
+    - Handles both single ToolManager and ToolManagerShard instances
+    
+    Note: Tuya tools are designed for device control actions (domain="device").
+    They should only be used by OrchestrationAgent for device orchestration tasks.
+    
+    Args:
+        tool_manager: ToolManager instance or ToolManagerShard handle
+        
+    Returns:
+        True if tools were registered, False if Tuya is disabled
+    """
+    try:
+        from seedcore.config.tuya_config import TuyaConfig
+        
+        tuya_config = TuyaConfig()
+        if not tuya_config.enabled:
+            logger.debug("Tuya integration disabled (TUYA_ENABLED=false)")
+            return False
+        
+        # Register tools
+        # Handle both ToolManager instance and ToolManagerShard handle
+        if hasattr(tool_manager, "register_internal"):
+            # Direct ToolManager instance
+            from seedcore.tools.tuya.tuya_tools import TuyaGetStatusTool, TuyaSendCommandTool
+            
+            await tool_manager.register_internal(TuyaGetStatusTool())
+            await tool_manager.register_internal(TuyaSendCommandTool())
+            
+            # Register capability flag for feature detection
+            if hasattr(tool_manager, "add_capability"):
+                await tool_manager.add_capability("device.vendor.tuya")
+            
+            logger.info("✅ Tuya tools registered: tuya.get_status, tuya.send_command (capability: device.vendor.tuya)")
+            return True
+        elif hasattr(tool_manager, "register_tuya_tools"):
+            # ToolManagerShard handle (Ray actor) - use internal method
+            result = await tool_manager.register_tuya_tools.remote()
+            if result:
+                logger.info("✅ Tuya tools registered in shard: tuya.get_status, tuya.send_command (capability: device.vendor.tuya)")
+            return bool(result)
+        else:
+            logger.warning("⚠️ Unknown tool_manager type, cannot register Tuya tools")
+            return False
+            
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to register Tuya tools: {e}", exc_info=True)
+        return False
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     v = os.getenv(name)
     if v is None:
@@ -758,6 +819,23 @@ class OrganismCore:
             self.mw_manager = None
 
     # ------------------------------------------------------------------
+    #  HELPER: Tuya Integration Check
+    # ------------------------------------------------------------------
+    def is_tuya_enabled(self) -> bool:
+        """
+        Check if Tuya integration is enabled.
+        
+        Returns:
+            True if Tuya is enabled and configured, False otherwise
+        """
+        try:
+            from seedcore.config.tuya_config import TuyaConfig
+            tuya_config = TuyaConfig()
+            return tuya_config.enabled
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------
     #  HELPER: Tool Manager (Sharding Logic)
     # ------------------------------------------------------------------
     async def _init_tool_manager(self):
@@ -770,6 +848,9 @@ class OrganismCore:
             self.tool_manager = ToolManager(skill_store=self.skill_store)
             self.tool_handler = self.tool_manager
             logger.info("🔧 ToolManager initialized (Single Mode)")
+            
+            # Register Tuya tools if enabled
+            await register_tuya_tools(self.tool_manager)
         else:
             # Dynamic Sharding Calculation
             # Default: 1 shard per 1000 agents, min 4, max 16
@@ -802,6 +883,13 @@ class OrganismCore:
                 for _ in range(shard_count)
             ]
             self.tool_handler = self.tool_shards
+            
+            # Register Tuya tools in all shards if enabled
+            # Use gather to register in parallel for better performance
+            registration_tasks = [
+                register_tuya_tools(shard) for shard in self.tool_shards
+            ]
+            await asyncio.gather(*registration_tasks, return_exceptions=True)
 
     # ------------------------------------------------------------------
     #  HELPER: Registries

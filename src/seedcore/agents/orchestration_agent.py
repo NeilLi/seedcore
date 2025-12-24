@@ -283,6 +283,10 @@ class OrchestrationAgent(BaseAgent):
         """
         Enqueue actuator commands durably rather than executing directly.
         This prevents half-applied actions under upstream cancellation.
+        
+        Note: Device commands (domain="device") should use Tuya tools when available.
+        This method delegates to command_queue.enqueue which routes to appropriate
+        vendor tools (e.g., tuya.send_command) based on device type.
         """
         results: List[Dict[str, Any]] = []
         for cmd in commands:
@@ -417,6 +421,45 @@ class OrchestrationAgent(BaseAgent):
             "result": {"energy": energy, "recommendation": rec},
             "meta": {"exec": {"kind": "orchestration.energy_optimize"}},
         }
+
+    # -------------------------------------------------------------------------
+    # Capability & Vendor Checks
+    # -------------------------------------------------------------------------
+
+    async def _has_tuya_capability(self) -> bool:
+        """
+        Check if Tuya device vendor capability is available.
+        
+        This enables graceful degradation when Tuya is disabled or unavailable.
+        Agents can check this before attempting device operations.
+        
+        Returns:
+            True if Tuya capability is available, False otherwise
+        """
+        try:
+            tool_handler = getattr(self, "tool_handler", None)
+            if not tool_handler:
+                return False
+            
+            # Handle both ToolManager instance and ToolManagerShard list
+            if isinstance(tool_handler, list):
+                # Sharded mode - check first shard (all shards should have same capabilities)
+                if tool_handler:
+                    if hasattr(tool_handler[0], "has_capability"):
+                        result = await tool_handler[0].has_capability.remote("device.vendor.tuya")
+                        return bool(result)
+            elif hasattr(tool_handler, "has_capability"):
+                # Single ToolManager instance
+                return await tool_handler.has_capability("device.vendor.tuya")
+            
+            # Fallback: check if tool exists
+            if hasattr(tool_handler, "has"):
+                has_tool = await tool_handler.has("tuya.send_command")
+                return bool(has_tool)
+            
+            return False
+        except Exception:
+            return False
 
     # -------------------------------------------------------------------------
     # Safety + Dedup helpers

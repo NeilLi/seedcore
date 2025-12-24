@@ -111,6 +111,12 @@ class ToolManager:
         self.skill_store = skill_store
         self.enable_tracing = enable_tracing
 
+        # Capabilities tracking (for feature detection and graceful degradation)
+        # Capabilities represent system-level features (e.g., "device.vendor.tuya")
+        # Tools can check capabilities before attempting operations
+        self._capabilities: set[str] = set()
+        self._capabilities_lock = asyncio.Lock()
+
         # Metrics (thread-safe access required for concurrent agent execution)
         self._call_count: Dict[str, int] = {}
         self._fail_count: Dict[str, int] = {}
@@ -173,6 +179,47 @@ class ToolManager:
             return name in self._tools
 
     # ============================================================
+    # Capability Management
+    # ============================================================
+
+    async def add_capability(self, capability: str) -> None:
+        """
+        Register a system capability (e.g., "device.vendor.tuya").
+        
+        Capabilities represent optional features that agents can check for
+        graceful degradation when features are unavailable.
+        
+        Args:
+            capability: Capability identifier (e.g., "device.vendor.tuya")
+        """
+        async with self._capabilities_lock:
+            self._capabilities.add(capability)
+        logger.debug(f"Capability registered: {capability}")
+
+    async def has_capability(self, capability: str) -> bool:
+        """
+        Check if a capability is available.
+        
+        Args:
+            capability: Capability identifier (e.g., "device.vendor.tuya")
+        
+        Returns:
+            True if capability is available, False otherwise
+        """
+        async with self._capabilities_lock:
+            return capability in self._capabilities
+
+    async def list_capabilities(self) -> set[str]:
+        """
+        Get all registered capabilities.
+        
+        Returns:
+            Set of capability identifiers
+        """
+        async with self._capabilities_lock:
+            return self._capabilities.copy()
+
+    # ============================================================
     # Memory Tool Routing
     # ============================================================
 
@@ -232,7 +279,7 @@ class ToolManager:
                 limit = args.get("limit", 5)
                 if not embedding:
                     raise ToolError(name, "Missing embedding parameter")
-                import numpy as np
+                import numpy as np  # pyright: ignore[reportMissingImports]
 
                 query_vec = np.array(embedding, dtype=np.float32)
                 # Use GLOBAL scope by default, can be extended with scopes parameter
