@@ -221,7 +221,7 @@ class BaseAgent:
 
         # 7. Go Live
         self.lifecycle = "active"
-        logger.info(
+        logger.debug(
             "✅ BaseAgent %s (%s) online. org=%s",
             self.agent_id,
             self.specialization.value,
@@ -655,7 +655,7 @@ class BaseAgent:
 
         # 2. Check if this update applies to ME
         if profile.name == self.specialization:
-            logger.info(
+            logger.debug(
                 f"[{self.agent_id}] 🔄 Hot-swapping RoleProfile: {profile.name.value}"
             )
 
@@ -1116,7 +1116,7 @@ class BaseAgent:
         started_ts = self._utc_now_iso()
         started_monotonic = self._now_monotonic()
 
-        logger.info(
+        logger.debug(
             f"[{self.agent_id}] 📥 Task execution started (spec={getattr(self.specialization, 'value', self.specialization)})"
         )
 
@@ -1216,7 +1216,7 @@ class BaseAgent:
         tool_errors: List[Dict[str, Any]] = []
         default_tool_timeout_s = float(getattr(self, "default_tool_timeout_s", 20.0))
 
-        logger.info(
+        logger.debug(
             f"[{self.agent_id}] 🔧 Executing {len(tv.tools)} tool(s) (load={self.load:.2f}/{self._load_max})"
         )
 
@@ -1311,7 +1311,7 @@ class BaseAgent:
                 tool_errors.append({"tool": tool_name, "error": "deadline_expired", "timeout": tool_timeout})
                 continue  # Skip this tool, don't retry
 
-            logger.info(
+            logger.debug(
                 f"[{self.agent_id}] ⚙️ Executing tool: {tool_name} (timeout={tool_timeout}s, "
                 f"args_keys={list(args.keys())}, cancelling={is_cancelling}, cancelled={is_cancelled})"
             )
@@ -1323,7 +1323,7 @@ class BaseAgent:
                 )
                 output = self._make_json_safe(output)
                 results.append({"tool": tool_name, "ok": True, "output": output})
-                logger.info(
+                logger.debug(
                     f"[{self.agent_id}] ✅ Tool '{tool_name}' executed successfully"
                 )
             except asyncio.TimeoutError:
@@ -1358,7 +1358,7 @@ class BaseAgent:
         quality = self._estimate_quality(results, tool_errors, tv)
         salience = await self._maybe_salience(tv, results, tool_errors)
 
-        logger.info(
+        logger.debug(
             f"[{self.agent_id}] 📊 Tool execution summary: success={success}, "
             f"results={len(results)}, errors={len(tool_errors)}, quality={quality:.2f}, salience={salience:.2f}"
         )
@@ -1408,7 +1408,7 @@ class BaseAgent:
             "attempt": 1,
         }
 
-        logger.info(
+        logger.debug(
             f"[{self.agent_id}] ✅ Task execution completed: task_id={tv.task_id}, "
             f"success={success}, latency={latency_ms:.1f}ms"
         )

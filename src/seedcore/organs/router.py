@@ -161,7 +161,7 @@ class RoutingDirectory:
         """
         # Initialize logger (CRITICAL: must be set before any logging calls)
         self.logger = logger
-        
+
         # --- 1. Configuration & Safety Defaults ---
         # Ensure we don't crash if config is missing keys; set defaults for weights
         self._raw_config = organism.router_cfgs or {}
@@ -201,42 +201,77 @@ class RoutingDirectory:
         # INSTALLED: Dedicated RouteCache with jitter to prevent thundering herd
         self.route_cache = RouteCache(ttl_s=self.config["cache_ttl"], jitter_s=0.5)
 
-        # --- 5. Initialization Pre-computation (Fast Path) ---
-        # Flatten organ structures for O(1) lookup
-        self._build_fast_lookup_tables()
-
-        # --- 6. Default Routing Rules ---
-        # Route "query" and "general_query" tasks to user_experience_organ 
-        # (handles user dialog/conversation). This ensures conversational queries
-        # are handled by the user_experience_organ, whose USER_LIAISON agents are
-        # instantiated as ConversationAgent instances.
-        # 
-        # Architectural Note: Router routes by organ + specialization, NOT by agent class.
-        # ConversationAgent is a runtime capability wrapper applied after routing.
-        # The Router remains class-agnostic and only cares about organ/specialization.
-        if "user_experience_organ" in self.organ_handles:
-            self.set_rule("query", "user_experience_organ")
-            self.set_rule("general_query", "user_experience_organ")
-            logger.info(
-                "[Router] Default rules: 'query' and 'general_query' -> 'user_experience_organ' "
-                "(USER_LIAISON specialization)"
-            )
+        # --- 5. Rule & Table Initialization ---
+        self._initialize_routing_rules()
 
         # Async lock for dynamic route updates (not read operations)
         self._lock = asyncio.Lock()
 
-    def _build_fast_lookup_tables(self):
+    def _initialize_routing_rules(self) -> None:
+        """
+        Internal helper to pre-compute lookup tables and apply default
+        routing logic based on available organs.
+        """
+        # --- 1. Pre-computation (Fast Path) ---
+        # Flatten structures for O(1) lookup during high-frequency routing
+        self._build_fast_lookup_tables()
+
+        # --- 2. Default Rule Assignment (Heuristic-based) ---
+        # Note: Rules follow a precedence order based on organ availability
+        if "user_experience_organ" in self.organ_handles:
+            self.set_rule("query", "user_experience_organ")
+            self.logger.debug(
+                "[Router] Default rule set: 'query' -> 'user_experience_organ' "
+                "(USER_LIAISON specialization)"
+            )
+
+        # Using a separate 'if' if these are non-exclusive,
+        # or 'elif' if you only want one primary default.
+        if "orchestration_organ" in self.organ_handles:
+            self.set_rule("action", "orchestration_organ")
+            self.logger.debug(
+                "[Router] Default rule set: 'action' -> 'orchestration_organ' "
+                "(DEVICE_ORCHESTRATOR specialization)"
+            )
+
+    def _build_fast_lookup_tables(self) -> None:
         """
         Internal helper to flatten organism structure into high-speed lookup dicts.
-        Called during init and whenever organism structure re-balances.
+        Optimizes for O(1) task-to-organ-pool resolution.
         """
-        # Example: Pre-fill logical groups based on Organ capabilities
-        for organ_id, organ_handle in self.organ_handles.items():
-            # Assuming organ_handle has a property 'supported_task_types'
-            # If strictly remote Ray actor, we might need to fetch this async later,
-            # but usually, metadata is available in the OrganismCore registry.
-            pass
-            # Logic to populate self.logical_groups goes here
+        # Reset tables to ensure consistency during re-balance
+        new_logical_groups: Dict[str, List[str]] = {}
+
+        # 1. Map Organs to Task Types (Logical Groups)
+        for organ_id in self.organ_handles:
+            # Retrieve metadata from the Organism registry rather than the Actor itself
+            # This avoids async/network overhead during table construction
+            specs = self.organ_specs.get(organ_id, {})
+            supported_tasks = specs.get("supported_tasks", [])
+
+            for task_type in supported_tasks:
+                if task_type not in new_logical_groups:
+                    new_logical_groups[task_type] = []
+                new_logical_groups[task_type].append(organ_id)
+
+        # 2. Atomic Update of the Live Tables
+        self.logical_groups = new_logical_groups
+
+        # 3. Telemetry/Metrics Initialization
+        # Pre-seed metrics for every known organ to avoid 'if key in dict' checks later
+        for organ_id in self.organ_handles:
+            if organ_id not in self.agent_metrics:
+                self.agent_metrics[organ_id] = {
+                    "load": 0.0,
+                    "latency_ms": 0.0,
+                    "last_seen": time.time(),
+                    "status": "active",
+                }
+
+        if len(new_logical_groups[task_type]) > 1:
+            self.logger.debug(
+                f"[Router] Multiple organs support '{task_type}': {new_logical_groups[task_type]}"
+            )
 
     async def get_target_handle(self, agent_id: str) -> Any:
         """
@@ -267,32 +302,35 @@ class RoutingDirectory:
     def _find_organ_by_spec(self, spec: str) -> Optional[str]:
         """
         Find the organ ID that hosts agents with the given specialization.
-        
+
         Args:
             spec: Specialization string (e.g., "generalist", "user_liaison")
-            
+
         Returns:
             Organ ID if found, None otherwise
         """
         if not spec:
             return None
-        
+
         # Normalize the specialization string
         spec_normalized = self._normalize(spec)
         if not spec_normalized:
             return None
-        
+
         # Look up in organ_specs map (specialization -> organ_id)
         # This map is populated during agent creation in OrganismCore
         organ_id = self.organ_specs.get(spec_normalized)
         if organ_id:
             return organ_id
-        
+
         # Fallback: try matching by partial name (e.g., "generalist" matches "GENERALIST")
         for spec_key, organ_id in self.organ_specs.items():
-            if spec_normalized in spec_key.lower() or spec_key.lower() in spec_normalized:
+            if (
+                spec_normalized in spec_key.lower()
+                or spec_key.lower() in spec_normalized
+            ):
                 return organ_id
-        
+
         return None
 
     # --- (A) AgentIDFactory Integration ---
@@ -379,11 +417,11 @@ class RoutingDirectory:
         if dm:
             # Stage 3: Domain specific rule
             self.rules_by_domain[(tt, dm)] = logical_id
-            logger.info(f"[Router] Rule set: {tt} + {dm} -> {logical_id}")
+            logger.debug(f"[Router] Rule set: {tt} + {dm} -> {logical_id}")
         else:
             # Stage 5: General Task-Type fallback
             self.rules_by_task[tt] = logical_id
-            logger.info(f"[Router] Rule set: {tt} -> {logical_id}")
+            logger.debug(f"[Router] Rule set: {tt} -> {logical_id}")
 
     def remove_rule(self, task_type: str, domain: Optional[str] = None):
         """Remove a static routing rule."""
@@ -396,11 +434,11 @@ class RoutingDirectory:
         if dm:
             if (tt, dm) in self.rules_by_domain:
                 del self.rules_by_domain[(tt, dm)]
-                logger.info(f"[Router] Rule removed: {tt} + {dm}")
+                logger.debug(f"[Router] Rule removed: {tt} + {dm}")
         else:
             if tt in self.rules_by_task:
                 del self.rules_by_task[tt]
-                logger.info(f"[Router] Rule removed: {tt}")
+                logger.debug(f"[Router] Rule removed: {tt}")
 
     def get_rules(self) -> Dict[str, Any]:
         """
@@ -771,7 +809,7 @@ class RoutingDirectory:
                         logical_id=organ_id,
                         epoch="",
                         resolved_from=reason,
-                        cached_at=time.time()
+                        cached_at=time.time(),
                     )
 
                     # Store in Cache
@@ -793,7 +831,7 @@ class RoutingDirectory:
                         logical_id="utility_organ",
                         epoch="",
                         resolved_from="router_error_fallback",
-                        cached_at=time.time()
+                        cached_at=time.time(),
                     )
                     fut.set_result(fallback_entry)
                     return fallback_entry.logical_id, fallback_entry.resolved_from
@@ -987,7 +1025,9 @@ class RoutingDirectory:
             if not agent_id:
                 # 3. Factory Fallback (Last Resort)
                 # Extract specialization from routing hints if available
-                spec = routing_in.get("required_specialization") or routing_in.get("specialization")
+                spec = routing_in.get("required_specialization") or routing_in.get(
+                    "specialization"
+                )
                 agent_id = self.new_agent_id(organ_id, spec)
                 self.logger.debug(
                     f"[Router] Generated new ID {agent_id} for {organ_id}"

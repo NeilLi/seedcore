@@ -252,7 +252,7 @@ class ConversationAgent(BaseAgent):
         if self._mw_manager is None and self._mw_manager_organ_id:
             from seedcore.memory.mw_manager import MwManager
             self._mw_manager = MwManager(organ_id=self._mw_manager_organ_id)
-            logger.info(f"✅ [{self.agent_id}] MwManager created for organ_id={self._mw_manager_organ_id}")
+            logger.debug(f"✅ [{self.agent_id}] MwManager created for organ_id={self._mw_manager_organ_id}")
         return self._mw_manager
     
     def persist_chat_history(self):
@@ -345,7 +345,7 @@ class ConversationAgent(BaseAgent):
                 if not disable_memory_write:
                     self.add_user_message(incoming_msg)
                 else:
-                    logger.info(f"[{self.agent_id}] Skipping user message write (disable_memory_write=true)")
+                    logger.debug(f"[{self.agent_id}] Skipping user message write (disable_memory_write=true)")
 
                 # v2 Chat Envelope (always set, regardless of memory flags)
                 chat["message"] = incoming_msg
@@ -417,7 +417,7 @@ class ConversationAgent(BaseAgent):
             (getattr(task_data, "description", None) if hasattr(task_data, "description") else None) or
             ""
         )
-        logger.info(
+        logger.debug(
             f"[{self.agent_id}] Auto-add check: task_type={task_type}, "
             f"interaction_mode={interaction.get('mode')}, "
             f"has_chat_message={bool(chat.get('message'))}, "
@@ -459,20 +459,20 @@ class ConversationAgent(BaseAgent):
                 }
                 routing["tools"] = [tool_call]
                 task_data["tools"] = [tool_call]  # Also set top-level for compatibility
-                logger.info(
+                logger.debug(
                     f"[{self.agent_id}] ✅ Auto-added general_query tool for {task_type} task "
                     f"(description: {(query_text or description or 'empty')[:50]}...)"
                 )
             else:
-                logger.info(
+                logger.debug(
                     f"[{self.agent_id}] Skipping auto-add: is_chat_task=True but no query text/description found"
                 )
         elif is_chat_task and existing_tools:
-            logger.info(
+            logger.debug(
                 f"[{self.agent_id}] Skipping auto-add: conversational task but {len(existing_tools)} tools already specified"
             )
         elif not is_chat_task:
-            logger.info(
+            logger.debug(
                 f"[{self.agent_id}] Skipping auto-add: not a conversational task (type={task_type})"
             )
 
@@ -518,7 +518,7 @@ class ConversationAgent(BaseAgent):
                 if not disable_memory_write:
                     self.add_assistant_message(assistant_msg)
                 else:
-                    logger.info(f"[{self.agent_id}] Skipping assistant message write (disable_memory_write=true)")
+                    logger.debug(f"[{self.agent_id}] Skipping assistant message write (disable_memory_write=true)")
 
         # =========================================================
         # 4. Local checkpoint (not long-term memory)
