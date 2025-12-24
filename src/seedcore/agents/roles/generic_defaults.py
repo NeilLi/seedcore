@@ -65,7 +65,7 @@ def create_default_registry() -> RoleRegistry:
     # =============================================================
     # "The Eyes/Senses" - Aggregates sensor data into state.
     registry.register(RoleProfile(
-        name=Specialization.ENVIRONMENT_MODEL,
+        name=Specialization.ENVIRONMENT,
         default_skills={"data_ingestion": 0.95, "state_tracking": 0.9},
         allowed_tools={"sensors.read_all", "graph.write_state"}
     ))

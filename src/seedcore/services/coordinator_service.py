@@ -179,7 +179,7 @@ class TimeoutConfig(BaseModel):
     """Service timeout configuration."""
 
     serve_call_s: int = Field(
-        default_factory=lambda: int(os.getenv("SERVE_CALL_TIMEOUT_S", "2"))
+        default_factory=lambda: int(os.getenv("SERVE_CALL_TIMEOUT_S", "5"))
     )
 
     @classmethod

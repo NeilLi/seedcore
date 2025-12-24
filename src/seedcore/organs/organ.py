@@ -29,6 +29,8 @@ import ray  # pyright: ignore[reportMissingImports]
 import asyncio
 import random
 import time
+import importlib
+from functools import lru_cache
 from typing import Dict, Any, Optional, List, TYPE_CHECKING, Tuple
 
 from seedcore.agents.roles import RoleProfile
@@ -57,6 +59,133 @@ logger = ensure_serve_logger("seedcore.organs.organ", level="DEBUG")
 
 # Target namespace for agent actors
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+
+
+# =====================================================================
+#  AGENT FACTORY HELPERS (Common, Reusable)
+# =====================================================================
+
+
+@lru_cache(maxsize=256)
+def _import_symbol(module_path: str, symbol_name: str) -> Any:
+    """
+    Cached import helper for agent classes.
+    Reduces import overhead in hot paths.
+    """
+    mod = importlib.import_module(module_path)
+    sym = getattr(mod, symbol_name, None)
+    if sym is None:
+        raise AttributeError(f"Symbol '{symbol_name}' not found in '{module_path}'")
+    return sym
+
+
+def _resolve_classpath(agent_class_name: str, class_map: Dict[str, str]) -> str:
+    """
+    Resolve agent class name to fully-qualified classpath.
+
+    Accepts either:
+      - Short name: "ConversationAgent" -> uses class_map
+      - Full path: "seedcore.agents.foo.BarAgent" -> uses directly
+
+    Args:
+        agent_class_name: Short name or fully-qualified path
+        class_map: Mapping of short names to classpaths
+
+    Returns:
+        Fully-qualified classpath string
+    """
+    if "." in agent_class_name:
+        # Already a full path
+        return agent_class_name
+    # Look up in class map, fallback to BaseAgent
+    return class_map.get(agent_class_name, class_map["BaseAgent"])
+
+
+def _load_agent_class(classpath: str) -> Any:
+    """
+    Load agent class from fully-qualified classpath.
+
+    Args:
+        classpath: Fully-qualified classpath (e.g., "seedcore.agents.base.BaseAgent")
+
+    Returns:
+        Agent class (may be regular class or Ray actor class)
+    """
+    module_path, class_name = classpath.rsplit(".", 1)
+    return _import_symbol(module_path, class_name)
+
+
+def _is_ray_actor_class(cls: Any) -> bool:
+    """
+    Check if a class is already a Ray actor.
+
+    Ray actor classes have a .remote callable (stable indicator without ray internals).
+
+    Args:
+        cls: Class to check
+
+    Returns:
+        True if cls is a Ray actor class, False otherwise
+    """
+    return hasattr(cls, "remote") and callable(getattr(cls, "remote", None))
+
+
+def _ensure_ray_actor_class(
+    cls: Any, *, default_remote_kwargs: Optional[Dict[str, Any]] = None
+) -> Any:
+    """
+    Ensure a class is wrapped as a Ray actor.
+
+    If cls is already a Ray actor -> return as-is.
+    If cls is a regular class -> wrap with ray.remote().
+
+    Args:
+        cls: Class to wrap (may be regular class or Ray actor)
+        default_remote_kwargs: Optional kwargs for ray.remote() wrapper
+
+    Returns:
+        Ray actor class (wrapped if needed)
+
+    Raises:
+        RuntimeError: If Ray is not available but wrapping is needed
+        TypeError: If cls is not a class
+    """
+    if _is_ray_actor_class(cls):
+        return cls
+
+    if ray is None:
+        raise RuntimeError("Ray is not available but a non-actor class needs wrapping.")
+
+    if not isinstance(cls, type):
+        raise TypeError(f"Resolved object is not a class (type={type(cls).__name__})")
+
+    default_remote_kwargs = default_remote_kwargs or {
+        "max_restarts": 2,
+        "max_task_retries": 0,
+    }
+    return ray.remote(**default_remote_kwargs)(cls)
+
+
+def _extra_init_kwargs_for(agent_class_name: str, organ: Any) -> Dict[str, Any]:
+    """
+    Central registry for class-specific init kwargs.
+
+    Add entries here instead of special-casing in create_agent.
+    This makes the factory extensible without modifying core logic.
+
+    Args:
+        agent_class_name: Short name of agent class (e.g., "ConversationAgent")
+        organ: Organ instance (for accessing organ-specific configs)
+
+    Returns:
+        Dict of extra kwargs to pass to agent __init__
+    """
+    if agent_class_name == "ConversationAgent":
+        return {
+            "mw_manager_organ_id": organ.organ_id,
+            "checkpoint_cfg": getattr(organ, "_checkpoint_cfg", None),
+        }
+    return {}
 
 
 class AgentIDFactory:
@@ -378,7 +507,13 @@ class Organ:
     ) -> None:
         """
         Factory method to spawn Agent Actors.
-        Injects CONFIGURATION (dicts), not LIVE OBJECTS, to ensure serialization safety.
+        Injects CONFIGURATION (dicts/strings), not LIVE OBJECTS, to ensure serialization safety.
+
+        This method uses a common factory pattern with:
+        - Cached imports for performance
+        - Support for both short class names and fully-qualified paths
+        - Centralized per-class init kwargs registry
+        - Automatic Ray actor wrapping for non-actor classes
         """
         if agent_id in self.agents:
             logger.warning(f"[{self.organ_id}] Agent {agent_id} already exists.")
@@ -390,71 +525,21 @@ class Organ:
         logger.info(f"🚀 [{self.organ_id}] Spawning {agent_class_name} '{agent_id}'...")
 
         try:
-            # 1. Resolve Class
-            import importlib
+            # 1. Resolve classpath -> import -> ensure ray actor
+            classpath = _resolve_classpath(agent_class_name, self.AGENT_CLASS_MAP)
+            raw_cls = _load_agent_class(classpath)
+            AgentActorClass = _ensure_ray_actor_class(raw_cls)
 
-            classpath = self.AGENT_CLASS_MAP.get(
-                agent_class_name, self.AGENT_CLASS_MAP["BaseAgent"]
-            )
-            module_path, class_name = classpath.rsplit(".", 1)
-
-            # Import module and get class
-            try:
-                module = importlib.import_module(module_path)
-            except ImportError as e:
-                raise ImportError(
-                    f"Failed to import module '{module_path}' for agent class '{agent_class_name}': {e}"
-                ) from e
-
-            AgentClass = getattr(module, class_name, None)
-            if AgentClass is None:
-                raise AttributeError(
-                    f"Class '{class_name}' not found in module '{module_path}' "
-                    f"for agent class '{agent_class_name}'"
-                )
-
-            # Validate that AgentClass is either a regular class or a Ray actor class
-            # Some agents are already decorated with @ray.remote, which wraps them in ActorClass
-            is_regular_class = isinstance(AgentClass, type)
-            # Check if it's already a Ray actor by looking for the 'remote' method
-            # This is the standard way Ray actors are identified
-            is_ray_actor = hasattr(AgentClass, "remote") and callable(
-                getattr(AgentClass, "remote", None)
-            )
-
-            if not (is_regular_class or is_ray_actor):
-                raise TypeError(
-                    f"'{agent_class_name}' resolved to '{AgentClass}' which is not a class or Ray actor "
-                    f"(type: {type(AgentClass).__name__}, has_remote: {hasattr(AgentClass, 'remote')})"
-                )
-
-            # 1a. Wrap non-actor classes (like BaseAgent) as actors
-            # Ray doesn't allow actor inheritance, so BaseAgent is a regular class
-            # that needs to be wrapped when used directly
-            # Note: Some agents (ObserverAgent, UtilityAgent) are already Ray actors
-            if not is_ray_actor:
-                # Class is not already a Ray actor, wrap it
-                if is_regular_class:
-                    AgentClass = ray.remote(max_restarts=2, max_task_retries=0)(
-                        AgentClass
-                    )
-                    logger.debug(
-                        f"[{self.organ_id}] Wrapped '{agent_class_name}' with @ray.remote"
-                    )
-                else:
-                    raise TypeError(
-                        f"'{agent_class_name}' is neither a regular class nor a Ray actor "
-                        f"(type: {type(AgentClass).__name__})"
-                    )
-            else:
+            if _is_ray_actor_class(raw_cls):
                 logger.debug(
                     f"[{self.organ_id}] Agent class '{agent_class_name}' is already a Ray actor, using as-is"
                 )
+            else:
+                logger.debug(
+                    f"[{self.organ_id}] Wrapped '{agent_class_name}' with @ray.remote"
+                )
 
-            # 2. Prepare Config-Based Context
-            # We must ensure OUR local deps are ready so we can pass data derived from them (like role snapshots)
-            # But we do NOT pass the deps themselves.
-
+            # 2. Build config-only params (serializable)
             # Snapshotting RoleRegistry avoids passing the whole object (safest approach)
             role_snapshot = self._get_role_registry_snapshot()
 
@@ -462,58 +547,61 @@ class Organ:
             # If shards exist, we pass the list. If local, we pass None (Agent creates its own local fallback).
             th_param = self.tool_handler_shards if self.tool_handler_shards else None
 
-            # 3. Construct Params
-            agent_params = {
+            # Prefer passing specialization as string for serialization safety
+            # BaseAgent should normalize this back to Specialization enum
+            spec_value = (
+                specialization.value
+                if hasattr(specialization, "value")
+                else str(specialization)
+            )
+
+            agent_params: Dict[str, Any] = {
                 "agent_id": agent_id,
                 "organ_id": self.organ_id,
-                "specialization": specialization,
+                # Pass as string for serialization stability (BaseAgent will normalize)
+                "specialization": spec_value,
                 "tool_handler_shards": th_param,
                 "role_registry_snapshot": role_snapshot,
                 "holon_fabric_config": self._holon_fabric_config,
                 "cognitive_client_cfg": self._cognitive_client_cfg,
                 "ml_client_cfg": self._ml_client_cfg,
-                "mcp_client_cfg": None,  # Add if you have this config in Organ
+                "mcp_client_cfg": getattr(self, "_mcp_client_cfg", None),
             }
 
-            # 4. Extended Params for Stateful Agents
-            # Architectural Note: ConversationAgent is a runtime capability wrapper,
-            # not a specialization. It should only be used for USER_LIAISON agents
-            # (enforced in OrganismCore._create_agents_from_config).
-            if agent_class_name == "ConversationAgent":
-                agent_params.update(
-                    {
-                        "mw_manager_organ_id": self.organ_id,
-                        "checkpoint_cfg": self._checkpoint_cfg,
-                    }
-                )
+            # 3. Optional per-class init kwargs (central registry)
+            agent_params.update(_extra_init_kwargs_for(agent_class_name, self))
 
-            # 5. Spawn Actor
+            # 4. Spawn actor
             actor_opts = {
                 "name": agent_id,
-                "namespace": "agent_namespace",  # Ensure this constant is imported
+                "namespace": AGENT_NAMESPACE,  # Use the module-level constant
                 "get_if_exists": True,
                 **agent_actor_options,
             }
 
-            handle = AgentClass.options(**actor_opts).remote(**agent_params)
+            handle = AgentActorClass.options(**actor_opts).remote(**agent_params)
 
-            # 6. Update Registry
+            # 5. Register locally
             self.agents[agent_id] = handle
             self.agent_info[agent_id] = {
                 "agent_id": agent_id,
-                "specialization": specialization.name,
+                "specialization": spec_value,  # Store as string for consistency
+                "specialization_name": specialization.name
+                if hasattr(specialization, "name")
+                else spec_value,
                 "class": agent_class_name,
+                "classpath": classpath,  # Store full classpath for debugging/respawn
                 "created_at": time.time(),
                 "status": "ready",
             }
 
-            # 7. Tier-1 Registration (Optional)
+            # 6. Optional tier-1 registration
             if self.organ_registry and session:
                 await self.organ_registry.register_agent(
                     session,
                     agent_id=agent_id,
                     organ_id=self.organ_id,
-                    specialization=specialization.value,
+                    specialization=spec_value,
                 )
 
             logger.info(f"✅ [{self.organ_id}] Registered {agent_id}")
@@ -521,6 +609,7 @@ class Organ:
         except Exception as e:
             logger.error(f"❌ Failed to spawn agent {agent_id}: {e}", exc_info=True)
             self.agents.pop(agent_id, None)
+            self.agent_info.pop(agent_id, None)
             raise
 
     def _get_role_registry_snapshot(self) -> Dict[str, Any]:
@@ -573,8 +662,24 @@ class Organ:
         if not info:
             raise ValueError(f"Cannot respawn {agent_id}: no info retained.")
 
-        spec_name = info.get("specialization", "GENERALIST")
-        spec = Specialization[spec_name.upper()]
+        # Handle both string value (new format) and name (legacy format)
+        spec_str = info.get("specialization") or info.get(
+            "specialization_name", "user_liaison"
+        )
+
+        # Try to resolve as value first (most common case with new factory)
+        try:
+            spec = Specialization(spec_str)
+        except ValueError:
+            # Fallback: try as name (uppercase)
+            try:
+                spec = Specialization[spec_str.upper()]
+            except KeyError:
+                logger.warning(
+                    f"[{self.organ_id}] Unknown specialization '{spec_str}' for respawn, defaulting to USER_LIAISON"
+                )
+                spec = Specialization.USER_LIAISON
+
         agent_class_name = info.get("class", "BaseAgent")  # Get the class
 
         # Re-run creation logic with preserved agent class
@@ -612,7 +717,10 @@ class Organ:
 
             # Check if this agent matches the updated specialization
             # (Use the normalized value we stored during register_agent)
-            agent_spec = info.get("specialization_value", "").lower()
+            # Support both new format (specialization as value) and legacy (specialization_value)
+            agent_spec = (
+                info.get("specialization", "") or info.get("specialization_value", "")
+            ).lower()
 
             if agent_spec == target_spec_val:
                 # 3. Remote Call to Agent
@@ -1000,11 +1108,19 @@ class Organ:
         candidates = []
 
         # 1. Filter candidates by Specialization
+        # Support both new format (specialization as value) and legacy formats
         for agent_id, info in self.agent_info.items():
-            stored_name = info.get("specialization", "").lower()
-            stored_value = info.get("specialization_value", "").lower()
+            # New format: specialization is the value (string)
+            stored_value = info.get("specialization", "").lower()
+            # Legacy formats: specialization_name or specialization_value
+            stored_name = info.get("specialization_name", "").lower()
+            legacy_value = info.get("specialization_value", "").lower()
 
-            if stored_name == spec_norm or stored_value == spec_norm:
+            if (
+                stored_value == spec_norm
+                or stored_name == spec_norm
+                or legacy_value == spec_norm
+            ):
                 candidates.append(agent_id)
 
         if not candidates:

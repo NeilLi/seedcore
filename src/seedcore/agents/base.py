@@ -153,6 +153,22 @@ class BaseAgent:
         else:
             self._role_registry = role_registry or DEFAULT_ROLE_REGISTRY
 
+        # Normalize specialization: accept str | Specialization for serialization safety
+        # Factory passes strings to avoid Ray serialization issues with enums
+        if isinstance(specialization, str):
+            try:
+                # Try to find by value first (most common case)
+                specialization = Specialization(specialization)
+            except ValueError:
+                # Fallback: try by name (uppercase)
+                try:
+                    specialization = Specialization[specialization.upper()]
+                except KeyError:
+                    logger.warning(
+                        f"Unknown specialization string '{specialization}', defaulting to GENERALIST"
+                    )
+                    specialization = Specialization.GENERALIST
+
         self.specialization = specialization
         self.role_profile = self._role_registry.get(self.specialization)
 

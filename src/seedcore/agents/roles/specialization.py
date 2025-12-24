@@ -14,6 +14,23 @@ import json
 # Define keys here to avoid circular imports with state.py
 ROLE_KEYS = ["E", "S", "O"]
 
+class OrganKind(str, Enum):
+    """
+    Top-level (hard) organ-kind.
+    Stable categories used for policy hardening, RBAC, routing gates.
+    Dynamic behavior lives in `Specialization`.
+    """
+
+    USER_EXPERIENCE = "user_experience"
+    ENV_INTELLIGENCE = "env_intelligence"
+    ORCHESTRATION = "orchestration"
+    EXECUTION = "execution"
+    VERIFICATION = "verification"
+    LEARNING = "learning"
+    BUSINESS = "business"
+    UTILITY = "utility"
+
+
 class Specialization(str, Enum):
     """
     Agent specialization taxonomy for AI-driven smart habitats.
@@ -31,7 +48,7 @@ class Specialization(str, Enum):
     # =============================================================
     #  ENVIRONMENT UNDERSTANDING
     # =============================================================
-    ENVIRONMENT_MODEL = "environment_model"
+    ENVIRONMENT = "environment"
     ANOMALY_DETECTOR = "anomaly_detector"
     FORECASTER = "forecaster"
     SAFETY_MONITOR = "safety_monitor"
@@ -60,9 +77,10 @@ class Specialization(str, Enum):
     # =============================================================
     #  VERIFICATION & FEEDBACK
     # =============================================================
-    ENVIRONMENT_VERIFIER = "environment_verifier"
+    RESULT_VERIFIER = "result_verifier"
     RESULT_VALIDATOR = "result_validator"
     FEEDBACK_INTEGRATOR = "feedback_integrator"
+    FEEDBACK_VERIFIER = "feedback_verifier"
 
     # =============================================================
     #  LEARNING & ADAPTATION

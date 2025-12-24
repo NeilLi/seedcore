@@ -20,6 +20,7 @@ seedcore:
         description: "User dialog, mood inference, preference management."
         agents:
           - specialization: "USER_LIAISON"
+            class: "ConversationAgent"
             count: 1
           - specialization: "MOOD_INFERENCE_AGENT"
             count: 0
@@ -36,10 +37,12 @@ seedcore:
       - id: "environment_intelligence_organ"
         description: "World modeling, predictions, anomalies, emergency detection."
         agents:
-          - specialization: "ENVIRONMENT_MODEL"
+          - specialization: "ENVIRONMENT"
+            class: "EnvironmentIntelligenceAgent"
             count: 1
           - specialization: "ANOMALY_DETECTOR"
-            count: 0
+            class: "EnvironmentIntelligenceAgent"
+            count: 1
           - specialization: "FORECASTER"
             count: 0
           - specialization: "SAFETY_MONITOR"
@@ -54,6 +57,7 @@ seedcore:
         description: "Device control, robot task coordination, energy optimization."
         agents:
           - specialization: "DEVICE_ORCHESTRATOR"
+            class: "OrchestrationAgent"
             count: 1
           - specialization: "ROBOT_COORDINATOR"
             count: 0
@@ -95,11 +99,13 @@ seedcore:
       - id: "verification_organ"
         description: "Real-world verification, QA, feedback integration."
         agents:
-          - specialization: "ENVIRONMENT_VERIFIER"
+          - specialization: "RESULT_VERIFIER"
             count: 1
           - specialization: "RESULT_VALIDATOR"
             count: 0
           - specialization: "FEEDBACK_INTEGRATOR"
+            count: 0
+          - specialization: "FEEDBACK_VERIFIER"
             count: 0
 
       # =============================================================
@@ -128,11 +134,11 @@ seedcore:
         description: "Specialized agents for pre-development and experimentation."
         agents:
           - specialization: "OBSERVER"
-            count: 1
             class: "ObserverAgent"
+            count: 1            
           - specialization: "UTILITY"
-            count: 1
-            class: "UtilityLearningAgent"
+            class: "UtilityAgent"
+            count: 1            
           - specialization: "GENERALIST"
             count: 1
 

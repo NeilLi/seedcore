@@ -92,7 +92,7 @@ class ConversationAgent(BaseAgent):
         initial_role_probs: Optional[Dict[str, float]] = None,
         
         # --- BaseAgent Configs (Passthrough) ---
-        specialization: Specialization = Specialization.GENERALIST,
+        specialization: Specialization = Specialization.USER_LIAISON,
         organ_id: Optional[str] = None,
         tool_handler_shards: Optional[List[Any]] = None,
         role_registry_snapshot: Optional[Dict[str, Any]] = None,

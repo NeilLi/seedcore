@@ -17,4 +17,4 @@ seedcore:
 
     # General Service Settings
     timeouts:
-      serve_call_s: 2
+      serve_call_s: 5
