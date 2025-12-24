@@ -179,37 +179,166 @@ def del_fact(fid: str):
         print(f"❌ No fact with ID starting with {fid}")
     else:
         r.raise_for_status()
-        print(f"🗑️ Deleted fact")
+        print("🗑️ Deleted fact")
 
 # ------------------- TASKS -------------------
-def intelligent_task_creation(prompt: str):
-    p = prompt.lower()
-    payload = {"description": prompt, "run_immediately": True, "params": {}}
-    if "plan" in p or "create a plan" in p:
-        payload["type"] = "query"  # TaskType.QUERY
-        payload["drift_score"] = 0.1
-        payload["params"]["task_description"] = prompt
-        print("🔍 Interpreted as a 'planning' task (low drift).")
-    elif "analyze" in p or "reason about" in p:
-        payload["type"] = "query"  # TaskType.QUERY
-        payload["drift_score"] = 0.2
-        if "incident" in p:
-            parts = prompt.split()
-            try:
-                idx = parts.index("incident")
-                payload["params"]["incident_id"] = parts[idx + 1]
-            except Exception:
-                pass
-        print("🔍 Interpreted as a 'reasoning' task (low drift).")
-    else:
-        payload["type"] = "query"  # TaskType.QUERY
-        payload["drift_score"] = 0.9
-        print("⚠️ Unrecognized pattern. Escalating with high drift score.")
+def create_task(task_type: str, description: str, params: dict | None = None, domain: str | None = None):
+    """
+    Explicit task creation helper.
+    
+    Args:
+        task_type: TaskType value (query, action, graph, maintenance, chat)
+        description: Human-readable description
+        params: Optional params dict
+        domain: Optional domain/namespace (e.g., "device", "robot")
+    """
+    payload = {
+        "type": task_type,
+        "description": description,
+        "params": params or {},
+        "run_immediately": True,
+    }
+    if domain:
+        payload["domain"] = domain
+    
+    try:
+        r = requests.post(f"{API_V1_BASE}/tasks", json=payload)
+        r.raise_for_status()
+        t = r.json()
+        print(f"🚀 Task {t['id'][:8]} [{t['type']}] created with status '{t['status']}'")
+    except requests.RequestException as e:
+        print(f"❌ Failed to create task: {e}")
 
-    r = requests.post(f"{API_V1_BASE}/tasks", json=payload)
-    r.raise_for_status()
-    t = r.json()
-    print(f"🚀 Task {t['id'][:8]} [{t['type']}] created with status '{t['status']}'")
+
+def query_command(args):
+    """query <description> - Create a QUERY task (reasoning, analysis, planning)"""
+    if not args:
+        print("Usage: query <description>")
+        print("Example: query 'analyze yesterday's energy usage'")
+        return
+    
+    description = " ".join(args)
+    create_task(
+        task_type="query",
+        description=description,
+        params={"task_description": description},
+    )
+
+
+def device_command(args):
+    """device <on|off> <device_type> [key=value ...] - Create an ACTION task for device control"""
+    if len(args) < 2:
+        print("Usage: device <on|off> <device_type> [key=value ...]")
+        print("Examples:")
+        print("  device on light room=1203")
+        print("  device off hvac room=1203")
+        print("  device on light room=1203 brightness=50")
+        return
+    
+    action = args[0].lower()
+    if action not in ("on", "off"):
+        print(f"❌ Invalid action '{action}'. Must be 'on' or 'off'")
+        return
+    
+    device_type = args[1].lower()
+    
+    # Parse key=value pairs
+    kv = {}
+    for arg in args[2:]:
+        if "=" in arg:
+            k, v = arg.split("=", 1)
+            kv[k] = v
+    
+    description = f"{action} {device_type}"
+    if kv:
+        description += " " + " ".join(f"{k}={v}" for k, v in kv.items())
+    
+    create_task(
+        task_type="action",
+        description=description,
+        domain="device",
+        params={
+            "domain": "device",
+            "action": action,
+            "device": device_type,
+            **kv,
+        },
+    )
+
+
+def robot_command(args):
+    """robot <dispatch|stop> <task> [key=value ...] - Create an ACTION task for robot control"""
+    if len(args) < 2:
+        print("Usage: robot <dispatch|stop> <task> [key=value ...]")
+        print("Examples:")
+        print("  robot dispatch cleaning room=1203")
+        print("  robot stop cleaning robot=cleaner-2")
+        return
+    
+    action = args[0].lower()
+    if action not in ("dispatch", "stop"):
+        print(f"❌ Invalid action '{action}'. Must be 'dispatch' or 'stop'")
+        return
+    
+    task = args[1].lower()
+    
+    # Parse key=value pairs
+    kv = {}
+    for arg in args[2:]:
+        if "=" in arg:
+            k, v = arg.split("=", 1)
+            kv[k] = v
+    
+    description = f"robot {action} {task}"
+    if kv:
+        description += " " + " ".join(f"{k}={v}" for k, v in kv.items())
+    
+    create_task(
+        task_type="action",
+        description=description,
+        domain="robot",
+        params={
+            "domain": "robot",
+            "action": action,
+            "task": task,
+            **kv,
+        },
+    )
+
+
+def graph_command(args):
+    """graph <operation> [args...] - Create a GRAPH task for knowledge graph operations"""
+    if not args:
+        print("Usage: graph <operation> [args...]")
+        print("Examples:")
+        print("  graph find rooms with hvac_alarm")
+        print("  graph relate guest=alice preference=quiet")
+        return
+    
+    description = " ".join(args)
+    create_task(
+        task_type="graph",
+        description=description,
+        params={"operation": args[0], "args": args[1:]},
+    )
+
+
+def maintenance_command(args):
+    """maint <operation> [args...] - Create a MAINTENANCE task for system operations"""
+    if not args:
+        print("Usage: maint <operation> [args...]")
+        print("Examples:")
+        print("  maint check devices")
+        print("  maint restart robot cleaner-1")
+        print("  maint drain queue orchestration")
+        return
+    
+    description = " ".join(args)
+    create_task(
+        task_type="maintenance",
+        description=description,
+        params={"operation": args[0], "args": args[1:]},
+    )
 
 def _print_task_row(t, prefix="  - "):
     status = (t.get('status') or 'N/A').upper()
@@ -383,45 +512,72 @@ def quick_status(tid: str):
         if t.get("error"):
             print(f"   🔴 Error: {t['error']}")
         elif t.get("result"):
-            print(f"   ✅ Has result")
+            print("   ✅ Has result")
     except requests.RequestException as e:
         print(f"❌ Could not connect to API: {e}")
 
 def show_help():
     print("🎯 SeedCore CLI Commands")
-    print("=" * 60)
-    print(" ask <prompt>              - Create and run a task from natural language")
-    print(" facts                     - List all facts")
-    print(" genfact <text>            - Create a new fact")
-    print(" delfact <id>              - Delete a fact by ID")
-    print(" tasks [--status S] [--type T] [--since V] [--limit N]")
+    print("=" * 70)
+    print("Task Creation (Explicit):")
+    print("  ask <prompt>              - Create QUERY task from natural language")
+    print("  query <description>       - Create QUERY task (reasoning, analysis)")
+    print("  device <on|off> <type> [key=value...]")
+    print("                           - Create ACTION task for device control")
+    print("  robot <dispatch|stop> <task> [key=value...]")
+    print("                           - Create ACTION task for robot control")
+    print("  graph <operation> [args...]")
+    print("                           - Create GRAPH task for knowledge operations")
+    print("  maint <operation> [args...]")
+    print("                           - Create MAINTENANCE task for system ops")
+    print("")
+    print("Task Inspection:")
+    print("  tasks [--status S] [--type T] [--since V] [--limit N]")
     print("                           - List tasks with filters")
-    print(" search <q> [--status S] [--type T] [--since V] [--limit N]")
+    print("  search <q> [--status S] [--type T] [--since V] [--limit N]")
     print("                           - Fuzzy search across id/type/description/result")
-    print(" taskstatus <id>           - Detailed status (accepts short IDs)")
-    print(" status <id>               - Quick status (accepts short IDs)")
-    print(" health                    - Check API health status")
-    print(" readyz                    - Check API readiness (including DB)")
-    print(" help                      - Show this help")
-    print(" exit / quit               - Exit")
-    print("=" * 60)
+    print("  taskstatus <id>           - Detailed status (accepts short IDs)")
+    print("  status <id>               - Quick status (accepts short IDs)")
+    print("")
+    print("Facts:")
+    print("  facts                     - List all facts")
+    print("  genfact <text>            - Create a new fact")
+    print("  delfact <id>              - Delete a fact by ID")
+    print("")
+    print("System:")
+    print("  health                    - Check API health status")
+    print("  readyz                    - Check API readiness (including DB)")
+    print("  help                      - Show this help")
+    print("  exit / quit               - Exit")
+    print("=" * 70)
     print("Examples:")
-    print("  tasks --status running")
-    print("  tasks --type general_query --since 24h --limit 10")
-    print("  search tea --status completed")
-    print("  ask analyze the incident 12345")
+    print("  query analyze yesterday's energy usage")
+    print("  device on light room=1203")
+    print("  device off hvac room=1203 brightness=0")
+    print("  robot dispatch cleaning room=1203")
+    print("  robot stop cleaning robot=cleaner-2")
+    print("  graph find rooms with hvac_alarm")
+    print("  maint check devices")
+    print("  tasks --status running --type action")
+    print("  tasks --type action --since 24h --limit 10")
     print("")
     print("Note: All flags (--status, --type, --since, --limit) require values.")
     print("      Use 'tasks --status running' not 'tasks --status'")
 
 # ------------------- SHELL LOOP -------------------
 def main():
-    print("🎯 SeedCore Interactive Shell (v1.6 — enhanced API integration)")
+    print("🎯 SeedCore Interactive Shell (v2.0 — explicit & safe)")
     print("Connected to", API_BASE)
-    print("Commands: ask, facts, genfact, delfact, tasks, taskstatus, search, status, health, readyz, help, exit")
+    print("Commands: ask, query, device, robot, graph, maint, facts, tasks, search, status, health, readyz, help, exit")
     print("=" * 70)
 
-    SYSTEM_COMMANDS = {"facts", "genfact", "delfact", "tasks", "taskstatus", "search", "status", "health", "readyz", "help"}
+    SYSTEM_COMMANDS = {
+        "ask", "query",
+        "device", "robot", "graph", "maint",
+        "facts", "genfact", "delfact",
+        "tasks", "taskstatus", "search", "status",
+        "health", "readyz", "help"
+    }
 
     while True:
         try:
@@ -439,12 +595,29 @@ def main():
 
         try:
             if op in SYSTEM_COMMANDS:
-                if op == "facts":
+                # Task creation commands
+                if op in ("ask", "query"):
+                    if not rest:
+                        print("Usage: {} <description>".format(op))
+                        print("Example: {} 'analyze yesterday's energy usage'".format(op))
+                    else:
+                        query_command(rest)
+                elif op == "device":
+                    device_command(rest)
+                elif op == "robot":
+                    robot_command(rest)
+                elif op == "graph":
+                    graph_command(rest)
+                elif op == "maint":
+                    maintenance_command(rest)
+                # Facts commands
+                elif op == "facts":
                     list_facts()
                 elif op == "genfact" and rest:
                     gen_fact(" ".join(rest))
                 elif op == "delfact" and rest:
                     del_fact(rest[0])
+                # Task inspection commands
                 elif op == "tasks":
                     list_tasks_with_filters(rest)
                 elif op == "taskstatus" and rest:
@@ -455,11 +628,13 @@ def main():
                     q = []
                     i = 0
                     while i < len(rest) and not rest[i].startswith("--"):
-                        q.append(rest[i]); i += 1
+                        q.append(rest[i])
+                        i += 1
                     query = " ".join(q).strip()
                     search_tasks(query, rest[i:])
                 elif op == "status" and rest:
                     quick_status(rest[0])
+                # System commands
                 elif op == "health":
                     check_health()
                 elif op == "readyz":
@@ -469,9 +644,13 @@ def main():
                 else:
                     print("ℹ️ Try 'help' for usage.")
             else:
-                # natural language or explicit 'ask'
-                prompt = " ".join(rest) if op == "ask" else cmd
-                intelligent_task_creation(prompt)
+                # Unknown command - treat as natural language query (backward compatibility)
+                print(f"⚠️ Unknown command '{op}'. Treating as natural language query.")
+                print("💡 Tip: Use explicit commands for better control:")
+                print("   - 'query <description>' for reasoning/analysis")
+                print("   - 'device <on|off> <type> [key=value...]' for device control")
+                print("   - 'robot <dispatch|stop> <task> [key=value...]' for robot control")
+                query_command([cmd])
         except Exception as e:
             print(f"❌ An error occurred: {e}")
 
