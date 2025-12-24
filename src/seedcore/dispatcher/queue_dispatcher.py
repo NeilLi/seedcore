@@ -15,6 +15,7 @@ from seedcore.dispatcher.router import CoordinatorHttpRouter, OrganismRouter
 from seedcore.models import TaskPayload
 from seedcore.database import get_asyncpg_pool, PG_DSN
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
+from seedcore.dispatcher.config import MAX_ATTEMPTS
 
 setup_logging(app_name="seedcore.dispatcher")
 logger = ensure_serve_logger("seedcore.dispatcher")
@@ -234,6 +235,8 @@ class Dispatcher:
     async def _process_task(self, row: Dict[str, Any]):
         task_id = str(row["id"])
         started = datetime.now(timezone.utc)
+        # Get current attempt count (attempts is incremented when task is claimed)
+        current_attempts = int(row.get("attempts", 0))
 
         try:
             # A. Parse
@@ -351,33 +354,43 @@ class Dispatcher:
                 agent_status = result.get("agent_status")
                 should_retry = result.get("retry", True)  # Default to retry unless explicitly False
                 
+                # Check if max attempts reached - fail immediately if exceeded
+                if current_attempts >= MAX_ATTEMPTS:
+                    final_error = f"Max attempts ({MAX_ATTEMPTS}) exceeded: {err}"
+                    logger.error(
+                        "[%s] ❌ Task %s failed after %d attempts (max: %d): %s",
+                        self.name, task_id, current_attempts, MAX_ATTEMPTS, err
+                    )
+                    await self._repo.fail(task_id, final_error)
+                    return  # Exit early, don't retry
+                
                 # Determine retry delay based on error type and agent status
                 if agent_status == "respawning_or_unavailable":
                     # Agent is respawning - use longer delay to allow respawn to complete
                     delay_seconds = 30
                     logger.info(
-                        "[%s] 🔁 Task %s failed: %s (agent respawning, delay=%ds)",
-                        self.name, task_id, err, delay_seconds
+                        "[%s] 🔁 Task %s failed: %s (attempt %d/%d, agent respawning, delay=%ds)",
+                        self.name, task_id, err, current_attempts, MAX_ATTEMPTS, delay_seconds
                     )
                 elif agent_status == "cancelled_or_respawning":
                     # Task was cancelled, likely due to respawning - use longer delay
                     delay_seconds = 30
                     logger.info(
-                        "[%s] 🔁 Task %s failed: %s (cancelled/respawning, delay=%ds)",
-                        self.name, task_id, err, delay_seconds
+                        "[%s] 🔁 Task %s failed: %s (attempt %d/%d, cancelled/respawning, delay=%ds)",
+                        self.name, task_id, err, current_attempts, MAX_ATTEMPTS, delay_seconds
                     )
                 elif result.get("kind") == "timeout":
                     # Timeout errors - use moderate delay
                     delay_seconds = 20
                     logger.info(
-                        "[%s] 🔁 Task %s failed: %s (timeout, delay=%ds)",
-                        self.name, task_id, err, delay_seconds
+                        "[%s] 🔁 Task %s failed: %s (attempt %d/%d, timeout, delay=%ds)",
+                        self.name, task_id, err, current_attempts, MAX_ATTEMPTS, delay_seconds
                     )
                 elif not should_retry:
                     # Explicitly marked as non-retryable - fail the task
                     logger.warning(
-                        "[%s] ❌ Task %s failed and marked as non-retryable: %s",
-                        self.name, task_id, err
+                        "[%s] ❌ Task %s failed and marked as non-retryable (attempt %d/%d): %s",
+                        self.name, task_id, current_attempts, MAX_ATTEMPTS, err
                     )
                     await self._repo.fail(task_id, err)
                     return  # Exit early, don't retry
@@ -385,11 +398,11 @@ class Dispatcher:
                     # Default retry delay for other errors
                     delay_seconds = 15
                     logger.warning(
-                        "[%s] 🔁 Task %s failed logic: %s (result keys: %s, delay=%ds)",
-                        self.name, task_id, err, list(result.keys())[:10], delay_seconds
+                        "[%s] 🔁 Task %s failed logic: %s (attempt %d/%d, result keys: %s, delay=%ds)",
+                        self.name, task_id, err, current_attempts, MAX_ATTEMPTS, list(result.keys())[:10], delay_seconds
                     )
                 
-                # Only retry if should_retry is True
+                # Only retry if should_retry is True and we haven't exceeded max attempts
                 if should_retry:
                     await self._repo.retry(task_id, err, delay_seconds=delay_seconds)
                 else:
@@ -402,9 +415,18 @@ class Dispatcher:
 
         except Exception as e:
             # Unexpected crashes (Parse error, Network down)
-            logger.error("[%s] ❌ Task %s crashed: %s", self.name, task_id, e)
+            logger.error("[%s] ❌ Task %s crashed: %s (attempt %d/%d)", self.name, task_id, e, current_attempts, MAX_ATTEMPTS)
             try:
-                await self._repo.retry(task_id, f"crash: {e}", delay_seconds=30)
+                # Check if max attempts reached before retrying crash
+                if current_attempts >= MAX_ATTEMPTS:
+                    final_error = f"Max attempts ({MAX_ATTEMPTS}) exceeded after crash: {e}"
+                    logger.error(
+                        "[%s] ❌ Task %s failed after %d attempts due to crash: %s",
+                        self.name, task_id, current_attempts, e
+                    )
+                    await self._repo.fail(task_id, final_error)
+                else:
+                    await self._repo.retry(task_id, f"crash: {e}", delay_seconds=30)
             except Exception:
                 pass  # Repo might be down, nothing we can do
 

@@ -246,6 +246,8 @@ class Organ:
         "ObserverAgent": "seedcore.agents.observer_agent.ObserverAgent",
         "UtilityAgent": "seedcore.agents.utility_agent.UtilityAgent",
         "UtilityLearningAgent": "seedcore.agents.utility_agent.UtilityAgent",  # Alias for UtilityAgent
+        "OrchestrationAgent": "seedcore.agents.orchestration_agent.OrchestrationAgent",
+        "EnvironmentIntelligenceAgent": "seedcore.agents.environment_agent.EnvironmentIntelligenceAgent",
     }
 
     def __init__(

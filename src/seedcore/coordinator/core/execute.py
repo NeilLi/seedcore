@@ -56,7 +56,7 @@ logger = ensure_serve_logger("seedcore.coordinator.core.execute", level="DEBUG")
 
 # Tunables
 DEFAULT_ORGAN_TIMEOUT_S = 30.0
-MIN_ORGAN_TIMEOUT_S = 1.0
+MIN_ORGAN_TIMEOUT_S = 20.0
 MAX_ORGAN_TIMEOUT_S = 300.0
 DEFAULT_PKG_TIMEOUT_S = 2
 MAX_STEPS_DEFAULT = 32

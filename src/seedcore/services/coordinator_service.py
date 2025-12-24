@@ -181,12 +181,17 @@ class TimeoutConfig(BaseModel):
     serve_call_s: int = Field(
         default_factory=lambda: int(os.getenv("SERVE_CALL_TIMEOUT_S", "5"))
     )
+    organism_timeout_s: int = Field(
+        default_factory=lambda: int(os.getenv("ORGANISM_TIMEOUT_S", "20"))
+    )
 
     @classmethod
     def from_yaml(cls, data: Dict[str, Any]) -> "TimeoutConfig":
         payload: Dict[str, Any] = {}
         if "serve_call_s" in data and data["serve_call_s"] is not None:
             payload["serve_call_s"] = int(data["serve_call_s"])
+        if "organism_timeout_s" in data and data["organism_timeout_s"] is not None:
+            payload["organism_timeout_s"] = int(data["organism_timeout_s"])
         # Env/defaults are handled via the default_factory when field is missing
         return cls(**payload)
 
@@ -332,7 +337,8 @@ class Coordinator:
         logger.info(
             f"🧠 Coordinator Init: Tau[F={self.cfg.surprise.tau_fast}/"
             f"P={self.cfg.surprise.tau_plan}], "
-            f"OCPS[Th={self.ocps_valve.h}], Timeout={self.timeout_s}s"
+            f"OCPS[Th={self.ocps_valve.h}], Timeout={self.timeout_s}s, "
+            f"OrganismTimeout={self.organism_timeout_s}s"
         )
 
     def _init_core_logic(self) -> None:
@@ -357,6 +363,7 @@ class Coordinator:
 
         # Service parameters
         self.timeout_s = self.cfg.timeouts.serve_call_s
+        self.organism_timeout_s = self.cfg.timeouts.organism_timeout_s
         self.fast_path_latency_slo_ms = FAST_PATH_LATENCY_SLO_MS
         self.ood_to01: Optional[Any] = None
 
@@ -849,11 +856,13 @@ class Coordinator:
                 # 4. Call Unified Organism Endpoint
                 # Note: The network routing to 'organ_id' happens here via the client
                 # 'self' is captured from the closure (outer scope)
+                # Use configured organism timeout instead of passed timeout parameter
+                organism_timeout = float(self.organism_timeout_s)
                 res = await self.organism_client.post(
                     "/route-and-execute",
                     json={"task": payload},
                     headers=headers,
-                    timeout=float(timeout),
+                    timeout=organism_timeout,
                 )
 
                 # 4. Handle Result & Back-fill V2 Metadata
