@@ -15,12 +15,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
 import time
 from typing import Any, Dict, Optional
 
 import httpx  # pyright: ignore[reportMissingImports]
 
+from seedcore.config.tuya_config import TuyaConfig
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 
 setup_logging(app_name="seedcore.tools.tuya.tuya_client")
@@ -40,14 +40,35 @@ class TuyaClient:
     def __init__(
         self,
         *,
+        config: Optional[TuyaConfig] = None,
         access_id: Optional[str] = None,
         access_secret: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout_s: float = 10.0,
     ):
-        self.access_id = access_id or os.getenv("ACCESS_ID")
-        self.access_secret = access_secret or os.getenv("ACCESS_SECRET")
-        self.base_url = base_url or os.getenv("TUYA_URL", "https://openapi.tuya.com")
+        """
+        Initialize Tuya client.
+        
+        Args:
+            config: Optional TuyaConfig instance. If not provided, creates one.
+            access_id: Optional override for access_id (takes precedence over config)
+            access_secret: Optional override for access_secret (takes precedence over config)
+            base_url: Optional override for base_url (takes precedence over config)
+            timeout_s: HTTP timeout in seconds
+        """
+        # Use provided config or create a new one
+        self._config = config or TuyaConfig()
+        
+        # Check if Tuya is enabled
+        if not self._config.enabled:
+            raise RuntimeError(
+                "Tuya is not enabled. Set TUYA_ENABLED=true and configure required env vars."
+            )
+        
+        # Use provided overrides or fall back to config values
+        self.access_id = access_id or self._config.access_id
+        self.access_secret = access_secret or self._config.access_secret
+        self.base_url = base_url or self._config.api_base or "https://openapi.tuya.com"
 
         if not self.access_id or not self.access_secret:
             raise RuntimeError("Tuya ACCESS_ID / ACCESS_SECRET not configured")
