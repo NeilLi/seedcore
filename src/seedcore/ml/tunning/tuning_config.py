@@ -7,8 +7,8 @@ using Ray Tune, specifically for XGBoost models in the SeedCore platform.
 
 from __future__ import annotations
 
-from ray import tune
-from typing import Dict, Any, List
+from ray import tune  # pyright: ignore[reportMissingImports]
+from typing import Dict, Any
 import logging
 import time
 import os

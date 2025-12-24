@@ -21,6 +21,7 @@ class MLServiceClient(BaseServiceClient):
     - Anomaly detection
     - XGBoost model operations
     - Scaling predictions
+    - Intent compilation: deterministic natural-language → function call translation
     """
     
     def __init__(self, 
@@ -278,6 +279,87 @@ class MLServiceClient(BaseServiceClient):
             List of available models
         """
         return await self.get("/models")
+
+    # --- Intent Compilation Endpoints ---
+    async def compile_intent(
+        self,
+        text: str,
+        context: Dict[str, Any] = None,
+        **params
+    ) -> Dict[str, Any]:
+        """
+        Compile natural language text into a structured function call.
+        
+        Uses FunctionGemma as a deterministic intent compiler to convert
+        user text into validated function calls without executing them.
+        
+        Args:
+            text: Natural language input (e.g., "turn on the bedroom light")
+            context: Optional context (domain, vendor, room_map, etc.)
+            **params: Additional parameters for the intent compilation request
+            
+        Returns:
+            Intent compilation result with function name, arguments, and confidence
+        """
+        payload = {
+            "text": text,
+            "context": context or {},
+            **params
+        }
+        return await self.post("/intent/compile", json=payload)
+
+    async def get_intent_schema(
+        self,
+        function_name: str = None,
+        domain: str = None
+    ) -> Dict[str, Any]:
+        """
+        Get function schema(s) for intent compilation.
+        
+        Args:
+            function_name: Get schema for specific function (optional)
+            domain: Filter schemas by domain (e.g., "device", "energy") (optional)
+            
+        Returns:
+            Schema(s) response - single schema if function_name provided,
+            otherwise list of schemas filtered by domain if provided
+        """
+        params = {}
+        if function_name:
+            params["function_name"] = function_name
+        if domain:
+            params["domain"] = domain
+        
+        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+        url = "/intent/schema"
+        if query_string:
+            url += f"?{query_string}"
+        
+        return await self.get(url)
+
+    async def validate_intent(
+        self,
+        function: str,
+        arguments: Dict[str, Any],
+        **params
+    ) -> Dict[str, Any]:
+        """
+        Validate a generated function call against its schema.
+        
+        Args:
+            function: Function name to validate
+            arguments: Function arguments to validate
+            **params: Additional parameters for validation
+            
+        Returns:
+            Validation result with valid flag and any errors
+        """
+        payload = {
+            "function": function,
+            "arguments": arguments,
+            **params
+        }
+        return await self.post("/intent/validate", json=payload)
 
     async def health(self) -> Dict[str, Any]:
         """

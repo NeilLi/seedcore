@@ -38,7 +38,15 @@ Core Capabilities:
        - Embeddings: Text-to-vector encoding for semantic search and RAG
        - Reranking: Relevance scoring for retrieval-augmented generation
 
-    4. Graph & Hypergraph Learning (/hgnn/*):
+    4. Intent Compilation (/intent/*):
+       Deterministic natural-language → structured command translation:
+       - /intent/compile: Converts user text into validated function calls
+       - /intent/schema: Returns supported function signatures
+       - /intent/validate: Validates generated commands against schemas
+       Uses FunctionGemma as a low-latency, local intent compiler optimized
+       for device/robot/automation commands. Pure inference, no tool execution.
+
+    5. Graph & Hypergraph Learning (/hgnn/*):
        Deep structural reasoning for the "Escalated" path:
        - Structural Embedding (/hgnn/embed): Converts hypergraph topology (nodes/edges)
          and anomaly snapshots into a dense vector space (hgnn_embedding). This allows
@@ -87,6 +95,8 @@ Environment Variables:
     SEEDCORE_HGNN_MODEL_PATH: Path to the pre-trained HGNN weights
     SEEDCORE_PROMOTION_LTOT_CAP: Maximum Lipschitz constant for model promotion
     SEEDCORE_E_GUARD: Energy guard threshold for promotion
+    SEEDCORE_FUNCTIONGEMMA_MODEL_PATH: Path to FunctionGemma base model
+    SEEDCORE_FUNCTIONGEMMA_LORA_PATH: Path to FunctionGemma LoRA adapter (optional)
 
 Error Handling:
     - Graceful degradation: Local fallback when Ray Actor unavailable
@@ -376,6 +386,11 @@ async def root():
                 "rerank": "/rerank",
                 "models": "/models"
             },
+            "intent": {
+                "compile": "/intent/compile",
+                "schema": "/intent/schema",
+                "validate": "/intent/validate"
+            },
             "scoring": {
                 "salience": "/score/salience"
             },
@@ -438,6 +453,28 @@ async def health_check():
             xgb_status = "available" if get_xgboost_service() else "unavailable"
         except Exception:
             xgb_status = "unavailable"
+        
+        try:
+            from seedcore.ml.intent.intent_compiler import get_intent_compiler
+            intent_compiler = get_intent_compiler()
+            if intent_compiler:
+                intent_status = "available"
+                intent_stats = intent_compiler.get_performance_stats()
+                intent_memory_mb = intent_compiler.get_memory_usage_mb()
+                intent_info = {
+                    "status": intent_status,
+                    "model_loaded": intent_stats.get("model_loaded", False),
+                    "using_fallback": intent_stats.get("using_fallback", False),
+                    "warmed_up": intent_stats.get("warmed_up", False),
+                }
+                if intent_memory_mb is not None:
+                    intent_info["memory_usage_mb"] = round(intent_memory_mb, 2)
+            else:
+                intent_status = "unavailable"
+                intent_info = {"status": intent_status}
+        except Exception as e:
+            intent_status = "unavailable"
+            intent_info = {"status": intent_status, "error": str(e)}
 
         system_info = {
             "cpu_percent": psutil.cpu_percent(interval=None),
@@ -448,7 +485,11 @@ async def health_check():
             "status": "healthy",
             "service": "ml_serve",
             "timestamp": time.time(),
-            "models": {"salience_scorer": "available", "xgboost_service": xgb_status},
+            "models": {
+                "salience_scorer": "available",
+                "xgboost_service": xgb_status,
+                "intent_compiler": intent_info,
+            },
             "system": system_info,
             "version": "1.0.0",
         }
@@ -1511,6 +1552,165 @@ async def predict_system_regime(request: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------------------------------------------------------------
+# Intent Compilation Service (/intent/*)
+# ---------------------------------------------------------------------
+@ml_app.post("/intent/compile")
+async def compile_intent(request: Dict[str, Any]):
+    """
+    Compile natural language text into a structured function call.
+    
+    This endpoint uses FunctionGemma as a deterministic intent compiler.
+    It converts user text into validated function calls without executing them.
+    
+    Expected request format:
+    {
+        "text": "turn on the bedroom light",
+        "context": {
+            "domain": "device",
+            "vendor": "tuya",
+            "room_map": {"bedroom": "1203"}
+        }
+    }
+    
+    Response format:
+    {
+        "ok": true,
+        "function": "tuya.send_command",
+        "arguments": {
+            "device_id": "bf1234567890abcdef",
+            "commands": [{"code": "switch_led", "value": true}]
+        },
+        "confidence": 0.97,
+        "model_version": "1.0.0",
+        "processing_time_ms": 45.2
+    }
+    """
+    try:
+        text = request.get("text")
+        if not text:
+            raise HTTPException(status_code=400, detail="Missing 'text' in request")
+
+        context = request.get("context", {})
+        
+        # Get intent compiler (lazy-loaded)
+        from seedcore.ml.intent.intent_compiler import get_intent_compiler
+        from seedcore.ml.intent.schema_registry import get_schema_registry
+        
+        compiler = get_intent_compiler()
+        schema_registry = get_schema_registry()
+        
+        # Compile intent
+        result = await compiler.compile(text, context, schema_registry)
+        
+        return sanitize_json(result.to_dict())
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[MLService] Intent compilation error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@ml_app.get("/intent/schema")
+async def get_intent_schema(function_name: Optional[str] = None, domain: Optional[str] = None):
+    """
+    Get function schema(s) for intent compilation.
+    
+    Query parameters:
+    - function_name: Get schema for specific function
+    - domain: Filter schemas by domain (e.g., "device", "energy")
+    
+    Returns list of schemas or single schema if function_name provided.
+    """
+    try:
+        from seedcore.ml.intent.schema_registry import get_schema_registry
+        
+        registry = get_schema_registry()
+        
+        if function_name:
+            schema = registry.get(function_name)
+            if not schema:
+                raise HTTPException(status_code=404, detail=f"Schema not found: {function_name}")
+            return {"status": "success", "schema": sanitize_json(schema.to_dict())}
+        
+        if domain:
+            schemas = registry.list_by_domain(domain)
+        else:
+            schemas = registry.list_all()
+        
+        return {
+            "status": "success",
+            "schemas": [sanitize_json(s.to_dict()) for s in schemas],
+            "total_count": len(schemas),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[MLService] Schema retrieval error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@ml_app.post("/intent/validate")
+async def validate_intent(request: Dict[str, Any]):
+    """
+    Validate a generated function call against its schema.
+    
+    Expected request format:
+    {
+        "function": "tuya.send_command",
+        "arguments": {
+            "device_id": "bf1234567890abcdef",
+            "commands": [{"code": "switch_led", "value": true}]
+        }
+    }
+    
+    Response format:
+    {
+        "valid": true,
+        "function": "tuya.send_command",
+        "errors": []
+    }
+    """
+    try:
+        function_name = request.get("function")
+        arguments = request.get("arguments", {})
+        
+        if not function_name:
+            raise HTTPException(status_code=400, detail="Missing 'function' in request")
+        
+        from seedcore.ml.intent.schema_registry import get_schema_registry
+        
+        registry = get_schema_registry()
+        schema = registry.get(function_name)
+        
+        if not schema:
+            return {
+                "valid": False,
+                "function": function_name,
+                "errors": [f"Schema not found for function: {function_name}"],
+            }
+        
+        is_valid, error_msg = schema.validate_arguments(arguments)
+        
+        if is_valid:
+            return {
+                "valid": True,
+                "function": function_name,
+                "errors": [],
+            }
+        else:
+            return {
+                "valid": False,
+                "function": function_name,
+                "errors": [error_msg] if error_msg else [],
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[MLService] Intent validation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------------------------------------------------------------
 # Serve deployment that hosts ml_app
 # ---------------------------------------------------------------------
 @ml_app.on_event("startup")
@@ -1578,6 +1778,7 @@ class MLService:
         self._salience_scorer = None
         self._xgboost_service = None  # kept for possible future use
         self._drift_detector = None  # Lazy initialization on first use
+        self._intent_compiler = None  # Lazy initialization for intent compilation
         
         logger.info("✅ MLService class initialized (startup event will handle async init)")
 
@@ -1602,6 +1803,18 @@ class MLService:
                 logger.error(f"Failed to load salience scorer: {e}")
                 self._salience_scorer = None
         return self._salience_scorer
+
+    def _get_intent_compiler(self):
+        """Get intent compiler with lazy initialization."""
+        if self._intent_compiler is None:
+            try:
+                from seedcore.ml.intent.intent_compiler import get_intent_compiler
+                self._intent_compiler = get_intent_compiler()
+                logger.info("✅ Intent compiler loaded on first use")
+            except Exception as e:
+                logger.error(f"❌ Failed to load intent compiler: {e}")
+                return None
+        return self._intent_compiler
 
 # ---------------------------------------------------------------------
 # Entrypoint (optional)
