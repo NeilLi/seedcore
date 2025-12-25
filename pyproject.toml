@@ -75,11 +75,15 @@ dependencies = [
     # AI & NLP
     "dspy-ai==2.4.9",
     "scikit-learn==1.4.2",
-    "transformers==4.40.1",
+    # transformers>=4.49.0 required for Gemma 3 architecture support (gemma3_text)
+    # tokenizers>=0.21.0 required by transformers>=4.49.0 (Gemma 3 compatibility)
+    "transformers>=4.49.0,<5.0",
     "sentence-transformers==2.7.0",
-    "tokenizers==0.19.1",
+    "tokenizers>=0.21.0",
     "safetensors==0.4.3",
+    "peft>=0.14.0",  # Required for LoRA adapters and FunctionGemma intent compiler (upgraded for Gemma 3 compatibility)
     "openai>=1.30.0",
+    # "bitsandbytes>=0.43.0",  # Optional: Only needed for 4-bit quantization on CUDA GPUs
     
     # Privacy & Security
     "presidio-analyzer>=2.2.355",

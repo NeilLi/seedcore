@@ -7,6 +7,7 @@ with all drift detection, salience scoring, and XGBoost endpoints.
 """
 
 import logging
+import os
 from typing import Dict, Any, List
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
 
@@ -26,8 +27,14 @@ class MLServiceClient(BaseServiceClient):
     
     def __init__(self, 
                  base_url: str = None, 
-                 timeout: float = 10.0,
-                 warmup_timeout: float = 30.0):
+                 timeout: float = None,  # Default: 15.0s (p95 latency ~8-9s on CPU, with safety margin)
+                 warmup_timeout: float = None):  # Default: 60.0s (increased for model warmup)
+        # Allow timeout to be configured via environment variable
+        # Based on testing: p95 latency ~8-9s, so 15s provides safety margin
+        if timeout is None:
+            timeout = float(os.getenv("ML_SERVICE_TIMEOUT", "15.0"))
+        if warmup_timeout is None:
+            warmup_timeout = float(os.getenv("ML_SERVICE_WARMUP_TIMEOUT", "60.0"))
         # Use centralized gateway discovery
         if base_url is None:
             try:

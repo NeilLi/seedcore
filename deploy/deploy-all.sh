@@ -24,7 +24,7 @@ log() {
 
 build_docker_image() {
   log "Building Docker image"
-  (cd "${PROJECT_ROOT}" && ./build.sh)
+  #(cd "${PROJECT_ROOT}" && ./build.sh)
 }
 
 start_kind_cluster() {

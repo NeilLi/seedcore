@@ -460,12 +460,14 @@ async def health_check():
             if intent_compiler:
                 intent_status = "available"
                 intent_stats = intent_compiler.get_performance_stats()
+                warmup_status = intent_compiler.get_warmup_status()
                 intent_memory_mb = intent_compiler.get_memory_usage_mb()
                 intent_info = {
                     "status": intent_status,
                     "model_loaded": intent_stats.get("model_loaded", False),
                     "using_fallback": intent_stats.get("using_fallback", False),
-                    "warmed_up": intent_stats.get("warmed_up", False),
+                    "warmed_up": intent_stats.get("warmed_up", False),  # Legacy flag
+                    "warmup_status": warmup_status,  # New structured warmup status
                 }
                 if intent_memory_mb is not None:
                     intent_info["memory_usage_mb"] = round(intent_memory_mb, 2)
@@ -1757,6 +1759,55 @@ async def startup_event():
             logger.info("✅ Drift detector warmup task scheduled")
     except Exception as e:
         logger.warning(f"⚠️ Could not initialize drift detector for warmup: {e}")
+    
+    # Initialize IntentCompiler with warmup policy
+    try:
+        from seedcore.ml.intent.intent_compiler import get_intent_compiler
+        from seedcore.ml.warmup_policy import get_warmup_mode, WarmupMode
+        
+        compiler = get_intent_compiler()
+        _service_state["intent_compiler"] = compiler
+        
+        if compiler:
+            mode = get_warmup_mode()
+            logger.info(f"🔥 IntentCompiler warmup mode: {mode.value}")
+            
+            if mode == WarmupMode.EAGER:
+                logger.info("⏳ EAGER warmup: blocking startup until model is ready")
+                try:
+                    await compiler.warmup_heavy()
+                    logger.info("✅ IntentCompiler eager warmup complete")
+                except Exception as e:
+                    logger.warning(f"⚠️ IntentCompiler eager warmup failed: {e}")
+            
+            elif mode == WarmupMode.BACKGROUND:
+                logger.info("🔄 BACKGROUND warmup: scheduling async warmup (light + heavy)")
+                try:
+                    # Schedule light warmup first (loads model) - non-blocking
+                    light_task = asyncio.create_task(compiler.warmup_light())
+                    _service_state["intent_warmup_light_task"] = light_task
+                    
+                    # Schedule heavy warmup (runs inference) - non-blocking, will wait for light to complete
+                    async def background_warmup():
+                        # Wait for light warmup to complete first
+                        await light_task
+                        # Then run heavy warmup
+                        await compiler.warmup_heavy()
+                    
+                    heavy_task = asyncio.create_task(background_warmup())
+                    _service_state["intent_warmup_task"] = heavy_task
+                    logger.info("✅ IntentCompiler background warmup tasks scheduled (light + heavy)")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not schedule IntentCompiler background warmup: {e}")
+            
+            elif mode == WarmupMode.LAZY:
+                logger.info("🐢 LAZY warmup enabled (on-demand, triggered by first request)")
+            
+            elif mode == WarmupMode.DISABLED:
+                logger.info("🚫 Warmup disabled entirely (model will load on first request)")
+            
+    except Exception as e:
+        logger.warning(f"⚠️ Could not initialize IntentCompiler: {e}")
     
     logger.info("✅ MLService startup event complete")
 

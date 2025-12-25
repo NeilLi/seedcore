@@ -3,27 +3,55 @@ set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:-seedcore-dev}"
 RECREATE_CLUSTER="${RECREATE_CLUSTER:-false}"
+RESET_KIND_CACHE="${RESET_KIND_CACHE:-false}"
+MIN_FREE_GB="${MIN_FREE_GB:-10}"
 
-# Detect interactive shell (TTY check)
+# -----------------------------
+# Detect interactive shell
+# -----------------------------
 if [[ -t 0 ]]; then
     INTERACTIVE=true
 else
     INTERACTIVE=false
 fi
 
-echo "🚀 Starting Kind cluster only..."
+echo "🚀 Starting Kind cluster bootstrap..."
 
-# Check if cluster already exists (exact match - Debian-safe)
+# -----------------------------
+# Disk safety check
+# -----------------------------
+ROOT_FREE_GB=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+
+if (( ROOT_FREE_GB < MIN_FREE_GB )); then
+    echo "❌ ERROR: Low disk space!"
+    echo "   Available: ${ROOT_FREE_GB}GB, Required: ${MIN_FREE_GB}GB"
+    echo "   Aborting to avoid containerd explosion."
+    exit 1
+fi
+
+echo "💾 Disk OK: ${ROOT_FREE_GB}GB free"
+
+# -----------------------------
+# Optional Kind cache cleanup
+# -----------------------------
+if [[ "$RESET_KIND_CACHE" == "true" ]]; then
+    echo "🧹 RESET_KIND_CACHE=true — cleaning Kind containerd cache..."
+    sudo rm -rf /var/kind/containerd || true
+    sudo mkdir -p /var/kind/containerd
+    sudo chmod 755 /var/kind/containerd
+fi
+
+# -----------------------------
+# Existing cluster handling
+# -----------------------------
 if kind get clusters 2>/dev/null | grep -Fxq "$CLUSTER_NAME"; then
-    echo "⚠️  Cluster $CLUSTER_NAME already exists"
+    echo "⚠️  Cluster '$CLUSTER_NAME' already exists"
 
-    # Environment variable takes precedence (CI/automation)
     if [[ "$RECREATE_CLUSTER" == "true" ]]; then
         echo "🗑️  Deleting existing cluster (RECREATE_CLUSTER=true)..."
         kind delete cluster --name "$CLUSTER_NAME"
     elif [[ "$INTERACTIVE" == true ]]; then
-        # Only prompt in interactive shells
-        read -r -p "Do you want to delete and recreate it? (y/N): " reply
+        read -r -p "Delete and recreate it? (y/N): " reply
         case "$reply" in
             y|Y)
                 echo "🗑️  Deleting existing cluster..."
@@ -35,14 +63,15 @@ if kind get clusters 2>/dev/null | grep -Fxq "$CLUSTER_NAME"; then
                 ;;
         esac
     else
-        # Non-interactive: use existing cluster
-        echo "ℹ️  Non-interactive shell detected — using existing cluster"
+        echo "ℹ️  Non-interactive shell — using existing cluster"
         echo "   Set RECREATE_CLUSTER=true to force recreation"
         exit 0
     fi
 fi
 
-# Generate kind-config.yaml with dynamic project root
+# -----------------------------
+# Generate Kind config
+# -----------------------------
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SEEDCORE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 KIND_CONFIG="${SCRIPT_DIR}/kind-config.yaml"
@@ -58,18 +87,30 @@ nodes:
         containerPath: /project
 EOF
 
-# Create Kind cluster
-echo "📦 Creating Kind cluster with kindest/node:v1.30.0..."
-kind create cluster --name "$CLUSTER_NAME" --image kindest/node:v1.30.0 --config "$KIND_CONFIG"
+# -----------------------------
+# Create cluster
+# -----------------------------
+echo "📦 Creating Kind cluster '$CLUSTER_NAME'..."
+kind create cluster \
+  --name "$CLUSTER_NAME" \
+  --image kindest/node:v1.30.0 \
+  --config "$KIND_CONFIG"
 
+# -----------------------------
 # Verify cluster
+# -----------------------------
 echo "🔍 Verifying cluster..."
 kubectl cluster-info --context "kind-$CLUSTER_NAME"
 
+echo ""
 echo "✅ Kind cluster '$CLUSTER_NAME' is ready!"
 echo ""
-echo "�� Useful commands:"
-echo "   - Check nodes: kubectl get nodes"
-echo "   - Check context: kubectl config current-context"
-echo "   - Switch context: kubectl config use-context kind-seedcore-dev"
-echo "   - Delete cluster: kind delete cluster --name $CLUSTER_NAME"
+echo "🧭 Useful commands:"
+echo "   kubectl get nodes"
+echo "   kubectl config current-context"
+echo "   kubectl config use-context kind-$CLUSTER_NAME"
+echo "   kind delete cluster --name $CLUSTER_NAME"
+echo ""
+echo "🧹 Cleanup tips:"
+echo "   RESET_KIND_CACHE=true ./start-kind.sh   # full cache reset"
+echo "   kind delete cluster --name $CLUSTER_NAME"

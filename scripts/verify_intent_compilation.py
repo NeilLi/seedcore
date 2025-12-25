@@ -45,6 +45,20 @@ def _pretty(obj: Any) -> str:
         return str(obj)
 
 
+def _infer_execution_path(result: dict) -> str:
+    """
+    Determine which execution path was used based on diagnostics.
+    
+    Returns:
+        "MODEL_INFERENCE" if model was used
+        "FALLBACK_HEURISTIC" if fallback was used
+    """
+    diag = result.get("diagnostics") or {}
+    if diag.get("used_model") is True:
+        return "MODEL_INFERENCE"
+    return "FALLBACK_HEURISTIC"
+
+
 def _print_header(title: str):
     """Print a formatted section header."""
     print("\n" + "=" * 20 + f" {title} " + "=" * 20)
@@ -102,7 +116,7 @@ async def verify_get_intent_schema(client) -> List[str]:
                 schemas = result.get("schemas", [])
                 logger.info(f"Number of schemas in 'device' domain: {len(schemas)}")
                 if schemas:
-                    logger.info(f"First schema function name: {schemas[0].get('name', 'N/A')}")
+                    logger.info(f"First schema function name: {schemas[0].get('function_name', 'N/A')}")
             logger.debug(f"Response: {_pretty(result)}")
     except Exception as e:
         logger.error(f"❌ Exception: {e}")
@@ -118,7 +132,7 @@ async def verify_get_intent_schema(client) -> List[str]:
         if isinstance(all_schemas_result, dict):
             schemas = all_schemas_result.get("schemas", [])
             if schemas and isinstance(schemas, list) and len(schemas) > 0:
-                function_name = schemas[0].get("name")
+                function_name = schemas[0].get("function_name")
         
         if function_name:
             logger.info(f"Using function name: {function_name}")
@@ -149,7 +163,7 @@ async def verify_get_intent_schema(client) -> List[str]:
             schemas = all_schemas_result.get("schemas", [])
             if schemas and isinstance(schemas, list) and len(schemas) > 0:
                 first_schema = schemas[0]
-                function_name = first_schema.get("name")
+                function_name = first_schema.get("function_name")
                 domain = first_schema.get("domain")
         
         if function_name and domain:
@@ -184,27 +198,32 @@ async def verify_compile_intent(client) -> List[str]:
         {
             "name": "Simple device control",
             "text": "turn on the bedroom light",
-            "context": {"domain": "device", "room": "bedroom"}
+            "context": {"domain": "device", "room": "bedroom", "device_id": "eisp7pij1tkyzhiw"},
+            "expect_model": True,  # Should use model if available
         },
         {
             "name": "Temperature adjustment",
             "text": "set the temperature to 72 degrees",
-            "context": {"domain": "device", "room": "living_room"}
+            "context": {"domain": "device", "room": "living_room", "device_id": "eisp7pij1tkyzhiw"},
+            "expect_model": False,  # Will early-exit due to no schema
         },
         {
             "name": "Energy query",
             "text": "what is the current energy consumption",
-            "context": {"domain": "energy"}
+            "context": {"domain": "energy"},
+            "expect_model": False,  # Will early-exit due to no schema
         },
         {
             "name": "Multiple devices",
             "text": "turn off all lights in the kitchen",
-            "context": {"domain": "device", "room": "kitchen"}
+            "context": {"domain": "device", "room": "kitchen", "device_id": "eisp7pij1tkyzhiw"},
+            "expect_model": True,  # Should use model if available
         },
         {
             "name": "No context",
             "text": "turn on the lights",
-            "context": None
+            "context": None,
+            "expect_model": True,  # Should use model if available
         }
     ]
     
@@ -229,12 +248,51 @@ async def verify_compile_intent(client) -> List[str]:
                 
                 # Check for expected fields in response
                 if isinstance(result, dict):
+                    # Infer and report execution path
+                    path = _infer_execution_path(result)
+                    diagnostics = result.get("diagnostics", {})
+                    
+                    logger.info(f"Execution path: {path}")
+                    
+                    if diagnostics:
+                        logger.info(
+                            "Diagnostics: used_model=%s, model_version=%s",
+                            diagnostics.get("used_model"),
+                            diagnostics.get("model_version"),
+                        )
+                    
                     if "function" in result:
                         logger.info(f"Compiled function: {result.get('function')}")
                     if "arguments" in result:
                         logger.info(f"Arguments: {_pretty(result.get('arguments'))}")
                     if "confidence" in result:
                         logger.info(f"Confidence: {result.get('confidence')}")
+                    if "processing_time_ms" in result:
+                        logger.info(f"Latency (server): {result.get('processing_time_ms')} ms")
+                    
+                    # ⚠️ Soft warnings (do NOT fail test)
+                    if diagnostics.get("used_model") and result.get("confidence", 0) < 0.3:
+                        logger.warning(
+                            "⚠️ Model was used but confidence is low (%.2f) - may indicate model uncertainty",
+                            result.get("confidence"),
+                        )
+                    
+                    if not diagnostics.get("used_model"):
+                        logger.warning("⚠️ Fallback path used for this request")
+                    
+                    # Check expectations if specified
+                    expected_model = test_case.get("expect_model")
+                    if expected_model is not None:
+                        actual_model = diagnostics.get("used_model", False)
+                        if expected_model != actual_model:
+                            logger.warning(
+                                "⚠️ Execution path mismatch: expected used_model=%s, got %s",
+                                expected_model, actual_model
+                            )
+                            # Optionally fail the test (uncomment to enforce strict expectations)
+                            # failures.append(
+                            #     f"compile_intent ({test_case['name']}): expected used_model={expected_model}, got {actual_model}"
+                            # )
                 
                 logger.debug(f"Full response: {_pretty(result)}")
         except Exception as e:
@@ -287,7 +345,8 @@ async def run_verification() -> int:
             base_url = os.getenv("MLS_BASE_URL", "http://127.0.0.1:8000/ml")
             logger.info(f"Using ML service URL: {base_url}")
         
-        client = MLServiceClient(base_url=base_url)
+        # Use longer timeout for intent compilation (p95 latency ~8-9s on CPU, 15s provides safety margin)
+        client = MLServiceClient(base_url=base_url, timeout=15.0)
         logger.info("✅ MLServiceClient initialized")
     except Exception as e:
         logger.error(f"❌ Failed to initialize MLServiceClient: {e}")
