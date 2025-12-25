@@ -114,7 +114,7 @@ import threading
 import concurrent.futures
 from typing import Any, Dict, Optional
 
-import numpy as np
+import numpy as np  # pyright: ignore[reportMissingImports]
 import ray  # pyright: ignore[reportMissingImports]
 from fastapi import BackgroundTasks, FastAPI, HTTPException  # pyright: ignore[reportMissingImports]
 from ray import serve  # pyright: ignore[reportMissingImports]
@@ -1244,7 +1244,7 @@ async def delete_xgboost_model(request: Dict[str, Any]):
 @ml_app.post("/xgboost/tune")
 async def run_tuning_sweep(request: Dict[str, Any]):
     try:
-        from seedcore.ml.tunning.tuning_service import get_tuning_service
+        from seedcore.ml.tuning.tuning_service import get_tuning_service
         from seedcore.ml.models.xgboost_models import TuneRequest, TuneResponse
 
         tune_request = TuneRequest(**request)
@@ -1278,7 +1278,7 @@ def _run_tuning_job_task(status_actor_handle, job_id: str, request: Dict[str, An
     t.start()
 
     try:
-        from seedcore.ml.tunning.tuning_service import get_tuning_service
+        from seedcore.ml.tuning.tuning_service import get_tuning_service
         tuning_service = get_tuning_service()
         result = tuning_service.run_tuning_sweep(
             space_type=request.get("space_type", "default"),
