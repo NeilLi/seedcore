@@ -28,7 +28,9 @@ from transformers.utils import get_json_schema  # pyright: ignore[reportMissingI
 # Paths
 # -------------------------------
 BASE_MODEL = "google/functiongemma-270m-it"
-LORA_ADAPTER = "/app/data/checkpoints/functiongemma-intent-lora"
+# Use HuggingFace Hub path for LoRA adapter (private repo)
+LORA_ADAPTER_HF_ID = "Neilhybridbrain/functiongemma-intent-lora"
+LORA_ADAPTER_CACHE = "/app/data/checkpoints/functiongemma-intent-lora-cache"
 HF_CACHE = "/app/data/hf_cache"
 
 # Prefer HF_HOME over TRANSFORMERS_CACHE
@@ -274,7 +276,11 @@ class StopOnAnySubsequence(StoppingCriteria):
 # -------------------------------
 # Load model + adapter
 # -------------------------------
-tokenizer = AutoTokenizer.from_pretrained(LORA_ADAPTER)
+# Load LoRA adapter tokenizer from HuggingFace Hub (with local cache)
+tokenizer = AutoTokenizer.from_pretrained(
+    LORA_ADAPTER_HF_ID,
+    cache_dir=LORA_ADAPTER_CACHE,
+)
 
 dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 base = AutoModelForCausalLM.from_pretrained(
@@ -284,7 +290,12 @@ base = AutoModelForCausalLM.from_pretrained(
     device_map="auto" if torch.cuda.is_available() else None,
 )
 
-model = PeftModel.from_pretrained(base, LORA_ADAPTER)
+# Load LoRA adapter from HuggingFace Hub (with local cache)
+model = PeftModel.from_pretrained(
+    base,
+    LORA_ADAPTER_HF_ID,
+    cache_dir=LORA_ADAPTER_CACHE,
+)
 model.eval()
 
 device = next(model.parameters()).device

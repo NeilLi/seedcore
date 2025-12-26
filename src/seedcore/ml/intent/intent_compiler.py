@@ -203,7 +203,9 @@ class IntentCompiler:
         self.model_path = model_path or os.getenv(
             "FUNCTIONGEMMA_MODEL_PATH", "google/functiongemma-270m-it"
         )
-        self.lora_path = lora_path or os.getenv("FUNCTIONGEMMA_LORA_PATH")
+        self.lora_path = lora_path or os.getenv(
+            "FUNCTIONGEMMA_LORA_PATH", "Neilhybridbrain/functiongemma-intent-lora"
+        )
 
         self.model = None
         self.processor = None
@@ -383,57 +385,34 @@ class IntentCompiler:
                     logger.info("✅ Base model downloaded from Hugging Face Hub")
 
                 # 4. Apply LoRA Adapter
-                if self.lora_path and os.path.exists(self.lora_path):
-                    # Validate LoRA directory contains required files
-                    adapter_config_path = os.path.join(
-                        self.lora_path, "adapter_config.json"
-                    )
-                    adapter_model_safetensors = os.path.join(
-                        self.lora_path, "adapter_model.safetensors"
-                    )
-                    adapter_model_bin = os.path.join(
-                        self.lora_path, "adapter_model.bin"
-                    )
-
-                    has_config = os.path.exists(adapter_config_path)
-                    has_model = os.path.exists(
-                        adapter_model_safetensors
-                    ) or os.path.exists(adapter_model_bin)
-
-                    if has_config and has_model:
-                        logger.info("Applying LoRA adapter from %s", self.lora_path)
+                # Support both local paths and HuggingFace Hub repo IDs
+                # Remove os.path.exists() check to allow Hub-only usage
+                if self.lora_path:
+                    logger.info("Applying LoRA adapter from %s", self.lora_path)
+                    try:
+                        # LoRA adapters can ALSO be gated, so we pass the token here too
+                        # Try local first (LoRA is usually local path, but handle both cases)
                         try:
-                            # LoRA adapters can ALSO be gated, so we pass the token here too
-                            # Try local first (LoRA is usually local path, but handle both cases)
-                            try:
-                                self.model = PeftModel.from_pretrained(
-                                    self.model,
-                                    self.lora_path,
-                                    local_files_only=True,  # Try local first
-                                )
-                                logger.info("✅ LoRA adapter loaded from local path")
-                            except Exception:
-                                # Fallback to network if LoRA is a Hub path
-                                self.model = PeftModel.from_pretrained(
-                                    self.model,
-                                    self.lora_path,
-                                    token=hf_token,
-                                )
-                                logger.info(
-                                    "✅ LoRA adapter loaded from Hugging Face Hub"
-                                )
-                        except Exception as e:
-                            logger.warning(
-                                "Failed to load LoRA adapter: %s (continuing without LoRA)",
-                                e,
+                            self.model = PeftModel.from_pretrained(
+                                self.model,
+                                self.lora_path,
+                                local_files_only=True,  # Try local first
                             )
-                    else:
+                            logger.info("✅ LoRA adapter loaded from local cache")
+                        except Exception:
+                            # Fallback to network if LoRA is a Hub path
+                            self.model = PeftModel.from_pretrained(
+                                self.model,
+                                self.lora_path,
+                                token=hf_token,
+                            )
+                            logger.info(
+                                "✅ LoRA adapter loaded from Hugging Face Hub"
+                            )
+                    except Exception as e:
                         logger.warning(
-                            "LoRA path exists but missing required files (adapter_config.json and adapter_model.safetensors/bin). "
-                            "Skipping LoRA loading. path=%s, has_config=%s, has_model=%s",
-                            self.lora_path,
-                            has_config,
-                            has_model,
+                            "Failed to load LoRA adapter: %s (continuing without LoRA)",
+                            e,
                         )
 
                 self.model.eval()

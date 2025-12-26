@@ -19,8 +19,14 @@ OPT_DIR = Path("/app/opt")
 # ---------------------------------------------------------------------
 BASE_MODEL_ID = "google/functiongemma-270m-it"
 
+# LoRA adapter HuggingFace repository (private)
+LORA_ADAPTER_HF_ID = "Neilhybridbrain/functiongemma-intent-lora"
+
 # HuggingFace cache directory
 HF_CACHE_DIR = DATA_DIR / "hf_cache"
+
+# Local cache directory for LoRA adapter (downloaded from HF)
+LORA_ADAPTER_CACHE_DIR = DATA_DIR / "checkpoints" / "functiongemma-intent-lora-cache"
 
 # ---------------------------------------------------------------------
 # Dataset paths
@@ -53,6 +59,7 @@ def ensure_dirs():
     HF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     FUNCTION_CALL_DATASET_DIR.mkdir(parents=True, exist_ok=True)
     LORA_ADAPTER_DIR.mkdir(parents=True, exist_ok=True)
+    LORA_ADAPTER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
     (OPT_DIR / "functiongemma").mkdir(parents=True, exist_ok=True)
 
