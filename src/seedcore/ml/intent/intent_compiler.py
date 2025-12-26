@@ -41,13 +41,24 @@ logger.info("[IntentCompiler] HF cache root: %s", HF_CACHE_ROOT)
 # FunctionGemma/Transformers imports
 try:
     import torch  # pyright: ignore[reportMissingImports]
-    from transformers import AutoProcessor, AutoModelForCausalLM, BitsAndBytesConfig  # pyright: ignore[reportMissingImports]
+    from transformers import (
+        AutoProcessor,
+        AutoModelForCausalLM,
+        AutoTokenizer,
+        BitsAndBytesConfig,
+        StoppingCriteria,
+        StoppingCriteriaList,
+    )  # pyright: ignore[reportMissingImports]
+    from transformers.utils import get_json_schema  # pyright: ignore[reportMissingImports]
     from peft import PeftModel  # pyright: ignore[reportMissingImports]
 
     FUNCTIONGEMMA_AVAILABLE = True
 except ImportError:
     FUNCTIONGEMMA_AVAILABLE = False
     torch = None  # type: ignore
+    StoppingCriteria = None  # type: ignore
+    StoppingCriteriaList = None  # type: ignore
+    get_json_schema = None  # type: ignore
 
 
 # ----------------------------
@@ -55,6 +66,10 @@ except ImportError:
 # ----------------------------
 
 _HEX_DEVICE_RE = re.compile(r"\b[a-fA-F0-9]{16,64}\b")
+_FUNCTION_CALL_PATTERN = re.compile(
+    r"<start_function_call>\s*call:([\w\.]+)\s*(\{.*?\})\s*<end_function_call>",
+    re.DOTALL,
+)
 
 
 def _find_first_json_object(text: str) -> Optional[tuple[int, int]]:
@@ -143,6 +158,183 @@ def _coerce_confidence(base: float) -> float:
     return max(0.0, min(1.0, x))
 
 
+def _strip_escape_tokens(s: str) -> str:
+    """Remove <escape> tokens from Gemma output."""
+    return s.replace("<escape>", "").strip()
+
+
+def _gemma_args_to_jsonish(s: str) -> str:
+    """
+    Convert Gemma-style args like:
+      {commands:{device_id:bedroom_light_id},device_id:living_room_light_id}
+    into JSON-ish:
+      {"commands":{"device_id":"bedroom_light_id"},"device_id":"living_room_light_id"}
+    This is heuristic but works well for common cases.
+    
+    Also handles <escape> tokens that Gemma inserts around values.
+    """
+    # Strip escape tokens first (they can appear anywhere)
+    s = _strip_escape_tokens(s)
+
+    # Ensure outer braces
+    s = s.strip()
+    if not (s.startswith("{") and s.endswith("}")):
+        return s
+
+    # Quote keys: {a:... , b:...} -> {"a":... , "b":...}
+    s = re.sub(r"([{,]\s*)([A-Za-z_][\w\-]*)\s*:", r'\1"\2":', s)
+
+    # Now process values: find all colons and quote bareword values
+    result = []
+    i = 0
+    brace_depth = 0
+
+    while i < len(s):
+        char = s[i]
+
+        if char == "{":
+            brace_depth += 1
+            result.append(char)
+            i += 1
+        elif char == "}":
+            brace_depth -= 1
+            result.append(char)
+            i += 1
+        elif char == ":" and i + 1 < len(s):
+            result.append(char)
+            i += 1
+            # Skip whitespace after colon
+            while i < len(s) and s[i] in " \t\n":
+                result.append(s[i])
+                i += 1
+
+            if i >= len(s):
+                break
+
+            val_start = i
+            val_brace_depth = brace_depth
+
+            # Check what follows the colon
+            if s[i] == "{":
+                # Nested object - find its end and process recursively
+                nested_start = i
+                nested_depth = 1
+                brace_depth += 1  # Track the opening brace
+                i += 1
+                while i < len(s) and nested_depth > 0:
+                    if s[i] == "{":
+                        nested_depth += 1
+                        brace_depth += 1
+                    elif s[i] == "}":
+                        nested_depth -= 1
+                        brace_depth -= 1
+                    i += 1
+                nested_str = s[nested_start:i]
+                nested_processed = _gemma_args_to_jsonish(nested_str)
+                result.append(nested_processed)
+            elif s[i] == "[":
+                # Array - find its end and process contents
+                array_start = i
+                array_depth = 1
+                i += 1
+                while i < len(s) and array_depth > 0:
+                    if s[i] == "[":
+                        array_depth += 1
+                    elif s[i] == "]":
+                        array_depth -= 1
+                    i += 1
+                array_str = s[array_start:i]
+                # Process array contents: strip escape tokens and quote string values
+                array_content = array_str[1:-1].strip()  # Remove [ and ]
+                if array_content:
+                    # Split by comma, but be careful with nested structures
+                    items = []
+                    current_item = ""
+                    depth = 0
+                    for char in array_content:
+                        if char in "[{":
+                            depth += 1
+                            current_item += char
+                        elif char in "]}":
+                            depth -= 1
+                            current_item += char
+                        elif char == "," and depth == 0:
+                            # Top-level comma - process this item
+                            item = _strip_escape_tokens(current_item.strip())
+                            if item and not item.startswith('"'):
+                                if not (
+                                    re.fullmatch(r"-?\d+(\.\d+)?", item)
+                                    or item in ("true", "false", "null")
+                                ):
+                                    item = '"' + item + '"'
+                            items.append(item)
+                            current_item = ""
+                        else:
+                            current_item += char
+                    # Process last item
+                    if current_item.strip():
+                        item = _strip_escape_tokens(current_item.strip())
+                        if item and not item.startswith('"'):
+                            if not (
+                                re.fullmatch(r"-?\d+(\.\d+)?", item)
+                                or item in ("true", "false", "null")
+                            ):
+                                item = '"' + item + '"'
+                        items.append(item)
+                    result.append("[" + ",".join(items) + "]")
+                else:
+                    result.append("[]")
+            elif s[i] == '"':
+                # Already quoted string - find its end
+                result.append(s[i])
+                i += 1
+                while i < len(s):
+                    if s[i] == "\\" and i + 1 < len(s):
+                        result.append(s[i : i + 2])
+                        i += 2
+                    elif s[i] == '"':
+                        result.append(s[i])
+                        i += 1
+                        break
+                    else:
+                        result.append(s[i])
+                        i += 1
+            else:
+                # Find the end of this value (comma or closing brace at same depth)
+                while i < len(s):
+                    if s[i] == "{":
+                        brace_depth += 1
+                        i += 1
+                    elif s[i] == "}":
+                        if brace_depth == val_brace_depth:
+                            # This closes the object containing our value
+                            break
+                        brace_depth -= 1
+                        i += 1
+                    elif s[i] == "," and brace_depth == val_brace_depth:
+                        # Top-level comma, value ends here
+                        break
+                    else:
+                        i += 1
+
+                value = s[val_start:i].strip()
+
+                # Check if it's a number, boolean, or null
+                if (
+                    re.fullmatch(r"-?\d+(\.\d+)?", value)
+                    or value in ("true", "false", "null")
+                ):
+                    result.append(value)
+                else:
+                    # Bareword string - quote it
+                    result.append('"' + value + '"')
+        else:
+            result.append(char)
+            i += 1
+
+    return "".join(result)
+
+
 @dataclass
 class IntentResult:
     """
@@ -179,6 +371,38 @@ class IntentResult:
         }
 
 
+if StoppingCriteria is not None:
+
+    class StopOnAnySubsequence(StoppingCriteria):
+        """Stop generation when any of the stop sequences is found."""
+
+        def __init__(self, tokenizer, stop_strings: List[str]):
+            super().__init__()
+            self.stop_seqs = [
+                tokenizer.encode(s, add_special_tokens=False) for s in stop_strings
+            ]
+
+        def __call__(self, input_ids, scores, **kwargs):
+            ids = input_ids[0].tolist()
+            # Search in recent window (last 512 tokens) instead of just suffix
+            window = ids[-512:] if len(ids) > 512 else ids
+            for seq in self.stop_seqs:
+                # Naive subsequence scan in window
+                for i in range(0, len(window) - len(seq) + 1):
+                    if window[i : i + len(seq)] == seq:
+                        return True
+            return False
+
+else:
+    # Dummy class if StoppingCriteria not available
+    class StopOnAnySubsequence:  # type: ignore
+        def __init__(self, tokenizer, stop_strings: List[str]):
+            pass
+
+        def __call__(self, input_ids, scores, **kwargs):
+            return False
+
+
 class IntentCompiler:
     """
     Intent Compilation Service (FunctionGemma-backed)
@@ -209,6 +433,7 @@ class IntentCompiler:
 
         self.model = None
         self.processor = None
+        self.tokenizer = None  # Separate tokenizer for apply_chat_template
 
         # Warmup state tracking (separate from legacy _warmed_up for backward compatibility)
         self._model_loaded = False  # True when model weights are loaded
@@ -311,7 +536,7 @@ class IntentCompiler:
                 logger.info("🚀 Loading FunctionGemma [%s]...", self.model_path)
                 logger.debug("HF_TOKEN presence: %s", bool(hf_token))
 
-                # 1. Load Processor (Offline-First Strategy)
+                # 1. Load Processor and Tokenizer (Offline-First Strategy)
                 # Try local cache first to avoid network/DNS issues in Kind clusters
                 try:
                     self.processor = AutoProcessor.from_pretrained(
@@ -319,8 +544,14 @@ class IntentCompiler:
                         local_files_only=True,  # Try local cache first
                         trust_remote_code=True,
                     )
+                    # Also load tokenizer separately for apply_chat_template
+                    self.tokenizer = AutoTokenizer.from_pretrained(
+                        self.model_path,
+                        local_files_only=True,
+                        trust_remote_code=True,
+                    )
                     self._load_mode = "offline_cache"
-                    logger.info("✅ Processor loaded from local cache")
+                    logger.info("✅ Processor and tokenizer loaded from local cache")
                 except Exception:
                     # Fallback to network download with token
                     logger.info("Local cache miss, attempting Hub download...")
@@ -329,8 +560,13 @@ class IntentCompiler:
                         token=hf_token,
                         trust_remote_code=True,
                     )
+                    self.tokenizer = AutoTokenizer.from_pretrained(
+                        self.model_path,
+                        token=hf_token,
+                        trust_remote_code=True,
+                    )
                     self._load_mode = "hub_download"
-                    logger.info("✅ Processor downloaded from Hugging Face Hub")
+                    logger.info("✅ Processor and tokenizer downloaded from Hugging Face Hub")
 
                 # 2. Hardware/Quantization Setup
                 use_cuda = torch and torch.cuda.is_available()
@@ -457,21 +693,23 @@ class IntentCompiler:
                 if torch and torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-    async def _run_model_inference(
-        self,
-        prompt: str,
-        schema_registry=None,
-    ) -> tuple[str, Dict[str, Any], float, Optional[str], float]:
+    async def _run_warmup_inference(self, prompt: str) -> float:
         """
-        Core model inference logic (extracted from compile to avoid recursion).
-
+        Simplified inference for warmup purposes.
+        Only runs forward pass to prime the model - doesn't require valid JSON.
+        
         Returns:
-            (function_name, arguments, confidence, error_msg, inference_elapsed_ms)
+            inference_elapsed_ms (latency measurement)
         """
         inference_start = _now_ms()
 
+        # Use tokenizer if available, otherwise fall back to processor
+        tokenizer_to_use = self.tokenizer if self.tokenizer else self.processor
+        if not tokenizer_to_use:
+            raise ValueError("Neither tokenizer nor processor available")
+
         # Process prompt
-        inputs = self.processor(prompt, return_tensors="pt")
+        inputs = tokenizer_to_use(prompt, return_tensors="pt")
         # Move tensors to model device
         device = getattr(self.model, "device", None)
         if device:
@@ -489,6 +727,7 @@ class IntentCompiler:
             elif hasattr(self.processor, "pad_token_id"):
                 pad_token_id = self.processor.pad_token_id
 
+            # Run generation (this primes the model's inference path)
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
@@ -497,32 +736,204 @@ class IntentCompiler:
                 pad_token_id=pad_token_id,
             )
 
-        # Decode safely (processor may be the tokenizer itself for Gemma)
-        if hasattr(self.processor, "tokenizer") and hasattr(
-            self.processor.tokenizer, "decode"
-        ):
-            decoded = self.processor.tokenizer.decode(
-                outputs[0], skip_special_tokens=True
+        # Decode to verify output (but don't require valid JSON for warmup)
+        try:
+            # Decode only generated tokens
+            input_length = inputs["input_ids"].shape[1]
+            gen_ids = outputs[0, input_length:]
+            decoded = tokenizer_to_use.decode(gen_ids, skip_special_tokens=False)
+            
+            # Log decoded output for debugging (but don't fail if it's not JSON)
+            logger.debug("[IntentCompiler] Warmup inference output: %s", decoded[:200])
+        except Exception as e:
+            logger.debug("[IntentCompiler] Warmup inference decode warning: %s", e)
+
+        inference_elapsed_ms = _now_ms() - inference_start
+        return inference_elapsed_ms
+
+    def _post_validate_semantics(
+        self, fn: str, args: Dict[str, Any], text: str
+    ) -> tuple[Dict[str, Any], Optional[str]]:
+        """
+        Post-validate and repair semantic errors in function arguments.
+        
+        Returns:
+            (repaired_args, error_msg) where error_msg is None if valid,
+            "repaired_*" if repaired, or "invalid_*" if invalid and not repairable
+        """
+        text_lower = (text or "").lower().strip()
+        
+        # Example: for power.set_energy_policy, validate/repair mode parameter
+        if fn == "power.set_energy_policy":
+            mode = args.get("mode")
+            if isinstance(mode, str):
+                m = mode.lower().strip()
+                if m not in {"on", "off", "eco", "balanced", "performance"}:
+                    # Attempt repair from user text
+                    if "turn on" in text_lower or text_lower.strip() == "on":
+                        args["mode"] = "on"
+                        return args, "repaired_mode_from_text"
+                    if "turn off" in text_lower or text_lower.strip() == "off":
+                        args["mode"] = "off"
+                        return args, "repaired_mode_from_text"
+                    # Check for other valid modes
+                    if "eco" in text_lower:
+                        args["mode"] = "eco"
+                        return args, "repaired_mode_from_text"
+                    if "balanced" in text_lower:
+                        args["mode"] = "balanced"
+                        return args, "repaired_mode_from_text"
+                    if "performance" in text_lower:
+                        args["mode"] = "performance"
+                        return args, "repaired_mode_from_text"
+                    return args, "invalid_mode"
+        
+        return args, None
+
+    async def _run_model_inference(
+        self,
+        prompt: str,
+        schema_registry=None,
+        text: Optional[str] = None,
+    ) -> tuple[str, Dict[str, Any], float, Optional[str], float]:
+        """
+        Core model inference logic (extracted from compile to avoid recursion).
+        Uses FunctionGemma chat template format with proper stopping criteria.
+
+        Returns:
+            (function_name, arguments, confidence, error_msg, inference_elapsed_ms)
+        """
+        inference_start = _now_ms()
+
+        # Use tokenizer if available, otherwise fall back to processor
+        tokenizer_to_use = self.tokenizer if self.tokenizer else self.processor
+        if not tokenizer_to_use:
+            raise ValueError("Neither tokenizer nor processor available")
+
+        # Tokenize prompt
+        inputs = tokenizer_to_use(prompt, return_tensors="pt")
+        # Move tensors to model device
+        device = getattr(self.model, "device", None)
+        if device:
+            inputs = {
+                k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()
+            }
+
+        # Get pad_token_id and eos_token_id
+        pad_token_id = None
+        eos_token_id = None
+        if hasattr(tokenizer_to_use, "pad_token_id"):
+            pad_token_id = tokenizer_to_use.pad_token_id
+        if hasattr(tokenizer_to_use, "eos_token_id"):
+            eos_token_id = tokenizer_to_use.eos_token_id
+        if pad_token_id is None:
+            pad_token_id = eos_token_id
+
+        # Set up stopping criteria for FunctionGemma function calls
+        stopping_criteria = None
+        if StoppingCriteriaList and self.tokenizer:
+            stopping = StopOnAnySubsequence(
+                self.tokenizer, ["<end_function_call>", "<start_function_response>"]
             )
-        elif hasattr(self.processor, "decode"):
-            decoded = self.processor.decode(outputs[0], skip_special_tokens=True)
+            stopping_criteria = StoppingCriteriaList([stopping])
+
+        with torch.inference_mode():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,  # Pure determinism
+                temperature=0.0,
+                use_cache=True,  # Enable KV cache for faster generation
+                pad_token_id=pad_token_id,
+                eos_token_id=eos_token_id,
+                stopping_criteria=stopping_criteria,
+            )
+
+        # Decode ONLY the newly generated tokens (prevents echo of tool declarations)
+        input_length = inputs["input_ids"].shape[1]
+        gen_ids = outputs[0, input_length:]
+        generated = tokenizer_to_use.decode(gen_ids, skip_special_tokens=False)
+
+        # Debug: Log raw model output (truncated for safety)
+        logger.debug(
+            "[IntentCompiler] Raw model output (first 500 chars): %s",
+            generated[:500],
+        )
+
+        # Parse FunctionGemma-style function call: <start_function_call>call:function_name{...}<end_function_call>
+        fn = "unknown"
+        args = {}
+        args_normalized = False  # Track if normalization was used
+
+        match = _FUNCTION_CALL_PATTERN.search(generated)
+        if match:
+            logger.debug(
+                "[IntentCompiler] Function call pattern matched: function=%s, args_text=%s",
+                match.group(1),
+                match.group(2)[:200],
+            )
+            fn = match.group(1).strip()
+            args_text = match.group(2).strip()
+
+            # Parse arguments: try strict JSON first, then normalize (Gemma often emits non-JSON)
+            try:
+                args = json.loads(args_text)
+                logger.debug(
+                    "[IntentCompiler] Successfully parsed arguments as strict JSON: %s",
+                    args,
+                )
+            except json.JSONDecodeError:
+                # Normalize Gemma-style output (primary path for tool-calls)
+                try:
+                    jsonish = _gemma_args_to_jsonish(args_text)
+                    args = json.loads(jsonish)
+                    args_normalized = True
+                    logger.debug(
+                        "[IntentCompiler] Successfully parsed arguments after Gemma normalization: %s",
+                        args,
+                    )
+                except json.JSONDecodeError as e2:
+                    logger.warning(
+                        "[IntentCompiler] Failed to parse function arguments (both strict and normalized): %s. Raw args_text: %s",
+                        e2,
+                        args_text[:200],
+                    )
+                    args = {}
         else:
-            raise ValueError("Processor does not have decode method")
-
-        data = _extract_first_json_obj(decoded)
-        if not data:
-            raise ValueError("Model output did not contain a valid JSON object")
-
-        fn = str(data.get("function") or "unknown").strip()
-        args = data.get("arguments") or {}
-        if not isinstance(args, dict):
-            args = {}
+            # Fallback: try to extract JSON from output
+            data = _extract_first_json_obj(generated)
+            if data:
+                fn = str(data.get("function") or "unknown").strip()
+                args = data.get("arguments") or {}
+                if not isinstance(args, dict):
+                    args = {}
+            else:
+                logger.warning(
+                    "No function call pattern found in generated output: %s",
+                    generated[:200],
+                )
 
         # Confidence shaping based on execution path
         confidence = self.BASE_CONFIDENCE[
             "model_unknown_fn"
         ]  # Default for model output
         error_msg = None
+
+        # Track normalization for observability
+        if args_normalized:
+            error_msg = "args_normalized"
+
+        # Semantic validation: repair common semantic errors
+        if fn and args:
+            args, sem_err = self._post_validate_semantics(fn, args, text)
+            if sem_err:
+                if sem_err.startswith("repaired_"):
+                    # Repair succeeded - append to error_msg
+                    error_msg = (error_msg or "") + f"|{sem_err}"
+                else:
+                    # Semantic validation failed
+                    confidence = self.BASE_CONFIDENCE["model_schema_invalid"]
+                    error_msg = (error_msg or "") + f"|semantic_invalid:{sem_err}"
 
         if schema_registry:
             schema = None
@@ -591,8 +1002,18 @@ class IntentCompiler:
         # Check if model is actually loaded and ready
         model_available = (
             self.model is not None
-            and self.processor is not None
+            and (self.processor is not None or self.tokenizer is not None)
             and not self._using_fallback
+        )
+
+        # Debug: Log model availability details
+        logger.debug(
+            "[IntentCompiler] Model availability check: model=%s, processor=%s, tokenizer=%s, _using_fallback=%s, _model_loaded=%s",
+            self.model is not None,
+            self.processor is not None,
+            self.tokenizer is not None,
+            self._using_fallback,
+            self._model_loaded,
         )
 
         # Enforce prefer_model_over_fallback policy
@@ -674,21 +1095,8 @@ class IntentCompiler:
                         )
 
         try:
-            # 1) Context & Schema preparation
-            schema_data: Dict[str, Any] = {}
-            if schema_registry:
-                try:
-                    schemas = schema_registry.list_all()
-                    schema_data = {s.function_name: s.to_dict() for s in schemas}
-                except Exception as e:
-                    logger.warning("Schema registry list_all failed: %s", e)
-                    schema_data = {}
-
-            schema_str = _safe_dumps(schema_data, self.max_schema_chars)
-            context_str = _safe_dumps(context or {}, self.max_context_chars)
-
-            # 2) Prompt Engineering (Strict for FunctionGemma IT)
-            prompt = self._format_prompt(text, schema_str, context_str)
+            # 2) Prompt Engineering (FunctionGemma chat template with tools)
+            prompt = self._format_prompt(text, schema_registry=schema_registry, context=context)
 
             # 3) Inference (using extracted core method)
             (
@@ -697,21 +1105,32 @@ class IntentCompiler:
                 confidence,
                 error_msg,
                 inference_elapsed_ms,
-            ) = await self._run_model_inference(prompt, schema_registry)
+            ) = await self._run_model_inference(prompt, schema_registry, text=text)
 
             # Check latency guard (hard inference budget)
-            # Hard budget: 8 seconds for CPU inference (p95 is ~8-9s, this prevents p99 timeouts)
-            hard_budget_ms = 8000
+            # Hard budget: configurable, default 12s for CPU inference (more realistic than 8s)
+            hard_budget_ms = int(os.getenv("INTENT_HARD_BUDGET_MS", "12000"))
             if inference_elapsed_ms > hard_budget_ms:
-                logger.warning(
-                    "[IntentCompiler] Inference exceeded hard budget (%dms > %dms), falling back to heuristics",
-                    inference_elapsed_ms,
-                    hard_budget_ms,
-                )
-                res = self._fallback_compile(text, context, schema_registry)
-                res.processing_time_ms = _now_ms() - start
-                res.error = f"inference_budget_exceeded: {inference_elapsed_ms}ms > {hard_budget_ms}ms"
-                return res
+                # Only fallback if output is not confidently valid
+                if confidence >= self.BASE_CONFIDENCE["model_schema_valid"]:
+                    # Keep model output but flag it as slow
+                    error_msg = (error_msg or "") + f"|slow_inference:{inference_elapsed_ms}ms"
+                    logger.warning(
+                        "[IntentCompiler] Inference exceeded hard budget (%dms > %dms) but output is valid, keeping result",
+                        inference_elapsed_ms,
+                        hard_budget_ms,
+                    )
+                else:
+                    # Invalid output - fallback
+                    logger.warning(
+                        "[IntentCompiler] Inference exceeded hard budget (%dms > %dms) with invalid output, falling back to heuristics",
+                        inference_elapsed_ms,
+                        hard_budget_ms,
+                    )
+                    res = self._fallback_compile(text, context, schema_registry)
+                    res.processing_time_ms = _now_ms() - start
+                    res.error = f"inference_budget_exceeded: {inference_elapsed_ms}ms > {hard_budget_ms}ms"
+                    return res
 
             # Optional soft latency guard (configurable, disabled by default)
             if (
@@ -858,36 +1277,100 @@ class IntentCompiler:
             error="intent_not_recognized",
         )
 
-    def _format_prompt(self, text: str, schema_json: str, context_json: str) -> str:
+    def _schemas_to_tools(self, schema_registry) -> List[Dict[str, Any]]:
         """
-        Gemma-2 IT specific prompt format to force JSON output.
-        Uses <start_of_turn>/<end_of_turn> tags for proper instruction formatting.
+        Convert schema registry to FunctionGemma tools format.
+        Matches the format used in training (similar to get_json_schema output).
+        """
+        if not schema_registry:
+            return []
 
-        Hardened prompt to prevent hallucinated function names.
-        """
-        # Extract function names from schema for explicit whitelist
-        function_names = []
+        tools = []
         try:
-            schema_data = json.loads(schema_json)
-            function_names = list(schema_data.keys())
-        except Exception:
-            pass
+            schemas = schema_registry.list_all()
+            for schema in schemas:
+                # Construct tool schema to match FunctionGemma training format
+                tool_schema = {
+                    "function": {
+                        "name": schema.function_name,
+                        "description": schema.description,
+                        "parameters": {
+                            "type": "object",
+                            "properties": schema.parameters,
+                            "required": schema.required or [],
+                        },
+                    }
+                }
+                tools.append(tool_schema)
+        except Exception as e:
+            logger.warning("Failed to convert schemas to tools format: %s", e)
 
-        function_list = ", ".join(function_names) if function_names else "none"
+        return tools
 
-        return (
-            f"<start_of_turn>user\n"
-            f"Convert query to JSON. Rules:\n"
-            f"- Output MUST be a single JSON object\n"
-            f'- "function" MUST be one of: {function_list}, OR "unknown"\n'
-            f"- Do NOT invent function names\n"
-            f"- Do NOT include explanations\n"
-            f"\nAvailable functions:\n{schema_json}\n"
-            f"Context:\n{context_json}\n"
-            f"Query: {text}<end_of_turn>\n"
-            f"<start_of_turn>model\n"
-            f"Output:"
+    def _format_prompt(
+        self, text: str, schema_registry=None, context: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Format prompt using FunctionGemma chat template with tools.
+        This matches the training format and ensures proper function call generation.
+        """
+        if not self.tokenizer:
+            # Fallback to old format if tokenizer not available
+            schema_json = "{}"
+            context_json = "{}"
+            if schema_registry:
+                try:
+                    schemas = schema_registry.list_all()
+                    schema_data = {s.function_name: s.to_dict() for s in schemas}
+                    schema_json = json.dumps(schema_data, separators=(",", ":"))
+                except Exception:
+                    pass
+            if context:
+                context_json = json.dumps(context, separators=(",", ":"))
+
+            return (
+                f"<start_of_turn>user\n"
+                f"Convert query to JSON. Rules:\n"
+                f"- Output MUST be a single JSON object\n"
+                f'- "function" MUST be one of: {list(schema_data.keys()) if schema_registry else "none"}, OR "unknown"\n'
+                f"- Do NOT invent function names\n"
+                f"- Do NOT include explanations\n"
+                f"\nAvailable functions:\n{schema_json}\n"
+                f"Context:\n{context_json}\n"
+                f"Query: {text}<end_of_turn>\n"
+                f"<start_of_turn>model\n"
+                f"Output:"
+            )
+
+        # Use FunctionGemma chat template with tools
+        tools = self._schemas_to_tools(schema_registry) if schema_registry else []
+
+        messages = [
+            {
+                "role": "developer",
+                "content": (
+                    "You are an intent compiler.\n"
+                    "Convert the user request into exactly ONE function call.\n"
+                    "Return ONLY the function call. No extra text.\n"
+                    "Arguments MUST be valid JSON (double-quoted keys/strings)."
+                ),
+            },
+            {"role": "user", "content": text},
+        ]
+
+        # Add context to user message if provided
+        if context:
+            context_str = json.dumps(context, separators=(",", ":"))
+            messages[-1]["content"] += f"\n\nContext: {context_str}"
+
+        prompt = self.tokenizer.apply_chat_template(
+            messages,
+            tools=tools,
+            tokenize=False,
+            add_generation_prompt=True,
         )
+
+        return prompt
 
     def _extract_device_id(
         self, text: str, context: Optional[Dict[str, Any]]
@@ -949,7 +1432,7 @@ class IntentCompiler:
                 await self._load_model()
 
             # Mark as loaded if model is ready
-            if self.model is not None and self.processor is not None:
+            if self.model is not None and (self.processor is not None or self.tokenizer is not None):
                 self._model_loaded = True
                 logger.info(
                     "[IntentCompiler] ✅ Light warmup complete (model_path=%s, device=%s)",
@@ -962,9 +1445,10 @@ class IntentCompiler:
                 logger.info("[IntentCompiler] ✅ Light warmup complete (fallback mode)")
             else:
                 logger.warning(
-                    "[IntentCompiler] ⚠️ Light warmup incomplete (model=%s, processor=%s)",
+                    "[IntentCompiler] ⚠️ Light warmup incomplete (model=%s, processor=%s, tokenizer=%s)",
                     self.model is not None,
                     self.processor is not None,
+                    self.tokenizer is not None,
                 )
 
     async def warmup_heavy(self, sample_texts: Optional[list] = None) -> None:
@@ -1005,7 +1489,7 @@ class IntentCompiler:
             # Only run inference if model is actually available
             if (
                 self.model is not None
-                and self.processor is not None
+                and (self.processor is not None or self.tokenizer is not None)
                 and not self._using_fallback
             ):
                 sample_texts = sample_texts or [
@@ -1014,29 +1498,33 @@ class IntentCompiler:
 
                 try:
                     # Prepare a simple prompt for warmup (avoid full compile() to prevent recursion)
-                    schema_str = "{}"  # Empty schema for warmup
-                    context_str = '{"domain":"device","vendor":"tuya"}'
-                    warmup_text = sample_texts[0]
-                    self._format_prompt(warmup_text, schema_str, context_str)
+                    warmup_context = {"domain": "device", "vendor": "tuya"}
 
-                    # Run inference directly (not via compile to avoid recursion)
+                    # Run simplified warmup inference (doesn't require valid JSON)
                     logger.info(
                         "[IntentCompiler] Running heavy warmup inference (%d samples)...",
                         len(sample_texts),
                     )
                     for i, t in enumerate(sample_texts, 1):
-                        warmup_prompt = self._format_prompt(t, schema_str, context_str)
-                        fn, args, conf, err, elapsed = await self._run_model_inference(
-                            warmup_prompt, schema_registry=None
+                        warmup_prompt = self._format_prompt(
+                            t, schema_registry=None, context=warmup_context
                         )
-                        logger.debug(
-                            "[IntentCompiler] Heavy warmup sample %d/%d: function=%s, confidence=%.2f, latency=%.1fms",
-                            i,
-                            len(sample_texts),
-                            fn,
-                            conf,
-                            elapsed,
-                        )
+                        try:
+                            elapsed = await self._run_warmup_inference(warmup_prompt)
+                            logger.debug(
+                                "[IntentCompiler] Heavy warmup sample %d/%d: latency=%.1fms",
+                                i,
+                                len(sample_texts),
+                                elapsed,
+                            )
+                        except Exception as e:
+                            # Log but continue - warmup failures are non-fatal
+                            logger.debug(
+                                "[IntentCompiler] Warmup sample %d/%d failed (non-fatal): %s",
+                                i,
+                                len(sample_texts),
+                                e,
+                            )
                     self._heavy_warmed = True
                     logger.info(
                         "✅ Intent compiler heavy warmup complete (model inference ready)"

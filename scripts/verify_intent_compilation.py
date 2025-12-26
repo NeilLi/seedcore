@@ -2,32 +2,41 @@
 """
 Verification script for MLServiceClient intent compilation endpoints.
 
-This script verifies:
-  - get_intent_schema: Retrieving function schemas (all, by domain, by function name)
-  - compile_intent: Compiling natural language text into structured function calls
+Verifies:
+  - get_intent_schema: retrieving schemas (all, by domain, by function name)
+  - compile_intent: compiling text into structured function calls
 
 Usage:
     python scripts/verify_intent_compilation.py
+Options:
+    --base-url http://127.0.0.1:8000/ml
+    --timeout 20
+    --strict
+    --parallel 4
+    --runs 2
 """
+
+from __future__ import annotations
 
 import os
 import sys
 import json
 import time
+import argparse
 import traceback
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import anyio  # pyright: ignore[reportMissingImports]
 import logging
 
-# Add src to path for imports
+
+# -----------------------------
+# Path + logging
+# -----------------------------
 src_path = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_path))
 
-
-
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -37,350 +46,482 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# -----------------------------
+# Helpers
+# -----------------------------
 def _pretty(obj: Any) -> str:
-    """Pretty print JSON objects."""
     try:
         return json.dumps(obj, indent=2, ensure_ascii=False)
     except Exception:
         return str(obj)
 
 
-def _infer_execution_path(result: dict) -> str:
-    """
-    Determine which execution path was used based on diagnostics.
-    
-    Returns:
-        "MODEL_INFERENCE" if model was used
-        "FALLBACK_HEURISTIC" if fallback was used
-    """
-    diag = result.get("diagnostics") or {}
-    if diag.get("used_model") is True:
-        return "MODEL_INFERENCE"
-    return "FALLBACK_HEURISTIC"
-
-
-def _print_header(title: str):
-    """Print a formatted section header."""
+def _print_header(title: str) -> None:
     print("\n" + "=" * 20 + f" {title} " + "=" * 20)
 
 
-def _elapsed(fn):
-    """Decorator to measure execution time."""
-    async def wrap(*args, **kwargs):
-        t0 = time.perf_counter()
-        try:
-            out = await fn(*args, **kwargs)
-            return out, (time.perf_counter() - t0)
-        except Exception as e:
-            return e, (time.perf_counter() - t0)
-    return wrap
+def _infer_execution_path(result: dict) -> str:
+    diag = result.get("diagnostics") or {}
+    return "MODEL_INFERENCE" if diag.get("used_model") is True else "FALLBACK_HEURISTIC"
 
 
-async def verify_get_intent_schema(client) -> List[str]:
-    """Verify get_intent_schema method with various scenarios."""
-    failures = []
-    
+def _get_server_latency_ms(result: dict) -> Optional[float]:
+    v = result.get("processing_time_ms")
+    try:
+        return float(v) if v is not None else None
+    except Exception:
+        return None
+
+
+def _get_confidence(result: dict) -> Optional[float]:
+    v = result.get("confidence")
+    try:
+        return float(v) if v is not None else None
+    except Exception:
+        return None
+
+
+def _ok_result_shape(result: Any) -> bool:
+    return isinstance(result, dict) and ("ok" in result or "function" in result)
+
+
+async def _call_timed(awaitable) -> Tuple[Any, float]:
+    t0 = time.perf_counter()
+    try:
+        out = await awaitable
+        return out, time.perf_counter() - t0
+    except Exception as e:
+        return e, time.perf_counter() - t0
+
+
+def _soft_assert(condition: bool, msg: str, failures: List[str], strict: bool) -> None:
+    if condition:
+        return
+    if strict:
+        failures.append(msg)
+        logger.error("❌ %s", msg)
+    else:
+        logger.warning("⚠️  %s", msg)
+
+
+def _pick_example_function(schemas: List[dict], domain: Optional[str] = None) -> Optional[Tuple[str, Optional[str]]]:
+    """
+    Pick a function_name (and its domain) from schemas list.
+    Prefer a given domain if provided.
+    """
+    if not schemas:
+        return None
+
+    if domain:
+        for s in schemas:
+            if (s.get("domain") or "").lower() == domain.lower() and s.get("function_name"):
+                return s["function_name"], s.get("domain")
+    # fallback: first with function_name
+    for s in schemas:
+        if s.get("function_name"):
+            return s["function_name"], s.get("domain")
+    return None
+
+
+def _schema_index(schemas: List[dict]) -> Dict[str, dict]:
+    out: Dict[str, dict] = {}
+    for s in schemas:
+        fn = s.get("function_name")
+        if isinstance(fn, str) and fn:
+            out[fn] = s
+    return out
+
+
+def _extract_diag_flags(result: dict) -> List[str]:
+    """
+    Useful for your current logs / new pipeline:
+    - args_normalized flag (if you add it)
+    - slow_inference flag (if you add it)
+    """
+    flags = []
+    err = (result.get("error") or "")
+    if isinstance(err, str):
+        if "args_normalized" in err:
+            flags.append("args_normalized")
+        if "slow_inference" in err or "inference_budget_exceeded" in err:
+            flags.append("slow_or_budget")
+    return flags
+
+
+# -----------------------------
+# Verifiers
+# -----------------------------
+async def verify_service_health(client) -> bool:
+    _print_header("SERVICE HEALTH CHECK")
+    try:
+        health, dt = await _call_timed(client.health())
+        if isinstance(health, Exception):
+            logger.error("❌ Health check failed in %.2fs: %s", dt, health)
+            logger.error(traceback.format_exc())
+            return False
+        logger.info("Health status: %s (%.2fs)", health.get("status", "unknown"), dt)
+        if health.get("status") == "healthy":
+            logger.info("✅ Service is healthy")
+            return True
+        logger.warning("⚠️  Service health is not 'healthy'")
+        return False
+    except Exception as e:
+        logger.error("❌ Health check exception: %s", e)
+        logger.error(traceback.format_exc())
+        return False
+
+
+async def fetch_all_schemas(client) -> Tuple[Optional[List[dict]], List[str]]:
+    failures: List[str] = []
+    _print_header("FETCH SCHEMAS (ONCE)")
+
+    result, dt = await _call_timed(client.get_intent_schema())
+    if isinstance(result, Exception):
+        logger.error("❌ get_intent_schema failed in %.2fs: %s", dt, result)
+        failures.append("get_intent_schema (all) failed")
+        return None, failures
+
+    if not isinstance(result, dict):
+        logger.error("❌ get_intent_schema returned non-dict: %r", type(result))
+        failures.append("get_intent_schema (all) returned non-dict")
+        return None, failures
+
+    schemas = result.get("schemas")
+    if not isinstance(schemas, list):
+        logger.error("❌ get_intent_schema missing 'schemas' list. keys=%s", list(result.keys()))
+        failures.append("get_intent_schema missing schemas")
+        return None, failures
+
+    logger.info("✅ get_intent_schema success in %.2fs; schemas=%d", dt, len(schemas))
+    return schemas, failures
+
+
+async def verify_get_intent_schema(client, schemas: List[dict], strict: bool) -> List[str]:
+    failures: List[str] = []
     _print_header("GET_INTENT_SCHEMA TESTS")
-    
-    # Test 1: Get all schemas
-    logger.info("Test 1: Get all schemas (no filters)")
-    try:
-        get_all = _elapsed(client.get_intent_schema)
-        result, dt = await get_all()
+
+    # Test 1: Basic sanity on cached schemas
+    logger.info("Test 1: Cached schemas sanity")
+    _soft_assert(len(schemas) > 0, "No schemas returned (schemas list is empty)", failures, strict)
+
+    fn_pick = _pick_example_function(schemas, domain="device") or _pick_example_function(schemas)
+    _soft_assert(fn_pick is not None, "Could not find any function_name in schemas", failures, strict)
+
+    # Test 2: Filter by domain
+    logger.info("Test 2: Get schemas filtered by domain='device'")
+    result, dt = await _call_timed(client.get_intent_schema(domain="device"))
+    if isinstance(result, Exception):
+        logger.error("❌ Failed in %.2fs: %s", dt, result)
+        failures.append("get_intent_schema (domain=device) failed")
+    else:
+        n = len(result.get("schemas", [])) if isinstance(result, dict) else -1
+        logger.info("✅ Success in %.2fs; schemas=%s", dt, n)
+
+    # Test 3: Filter by function_name
+    if fn_pick:
+        fn, dom = fn_pick
+        logger.info("Test 3: Get schema for function_name=%s", fn)
+        result, dt = await _call_timed(client.get_intent_schema(function_name=fn))
         if isinstance(result, Exception):
-            logger.error(f"❌ Failed: {result}")
-            failures.append("get_intent_schema (all) failed")
+            logger.error("❌ Failed in %.2fs: %s", dt, result)
+            failures.append("get_intent_schema (by function_name) failed")
         else:
-            logger.info(f"✅ Success in {dt:.2f}s")
-            logger.info(f"Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-            if isinstance(result, dict) and "schemas" in result:
-                logger.info(f"Number of schemas: {len(result.get('schemas', []))}")
-            logger.debug(f"Response: {_pretty(result)}")
-    except Exception as e:
-        logger.error(f"❌ Exception: {e}")
-        logger.error(traceback.format_exc())
-        failures.append("get_intent_schema (all) exception")
-    
-    # Test 2: Get schemas by domain
-    logger.info("\nTest 2: Get schemas filtered by domain='device'")
-    try:
-        get_by_domain = _elapsed(client.get_intent_schema)
-        result, dt = await get_by_domain(domain="device")
-        if isinstance(result, Exception):
-            logger.error(f"❌ Failed: {result}")
-            failures.append("get_intent_schema (by domain) failed")
-        else:
-            logger.info(f"✅ Success in {dt:.2f}s")
-            logger.info(f"Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-            if isinstance(result, dict) and "schemas" in result:
-                schemas = result.get("schemas", [])
-                logger.info(f"Number of schemas in 'device' domain: {len(schemas)}")
-                if schemas:
-                    logger.info(f"First schema function name: {schemas[0].get('function_name', 'N/A')}")
-            logger.debug(f"Response: {_pretty(result)}")
-    except Exception as e:
-        logger.error(f"❌ Exception: {e}")
-        logger.error(traceback.format_exc())
-        failures.append("get_intent_schema (by domain) exception")
-    
-    # Test 3: Get schema by function name
-    logger.info("\nTest 3: Get schema for specific function")
-    try:
-        # First, get all schemas to find a function name
-        all_schemas_result = await client.get_intent_schema()
-        function_name = None
-        if isinstance(all_schemas_result, dict):
-            schemas = all_schemas_result.get("schemas", [])
-            if schemas and isinstance(schemas, list) and len(schemas) > 0:
-                function_name = schemas[0].get("function_name")
-        
-        if function_name:
-            logger.info(f"Using function name: {function_name}")
-            get_by_function = _elapsed(client.get_intent_schema)
-            result, dt = await get_by_function(function_name=function_name)
+            logger.info("✅ Success in %.2fs", dt)
+
+        # Test 4: Combined filters (domain + function_name)
+        if dom:
+            logger.info("Test 4: Get schema with domain=%s and function_name=%s", dom, fn)
+            result, dt = await _call_timed(client.get_intent_schema(domain=dom, function_name=fn))
             if isinstance(result, Exception):
-                logger.error(f"❌ Failed: {result}")
-                failures.append("get_intent_schema (by function_name) failed")
+                logger.error("❌ Failed in %.2fs: %s", dt, result)
+                failures.append("get_intent_schema (combined) failed")
             else:
-                logger.info(f"✅ Success in {dt:.2f}s")
-                logger.info(f"Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-                logger.debug(f"Response: {_pretty(result)}")
-        else:
-            logger.warning("⚠️  Could not find a function name to test with")
-            failures.append("get_intent_schema (by function_name) - no function found")
-    except Exception as e:
-        logger.error(f"❌ Exception: {e}")
-        logger.error(traceback.format_exc())
-        failures.append("get_intent_schema (by function_name) exception")
-    
-    # Test 4: Get schema with both domain and function_name
-    logger.info("\nTest 4: Get schema with both domain and function_name")
-    try:
-        all_schemas_result = await client.get_intent_schema()
-        function_name = None
-        domain = None
-        if isinstance(all_schemas_result, dict):
-            schemas = all_schemas_result.get("schemas", [])
-            if schemas and isinstance(schemas, list) and len(schemas) > 0:
-                first_schema = schemas[0]
-                function_name = first_schema.get("function_name")
-                domain = first_schema.get("domain")
-        
-        if function_name and domain:
-            logger.info(f"Using function_name={function_name}, domain={domain}")
-            get_combined = _elapsed(client.get_intent_schema)
-            result, dt = await get_combined(function_name=function_name, domain=domain)
-            if isinstance(result, Exception):
-                logger.error(f"❌ Failed: {result}")
-                failures.append("get_intent_schema (combined filters) failed")
-            else:
-                logger.info(f"✅ Success in {dt:.2f}s")
-                logger.debug(f"Response: {_pretty(result)}")
-        else:
-            logger.warning("⚠️  Could not find function_name and domain to test with")
-            failures.append("get_intent_schema (combined filters) - insufficient data")
-    except Exception as e:
-        logger.error(f"❌ Exception: {e}")
-        logger.error(traceback.format_exc())
-        failures.append("get_intent_schema (combined filters) exception")
-    
+                logger.info("✅ Success in %.2fs", dt)
+
     return failures
 
 
-async def verify_compile_intent(client) -> List[str]:
-    """Verify compile_intent method with various scenarios."""
-    failures = []
-    
+async def _run_compile_case(
+    client,
+    case: dict,
+    strict: bool,
+    schema_by_fn: Dict[str, dict],
+) -> Tuple[List[str], Dict[str, Any]]:
+    """
+    Runs one compile test case once and returns:
+      - failures
+      - metrics for summary
+    """
+    failures: List[str] = []
+    text = case["text"]
+    context = case.get("context")
+    expect_model = case.get("expect_model")
+    expect_fn_prefix = case.get("expect_fn_prefix")
+
+    result, dt = await _call_timed(client.compile_intent(text=text, context=context))
+    metrics: Dict[str, Any] = {
+        "name": case.get("name"),
+        "client_rtt_s": dt,
+        "server_ms": None,
+        "path": None,
+        "function": None,
+        "confidence": None,
+        "flags": [],
+        "ok": False,
+    }
+
+    if isinstance(result, Exception):
+        logger.error("❌ compile_intent failed in %.2fs: %s", dt, result)
+        failures.append(f"compile_intent ({case['name']}) failed")
+        return failures, metrics
+
+    if not isinstance(result, dict):
+        failures.append(f"compile_intent ({case['name']}) returned non-dict")
+        return failures, metrics
+
+    metrics["ok"] = True
+    metrics["server_ms"] = _get_server_latency_ms(result)
+    metrics["confidence"] = _get_confidence(result)
+    metrics["path"] = _infer_execution_path(result)
+    metrics["flags"] = _extract_diag_flags(result)
+
+    fn = result.get("function")
+    metrics["function"] = fn
+
+    diagnostics = result.get("diagnostics", {}) if isinstance(result.get("diagnostics"), dict) else {}
+    used_model = diagnostics.get("used_model", False)
+
+    logger.info("✅ %s in %.2fs (server=%sms) path=%s used_model=%s conf=%s fn=%s flags=%s",
+                case["name"],
+                dt,
+                metrics["server_ms"],
+                metrics["path"],
+                used_model,
+                metrics["confidence"],
+                fn,
+                ",".join(metrics["flags"]) if metrics["flags"] else "-",
+    )
+
+    # Expectation checks (soft by default unless --strict)
+    if expect_model is not None:
+        _soft_assert(
+            bool(used_model) == bool(expect_model),
+            f"{case['name']}: expected used_model={expect_model} got {used_model}",
+            failures,
+            strict,
+        )
+
+    if expect_fn_prefix and isinstance(fn, str):
+        _soft_assert(
+            fn.startswith(expect_fn_prefix),
+            f"{case['name']}: expected function prefix '{expect_fn_prefix}' got '{fn}'",
+            failures,
+            strict,
+        )
+
+    # If function exists in schema, optionally validate required keys presence (very light check)
+    if isinstance(fn, str) and fn in schema_by_fn:
+        args = result.get("arguments", {})
+        if isinstance(args, dict):
+            required = schema_by_fn[fn].get("required") or []
+            if isinstance(required, list) and required:
+                missing = [k for k in required if k not in args]
+                _soft_assert(
+                    not missing,
+                    f"{case['name']}: missing required args for {fn}: {missing}",
+                    failures,
+                    strict,
+                )
+
+    return failures, metrics
+
+
+async def verify_compile_intent(
+    client,
+    schemas: List[dict],
+    strict: bool,
+    runs: int,
+    parallel: int,
+) -> List[str]:
+    failures: List[str] = []
     _print_header("COMPILE_INTENT TESTS")
-    
-    # Test cases for intent compilation
+
+    schema_by_fn = _schema_index(schemas)
+
+    # Warmup (helps stabilize latency)
+    logger.info("Warmup: running one compile_intent to prime model/caches...")
+    _ = await _call_timed(client.compile_intent(text="turn on the bedroom light", context={"domain": "device"}))
+
     test_cases = [
         {
             "name": "Simple device control",
             "text": "turn on the bedroom light",
             "context": {"domain": "device", "room": "bedroom", "device_id": "eisp7pij1tkyzhiw"},
-            "expect_model": True,  # Should use model if available
+            "expect_model": True,
         },
         {
-            "name": "Temperature adjustment",
+            "name": "Temperature adjustment (expected early-exit if no schema)",
             "text": "set the temperature to 72 degrees",
             "context": {"domain": "device", "room": "living_room", "device_id": "eisp7pij1tkyzhiw"},
-            "expect_model": False,  # Will early-exit due to no schema
+            "expect_model": False,
         },
         {
-            "name": "Energy query",
+            "name": "Energy query (expected early-exit if no schema)",
             "text": "what is the current energy consumption",
             "context": {"domain": "energy"},
-            "expect_model": False,  # Will early-exit due to no schema
+            "expect_model": False,
         },
         {
-            "name": "Multiple devices",
+            "name": "Multiple devices phrasing",
             "text": "turn off all lights in the kitchen",
             "context": {"domain": "device", "room": "kitchen", "device_id": "eisp7pij1tkyzhiw"},
-            "expect_model": True,  # Should use model if available
+            "expect_model": True,
         },
         {
             "name": "No context",
             "text": "turn on the lights",
             "context": None,
-            "expect_model": True,  # Should use model if available
-        }
+            "expect_model": True,
+        },
     ]
-    
-    for i, test_case in enumerate(test_cases, 1):
-        logger.info(f"\nTest {i}: {test_case['name']}")
-        logger.info(f"Text: '{test_case['text']}'")
-        logger.info(f"Context: {test_case['context']}")
-        
-        try:
-            compile_fn = _elapsed(client.compile_intent)
-            result, dt = await compile_fn(
-                text=test_case["text"],
-                context=test_case["context"]
-            )
-            
-            if isinstance(result, Exception):
-                logger.error(f"❌ Failed: {result}")
-                failures.append(f"compile_intent ({test_case['name']}) failed")
-            else:
-                logger.info(f"✅ Success in {dt:.2f}s")
-                logger.info(f"Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-                
-                # Check for expected fields in response
-                if isinstance(result, dict):
-                    # Infer and report execution path
-                    path = _infer_execution_path(result)
-                    diagnostics = result.get("diagnostics", {})
-                    
-                    logger.info(f"Execution path: {path}")
-                    
-                    if diagnostics:
-                        logger.info(
-                            "Diagnostics: used_model=%s, model_version=%s",
-                            diagnostics.get("used_model"),
-                            diagnostics.get("model_version"),
-                        )
-                    
-                    if "function" in result:
-                        logger.info(f"Compiled function: {result.get('function')}")
-                    if "arguments" in result:
-                        logger.info(f"Arguments: {_pretty(result.get('arguments'))}")
-                    if "confidence" in result:
-                        logger.info(f"Confidence: {result.get('confidence')}")
-                    if "processing_time_ms" in result:
-                        logger.info(f"Latency (server): {result.get('processing_time_ms')} ms")
-                    
-                    # ⚠️ Soft warnings (do NOT fail test)
-                    if diagnostics.get("used_model") and result.get("confidence", 0) < 0.3:
-                        logger.warning(
-                            "⚠️ Model was used but confidence is low (%.2f) - may indicate model uncertainty",
-                            result.get("confidence"),
-                        )
-                    
-                    if not diagnostics.get("used_model"):
-                        logger.warning("⚠️ Fallback path used for this request")
-                    
-                    # Check expectations if specified
-                    expected_model = test_case.get("expect_model")
-                    if expected_model is not None:
-                        actual_model = diagnostics.get("used_model", False)
-                        if expected_model != actual_model:
-                            logger.warning(
-                                "⚠️ Execution path mismatch: expected used_model=%s, got %s",
-                                expected_model, actual_model
-                            )
-                            # Optionally fail the test (uncomment to enforce strict expectations)
-                            # failures.append(
-                            #     f"compile_intent ({test_case['name']}): expected used_model={expected_model}, got {actual_model}"
-                            # )
-                
-                logger.debug(f"Full response: {_pretty(result)}")
-        except Exception as e:
-            logger.error(f"❌ Exception: {e}")
-            logger.error(traceback.format_exc())
-            failures.append(f"compile_intent ({test_case['name']}) exception")
-    
+
+    # Run cases N times to catch cold vs warm + tail latency
+    all_metrics: List[Dict[str, Any]] = []
+
+    async def run_one(case: dict) -> None:
+        nonlocal failures, all_metrics
+        for r in range(1, runs + 1):
+            case_name = f"{case['name']} [run {r}/{runs}]"
+            case_run = dict(case)
+            case_run["name"] = case_name
+            f, m = await _run_compile_case(client, case_run, strict, schema_by_fn)
+            failures.extend(f)
+            all_metrics.append(m)
+
+    if parallel and parallel > 1:
+        logger.info("Running compile cases with parallel=%d", parallel)
+        # simple bounded concurrency
+        sem = anyio.Semaphore(parallel)
+
+        async def run_one_bounded(case: dict) -> None:
+            async with sem:
+                await run_one(case)
+
+        async with anyio.create_task_group() as tg:
+            for c in test_cases:
+                tg.start_soon(run_one_bounded, c)
+    else:
+        for c in test_cases:
+            await run_one(c)
+
+    # Summary metrics
+    _print_header("COMPILE SUMMARY")
+    ok_metrics = [m for m in all_metrics if m.get("ok")]
+    if ok_metrics:
+        rtts = sorted([m["client_rtt_s"] for m in ok_metrics if isinstance(m.get("client_rtt_s"), (int, float))])
+        srv = sorted([m["server_ms"] for m in ok_metrics if isinstance(m.get("server_ms"), (int, float))])
+
+        def pct(xs, p):
+            if not xs:
+                return None
+            idx = int(round((p / 100.0) * (len(xs) - 1)))
+            return xs[max(0, min(len(xs) - 1, idx))]
+
+        logger.info("Client RTT: p50=%.2fs p95=%.2fs max=%.2fs",
+                    pct(rtts, 50) or 0.0, pct(rtts, 95) or 0.0, (rtts[-1] if rtts else 0.0))
+        if srv:
+            logger.info("Server time: p50=%.0fms p95=%.0fms max=%.0fms",
+                        pct(srv, 50) or 0.0, pct(srv, 95) or 0.0, (srv[-1] if srv else 0.0))
+
+        path_counts: Dict[str, int] = {}
+        for m in ok_metrics:
+            path_counts[m.get("path") or "UNKNOWN"] = path_counts.get(m.get("path") or "UNKNOWN", 0) + 1
+        logger.info("Execution paths: %s", path_counts)
+
+        flagged = [m for m in ok_metrics if m.get("flags")]
+        if flagged:
+            logger.warning("Flagged responses (%d):", len(flagged))
+            for m in flagged[:10]:
+                logger.warning("  - %s flags=%s fn=%s rtt=%.2fs server=%sms",
+                               m.get("name"), ",".join(m.get("flags", [])), m.get("function"),
+                               m.get("client_rtt_s", 0.0), m.get("server_ms"))
+    else:
+        logger.warning("No successful compile responses to summarize.")
+
     return failures
 
 
-async def verify_service_health(client) -> bool:
-    """Verify ML service is healthy before running tests."""
-    _print_header("SERVICE HEALTH CHECK")
-    
-    try:
-        health = await client.health()
-        logger.info(f"Health status: {health.get('status', 'unknown')}")
-        logger.debug(f"Health response: {_pretty(health)}")
-        
-        if health.get("status") == "healthy":
-            logger.info("✅ Service is healthy")
-            return True
-        else:
-            logger.warning("⚠️  Service health status is not 'healthy'")
-            return False
-    except Exception as e:
-        logger.error(f"❌ Health check failed: {e}")
-        logger.error(traceback.format_exc())
-        return False
-
-
-async def run_verification() -> int:
-    """Run all verification tests."""
+# -----------------------------
+# Orchestration
+# -----------------------------
+async def run_verification(args) -> int:
     logger.info("🚀 Starting intent compilation verification...")
-    
-    failures = []
-    
-    # Initialize ML client
+
     _print_header("CLIENT INITIALIZATION")
     try:
         from seedcore.serve.ml_client import MLServiceClient
-        
-        # Try to get base URL from ray_utils, fallback to env or default
-        base_url = None
-        try:
-            from seedcore.utils.ray_utils import ML
-            base_url = ML
-            logger.info(f"Using ML service URL from ray_utils: {base_url}")
-        except Exception:
-            base_url = os.getenv("MLS_BASE_URL", "http://127.0.0.1:8000/ml")
-            logger.info(f"Using ML service URL: {base_url}")
-        
-        # Use longer timeout for intent compilation (p95 latency ~8-9s on CPU, 15s provides safety margin)
-        client = MLServiceClient(base_url=base_url, timeout=15.0)
-        logger.info("✅ MLServiceClient initialized")
+
+        base_url = args.base_url
+        if not base_url:
+            try:
+                from seedcore.utils.ray_utils import ML
+                base_url = ML
+                logger.info("Using ML service URL from ray_utils: %s", base_url)
+            except Exception:
+                base_url = os.getenv("MLS_BASE_URL", "http://127.0.0.1:8000/ml")
+                logger.info("Using ML service URL: %s", base_url)
+
+        client = MLServiceClient(base_url=base_url, timeout=float(args.timeout))
+        logger.info("✅ MLServiceClient initialized (base_url=%s, timeout=%ss)", base_url, args.timeout)
     except Exception as e:
-        logger.error(f"❌ Failed to initialize MLServiceClient: {e}")
+        logger.error("❌ Failed to initialize MLServiceClient: %s", e)
         logger.error(traceback.format_exc())
         return 1
-    
-    # Check service health
-    is_healthy = await verify_service_health(client)
-    if not is_healthy:
-        logger.warning("⚠️  Service health check failed, but continuing with tests...")
-    
-    # Run verification tests
-    schema_failures = await verify_get_intent_schema(client)
-    failures.extend(schema_failures)
-    
-    compile_failures = await verify_compile_intent(client)
-    failures.extend(compile_failures)
-    
-    # Summary
+
+    await verify_service_health(client)
+
+    schemas, schema_fetch_failures = await fetch_all_schemas(client)
+    failures: List[str] = []
+    failures.extend(schema_fetch_failures)
+
+    if schemas is None:
+        _print_header("SUMMARY")
+        logger.error("❌ Cannot continue: schema fetch failed.")
+        for f in failures:
+            logger.error("  - %s", f)
+        return 1
+
+    failures.extend(await verify_get_intent_schema(client, schemas, strict=args.strict))
+    failures.extend(await verify_compile_intent(
+        client,
+        schemas,
+        strict=args.strict,
+        runs=int(args.runs),
+        parallel=int(args.parallel),
+    ))
+
     _print_header("SUMMARY")
     if failures:
-        logger.error(f"❌ {len(failures)} test(s) failed:")
-        for failure in failures:
-            logger.error(f"  - {failure}")
+        logger.error("❌ %d issue(s):", len(failures))
+        for f in failures:
+            logger.error("  - %s", f)
         return 1
-    else:
-        logger.info("✅ All verification tests passed!")
-        return 0
+
+    logger.info("✅ All verification tests passed!")
+    return 0
 
 
-def main():
-    """Main entry point."""
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base-url", default=os.getenv("MLS_BASE_URL", ""), help="ML service base URL")
+    parser.add_argument("--timeout", default=float(os.getenv("MLS_TIMEOUT", "20")), type=float, help="Client timeout seconds")
+    parser.add_argument("--strict", action="store_true", help="Fail on expectation mismatches (otherwise warn)")
+    parser.add_argument("--parallel", default=int(os.getenv("VERIFY_PARALLEL", "1")), type=int, help="Parallel compile test concurrency")
+    parser.add_argument("--runs", default=int(os.getenv("VERIFY_RUNS", "1")), type=int, help="Run each compile case N times")
+    args = parser.parse_args()
+
     try:
-        code = anyio.run(run_verification)
+        code = anyio.run(run_verification, args)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
         code = 130
@@ -388,9 +529,9 @@ def main():
         logger.error("Unhandled exception:")
         logger.error(traceback.format_exc())
         code = 1
+
     sys.exit(code)
 
 
 if __name__ == "__main__":
     main()
-

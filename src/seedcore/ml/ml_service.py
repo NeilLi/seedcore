@@ -1773,10 +1773,10 @@ async def startup_event():
             logger.info(f"🔥 IntentCompiler warmup mode: {mode.value}")
             
             if mode == WarmupMode.EAGER:
-                logger.info("⏳ EAGER warmup: blocking startup until model is ready")
+                logger.info("⏳ EAGER warmup: blocking startup until model is loaded")
                 try:
-                    await compiler.warmup_heavy()
-                    logger.info("✅ IntentCompiler eager warmup complete")
+                    await compiler.warmup_light()
+                    logger.info("✅ IntentCompiler eager warmup complete (model loaded, inference will warm on first request)")
                 except Exception as e:
                     logger.warning(f"⚠️ IntentCompiler eager warmup failed: {e}")
             
