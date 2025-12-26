@@ -37,7 +37,7 @@ spec:
             max_concurrent_queries: 20
             ray_actor_options:
               num_cpus: 0.5        # Give a full core for numpy/torch logic
-              memory: 1073741824   # 2GB
+              memory: 1073741824   
               # REMOVED: {"head_node": 0.001} -> Let this run on workers!
 
       # ----------------------------------------------------------------
@@ -58,7 +58,7 @@ spec:
             max_concurrent_queries: 100  # High concurrency (Async I/O)
             ray_actor_options:
               num_cpus: 0.2        # Low CPU usage (waiting for HTTP)
-              memory: 1073741824   # 2GB
+              memory: 1073741824   
 
       # ----------------------------------------------------------------
       # 3. Coordinator (Orchestrator - Singleton)
@@ -94,7 +94,7 @@ spec:
             health_check_timeout_s: 30
             ray_actor_options:
               num_cpus: 0.5         # Needs CPU for routing logic/hashing
-              memory: 1073741824    # 2GB
+              memory: 1073741824    
 
       # ----------------------------------------------------------------
       # 5. Ops & Shared Utilities
@@ -116,27 +116,27 @@ spec:
               target_num_ongoing_requests_per_replica: 50
             max_concurrent_queries: 100
             ray_actor_options:
-              num_cpus: 0.2
-              memory: 2147483648
+              num_cpus: 0.1
+              memory: 524288000
 
           # --- Singletons (Stateful) ---
           - name: FactManagerService
             num_replicas: 1
             ray_actor_options:
               num_cpus: 0.1
-              memory: 1073741824 # 1GB
+              memory: 524288000
 
           - name: StateService
             num_replicas: 1
             ray_actor_options:
               num_cpus: 0.2
-              memory: 1073741824
+              memory: 524288000
 
           - name: EnergyService
             num_replicas: 1
             ray_actor_options:
               num_cpus: 0.1
-              memory: 1073741824
+              memory: 524288000
 
       # ----------------------------------------------------------------
       # 6. MCP Protocol
@@ -150,7 +150,7 @@ spec:
             max_concurrent_queries: 50
             ray_actor_options:
               num_cpus: 0.1
-              memory: 1073741824
+              memory: 524288000
 
   # ===================================================================
   #  Ray Cluster Configuration
@@ -190,38 +190,11 @@ spec:
                 - name: ENABLE_ML_SERVICE
                   value: "true" # Set to "false" to disable ML service
                 - name: DGL_GRAPHBOLT_SKIP
-                  value: "0"
+                  value: "1"
                 - name: RAY_OVERRIDE_RESOURCES
                   value: '{"head_node": 1}'
-                - name: RAY_NAMESPACE
-                  value: "seedcore-dev"
-                - name: SEEDCORE_NS
-                  value: "seedcore-dev"
                 - name: XGB_STORAGE_PATH
                   value: "/app/data/models"
-                # ✅ Routing environment variables for coordinator access
-                - name: OCPS_DRIFT_THRESHOLD
-                  value: "0.5"
-                - name: COGNITIVE_TIMEOUT_S
-                  value: "8.0"
-                - name: COGNITIVE_MAX_INFLIGHT
-                  value: "64"
-                - name: FAST_PATH_LATENCY_SLO_MS
-                  value: "1000"
-                - name: MAX_PLAN_STEPS
-                  value: "16"
-                - name: DSP_LOG_TO_FILE
-                  value: "false"
-                - name: DSP_LOG_TO_STDOUT
-                  value: "true"
-                - name: DSP_LOG_PATH
-                  value: "/tmp/azure_openai_usage.log"
-                - name: LOG_TO_FILE
-                  value: "false"
-                - name: LOG_TO_STDOUT
-                  value: "true"
-                - name: LOG_LEVEL
-                  value: "INFO"
               ports:
                 - name: gcs
                   containerPort: 6379
@@ -242,7 +215,7 @@ spec:
                   cpu: "2"
                   memory: "8Gi"
               volumeMounts:
-                - name: xgb-model-storage
+                - name: ml-model-storage
                   mountPath: /app/data
                 - name: project-src
                   mountPath: /app
@@ -281,7 +254,7 @@ spec:
                 timeoutSeconds: 2
                 failureThreshold: 120
           volumes:
-            - name: xgb-model-storage
+            - name: ml-model-storage
               persistentVolumeClaim:
                 claimName: xgb-pvc
             - name: project-src
@@ -313,36 +286,9 @@ spec:
                   - name: SERVE_SERVICE
                     value: "stable"
                   - name: DGL_GRAPHBOLT_SKIP
-                    value: "0"
-                  - name: RAY_NAMESPACE
-                    value: "seedcore-dev"
-                  - name: SEEDCORE_NS
-                    value: "seedcore-dev"
+                    value: "1"
                   - name: XGB_STORAGE_PATH
                     value: "/app/data/models"
-                  # ✅ Routing environment variables for coordinator access
-                  - name: OCPS_DRIFT_THRESHOLD
-                    value: "0.5"
-                  - name: COGNITIVE_TIMEOUT_S
-                    value: "8.0"
-                  - name: COGNITIVE_MAX_INFLIGHT
-                    value: "64"
-                  - name: FAST_PATH_LATENCY_SLO_MS
-                    value: "1000"
-                  - name: MAX_PLAN_STEPS
-                    value: "16"
-                  - name: DSP_LOG_TO_FILE
-                    value: "false"
-                  - name: DSP_LOG_TO_STDOUT
-                    value: "true"
-                  - name: DSP_LOG_PATH
-                    value: "/tmp/azure_openai_usage.log"
-                  - name: LOG_TO_FILE
-                    value: "false"
-                  - name: LOG_TO_STDOUT
-                    value: "true"
-                  - name: LOG_LEVEL
-                    value: "INFO"
                 resources:
                   requests:
                     cpu: "500m"
@@ -351,7 +297,7 @@ spec:
                     cpu: "2"
                     memory: "8Gi"
                 volumeMounts:
-                  - name: xgb-model-storage
+                  - name: ml-model-storage
                     mountPath: /app/data
                   - name: project-src
                     mountPath: /app
@@ -378,7 +324,7 @@ spec:
                   timeoutSeconds: 2
                   failureThreshold: 120
             volumes:
-              - name: xgb-model-storage
+              - name: ml-model-storage
                 persistentVolumeClaim:
                   claimName: xgb-pvc
               - name: project-src
