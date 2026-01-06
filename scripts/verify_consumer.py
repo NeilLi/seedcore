@@ -38,11 +38,12 @@ def main() -> None:
 
     try:
         while True:
-            event = consumer.poll(timeout=1.0)
+            msg = consumer.poll_raw(timeout=1.0)
 
-            if event is None:
+            if msg is None:
                 continue
 
+            event = consumer.decode(msg)
             print(f"📥 Received event:\n    {event}")
 
     except KeyboardInterrupt:

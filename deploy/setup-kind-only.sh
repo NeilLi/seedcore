@@ -20,7 +20,9 @@ echo "🚀 Starting Kind cluster bootstrap..."
 # -----------------------------
 # Disk safety check
 # -----------------------------
-ROOT_FREE_GB=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+# Portable: available space in KB (macOS + Linux), then convert to GB
+avail_kb=$(df -Pk / | tail -1 | awk '{print $4}')
+ROOT_FREE_GB=$(( avail_kb / 1024 / 1024 ))
 
 if (( ROOT_FREE_GB < MIN_FREE_GB )); then
     echo "❌ ERROR: Low disk space!"

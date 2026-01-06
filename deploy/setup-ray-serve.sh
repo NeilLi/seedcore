@@ -68,6 +68,27 @@ print_status "OK" "Namespace ready"
 # ---------- Load your image into Kind (digest-aware, avoid unnecessary reloads) ----------
 print_status "INFO" "Checking if image ${RAY_IMAGE} already exists in Kind nodes..."
 
+# Verify image exists locally first
+if ! docker image inspect "${RAY_IMAGE}" >/dev/null 2>&1; then
+  print_status "ERROR" "Image ${RAY_IMAGE} not found locally. Please build it first:"
+  echo "   ./build.sh"
+  echo "   or"
+  echo "   docker build --platform linux/amd64 -f docker/Dockerfile -t ${RAY_IMAGE} ."
+  exit 1
+fi
+
+# Check image platform (Kind nodes typically run linux/amd64)
+IMAGE_PLATFORM=$(docker image inspect "${RAY_IMAGE}" --format '{{.Architecture}}/{{.Os}}' 2>/dev/null || echo "unknown")
+if [[ "${IMAGE_PLATFORM}" != "amd64/linux" ]] && [[ "${IMAGE_PLATFORM}" != "unknown" ]]; then
+  print_status "WARN" "Image platform is ${IMAGE_PLATFORM}, but Kind nodes expect linux/amd64"
+  print_status "INFO" "Rebuilding image for correct platform..."
+  if [ -f "${SCRIPT_DIR}/../build.sh" ]; then
+    "${SCRIPT_DIR}/../build.sh"
+  else
+    docker build --platform linux/amd64 -f "${SCRIPT_DIR}/../docker/Dockerfile" -t "${RAY_IMAGE}" "${SCRIPT_DIR}/.."
+  fi
+fi
+
 # Get actual Kind node names dynamically (works regardless of naming scheme)
 NODES=$(kind get nodes --name "${CLUSTER_NAME}" 2>/dev/null || true)
 
@@ -104,7 +125,17 @@ elif [[ "$NODE_HAS_IMAGE" == "true" ]]; then
 # 3. If neither, load the image
 else
   print_status "INFO" "Loading image ${RAY_IMAGE} into Kind nodes (${CLUSTER_NAME})..."
-  kind load docker-image "${RAY_IMAGE}" --name "${CLUSTER_NAME}"
+  if ! kind load docker-image "${RAY_IMAGE}" --name "${CLUSTER_NAME}" 2>&1; then
+    print_status "ERROR" "Failed to load image into Kind cluster"
+    echo ""
+    echo "This is often caused by a platform mismatch. Try rebuilding the image:"
+    echo "   ./build.sh"
+    echo "   or"
+    echo "   docker build --platform linux/amd64 -f docker/Dockerfile -t ${RAY_IMAGE} ."
+    echo ""
+    echo "Then retry the deployment."
+    exit 1
+  fi
   print_status "OK" "Image loaded into Kind nodes"
 fi
 
