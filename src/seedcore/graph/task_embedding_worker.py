@@ -10,12 +10,12 @@ from hashlib import sha256
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text  # pyright: ignore[reportMissingImports]
+from sqlalchemy.exc import SQLAlchemyError  # pyright: ignore[reportMissingImports]
 
 from seedcore.database import get_async_pg_session_factory
 from seedcore.utils.ray_utils import ensure_ray_initialized
-from prometheus_client import Counter
+from prometheus_client import Counter  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,9 @@ class TaskEmbeddingJob:
     reason: str = "unspecified"
 
 
-async def enqueue_task_embedding_job(app_state: Any, task_id: UUID | str, *, reason: str = "manual") -> bool:
+async def enqueue_task_embedding_job(
+    app_state: Any, task_id: UUID | str, *, reason: str = "manual"
+) -> bool:
     """Enqueue a task for embedding if the background worker is available."""
 
     queue = getattr(app_state, "task_embedding_queue", None)
@@ -54,13 +56,17 @@ async def enqueue_task_embedding_job(app_state: Any, task_id: UUID | str, *, rea
     lock = getattr(app_state, "task_embedding_pending_lock", None)
 
     if queue is None or pending is None or lock is None:
-        logger.debug("Task embedding queue not initialized; skipping enqueue for %s", task_id)
+        logger.debug(
+            "Task embedding queue not initialized; skipping enqueue for %s", task_id
+        )
         return False
 
     task_id_str = str(task_id)
     async with lock:
         if task_id_str in pending:
-            logger.debug("Task %s already pending embedding (reason=%s)", task_id_str, reason)
+            logger.debug(
+                "Task %s already pending embedding (reason=%s)", task_id_str, reason
+            )
             LTM_EMBED_ENQUEUE_DEDUPE.labels(reason).inc()
             return False
         pending.add(task_id_str)
@@ -90,14 +96,22 @@ async def task_embedding_worker(app_state: Any) -> None:
         if not ensure_ray_initialized():
             logger.warning("Ray not initialized; cannot obtain LTM embedder")
             return None
-        import ray
+        import ray  # pyright: ignore[reportMissingImports]
         from seedcore.graph.ltm_embeddings import LTMEmbedder
 
         try:
-            embedder_handle = ray.get_actor(LTM_EMBEDDER_ACTOR_NAME, namespace=AGENT_NAMESPACE)
-            logger.debug("Reusing existing LTMEmbedder actor '%s'", LTM_EMBEDDER_ACTOR_NAME)
+            embedder_handle = ray.get_actor(
+                LTM_EMBEDDER_ACTOR_NAME, namespace=AGENT_NAMESPACE
+            )
+            logger.debug(
+                "Reusing existing LTMEmbedder actor '%s'", LTM_EMBEDDER_ACTOR_NAME
+            )
         except ValueError:
-            logger.info("Creating LTMEmbedder actor '%s' (namespace=%s)", LTM_EMBEDDER_ACTOR_NAME, AGENT_NAMESPACE)
+            logger.info(
+                "Creating LTMEmbedder actor '%s' (namespace=%s)",
+                LTM_EMBEDDER_ACTOR_NAME,
+                AGENT_NAMESPACE,
+            )
             embedder_handle = LTMEmbedder.options(
                 name=LTM_EMBEDDER_ACTOR_NAME,
                 namespace=AGENT_NAMESPACE,
@@ -118,7 +132,9 @@ async def task_embedding_worker(app_state: Any) -> None:
                 )
                 node_id = ensure_result.scalar_one_or_none()
                 if node_id is None:
-                    logger.warning("ensure_task_node returned NULL for task %s", task_id)
+                    logger.warning(
+                        "ensure_task_node returned NULL for task %s", task_id
+                    )
                     await session.rollback()
                     continue
 
@@ -140,7 +156,9 @@ async def task_embedding_worker(app_state: Any) -> None:
                 )
                 row = task_row.mappings().first()
                 if not row:
-                    logger.debug("Task %s no longer exists; skipping embedding", task_id)
+                    logger.debug(
+                        "Task %s no longer exists; skipping embedding", task_id
+                    )
                     await session.rollback()
                     continue
 
@@ -150,7 +168,9 @@ async def task_embedding_worker(app_state: Any) -> None:
                     params_pretty=row.get("params_pretty"),
                 )
                 if not text_blob:
-                    logger.debug("Task %s has empty embedding payload; skipping", task_id)
+                    logger.debug(
+                        "Task %s has empty embedding payload; skipping", task_id
+                    )
                     await session.rollback()
                     continue
                 content_hash = sha256(text_blob.encode("utf-8")).hexdigest()
@@ -169,7 +189,9 @@ async def task_embedding_worker(app_state: Any) -> None:
                 existing = existing_hash.scalar_one_or_none()
                 if existing and existing == content_hash:
                     logger.debug(
-                        "Task %s embedding up-to-date (hash=%s); skipping", task_id, content_hash
+                        "Task %s embedding up-to-date (hash=%s); skipping",
+                        task_id,
+                        content_hash,
                     )
                     await session.rollback()
                     LTM_EMBED_JOB_SKIPPED.labels(job.reason, "up_to_date").inc()
@@ -177,7 +199,9 @@ async def task_embedding_worker(app_state: Any) -> None:
 
                 embedder = _get_embedder()
                 if embedder is None:
-                    logger.warning("No LTM embedder available; task %s re-queued", task_id)
+                    logger.warning(
+                        "No LTM embedder available; task %s re-queued", task_id
+                    )
                     await queue.put(job)
                     await asyncio.sleep(1)
                     await session.rollback()
@@ -191,8 +215,8 @@ async def task_embedding_worker(app_state: Any) -> None:
                     "model": TASK_EMBED_MODEL,
                 }
 
-                import ray
-                from ray.exceptions import RayActorError
+                import ray  # pyright: ignore[reportMissingImports]
+                from ray.exceptions import RayActorError  # pyright: ignore[reportMissingImports]
 
                 try:
                     result = await asyncio.to_thread(
@@ -234,9 +258,13 @@ async def task_embedding_worker(app_state: Any) -> None:
                 await session.commit()
                 LTM_EMBED_JOB_PROCESSED.labels(job.reason).inc()
         except SQLAlchemyError as exc:
-            logger.exception("Database error while processing embedding for %s: %s", job.task_id, exc)
+            logger.exception(
+                "Database error while processing embedding for %s: %s", job.task_id, exc
+            )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Unexpected error while embedding task %s: %s", job.task_id, exc)
+            logger.exception(
+                "Unexpected error while embedding task %s: %s", job.task_id, exc
+            )
         finally:
             if lock is not None and pending is not None:
                 async with lock:

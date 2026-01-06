@@ -9,13 +9,14 @@ The caller is responsible for session lifecycle and transaction management
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Any, Dict, List, Optional, Union
 
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError, DataError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text  # pyright: ignore[reportMissingImports]
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError, DataError  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from seedcore.models import DatabaseTask as Task
 
@@ -23,13 +24,16 @@ logger = logging.getLogger(__name__)
 
 
 class TaskMetadataRepository:
-    """Lightweight, stateless repository for persisting task graph metadata.
+    """Enhanced Repository for Unified Memory and Multimodal Task Metadata.
 
     This class provides high-level helpers that take care of:
     - creating or updating task rows
     - wiring cross-layer edges (task↔agent, task↔organ)
     - materialising node ids via the ``ensure_*`` helper functions
     - adding task dependencies for HGNN plans
+    - persisting multimodal embeddings into Working Memory
+    - querying across unified memory (Events + Knowledge Graph)
+    - fetching complete multimodal task context
 
     All public methods must be passed an ``AsyncSession`` and are designed
     to be run within a transaction managed by the caller.
@@ -368,7 +372,6 @@ class TaskMetadataRepository:
             table_name = "graph_embeddings_128"
 
         # Ensure embedding is string formatted for SQL (e.g. '[0.1, 0.2, ...]')
-        import json
         embedding_str = json.dumps(embedding)
 
         stmt = text(f"""
@@ -397,6 +400,184 @@ class TaskMetadataRepository:
         except Exception as e:
             logger.error(f"Vector search failed: {e}")
             return []
+
+    async def save_task_multimodal_embedding(
+        self,
+        session: AsyncSession,
+        task_id: uuid.UUID,
+        embedding: List[float],
+        source_modality: str = "text",
+        model_version: str = "seedcore-v2-1024",
+    ) -> None:
+        """Persist a high-dimensional embedding into the Working Memory tier.
+
+        This populates the 'task_multimodal_embeddings' table and ensures
+        the Unified View is updated for immediate reading.
+
+        Args:
+            session: The AsyncSession to use for database operations.
+            task_id: The UUID of the task to associate with this embedding.
+            embedding: The high-dimensional embedding vector (list of floats).
+            source_modality: The source modality (e.g., "text", "image", "audio").
+            model_version: The model version used to generate the embedding.
+
+        Raises:
+            SQLAlchemyError: If database operations fail.
+        """
+        stmt = text("""
+            INSERT INTO task_multimodal_embeddings (
+                task_id, emb, source_modality, model_version, created_at
+            )
+            VALUES (:task_id, :emb, :modality, :version, NOW())
+            ON CONFLICT (task_id) DO UPDATE SET
+                emb = EXCLUDED.emb,
+                model_version = EXCLUDED.model_version
+        """)
+        try:
+            await session.execute(stmt, {
+                "task_id": task_id,
+                "emb": json.dumps(embedding),
+                "modality": source_modality,
+                "version": model_version
+            })
+            # We flush here to ensure the Unified View is updated for immediate reading
+            await session.flush()
+        except SQLAlchemyError as e:
+            logger.error(
+                "Failed to persist multimodal embedding for task %s: %s. "
+                "This may indicate invalid task_id or embedding dimension mismatch.",
+                task_id, str(e)
+            )
+            raise
+        except Exception as e:
+            logger.error(
+                "Unexpected error while persisting multimodal embedding for task %s: %s",
+                task_id, str(e)
+            )
+            raise
+
+    async def query_unified_memory(
+        self,
+        session: AsyncSession,
+        query_embedding: List[float],
+        k: int = 5,
+        min_similarity: float = 0.7,
+        tier_filter: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Perform semantic search across the entire Unified Memory View.
+
+        This bridges the 'Now' (Tasks) and 'Always' (Knowledge Graph) tiers,
+        allowing queries across both event_working and knowledge_base memory.
+
+        Args:
+            session: The AsyncSession to use for database operations.
+            query_embedding: The query embedding vector (list of floats).
+            k: Number of nearest neighbors to return (default: 5).
+            min_similarity: Minimum similarity threshold (default: 0.7).
+            tier_filter: Optional filter for memory tier (e.g., "event_working", "knowledge_base").
+
+        Returns:
+            List of dictionaries containing memory information and similarity scores.
+            Each dict has: id, category, content, tier, metadata, similarity.
+        """
+        query_vec = json.dumps(query_embedding)
+
+        # Build the dynamic filter for tiers (event_working vs knowledge_base)
+        tier_clause = "AND memory_tier = :tier" if tier_filter else ""
+
+        stmt = text(f"""
+            SELECT 
+                id, category, content, memory_tier, metadata,
+                1 - (vector <=> CAST(:vec AS vector)) as similarity
+            FROM v_unified_cortex_memory
+            WHERE 1=1 {tier_clause}
+            AND 1 - (vector <=> CAST(:vec AS vector)) >= :min_sim
+            ORDER BY vector <=> CAST(:vec AS vector)
+            LIMIT :k
+        """)
+
+        try:
+            params = {"vec": query_vec, "k": k, "min_sim": min_similarity}
+            if tier_filter:
+                params["tier"] = tier_filter
+
+            result = await session.execute(stmt, params)
+
+            memories = []
+            for row in result:
+                memories.append({
+                    "id": row.id,
+                    "category": row.category,
+                    "content": row.content,
+                    "tier": row.memory_tier,
+                    "metadata": row.metadata,
+                    "similarity": float(row.similarity) if row.similarity is not None else 0.0,
+                })
+            return memories
+        except SQLAlchemyError as e:
+            logger.error(
+                "Unified Memory query failed: %s. "
+                "This may indicate the v_unified_cortex_memory view is not available or vector dimension mismatch.",
+                str(e)
+            )
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error during Unified Memory query: {e}")
+            return []
+
+    async def get_multimodal_task_context(
+        self,
+        session: AsyncSession,
+        task_id: uuid.UUID
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch the complete multimodal context for a task.
+
+        Retrieves task data from the Unified View, including refined text
+        and media pointers. This feeds the Coordinator and PKG with
+        high-fidelity signals (like standard 24h time or S3 media links)
+        without multiple table joins.
+
+        Args:
+            session: The AsyncSession to use for database operations.
+            task_id: The UUID of the task to fetch.
+
+        Returns:
+            Dictionary containing multimodal task context, or None if task not found.
+            Contains: id, type, description, memory_tier, multimodal_params, grounded_time.
+        """
+        stmt = text("""
+            SELECT * FROM v_unified_cortex_memory 
+            WHERE id = :task_id::text 
+            LIMIT 1
+        """)
+        try:
+            result = await session.execute(stmt, {"task_id": str(task_id)})
+            row = result.fetchone()
+            if not row:
+                return None
+
+            metadata = row.metadata if isinstance(row.metadata, dict) else {}
+            return {
+                "id": row.id,
+                "type": row.category,
+                "description": row.content,
+                "memory_tier": row.memory_tier,
+                "multimodal_params": metadata.get("multimodal") if metadata else None,
+                "grounded_time": metadata.get("grounded_time") if metadata else None
+            }
+        except SQLAlchemyError as e:
+            logger.error(
+                "Failed to fetch multimodal context for task %s: %s. "
+                "This may indicate the v_unified_cortex_memory view is not available.",
+                task_id, str(e)
+            )
+            return None
+        except Exception as e:
+            logger.error(
+                "Unexpected error while fetching multimodal context for task %s: %s",
+                task_id, str(e)
+            )
+            return None
 
     @staticmethod
     def _coerce_float(value: Any) -> Optional[float]:

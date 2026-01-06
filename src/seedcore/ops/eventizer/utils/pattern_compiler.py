@@ -19,12 +19,13 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from seedcore.ops.eventizer.utils.json_schema_validator import EventizerPatternsValidator
 
 from seedcore.models.eventizer import EventizerConfig, PatternMatch
 from .aho_corasick import create_keyword_matcher, OptimizedAhoCorasickMatcher
+from .text_normalizer import TextNormalizer, SpanMap, NormalizationTier
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,8 @@ class KeywordSet:
     priority: int
     confidence: float
     whole_word: bool
-    metadata: Dict[str, Any]
+    case_sensitive: bool = False  # Add case_sensitive field
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 def _safe_hash(s: str) -> str:
@@ -127,6 +129,12 @@ class PatternCompiler:
         # Version / telemetry
         self._engines: Dict[str, str] = {}
         self._pattern_file_hashes: Dict[str, str] = {}
+        
+        # Normalization support (optional, controlled by config)
+        self._normalize_before_match: bool = getattr(config, 'normalize_before_match', False)
+        self._normalization_tier: NormalizationTier = getattr(
+            config, 'normalization_tier', NormalizationTier.AGGRESSIVE
+        )
 
         # Load defaults immediately (safe)
         self._load_default_patterns()
@@ -158,24 +166,50 @@ class PatternCompiler:
         """
         Match all enabled pattern families with optional time budget.
 
-        Returns deduplicated, priority-ordered matches with stable offsets.
+        Returns deduplicated, priority-ordered matches with stable offsets on ORIGINAL text.
+        
+        If normalization is enabled (via config.normalize_before_match), patterns are matched
+        against normalized text, then spans are projected back to original using SpanMap.
         """
         start = time.perf_counter()
         matches: List[PatternMatch] = []
+        original_text = text
+        span_map: Optional[SpanMap] = None
+        
+        # Optional normalization pass
+        if self._normalize_before_match:
+            try:
+                normalizer = TextNormalizer(
+                    tier=self._normalization_tier,
+                    case="lower",
+                    fold_accents=False,
+                    standardize_units=True,
+                    strip_audio_tags=True,
+                    join_split_tokens=True,
+                )
+                normalized_result = normalizer.normalize(text, build_map=True)
+                if isinstance(normalized_result, tuple):
+                    text, span_map = normalized_result
+                else:
+                    text = normalized_result
+                    span_map = None
+            except Exception as e:
+                logger.warning("Normalization failed, using original text: %s", e)
+                span_map = None
 
         try:
             if include_regex and self._compiled_regex:
-                matches.extend(self._match_regex(text, start, budget_ms))
+                matches.extend(self._match_regex(text, start, budget_ms, original_text, span_map))
                 if _time_exceeded(start, budget_ms):
                     return self._dedup_and_sort(matches)
 
             if include_keywords and (self._keyword_matchers or self._keyword_sets):
-                matches.extend(self._match_keywords(text))
+                matches.extend(self._match_keywords(text, original_text, span_map))
                 if _time_exceeded(start, budget_ms):
                     return self._dedup_and_sort(matches)
 
             if include_entities and self._compiled_entities:
-                matches.extend(self._match_entities(text, start, budget_ms))
+                matches.extend(self._match_entities(text, start, budget_ms, original_text, span_map))
         except Exception as e:
             logger.exception("Pattern match failed: %s", e)
 
@@ -249,6 +283,7 @@ class PatternCompiler:
                 priority=int(item.get("priority", 100)),
                 confidence=float(item.get("confidence", 0.7)),
                 whole_word=bool(item.get("whole_word", True)),
+                case_sensitive=bool(item.get("case_sensitive", False)),
                 metadata=meta
             ))
 
@@ -267,9 +302,12 @@ class PatternCompiler:
                 "description": item.get("description", "")
             })
             
-            for sub in item.get("patterns", []):
+            for idx, sub in enumerate(item.get("patterns", [])):
                 if "regex" in sub:
+                    # Use unique pattern_id to avoid overwriting: entity:{entity_type}:{index}
+                    pattern_id = f"entity:{et}:{idx}"
                     self._add_entity_compiled(
+                        pattern_id=pattern_id,
                         entity_type=et,
                         pattern_text=str(sub["regex"]),
                         flags=self._decode_flags(sub.get("flags")),
@@ -300,6 +338,7 @@ class PatternCompiler:
                 priority=100,
                 confidence=0.7,
                 whole_word=True,
+                case_sensitive=False,
                 metadata={}
             ))
             logger.info("Loaded keyword dictionary: %s (%d keywords)", p.stem, len(kws))
@@ -324,6 +363,7 @@ class PatternCompiler:
             priority=100,
             confidence=0.7,
             whole_word=True,
+            case_sensitive=False,
             metadata={}
         ))
         logger.debug("Added keyword dictionary: %s (%d keywords)", dict_name, len(keywords))
@@ -332,7 +372,9 @@ class PatternCompiler:
                            *, priority: int = 100, confidence: float = 0.9,
                            metadata: Dict[str, Any] = None) -> bool:
         try:
-            self._add_entity_compiled(entity_type, pattern_text, flags, priority, confidence, metadata)
+            # Generate unique pattern_id to avoid overwriting
+            pattern_id = f"entity:{entity_type}:{len(self._compiled_entities)}"
+            self._add_entity_compiled(pattern_id, entity_type, pattern_text, flags, priority, confidence, metadata)
             return True
         except Exception as e:
             logger.warning("Invalid entity pattern %s: %s", entity_type, e)
@@ -387,8 +429,9 @@ class PatternCompiler:
             metadata=metadata or {}
         )
 
-    def _add_entity_compiled(self, entity_type: str, pattern_text: str, flags: int,
+    def _add_entity_compiled(self, pattern_id: str, entity_type: str, pattern_text: str, flags: int,
                             priority: int, confidence: float, metadata: Dict[str, Any] = None) -> None:
+        """Compile entity pattern with unique pattern_id to avoid overwriting."""
         # Similar to regex, but stored in _compiled_entities
         compiled = re.compile(pattern_text, flags)
         engine_used = "re"
@@ -398,10 +441,10 @@ class PatternCompiler:
                 compiled = re2.compile(pattern_text, flags)
                 engine_used = "re2"
             except Exception as e:
-                logger.debug("re2 entity compile failed for %s, fallback to re: %s", entity_type, e)
+                logger.debug("re2 entity compile failed for %s, fallback to re: %s", pattern_id, e)
         
-        self._compiled_entities[entity_type] = CompiledRegex(
-            pattern_id=f"entity:{entity_type}",
+        self._compiled_entities[pattern_id] = CompiledRegex(
+            pattern_id=pattern_id,
             engine=engine_used,
             pattern=compiled,
             flags=flags,
@@ -440,9 +483,17 @@ class PatternCompiler:
                     pat = None
             if not pat:
                 continue
-            # Best-effort heuristic: skip patterns with capture groups (?P<...) etc.
-            if "(" in pat and r"\(" not in pat:
-                continue
+            # Hyperscan eligibility: reject patterns with capture groups (but allow non-capturing groups)
+            # Reject: (?P<name>...) or plain ( without non-capturing prefix
+            # Allow: (?:...) (?=...) (?!...) (?<=...) (?<!...) and escaped \(
+            if "(" in pat:
+                # Check for escaped parentheses
+                import re as re_module
+                # Remove escaped parentheses for analysis
+                pat_unescaped = pat.replace(r"\(", "").replace(r"\)", "")
+                # Reject if contains capture groups: (?P< or plain ( not followed by ?: = ! <
+                if "(?P<" in pat_unescaped or re_module.search(r"\((?!\?[:=!<>])", pat_unescaped):
+                    continue
             try:
                 exprs.append(pat.encode("utf-8"))
                 flags.append(hs_flags(comp.flags))
@@ -470,7 +521,8 @@ class PatternCompiler:
     # -----------------------------
     # Internal: matching
     # -----------------------------
-    def _match_regex(self, text: str, start_ts: float, budget_ms: Optional[float]) -> List[PatternMatch]:
+    def _match_regex(self, text: str, start_ts: float, budget_ms: Optional[float],
+                     original_text: Optional[str] = None, span_map: Optional[SpanMap] = None) -> List[PatternMatch]:
         out: List[PatternMatch] = []
         
         # Hyperscan Path
@@ -496,6 +548,16 @@ class PatternCompiler:
                         for m in comp.pattern.finditer(text[s:e]):
                             ms = s + m.start()
                             me = s + m.end()
+                            
+                            # Project normalized spans back to original if span_map available
+                            if span_map and original_text:
+                                orig_span = span_map.project_norm_span_to_orig(ms, me, original_len=len(original_text))
+                                orig_start, orig_end = orig_span
+                                matched_text = original_text[orig_start:orig_end]
+                            else:
+                                orig_start, orig_end = ms, me
+                                matched_text = text[ms:me]
+                            
                             # Merge capture groups into metadata
                             meta = comp.metadata.copy()
                             meta["priority"] = comp.priority
@@ -506,23 +568,31 @@ class PatternCompiler:
                             out.append(PatternMatch(
                                 pattern_id=pid,
                                 pattern_type="regex",
-                                matched_text=text[ms:me],
-                                start_pos=ms,
-                                end_pos=me,
+                                matched_text=matched_text,
+                                start_pos=orig_start,
+                                end_pos=orig_end,
                                 confidence=max(0.0, min(1.0, comp.confidence)),
                                 metadata=meta,
                             ))
                     except Exception:
                         # Fallback: trust HS span
+                        if span_map and original_text:
+                            orig_span = span_map.project_norm_span_to_orig(s, e, original_len=len(original_text))
+                            orig_start, orig_end = orig_span
+                            matched_text = original_text[orig_start:orig_end]
+                        else:
+                            orig_start, orig_end = s, e
+                            matched_text = text[s:e]
+                        
                         meta = comp.metadata.copy()
                         meta["engine"] = "hyperscan"
                         meta["priority"] = comp.priority
                         out.append(PatternMatch(
                             pattern_id=pid,
                             pattern_type="regex",
-                            matched_text=text[s:e],
-                            start_pos=s,
-                            end_pos=e,
+                            matched_text=matched_text,
+                            start_pos=orig_start,
+                            end_pos=orig_end,
                             confidence=max(0.0, min(1.0, comp.confidence)),
                             metadata=meta,
                         ))
@@ -535,6 +605,17 @@ class PatternCompiler:
         for pid, comp in self._compiled_regex.items():
             try:
                 for m in comp.pattern.finditer(text):
+                    ns, ne = m.start(), m.end()
+                    
+                    # Project normalized spans back to original if span_map available
+                    if span_map and original_text:
+                        orig_span = span_map.project_norm_span_to_orig(ns, ne, original_len=len(original_text))
+                        orig_start, orig_end = orig_span
+                        matched_text = original_text[orig_start:orig_end]
+                    else:
+                        orig_start, orig_end = ns, ne
+                        matched_text = m.group()
+                    
                     # Merge capture groups into metadata
                     meta = comp.metadata.copy()
                     meta["priority"] = comp.priority
@@ -545,9 +626,9 @@ class PatternCompiler:
                     out.append(PatternMatch(
                         pattern_id=pid,
                         pattern_type="regex",
-                        matched_text=m.group(),
-                        start_pos=m.start(),
-                        end_pos=m.end(),
+                        matched_text=matched_text,
+                        start_pos=orig_start,
+                        end_pos=orig_end,
                         confidence=comp.confidence,
                         metadata=meta
                     ))
@@ -557,114 +638,156 @@ class PatternCompiler:
                 pass
         return out
 
-    def _match_keywords(self, text: str) -> List[PatternMatch]:
-        """Match keywords using Aho-Corasick with metadata hydration."""
+    def _match_keywords(self, text: str, original_text: Optional[str] = None, span_map: Optional[SpanMap] = None) -> List[PatternMatch]:
+        """Match keywords using Aho-Corasick with metadata hydration.
+        
+        Matches across all bucketized matchers (respecting per-set case_sensitive/whole_word).
+        """
         matches = []
         
-        # Fast Path: Aho-Corasick
-        if self._use_aho_corasick and "global" in self._keyword_matchers:
-            matcher = self._keyword_matchers["global"]
-            try:
-                # Sync call to C++ extension or optimized python wrapper
-                for m in matcher.search(text):
-                    # m.value contains the payload we injected in _build
-                    meta = {}
-                    if isinstance(m.value, dict):
-                        meta = m.value.get("metadata", {}).copy()
-                    elif hasattr(m.value, "get"):
-                        meta = m.value.get("metadata", {}).copy()
-                    meta["matched_keyword"] = m.pattern
-                    
-                    matches.append(PatternMatch(
-                        pattern_id=m.pattern_id,
-                        pattern_type="keyword",
-                        matched_text=m.pattern,
-                        start_pos=m.start,
-                        end_pos=m.end,
-                        confidence=m.value.get("confidence", 0.7) if isinstance(m.value, dict) else 0.7,
-                        # In JSON schema, lower int = higher priority? 
-                        # Assuming standard Eventizer priority (higher is better)
-                        # or normalizing based on config. 
-                        # The schema default is 100. Let's pass it through.
-                        metadata={
-                            "priority": m.value.get("priority", 100) if isinstance(m.value, dict) else 100, 
-                            **meta
-                        }
-                    ))
+        # Fast Path: Aho-Corasick (try all buckets)
+        if self._use_aho_corasick and self._keyword_matchers:
+            for bucket_key, matcher in self._keyword_matchers.items():
+                try:
+                    # Sync call to C++ extension or optimized python wrapper
+                    for m in matcher.search(text):
+                        # m.value contains the payload we injected in _build
+                        meta = {}
+                        if isinstance(m.value, dict):
+                            meta = m.value.get("metadata", {}).copy()
+                        elif hasattr(m.value, "get"):
+                            meta = m.value.get("metadata", {}).copy()
+                        meta["matched_keyword"] = m.pattern
+                        
+                        # Project normalized spans back to original if span_map available
+                        if span_map and original_text:
+                            orig_span = span_map.project_norm_span_to_orig(m.start, m.end, original_len=len(original_text))
+                            orig_start, orig_end = orig_span
+                            matched_text = original_text[orig_start:orig_end]
+                        else:
+                            orig_start, orig_end = m.start, m.end
+                            matched_text = m.pattern
+                        
+                        matches.append(PatternMatch(
+                            pattern_id=m.pattern_id,
+                            pattern_type="keyword",
+                            matched_text=matched_text,
+                            start_pos=orig_start,
+                            end_pos=orig_end,
+                            confidence=m.value.get("confidence", 0.7) if isinstance(m.value, dict) else 0.7,
+                            # Priority semantics: lower number = higher priority (classic Unix-style)
+                            # Schema default is 100. Lower values (e.g., 50) are higher priority.
+                            metadata={
+                                "priority": m.value.get("priority", 100) if isinstance(m.value, dict) else 100, 
+                                **meta
+                            }
+                        ))
+                except Exception as e:
+                    logger.warning(f"AC matching failed for bucket {bucket_key}: {e}. Continuing with other buckets.")
+            
+            if matches:
                 return matches
-            except Exception as e:
-                logger.warning(f"AC matching failed: {e}. Falling back to simple.")
-
+        
         # Fallback: Simple Iteration
         return self._match_keywords_simple(text)
 
-    def _match_keywords_simple(self, text: str) -> List[PatternMatch]:
+    def _match_keywords_simple(self, text: str, original_text: Optional[str] = None, span_map: Optional[SpanMap] = None) -> List[PatternMatch]:
+        """Fallback keyword matching that respects per-set case_sensitive and whole_word."""
         out = []
-        tl = text.lower()
         for kset in self._keyword_sets:
             meta = kset.metadata.copy()
             meta["priority"] = kset.priority
             
+            # Respect case_sensitive: use original text or lowercased version
+            search_text = text if getattr(kset, 'case_sensitive', False) else text.lower()
+            
             for kw in kset.keywords:
                 if not kw:
                     continue
-                needle = kw.lower()
+                # Respect case_sensitive for needle
+                needle = kw if getattr(kset, 'case_sensitive', False) else kw.lower()
                 start = 0
                 while True:
-                    pos = tl.find(needle, start)
+                    pos = search_text.find(needle, start)
                     if pos < 0:
                         break
                     
                     # Manual whole word check
                     if kset.whole_word:
-                        if (pos > 0 and tl[pos-1].isalnum()) or \
-                           (pos + len(needle) < len(tl) and tl[pos+len(needle)].isalnum()):
+                        if (pos > 0 and search_text[pos-1].isalnum()) or \
+                           (pos + len(needle) < len(search_text) and search_text[pos+len(needle)].isalnum()):
                             start = pos + 1
                             continue
 
+                    # Project normalized spans back to original if span_map available
+                    if span_map and original_text:
+                        orig_span = span_map.project_norm_span_to_orig(pos, pos+len(kw), original_len=len(original_text))
+                        orig_start, orig_end = orig_span
+                        matched_text = original_text[orig_start:orig_end]
+                    else:
+                        orig_start, orig_end = pos, pos+len(kw)
+                        matched_text = text[pos:pos+len(kw)]
+                    
                     out.append(PatternMatch(
                         pattern_id=kset.id,
                         pattern_type="keyword",
-                        matched_text=text[pos:pos+len(needle)],
-                        start_pos=pos,
-                        end_pos=pos+len(needle),
+                        matched_text=matched_text,
+                        start_pos=orig_start,
+                        end_pos=orig_end,
                         confidence=kset.confidence,
                         metadata=meta
                     ))
                     start = pos + 1
         return out
 
-    def _match_entities(self, text: str, start_ts: float, budget_ms: Optional[float]) -> List[PatternMatch]:
+    def _match_entities(self, text: str, start_ts: float, budget_ms: Optional[float],
+                        original_text: Optional[str] = None, span_map: Optional[SpanMap] = None) -> List[PatternMatch]:
         out: List[PatternMatch] = []
-        for etype, comp in self._compiled_entities.items():
+        for pattern_id, comp in self._compiled_entities.items():
             try:
                 for m in comp.pattern.finditer(text):
+                    ns, ne = m.start(), m.end()
+                    
+                    # Project normalized spans back to original if span_map available
+                    if span_map and original_text:
+                        orig_span = span_map.project_norm_span_to_orig(ns, ne, original_len=len(original_text))
+                        orig_start, orig_end = orig_span
+                        matched_text = original_text[orig_start:orig_end]
+                    else:
+                        orig_start, orig_end = ns, ne
+                        matched_text = m.group()
+                    
                     meta = comp.metadata.copy()
                     meta["priority"] = comp.priority
                     meta["engine"] = comp.engine
                     meta["groups"] = m.groups()
                     meta["groupdict"] = m.groupdict()
+                    # entity_type is available in metadata if needed
                     
                     out.append(PatternMatch(
-                        pattern_id=f"entity:{etype}",
+                        pattern_id=pattern_id,
                         pattern_type="entity",
-                        matched_text=m.group(),
-                        start_pos=m.start(),
-                        end_pos=m.end(),
+                        matched_text=matched_text,
+                        start_pos=orig_start,
+                        end_pos=orig_end,
                         confidence=max(0.0, min(1.0, comp.confidence)),
                         metadata=meta,
                     ))
                 if _time_exceeded(start_ts, budget_ms):
                     break
             except Exception as e:
-                logger.warning("Entity match error for %s: %s", etype, e)
+                logger.warning("Entity match error for %s: %s", pattern_id, e)
         return out
 
     # -----------------------------
     # Internal: utilities
     # -----------------------------
     def _dedup_and_sort(self, matches: List[PatternMatch]) -> List[PatternMatch]:
-        """Deduplicate overlaps (prefer higher confidence, then higher priority; keep deterministic order)."""
+        """Deduplicate overlaps (prefer higher confidence, then higher priority; keep deterministic order).
+        
+        Priority semantics: Lower number = higher priority (classic Unix-style).
+        Example: priority 50 beats priority 100.
+        """
         if not matches:
             return []
 
@@ -676,27 +799,16 @@ class PatternCompiler:
             if prev is None:
                 by_span[key] = m
             else:
-                # Prefer higher confidence; if tie, prefer lower 'priority' in metadata (lower = higher priority)
+                # Prefer higher confidence; if tie, prefer lower 'priority' (lower = higher priority)
                 prev_prio = int(prev.metadata.get("priority", 100))
                 m_prio = int(m.metadata.get("priority", 100))
                 if (m.confidence, -m_prio) > (prev.confidence, -prev_prio):
                     by_span[key] = m
 
         deduped = list(by_span.values())
-        # Sort by: start_pos, then end_pos, then descending confidence, then priority
+        # Sort by: start_pos, then end_pos, then descending confidence, then ascending priority (lower = better)
         deduped.sort(key=lambda m: (m.start_pos, m.end_pos, -m.confidence, int(m.metadata.get("priority", 100))))
         return deduped
-
-    def _decode_flags(self, flags: Optional[Iterable[str]]) -> int:
-        if not flags:
-            return 0
-        acc = 0
-        for f in flags:
-            try:
-                acc |= getattr(re, f.upper())
-            except Exception:
-                logger.debug("Unknown regex flag: %s", f)
-        return acc
 
     async def _load_configured_patterns(self) -> None:
         # JSON pattern files
@@ -732,38 +844,51 @@ class PatternCompiler:
     # -----------------------------
     def _build_aho_corasick_matchers(self) -> None:
         """
-        Compiles all keyword sets into a single optimized automaton.
-        Uses 'global' scope for simplicity, but supports splitting if needed.
+        Compiles all keyword sets into optimized automatons, bucketized by (case_sensitive, whole_word).
+        This ensures per-set settings are respected while maintaining performance.
         """
         if not self._use_aho_corasick or not self._keyword_sets:
             return
         
-        # We build one global matcher for maximum throughput
-        matcher = create_keyword_matcher(case_sensitive=False, whole_word=True)
-        count = 0
-        
+        # Bucketize keyword sets by (case_sensitive, whole_word) to respect per-set settings
+        buckets: Dict[Tuple[bool, bool], List[KeywordSet]] = {}
         for kset in self._keyword_sets:
-            # Attach rich payload to every keyword
-            payload = {
-                "id": kset.id,
-                "priority": kset.priority,
-                "confidence": kset.confidence,
-                "metadata": kset.metadata # This contains the emits_attributes!
-            }
+            key = (kset.case_sensitive, kset.whole_word)
+            if key not in buckets:
+                buckets[key] = []
+            buckets[key].append(kset)
+        
+        total_count = 0
+        for (case_sensitive, whole_word), sets in buckets.items():
+            matcher = create_keyword_matcher(case_sensitive=case_sensitive, whole_word=whole_word)
+            count = 0
             
-            for kw in kset.keywords:
-                # Add pattern with payload
-                matcher.add_pattern(
-                    kw, 
-                    pattern_id=kset.id,
-                    # Inject payload attributes directly into match value
-                    **payload
-                )
-                count += 1
+            for kset in sets:
+                # Attach rich payload to every keyword
+                payload = {
+                    "id": kset.id,
+                    "priority": kset.priority,
+                    "confidence": kset.confidence,
+                    "metadata": kset.metadata or {}  # This contains the emits_attributes!
+                }
                 
-        matcher.build()
-        self._keyword_matchers["global"] = matcher
-        logger.info(f"Built Aho-Corasick matcher with {count} keywords from {len(self._keyword_sets)} sets")
+                for kw in kset.keywords:
+                    # Add pattern with payload
+                    matcher.add_pattern(
+                        kw, 
+                        pattern_id=kset.id,
+                        # Inject payload attributes directly into match value
+                        **payload
+                    )
+                    count += 1
+            
+            matcher.build()
+            bucket_key = f"cs_{case_sensitive}_ww_{whole_word}"
+            self._keyword_matchers[bucket_key] = matcher
+            total_count += count
+            logger.debug(f"Built Aho-Corasick matcher bucket {bucket_key} with {count} keywords from {len(sets)} sets")
+        
+        logger.info(f"Built {len(buckets)} Aho-Corasick matcher buckets with {total_count} total keywords from {len(self._keyword_sets)} sets")
     
     
     def _validate_patterns_file(self, file_path: Path) -> bool:

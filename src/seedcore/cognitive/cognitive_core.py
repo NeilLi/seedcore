@@ -73,6 +73,12 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     SentenceTransformer = None  # type: ignore
 
+# SynopsisEmbedder for composition-based embedding
+try:
+    from ..ml.embedding.synopsis_embedder import SynopsisEmbedder
+except Exception:  # pragma: no cover - optional dependency
+    SynopsisEmbedder = None  # type: ignore
+
 # Centralized result schema
 from ..models.result_schema import create_cognitive_result, create_error_result
 from ..models.fact import Fact
@@ -151,6 +157,20 @@ class DefaultScopeResolver:
             scopes.append("ENTITY")
 
         return scopes, entity_ids
+
+
+class _SynopsisEmbedderAdapter:
+    """Adapter to make SynopsisEmbedder compatible with HolonFabricRetrieval.embed() interface."""
+
+    def __init__(self, synopsis_embedder: Any):
+        self.synopsis_embedder = synopsis_embedder
+
+    def embed(self, text: str) -> np.ndarray:
+        """Adapter method: converts SynopsisEmbedder.embed_text() to embed() interface."""
+        vec = self.synopsis_embedder.embed_text(text, normalize=True)
+        if vec is None:
+            raise RuntimeError("SynopsisEmbedder.embed_text() returned None")
+        return vec
 
 
 class HolonFabricRetrieval:
@@ -236,36 +256,21 @@ class CognitiveCore(dspy.Module):
             "staleness_ratio": 0.3,
             "trust_score": 0.4,
         }
-        self._synopsis_embedding_backend = (
-            (
-                os.getenv("SYNOPSIS_EMBEDDING_BACKEND")
-                or (
-                    "nim"
-                    if os.getenv("SYNOPSIS_EMBEDDING_BASE_URL")
-                    or os.getenv("NIM_RETRIEVAL_BASE_URL")
-                    else "sentence-transformer"
-                )
-            )
-            .lower()
-            .replace("_", "-")
-        )
-        self._synopsis_embedding_model = os.getenv(
-            "SYNOPSIS_EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"
-        )
+        # Initialize SynopsisEmbedder via composition (replaces internal embedder handling)
         self._synopsis_embedding_dim = int(os.getenv("SYNOPSIS_EMBEDDING_DIM", "768"))
-        self._synopsis_embedding_base_url = (
-            os.getenv("SYNOPSIS_EMBEDDING_BASE_URL")
-            or os.getenv("NIM_RETRIEVAL_BASE_URL", "")
-        ).lstrip("@")
-        self._synopsis_embedding_api_key = os.getenv(
-            "SYNOPSIS_EMBEDDING_API_KEY"
-        ) or os.getenv("NIM_RETRIEVAL_API_KEY")
-        self._synopsis_embedding_timeout = float(
-            os.getenv("SYNOPSIS_EMBEDDING_TIMEOUT", "10")
-        )
-        self._synopsis_embedder: Optional[Any] = None
-        self._synopsis_embedder_failed = False
-        self._synopsis_embedder_lock = threading.Lock()
+        if SynopsisEmbedder is not None:
+            self.synopsis_embedder = SynopsisEmbedder(
+                dim=self._synopsis_embedding_dim,
+                # Backend, model, base_url, api_key, timeout_s are read from env vars by SynopsisEmbedder
+            )
+            logger.debug(
+                f"SynopsisEmbedder initialized (dim={self._synopsis_embedding_dim})"
+            )
+        else:
+            self.synopsis_embedder = None
+            logger.warning(
+                "SynopsisEmbedder module not available; synopsis embedding will be disabled"
+            )
 
         # Create ContextBroker with Mw search functions if none provided
         # NOTE: ContextBroker is deprecated in favor of CognitiveMemoryBridge + HolonFabricRetrieval
@@ -344,22 +349,13 @@ class CognitiveCore(dspy.Module):
             logger.info("MwManager integration: DISABLED (missing module or env)")
 
         # Log synopsis embedding status
-        synopsis_enabled = self._synopsis_embedding_backend in {
-            "nim",
-            "nim-retrieval",
-            "sentence-transformer",
-        } and (
-            self._synopsis_embedding_base_url
-            or self._synopsis_embedding_backend == "sentence-transformer"
-        )
-        if synopsis_enabled:
+        if self.synopsis_embedder is not None:
             logger.info(
-                f"Synopsis embedding: ENABLED (backend={self._synopsis_embedding_backend}, "
-                f"model={self._synopsis_embedding_model})"
+                f"Synopsis embedding: ENABLED (via SynopsisEmbedder, dim={self._synopsis_embedding_dim})"
             )
         else:
             logger.info(
-                "Synopsis embedding: DISABLED (backend not configured or dependencies unavailable)"
+                "Synopsis embedding: DISABLED (SynopsisEmbedder not available or not configured)"
             )
 
         # Memory bridges (per-agent) - supports multi-agent and global/coordinator modes
@@ -482,7 +478,11 @@ class CognitiveCore(dspy.Module):
         )
         if cognitive_retrieval is None:
             holon_fabric = self.holon_fabric
-            embedder = self._ensure_synopsis_embedder()
+            # Use SynopsisEmbedder via adapter for HolonFabricRetrieval compatibility
+            if self.synopsis_embedder is not None:
+                embedder = _SynopsisEmbedderAdapter(self.synopsis_embedder)
+            else:
+                embedder = None
 
             if holon_fabric is not None and embedder is not None:
                 cognitive_retrieval = HolonFabricRetrieval(
@@ -876,117 +876,62 @@ class CognitiveCore(dspy.Module):
                 steps.append({"type": "execute", "description": clean})
         return steps or [{"type": "unknown", "description": text}]
 
-    def _ensure_synopsis_embedder(self) -> Optional[Any]:
-        if self._synopsis_embedder or self._synopsis_embedder_failed:
-            return self._synopsis_embedder
 
-        with self._synopsis_embedder_lock:
-            if self._synopsis_embedder or self._synopsis_embedder_failed:
-                return self._synopsis_embedder
+    def embed_synopsis(
+        self,
+        synopsis: Dict[str, Any],
+        *,
+        dim: int = 1024,
+        normalize: bool = True,
+    ) -> Optional[List[float]]:
+        """
+        Public API for generating synopsis embeddings for internal callers (e.g., Coordinator).
 
-            backend = self._synopsis_embedding_backend
-            if backend in {"nim", "nim-retrieval"}:
-                if NimRetrievalHTTP is None:
-                    logger.warning(
-                        "Synopsis embedding backend configured for NIM but NimRetrievalHTTP dependency is unavailable."
-                    )
-                    self._synopsis_embedder_failed = True
-                    return None
-                if not self._synopsis_embedding_base_url:
-                    logger.warning(
-                        "Synopsis embedding backend configured for NIM but SYNOPSIS_EMBEDDING_BASE_URL/NIM_RETRIEVAL_BASE_URL is not set."
-                    )
-                    self._synopsis_embedder_failed = True
-                    return None
-                try:
-                    self._synopsis_embedder = NimRetrievalHTTP(
-                        base_url=self._synopsis_embedding_base_url,
-                        api_key=self._synopsis_embedding_api_key,
-                        model=self._synopsis_embedding_model,
-                        timeout=int(self._synopsis_embedding_timeout),
-                    )
-                    logger.debug(
-                        "Initialized NimRetrievalHTTP for synopsis embeddings (model=%s).",
-                        self._synopsis_embedding_model,
-                    )
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    logger.warning(
-                        "Failed to initialize NimRetrievalHTTP for synopsis embeddings: %s",
-                        exc,
-                        exc_info=True,
-                    )
-                    self._synopsis_embedder_failed = True
-            else:
-                if SentenceTransformer is None:
-                    logger.warning(
-                        "SentenceTransformer is not available; synopsis embeddings will be disabled. "
-                        "Install sentence-transformers or configure SYNOPSIS_EMBEDDING_BACKEND=nim."
-                    )
-                    self._synopsis_embedder_failed = True
-                    return None
-                try:
-                    self._synopsis_embedder = SentenceTransformer(
-                        self._synopsis_embedding_model
-                    )
-                    logger.debug(
-                        "Loaded SentenceTransformer model '%s' for synopsis embeddings.",
-                        self._synopsis_embedding_model,
-                    )
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    logger.warning(
-                        "Failed to load SentenceTransformer model '%s' for synopsis embeddings: %s",
-                        self._synopsis_embedding_model,
-                        exc,
-                    )
-                    self._synopsis_embedder_failed = True
+        This method provides a stable Python API for generating embeddings that can be used
+        by Coordinator or other internal services. It delegates to SynopsisEmbedder via
+        composition, ensuring consistent behavior and maintainability.
 
-        return self._synopsis_embedder
+        Args:
+            synopsis: Dictionary containing synopsis data to embed (will be JSON-serialized)
+            dim: Target dimension for the embedding (default: 1024)
+            normalize: Whether to L2-normalize the embedding (default: True)
+
+        Returns:
+            List of floats representing the embedding vector, or None if embedding failed.
+            The list will have exactly `dim` elements (padded/truncated as needed).
+            Returns None if SynopsisEmbedder is not configured or embedding generation fails.
+
+        Example:
+            >>> synopsis = {"summary": "Task completed successfully", "confidence": 0.95}
+            >>> vec = cognitive_core.embed_synopsis(synopsis, dim=1024)
+            >>> assert len(vec) == 1024
+        """
+        if self.synopsis_embedder is None:
+            logger.warning("SynopsisEmbedder not available; cannot generate embedding")
+            return None
+
+        vec = self.synopsis_embedder.embed_synopsis(synopsis, dim=dim, normalize=normalize)
+        return None if vec is None else vec.tolist()
 
     def _generate_synopsis_embedding(
         self, synopsis: Dict[str, Any]
     ) -> Optional[np.ndarray]:
-        embedder = self._ensure_synopsis_embedder()
-        if embedder is None:
+        """
+        Internal method to generate synopsis embedding using default dimensions.
+
+        This method is kept for backward compatibility with internal callers.
+        It delegates to SynopsisEmbedder and uses the default dimension from config.
+
+        Returns:
+            NumPy array with default configured dimensions, or None if embedding failed.
+        """
+        if self.synopsis_embedder is None:
             return None
 
-        text_to_embed = json.dumps(synopsis, sort_keys=True)
-        try:
-            if NimRetrievalHTTP is not None and isinstance(embedder, NimRetrievalHTTP):
-                vectors = embedder.embed(text_to_embed, input_type="passage")
-                if not vectors:
-                    logger.debug("Nim synopsis embedder returned no vectors.")
-                    return None
-                vector = vectors[0]
-            else:
-                vector = embedder.encode(  # type: ignore[attr-defined]
-                    text_to_embed,
-                    convert_to_numpy=True,
-                    normalize_embeddings=True,
-                )
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning(
-                "Failed to generate synopsis embedding: %s", exc, exc_info=True
-            )
-            return None
-
-        vec = np.asarray(vector, dtype=np.float32).reshape(-1)
-        target_dim = self._synopsis_embedding_dim
-        if vec.size != target_dim:
-            logger.debug(
-                "Adjusting synopsis embedding dimensionality from %d to %d.",
-                vec.size,
-                target_dim,
-            )
-            if vec.size > target_dim:
-                vec = vec[:target_dim]
-            else:
-                vec = np.pad(vec, (0, target_dim - vec.size), mode="constant")
-
-        norm = float(np.linalg.norm(vec))
-        if norm > 0:
-            vec = vec / norm
-
-        return vec.astype(np.float32)
+        # Use default dimension from config (no override)
+        return self.synopsis_embedder.embed_synopsis(
+            synopsis, dim=self._synopsis_embedding_dim, normalize=True
+        )
 
     def _run_handler_and_postprocess(
         self,

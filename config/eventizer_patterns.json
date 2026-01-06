@@ -40,7 +40,11 @@
     "maintenance": "maintenance",
     "fraud": "fraud",
     "healthcare": "healthcare",
-    "robotics": "robotics"
+    "robotics": "robotics",
+    "luggage": "luggage_custody",
+    "baggage": "luggage_custody",
+    "lost": "luggage_custody",
+    "mishandled": "luggage_custody"
   },
   "regex_patterns": [
     {
@@ -220,6 +224,44 @@
       "emits_tags": [
         "maintenance_request"
       ]
+    },
+    {
+      "id": "luggage_tracking",
+      "pattern": "\\b(luggage|baggage|suitcase|bag|belongings)\\s*(?:is|are|was|were|has|have)\\s*(?:lost|missing|mishandled|damaged|delayed|not\\s*arrived|wrong\\s*room|delivered\\s*to)",
+      "flags": 34,
+      "priority": 75,
+      "confidence": 0.95,
+      "event_types": [
+        "luggage_custody"
+      ],
+      "description": "Luggage tracking and custody issues",
+      "enabled": true,
+      "emits_tags": [
+        "luggage_custody",
+        "guest_service"
+      ],
+      "emits_attributes": {
+        "required_service": "luggage_service",
+        "target_organ": "luggage_organ"
+      }
+    },
+    {
+      "id": "luggage_delivery_request",
+      "pattern": "\\b(?:deliver|bring|send|transfer)\\s+(?:luggage|baggage|suitcase|bag|belongings)\\s+(?:to|room|suite)",
+      "flags": 34,
+      "priority": 65,
+      "confidence": 0.92,
+      "event_types": [
+        "luggage_custody"
+      ],
+      "description": "Luggage delivery requests",
+      "enabled": true,
+      "emits_tags": [
+        "luggage_custody"
+      ],
+      "emits_attributes": {
+        "required_service": "luggage_service"
+      }
     }
   ],
   "keyword_patterns": [
@@ -371,6 +413,38 @@
       "emits_tags": [
         "maintenance_request"
       ]
+    },
+    {
+      "id": "luggage_keywords",
+      "keywords": [
+        "luggage",
+        "baggage",
+        "suitcase",
+        "bag",
+        "belongings",
+        "lost",
+        "missing",
+        "mishandled",
+        "delayed",
+        "delivery",
+        "bellhop",
+        "porter",
+        "storage"
+      ],
+      "priority": 65,
+      "confidence": 0.85,
+      "event_types": [
+        "luggage_custody"
+      ],
+      "description": "Luggage and baggage handling keywords",
+      "enabled": true,
+      "emits_tags": [
+        "luggage_custody",
+        "guest_service"
+      ],
+      "emits_attributes": {
+        "required_service": "luggage_service"
+      }
     }
   ],
   "entity_patterns": [
@@ -418,7 +492,7 @@
       "entity_type": "MONEY",
       "patterns": [
         {
-          "regex": "\\b(?:USD|EUR|GBP|\\$|€|£)\\s?\\d{1,3}(?:[,\\s]\\d{3})*(?:\\.\\d{1,2})?\\b"
+          "regex": "\\b(?:USD|EUR|GBP|\\$|€|£)\\s?\\d{1,3}(?:[,\\s]\\d{3})*(?:\\.\\d{1,2})?\\b|\\b\\d{1,3}(?:[,\\s]\\d{3})*(?:\\.\\d{1,2})?\\s*(?:dollars?|usd|eur|euros?|gbp|pounds?)\\b"
         }
       ],
       "priority": 70,
@@ -428,8 +502,11 @@
         "maintenance",
         "vip"
       ],
-      "description": "Currency amounts",
-      "enabled": true
+      "description": "Currency amounts (supports normalized formats)",
+      "enabled": true,
+      "emits_attributes": {
+        "value_hint": "currency"
+      }
     },
     {
       "id": "account_reference",
@@ -470,7 +547,7 @@
       "entity_type": "TIME",
       "patterns": [
         {
-          "regex": "\\b(?:\\d{1,2}:\\d{2}(?:\\s*[AP]M)?|\\d{1,2}\\s*(?:am|pm|AM|PM))\\b"
+          "regex": "\\b(?:\\d{1,2}:\\d{2}(?:\\s*[AP]M)?|\\d{1,2}\\s*(?:am|pm|AM|PM)|\\d{2}:\\d{2})\\b"
         }
       ],
       "priority": 45,
@@ -478,10 +555,14 @@
       "event_types": [
         "maintenance",
         "vip",
-        "emergency"
+        "emergency",
+        "luggage_custody"
       ],
-      "description": "Time mentions",
-      "enabled": true
+      "description": "Time mentions (supports 12-hour and 24-hour formats after normalization)",
+      "enabled": true,
+      "emits_attributes": {
+        "value_hint": "time"
+      }
     }
   ],
   "composite_rules": [
@@ -526,6 +607,46 @@
         "priority": "critical"
       },
       "priority": 130,
+      "enabled": true
+    },
+    {
+      "id": "multimodal_fraud_composite",
+      "all_of": [
+        "currency_amount",
+        "fraud_keywords"
+      ],
+      "emits_tags": [
+        "fraud",
+        "policy_risk",
+        "emergency"
+      ],
+      "emits_attributes": {
+        "urgency": "CRITICAL",
+        "required_service": "fraud_detection_service",
+        "target_organ": "security_organ"
+      },
+      "priority": 95,
+      "confidence": 0.98,
+      "description": "High-value fraud detection: currency amount + fraud keywords triggers critical urgency",
+      "enabled": true
+    },
+    {
+      "id": "emergency_bypass_rule",
+      "any_of": [
+        "emergency_signal",
+        "healthcare_allergy_flag",
+        "emergency_keywords"
+      ],
+      "emits_tags": [
+        "emergency"
+      ],
+      "emits_attributes": {
+        "urgency": "CRITICAL",
+        "bypass_surprise_computer": true,
+        "immediate_routing": true
+      },
+      "priority": 100,
+      "description": "Emergency bypass: priority >= 90 triggers immediate routing, skipping Surprise Computer",
       "enabled": true
     }
   ],

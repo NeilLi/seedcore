@@ -13,9 +13,9 @@ import logging
 from typing import Any, Mapping, Optional
 from uuid import UUID
 
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError, DataError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text  # pyright: ignore[reportMissingImports]
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError, DataError  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 # Get a logger instance
 logger = logging.getLogger(__name__)
@@ -60,7 +60,10 @@ class GraphTaskSqlRepository:
                 "Integrity constraint violation while creating task type '%s': %s. "
                 "This may indicate duplicate data or invalid foreign key references. "
                 "Agent: %s, Organ: %s",
-                task_type, str(e), agent_id, organ_id
+                task_type,
+                str(e),
+                agent_id,
+                organ_id,
             )
             raise
         except OperationalError as e:
@@ -68,7 +71,10 @@ class GraphTaskSqlRepository:
                 "Database operational error while creating task type '%s': %s. "
                 "This may indicate connection issues or database unavailability. "
                 "Agent: %s, Organ: %s",
-                task_type, str(e), agent_id, organ_id
+                task_type,
+                str(e),
+                agent_id,
+                organ_id,
             )
             raise
         except DataError as e:
@@ -76,21 +82,32 @@ class GraphTaskSqlRepository:
                 "Data error while creating task type '%s': %s. "
                 "This may indicate invalid data types or constraint violations. "
                 "Agent: %s, Organ: %s",
-                task_type, str(e), agent_id, organ_id
+                task_type,
+                str(e),
+                agent_id,
+                organ_id,
             )
             raise
         except SQLAlchemyError as e:
             logger.error(
                 "SQLAlchemy error while creating task type '%s': %s. "
                 "Agent: %s, Organ: %s, Params: %s",
-                task_type, str(e), agent_id, organ_id, params_dict
+                task_type,
+                str(e),
+                agent_id,
+                organ_id,
+                params_dict,
             )
             raise
         except Exception as e:
             logger.error(
                 "Unexpected error while creating task type '%s': %s. "
                 "Agent: %s, Organ: %s, Params: %s",
-                task_type, str(e), agent_id, organ_id, params_dict
+                task_type,
+                str(e),
+                agent_id,
+                organ_id,
+                params_dict,
             )
             raise
 
@@ -114,33 +131,43 @@ class GraphTaskSqlRepository:
             logger.error(
                 "Integrity constraint violation while adding dependency %s -> %s: %s. "
                 "This may indicate invalid task IDs or circular dependencies.",
-                parent_id, child_id, str(e)
+                parent_id,
+                child_id,
+                str(e),
             )
             raise
         except OperationalError as e:
             logger.error(
                 "Database operational error while adding dependency %s -> %s: %s. "
                 "This may indicate connection issues or database unavailability.",
-                parent_id, child_id, str(e)
+                parent_id,
+                child_id,
+                str(e),
             )
             raise
         except DataError as e:
             logger.error(
                 "Data error while adding dependency %s -> %s: %s. "
                 "This may indicate invalid data types.",
-                parent_id, child_id, str(e)
+                parent_id,
+                child_id,
+                str(e),
             )
             raise
         except SQLAlchemyError as e:
             logger.error(
                 "SQLAlchemy error while adding dependency %s -> %s: %s",
-                parent_id, child_id, str(e)
+                parent_id,
+                child_id,
+                str(e),
             )
             raise
         except Exception as e:
             logger.error(
                 "Unexpected error while adding dependency %s -> %s: %s",
-                parent_id, child_id, str(e)
+                parent_id,
+                child_id,
+                str(e),
             )
             raise
 
@@ -159,7 +186,11 @@ class GraphTaskSqlRepository:
             start_ids = self._coerce_int_list(params, "start_node_ids", "start_ids")
             if not start_ids:
                 raise ValueError("graph_embed requires 'start_ids' or 'start_node_ids'")
-            k_hops = self._coerce_int(params.get("k")) or self._coerce_int(params.get("k_hops")) or 2
+            k_hops = (
+                self._coerce_int(params.get("k"))
+                or self._coerce_int(params.get("k_hops"))
+                or 2
+            )
 
             stmt = text(
                 """
@@ -181,35 +212,53 @@ class GraphTaskSqlRepository:
         except ValueError as e:
             logger.error(
                 "Validation error in graph_embed task creation: %s. Params: %s",
-                str(e), params
+                str(e),
+                params,
             )
             raise
         except IntegrityError as e:
             logger.error(
                 "Integrity constraint violation in graph_embed task creation: %s. "
                 "Start IDs: %s, K-hops: %s, Agent: %s, Organ: %s",
-                str(e), start_ids, k_hops, agent_id, organ_id
+                str(e),
+                start_ids,
+                k_hops,
+                agent_id,
+                organ_id,
             )
             raise
         except OperationalError as e:
             logger.error(
                 "Database operational error in graph_embed task creation: %s. "
                 "Start IDs: %s, K-hops: %s, Agent: %s, Organ: %s",
-                str(e), start_ids, k_hops, agent_id, organ_id
+                str(e),
+                start_ids,
+                k_hops,
+                agent_id,
+                organ_id,
             )
             raise
         except SQLAlchemyError as e:
             logger.error(
                 "SQLAlchemy error in graph_embed task creation: %s. "
                 "Start IDs: %s, K-hops: %s, Agent: %s, Organ: %s",
-                str(e), start_ids, k_hops, agent_id, organ_id
+                str(e),
+                start_ids,
+                k_hops,
+                agent_id,
+                organ_id,
             )
             raise
         except Exception as e:
             logger.error(
                 "Unexpected error in graph_embed task creation: %s. "
                 "Start IDs: %s, K-hops: %s, Agent: %s, Organ: %s, Params: %s",
-                str(e), start_ids, k_hops, agent_id, organ_id, params
+                str(e),
+                start_ids,
+                k_hops,
+                agent_id,
+                organ_id,
+                params,
             )
             raise
 
@@ -224,8 +273,14 @@ class GraphTaskSqlRepository:
         try:
             start_ids = self._coerce_int_list(params, "start_node_ids", "start_ids")
             if not start_ids:
-                raise ValueError("graph_rag_query requires 'start_ids' or 'start_node_ids'")
-            k_hops = self._coerce_int(params.get("k")) or self._coerce_int(params.get("k_hops")) or 2
+                raise ValueError(
+                    "graph_rag_query requires 'start_ids' or 'start_node_ids'"
+                )
+            k_hops = (
+                self._coerce_int(params.get("k"))
+                or self._coerce_int(params.get("k_hops"))
+                or 2
+            )
             top_k = (
                 self._coerce_int(params.get("topk"))
                 or self._coerce_int(params.get("top_k"))
@@ -254,35 +309,57 @@ class GraphTaskSqlRepository:
         except ValueError as e:
             logger.error(
                 "Validation error in graph_rag_query task creation: %s. Params: %s",
-                str(e), params
+                str(e),
+                params,
             )
             raise
         except IntegrityError as e:
             logger.error(
                 "Integrity constraint violation in graph_rag_query task creation: %s. "
                 "Start IDs: %s, K-hops: %s, Top-K: %s, Agent: %s, Organ: %s",
-                str(e), start_ids, k_hops, top_k, agent_id, organ_id
+                str(e),
+                start_ids,
+                k_hops,
+                top_k,
+                agent_id,
+                organ_id,
             )
             raise
         except OperationalError as e:
             logger.error(
                 "Database operational error in graph_rag_query task creation: %s. "
                 "Start IDs: %s, K-hops: %s, Top-K: %s, Agent: %s, Organ: %s",
-                str(e), start_ids, k_hops, top_k, agent_id, organ_id
+                str(e),
+                start_ids,
+                k_hops,
+                top_k,
+                agent_id,
+                organ_id,
             )
             raise
         except SQLAlchemyError as e:
             logger.error(
                 "SQLAlchemy error in graph_rag_query task creation: %s. "
                 "Start IDs: %s, K-hops: %s, Top-K: %s, Agent: %s, Organ: %s",
-                str(e), start_ids, k_hops, top_k, agent_id, organ_id
+                str(e),
+                start_ids,
+                k_hops,
+                top_k,
+                agent_id,
+                organ_id,
             )
             raise
         except Exception as e:
             logger.error(
                 "Unexpected error in graph_rag_query task creation: %s. "
                 "Start IDs: %s, K-hops: %s, Top-K: %s, Agent: %s, Organ: %s, Params: %s",
-                str(e), start_ids, k_hops, top_k, agent_id, organ_id, params
+                str(e),
+                start_ids,
+                k_hops,
+                top_k,
+                agent_id,
+                organ_id,
+                params,
             )
             raise
 
@@ -347,35 +424,51 @@ class GraphTaskSqlRepository:
             logger.error(
                 "JSON serialization error in generic task creation: %s. "
                 "Task type: %s, Params: %s",
-                str(e), task_type, params
+                str(e),
+                task_type,
+                params,
             )
             raise
         except IntegrityError as e:
             logger.error(
                 "Integrity constraint violation in generic task creation: %s. "
                 "Task type: %s, Agent: %s, Organ: %s",
-                str(e), task_type, agent_id, organ_id
+                str(e),
+                task_type,
+                agent_id,
+                organ_id,
             )
             raise
         except OperationalError as e:
             logger.error(
                 "Database operational error in generic task creation: %s. "
                 "Task type: %s, Agent: %s, Organ: %s",
-                str(e), task_type, agent_id, organ_id
+                str(e),
+                task_type,
+                agent_id,
+                organ_id,
             )
             raise
         except SQLAlchemyError as e:
             logger.error(
                 "SQLAlchemy error in generic task creation: %s. "
                 "Task type: %s, Agent: %s, Organ: %s, Params: %s",
-                str(e), task_type, agent_id, organ_id, params
+                str(e),
+                task_type,
+                agent_id,
+                organ_id,
+                params,
             )
             raise
         except Exception as e:
             logger.error(
                 "Unexpected error in generic task creation: %s. "
                 "Task type: %s, Agent: %s, Organ: %s, Params: %s",
-                str(e), task_type, agent_id, organ_id, params
+                str(e),
+                task_type,
+                agent_id,
+                organ_id,
+                params,
             )
             raise
 
@@ -438,19 +531,18 @@ class GraphTaskSqlRepository:
         except IntegrityError as e:
             logger.error(
                 "Integrity constraint violation while ensuring agent %s: %s",
-                agent_id, str(e)
+                agent_id,
+                str(e),
             )
             raise
         except SQLAlchemyError as e:
             logger.error(
-                "SQLAlchemy error while ensuring agent %s: %s",
-                agent_id, str(e)
+                "SQLAlchemy error while ensuring agent %s: %s", agent_id, str(e)
             )
             raise
         except Exception as e:
             logger.error(
-                "Unexpected error while ensuring agent %s: %s",
-                agent_id, str(e)
+                "Unexpected error while ensuring agent %s: %s", agent_id, str(e)
             )
             raise
 
@@ -472,18 +564,24 @@ class GraphTaskSqlRepository:
         except IntegrityError as e:
             logger.error(
                 "Integrity constraint violation while ensuring organ %s (agent: %s): %s",
-                organ_id, agent_id, str(e)
+                organ_id,
+                agent_id,
+                str(e),
             )
             raise
         except SQLAlchemyError as e:
             logger.error(
                 "SQLAlchemy error while ensuring organ %s (agent: %s): %s",
-                organ_id, agent_id, str(e)
+                organ_id,
+                agent_id,
+                str(e),
             )
             raise
         except Exception as e:
             logger.error(
                 "Unexpected error while ensuring organ %s (agent: %s): %s",
-                organ_id, agent_id, str(e)
+                organ_id,
+                agent_id,
+                str(e),
             )
             raise

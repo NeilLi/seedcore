@@ -5,14 +5,22 @@ Fast-Path Eventizer for SeedCore (hardened)
 - Deterministic, sub-ms path for PKG inputs
 - Minimal PII redaction with lower FP rate (Luhn for CC)
 - No external deps; pure Python `re` (can swap for re2 if desired)
+- Uses unified EventType from eventizer.py for PKG compatibility
 """
 
 from __future__ import annotations
 import re
 import time
-from typing import Dict, Any, List, Optional, Tuple
+import uuid
+import hashlib
+from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
-from enum import Enum
+
+# Import unified EventType from eventizer models for PKG compatibility
+from seedcore.models.eventizer import EventType
+
+if TYPE_CHECKING:
+    from seedcore.models.eventizer import EventizerResponse
 
 # -------------------------
 # Helpers
@@ -43,24 +51,14 @@ def _clip_text(s: str, limit: int) -> str:
 # -------------------------
 # Types
 # -------------------------
-
-class EventType(Enum):
-    EMERGENCY = "emergency"
-    SECURITY = "security"
-    MAINTENANCE = "maintenance"
-    WARNING = "warning"
-    NORMAL = "normal"
-    # Domain-specific types for fallback planner
-    VIP = "vip"
-    PRIVACY = "privacy"
-    ALLERGEN = "allergen"
-    HVAC_FAULT = "hvac_fault"
-    LUGGAGE_CUSTODY = "luggage_custody"
+# EventType is now imported from seedcore.models.eventizer for unified PKG compatibility
 
 @dataclass(slots=True)
 class FastEventTags:
+    """FastEventizer tags with keyword extraction for semantic mapping."""
     priority: int
-    event_types: List[EventType]
+    event_types: List[EventType]  # Hard tags from regex patterns
+    keywords: List[str]  # Extracted keywords for vector search and PKG evaluation
     domain: Optional[str]
     confidence: float
     needs_ml_fallback: bool
@@ -69,6 +67,7 @@ class FastEventTags:
         return {
             "priority": self.priority,
             "event_types": [e.value for e in self.event_types],
+            "keywords": self.keywords,
             "domain": self.domain,
             "confidence": self.confidence,
             "needs_ml_fallback": self.needs_ml_fallback,
@@ -244,6 +243,44 @@ class FastEventizer:
 
     # ----- Classification -----
 
+    def _extract_keywords(self, text: str) -> List[str]:
+        """Extract significant keywords from text for semantic mapping and PKG evaluation.
+        
+        Keywords are extracted from matched patterns and important terms, enabling
+        vector search against v_unified_cortex_memory and PKG rule evaluation.
+        """
+        keywords: List[str] = []
+        text_lower = text.lower()
+        
+        # Extract keywords from matched patterns (non-overlapping, significant terms)
+        # This is a simple extraction - can be enhanced with NLP libraries if needed
+        significant_words = {
+            # Emergency/urgency indicators
+            "emergency", "urgent", "critical", "fire", "evacuate", "help", "911",
+            # Security indicators
+            "security", "breach", "unauthorized", "intrusion", "suspicious", "threat",
+            # Maintenance indicators
+            "maintenance", "update", "fix", "broken", "malfunction", "issue", "problem",
+            # Domain-specific
+            "vip", "executive", "presidential", "concierge",
+            "privacy", "confidential", "private", "sensitive",
+            "allergen", "allergy", "peanut", "nuts", "dairy", "gluten",
+            "hvac", "temperature", "thermostat", "heating", "cooling", "air", "stuffy",
+            "luggage", "baggage", "lost", "mishandled",
+            # Location indicators
+            "room", "floor", "building", "lobby", "suite",
+            # Temporal indicators
+            "now", "immediate", "asap", "soon",
+        }
+        
+        # Extract words that match significant terms (simple word boundary matching)
+        words = re.findall(r'\b\w+\b', text_lower)
+        for word in words:
+            if word in significant_words and word not in keywords:
+                keywords.append(word)
+        
+        return keywords
+
     def _extract_event_types(self, text: str, start_ms: float, budget_ms: float) -> Tuple[List[EventType], int]:
         patterns_applied = 0
         ets: List[EventType] = []
@@ -273,11 +310,13 @@ class FastEventizer:
             patterns_applied += 1
         
         if self._hvac_re.search(text):
-            ets.append(EventType.HVAC_FAULT)
+            # Map HVAC fault to HVAC (unified EventType)
+            ets.append(EventType.HVAC)
             patterns_applied += 1
         
         if self._luggage_re.search(text):
-            ets.append(EventType.LUGGAGE_CUSTODY)
+            # Map LUGGAGE_CUSTODY to LUGGAGE (unified EventType uses "luggage_custody" value)
+            ets.append(EventType.LUGGAGE)
             patterns_applied += 1
 
         # Generic patterns (lower priority - these are less specific)
@@ -288,7 +327,8 @@ class FastEventizer:
                 patterns_applied += 1
 
             if self._warn_re.search(text):
-                ets.append(EventType.WARNING)
+                # Map WARNING to ROUTINE (unified EventType doesn't have WARNING)
+                ets.append(EventType.ROUTINE)
                 patterns_applied += 1
 
             if self._maint_re.search(text):
@@ -296,7 +336,8 @@ class FastEventizer:
                 patterns_applied += 1
 
         if not ets:
-            ets.append(EventType.NORMAL)
+            # Map NORMAL to ROUTINE (unified EventType doesn't have NORMAL)
+            ets.append(EventType.ROUTINE)
 
         return ets, patterns_applied
 
@@ -310,12 +351,12 @@ class FastEventizer:
             return 9  # Food safety is critical
         if EventType.VIP in ets or EventType.PRIVACY in ets:
             return 7  # VIP/Privacy needs elevated priority
-        if EventType.HVAC_FAULT in ets:
+        if EventType.HVAC in ets:
             return 6  # HVAC issues need prompt attention
-        if EventType.LUGGAGE_CUSTODY in ets:
+        if EventType.LUGGAGE in ets:
             return 6  # Lost luggage needs quick resolution
-        if EventType.WARNING in ets:
-            return 5
+        if EventType.ROUTINE in ets:
+            return 5  # Routine/warning events
         if EventType.MAINTENANCE in ets:
             return 4
         return 2
@@ -366,6 +407,7 @@ class FastEventizer:
 
         # Classify
         ets, pats = self._extract_event_types(processed_text, start, self._time_budget_ms)
+        keywords = self._extract_keywords(processed_text)  # Extract keywords for semantic mapping
         priority = self._determine_priority(ets)
         attrs = self._extract_attributes(processed_text)
         conf, need_ml = self._confidence_and_fallback(pats, attrs.text_length)
@@ -373,6 +415,7 @@ class FastEventizer:
         tags = FastEventTags(
             priority=priority,
             event_types=ets,
+            keywords=keywords,  # Keywords for vector search and PKG evaluation
             domain=domain or None,
             confidence=conf,
             needs_ml_fallback=need_ml,
@@ -389,6 +432,144 @@ class FastEventizer:
             original_text=text if include_original_text else None,
             processed_text=processed_text,
         )
+
+# -------------------------
+# Conversion to EventizerResponse
+# -------------------------
+
+def fast_result_to_eventizer_response(
+    result: FastEventizerResult,
+    original_text: str,
+    *,
+    task_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+) -> "EventizerResponse":
+    """
+    Convert FastEventizerResult to EventizerResponse for unified Coordinator interface.
+    
+    This allows the Coordinator to work with a single, unified EventizerResponse object
+    regardless of whether the event was processed by FastEventizer or DeepEventizer.
+    """
+    from seedcore.models.eventizer import (
+        EventizerResponse,
+        EventTags,
+        EventAttributes,
+        EventSignals,
+        ConfidenceScore,
+        ConfidenceLevel,
+        RouteDecision,
+        Urgency,
+    )
+    
+    # Calculate SHA256 of original text
+    original_text_sha256 = hashlib.sha256(original_text.encode()).hexdigest()
+    
+    # Convert event types to unified EventType enum values (hard tags)
+    hard_tags = [et for et in result.event_tags.event_types]
+    
+    # Extract keywords (for vector search and PKG evaluation)
+    keywords = getattr(result.event_tags, 'keywords', [])
+    
+    # Determine urgency from priority
+    if result.event_tags.priority >= 9:
+        urgency = Urgency.CRITICAL
+    elif result.event_tags.priority >= 7:
+        urgency = Urgency.HIGH
+    elif result.event_tags.priority >= 5:
+        urgency = Urgency.NORMAL
+    else:
+        urgency = Urgency.LOW
+    
+    # Build EventTags with new flexible structure
+    # resolved_type defaults to first hard tag or "routine" - PKG will override this
+    resolved_type = hard_tags[0].value if hard_tags else "routine"
+    
+    event_tags = EventTags(
+        hard_tags=hard_tags,  # Deterministic tags from regex patterns
+        soft_tags=[],  # Will be populated by PKG/vector search
+        resolved_type=resolved_type,  # Default to hard tag, PKG will resolve final type
+        event_types=hard_tags,  # Backward compatibility
+        keywords=keywords,  # Keywords for semantic mapping
+        entities=[],  # FastEventizer doesn't extract entities
+        patterns=[],  # FastEventizer doesn't return PatternMatch objects
+        priority=result.event_tags.priority,
+        urgency=urgency,
+    )
+    
+    # Build EventAttributes
+    attributes = EventAttributes(
+        required_service=None,
+        required_skill=None,
+        target_organ=None,
+        processing_timeout=None,
+        resource_requirements={},
+        routing_hints={
+            "has_urgency": result.attributes.has_urgency,
+            "has_location": result.attributes.has_location,
+            "has_timestamp": result.attributes.has_timestamp,
+            "text_length": result.attributes.text_length,
+            "word_count": result.attributes.word_count,
+        },
+    )
+    
+    # Build ConfidenceScore
+    confidence = ConfidenceScore(
+        overall_confidence=result.event_tags.confidence,
+        confidence_level=(
+            ConfidenceLevel.HIGH
+            if result.event_tags.confidence >= 0.9
+            else ConfidenceLevel.MEDIUM
+            if result.event_tags.confidence >= 0.7
+            else ConfidenceLevel.LOW
+        ),
+        needs_ml_fallback=result.event_tags.needs_ml_fallback,
+        fallback_reasons=(
+            ["low_confidence", "needs_deep_analysis"]
+            if result.event_tags.needs_ml_fallback
+            else []
+        ),
+        processing_notes=[f"fast_eventizer: {result.patterns_applied} patterns applied"],
+    )
+    
+    # Determine decision_kind based on confidence and needs_ml_fallback
+    if result.event_tags.needs_ml_fallback:
+        decision_kind = RouteDecision.PLANNER
+    elif result.event_tags.confidence >= 0.9:
+        decision_kind = RouteDecision.FAST
+    else:
+        decision_kind = RouteDecision.FAST
+    
+    return EventizerResponse(
+        original_text=original_text,
+        original_text_sha256=original_text_sha256,
+        normalized_text=result.processed_text,  # FastEventizer doesn't normalize separately
+        processed_text=result.processed_text,
+        text_normalization=None,  # FastEventizer doesn't provide normalization details
+        pattern_compilation=None,  # FastEventizer doesn't provide compilation details
+        pii=None,  # FastEventizer doesn't provide detailed PII audit
+        event_tags=event_tags,
+        attributes=attributes,
+        signals=EventSignals(),  # FastEventizer doesn't compute OCPS signals, use defaults
+        multimodal=None,  # FastEventizer doesn't handle multimodal
+        pkg_hint=None,  # FastEventizer doesn't compute PKG hints
+        decision_hint=None,
+        decision_kind=decision_kind,
+        task_id=task_id or str(uuid.uuid4()),
+        confidence=confidence,
+        processing_time_ms=result.processing_time_ms,
+        patterns_applied=result.patterns_applied,
+        pii_redacted=result.pii_redacted,
+        warnings=[],
+        errors=[],
+        processing_log=[f"fast_eventizer: {result.patterns_applied} patterns applied"],
+        eventizer_version="1.2.0",
+        engines={"fast_eventizer": "1.0.0"},
+        pkg_snapshot_version=None,
+        pkg_snapshot_id=None,
+        pkg_validation_status=None,
+        pkg_deployment_info=None,
+    )
+
 
 # -------------------------
 # Singleton & convenience

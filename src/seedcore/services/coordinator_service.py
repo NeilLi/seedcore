@@ -83,6 +83,15 @@ from ..serve.eventizer_client import EventizerServiceClient
 from ..serve.state_client import StateServiceClient
 from ..serve.energy_client import EnergyServiceClient
 
+# FastEventizer for dual-stage perception (local reflex before remote brain)
+from ..ops.eventizer.fast_eventizer import (
+    get_fast_eventizer,
+    fast_result_to_eventizer_response,
+)
+
+# Multimodal Context Refinement (bridges perception to Unified Memory)
+from ..ops.eventizer.utils.context_refiner import MultimodalContextRefiner
+
 from ..coordinator.core.signals import SignalEnricher
 from ..coordinator.metrics.registry import get_global_metrics_tracker
 
@@ -456,7 +465,7 @@ class Coordinator:
     ) -> Dict[str, Any]:
         """
         The Main Loop of the Control Plane.
-        
+
         Accepts POST requests with JSON body containing the task payload.
         """
         await self._ensure_background_tasks_started()
@@ -470,7 +479,7 @@ class Coordinator:
                 task_data = payload.get("payload") or payload.get("task") or payload
             else:
                 task_data = payload
-            
+
             # Coerce to TaskPayload
             task_obj, task_dict = coerce_task_payload(task_data)
             task_type = task_obj.type.lower()
@@ -510,7 +519,7 @@ class Coordinator:
             # Dispatcher expects: {success: bool, error: Optional[str], ...}
             # Coordinator must always return this format, never raw domain objects
             task_id = task_dict.get("task_id") or task_obj.task_id
-            
+
             if not isinstance(result, dict):
                 logger.error(
                     f"Coordinator returned non-dict result (type={type(result).__name__}) for task {task_id}"
@@ -519,14 +528,17 @@ class Coordinator:
                     "success": False,
                     "error": f"Invalid result type: {type(result).__name__}",
                     "kind": "error",
-                    "path": "coordinator_type_error"
+                    "path": "coordinator_type_error",
                 }
             else:
                 # Normalize success field - handle different result formats
                 if "success" not in result:
                     # Case 1: TaskResult format: {kind: "error", payload: {error: ...}}
                     result_kind = result.get("kind")
-                    if result_kind == "error" or result_kind == DecisionKind.ERROR.value:
+                    if (
+                        result_kind == "error"
+                        or result_kind == DecisionKind.ERROR.value
+                    ):
                         # TaskResult error format - extract error from payload
                         payload = result.get("payload", {})
                         if isinstance(payload, dict):
@@ -535,11 +547,16 @@ class Coordinator:
                             if "error" not in result and "error" in payload:
                                 result["error"] = payload.get("error")
                             elif "error_type" in payload:
-                                result["error"] = payload.get("error_type", "unknown_error")
+                                result["error"] = payload.get(
+                                    "error_type", "unknown_error"
+                                )
                         else:
                             result["success"] = False
-                            result["error"] = result.get("error") or "TaskResult error without payload"
-                    
+                            result["error"] = (
+                                result.get("error")
+                                or "TaskResult error without payload"
+                            )
+
                     # Case 2: OrganismResponse format: {success: bool, result: {...}, error: ...}
                     # Note: OrganismResponse should already have success, but handle edge cases
                     elif "result" in result:
@@ -551,7 +568,7 @@ class Coordinator:
                                 f"Coordinator inferred success from OrganismResponse format "
                                 f"for task {task_id}: success={result['success']}"
                             )
-                    
+
                     # Case 3: Raw domain object (no success/error fields)
                     else:
                         # Check if it looks like an error (has 'error' field)
@@ -565,25 +582,25 @@ class Coordinator:
                                 f"Coordinator inferred success=True for raw domain object "
                                 f"(task {task_id}, keys: {list(result.keys())[:5]})"
                             )
-                    
+
                     logger.debug(
                         f"Coordinator normalized result for task {task_id}: "
                         f"success={result.get('success')}, kind={result.get('kind')}, "
                         f"has_error={bool(result.get('error'))}, keys={list(result.keys())[:10]}"
                     )
-                
+
                 # Ensure 'error' field exists for consistency (even if None)
                 if "error" not in result:
                     result["error"] = None
-                
+
                 # Ensure 'kind' field for consistency
                 if "kind" not in result:
                     result["kind"] = task_type
-                
+
                 # Ensure 'path' field for traceability
                 if "path" not in result:
                     result["path"] = "coordinator"
-                
+
                 # Log final normalized result structure
                 logger.debug(
                     f"Coordinator final result for task {task_id}: "
@@ -605,37 +622,286 @@ class Coordinator:
 
     async def _run_eventizer(self, task_dict: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Adapter: Task Dict -> Eventizer Service (Ops Module) -> Feature Dict.
-        This feeds the 'System 1' perception into the 'System 2' router.
+        Dual-Stage Orchestrator for SeedCore Perception.
         """
         text = task_dict.get("description") or ""
-        if not text:
-            return {}  # noqa: E701
+        params = task_dict.get("params", {}) or {}
+        multimodal_ctx = params.get("multimodal") or {}
 
+        if not text and not multimodal_ctx:
+            return {}
+
+        # Stage 1: Local Reflex (Deterministic Regex & PII)
+        resp_obj = self._run_fast_reflex(text, task_dict)
+
+        # Stage 2: Multimodal Refinement (Semantic Grounding & Vision Narrative)
+        refinement = self._refine_multimodal_context(text, task_dict, multimodal_ctx)
+
+        # Decision: Skip remote if it's an emergency or high-confidence routine
+        from seedcore.models.eventizer import EventType
+
+        is_emergency = EventType.EMERGENCY in resp_obj.event_tags.hard_tags
+        is_confident = resp_obj.confidence.overall_confidence >= 0.9
+        needs_deep_reasoning = resp_obj.confidence.needs_ml_fallback
+
+        if is_emergency or (is_confident and not needs_deep_reasoning):
+            return self._format_eventizer_output(
+                self._merge_refinement(resp_obj.model_dump(), refinement)
+            )
+
+        # Stage 3: Remote Brain (Deep Semantic Reasoning)
         try:
-            # Use the EventizerServiceClient
-            payload = {
-                "text": text,
-                "domain": task_dict.get("domain"),
-                "task_type": task_dict.get("type"),
-            }
-            resp = await self.eventizer.process(payload)
-
-            # Client already returns dict format, just extract relevant fields
-            return {
-                "event_tags": resp.get("event_tags", {}),
-                "attributes": resp.get("attributes", {}),
-                "confidence": resp.get("confidence", {}),
-                "pii_redacted": resp.get("pii_redacted", False),
-            }
+            remote_data = await self._call_remote_eventizer(
+                text, task_dict, multimodal_ctx, refinement
+            )
+            return self._format_eventizer_output(remote_data)
         except Exception as e:
-            logger.warning(f"Eventizer failed (non-blocking): {e}")
+            logger.warning(f"Remote Eventizer failed, using refined Fast-Path: {e}")
+            return self._format_eventizer_output(
+                self._merge_refinement(resp_obj.model_dump(), refinement)
+            )
+
+    def _run_fast_reflex(self, text: str, task_dict: Dict[str, Any]):
+        """Run FastEventizer for local deterministic perception (regex, PII, emergency detection)."""
+        fast_ev = get_fast_eventizer()
+        fast_res = fast_ev.process_text(
+            text,
+            task_type=task_dict.get("type", ""),
+            domain=task_dict.get("domain", ""),
+            include_original_text=True,
+        )
+        # Use task_id or id, with fallback for compatibility
+        task_id = task_dict.get("task_id") or task_dict.get("id")
+        return fast_result_to_eventizer_response(fast_res, text, task_id=task_id)
+
+    def _refine_multimodal_context(
+        self, text: str, task_dict: Dict[str, Any], multimodal_ctx: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Refines multimodal context: temporal grounding and vision narrative synthesis.
+
+        Returns a refinement dict with:
+        - refined_text: cleaned and temporally grounded text
+        - has_temporal_intent: whether temporal grounding was applied
+        - grounded_timestamp: ISO timestamp if temporal intent found
+        - vision_narrative: synthesized narrative for vision tasks
+        """
+        refinement = {
+            "refined_text": text,
+            "has_temporal_intent": False,
+            "grounded_timestamp": None,
+            "vision_narrative": None,
+        }
+
+        # 1. Temporal Grounding (voice/text transcripts)
+        if text:
+            try:
+                from datetime import datetime
+
+                # Extract context time from task_dict (supports now_utc, timestamp, etc.)
+                context_time = None
+                now_str = task_dict.get("now_utc") or task_dict.get("timestamp")
+                if now_str:
+                    try:
+                        if isinstance(now_str, str):
+                            # Handle ISO format with or without Z suffix
+                            context_time = datetime.fromisoformat(
+                                now_str.replace("Z", "+00:00")
+                            )
+                        elif isinstance(now_str, datetime):
+                            context_time = now_str
+                    except (ValueError, AttributeError) as e:
+                        logger.debug(f"Failed to parse context time '{now_str}': {e}")
+
+                refined_data = MultimodalContextRefiner.refine_voice_transcript(
+                    text, context_time=context_time
+                )
+                refinement.update(refined_data)
+
+                logger.debug(
+                    f"[Eventizer] Refined text for task {task_dict.get('task_id') or task_dict.get('id')}: "
+                    f"has_temporal_intent={refinement.get('has_temporal_intent')}"
+                )
+            except Exception as e:
+                logger.debug(f"[Eventizer] Text refinement failed (non-fatal): {e}")
+
+        # 2. Vision Narrative Synthesis
+        if multimodal_ctx and multimodal_ctx.get("modality") == "vision":
+            try:
+                detections = multimodal_ctx.get("detections", [])
+                camera_id = multimodal_ctx.get("camera_id", "unknown")
+
+                # Ensure detections is a list
+                if not isinstance(detections, list):
+                    detections = []
+
+                vision_narrative = MultimodalContextRefiner.synthesize_vision_event(
+                    detections, camera_id
+                )
+                refinement["vision_narrative"] = vision_narrative
+
+                logger.debug(
+                    f"[Eventizer] Synthesized vision narrative for task {task_dict.get('task_id') or task_dict.get('id')}"
+                )
+            except Exception as e:
+                logger.debug(
+                    f"[Eventizer] Vision narrative synthesis failed (non-fatal): {e}"
+                )
+
+        return refinement
+
+    async def _call_remote_eventizer(
+        self,
+        text: str,
+        task_dict: Dict[str, Any],
+        multimodal_ctx: dict,
+        refinement: dict,
+    ):
+        """
+        Call remote EventizerService with refined text and multimodal context.
+
+        Architecture: This stage only runs if FastEventizer is uncertain or needs
+        deep reasoning. The refined text (with temporal grounding and vision narrative)
+        is passed to improve LLM accuracy.
+        """
+        # Determine normalization tier based on task type
+        # COGNITIVE preserves sentiment for CHAT tasks (guest interactions)
+        # AGGRESSIVE normalizes units/time for MAINTENANCE/IOT (system signals)
+        task_type_str = (task_dict.get("type") or "").lower()
+        tier = "cognitive" if task_type_str == "chat" else "aggressive"
+
+        # Combine refined text with vision narrative for the LLM
+        final_text = refinement.get("refined_text") or text
+        vision_narrative = refinement.get("vision_narrative")
+        if vision_narrative:
+            final_text = f"{vision_narrative} | {final_text}"
+
+        payload = {
+            "text": final_text,  # Use REFINED text (cleaned + temporally grounded)
+            "domain": task_dict.get("domain"),
+            "task_type": task_dict.get("type"),  # Preserve original case
+            "media_context": multimodal_ctx,  # Essential for v2.5 multimodal caching
+            "include_pkg_hint": tier
+            == "cognitive",  # Hint for TextNormalizer tier selection
+        }
+
+        remote_resp = await self.eventizer.process(payload)
+
+        # Ensure Pydantic is converted to dict for merging
+        data = (
+            remote_resp.model_dump()
+            if hasattr(remote_resp, "model_dump")
+            else remote_resp
+        )
+        return self._merge_refinement(data, refinement)
+
+    def _merge_refinement(
+        self, base_data: Dict[str, Any], refinement: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Merges semantic refinement signals into the perception result.
+
+        This ensures that grounded timestamps and synthesized vision narratives
+        are persisted into the 'task_multimodal_embeddings' table.
+        """
+        # 1. Update processed text with the grounded version
+        refined_text = refinement.get("refined_text")
+        vision_narrative = refinement.get("vision_narrative")
+
+        current_text = (
+            base_data.get("processed_text") or base_data.get("normalized_text") or ""
+        )
+
+        # If we have a vision narrative, prepend it to provide spatial context
+        if vision_narrative:
+            current_text = f"{vision_narrative} | {current_text}".strip(" |")
+
+        # If the refiner cleaned up audio artifacts, prioritize that text
+        if refined_text and len(refined_text) < len(current_text):
+            base_data["processed_text"] = refined_text
+        else:
+            base_data["processed_text"] = current_text
+
+        # 2. Inject Grounded Signals into Attributes
+        # This is what the PKG uses for logical branching (e.g. scheduling)
+        if refinement.get("has_temporal_intent"):
+            attrs = base_data.setdefault("attributes", {})
+            # Ensure it's a dict (in case it came back as a Pydantic object)
+            if hasattr(attrs, "model_dump"):
+                attrs = attrs.model_dump()
+
+            attrs["grounded_time"] = refinement.get("grounded_timestamp")
+            base_data["attributes"] = attrs
+
+        # 3. Populate Surprise Signals (Bridge to SurpriseComputer)
+        signals = base_data.setdefault("signals", {})
+        if refinement.get("has_temporal_intent"):
+            # Flag that logic might be complex due to temporal constraints
+            signals["x5_logic_uncertainty"] = 0.3
+
+        if vision_narrative:
+            # Flag multimodal contribution
+            signals["x3_multimodal_anomaly"] = signals.get("x3_multimodal_anomaly", 0.1)
+
+        return base_data
+
+    def _format_eventizer_output(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Standardizes the output for TaskContext ingestion.
+
+        Handles both FastEventizer and RemoteEventizer output formats,
+        ensuring consistent structure for downstream processing.
+        """
+        # Handle both dict and Pydantic model_dump formats
+        if isinstance(data, dict):
+            event_tags = data.get("event_tags", {})
+            # Convert EventTags Pydantic model to dict if needed
+            if hasattr(event_tags, "model_dump"):
+                event_tags = event_tags.model_dump()
+            elif hasattr(event_tags, "dict"):
+                event_tags = event_tags.dict()
+
+            return {
+                "event_tags": event_tags,
+                "attributes": (
+                    data.get("attributes", {}).model_dump()
+                    if hasattr(data.get("attributes", {}), "model_dump")
+                    else data.get("attributes", {})
+                ),
+                "confidence": (
+                    data.get("confidence", {}).model_dump()
+                    if hasattr(data.get("confidence", {}), "model_dump")
+                    else data.get("confidence", {})
+                ),
+                "signals": (
+                    data.get("signals", {}).model_dump()
+                    if hasattr(data.get("signals", {}), "model_dump")
+                    else data.get("signals", {})
+                ),
+                "pii_redacted": data.get("pii_redacted", False),
+                "processed_text": data.get("processed_text")
+                or data.get("normalized_text")
+                or "",
+                "normalized_text": data.get("normalized_text")
+                or data.get("processed_text")
+                or "",
+                "multimodal": (
+                    data.get("multimodal", {}).model_dump()
+                    if hasattr(data.get("multimodal"), "model_dump")
+                    else data.get("multimodal")
+                )
+                if data.get("multimodal")
+                else None,
+            }
+        else:
+            # Fallback for unexpected types
+            logger.warning(f"Unexpected Eventizer output type: {type(data)}")
             return {}
 
     def _build_route_config(self) -> RouteConfig:
         """
         Build routing policy config with global PKG manager (PKG-first architecture).
-        
+
         Architecture: PKG is the authoritative source of routing hints.
         This adapter normalizes PKG output to proto_plan contract expected by core.execute.
         """
@@ -643,24 +909,24 @@ class Coordinator:
         async def evaluate_pkg_func(tags, signals, context, timeout_s):
             """
             PKG evaluation adapter that returns proto_plan contract.
-            
+
             Returns proto_plan structure compatible with core.execute._extract_routing_intent_from_proto_plan():
             - proto_plan["routing"] (top-level routing hints)
             - proto_plan["steps"] (list of step dicts with task.params.routing)
-            
+
             Architecture: Option A (Quickest) - Adapts PKG output to proto_plan shape.
             Extracts routing hints from subtask params and embeds them into proto_plan structure.
             """
             pkg_mgr = get_global_pkg_manager()
             evaluator = pkg_mgr and pkg_mgr.get_active_evaluator()
-            
+
             # Verification: Log PKG evaluator status
             if not evaluator:
                 logger.warning(
                     "[PKG] Evaluator not available - PKG manager exists but no active evaluator"
                 )
                 raise RuntimeError("PKG evaluator not available")
-            
+
             logger.debug(
                 f"[PKG] Evaluator active: version={getattr(evaluator, 'version', 'unknown')}, "
                 f"engine={getattr(evaluator, 'engine_type', 'unknown')}"
@@ -677,7 +943,7 @@ class Coordinator:
                 return await asyncio.to_thread(evaluator.evaluate, payload)
 
             res = await asyncio.wait_for(_run_eval(), timeout=float(timeout_s or 2))
-            
+
             # Verification: Log PKG output structure
             logger.debug(
                 f"[PKG] Evaluation result keys: {list(res.keys())}, "
@@ -688,17 +954,23 @@ class Coordinator:
             # ---- Normalize to proto_plan contract expected by core.execute ----
             subtasks = res.get("subtasks", []) or res.get("tasks", []) or []
             dag = res.get("dag", []) or res.get("edges", []) or []
-            version = res.get("snapshot") or res.get("version") or getattr(evaluator, "version", None)
+            version = (
+                res.get("snapshot")
+                or res.get("version")
+                or getattr(evaluator, "version", None)
+            )
 
             # Extract routing hints from PKG output (Option A: adapt wrapper)
             # Strategy: Check top-level routing first, then extract from subtask params
             extracted_routing = {}
-            
+
             # 1. Check for top-level routing in PKG output
             if isinstance(res.get("routing"), dict):
                 extracted_routing = dict(res["routing"])
-                logger.debug(f"[PKG] Found top-level routing: {list(extracted_routing.keys())}")
-            
+                logger.debug(
+                    f"[PKG] Found top-level routing: {list(extracted_routing.keys())}"
+                )
+
             # 2. Extract routing hints from subtask params (if PKG embeds them there)
             # Aggregate routing hints from all subtasks (prefer first non-empty)
             for st in subtasks:
@@ -708,13 +980,24 @@ class Coordinator:
                         subtask_routing = subtask_params.get("routing", {})
                         if isinstance(subtask_routing, dict):
                             # Merge routing hints (child overrides parent)
-                            if subtask_routing.get("required_specialization") and not extracted_routing.get("required_specialization"):
-                                extracted_routing["required_specialization"] = subtask_routing["required_specialization"]
-                            if subtask_routing.get("specialization") and not extracted_routing.get("specialization"):
-                                extracted_routing["specialization"] = subtask_routing["specialization"]
+                            if subtask_routing.get(
+                                "required_specialization"
+                            ) and not extracted_routing.get("required_specialization"):
+                                extracted_routing["required_specialization"] = (
+                                    subtask_routing["required_specialization"]
+                                )
+                            if subtask_routing.get(
+                                "specialization"
+                            ) and not extracted_routing.get("specialization"):
+                                extracted_routing["specialization"] = subtask_routing[
+                                    "specialization"
+                                ]
                             if subtask_routing.get("skills"):
                                 existing_skills = extracted_routing.get("skills", {})
-                                extracted_routing["skills"] = {**existing_skills, **(subtask_routing["skills"] or {})}
+                                extracted_routing["skills"] = {
+                                    **existing_skills,
+                                    **(subtask_routing["skills"] or {}),
+                                }
 
             # IMPORTANT: "steps" is the canonical field expected downstream.
             # Each step should be a dict with at minimum {"task": {...}}.
@@ -727,13 +1010,13 @@ class Coordinator:
                         step_task = st["task"]
                     else:
                         step_task = st
-                    
+
                     # Ensure step has proper structure: {"task": {...}}
                     step = {"task": dict(step_task)}
-                    
+
                     # Ensure task has params dict
                     task_params = step["task"].setdefault("params", {})
-                    
+
                     # Embed routing hints into step.task.params.routing
                     # Merge extracted routing with any existing routing in the step
                     step_routing = task_params.setdefault("routing", {})
@@ -744,7 +1027,7 @@ class Coordinator:
                         if isinstance(step_task.get("params", {}).get("routing"), dict):
                             step_routing.update(step_task["params"]["routing"])
                         task_params["routing"] = step_routing
-                    
+
                     steps.append(step)
                 else:
                     # object-like fallback
@@ -761,14 +1044,14 @@ class Coordinator:
                 proto_plan["routing"] = extracted_routing
                 required_spec = extracted_routing.get("required_specialization")
                 specialization = extracted_routing.get("specialization")
-                
+
                 # Positive confirmation signal: INFO log when PKG is active and routing is found
                 logger.info(
                     "[PKG] Active policy snapshot=%s, routing=%s",
                     version or "unknown",
                     required_spec or specialization or "none",
                 )
-                
+
                 logger.debug(
                     f"[PKG] Embedded routing into proto_plan: "
                     f"required_specialization={required_spec}, "
@@ -824,10 +1107,10 @@ class Coordinator:
         ) -> dict:
             """
             Executes a task on a specific Organism (via HTTP/RPC) using TaskPayload v2 semantics.
-            
+
             Architecture: Coordinator delegates execution to Organism with routing hints
             already embedded in the payload. Organism resolves HOW to execute.
-            
+
             Note: This is a nested function that captures 'self' from the closure.
             """
             # 1. Prepare Payload (Shallow Copy to avoid mutation side-effects)
@@ -948,7 +1231,7 @@ class Coordinator:
         retention = (
             RetentionPolicy.FULL_ARCHIVE if is_novel else RetentionPolicy.SUMMARY_ONLY
         )
-        
+
         # Use correct OCPS valve name (ocps_valve, not ocps)
         drift_state = self.ocps_valve.update(drift_score)
         should_escalate = bool(getattr(drift_state, "is_breached", False))
@@ -997,7 +1280,7 @@ class Coordinator:
     async def _handle_tune_callback(self, payload: TuneCallbackRequest):
         """
         Handle ML tuning callback.
-        
+
         Note: predicate_router is not part of the current architecture.
         This endpoint is kept for backward compatibility but does not update
         predicate router state.
@@ -1005,14 +1288,14 @@ class Coordinator:
         try:
             logger.info(f"[Coord] Tuning callback {payload.job_id}: {payload.status}")
             success = payload.status == "completed"
-            
+
             # NOTE: predicate_router is not initialized in current architecture
             # If you need GPU job status tracking, initialize it in _init_core_logic()
             # or remove this functionality.
             # self.predicate_router.update_gpu_job_status(
             #     payload.job_id, payload.status, success=success
             # )
-            
+
             if success:
                 logger.info(
                     f"Job {payload.job_id} success. GPU Secs: {payload.gpu_seconds}"
@@ -1037,7 +1320,7 @@ class Coordinator:
     ) -> float:
         """
         Compute drift score with signature-tolerant wrapper.
-        
+
         Architecture: Matches core.execute._call_compute_drift_score() signature
         to avoid signature mismatch issues. Accepts extra kwargs for future-proofing.
         """
@@ -1211,29 +1494,27 @@ class Coordinator:
     async def ready(self):
         """
         Readiness check including background tasks and optional vendor integrations.
-        
+
         Returns:
             Dict with readiness status and dependency information
         """
         deps = {}
         all_ready = self._bg_started
-        
+
         # Background tasks status
         deps["background_tasks"] = "started" if self._bg_started else "not_started"
-        
+
         # Optional vendor integrations (non-blocking for overall readiness)
         try:
             from seedcore.config.tuya_config import TuyaConfig
+
             tuya_config = TuyaConfig()
             deps["tuya"] = "enabled" if tuya_config.enabled else "disabled"
         except Exception as e:
             # Tuya config check failed - mark as unavailable but don't block readiness
             deps["tuya"] = f"unavailable: {e}"
-        
-        return {
-            "ready": all_ready,
-            "deps": deps
-        }
+
+        return {"ready": all_ready, "deps": deps}
 
     async def get_metrics(self):
         return self.metrics.get_metrics()
@@ -1241,7 +1522,7 @@ class Coordinator:
     async def get_pkg_status(self):
         """
         Get PKG evaluator status for debugging/verification.
-        
+
         Never throws - always returns a safe response even if PKG is half-initialized.
         """
         try:
@@ -1264,27 +1545,27 @@ class Coordinator:
     async def get_predicate_status(self):
         """
         Get predicate router status.
-        
+
         Note: predicate_config is not part of the current PKG-first architecture.
         PKG policy evaluation replaces predicate-based routing.
         """
         return {
             "rules": 0,
             "note": "predicate_config not enabled in PKG-first architecture. "
-                    "PKG policy evaluation handles routing decisions."
+            "PKG policy evaluation handles routing decisions.",
         }
 
     async def get_predicate_config(self):
         """
         Get predicate router configuration.
-        
+
         Note: predicate_config is not part of the current PKG-first architecture.
         PKG policy evaluation replaces predicate-based routing.
         """
         return {
             "routing": [],
             "note": "predicate_config not enabled in PKG-first architecture. "
-                    "PKG policy evaluation handles routing decisions."
+            "PKG policy evaluation handles routing decisions.",
         }
 
     def _normalize(self, x):
@@ -1302,9 +1583,9 @@ class Coordinator:
     def _verify_pkg_status(self) -> Dict[str, Any]:
         """
         Verify PKG evaluator status (for debugging/testing).
-        
+
         Never throws - always returns a safe response even if PKG is half-initialized.
-        
+
         Returns:
             Dictionary with PKG status information:
             - enabled: bool - whether PKG is enabled and active (alias for "active")
@@ -1317,7 +1598,7 @@ class Coordinator:
         try:
             pkg_mgr = get_global_pkg_manager()
             manager_exists = pkg_mgr is not None
-            
+
             if not manager_exists:
                 return {
                     "enabled": False,
@@ -1327,7 +1608,7 @@ class Coordinator:
                     "engine_type": None,
                     "error": "PKG manager not available",
                 }
-            
+
             evaluator = pkg_mgr.get_active_evaluator()
             if not evaluator:
                 return {
@@ -1338,10 +1619,10 @@ class Coordinator:
                     "engine_type": None,
                     "error": "PKG manager exists but no active evaluator",
                 }
-            
+
             version = getattr(evaluator, "version", "unknown")
             engine_type = getattr(evaluator, "engine_type", "unknown")
-            
+
             return {
                 "enabled": True,
                 "active": True,

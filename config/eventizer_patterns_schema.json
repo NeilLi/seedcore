@@ -13,6 +13,7 @@
     "metadata": {
       "type": "object",
       "description": "Governance metadata for audit trails.",
+      "additionalProperties": false,
       "properties": {
         "name": { "type": "string" },
         "description": { "type": "string" },
@@ -23,6 +24,15 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Target domains (e.g., hotel_ops, robotics)."
+        },
+        "engine_compat": {
+          "type": "object",
+          "description": "Engine compatibility constraints to prevent silent behavioral drift.",
+          "additionalProperties": false,
+          "properties": {
+            "min_engine_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+            "max_engine_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" }
+          }
         }
       },
       "required": ["name", "description", "updated_at"]
@@ -30,6 +40,7 @@
     "settings": {
       "type": "object",
       "description": "Global engine settings and resource limits.",
+      "additionalProperties": false,
       "properties": {
         "default_case_sensitive": { "type": "boolean", "default": false },
         "default_whole_word": { "type": "boolean", "default": true },
@@ -42,7 +53,53 @@
         "budget_ms_soft": { "type": "number", "default": 40 },
         "budget_ms_hard": { "type": "number", "default": 100 },
         "max_regex_length": { "type": "integer", "default": 4096 },
-        "max_keywords_total": { "type": "integer", "default": 200000 }
+        "max_keywords_total": { "type": "integer", "default": 200000 },
+        "normalization": {
+          "type": "object",
+          "description": "Text normalization configuration used before pattern matching. Ensures deterministic behavior across engine versions.",
+          "additionalProperties": false,
+          "properties": {
+            "tier": {
+              "type": "string",
+              "enum": ["aggressive", "cognitive"],
+              "default": "aggressive",
+              "description": "Normalization tier: aggressive (collapses punctuation) for fast-path, cognitive (preserves sentiment) for deep reasoning"
+            },
+            "case": {
+              "type": "string",
+              "enum": ["lower", "upper", "title", "preserve"],
+              "default": "lower",
+              "description": "Case normalization mode"
+            },
+            "fold_accents": {
+              "type": "boolean",
+              "default": false,
+              "description": "Strip diacritics from characters"
+            },
+            "strip_audio_tags": {
+              "type": "boolean",
+              "default": true,
+              "description": "Remove audio transcript artifacts like [laughter], (clears throat)"
+            },
+            "standardize_units": {
+              "type": "boolean",
+              "default": true,
+              "description": "Normalize units: '6 PM' -> '18:00', '100 sqft' -> '100 sqft'"
+            },
+            "join_split_tokens": {
+              "type": "boolean",
+              "default": true,
+              "description": "De-obfuscation: join 'v-i-p' -> 'vip', 'S.E.C.U.R.I.T.Y' -> 'security'"
+            },
+            "join_max_token_len": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32,
+              "default": 6,
+              "description": "Maximum token length for de-obfuscation joining"
+            }
+          }
+        }
       }
     },
 
@@ -96,7 +153,7 @@
           "id": { "type": "string", "pattern": "^[a-zA-Z0-9:_-]+$" },
           "keywords": {
             "type": "array",
-            "items": { "type": "string", "minLength": 1 },
+            "items": { "type": "string", "minLength": 1, "maxLength": 128 },
             "minItems": 1
           },
           "priority": { "type": "integer" },
@@ -128,6 +185,7 @@
           "entity_type": { "type": "string" },
           "patterns": {
             "type": "array",
+            "minItems": 1,
             "items": {
               "type": "object",
               "properties": {
@@ -157,13 +215,15 @@
       "items": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
+          "id": { "type": "string", "pattern": "^[a-zA-Z0-9:_-]+$" },
           "any_of": { "type": "array", "items": { "type": "string" } },
           "all_of": { "type": "array", "items": { "type": "string" } },
           "none_of": { "type": "array", "items": { "type": "string" } },
           "emits_tags": { "type": "array", "items": { "type": "string" } },
           "emits_attributes": { "type": "object", "additionalProperties": true },
           "priority": { "type": "integer" },
+          "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+          "description": { "type": "string" },
           "enabled": { "type": "boolean", "default": true }
         },
         "required": ["id"]

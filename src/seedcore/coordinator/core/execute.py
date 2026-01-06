@@ -81,7 +81,7 @@ class TaskContext:
     task_id: str
     task_type: str
     domain: str | None
-    description: str
+    description: str  # Refined description (processed_text from Eventizer if available)
     params: dict[str, Any]
 
     # eventizer
@@ -90,6 +90,7 @@ class TaskContext:
     tags: set[str]
     attributes: dict[str, Any]
     confidence: dict[str, Any]
+    signals: dict[str, Any]  # x1..x6 surprise signals from Eventizer
     pii_redacted: bool
 
     # placeholders for future integrations
@@ -109,6 +110,7 @@ class TaskContext:
             tags=set(d["tags"]),
             attributes=d["attributes"],
             confidence=d["confidence"],
+            signals=d.get("signals", {}),  # Extract signals for SurpriseComputer
             pii_redacted=d["pii_redacted"],
             fact_reads=list(d["fact_reads"]),
             fact_produced=list(d["fact_produced"]),
@@ -376,6 +378,10 @@ async def execute_task(
     )
     ctx = TaskContext.from_dict(task_context_dict)
 
+    # 2. EMBEDDING GENERATION & UNIFIED MEMORY PERSISTENCE (The "Memory Write" Stage)
+    # Generate a 1024d embedding and persist it to Working Memory for Unified Cortex queries
+    await _persist_task_embedding_to_unified_memory(ctx, execution_config)
+
     routing_dec = await _compute_routing_decision(
         task=task,
         task_dict=merged_dict,
@@ -409,6 +415,7 @@ async def execute_task(
             decision_payload=router_result_payload,
             decision_kind=DecisionKind(decision_kind),
             config=execution_config,
+            ctx=ctx,  # Pass TaskContext with Eventizer signals
         )
 
     logger.warning(
@@ -463,6 +470,7 @@ async def _handle_cognitive_path(
     decision_payload: Dict[str, Any],
     decision_kind: DecisionKind,
     config: ExecutionConfig,
+    ctx: TaskContext,  # TaskContext with Eventizer signals
 ) -> Dict[str, Any]:
     if not config.cognitive_client:
         logger.error("[Coordinator] Cognitive Client missing.")
@@ -568,25 +576,11 @@ async def _handle_cognitive_path(
         # Extract routing intent from proto_plan for step injection
         routing_intent = None
         if proto_plan_from_router:
+            # Use the TaskContext that was already built with Eventizer signals
+            # This ensures routing intent extraction has access to all context
             routing_intent = _extract_routing_intent_from_proto_plan(
                 proto_plan_from_router,
-                TaskContext.from_dict(
-                    {
-                        "task_id": task.task_id,
-                        "task_type": task.type,
-                        "domain": task.domain,
-                        "description": task.description or "",
-                        "params": task.params or {},
-                        "eventizer_data": {},
-                        "eventizer_tags": {},
-                        "tags": set(),
-                        "attributes": {},
-                        "confidence": {},
-                        "pii_redacted": False,
-                        "fact_reads": [],
-                        "fact_produced": [],
-                    }
-                ),
+                ctx,  # Use the TaskContext built in execute_task() with Eventizer data
             )
 
         step_results = await _execute_steps_dependency_aware(
@@ -767,6 +761,93 @@ def _extract_solution_steps(plan_res: Any) -> List[Dict[str, Any]]:
         )
         or []
     )
+
+
+async def _persist_task_embedding_to_unified_memory(
+    ctx: TaskContext,
+    execution_config: ExecutionConfig,
+) -> None:
+    """Generate and persist task embedding to Unified Memory (Working Memory tier).
+
+    This function generates a 1024d embedding from the task's refined description
+    (Eventizer-processed text) and persists it to the Unified Memory System.
+    This enables cross-tier semantic queries bridging "Now" (Tasks) and "Always" (Knowledge Graph).
+
+    Architecture: This is the "Memory Write" stage that populates the Working Memory
+    tier, making the task immediately queryable via the v_unified_cortex_memory view.
+
+    Args:
+        ctx: TaskContext containing refined description and metadata.
+        execution_config: ExecutionConfig with graph_task_repo and session factory.
+
+    Note:
+        This operation is non-blocking. Failures are logged but do not break execution.
+    """
+    if not ctx.description:
+        return
+
+    if not execution_config.graph_task_repo:
+        logger.debug("[Coordinator] graph_task_repo not available, skipping embedding persistence")
+        return
+
+    if not execution_config.resolve_session_factory_func:
+        logger.debug(
+            "[Coordinator] resolve_session_factory_func not available, skipping embedding persistence"
+        )
+        return
+
+    try:
+        from seedcore.ml.embedding.synopsis_embedder import SynopsisEmbedder
+
+        # Initialize embedder (lazy initialization is handled internally)
+        embedder = SynopsisEmbedder(dim=1024)
+
+        # Generate 1024d embedding from refined description (Eventizer-processed text)
+        vec = embedder.embed_text(ctx.description, dim=1024)
+        if vec is None:
+            logger.debug(
+                "[Coordinator] Embedding generation returned None for task %s", ctx.task_id
+            )
+            return
+
+        # Persist as plain list (repository expects List[float])
+        embedding_vector = vec.tolist()
+
+        # Get session factory and persist to Unified Memory
+        session_factory = execution_config.resolve_session_factory_func()
+        async with session_factory() as session:
+            async with session.begin():
+                # Convert task_id to UUID for repository method
+                task_id_uuid = (
+                    uuid.UUID(ctx.task_id) if isinstance(ctx.task_id, str) else ctx.task_id
+                )
+
+                # Extract modality from params if available
+                source_modality = "text"
+                if ctx.params and isinstance(ctx.params, dict):
+                    multimodal = ctx.params.get("multimodal", {})
+                    if isinstance(multimodal, dict):
+                        source_modality = multimodal.get("modality", "text") or "text"
+
+                await execution_config.graph_task_repo.save_task_multimodal_embedding(
+                    session=session,
+                    task_id=task_id_uuid,
+                    embedding=embedding_vector,
+                    source_modality=source_modality,
+                    model_version="synopsis-1024",
+                )
+                logger.debug(
+                    "[Coordinator] Persisted 1024d embedding to Unified Memory for task %s",
+                    ctx.task_id,
+                )
+    except Exception as e:
+        # Non-blocking: embedding persistence failure should not break execution
+        logger.debug(
+            "[Coordinator] Failed to persist embedding for task %s (non-fatal): %s",
+            ctx.task_id,
+            e,
+            exc_info=True,
+        )
 
 
 def _prepare_step_task_payload(
@@ -1049,11 +1130,32 @@ async def _try_run_pkg_evaluation(
     proto_plan: Dict[str, Any] = {}
 
     try:
+        # Extract Eventizer signals (x1..x6) from TaskContext
+        # These signals come from the Eventizer's "System 1" perception:
+        # - x1_cache_novelty: Pattern matching cache hit/miss
+        # - x2_semantic_drift: Semantic drift detected by Eventizer
+        # - x3_multimodal_anomaly: Multimodal anomaly (voice/vision weirdness)
+        # - x4_graph_context_drift: Graph context drift
+        # - x5_logic_uncertainty: Logic/dependency uncertainty
+        # - x6_cost_risk: Cost/risk signal
+        eventizer_signals = ctx.signals or {}
+        
         pkg_signals: Dict[str, Any] = {
             "ocps_drift": raw_drift,
             "ocps_cusum": getattr(drift_state, "score", None),
             "ocps_breached": getattr(drift_state, "is_breached", False),
             "ocps_severity": getattr(drift_state, "severity", None),
+            # Inject Eventizer signals for PKG evaluation
+            "x1_cache_novelty": eventizer_signals.get("x1_cache_novelty", 0.0),
+            "x2_semantic_drift": eventizer_signals.get("x2_semantic_drift", 0.0),
+            "x3_multimodal_anomaly": eventizer_signals.get("x3_multimodal_anomaly", 0.0),
+            "x4_graph_context_drift": eventizer_signals.get("x4_graph_context_drift", 0.0),
+            "x5_logic_uncertainty": eventizer_signals.get("x5_logic_uncertainty", 0.0),
+            "x6_cost_risk": eventizer_signals.get("x6_cost_risk", 0.0),
+            # Embedding metadata for Unified Memory System
+            "embedding_id": eventizer_signals.get("embedding_id"),
+            "vector_dimension": eventizer_signals.get("vector_dimension", 1024),
+            "embedding_model": eventizer_signals.get("embedding_model"),
         }
 
         if cfg.signal_enricher:
@@ -1104,6 +1206,20 @@ async def _process_task_input(
     eventizer_helper: Callable[[Any], Any] | None,
     normalize_domain: Callable[[str | None], str | None],
 ) -> Dict[str, Any]:
+    """
+    Process task input with Eventizer integration (System 1 perception).
+    
+    Architecture: Eventizer is the primary signal generator that:
+    - Normalizes text (de-obfuscation, unit grounding: "6 PM" -> "18:00")
+    - Extracts event tags and attributes for PKG evaluation
+    - Generates surprise signals (x1..x6) for SurpriseComputer
+    - Handles multimodal context (voice/vision/sensor metadata)
+    
+    The processed_text from Eventizer becomes the "source of truth" for
+    downstream ML models and PKG evaluation, as it has been normalized and
+    de-obfuscated.
+    """
+    # 1. Execute Eventizer Helper (The 'Reflex' / System 1)
     eventizer_data: Dict[str, Any] = {}
     if eventizer_helper:
         try:
@@ -1112,20 +1228,36 @@ async def _process_task_input(
         except Exception:
             logger.debug("Eventizer failed (non-blocking)", exc_info=True)
 
+    # 2. Extract Event Tags and Signals
     event_tags = eventizer_data.get("event_tags", {}) or {}
     tags = set(event_tags.get("event_types", []) or [])
+    signals = eventizer_data.get("signals", {}) or {}
+    
+    # 3. Use the cleaned/normalized text from Eventizer as the "source of truth"
+    # This ensures downstream PKG/ML models see:
+    # - De-obfuscated text (S.E.C.U.R.I.T.Y -> security)
+    # - Grounded units (6 PM -> 18:00, 100 sqft -> 100sqft)
+    # - Audio artifacts stripped ([laughter] removed)
+    refined_description = (
+        eventizer_data.get("processed_text")
+        or eventizer_data.get("normalized_text")
+        or payload.description
+        or merged_dict.get("description")
+        or ""
+    )
 
     return {
         "task_id": payload.task_id,
         "task_type": payload.type,
         "domain": normalize_domain(payload.domain),
-        "description": payload.description or merged_dict.get("description") or "",
+        "description": refined_description,  # GROUNDED TEXT (e.g., 6 PM -> 18:00)
         "params": merged_dict.get("params", {}) or {},
         "eventizer_data": eventizer_data,
         "eventizer_tags": event_tags,
         "tags": tags,
         "attributes": eventizer_data.get("attributes", {}) or {},
         "confidence": eventizer_data.get("confidence", {}) or {},
+        "signals": signals,  # x1..x6 signals passed to SurpriseComputer via PKG
         "pii_redacted": bool(eventizer_data.get("pii_redacted", False)),
         "fact_reads": [],
         "fact_produced": [],

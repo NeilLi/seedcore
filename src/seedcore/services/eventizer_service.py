@@ -27,6 +27,7 @@ from seedcore.models.eventizer import (
     EventizerResponse,
     EventTags,
     EventAttributes,
+    EventSignals,
     EventizerConfig,
     PatternMatch,
     ConfidenceScore,
@@ -34,7 +35,11 @@ from seedcore.models.eventizer import (
     EventType,
     EntitySpan,
 )
-from ..ops.eventizer.utils.text_normalizer import TextNormalizer, SpanMap
+from ..ops.eventizer.utils.text_normalizer import (
+    TextNormalizer,
+    SpanMap,
+    NormalizationTier,
+)
 from ..ops.eventizer.utils.pattern_compiler import PatternCompiler
 from ..ops.eventizer.clients.pii_client import PIIClient
 
@@ -97,7 +102,7 @@ class EventizerServiceImpl:
     ):
         self.config = config or EventizerConfig()
         self._initialized = False
-        self._text_normalizer: Optional[TextNormalizer] = None
+        # TextNormalizer is created per-request with tiered normalization
         self._pattern_compiler: Optional[PatternCompiler] = None
         self._pii_client: Optional[PIIClient] = None
         self._ml_fallback_hook = ml_fallback_hook
@@ -119,7 +124,8 @@ class EventizerServiceImpl:
 
         t0 = _now_ms()
 
-        self._text_normalizer = TextNormalizer(case="lower", fold_accents=False)
+        # TextNormalizer is created per-request with tiered normalization
+        # No need to create a default instance here
         self._pattern_compiler = PatternCompiler(self.config)
         await self._pattern_compiler.initialize()
 
@@ -150,8 +156,8 @@ class EventizerServiceImpl:
             budget_ms = float(self.config.max_processing_time_ms)
             budget_deadline = stats.start_ms + budget_ms
 
-            # 1. Normalize
-            norm_text, span_map = await self._normalize_with_map(request.text)
+            # 1. Normalize (with tiered normalization based on request context)
+            norm_text, span_map = await self._normalize_with_map(request.text, request)
 
             # 2. PII Redaction
             redacted_text = norm_text
@@ -187,7 +193,10 @@ class EventizerServiceImpl:
             # 6. Confidence
             conf = self._calculate_confidence(tags, attrs, stats)
 
-            # 7. Response Construction
+            # 7. Signals: Populate multimodal anomaly and semantic drift signals
+            signals = self._calculate_signals(tags, conf, request, stats)
+
+            # 8. Response Construction
             stats.end_ms = _now_ms()
 
             return EventizerResponse(
@@ -198,6 +207,8 @@ class EventizerServiceImpl:
                 pii=pii_audit,
                 event_tags=tags,
                 attributes=attrs,
+                signals=signals,
+                multimodal=request.media_context,  # Bridge multimodal context to response
                 confidence=conf,
                 processing_time_ms=stats.end_ms - stats.start_ms,
                 patterns_applied=stats.patterns_applied,
@@ -402,9 +413,39 @@ class EventizerServiceImpl:
     # Internals (Helpers)
     # -----------------
 
-    async def _normalize_with_map(self, text: str) -> Tuple[str, SpanMap]:
-        assert self._text_normalizer is not None
-        return await self._text_normalizer.normalize(text, build_map=True)
+    async def _normalize_with_map(
+        self, text: str, request: EventizerRequest
+    ) -> Tuple[str, SpanMap]:
+        """
+        Normalize text with tiered normalization based on request context.
+        
+        - AGGRESSIVE tier: For fast-path pattern matching (default for Reflex Arc)
+        - COGNITIVE tier: For deep reasoning paths that need sentiment preservation
+        
+        The tier is selected based on whether PKG hints are requested, indicating
+        a Cognitive Agent path that benefits from preserved punctuation intensity.
+        """
+        # Select normalization tier based on request context
+        # If PKG hints are requested, use COGNITIVE tier to preserve sentiment
+        # Otherwise, use AGGRESSIVE tier for fast pattern matching
+        # Select tier: COGNITIVE for deep reasoning (PKG hints), AGGRESSIVE for fast-path
+        tier = (
+            NormalizationTier.COGNITIVE
+            if request.include_pkg_hint
+            else NormalizationTier.AGGRESSIVE
+        )
+
+        # Create normalizer with multimodal support
+        normalizer = TextNormalizer(
+            tier=tier,
+            case="lower",
+            fold_accents=False,
+            standardize_units=True,  # Essential for unit grounding ("6 PM" -> "18:00")
+            strip_audio_tags=True,  # Essential for voice-to-text transcripts
+            join_split_tokens=True,  # De-obfuscation for security bypass prevention
+        )
+
+        return normalizer.normalize(text, build_map=True)
 
     async def _match_all_budgeted_with_compilation(
         self, text: str, budget_ms: float
@@ -419,12 +460,17 @@ class EventizerServiceImpl:
     ) -> List[EntitySpan]:
         """
         Map PII spans from normalized text coordinates back to original text coordinates.
+        
+        Uses SpanMap.project_norm_span_to_orig() to project normalized spans
+        back to original text indices for accurate PII audit reporting.
         """
         mapped_spans = []
         for span in pii_spans:
             try:
-                original_start = span_map.normalized_to_original(span.start)
-                original_end = span_map.normalized_to_original(span.end)
+                # Project normalized span to original text coordinates
+                original_start, original_end = span_map.project_norm_span_to_orig(
+                    span.start, span.end, original_len=len(original_text)
+                )
 
                 if (
                     0 <= original_start < len(original_text)
@@ -441,8 +487,10 @@ class EventizerServiceImpl:
                     )
                     mapped_spans.append(mapped_span)
                 else:
+                    # Fallback: keep original span if projection fails
                     mapped_spans.append(span)
             except Exception:
+                # Fallback: keep original span on any error
                 mapped_spans.append(span)
         return mapped_spans
 
@@ -472,6 +520,50 @@ class EventizerServiceImpl:
                 )
             )
         return projected
+
+    def _calculate_signals(
+        self,
+        tags: EventTags,
+        confidence: ConfidenceScore,
+        request: EventizerRequest,
+        stats: ProcessingStats,
+    ) -> EventSignals:
+        """
+        Calculate semantic drift and multimodal anomaly signals.
+        
+        Specifically flags x3_multimodal_anomaly when confidence is low despite
+        high-intensity keywords, signaling a potential mismatch between
+        "what was heard" and "what was meant."
+        """
+        signals = EventSignals()
+
+        # x3_multimodal_anomaly: Low confidence despite high-intensity keywords
+        # This indicates potential transcription errors or semantic mismatch
+        has_intensity_keywords = any(
+            kw in tags.keywords
+            for kw in ["emergency", "urgent", "critical", "fire", "help", "911"]
+        )
+        if has_intensity_keywords and confidence.overall_confidence < 0.5:
+            signals.x3_multimodal_anomaly = 1.0 - confidence.overall_confidence
+            signals.drift_flag = True
+
+        # x2_semantic_drift: Low pattern confidence suggests semantic drift
+        if confidence.needs_ml_fallback:
+            signals.x2_semantic_drift = 1.0 - confidence.overall_confidence
+
+        # x1_cache_novelty: High pattern count suggests novel patterns
+        if len(tags.patterns) > 10:
+            signals.x1_cache_novelty = min(1.0, len(tags.patterns) / 20.0)
+
+        # Set vector dimension based on multimodal context
+        if request.media_context:
+            signals.vector_dimension = 1024  # Multimodal embeddings use 1024d
+            signals.embedding_model = "multimodal-perception-v1"
+        else:
+            signals.vector_dimension = 1024  # Default to 1024d for Unified Memory
+            signals.embedding_model = "text-embedding-v1"
+
+        return signals
 
     def _calculate_confidence(
         self, tags: EventTags, attrs: EventAttributes, stats: ProcessingStats
@@ -528,8 +620,11 @@ class EventizerServiceImpl:
         return EventizerResponse(
             original_text=request.text,
             processed_text=request.text,
+            normalized_text=request.text,  # Fallback to original on error
             event_tags=EventTags(),
             attributes=EventAttributes(),
+            signals=EventSignals(),  # Default signals on error
+            multimodal=request.media_context,  # Preserve multimodal context even on error
             confidence=ConfidenceScore(
                 overall_confidence=0.0,
                 confidence_level=ConfidenceLevel.LOW,
