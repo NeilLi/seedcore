@@ -12,6 +12,7 @@ DB_PASS="${DB_PASS:-postgres}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 MIGRATION_001="${SCRIPT_DIR}/migrations/001_create_tasks_table.sql"
 MIGRATION_002="${SCRIPT_DIR}/migrations/002_graph_embeddings.sql"
+MIGRATION_003="${SCRIPT_DIR}/migrations/003_task_multimodal_embeddings.sql"
 MIGRATION_007="${SCRIPT_DIR}/migrations/007_hgnn_graph_schema.sql"
 # HGNN base graph schema (task layer)
 MIGRATION_008="${SCRIPT_DIR}/migrations/008_hgnn_agent_layer.sql"
@@ -29,7 +30,7 @@ MIGRATION_018="${SCRIPT_DIR}/migrations/018_task_outbox_hardening.sql"
 
 # Check if all migration files exist
 for migration in \
-  "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_007" \
+  "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_007" \
   "$MIGRATION_008" "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" \
   "$MIGRATION_012" "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" \
   "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_018"
@@ -45,6 +46,7 @@ echo "🔧 Database:  $DB_NAME (user: $DB_USER)"
 echo "🔧 Migrations:"
 echo "   - 001: Create tasks table (includes lease columns, routing indexes, cleanup functions, graph_tasks view, helper functions)"
 echo "   - 002: Create separate embedding tables (graph_embeddings_128 and graph_embeddings_1024) + migration from old table"
+echo "   - 003: Task-level multimodal embeddings (voice, vision, sensor) with direct FK to tasks"
 echo "   - 007: HGNN base graph schema (task layer)"
 echo "   - 008: HGNN agent/organ layer + relations"
 echo "   - 009: Create facts table"
@@ -140,6 +142,11 @@ echo "⚙️  Running migration 002: Create separate embedding tables (graph_emb
 kubectl -n "$NAMESPACE" cp "$MIGRATION_002" "$POSTGRES_POD:/tmp/002_graph_embeddings.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/002_graph_embeddings.sql"
 
+# Migration 003
+echo "⚙️  Running migration 003: Task-level multimodal embeddings (voice, vision, sensor)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_003" "$POSTGRES_POD:/tmp/003_task_multimodal_embeddings.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/003_task_multimodal_embeddings.sql"
+
 # Migration 007
 echo "⚙️  Running migration 007: HGNN base graph schema..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_007" "$POSTGRES_POD:/tmp/007_hgnn_graph_schema.sql"
@@ -217,6 +224,9 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 
 echo "📊 Graph embeddings 1024d table structure:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ graph_embeddings_1024"
+
+echo "📊 Task multimodal embeddings table structure:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_multimodal_embeddings"
 
 echo "📊 Verifying graph embeddings vector dimensions:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
@@ -361,7 +371,7 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
 
 echo "🎉 SeedCore database setup complete!"
 echo "✅ Created tables: tasks (with lease columns, routing indexes, cleanup functions),"
-echo "   holons, graph_embeddings_128, graph_embeddings_1024, facts"
+echo "   holons, graph_embeddings_128, graph_embeddings_1024, task_multimodal_embeddings, facts"
 echo "✅ Created graph schema (HGNN): graph_node_map, agent_registry, organ_registry,"
 echo "   artifact, capability, memory_cell, edge tables (task_*), organ_provides_capability, agent_owns_memory_cell"
 echo "✅ Created views: graph_tasks, task_embeddings_primary_128, task_embeddings_primary_1024,"
