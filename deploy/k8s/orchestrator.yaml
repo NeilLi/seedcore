@@ -27,7 +27,7 @@ spec:
               value: "ray://seedcore-svc-head-svc:10001"
             - name: RAY_NAMESPACE
               value: "${SEEDCORE_NS}"
-            - name: SEEDCORE_API_URL
+            - name: SEEDCORE_API_ADDRESS
               value: "http://seedcore-api:8002"
             - name: SEEDCORE_API_TIMEOUT
               value: "5.0"

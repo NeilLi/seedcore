@@ -19,6 +19,7 @@ This module:
 from __future__ import annotations
 
 import inspect
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -60,6 +61,38 @@ MIN_ORGAN_TIMEOUT_S = 20.0
 MAX_ORGAN_TIMEOUT_S = 300.0
 DEFAULT_PKG_TIMEOUT_S = 2
 MAX_STEPS_DEFAULT = 32
+
+# Global embedder instance (singleton for efficiency)
+# This prevents redundant configuration checks and API re-authentication on every task
+_global_embedder: Optional[Any] = None
+_embedder_lock = None
+
+
+def _get_global_embedder():
+    """Get or create the global SynopsisEmbedder instance (thread-safe singleton)."""
+    global _global_embedder, _embedder_lock
+
+    if _global_embedder is not None:
+        return _global_embedder
+
+    # Use threading lock for initialization (SynopsisEmbedder uses threading internally)
+    if _embedder_lock is None:
+        _embedder_lock = threading.Lock()
+
+    with _embedder_lock:
+        # Double-check after acquiring lock
+        if _global_embedder is not None:
+            return _global_embedder
+
+        from seedcore.ml.embedding.synopsis_embedder import SynopsisEmbedder
+
+        _global_embedder = SynopsisEmbedder(dim=1024)
+        logger.debug(
+            "[Coordinator] Initialized global embedder: backend=%s, model=%s, dim=1024",
+            _global_embedder.backend,
+            _global_embedder.model,
+        )
+        return _global_embedder
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +404,7 @@ async def execute_task(
 ) -> Dict[str, Any]:
     merged_dict = task.model_dump()
     task_context_dict = await _process_task_input(
-        payload=task,
+        task=task,
         merged_dict=merged_dict,
         eventizer_helper=execution_config.eventizer_helper,
         normalize_domain=execution_config.normalize_domain,
@@ -797,10 +830,8 @@ async def _persist_task_embedding_to_unified_memory(
         return
 
     try:
-        from seedcore.ml.embedding.synopsis_embedder import SynopsisEmbedder
-
-        # Initialize embedder (lazy initialization is handled internally)
-        embedder = SynopsisEmbedder(dim=1024)
+        # Use global singleton embedder (prevents redundant initialization)
+        embedder = _get_global_embedder()
 
         # Generate 1024d embedding from refined description (Eventizer-processed text)
         vec = embedder.embed_text(ctx.description, dim=1024)
@@ -817,10 +848,17 @@ async def _persist_task_embedding_to_unified_memory(
         session_factory = execution_config.resolve_session_factory_func()
         async with session_factory() as session:
             async with session.begin():
-                # Convert task_id to UUID for repository method
-                task_id_uuid = (
-                    uuid.UUID(ctx.task_id) if isinstance(ctx.task_id, str) else ctx.task_id
-                )
+                # Convert task_id to UUID for repository method (safe conversion)
+                try:
+                    task_id_uuid = (
+                        uuid.UUID(ctx.task_id) if isinstance(ctx.task_id, str) else ctx.task_id
+                    )
+                except ValueError:
+                    logger.error(
+                        "[Coordinator] Malformed task_id '%s', skipping embedding persistence",
+                        ctx.task_id,
+                    )
+                    return
 
                 # Extract modality from params if available
                 source_modality = "text"
@@ -829,16 +867,26 @@ async def _persist_task_embedding_to_unified_memory(
                     if isinstance(multimodal, dict):
                         source_modality = multimodal.get("modality", "text") or "text"
 
+                # Construct model version string with backend and model info for traceability
+                # Format: "{backend}-{model_short_name}-{dim}"
+                # Example: "gemini-text-embedding-004-1024" or "nim-retrieval-1024"
+                model_name_short = (
+                    embedder.model.split("/")[-1] if "/" in embedder.model else embedder.model
+                )
+                model_version = f"{embedder.backend}-{model_name_short}-1024"
+
                 await execution_config.graph_task_repo.save_task_multimodal_embedding(
                     session=session,
                     task_id=task_id_uuid,
                     embedding=embedding_vector,
                     source_modality=source_modality,
-                    model_version="synopsis-1024",
+                    model_version=model_version,
                 )
                 logger.debug(
-                    "[Coordinator] Persisted 1024d embedding to Unified Memory for task %s",
+                    "[Coordinator] Persisted 1024d embedding to Unified Memory for task %s "
+                    "(model=%s)",
                     ctx.task_id,
+                    model_version,
                 )
     except Exception as e:
         # Non-blocking: embedding persistence failure should not break execution
@@ -1201,7 +1249,7 @@ async def _try_run_pkg_evaluation(
 
 async def _process_task_input(
     *,
-    payload: TaskPayload,
+    task: TaskPayload,
     merged_dict: Dict[str, Any],
     eventizer_helper: Callable[[Any], Any] | None,
     normalize_domain: Callable[[str | None], str | None],
@@ -1241,15 +1289,15 @@ async def _process_task_input(
     refined_description = (
         eventizer_data.get("processed_text")
         or eventizer_data.get("normalized_text")
-        or payload.description
+        or task.description
         or merged_dict.get("description")
         or ""
     )
 
     return {
-        "task_id": payload.task_id,
-        "task_type": payload.type,
-        "domain": normalize_domain(payload.domain),
+        "task_id": task.task_id,
+        "task_type": task.type,
+        "domain": normalize_domain(task.domain),
         "description": refined_description,  # GROUNDED TEXT (e.g., 6 PM -> 18:00)
         "params": merged_dict.get("params", {}) or {},
         "eventizer_data": eventizer_data,
