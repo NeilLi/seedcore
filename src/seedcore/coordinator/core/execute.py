@@ -99,8 +99,11 @@ def _get_global_embedder():
 # Configuration Objects
 # ---------------------------------------------------------------------------
 
+# Type signature for PKG evaluation function
+# Supports both old signature (without embedding) and new signature (with embedding)
+# The embedding parameter is optional and can be passed as a keyword argument
 PkgEvalFn = Callable[
-    [Sequence[str], Mapping[str, Any], Mapping[str, Any] | None, int],
+    ...,
     Awaitable[dict[str, Any]],
 ]
 
@@ -289,16 +292,27 @@ async def _call_pkg_eval(
     signals: Mapping[str, Any],
     context: Mapping[str, Any] | None,
     timeout_s: int,
+    embedding: Optional[List[float]] = None,
 ) -> Dict[str, Any]:
     """
     PKG evaluator call wrapper that tolerates positional/keyword implementations.
+    
+    ENHANCEMENT: Supports embedding parameter for semantic context hydration.
     """
     try:
+        # Try with embedding parameter (new signature)
         return await _maybe_await(
-            fn(tags=tags, signals=signals, context=context, timeout_s=timeout_s)
+            fn(tags=tags, signals=signals, context=context, timeout_s=timeout_s, embedding=embedding)
         )
     except TypeError:
-        return await _maybe_await(fn(tags, signals, context, timeout_s))
+        try:
+            # Fallback to original signature without embedding
+            return await _maybe_await(
+                fn(tags=tags, signals=signals, context=context, timeout_s=timeout_s)
+            )
+        except TypeError:
+            # Fallback to positional arguments
+            return await _maybe_await(fn(tags, signals, context, timeout_s))
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +427,8 @@ async def execute_task(
 
     # 2. EMBEDDING GENERATION & UNIFIED MEMORY PERSISTENCE (The "Memory Write" Stage)
     # Generate a 1024d embedding and persist it to Working Memory for Unified Cortex queries
-    await _persist_task_embedding_to_unified_memory(ctx, execution_config)
+    # Also capture the embedding for PKG semantic context hydration
+    embedding_vector = await _generate_and_persist_task_embedding(ctx, execution_config)
 
     routing_dec = await _compute_routing_decision(
         task=task,
@@ -422,6 +437,7 @@ async def execute_task(
         route_cfg=route_config,
         exec_cfg=execution_config,
         correlation_id=merged_dict.get("correlation_id") or execution_config.cid,
+        embedding=embedding_vector,  # Pass embedding for PKG hydration
     )
 
     decision_kind = routing_dec["decision_kind"]
@@ -796,38 +812,44 @@ def _extract_solution_steps(plan_res: Any) -> List[Dict[str, Any]]:
     )
 
 
-async def _persist_task_embedding_to_unified_memory(
+async def _generate_and_persist_task_embedding(
     ctx: TaskContext,
     execution_config: ExecutionConfig,
-) -> None:
-    """Generate and persist task embedding to Unified Memory (Working Memory tier).
-
+) -> Optional[List[float]]:
+    """
+    Generate and persist task embedding to Unified Memory (Working Memory tier).
+    
+    Returns the embedding vector for use in PKG semantic context hydration.
+    
     This function generates a 1024d embedding from the task's refined description
     (Eventizer-processed text) and persists it to the Unified Memory System.
     This enables cross-tier semantic queries bridging "Now" (Tasks) and "Always" (Knowledge Graph).
-
+    
     Architecture: This is the "Memory Write" stage that populates the Working Memory
     tier, making the task immediately queryable via the v_unified_cortex_memory view.
-
+    
     Args:
         ctx: TaskContext containing refined description and metadata.
         execution_config: ExecutionConfig with graph_task_repo and session factory.
-
+    
+    Returns:
+        The 1024d embedding vector as a list, or None if generation/persistence failed.
+    
     Note:
         This operation is non-blocking. Failures are logged but do not break execution.
     """
     if not ctx.description:
-        return
+        return None
 
     if not execution_config.graph_task_repo:
         logger.debug("[Coordinator] graph_task_repo not available, skipping embedding persistence")
-        return
+        return None
 
     if not execution_config.resolve_session_factory_func:
         logger.debug(
             "[Coordinator] resolve_session_factory_func not available, skipping embedding persistence"
         )
-        return
+        return None
 
     try:
         # Use global singleton embedder (prevents redundant initialization)
@@ -839,7 +861,7 @@ async def _persist_task_embedding_to_unified_memory(
             logger.debug(
                 "[Coordinator] Embedding generation returned None for task %s", ctx.task_id
             )
-            return
+            return None
 
         # Persist as plain list (repository expects List[float])
         embedding_vector = vec.tolist()
@@ -858,7 +880,7 @@ async def _persist_task_embedding_to_unified_memory(
                         "[Coordinator] Malformed task_id '%s', skipping embedding persistence",
                         ctx.task_id,
                     )
-                    return
+                    return None
 
                 # Extract modality from params if available
                 source_modality = "text"
@@ -888,6 +910,9 @@ async def _persist_task_embedding_to_unified_memory(
                     ctx.task_id,
                     model_version,
                 )
+                
+                # Return embedding for PKG hydration
+                return embedding_vector
     except Exception as e:
         # Non-blocking: embedding persistence failure should not break execution
         logger.debug(
@@ -896,7 +921,7 @@ async def _persist_task_embedding_to_unified_memory(
             e,
             exc_info=True,
         )
-
+        return None
 
 def _prepare_step_task_payload(
     parent_task: TaskPayload,
@@ -1018,6 +1043,7 @@ async def _compute_routing_decision(
     route_cfg: RouteConfig,
     exec_cfg: ExecutionConfig,
     correlation_id: str | None = None,
+    embedding: Optional[List[float]] = None,
 ) -> Dict[str, Any]:
     t0 = time.perf_counter()
 
@@ -1047,6 +1073,7 @@ async def _compute_routing_decision(
     if route_cfg.evaluate_pkg_func:
         # PKG evaluation should happen for both FAST_PATH and COGNITIVE paths
         # PKG provides routing hints even for simple tasks
+        # ENHANCEMENT: Pass embedding for semantic context hydration
         try:
             pkg_meta, proto_plan = await _try_run_pkg_evaluation(
                 ctx=ctx,
@@ -1054,6 +1081,7 @@ async def _compute_routing_decision(
                 intent=None,  # PKG doesn't need pre-computed intent
                 raw_drift=raw_drift,
                 drift_state=drift_state,
+                embedding=embedding,  # Pass embedding for Unified Memory hydration
             )
         except Exception as e:
             logger.debug(f"[Coordinator] PKG evaluation failed: {e}, using fallback")
@@ -1164,6 +1192,7 @@ async def _try_run_pkg_evaluation(
     intent: Optional[RoutingIntent],  # Optional - PKG doesn't need pre-computed intent
     raw_drift: float,
     drift_state: Any,
+    embedding: Optional[List[float]] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Evaluate PKG policy to produce proto_plan with routing hints.
@@ -1219,6 +1248,7 @@ async def _try_run_pkg_evaluation(
 
         # PKG evaluation: PKG receives task context and produces proto_plan
         # PKG is responsible for policy evaluation and routing hint generation
+        # ENHANCEMENT: Pass embedding for semantic context hydration
         pkg_res = await _call_pkg_eval(
             cfg.evaluate_pkg_func,  # type: ignore[arg-type]
             tags=list(ctx.tags),
@@ -1231,6 +1261,7 @@ async def _try_run_pkg_evaluation(
                 # Note: We don't pass intent.specialization - PKG decides this
             },
             timeout_s=int(cfg.pkg_timeout_s or DEFAULT_PKG_TIMEOUT_S),
+            embedding=embedding,  # Pass embedding for Unified Memory hydration
         )
 
         proto_plan = pkg_res or {}

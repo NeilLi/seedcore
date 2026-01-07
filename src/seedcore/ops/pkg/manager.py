@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Policy Knowledge Graph (PKG) Manager
+Enhanced Policy Knowledge Graph (PKG) Manager (v2.5)
 
-Manages the lifecycle of active policy snapshots.
+Manages the lifecycle of active policy snapshots with Semantic Context Hydration.
 - Loads initial policy from DB.
 - Subscribes to hot-swap events via Redis.
 - Provides thread-safe access to the active Evaluator.
+- Supports Unified Memory integration for hydrated policy evaluation.
 """
 
 import asyncio
 import logging
 import time
 import threading
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 
 # Models
 from .evaluator import PKGEvaluator
@@ -28,11 +29,14 @@ MAX_RECONNECT_BACKOFF = 60
 
 class PKGManager:
     """
-    Singleton manager for Policy Knowledge Graph state.
+    Singleton manager for PKG state and Semantic Context orchestration.
+    
+    Evolved from a simple "Snapshot Swapper" into a "Semantic Context Orchestrator"
+    that bridges Perception (Current Task) with Policy (Historical Context/KG).
     """
     
     def __init__(self, pkg_client: PKGClient, redis_client: Any):
-        self._client = pkg_client
+        self._client = pkg_client  # Now used for both Snapshots AND Cortex queries
         self._redis_client = redis_client
         
         # Evaluator Registry: {version: (Evaluator, timestamp)}
@@ -75,6 +79,9 @@ class PKGManager:
     async def _load_and_activate_snapshot(self, snapshot: PKGSnapshotData, source: str):
         """
         Loads a snapshot into memory and atomically swaps it as active.
+        
+        ENHANCEMENT: Injects PKGClient into evaluator for Cortex context access.
+        This enables semantic context hydration during policy evaluation.
         """
         version = snapshot.version
         start = time.perf_counter()
@@ -82,7 +89,9 @@ class PKGManager:
         try:
             # 1. Create Evaluator (Heavy Operation)
             # This compiles WASM/Rego or loads native rules
-            new_evaluator = PKGEvaluator(snapshot)
+            # ENHANCEMENT: Pass the PKGClient to the Evaluator so it can 
+            # reach out to the Cortex DAO during hydration.
+            new_evaluator = PKGEvaluator(snapshot, pkg_client=self._client)
             
             # 2. Atomic Swap
             with self._swap_lock:
@@ -90,19 +99,64 @@ class PKGManager:
                 self._evaluators[version] = (new_evaluator, time.time())
                 self._active_version = version
                 
-                # Prune Cache (LRU)
+                # Prune Cache (LRU) - exclude active version from pruning
                 if len(self._evaluators) > MAX_EVALUATOR_CACHE_SIZE:
-                    oldest = min(self._evaluators.keys(), key=lambda k: self._evaluators[k][1])
-                    if oldest != self._active_version:
+                    candidates = [
+                        k for k in self._evaluators.keys() 
+                        if k != self._active_version
+                    ]
+                    if candidates:
+                        oldest = min(candidates, key=lambda k: self._evaluators[k][1])
                         del self._evaluators[oldest]
             
             duration = (time.perf_counter() - start) * 1000
-            logger.info(f"Activated PKG {version} (src={source}) in {duration:.1f}ms")
+            logger.info(f"Activated PKG {version} (src={source}) with Cortex-support in {duration:.1f}ms")
             self._status.update({"healthy": True, "error": None, "version": version})
 
         except Exception as e:
             logger.error(f"Failed to activate PKG {version}: {e}")
             self._status.update({"healthy": False, "error": str(e)})
+
+    # --- Core Evaluation Chain (The Enhanced Entrypoint) ---
+
+    async def evaluate_task(
+        self, 
+        task_facts: Dict[str, Any], 
+        embedding: Optional[List[float]] = None
+    ) -> Dict[str, Any]:
+        """
+        The primary 'Living System' evaluation entrypoint.
+        
+        Performs:
+        1. Evaluator retrieval (Thread-safe)
+        2. Semantic Hydration (Async I/O via Cortex DAO)
+        3. Policy Execution (Logic Engine)
+        
+        Architecture: This bridges Perception (Current Task) with Policy (Historical Context/KG).
+        The embedding enables semantic similarity search across Unified Memory, allowing policies
+        to make grounded decisions based on historical context.
+        
+        Args:
+            task_facts: Input facts dictionary with tags, signals, context
+            embedding: Optional 1024d embedding vector for semantic similarity search.
+                      If provided, enables semantic context hydration from Unified Memory.
+        
+        Returns:
+            Policy evaluation result with subtasks, dag, provenance, and snapshot version.
+        """
+        evaluator = self.get_active_evaluator()
+        if not evaluator:
+            logger.error("No active PKG evaluator available for task evaluation")
+            return {
+                "subtasks": [],
+                "dag": [],
+                "rules": [{"rule_id": "error", "error": "no_active_policy"}],
+                "snapshot": None
+            }
+
+        # Use the Asynchronous pipeline we built in the Evaluator
+        # This performs: Hydration -> Injection -> Execution
+        return await evaluator.evaluate_async(task_facts, embedding)
 
     # --- Public Accessors ---
 
@@ -119,7 +173,8 @@ class PKGManager:
             return {
                 "active_version": self._active_version,
                 "cached_versions": list(self._evaluators.keys()),
-                "status": self._status
+                "status": self._status,
+                "cortex_enabled": self._client is not None
             }
 
     # --- Internals ---

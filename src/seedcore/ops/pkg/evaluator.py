@@ -5,8 +5,9 @@ import logging
 from typing import Any, Dict, Optional, List, Protocol, runtime_checkable
 from dataclasses import dataclass
 
-# Import snapshot data structure from dao
+# Import snapshot data structure and client
 from .dao import PKGSnapshotData
+from .client import PKGClient
 
 logger = logging.getLogger(__name__)
 
@@ -386,6 +387,12 @@ class NativeRuleEngine:
                 if not self._check_condition(condition, context, condition_type="FACT"):
                     logger.debug(f"Condition failed: FACT {condition_key} {operator} {value}")
                     return False
+            elif condition_type == "SEMANTIC":
+                # Check if a specific category exists in semantic context with sufficient similarity
+                # e.g., condition_key="hvac_fault", operator="EXISTS", value=0.9 (min similarity)
+                if not self._check_condition(condition, context, condition_type="SEMANTIC"):
+                    logger.debug(f"Condition failed: SEMANTIC {condition_key} not found in semantic_context")
+                    return False
             else:
                 # Default: use field_path-based evaluation
                 if not self._check_condition(condition, context):
@@ -437,6 +444,38 @@ class NativeRuleEngine:
             field_path = condition.get("field_path", condition_key)
             field_value = self._get_field_value(field_path, context)
             return self._evaluate_operator(field_value, operator, value)
+        
+        elif condition_type == "SEMANTIC":
+            # Check if a specific category exists in our recent semantic context
+            # e.g., condition_key="hvac_fault", operator="EXISTS", value=0.9 (min similarity threshold)
+            context_memories = context.get("semantic_context", [])
+            target_category = condition_key
+            
+            # Default minimum similarity threshold
+            min_similarity = value if value is not None else 0.85
+            
+            for memory in context_memories:
+                memory_category = memory.get("category")
+                memory_similarity = memory.get("similarity", 0.0)
+                
+                if memory_category == target_category:
+                    if operator == "EXISTS" or operator == "=":
+                        # Check if similarity meets threshold
+                        if memory_similarity >= min_similarity:
+                            return True
+                    elif operator == ">=":
+                        # Check if similarity is greater than or equal to threshold
+                        if memory_similarity >= min_similarity:
+                            return True
+                    elif operator == ">":
+                        # Check if similarity is greater than threshold
+                        if memory_similarity > min_similarity:
+                            return True
+                    else:
+                        # For other operators, use similarity comparison
+                        return self._evaluate_operator(memory_similarity, operator, min_similarity)
+            
+            return False
         
         else:
             # Default: use field_path-based evaluation
@@ -649,16 +688,17 @@ def register_engine(engine_type: str, engine_class: type) -> None:
 
 class PKGEvaluator:
     """
-    Implements the PKGEvaluator class as defined in the architecture document.
-    [cite: 85]
+    Implements the PKGEvaluator with Cortex Memory Integration.
     
-    This class holds a specific, loaded policy snapshot (either WASM or 
-    native) and provides a unified 'evaluate' interface.
+    This class handles the transition from raw perception to grounded policy.
+    It uses a PKGClient to 'hydrate' facts from Unified Memory before evaluation.
     
-    Uses dynamic engine registration for extensibility.
+    Architecture: PKGEvaluator evolves from a stateless rule-checker into a
+    Contextually Hydrated Reasoning Engine that bridges 'Now' (Current Task)
+    with 'Always' (Historical context/KG).
     """
     
-    def __init__(self, snapshot: PKGSnapshotData):
+    def __init__(self, snapshot: PKGSnapshotData, pkg_client: Optional[PKGClient] = None):
         """
         Initializes the evaluator by loading the specified snapshot's engine.
         [cite: 86]
@@ -668,10 +708,13 @@ class PKGEvaluator:
         
         Args:
             snapshot: PKGSnapshotData instance from PKGClient
+            pkg_client: Optional PKGClient facade for Cortex memory access.
+                       If provided, enables semantic context hydration.
         """
         self.version: str = snapshot.version  # [cite: 87]
         self.engine_type: str = snapshot.engine  # [cite: 88]
         self.loaded_at: float = time.time()  # [cite: 89]
+        self.pkg_client = pkg_client
         self.engine: Optional[PolicyEngine] = None
 
         # Use engine registry for dynamic engine selection
@@ -692,20 +735,113 @@ class PKGEvaluator:
                 snapshot.wasm_artifact, 
                 checksum=snapshot.checksum
             )  # [cite: 91]
-            logger.info(f"PKGEvaluator initialized with WASM engine (version: {self.version}, checksum={snapshot.checksum[:8] if snapshot.checksum else 'N/A'}...)")
+            logger.info(f"PKGEvaluator initialized with WASM engine (version: {self.version}, checksum={snapshot.checksum[:8] if snapshot.checksum else 'N/A'}..., cortex={'enabled' if pkg_client else 'disabled'})")
         else:
             # Load the native rule definitions [cite: 92]
             self.engine = NativeRuleEngine(snapshot.rules)  # [cite: 93]
-            logger.info(f"PKGEvaluator initialized with native engine (version: {self.version}, {len(snapshot.rules) if snapshot.rules else 0} rules)")
+            logger.info(f"PKGEvaluator initialized with native engine (version: {self.version}, {len(snapshot.rules) if snapshot.rules else 0} rules, cortex={'enabled' if pkg_client else 'disabled'})")
+
+    async def hydrate_semantic_context(
+        self, 
+        task_facts: Dict[str, Any], 
+        embedding: Optional[List[float]] = None
+    ) -> Dict[str, Any]:
+        """
+        Hydrates task_facts with semantic context from Unified Memory.
+        
+        This bridges 'Now' (Current Task) with 'Always' (Historical context/KG).
+        The semantic memory retrieved from v_unified_cortex_memory becomes a
+        First-Class Fact that rules can query to understand history and world-state.
+        
+        Args:
+            task_facts: Input facts dictionary (will be modified in-place)
+            embedding: Optional 1024d embedding vector for semantic similarity search.
+                      If None, hydration is skipped.
+        
+        Returns:
+            Hydrated task_facts dictionary with semantic_context injected.
+        
+        Note:
+            This method automatically excludes the current task_id from semantic search
+            to prevent the "Identity Match" problem where the current task returns itself
+            as the #1 match. The task_id is extracted from task_facts (either top-level
+            or nested in context.task_id).
+        """
+        if not self.pkg_client or not embedding:
+            return task_facts
+
+        try:
+            # Extract task_id from task_facts to exclude from semantic search
+            # Check both top-level and nested in context (for compatibility)
+            current_task_id = (
+                task_facts.get("task_id") 
+                or task_facts.get("context", {}).get("task_id")
+            )
+
+            # Query the Unified Memory View (v_unified_cortex_memory)
+            # Exclude current task to prevent self-retrieval
+            memory_bundle = await self.pkg_client.get_semantic_context(
+                embedding=embedding,
+                limit=5,
+                min_similarity=0.85,
+                exclude_task_id=current_task_id
+            )
+            
+            # Inject memory bundle into facts as First-Class Fact
+            task_facts["semantic_context"] = memory_bundle
+            
+            # Extract grounded metadata for easier rule access
+            task_facts["memory_hits"] = [m.get("category") for m in memory_bundle if m.get("category")]
+            
+            logger.debug(
+                f"[PKG] Hydrated task {current_task_id or 'unknown'} with {len(memory_bundle)} memory nodes"
+                + (" (excluded self)" if current_task_id else "")
+            )
+            return task_facts
+        except Exception as e:
+            logger.error(f"[PKG] Semantic hydration failed: {e}", exc_info=True)
+            return task_facts
+
+    async def evaluate_async(
+        self, 
+        task_facts: Dict[str, Any], 
+        embedding: Optional[List[float]] = None
+    ) -> Dict[str, Any]:
+        """
+        Asynchronous evaluation wrapper that performs hydration before execution.
+        
+        This is the recommended entry point when semantic context is available.
+        It follows the three-step dance:
+        1. Hydration: Fetching the "Semantic Memory Bundle" based on task embedding
+        2. Injection: Merging this bundle into the task_facts dictionary
+        3. Execution: Running the WASM or Native rules against enriched context
+        
+        Args:
+            task_facts: Input facts dictionary with tags, signals, context
+            embedding: Optional 1024d embedding vector for semantic similarity search
+        
+        Returns:
+            A dictionary containing the policy output (subtasks, dag, provenance)
+            and the snapshot version that was used.
+        """
+        # 1. HYDRATION: Fetch semantic context from Cortex
+        hydrated_facts = await self.hydrate_semantic_context(task_facts.copy(), embedding)
+        
+        # 2. EVALUATION: Run the actual engine (synchronous)
+        return self.evaluate(hydrated_facts)
 
     def evaluate(self, task_facts: Dict[str, Any]) -> Dict[str, Any]:
         """
         Runs the loaded policy engine against a set of input facts.
         [cite: 94]
         
+        Note: For semantic context hydration, use evaluate_async() instead.
+        This method assumes task_facts is already hydrated if needed.
+        
         Args:
             task_facts: A dictionary of input facts for the policy. 
-                        e.g., {"tags": [...], "signals": {...}, "context": {...}} [cite: 55-59]
+                        e.g., {"tags": [...], "signals": {...}, "context": {...}, 
+                               "semantic_context": [...]} [cite: 55-59]
 
         Returns:
             A dictionary containing the policy output (subtasks, dag, provenance)
@@ -721,7 +857,8 @@ class PKGEvaluator:
             "event": "pkg_evaluation_start",
             "snapshot": self.version,
             "engine": self.engine_type,
-            "facts_keys": list(task_facts.keys()) if isinstance(task_facts, dict) else []
+            "facts_keys": list(task_facts.keys()) if isinstance(task_facts, dict) else [],
+            "has_semantic_context": "semantic_context" in task_facts if isinstance(task_facts, dict) else False
         })
 
         try:
@@ -753,7 +890,8 @@ class PKGEvaluator:
                 "engine": self.engine_type,
                 "duration_ms": elapsed * 1000,
                 "subtasks_count": len(result.subtasks),
-                "rules_matched": len(result.provenance)
+                "rules_matched": len(result.provenance),
+                "had_semantic_context": "semantic_context" in task_facts if isinstance(task_facts, dict) else False
             })
             
             return output

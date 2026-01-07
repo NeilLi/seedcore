@@ -2,18 +2,8 @@
 """
 PKG (Policy Knowledge Graph) client for PostgreSQL.
 
-This module provides a unified facade client that composes multiple DAOs
-for PKG operations. The actual DAO implementations are in dao.py.
-
-The PKGClient provides a single entry point while maintaining modularity
-through composition of specialized DAOs:
-- PKGSnapshotsDAO: Versioned policy snapshots, rules, conditions, emissions
-- PKGDeploymentsDAO: Canary deployments and targeted rollouts
-- PKGValidationDAO: Test fixtures and validation runs
-- PKGPromotionsDAO: Promotion/rollback audit trail
-- PKGDevicesDAO: Edge device telemetry and version tracking
-
-It is designed to be used exclusively by the PKGManager and related services.
+Updated v2.5: Unified Facade with Cortex Memory Integration.
+This client now composes the PKGCortexDAO to bridge vectors into policy evaluation.
 """
 
 import logging
@@ -26,6 +16,7 @@ from .dao import (
     PKGValidationDAO,
     PKGPromotionsDAO,
     PKGDevicesDAO,
+    PKGCortexDAO,         # NEW: Added Cortex DAO
     PKGSnapshotData,
     check_pkg_integrity,
 )
@@ -40,42 +31,57 @@ class PKGClient:
     """
     Unified facade client for PKG operations.
     
-    This client composes specialized DAOs to provide a single entry point
-    for all PKG operations while maintaining modularity and testability.
-    
-    The client delegates to specialized DAOs:
-    - self.snapshots: PKGSnapshotsDAO
-    - self.deployments: PKGDeploymentsDAO
-    - self.validation: PKGValidationDAO
-    - self.promotions: PKGPromotionsDAO
-    - self.devices: PKGDevicesDAO
-    
-    Usage:
-        client = PKGClient()
-        snapshot = await client.get_active_snapshot()
-        deployments = await client.get_deployments(target="router")
-        # Or access DAOs directly:
-        client.snapshots.get_active_snapshot()
-        client.deployments.get_deployment_coverage()
+    Delegates specialized operations to:
+    - self.snapshots: Policy versions and rules
+    - self.cortex: Semantic context and Unified Memory queries [NEW]
+    - self.deployments: Rollout management
+    - self.validation: Policy testing
+    - self.promotions: Audit and governance
+    - self.devices: Edge telemetry
     """
     
     def __init__(self, session_factory: Optional[callable] = None):
         """
         Initialize PKG client facade.
-        
-        Args:
-            session_factory: An async session factory. If None, uses the
-                             project's default.
         """
         self._sf = session_factory or get_async_pg_session_factory()
         
         # Compose specialized DAOs
         self.snapshots = PKGSnapshotsDAO(self._sf)
+        self.cortex = PKGCortexDAO(self._sf)       # NEW: Cortex Integration
         self.deployments = PKGDeploymentsDAO(self._sf)
         self.validation = PKGValidationDAO(self._sf)
         self.promotions = PKGPromotionsDAO(self._sf)
         self.devices = PKGDevicesDAO(self._sf)
     
+    # =========================
+    # Cortex / Unified Memory [NEW]
+    # =========================
+
+    async def get_semantic_context(
+        self, 
+        embedding: List[float], 
+        limit: int = 5,
+        min_similarity: float = 0.8,
+        exclude_task_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves cross-tier semantic context from Unified Memory.
+        Used to 'hydrate' the PKG evaluation context with historical facts.
+
+        Args:
+            embedding: 1024d embedding vector for similarity search
+            limit: Maximum number of results to return
+            min_similarity: Minimum similarity threshold (0.0-1.0)
+            exclude_task_id: Optional task ID to exclude from results (prevents self-retrieval)
+        """
+        return await self.cortex.get_semantic_context(
+            embedding=embedding,
+            limit=limit,
+            min_similarity=min_similarity,
+            exclude_task_id=exclude_task_id
+        )
+
     # =========================
     # Snapshots (delegate to DAO)
     # =========================

@@ -906,7 +906,7 @@ class Coordinator:
         This adapter normalizes PKG output to proto_plan contract expected by core.execute.
         """
 
-        async def evaluate_pkg_func(tags, signals, context, timeout_s):
+        async def evaluate_pkg_func(tags, signals, context, timeout_s, embedding=None):
             """
             PKG evaluation adapter that returns proto_plan contract.
 
@@ -916,11 +916,16 @@ class Coordinator:
 
             Architecture: Option A (Quickest) - Adapts PKG output to proto_plan shape.
             Extracts routing hints from subtask params and embeds them into proto_plan structure.
+            
+            ENHANCEMENT: Now supports semantic context hydration via embedding parameter.
+            Uses PKGManager.evaluate_task() for async hydration -> evaluation pipeline.
             """
             pkg_mgr = get_global_pkg_manager()
-            evaluator = pkg_mgr and pkg_mgr.get_active_evaluator()
+            if not pkg_mgr:
+                logger.warning("[PKG] PKG manager not available")
+                raise RuntimeError("PKG manager not available")
 
-            # Verification: Log PKG evaluator status
+            evaluator = pkg_mgr.get_active_evaluator()
             if not evaluator:
                 logger.warning(
                     "[PKG] Evaluator not available - PKG manager exists but no active evaluator"
@@ -929,20 +934,27 @@ class Coordinator:
 
             logger.debug(
                 f"[PKG] Evaluator active: version={getattr(evaluator, 'version', 'unknown')}, "
-                f"engine={getattr(evaluator, 'engine_type', 'unknown')}"
+                f"engine={getattr(evaluator, 'engine_type', 'unknown')}, "
+                f"embedding_provided={embedding is not None}"
             )
 
-            payload = {
+            # Build task_facts payload for PKG evaluation
+            task_facts = {
                 "tags": list(tags or []),
                 "signals": signals or {},
                 "context": context or {},
             }
 
-            # evaluator.evaluate(...) is often sync; run it in a thread w/ timeout
-            async def _run_eval():
-                return await asyncio.to_thread(evaluator.evaluate, payload)
-
-            res = await asyncio.wait_for(_run_eval(), timeout=float(timeout_s or 2))
+            # Use PKGManager's evaluate_task for async hydration -> evaluation pipeline
+            # This performs: Hydration (if embedding provided) -> Injection -> Execution
+            try:
+                res = await asyncio.wait_for(
+                    pkg_mgr.evaluate_task(task_facts, embedding=embedding),
+                    timeout=float(timeout_s or 2)
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"[PKG] Evaluation timed out after {timeout_s}s")
+                raise RuntimeError(f"PKG evaluation timeout after {timeout_s}s")
 
             # Verification: Log PKG output structure
             logger.debug(
