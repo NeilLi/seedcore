@@ -4,76 +4,51 @@ set -euo pipefail
 RAY_ADDR="${RAY_ADDR:-http://127.0.0.1:8265}"
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 <actor-name-or-class-substring> [out|err] [--tail] [--all]"
+  echo "Usage: $0 <actor-name-substring> [out|err] [--tail]"
   exit 1
 fi
 
 QUERY="$1"
-STREAM="out"
+STREAM="${2:-out}"
 TAIL=false
-ALL=false
 
-# parse remaining args
-for arg in "${@:2}"; do
-  case "$arg" in
-    out|err) STREAM="$arg" ;;
-    --tail)  TAIL=true ;;
-    --all)   ALL=true ;;
-    *)
-      echo "Unknown arg: $arg"
-      exit 1
-      ;;
-  esac
+for arg in "$@"; do
+  [[ "$arg" == "--tail" ]] && TAIL=true
 done
 
-ACTORS_JSON="$(curl -s "$RAY_ADDR/api/v0/actors")"
+# 1. Get Actor Metadata and grab the Actor ID and Node ID
+ACTOR_JSON=$(curl -s "$RAY_ADDR/api/v0/actors" | jq -r --arg q "$QUERY" '
+  .data.result.result[] 
+  | select(.state=="ALIVE") 
+  | select((.name // "" | contains($q)) or (.class_name // "" | contains($q))) 
+  | "\(.actor_id):\(.address.node_id)"
+' | head -n 1)
 
-# Collect matching PIDs (your Ray shape: .data.result.result[])
-mapfile -t PIDS < <(echo "$ACTORS_JSON" | jq -r --arg q "$QUERY" '
-  .data.result.result[]
-  | select(.state=="ALIVE")
-  | select((.name // "" | contains($q)) or (.class_name // "" | contains($q)))
-  | .pid
-')
-
-if [[ ${#PIDS[@]} -eq 0 ]]; then
+if [[ -z "$ACTOR_JSON" ]]; then
   echo "❌ No ALIVE actor found matching: $QUERY"
-  echo
-  echo "Tip: inspect available class_name values:"
-  echo "$ACTORS_JSON" | jq -r '.data.result.result[].class_name' | sort -u
   exit 1
 fi
 
-if [[ "$ALL" = false ]]; then
-  PIDS=("${PIDS[0]}")
+ACTOR_ID="${ACTOR_JSON%%:*}"
+NODE_ID="${ACTOR_JSON##*:}"
+
+echo "✅ Found Actor: $QUERY"
+echo "🆔 Actor ID: $ACTOR_ID"
+echo "🌐 Node ID: $NODE_ID"
+
+# 2. Use the dedicated Actor Log API
+# This avoids the "node_id must be provided" Pydantic error
+LOG_URL="$RAY_ADDR/api/v0/logs/file?node_id=$NODE_ID&actor_id=$ACTOR_ID&suffix=$STREAM"
+
+echo "🔗 $LOG_URL"
+echo "----------------------------------------------------"
+
+if [[ "$TAIL" == "true" ]]; then
+  echo "📡 Tailing logs... (Ctrl+C to stop)"
+  while true; do
+    curl -s "$LOG_URL" | tail -n 50
+    sleep 2
+  done
+else
+  curl -s "$LOG_URL"
 fi
-
-for PID in "${PIDS[@]}"; do
-  echo "✅ Found actor PID: $PID"
-
-  # /logs is plain text, not JSON
-  LOG_FILE="$(curl -s "$RAY_ADDR/logs" | grep -E "^worker-${PID}-.*\.${STREAM}$" | head -n 1 || true)"
-
-  if [[ -z "$LOG_FILE" ]]; then
-    echo "❌ No worker log file found for PID $PID ($STREAM)."
-    echo "Available logs for this PID:"
-    curl -s "$RAY_ADDR/logs" | grep "worker-${PID}-" || true
-    continue
-  fi
-
-  LOG_URL="$RAY_ADDR/logs/$LOG_FILE"
-  echo "📄 Log file: $LOG_FILE"
-  echo "🔗 $LOG_URL"
-  echo
-
-  if [[ "$TAIL" = true ]]; then
-    echo "📡 Tailing (Ctrl+C to stop)..."
-    while true; do
-      echo "----- [PID $PID] $(date) -----"
-      curl -s "$LOG_URL" | tail -n 80
-      sleep 2
-    done
-  else
-    curl -s "$LOG_URL"
-  fi
-done
