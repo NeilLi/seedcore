@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = httpx.Timeout(
     connect=0.25,  # 250ms connect
-    read=0.8,  # 800ms read (allows for complex pattern matching)
+    read=2.0,  # 2.0s read (allows for cold start pattern compilation and complex matching)
     write=0.25,
     pool=0.25,
 )

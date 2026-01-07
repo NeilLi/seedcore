@@ -430,6 +430,16 @@ async def execute_task(
     # Also capture the embedding for PKG semantic context hydration
     embedding_vector = await _generate_and_persist_task_embedding(ctx, execution_config)
 
+    # 2.5. SEMANTIC CACHE CHECK (System 0 Fast Path)
+    # Check for near-identical completed tasks before expensive route-and-execute
+    if embedding_vector and execution_config.graph_task_repo:
+        cached_result = await _check_semantic_cache(ctx, embedding_vector, execution_config)
+        if cached_result:
+            logger.info(
+                f"[Coordinator] Semantic Cache HIT for task {ctx.task_id} - returning cached result"
+            )
+            return cached_result
+
     routing_dec = await _compute_routing_decision(
         task=task,
         task_dict=merged_dict,
@@ -1271,6 +1281,77 @@ async def _try_run_pkg_evaluation(
         logger.debug("[Coordinator] PKG evaluation failed: %s", e)
 
     return pkg_meta, proto_plan
+
+
+# ---------------------------------------------------------------------------
+# Semantic Cache (System 0 Fast Path)
+# ---------------------------------------------------------------------------
+
+
+async def _check_semantic_cache(
+    ctx: TaskContext,
+    embedding: List[float],
+    execution_config: ExecutionConfig,
+) -> Optional[Dict[str, Any]]:
+    """Check Unified Memory for a near-identical task result.
+    
+    This is a "System 0" optimization that occurs after embedding generation
+    but before the expensive route-and-execute call. If a very similar task
+    (similarity >= 0.98) was completed in the last 24 hours, return its cached result.
+    
+    Args:
+        ctx: TaskContext containing task metadata.
+        embedding: The 1024d embedding vector for the current task.
+        execution_config: ExecutionConfig with graph_task_repo and session factory.
+    
+    Returns:
+        Cached task result dictionary if a match is found, None otherwise.
+    """
+    if not execution_config.graph_task_repo:
+        return None
+    
+    if not execution_config.resolve_session_factory_func:
+        return None
+    
+    try:
+        session_factory = execution_config.resolve_session_factory_func()
+        async with session_factory() as session:
+            # Query for similar completed tasks with high precision threshold
+            cached_task = await execution_config.graph_task_repo.find_similar_task(
+                session=session,
+                embedding=embedding,
+                threshold=0.98,  # High precision for near-exact matches
+                limit=1,
+                hours_back=24,  # Look back 24 hours
+            )
+            
+            if cached_task and cached_task.get("result"):
+                logger.info(
+                    f"[Coordinator] Semantic Cache HIT for task {ctx.task_id} "
+                    f"(Source: {cached_task.get('id')}, Similarity: {cached_task.get('similarity', 0.0):.4f})"
+                )
+                # Return the cached result wrapped in a proper TaskResult structure
+                result = cached_task["result"]
+                # Ensure it's a dict (it might already be parsed from JSONB)
+                if isinstance(result, str):
+                    import json
+                    result = json.loads(result)
+                
+                # Return result in expected format (may need to wrap based on your result schema)
+                return result
+            else:
+                logger.debug(
+                    f"[Coordinator] Semantic Cache MISS for task {ctx.task_id} "
+                    f"(no similar completed tasks found in last 24h)"
+                )
+                return None
+    except Exception as e:
+        # Non-fatal: log and continue with normal execution
+        logger.warning(
+            f"[Coordinator] Semantic cache check failed for task {ctx.task_id}: {e}. "
+            "Continuing with normal execution."
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------

@@ -465,7 +465,24 @@ def fast_result_to_eventizer_response(
     original_text_sha256 = hashlib.sha256(original_text.encode()).hexdigest()
     
     # Convert event types to unified EventType enum values (hard tags)
-    hard_tags = [et for et in result.event_tags.event_types]
+    # Ensure all items are EventType enums, not strings
+    hard_tags: List[EventType] = []
+    for et in result.event_tags.event_types:
+        if isinstance(et, EventType):
+            hard_tags.append(et)
+        elif isinstance(et, str):
+            # Convert string to EventType enum
+            try:
+                hard_tags.append(EventType(et.lower()))
+            except ValueError:
+                # If string doesn't match any enum, use CUSTOM
+                hard_tags.append(EventType.CUSTOM)
+        else:
+            # Fallback: try to convert to EventType
+            try:
+                hard_tags.append(EventType(str(et).lower()))
+            except ValueError:
+                hard_tags.append(EventType.CUSTOM)
     
     # Extract keywords (for vector search and PKG evaluation)
     keywords = getattr(result.event_tags, 'keywords', [])

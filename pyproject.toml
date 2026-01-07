@@ -84,6 +84,7 @@ dependencies = [
     "safetensors==0.4.3",
     "peft>=0.14.0",  # Required for LoRA adapters and FunctionGemma intent compiler (upgraded for Gemma 3 compatibility)
     "openai>=1.30.0",
+    "google-generativeai>=0.8.0",  # Google Gemini API client for embeddings and generative AI
     # "bitsandbytes>=0.43.0",  # Optional: Only needed for 4-bit quantization on CUDA GPUs
     
     # Privacy & Security

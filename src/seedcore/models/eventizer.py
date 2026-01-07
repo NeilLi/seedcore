@@ -398,6 +398,52 @@ class EventTags(BaseModel):
 
     model_config = ConfigDict(use_enum_values=True, extra="forbid")
     
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_hard_tags(cls, data: Any) -> Any:
+        """Normalize hard_tags and event_types from strings to EventType enums before validation."""
+        if isinstance(data, dict):
+            # Normalize hard_tags
+            if "hard_tags" in data:
+                hard_tags = data["hard_tags"]
+                if isinstance(hard_tags, list):
+                    normalized = []
+                    for tag in hard_tags:
+                        if isinstance(tag, EventType):
+                            normalized.append(tag)
+                        elif isinstance(tag, str):
+                            try:
+                                normalized.append(EventType(tag.lower()))
+                            except ValueError:
+                                normalized.append(EventType.CUSTOM)
+                        else:
+                            try:
+                                normalized.append(EventType(str(tag).lower()))
+                            except ValueError:
+                                normalized.append(EventType.CUSTOM)
+                    data["hard_tags"] = normalized
+            
+            # Normalize event_types
+            if "event_types" in data:
+                event_types = data["event_types"]
+                if isinstance(event_types, list):
+                    normalized = []
+                    for tag in event_types:
+                        if isinstance(tag, EventType):
+                            normalized.append(tag)
+                        elif isinstance(tag, str):
+                            try:
+                                normalized.append(EventType(tag.lower()))
+                            except ValueError:
+                                normalized.append(EventType.CUSTOM)
+                        else:
+                            try:
+                                normalized.append(EventType(str(tag).lower()))
+                            except ValueError:
+                                normalized.append(EventType.CUSTOM)
+                    data["event_types"] = normalized
+        return data
+    
     @computed_field
     @property
     def all_event_types(self) -> List[str]:
@@ -410,6 +456,46 @@ class EventTags(BaseModel):
     
     def model_post_init(self, __context: Any) -> None:
         """Ensure backward compatibility: sync hard_tags and event_types bidirectionally."""
+        # Normalize hard_tags: ensure all items are EventType enums (not strings)
+        normalized_hard_tags: List[EventType] = []
+        for tag in self.hard_tags:
+            if isinstance(tag, EventType):
+                normalized_hard_tags.append(tag)
+            elif isinstance(tag, str):
+                # Convert string to EventType enum
+                try:
+                    normalized_hard_tags.append(EventType(tag.lower()))
+                except ValueError:
+                    # If string doesn't match any enum, use CUSTOM
+                    normalized_hard_tags.append(EventType.CUSTOM)
+            else:
+                # Fallback: try to convert to EventType
+                try:
+                    normalized_hard_tags.append(EventType(str(tag).lower()))
+                except ValueError:
+                    normalized_hard_tags.append(EventType.CUSTOM)
+        self.hard_tags = normalized_hard_tags
+        
+        # Normalize event_types: ensure all items are EventType enums (not strings)
+        normalized_event_types: List[EventType] = []
+        for tag in self.event_types:
+            if isinstance(tag, EventType):
+                normalized_event_types.append(tag)
+            elif isinstance(tag, str):
+                # Convert string to EventType enum
+                try:
+                    normalized_event_types.append(EventType(tag.lower()))
+                except ValueError:
+                    # If string doesn't match any enum, use CUSTOM
+                    normalized_event_types.append(EventType.CUSTOM)
+            else:
+                # Fallback: try to convert to EventType
+                try:
+                    normalized_event_types.append(EventType(str(tag).lower()))
+                except ValueError:
+                    normalized_event_types.append(EventType.CUSTOM)
+        self.event_types = normalized_event_types
+        
         # If event_types is provided but hard_tags is empty, populate hard_tags (backward compat)
         if self.event_types and not self.hard_tags:
             self.hard_tags = self.event_types.copy()
@@ -420,7 +506,13 @@ class EventTags(BaseModel):
         
         # If resolved_type is default but we have hard_tags, use first hard tag as resolved_type
         if self.resolved_type == "routine" and self.hard_tags:
-            self.resolved_type = self.hard_tags[0].value
+            first_tag = self.hard_tags[0]
+            # Check if it's an Enum (has .value) or a string
+            if hasattr(first_tag, 'value'):
+                self.resolved_type = first_tag.value
+            else:
+                # It's already a string, use it directly
+                self.resolved_type = str(first_tag)
 
 
 class EventAttributes(BaseModel):
@@ -689,6 +781,7 @@ class EventizerConfig(BaseModel):
     enable_presidio: bool = False
     enable_hyperscan: bool = False
     enable_re2: bool = False
+    enable_aho_corasick: bool = True  # Aho-Corasick algorithm for fast keyword matching (temporal markers, etc.)
     enable_onnx_ort: bool = False
     onnx_execution_providers: List[str] = Field(
         default_factory=lambda: ["OpenVINO", "CPUExecutionProvider"]
@@ -701,6 +794,7 @@ class EventizerConfig(BaseModel):
             "EMAIL_ADDRESS",
             "PHONE_NUMBER",
             "CREDIT_CARD",
+            "DATE_TIME",  # Added for temporal intent detection (e.g., "6PM")
         ]
     )
     redact_mode: RedactMode = RedactMode.REDACT

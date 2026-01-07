@@ -148,7 +148,7 @@ class ProblemSolvingSignature(WithKnowledgeMixin, dspy.Signature):
     )
 
     thought = dspy.OutputField(
-        desc="Structured chain-of-thought connecting context, constraints, and tools."
+        desc="Concise chain-of-thought connecting context, constraints, and tools. Keep under 50 tokens for simple queries. Only elaborate for complex multi-step problems."
     )
 
     solution_steps = dspy.OutputField(

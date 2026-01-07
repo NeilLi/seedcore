@@ -41,7 +41,7 @@ from ..ops.eventizer.utils.text_normalizer import (
     NormalizationTier,
 )
 from ..ops.eventizer.utils.pattern_compiler import PatternCompiler
-from ..ops.eventizer.clients.pii_client import PIIClient
+from ..ops.eventizer.clients.pii_client import PIIClient, PIIConfig
 
 # Logging
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
@@ -130,8 +130,19 @@ class EventizerServiceImpl:
         await self._pattern_compiler.initialize()
 
         if self.config.enable_pii_redaction:
-            self._pii_client = PIIClient(self.config.pii_redaction_entities)
-            await self._pii_client.initialize()
+            # Create PIIConfig from EventizerConfig fields
+            # Note: PII client initialization is lazy - it will initialize on first use
+            # This prevents blocking startup with Presidio initialization
+            pii_config = PIIConfig(
+                entities=self.config.pii_redaction_entities,
+                mode=self.config.redact_mode.value,
+                mask_char=self.config.mask_char,
+                mask_keep_len=self.config.mask_keep_len,
+                preserve_offsets=self.config.preserve_offsets,
+            )
+            self._pii_client = PIIClient(pii_config)
+            # Don't initialize here - let it initialize lazily on first use
+            # This prevents blocking startup with Presidio's slow initialization
 
         # Load patterns (which now contain the logic)
         await self._load_patterns()

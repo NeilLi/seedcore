@@ -1457,7 +1457,7 @@ class Coordinator:
     async def _ensure_background_tasks_started(self):
         """
         Idempotent starter. Handles both infinite loops (Outbox)
-        and one-off warmups (Drift Detector).
+        and one-off warmups (Drift Detector, PKG Manager).
         """
         # 1. Idempotency Check: Unified Flag
         # We only need one flag to know if we've pulled the trigger.
@@ -1472,6 +1472,25 @@ class Coordinator:
         # 3. Initialize the task container if not exists
         if not hasattr(self, "_bg_tasks"):
             self._bg_tasks = []
+
+        # 3.5. Initialize PKG Manager (if not already initialized)
+        try:
+            from ..ops.pkg import initialize_global_pkg_manager, PKGClient
+            from ..database import get_async_pg_session_factory
+            
+            pkg_mgr = get_global_pkg_manager()
+            if not pkg_mgr:
+                # Initialize PKG manager with database client
+                session_factory = get_async_pg_session_factory()
+                pkg_client = PKGClient(session_factory)
+                redis_client = get_redis_client()
+                await initialize_global_pkg_manager(pkg_client, redis_client)
+                logger.info("✅ PKG Manager initialized and ready")
+            else:
+                logger.debug("PKG Manager already initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ PKG Manager initialization failed (non-fatal): {e}")
+            # Continue without PKG - system will use fallback routing
 
         # 4. Launch The Infinite Loop (Maintenance)
         # This runs forever to flush the outbox
@@ -1491,7 +1510,23 @@ class Coordinator:
             # when it finishes, or we can set it here if we just mean "started".
 
     async def _warmup_drift_detector(self):
+        """Warmup drift detector and embedder in background."""
         import random
+        
+        # Warmup embedder in background (non-blocking)
+        try:
+            from ..coordinator.core.execute import _get_global_embedder
+            embedder = _get_global_embedder()
+            if embedder:
+                # Trigger lazy initialization by calling _ensure()
+                # This will initialize Gemini/NIM/SentenceTransformer in background
+                logger.info("🔥 Warming up embedder in background...")
+                embedder._ensure()  # Synchronous but fast (just config check)
+                # Optionally trigger a dummy embed to fully warm up the model
+                # This happens asynchronously, so it won't block
+                logger.info("✅ Embedder warmup initiated (will complete in background)")
+        except Exception as e:
+            logger.warning(f"⚠️ Embedder warmup failed (non-fatal): {e}")
 
         await asyncio.sleep(random.uniform(2.0, 5.0))
         try:

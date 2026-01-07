@@ -27,13 +27,14 @@ MIGRATION_015="${SCRIPT_DIR}/migrations/015_pkg_views_functions.sql"
 MIGRATION_016="${SCRIPT_DIR}/migrations/016_fact_pkg_integration.sql"
 MIGRATION_017="${SCRIPT_DIR}/migrations/017_task_embedding_support.sql"
 MIGRATION_018="${SCRIPT_DIR}/migrations/018_task_outbox_hardening.sql"
+MIGRATION_019="${SCRIPT_DIR}/migrations/019_task_router_telemetry.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_007" \
   "$MIGRATION_008" "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" \
   "$MIGRATION_012" "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" \
-  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_018"
+  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_018" "$MIGRATION_019"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -59,6 +60,7 @@ echo "   - 015: PKG views and helper functions"
 echo "   - 016: Fact model PKG integration (temporal facts, policy governance, eventizer support)"
 echo "   - 017: Task embedding support (views/functions/backfill for separate 128d/1024d tables)"
 echo "   - 018: Task outbox hardening (available_at, attempts, index)"
+echo "   - 019: Task router telemetry (OCPS signals, surprise scores, routing decisions)"
 
 find_pg_pod() {
   local sel pod
@@ -206,6 +208,11 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 echo "⚙️  Running migration 018: Task outbox hardening (available_at, attempts, index)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_018" "$POSTGRES_POD:/tmp/018_task_outbox_hardening.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/018_task_outbox_hardening.sql"
+
+# Migration 019 (Task Router Telemetry)
+echo "⚙️  Running migration 019: Task router telemetry (OCPS signals, surprise scores, routing decisions)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_019" "$POSTGRES_POD:/tmp/019_task_router_telemetry.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/019_task_router_telemetry.sql"
 
 # 6) Verify schema
 echo "✅ Verifying schema..."

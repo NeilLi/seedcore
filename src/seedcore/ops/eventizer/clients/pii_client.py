@@ -40,6 +40,19 @@ DEFAULT_ENTITIES = [
     "NRIC", "ROOM_ID", "BOOKING_ID"
 ]
 
+# Presidio version compatibility helpers
+_AnonymizerConfig = None
+try:
+    # Try newer Presidio API (OperatorConfig)
+    from presidio_anonymizer.entities import OperatorConfig as _AnonymizerConfig
+except ImportError:
+    try:
+        # Try older Presidio API (AnonymizerConfig)
+        from presidio_anonymizer.entities import AnonymizerConfig as _AnonymizerConfig
+    except ImportError:
+        # Presidio not available or incompatible version
+        _AnonymizerConfig = None
+
 # -------------------------------
 # Utilities
 # -------------------------------
@@ -125,7 +138,9 @@ _FALLBACK_PATTERNS: Dict[str, re.Pattern] = {
     "IBAN_CODE": re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b"),
     "DATE_TIME": re.compile(
         r"\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|"
-        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},\s+\d{4})\b",
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},\s+\d{4}|"
+        r"\d{1,2}\s*(?:AM|PM|am|pm|A\.M\.|P\.M\.|a\.m\.|p\.m\.)|"
+        r"\d{1,2}:\d{2}\s*(?:AM|PM|am|pm|A\.M\.|P\.M\.|a\.m\.|p\.m\.)?)\b",
         re.IGNORECASE,
     ),
     # Domain-specific helpers (customize per deployment)
@@ -167,13 +182,8 @@ class PIIClient:
             .encode("utf-8")
         )
 
-        # Pre-bind mode function
-        self._replace_fn = {
-            "redact": self._replace_with_placeholder,
-            "mask": self._replace_with_mask,
-            "tokenize": self._replace_with_token,
-            "hash": self._replace_with_hash,
-        }.get(self._cfg.mode, self._replace_with_placeholder)
+        # Note: Replacement logic is handled by _replacement_string() method
+        # which takes mode as a parameter, so no need to pre-bind functions
 
     # ---------------------------
     # Lifecycle
@@ -187,7 +197,13 @@ class PIIClient:
             if self._initialized:
                 return
             try:
-                # Try Presidio
+                # Try Presidio - check if AnonymizerConfig is available first
+                if _AnonymizerConfig is None:
+                    raise ImportError(
+                        "AnonymizerConfig/OperatorConfig not available. "
+                        "Presidio version may be incompatible. Using fallback engine."
+                    )
+                
                 from presidio_analyzer import AnalyzerEngine
                 from presidio_anonymizer import AnonymizerEngine
 
@@ -196,8 +212,14 @@ class PIIClient:
 
                 logger.info("PIIClient initialized with Presidio")
                 self._initialized = True
+            except ImportError as e:
+                # Import errors (missing AnonymizerConfig or incompatible version)
+                logger.warning("Presidio import failed (%s); using fallback engine.", e)
+                self._analyzer = None
+                self._anonymizer = None
+                self._initialized = True
             except Exception as e:
-                # Fallback only
+                # Other initialization errors
                 logger.warning("Presidio unavailable or failed to init (%s); using fallback engine.", e)
                 self._analyzer = None
                 self._anonymizer = None
@@ -351,25 +373,36 @@ class PIIClient:
     # ---------------------------
 
     def _redact_with_presidio(self, text: str, entities: List[str], mode: str) -> PIIResult:
-        from presidio_analyzer import AnalyzerEngine
-        from presidio_anonymizer.entities import AnonymizerConfig
+        # Check if AnonymizerConfig is available (version compatibility)
+        if _AnonymizerConfig is None:
+            raise ImportError(
+                "AnonymizerConfig not available. "
+                "Please install compatible presidio-anonymizer version or use fallback engine."
+            )
+
+        # Filter entities to only Presidio-supported ones (DATE_TIME not supported by Presidio)
+        presidio_entities = self._get_presidio_supported_entities(entities)
+        if not presidio_entities:
+            # If no Presidio-supported entities, fall back to fallback engine
+            raise ValueError("No Presidio-supported entities in request")
 
         analyzer_results = self._analyzer.analyze(
             text=text,
-            entities=entities,
+            entities=presidio_entities,  # Use filtered entities
             language=self._cfg.language,
             score_threshold=self._cfg.presidio_score_threshold,
             **self._cfg.presidio_analyzer_kwargs,
         )
 
         # Build anonymizer config per entity: we still want deterministic placeholders
+        # Use presidio_entities (filtered) for operator config
         operators = {}
-        for ent in entities:
+        for ent in presidio_entities:
             if mode == "redact":
-                operators[ent] = AnonymizerConfig("replace", {"new_value": self._next_placeholder(ent)})
+                operators[ent] = _AnonymizerConfig("replace", {"new_value": self._next_placeholder(ent)})
             elif mode == "mask":
                 # Mask with fixed char; optionally preserve length
-                operators[ent] = AnonymizerConfig(
+                operators[ent] = _AnonymizerConfig(
                     "mask",
                     {
                         "masking_char": self._cfg.mask_char,
@@ -378,11 +411,11 @@ class PIIClient:
                     },
                 )
             elif mode == "tokenize":
-                operators[ent] = AnonymizerConfig("replace", {"new_value": self._next_placeholder(ent)})
+                operators[ent] = _AnonymizerConfig("replace", {"new_value": self._next_placeholder(ent)})
             elif mode == "hash":
-                operators[ent] = AnonymizerConfig("hash", {"hash_type": "sha256"})
+                operators[ent] = _AnonymizerConfig("hash", {"hash_type": "sha256"})
             else:
-                operators[ent] = AnonymizerConfig("replace", {"new_value": self._next_placeholder(ent)})
+                operators[ent] = _AnonymizerConfig("replace", {"new_value": self._next_placeholder(ent)})
 
         anonymized = self._anonymizer.anonymize(
             text=text,
@@ -419,7 +452,7 @@ class PIIClient:
             version=PII_CLIENT_VERSION,
             mode=mode,
             language=self._cfg.language,
-            entities_evaluated=list(entities),
+            entities_evaluated=list(entities),  # Return original entities list (includes DATE_TIME)
             text_redacted=anonymized.text,
             spans=spans,
             counts_by_type=counts,
@@ -433,9 +466,14 @@ class PIIClient:
         )
 
     def _detect_with_presidio(self, text: str, entities: List[str]) -> List[Span]:
+        # Filter entities to only Presidio-supported ones (DATE_TIME not supported by Presidio)
+        presidio_entities = self._get_presidio_supported_entities(entities)
+        if not presidio_entities:
+            return []  # No Presidio-supported entities to detect
+        
         analyzer_results = self._analyzer.analyze(
             text=text,
-            entities=entities,
+            entities=presidio_entities,  # Use filtered entities
             language=self._cfg.language,
             score_threshold=self._cfg.presidio_score_threshold,
             **self._cfg.presidio_analyzer_kwargs,
@@ -563,6 +601,23 @@ class PIIClient:
             s -= set(denylist)
         # keep only known patterns in fallback to avoid surprises
         return [e for e in s]
+    
+    def _get_presidio_supported_entities(self, entities: List[str]) -> List[str]:
+        """
+        Filter entities to only include those supported by Presidio.
+        Presidio doesn't support DATE_TIME, so we filter it out for Presidio operations.
+        DATE_TIME will still be handled by the fallback regex engine.
+        """
+        # Presidio supported entities (common subset)
+        # DATE_TIME is not in Presidio's standard entity list
+        presidio_supported = {
+            "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD",
+            "SSN", "IBAN_CODE", "IP_ADDRESS", "LOCATION",
+            "NRIC", "ROOM_ID", "BOOKING_ID", "ORGANIZATION",
+            "DATE", "TIME",  # Presidio has DATE and TIME separately, not DATE_TIME
+        }
+        # Filter to only Presidio-supported entities
+        return [e for e in entities if e in presidio_supported or e not in {"DATE_TIME"}]
 
     def _empty_result(self, text: str) -> PIIResult:
         return PIIResult(

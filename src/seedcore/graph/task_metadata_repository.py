@@ -429,9 +429,10 @@ class TaskMetadataRepository:
                 task_id, emb, source_modality, model_version, created_at
             )
             VALUES (:task_id, :emb, :modality, :version, NOW())
-            ON CONFLICT (task_id) DO UPDATE SET
+            ON CONFLICT (task_id, source_modality) DO UPDATE SET
                 emb = EXCLUDED.emb,
-                model_version = EXCLUDED.model_version
+                model_version = EXCLUDED.model_version,
+                updated_at = NOW()
         """)
         try:
             await session.execute(stmt, {
@@ -524,6 +525,77 @@ class TaskMetadataRepository:
         except Exception as e:
             logger.error(f"Unexpected error during Unified Memory query: {e}")
             return []
+
+    async def find_similar_task(
+        self,
+        session: AsyncSession,
+        embedding: List[float],
+        threshold: float = 0.98,
+        limit: int = 1,
+        hours_back: int = 24
+    ) -> Optional[Dict[str, Any]]:
+        """Find a similar completed task by embedding similarity.
+        
+        Queries for completed tasks with similar embeddings within the specified
+        time window. Used for semantic caching to avoid re-executing identical tasks.
+        
+        Args:
+            session: The AsyncSession to use for database operations.
+            embedding: The query embedding vector (list of floats).
+            threshold: Minimum similarity threshold (default: 0.98 for near-exact matches).
+            limit: Maximum number of results to return (default: 1).
+            hours_back: Number of hours to look back (default: 24).
+        
+        Returns:
+            Dictionary with task id, result, and similarity score, or None if no match found.
+        """
+        embedding_str = json.dumps(embedding)
+        
+        stmt = text(f"""
+            SELECT 
+                t.id,
+                t.result,
+                t.description,
+                t.created_at,
+                1 - (tme.emb <=> CAST(:vec AS vector)) as similarity
+            FROM tasks t
+            INNER JOIN task_multimodal_embeddings tme ON t.id = tme.task_id
+            WHERE t.status = 'completed'
+                AND t.result IS NOT NULL
+                AND tme.source_modality = 'text'
+                AND t.created_at >= NOW() - INTERVAL '{hours_back} hours'
+                AND 1 - (tme.emb <=> CAST(:vec AS vector)) >= :threshold
+            ORDER BY tme.emb <=> CAST(:vec AS vector)
+            LIMIT :limit
+        """)
+        
+        try:
+            result = await session.execute(stmt, {
+                "vec": embedding_str,
+                "threshold": threshold,
+                "limit": limit
+            })
+            
+            row = result.fetchone()
+            if row:
+                return {
+                    "id": str(row.id),
+                    "result": row.result if isinstance(row.result, dict) else json.loads(row.result) if row.result else None,
+                    "description": row.description,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "similarity": float(row.similarity) if row.similarity is not None else 0.0,
+                }
+            return None
+        except SQLAlchemyError as e:
+            logger.error(
+                "Similar task query failed: %s. "
+                "This may indicate the task_multimodal_embeddings table is not available or vector dimension mismatch.",
+                str(e)
+            )
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during similar task query: {e}")
+            return None
 
     async def get_multimodal_task_context(
         self,

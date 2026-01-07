@@ -120,7 +120,8 @@ class PatternCompiler:
         # Aho-Corasick matchers (Final state)
         # Keyed by 'scope' (usually 'global', but extensible)
         self._keyword_matchers: Dict[str, OptimizedAhoCorasickMatcher] = {}
-        self._use_aho_corasick = self.config.enable_aho_corasick
+        # Use getattr with default for backward compatibility (defensive programming)
+        self._use_aho_corasick = getattr(config, 'enable_aho_corasick', True)
 
         # Hyperscan db for batch regex (optional)
         self._hs_db = None
