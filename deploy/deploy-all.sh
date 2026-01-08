@@ -144,12 +144,34 @@ deploy_pkg_policy() {
     return 0
   fi
 
+  # Export PKG version/env/activate for ingestion script
+  export PKG_VERSION="${PKG_VERSION:-}"
+  export PKG_ENV="${PKG_ENV:-prod}"
+  export PKG_ACTIVATE="${PKG_ACTIVATE:-false}"
+
   if [[ -n "${PKG_WASM_FILE}" ]]; then
     echo "📦 Applying PKG WASM from ${PKG_WASM_FILE}"
+    
+    # Optional: Hard-fail in production if version is missing
+    # (Uncomment the following block to enforce strict production requirements)
+    # if [[ "${PKG_ENV}" == "prod" && -z "${PKG_VERSION}" ]]; then
+    #   echo "❌ ERROR: PKG_VERSION is required when APPLY_PKG_WASM=true and PKG_ENV=prod"
+    #   echo "   Set PKG_VERSION to enable DB ingestion (e.g., PKG_VERSION=rules@1.4.0)"
+    #   exit 1
+    # fi
+    
+    if [[ -n "${PKG_VERSION}" ]]; then
+      echo "   Version: ${PKG_VERSION}"
+      echo "   Env: ${PKG_ENV}"
+      echo "   Activate: ${PKG_ACTIVATE}"
+    else
+      echo "   ⚠️  PKG_VERSION not set - file will be uploaded but not ingested into DB"
+      echo "   Set PKG_VERSION to enable DB ingestion (e.g., PKG_VERSION=rules@1.4.0)"
+    fi
     "${DEPLOY_DIR}/update-pkg-wasm.sh" "${PKG_WASM_FILE}"
   else
     echo "⚠️  APPLY_PKG_WASM=true but PKG_WASM_FILE not set"
-    echo "    Falling back to dummy WASM"
+    echo "    Falling back to dummy WASM (no DB ingestion)"
     "${DEPLOY_DIR}/update-pkg-wasm.sh"
   fi
 }

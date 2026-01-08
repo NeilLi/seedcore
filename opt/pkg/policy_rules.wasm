@@ -1,4 +1,0 @@
-# Dummy PKG WASM for testing
-# Version: rules@1.3.0+ontology@0.9.1
-# This is a placeholder - replace with real WASM binary in production
-# To replace: kubectl cp policy_rules.wasm <namespace>/<head-pod>:/app/opt/pkg/policy_rules.wasm

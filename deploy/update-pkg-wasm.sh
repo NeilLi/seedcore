@@ -16,25 +16,34 @@ print_status() {
 NAMESPACE="${NAMESPACE:-seedcore-dev}"
 SECRET_NAME="${SECRET_NAME:-seedcore-env-secret}"
 WASM_FILE="${1:-}"
+PKG_VERSION="${PKG_VERSION:-}"
+PKG_ENV="${PKG_ENV:-prod}"
+PKG_ACTIVATE="${PKG_ACTIVATE:-false}"
 
 usage() {
   echo "Usage: $0 [wasm_file]"
   echo
-  echo "Updates PKG WASM file in the Ray deployment."
+  echo "Updates PKG WASM file in the Ray deployment and ingests it into the database."
   echo
   echo "Options:"
   echo "  wasm_file    Path to PKG WASM binary file (optional, creates dummy if not provided)"
   echo
   echo "Environment Variables:"
-  echo "  NAMESPACE    Kubernetes namespace (default: seedcore-dev)"
-  echo "  SECRET_NAME  Secret name (default: seedcore-env-secret)"
+  echo "  NAMESPACE      Kubernetes namespace (default: seedcore-dev)"
+  echo "  SECRET_NAME    Secret name (default: seedcore-env-secret)"
+  echo "  PKG_VERSION    Version string for DB ingestion (e.g., 'rules@1.4.0')"
+  echo "  PKG_ENV        Environment for DB ingestion (default: prod)"
+  echo "  PKG_ACTIVATE   Set to 'true' to activate snapshot in DB (default: false)"
   echo
   echo "Examples:"
   echo "  # Create/update with dummy WASM (for testing)"
   echo "  $0"
   echo
-  echo "  # Update with real WASM binary"
+  echo "  # Update with real WASM binary (file only, no DB ingestion)"
   echo "  $0 /path/to/policy_rules.wasm"
+  echo
+  echo "  # Update with WASM and ingest into DB"
+  echo "  PKG_VERSION=rules@1.4.0 PKG_ACTIVATE=true $0 /path/to/policy_rules.wasm"
   exit 1
 }
 
@@ -105,6 +114,57 @@ if kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- test -f /app/data/opt/pkg/pol
 else
   print_status "ERROR" "WASM file not found in pod"
   exit 1
+fi
+
+# ---------- Ingest WASM into database (DB-first model) ----------
+if [ -n "${PKG_VERSION}" ] && [ -n "${WASM_FILE}" ] && [ -f "${WASM_FILE}" ]; then
+  print_status "INFO" "Ingesting WASM into PKG database (DB-first model)..."
+  print_status "INFO" "  Version: ${PKG_VERSION}"
+  print_status "INFO" "  Env: ${PKG_ENV}"
+  print_status "INFO" "  Activate: ${PKG_ACTIVATE}"
+  
+  # Copy ingestion script to pod
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  INGEST_SCRIPT="${SCRIPT_DIR}/../scripts/host/ingest_pkg_wasm.py"
+  
+  if [ ! -f "${INGEST_SCRIPT}" ]; then
+    print_status "WARN" "Ingestion script not found at ${INGEST_SCRIPT}"
+    print_status "WARN" "Skipping DB ingestion - WASM file uploaded but not in database"
+  else
+    # Verify DB access before ingestion
+    print_status "INFO" "Verifying database access in pod..."
+    if ! kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- env | grep -qE '(POSTGRES|PG_DSN|DATABASE_URL)'; then
+      print_status "WARN" "Database environment variables not found in pod"
+      print_status "WARN" "Ingestion may fail - ensure POSTGRES_* or PG_DSN env vars are set"
+    else
+      print_status "OK" "Database environment variables detected"
+    fi
+    
+    # Copy script and WASM file to pod
+    kubectl cp "${INGEST_SCRIPT}" "${NAMESPACE}/${HEAD_POD}:/tmp/ingest_pkg_wasm.py"
+    
+    # Run ingestion script inside pod
+    ACTIVATE_FLAG=""
+    if [ "${PKG_ACTIVATE}" = "true" ]; then
+      ACTIVATE_FLAG="--activate"
+    fi
+    
+    if kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- python3 /tmp/ingest_pkg_wasm.py \
+      --wasm /app/data/opt/pkg/policy_rules.wasm \
+      --version "${PKG_VERSION}" \
+      --env "${PKG_ENV}" \
+      ${ACTIVATE_FLAG} 2>&1; then
+      print_status "OK" "WASM successfully ingested into database"
+    else
+      print_status "ERROR" "Failed to ingest WASM into database"
+      print_status "WARN" "WASM file uploaded but not in database - PKG will not use it"
+      exit 1
+    fi
+  fi
+elif [ -n "${WASM_FILE}" ] && [ -f "${WASM_FILE}" ]; then
+  print_status "WARN" "PKG_VERSION not set - skipping DB ingestion"
+  print_status "WARN" "WASM file uploaded but not in database - PKG will not use it"
+  print_status "INFO" "To ingest into DB, set PKG_VERSION (e.g., PKG_VERSION=rules@1.4.0)"
 fi
 
 # ---------- Restart Ray head pod to reload ----------
