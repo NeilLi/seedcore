@@ -2,7 +2,11 @@
 """
 SeedCore CLI — interactive shell for human-in-the-loop control.
 
-New in this version
+New in v2.5
+- voice <transcription> [key=value...] - Create CHAT task with multimodal voice envelope
+- vision <scene_description> [type=action|query] [key=value...] - Create ACTION/QUERY task with multimodal vision envelope
+
+Previous features:
 - tasks --status <queued|running|completed|failed>
 - tasks --type <task_type>
 - tasks --since <1h|24h|2d|YYYY-MM-DD>
@@ -24,6 +28,18 @@ import requests  # pyright: ignore[reportMissingModuleSource]
 import difflib
 import argparse
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+try:
+    from prompt_toolkit import prompt
+    from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    PROMPT_TOOLKIT_AVAILABLE = True
+except ImportError:
+    PROMPT_TOOLKIT_AVAILABLE = False
+    # Fallback to standard input if prompt_toolkit not available
+    def prompt(prompt_text, **kwargs):
+        return input(prompt_text)
 
 API_BASE = os.getenv("SEEDCORE_API", "http://127.0.0.1:8002")
 API_V1_BASE = f"{API_BASE}/api/v1"
@@ -59,6 +75,55 @@ def _parse_since(val: str) -> datetime | None:
         return datetime.fromisoformat(val).replace(tzinfo=timezone.utc)
     except Exception:
         return None
+
+def _parse_quoted_string(args: list[str]) -> tuple[str, list[str]]:
+    """
+    Parse a quoted string from the beginning of args list.
+    
+    Handles both single and double quotes. If the first arg starts with a quote,
+    collects subsequent args until the closing quote is found.
+    
+    Args:
+        args: List of arguments (may include quoted strings split by spaces)
+    
+    Returns:
+        Tuple of (parsed_string, remaining_args)
+    """
+    if not args:
+        return "", []
+    
+    first_arg = args[0]
+    
+    # Check if first arg starts with a quote
+    if first_arg.startswith("'") or first_arg.startswith('"'):
+        quote_char = first_arg[0]
+        
+        # Check if the quote is already closed in the first arg (single-word quoted string)
+        if len(first_arg) > 1 and first_arg.endswith(quote_char):
+            # Single-word quoted string like 'Hello' or "Hello"
+            parsed = first_arg[1:-1]  # Remove both opening and closing quotes
+            return parsed, args[1:]
+        
+        # Multi-word quoted string: collect parts until closing quote
+        # Remove opening quote from first part
+        parts = [first_arg[1:]]
+        
+        # Collect parts until we find closing quote
+        for i, arg in enumerate(args[1:], start=1):
+            if arg.endswith(quote_char):
+                # Found closing quote, remove it and join
+                parts.append(arg[:-1])
+                parsed = " ".join(parts)
+                return parsed, args[i+1:]
+            else:
+                parts.append(arg)
+        
+        # No closing quote found in remaining args, return as-is (malformed but don't crash)
+        parsed = " ".join(parts)
+        return parsed, args[len(parts):]
+    
+    # No quote, return first arg as-is
+    return args[0], args[1:]
 
 def _parse_task_args(argv):
     """Parse task/search command arguments using argparse for robust flag handling."""
@@ -340,6 +405,169 @@ def maintenance_command(args):
         params={"operation": args[0], "args": args[1:]},
     )
 
+
+def voice_command(args):
+    """voice <transcription> [key=value ...] - Create a CHAT task with multimodal voice envelope"""
+    if not args:
+        print("Usage: voice <transcription> [key=value ...]")
+        print("Examples:")
+        print("  voice 'Turn off the lights in the lobby' media_uri=s3://hotel-assets/audio/clip_99.wav")
+        print("  voice 'Set temperature to 72' media_uri=s3://hotel-assets/audio/clip_100.wav location_context=lobby_area_01 confidence=0.98")
+        print("  voice 'Hello' media_uri=s3://hotel-assets/audio/clip_101.wav transcription_engine=whisper-v3 duration_seconds=2.5 language=en-US is_real_time=true")
+        print("")
+        print("Required: transcription (first arg), media_uri")
+        print("Optional: transcription_engine, confidence, duration_seconds, language, location_context, is_real_time, ttl_seconds")
+        return
+    
+    # Parse quoted transcription string (handles multi-word transcriptions)
+    transcription, remaining_args = _parse_quoted_string(args)
+    
+    # Parse key=value pairs from remaining args
+    kv = {}
+    for arg in remaining_args:
+        if "=" in arg:
+            k, v = arg.split("=", 1)
+            kv[k] = v
+    
+    # Required fields
+    if "media_uri" not in kv:
+        print("❌ Required: media_uri (e.g., media_uri=s3://hotel-assets/audio/clip_99.wav)")
+        return
+    
+    # Build multimodal envelope
+    multimodal = {
+        "source": "voice",
+        "media_uri": kv.pop("media_uri"),
+        "transcription": transcription,
+    }
+    
+    # Optional voice-specific fields
+    for field in ["transcription_engine", "confidence", "duration_seconds", "language", "location_context", "is_real_time", "ttl_seconds"]:
+        if field in kv:
+            value = kv.pop(field)
+            # Type conversions
+            if field == "confidence":
+                try:
+                    multimodal[field] = float(value)
+                except ValueError:
+                    print(f"⚠️ Warning: confidence must be a float, ignoring '{value}'")
+            elif field == "duration_seconds":
+                try:
+                    multimodal[field] = float(value)
+                except ValueError:
+                    print(f"⚠️ Warning: duration_seconds must be a float, ignoring '{value}'")
+            elif field == "ttl_seconds":
+                try:
+                    multimodal[field] = int(value)
+                except ValueError:
+                    print(f"⚠️ Warning: ttl_seconds must be an integer, ignoring '{value}'")
+            elif field == "is_real_time":
+                multimodal[field] = value.lower() in ("true", "1", "yes", "on")
+            else:
+                multimodal[field] = value
+    
+    # Build params with multimodal envelope and chat envelope
+    params = {
+        "multimodal": multimodal,
+        "chat": {
+            "message": transcription
+        }
+    }
+    
+    # Add any remaining kv pairs to params (for extensibility)
+    if kv:
+        params.update(kv)
+    
+    create_task(
+        task_type="chat",
+        description=transcription,
+        params=params,
+    )
+
+
+def vision_command(args):
+    """vision <scene_description> [type=action|query] [key=value ...] - Create an ACTION/QUERY task with multimodal vision envelope"""
+    if len(args) < 1:
+        print("Usage: vision <scene_description> [type=action|query] [key=value ...]")
+        print("Examples:")
+        print("  vision 'Person detected near Room 101' media_uri=s3://hotel-assets/video/camera_101.mp4")
+        print("  vision 'Person detected near Room 101' type=action media_uri=s3://hotel-assets/video/camera_101.mp4 camera_id=camera_101 confidence=0.92")
+        print("  vision 'Visual scene analysis' type=query media_uri=s3://hotel-assets/video/scene.mp4 detection_engine=yolo-v8 location_context=room_101_corridor")
+        print("  vision 'Security alert' type=action media_uri=s3://hotel-assets/video/alert.mp4 is_real_time=true ttl_seconds=60 parent_stream_id=stream_camera_101")
+        print("")
+        print("Required: scene_description (first arg), media_uri")
+        print("Optional: type (action|query, default: action), detection_engine, confidence, timestamp, camera_id, location_context, is_real_time, ttl_seconds, parent_stream_id, detected_objects (JSON)")
+        return
+    
+    # Parse quoted scene description string (handles multi-word descriptions)
+    scene_description, remaining_args = _parse_quoted_string(args)
+    
+    # Parse key=value pairs from remaining args
+    kv = {}
+    for arg in remaining_args:
+        if "=" in arg:
+            k, v = arg.split("=", 1)
+            kv[k] = v
+    
+    # Determine task type (default: action)
+    task_type = kv.pop("type", "action").lower()
+    if task_type not in ("action", "query"):
+        print("⚠️ Warning: type must be 'action' or 'query', defaulting to 'action'")
+        task_type = "action"
+    
+    # Required fields
+    if "media_uri" not in kv:
+        print("❌ Required: media_uri (e.g., media_uri=s3://hotel-assets/video/camera_101.mp4)")
+        return
+    
+    # Build multimodal envelope
+    multimodal = {
+        "source": "vision",
+        "media_uri": kv.pop("media_uri"),
+        "scene_description": scene_description,
+    }
+    
+    # Optional vision-specific fields
+    for field in ["detection_engine", "confidence", "timestamp", "camera_id", "location_context", "is_real_time", "ttl_seconds", "parent_stream_id", "detected_objects"]:
+        if field in kv:
+            value = kv.pop(field)
+            # Type conversions
+            if field == "confidence":
+                try:
+                    multimodal[field] = float(value)
+                except ValueError:
+                    print(f"⚠️ Warning: confidence must be a float, ignoring '{value}'")
+            elif field == "ttl_seconds":
+                try:
+                    multimodal[field] = int(value)
+                except ValueError:
+                    print(f"⚠️ Warning: ttl_seconds must be an integer, ignoring '{value}'")
+            elif field == "is_real_time":
+                multimodal[field] = value.lower() in ("true", "1", "yes", "on")
+            elif field == "detected_objects":
+                # Try to parse as JSON
+                try:
+                    multimodal[field] = json.loads(value)
+                except json.JSONDecodeError:
+                    print(f"⚠️ Warning: detected_objects must be valid JSON, ignoring '{value}'")
+            else:
+                multimodal[field] = value
+    
+    # Build params with multimodal envelope
+    params = {
+        "multimodal": multimodal
+    }
+    
+    # Add any remaining kv pairs to params (for extensibility)
+    if kv:
+        params.update(kv)
+    
+    create_task(
+        task_type=task_type,
+        description=scene_description,
+        params=params,
+    )
+
 def _print_task_row(t, prefix="  - "):
     status = (t.get('status') or 'N/A').upper()
     desc = t.get('description', '')
@@ -530,6 +758,10 @@ def show_help():
     print("                           - Create GRAPH task for knowledge operations")
     print("  maint <operation> [args...]")
     print("                           - Create MAINTENANCE task for system ops")
+    print("  voice <transcription> [key=value...]")
+    print("                           - Create CHAT task with multimodal voice envelope")
+    print("  vision <scene_description> [type=action|query] [key=value...]")
+    print("                           - Create ACTION/QUERY task with multimodal vision envelope")
     print("")
     print("Task Inspection:")
     print("  tasks [--status S] [--type T] [--since V] [--limit N]")
@@ -558,6 +790,9 @@ def show_help():
     print("  robot stop cleaning robot=cleaner-2")
     print("  graph find rooms with hvac_alarm")
     print("  maint check devices")
+    print("  voice 'Turn off the lights' media_uri=s3://hotel-assets/audio/clip_99.wav")
+    print("  vision 'Person detected near Room 101' media_uri=s3://hotel-assets/video/camera_101.mp4")
+    print("  vision 'Visual analysis' type=query media_uri=s3://hotel-assets/video/scene.mp4 camera_id=camera_101")
     print("  tasks --status running --type action")
     print("  tasks --type action --since 24h --limit 10")
     print("")
@@ -566,22 +801,43 @@ def show_help():
 
 # ------------------- SHELL LOOP -------------------
 def main():
-    print("🎯 SeedCore Interactive Shell (v2.0 — explicit & safe)")
+    print("🎯 SeedCore Interactive Shell (v2.5 — multimodal support)")
     print("Connected to", API_BASE)
-    print("Commands: ask, query, device, robot, graph, maint, facts, tasks, search, status, health, readyz, help, exit")
+    print("Commands: ask, query, device, robot, graph, maint, voice, vision, facts, tasks, search, status, health, readyz, help, exit")
     print("=" * 70)
 
     SYSTEM_COMMANDS = {
         "ask", "query",
         "device", "robot", "graph", "maint",
+        "voice", "vision",
         "facts", "genfact", "delfact",
         "tasks", "taskstatus", "search", "status",
         "health", "readyz", "help"
     }
 
+    # Set up command history if prompt_toolkit is available
+    history = None
+    auto_suggest = None
+    if PROMPT_TOOLKIT_AVAILABLE:
+        try:
+            history_file = Path.home() / ".seedcore_cli_history"
+            history_file.parent.mkdir(parents=True, exist_ok=True)
+            history = FileHistory(str(history_file))
+            auto_suggest = AutoSuggestFromHistory()
+        except Exception as e:
+            # Fallback if history setup fails
+            print(f"⚠️ Warning: Could not initialize command history: {e}")
+
     while True:
         try:
-            cmd = input("SeedCore> ").strip()
+            if PROMPT_TOOLKIT_AVAILABLE and history:
+                cmd = prompt(
+                    "SeedCore> ",
+                    history=history,
+                    auto_suggest=auto_suggest,
+                ).strip()
+            else:
+                cmd = input("SeedCore> ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n👋 Exiting SeedCore CLI")
             break
@@ -610,6 +866,10 @@ def main():
                     graph_command(rest)
                 elif op == "maint":
                     maintenance_command(rest)
+                elif op == "voice":
+                    voice_command(rest)
+                elif op == "vision":
+                    vision_command(rest)
                 # Facts commands
                 elif op == "facts":
                     list_facts()
@@ -650,6 +910,8 @@ def main():
                 print("   - 'query <description>' for reasoning/analysis")
                 print("   - 'device <on|off> <type> [key=value...]' for device control")
                 print("   - 'robot <dispatch|stop> <task> [key=value...]' for robot control")
+                print("   - 'voice <transcription> [key=value...]' for voice commands")
+                print("   - 'vision <scene_description> [type=action|query] [key=value...]' for vision tasks")
                 query_command([cmd])
         except Exception as e:
             print(f"❌ An error occurred: {e}")

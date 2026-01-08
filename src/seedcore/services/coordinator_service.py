@@ -910,7 +910,7 @@ class Coordinator:
             """
             PKG evaluation adapter that returns proto_plan contract.
 
-            Returns proto_plan structure compatible with core.execute._extract_routing_intent_from_proto_plan():
+            Returns proto_plan structure compatible with coordinator.core.intent.PKGPlanIntentExtractor:
             - proto_plan["routing"] (top-level routing hints)
             - proto_plan["steps"] (list of step dicts with task.params.routing)
 

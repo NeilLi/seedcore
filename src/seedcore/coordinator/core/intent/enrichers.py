@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""
+Intent enrichers: Augment and synthesize routing intent.
+
+This module provides the "Coordinator's Reflex" logic. It can:
+1. Synthesize a baseline intent from perception (Eventizer tags/domain).
+2. Refine existing PKG intent using semantic history (v_unified_cortex_memory).
+3. Map perceived service requirements to agent specializations.
+"""
+
+from typing import Dict, Any, Optional, List
+from seedcore.logging_setup import ensure_serve_logger
+from seedcore.agents.roles import Specialization
+from .model import RoutingIntent, IntentSource, IntentConfidence
+
+logger = ensure_serve_logger("seedcore.coordinator.core.intent.enrichers")
+
+class IntentEnricher:
+    """
+    Enriches routing intent with perception-based baselines and memory patterns.
+    """
+
+    # Mapping perceived 'required_service' attributes to canonical Specializations
+    SERVICE_MAP = {
+        "hvac_service": Specialization.HVAC_CONTROLLER,
+        "lighting_service": Specialization.LIGHTING_CONTROLLER,
+        "security_service": Specialization.SECURITY_DRONE_MANAGER,
+        "maintenance_service": Specialization.MAINTENANCE_MANAGER,
+        "robot_service": Specialization.ROBOT_COORDINATOR,
+        "guest_request": Specialization.USER_LIAISON,
+        "graph_query": Specialization.GENERALIST,
+    }
+
+    @staticmethod
+    def synthesize_baseline(ctx: Any) -> RoutingIntent:
+        """
+        Generates a baseline intent from Eventizer perception.
+        Ensures the Coordinator is 'Never Blind' if PKG provides no hints.
+        """
+        # 1. Try mapping from Eventizer attributes (System 1)
+        service_hint = ctx.attributes.get("required_service")
+        spec = IntentEnricher.SERVICE_MAP.get(service_hint)
+
+        # 2. Fallback to Domain/Type heuristics
+        if not spec:
+            if ctx.domain == "device":
+                spec = Specialization.DEVICE_ORCHESTRATOR
+            elif ctx.domain == "robot":
+                spec = Specialization.ROBOT_COORDINATOR
+            elif ctx.task_type == "chat":
+                spec = Specialization.USER_LIAISON
+            else:
+                spec = Specialization.GENERALIST
+
+        return RoutingIntent(
+            specialization=spec.value,
+            skills=ctx.attributes.get("required_skills") or {},
+            source=IntentSource.COORDINATOR_BASELINE,
+            confidence=IntentConfidence.MEDIUM
+        )
+
+    @staticmethod
+    def enrich(
+        intent: RoutingIntent,
+        ctx: Any,  # TaskContext
+        semantic_context: Optional[List[Dict[str, Any]]] = None,
+    ) -> RoutingIntent:
+        """
+        Refines intent using historical patterns from Unified Memory.
+        """
+        if not semantic_context:
+            return intent
+
+        # 1. Check for 'Specialization Drift' in memory
+        # If history shows a high similarity hit with a different specialization,
+        # we suggest an override or adjust confidence.
+        top_memory = semantic_context[0] if semantic_context else None
+        
+        if top_memory and top_memory.get("similarity", 0) > 0.95:
+            # High confidence historical match
+            historical_spec = top_memory.get("metadata", {}).get("intended_specialization")
+            
+            if historical_spec and historical_spec != intent.specialization:
+                logger.info(
+                    f"[IntentEnricher] Detected historical spec override: "
+                    f"{intent.specialization} -> {historical_spec} (sim: {top_memory['similarity']:.2f})"
+                )
+                # Boost confidence if we find a historical match
+                intent = intent.model_copy(update={
+                    "confidence": IntentConfidence.HIGH,
+                    "specialization": historical_spec # Optional: Follow the successful historical path
+                })
+
+        return intent

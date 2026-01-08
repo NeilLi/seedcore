@@ -1565,6 +1565,73 @@ class OrganismCore:
 
         return None
 
+    async def _jit_spawn_agent(
+        self, organ: Any, organ_id: str, agent_id: str, spec_str: str
+    ) -> bool:
+        """
+        JIT (Just-In-Time) spawn an agent when it's missing during execution.
+        
+        This is called when an agent is requested but doesn't exist yet.
+        It creates the agent on-demand with the specified specialization.
+        
+        Args:
+            organ: Ray actor handle for the Organ
+            organ_id: ID of the organ
+            agent_id: ID of the agent to spawn
+            spec_str: Specialization string (e.g., "user_liaison", "GENERALIST")
+        
+        Returns:
+            True if spawn succeeded, False otherwise
+        """
+        try:
+            # Normalize specialization string to Specialization enum
+            spec_str_upper = spec_str.upper()
+            try:
+                # Try as enum name first (e.g., "USER_LIAISON")
+                spec = Specialization[spec_str_upper]
+            except KeyError:
+                try:
+                    # Try as enum value (e.g., "user_liaison")
+                    spec = Specialization(spec_str.lower())
+                except ValueError:
+                    # Fallback to GENERALIST if unknown specialization
+                    self.logger.warning(
+                        f"[{organ_id}] Unknown specialization '{spec_str}', "
+                        "defaulting to GENERALIST for JIT spawn"
+                    )
+                    spec = Specialization.GENERALIST
+
+            # Get agent class name from specialization (default to BaseAgent)
+            # In the future, this could be looked up from a mapping
+            agent_class_name = "BaseAgent"
+
+            # Get configuration-driven agent actor options
+            agent_opts = self._get_agent_actor_options(agent_id)
+
+            # Spawn agent via Organ actor
+            await organ.create_agent.remote(
+                agent_id=agent_id,
+                specialization=spec,
+                organ_id=organ_id,
+                agent_class_name=agent_class_name,
+                **agent_opts,
+            )
+
+            # Update local mapping
+            self.agent_to_organ_map[agent_id] = organ_id
+
+            self.logger.info(
+                f"[{organ_id}] ✅ JIT spawned agent {agent_id} with specialization {spec.value}"
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                f"[{organ_id}] ❌ Failed to JIT spawn agent {agent_id}: {e}",
+                exc_info=True,
+            )
+            return False
+
     # =========================================================
     # 🔧 HELPER: TUNNEL MANAGEMENT
     # =========================================================

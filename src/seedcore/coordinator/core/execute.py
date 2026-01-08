@@ -38,6 +38,16 @@ from typing import (
 
 from seedcore.agents.roles import Specialization
 from seedcore.coordinator.core.ocps_valve import NeuralCUSUMValve
+from seedcore.coordinator.core.intent import (
+    RoutingIntent,
+    PKGPlanIntentExtractor,
+    IntentEnricher,
+    IntentValidator,
+    IntentSource,
+    IntentConfidence,
+    SummaryGenerator,
+    IntentInsight,
+)
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.models.cognitive import CognitiveType, DecisionKind
 from seedcore.models.task import TaskType
@@ -107,7 +117,7 @@ PkgEvalFn = Callable[
     Awaitable[dict[str, Any]],
 ]
 
-IntentResolverFn = Callable[["TaskContext"], "RoutingIntent"]
+IntentResolverFn = Callable[["TaskContext"], RoutingIntent]
 
 
 @dataclass(frozen=True)
@@ -206,14 +216,8 @@ class ExecutionConfig:
     max_steps: int = MAX_STEPS_DEFAULT
 
 
-@dataclass
-class RoutingIntent:
-    """Internal DTO to hold derived routing instructions."""
-
-    specialization: Optional[str] = None  # V2 required_specialization
-    organ_hint: Optional[str] = None  # optional target organ id
-    skills: Dict[str, float] | None = None
-
+# RoutingIntent is now imported from coordinator.core.intent
+# This import maintains backward compatibility for type hints
 
 # ---------------------------------------------------------------------------
 # Generic async call helpers
@@ -318,6 +322,8 @@ async def _call_pkg_eval(
 # ---------------------------------------------------------------------------
 # Routing Intent Extraction (PKG-First Architecture)
 # ---------------------------------------------------------------------------
+# Intent extraction is now handled by coordinator.core.intent module
+# These are convenience wrappers that maintain backward compatibility
 
 
 def _extract_routing_intent_from_proto_plan(
@@ -325,45 +331,14 @@ def _extract_routing_intent_from_proto_plan(
 ) -> Optional[RoutingIntent]:
     """
     Extract routing intent from PKG-generated proto_plan.
-
-    PKG is the authoritative source of routing decisions. This function
-    extracts required_specialization and routing hints from the plan.
-
+    
+    DEPRECATED: Use PKGPlanIntentExtractor.extract() directly.
+    This wrapper maintains backward compatibility.
+    
     Architecture: Coordinator (PKG) decides WHAT and IN WHAT ORDER.
     This function extracts the routing hints that PKG embedded in the plan.
     """
-    if not proto_plan:
-        return None
-
-    # Check if proto_plan has top-level routing hints
-    routing = proto_plan.get("routing") or {}
-    required_spec = routing.get("required_specialization")
-    specialization = routing.get("specialization")
-    skills = routing.get("skills") or {}
-
-    # If no top-level routing, check first step
-    if not required_spec and not specialization:
-        steps = proto_plan.get("steps") or proto_plan.get("solution_steps") or []
-        if steps and isinstance(steps, list) and len(steps) > 0:
-            first_step = steps[0]
-            step_task = first_step.get("task", first_step)
-            step_routing = (
-                step_task.get("params", {}).get("routing", {})
-                if isinstance(step_task, dict)
-                else {}
-            )
-            required_spec = step_routing.get("required_specialization") or required_spec
-            specialization = step_routing.get("specialization") or specialization
-            if step_routing.get("skills"):
-                skills.update(step_routing["skills"])
-
-    if required_spec or specialization:
-        return RoutingIntent(
-            specialization=required_spec or specialization,
-            skills=skills if skills else None,
-        )
-
-    return None
+    return PKGPlanIntentExtractor.extract_with_validation(proto_plan, ctx)
 
 
 def _minimal_fallback_intent(ctx: TaskContext) -> RoutingIntent:
@@ -386,6 +361,8 @@ def _minimal_fallback_intent(ctx: TaskContext) -> RoutingIntent:
     return RoutingIntent(
         specialization=Specialization.GENERALIST.value,
         skills={},
+        source=IntentSource.FALLBACK_NEUTRAL,
+        confidence=IntentConfidence.MINIMAL,
     )
 
 
@@ -637,7 +614,7 @@ async def _handle_cognitive_path(
         if proto_plan_from_router:
             # Use the TaskContext that was already built with Eventizer signals
             # This ensures routing intent extraction has access to all context
-            routing_intent = _extract_routing_intent_from_proto_plan(
+            routing_intent = PKGPlanIntentExtractor.extract(
                 proto_plan_from_router,
                 ctx,  # Use the TaskContext built in execute_task() with Eventizer data
             )
@@ -1102,17 +1079,21 @@ async def _compute_routing_decision(
 
     # First: Extract from PKG proto_plan (authoritative)
     if proto_plan:
-        intent = _extract_routing_intent_from_proto_plan(proto_plan, ctx)
-
-        # Validation: PKG should always provide routing hints
-        if not intent:
-            logger.error(
-                f"[Coordinator] PKG proto_plan missing routing hints for task {ctx.task_id}. "
-                "PKG policy evaluation should always include required_specialization or "
-                "specialization in proto_plan.routing or step.task.params.routing."
+        intent = PKGPlanIntentExtractor.extract(proto_plan, ctx)
+        
+        # Enrich intent with semantic context from Unified Memory (if available)
+        if intent:
+            semantic_context = proto_plan.get("semantic_context") or proto_plan.get("metadata", {}).get("semantic_context")
+            if semantic_context:
+                intent = IntentEnricher.enrich(intent, ctx, semantic_context=semantic_context)
+        
+        # Validate intent (handles both None and extracted intent)
+        validation_errors = IntentValidator.validate(intent, ctx)
+        if validation_errors:
+            logger.warning(
+                f"[Coordinator] Intent validation errors for task {ctx.task_id}: "
+                f"{'; '.join(validation_errors)}"
             )
-            # Optionally escalate to System-2 error if policy requires it
-            # For now, we fall through to resolver/fallback
 
     # Second: Use config-driven resolver if provided (LEGACY - deprecated)
     if not intent and route_cfg.intent_resolver:
@@ -1121,24 +1102,64 @@ async def _compute_routing_decision(
             "intent_resolver is legacy; PKG should supply routing hints via proto_plan. "
             "Consider migrating to PKG-based routing."
         )
-        intent = route_cfg.intent_resolver(ctx)
+        legacy_intent = route_cfg.intent_resolver(ctx)
+        # Wrap legacy intent with provenance metadata
+        if legacy_intent:
+            legacy_intent.source = IntentSource.LEGACY_RESOLVER
+            legacy_intent.confidence = IntentConfidence.LOW
+        intent = legacy_intent
 
-    # Third: Structurally neutral fallback (should be rare - PKG should always provide routing)
+    # Third: Coordinator baseline synthesis (perception-based fallback)
+    # Uses IntentEnricher to synthesize intent from Eventizer perception
+    # This ensures Coordinator is "Never Blind" even if PKG provides no hints
     if not intent:
-        intent = _minimal_fallback_intent(ctx)
-        logger.warning(
-            f"[Coordinator] Using structurally neutral fallback routing for task {ctx.task_id}. "
-            "PKG evaluation should be enabled for proper policy-aware routing. "
-            "Fallback weakens policy guarantees."
+        intent = IntentEnricher.synthesize_baseline(ctx)
+        logger.info(
+            f"[Coordinator] Synthesized baseline intent for task {ctx.task_id} from Eventizer perception: "
+            f"{intent.specialization} (source={intent.source.value}, confidence={intent.confidence.value})"
         )
 
     if intent.skills is None:
         intent.skills = {}
 
+    # Determine target organ for routing
+    # Architecture: If organ_hint is explicitly set (from PKG), use it.
+    # Otherwise, delegate to "organism" and let Organism's router resolve
+    # the organ based on specialization. This allows Organism to handle
+    # dynamic organ discovery and JIT agent spawning.
     target_organ = intent.organ_hint or "organism"
+    
+    # Log routing decision for observability
+    if intent.specialization and not intent.organ_hint:
+        logger.debug(
+            f"[Coordinator] Routing task {ctx.task_id} to 'organism' with "
+            f"specialization={intent.specialization} (organ_hint not set, "
+            "delegating to Organism router for organ resolution)"
+        )
 
     router_latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
 
+    # Generate Cognitive Audit Trail (Explainability)
+    insight: Optional[IntentInsight] = None
+    try:
+        insight = SummaryGenerator.generate(
+            ctx=ctx,
+            proto_plan=proto_plan,
+            intent=intent,
+            decision_kind=decision_kind,
+            raw_drift=raw_drift,
+            drift_state=drift_state,
+        )
+        logger.info(
+            f"[Cortex Insight] Task {ctx.task_id}: {insight.summary}"
+        )
+    except Exception as e:
+        logger.debug(
+            f"[Coordinator] Failed to generate intent insight (non-fatal): {e}",
+            exc_info=True,
+        )
+
+    # Prepare payload common with insight metadata
     payload_common = _create_payload_common(
         task_id=ctx.task_id,
         decision_kind=decision_kind,
@@ -1154,6 +1175,10 @@ async def _compute_routing_decision(
             "severity": getattr(drift_state, "severity", None),
         },
     )
+    
+    # Attach insight to payload_common metadata for auditability
+    if insight:
+        payload_common["insight"] = insight.to_dict()
 
     if is_escalated:
         task_result = create_cognitive_path_result(
@@ -1177,6 +1202,7 @@ async def _compute_routing_decision(
             **payload_common,
         )
 
+    # Insight is already attached via payload_common metadata
     # optional telemetry hook
     if exec_cfg.record_router_telemetry_func:
         try:
