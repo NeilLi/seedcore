@@ -177,7 +177,9 @@ SELECT t.id AS task_id,
 
 -- Convenience view for the primary task embedding label (1024d)
 -- Enhanced with memory_tier and memory_label for Unified Memory integration
-CREATE OR REPLACE VIEW task_embeddings_primary_1024 AS
+-- Drop first to handle column name changes (CREATE OR REPLACE cannot rename columns)
+DROP VIEW IF EXISTS task_embeddings_primary_1024 CASCADE;
+CREATE VIEW task_embeddings_primary_1024 AS
 SELECT t.id         AS task_id,
        m.node_id    AS node_id,
        e.emb        AS emb,

@@ -202,7 +202,22 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 # Migration 017 (NEW - Task Embedding Support)
 echo "⚙️  Running migration 017: Task embedding support (views/functions/backfill)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_017" "$POSTGRES_POD:/tmp/017_task_embedding_support.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/017_task_embedding_support.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/017_task_embedding_support.sql"
+# Verify key views were created
+echo "✅ Verifying migration 017 views..."
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
+  psql -U "$DB_USER" -d "$DB_NAME" -c "
+    SELECT 
+      CASE WHEN EXISTS (SELECT 1 FROM pg_views WHERE viewname = 'v_unified_cortex_memory') 
+        THEN '✅ v_unified_cortex_memory view exists'
+        ELSE '❌ v_unified_cortex_memory view MISSING'
+      END AS status;
+    SELECT 
+      CASE WHEN EXISTS (SELECT 1 FROM pg_views WHERE viewname = 'tasks_missing_any_embedding_1024') 
+        THEN '✅ tasks_missing_any_embedding_1024 view exists'
+        ELSE '❌ tasks_missing_any_embedding_1024 view MISSING'
+      END AS status;
+  "
 
 # Migration 018 (Task Outbox Hardening)
 echo "⚙️  Running migration 018: Task outbox hardening (available_at, attempts, index)..."
@@ -278,6 +293,8 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ task_embeddings_stale_1024"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ tasks_missing_embeddings_128"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ tasks_missing_embeddings_1024"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ tasks_missing_any_embedding_1024"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ v_unified_cortex_memory"
 
 echo "📊 Key HGNN functions:"
 for fn in ensure_task_node ensure_agent_node ensure_organ_node ensure_fact_node backfill_task_nodes \
@@ -383,7 +400,8 @@ echo "✅ Created graph schema (HGNN): graph_node_map, agent_registry, organ_reg
 echo "   artifact, capability, memory_cell, edge tables (task_*), organ_provides_capability, agent_owns_memory_cell"
 echo "✅ Created views: graph_tasks, task_embeddings_primary_128, task_embeddings_primary_1024,"
 echo "   task_embeddings_stale_128, task_embeddings_stale_1024, tasks_missing_embeddings_128,"
-echo "   tasks_missing_embeddings_1024, hgnn_edges"
+echo "   tasks_missing_embeddings_1024, tasks_missing_any_embedding_1024,"
+echo "   v_unified_cortex_memory (unified memory view), hgnn_edges"
 echo "✅ Helper functions: create_graph_embed_task, create_graph_rag_task (with optional agent/organ parameters),"
 echo "   ensure_*_node, backfill_task_nodes, cleanup_stale_running_tasks"
 echo "✅ Task schema includes: taskstatus enum (lowercase), lease columns (owner_id, lease_expires_at,"

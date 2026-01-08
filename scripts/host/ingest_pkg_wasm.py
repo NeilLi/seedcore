@@ -109,7 +109,52 @@ async def ingest_wasm_snapshot(
         Snapshot ID
     """
     if not wasm_file.exists():
-        raise FileNotFoundError(f"WASM file not found: {wasm_file}")
+        # Provide helpful error message with current directory and suggestions
+        cwd = Path.cwd()
+        error_msg = f"WASM file not found: {wasm_file}\n"
+        error_msg += f"  Current working directory: {cwd}\n"
+        
+        # Try to resolve the path (works for both absolute and relative)
+        try:
+            if wasm_file.is_absolute():
+                resolved = wasm_file
+            else:
+                resolved = (cwd / wasm_file).resolve()
+            error_msg += f"  Resolved path: {resolved}\n"
+        except Exception:
+            pass
+        
+        # Extract filename for suggestions
+        filename = wasm_file.name if hasattr(wasm_file, 'name') else str(wasm_file)
+        
+        # Check common locations
+        common_locations = [
+            cwd / "data/opt/pkg" / filename,
+            Path("/app/data/opt/pkg") / filename,
+            cwd / "data/opt/pkg" / wasm_file,
+            Path("/app/data/opt/pkg") / wasm_file,
+        ]
+        found_alternatives = []
+        seen_paths = set()
+        for alt_path in common_locations:
+            if alt_path.exists():
+                # Resolve to absolute path and deduplicate
+                resolved_alt = str(alt_path.resolve())
+                if resolved_alt not in seen_paths:
+                    seen_paths.add(resolved_alt)
+                    found_alternatives.append(resolved_alt)
+        
+        if found_alternatives:
+            error_msg += f"\n  ✅ Found similar files:\n"
+            for alt in found_alternatives:
+                error_msg += f"    {alt}\n"
+            error_msg += f"\n  Try: --wasm {found_alternatives[0]}\n"
+        else:
+            error_msg += f"\n  Common locations to check:\n"
+            error_msg += f"    data/opt/pkg/{filename}\n"
+            error_msg += f"    /app/data/opt/pkg/{filename}\n"
+        
+        raise FileNotFoundError(error_msg)
 
     # Read WASM file and calculate checksum
     print(f"📦 Reading WASM file: {wasm_file}")
@@ -146,7 +191,7 @@ async def ingest_wasm_snapshot(
                 SELECT id FROM pkg_snapshots WHERE version = :version
             """)
             check_res = await session.execute(check_sql, {"version": version})
-            existing = await check_res.first()
+            existing = check_res.first()
             if existing:
                 raise ValueError(
                     f"Snapshot version '{version}' already exists (id={existing[0]})"
@@ -157,7 +202,7 @@ async def ingest_wasm_snapshot(
                 INSERT INTO pkg_snapshots 
                     (version, env, entrypoint, checksum, size_bytes, is_active, notes)
                 VALUES 
-                    (:version, :env::pkg_env, :entrypoint, :checksum, :size_bytes, :is_active, :notes)
+                    (:version, CAST(:env AS pkg_env), :entrypoint, :checksum, :size_bytes, :is_active, :notes)
                 RETURNING id
             """)
             snapshot_res = await session.execute(
@@ -172,7 +217,7 @@ async def ingest_wasm_snapshot(
                     "notes": notes,
                 },
             )
-            snapshot_id = await snapshot_res.scalar()
+            snapshot_id = snapshot_res.scalar()
             print(f"✅ Created snapshot: id={snapshot_id}, version={version}")
 
             # If activating, deactivate other snapshots in the same env
@@ -180,7 +225,7 @@ async def ingest_wasm_snapshot(
                 deactivate_sql = text("""
                     UPDATE pkg_snapshots 
                     SET is_active = FALSE 
-                    WHERE env = :env::pkg_env AND is_active = TRUE AND id != :snapshot_id
+                    WHERE env = CAST(:env AS pkg_env) AND is_active = TRUE AND id != :snapshot_id
                 """)
                 await session.execute(deactivate_sql, {"env": env, "snapshot_id": snapshot_id})
                 print(f"✅ Deactivated other snapshots in env={env}")
