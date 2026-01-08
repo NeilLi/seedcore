@@ -12,6 +12,10 @@ DEPLOY_DIR="${SCRIPT_DIR}"
 SEEDCORE_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"  # darwin / linux
 export SEEDCORE_OS
 
+# ---------- PKG Policy Deployment ----------
+APPLY_PKG_WASM="${APPLY_PKG_WASM:-false}"
+PKG_WASM_FILE="${PKG_WASM_FILE:-}"
+
 require() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: '$1' not found in PATH."
@@ -132,6 +136,24 @@ deploy_ray_services() {
   kubectl apply -f "${DEPLOY_DIR}/ray-stable-svc.yaml"
 }
 
+deploy_pkg_policy() {
+  log "Deploying PKG policy (WASM)"
+
+  if [[ "${APPLY_PKG_WASM}" != "true" ]]; then
+    echo "ℹ️  Skipping PKG WASM deployment (APPLY_PKG_WASM != true)"
+    return 0
+  fi
+
+  if [[ -n "${PKG_WASM_FILE}" ]]; then
+    echo "📦 Applying PKG WASM from ${PKG_WASM_FILE}"
+    "${DEPLOY_DIR}/update-pkg-wasm.sh" "${PKG_WASM_FILE}"
+  else
+    echo "⚠️  APPLY_PKG_WASM=true but PKG_WASM_FILE not set"
+    echo "    Falling back to dummy WASM"
+    "${DEPLOY_DIR}/update-pkg-wasm.sh"
+  fi
+}
+
 bootstrap_components() {
   log "Bootstrapping organism and dispatchers"
   "${DEPLOY_DIR}/bootstrap.sh"
@@ -186,6 +208,7 @@ main() {
   deploy_storage
   deploy_rbac
   deploy_ray_services
+  deploy_pkg_policy
 
   echo "⏳ Waiting for 30 seconds for Ray services to stabilize..."
   sleep 30
