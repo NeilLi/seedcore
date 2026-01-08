@@ -24,6 +24,7 @@ import argparse
 import hashlib
 import os
 import sys
+import socket
 from pathlib import Path
 from typing import Optional
 
@@ -31,8 +32,57 @@ from typing import Optional
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
-from sqlalchemy import text
 
+def check_port_forward(host: str, port: int, timeout: float = 1.0) -> bool:
+    """Check if a port is accessible (for detecting port-forward)."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+def detect_and_configure_database():
+    """
+    Detect if running on host and adjust database connection settings.
+    
+    This function checks if we're running from host (not in pod) and detects
+    if port-forwarding is available. If so, it updates environment variables
+    to use localhost BEFORE importing database modules.
+    
+    Returns:
+        Tuple of (host, port, message) for database connection
+    """
+    postgres_host = os.getenv("POSTGRES_HOST", "postgresql")
+    postgres_port = int(os.getenv("POSTGRES_PORT", "5432"))
+    
+    # If explicitly set to localhost, use it
+    if postgres_host == "localhost" or postgres_host == "127.0.0.1":
+        return postgres_host, postgres_port, "Using localhost (port-forward expected)"
+    
+    # If set to pod hostname, check if we're on host
+    if postgres_host == "postgresql" or postgres_host.startswith("postgresql."):
+        # Check if localhost port-forward is available
+        if check_port_forward("localhost", postgres_port):
+            print("ℹ️  Detected port-forward on localhost - switching to localhost")
+            os.environ["POSTGRES_HOST"] = "localhost"
+            return "localhost", postgres_port, "Using localhost (port-forward detected)"
+        else:
+            return postgres_host, postgres_port, f"Using {postgres_host} (ensure port-forward or network access)"
+    
+    # Use whatever is configured
+    return postgres_host, postgres_port, f"Using configured host: {postgres_host}"
+
+
+# Detect database connection BEFORE importing database modules
+# This ensures environment variables are set correctly before database.py reads them
+_db_host, _db_port, _db_msg = detect_and_configure_database()
+
+# Now import database modules (they will use the updated environment variables)
+from sqlalchemy import text
 from seedcore.database import get_async_pg_session_factory
 
 
@@ -74,6 +124,19 @@ async def ingest_wasm_snapshot(
     if env not in ("prod", "staging", "dev"):
         raise ValueError(f"Invalid env: {env}. Must be 'prod', 'staging', or 'dev'")
 
+    # Database connection was already detected and configured at module import time
+    print(f"🔌 Database connection: {_db_msg}")
+    
+    # Verify database connectivity before proceeding
+    if not check_port_forward(_db_host, _db_port):
+        raise ConnectionError(
+            f"Cannot connect to database at {_db_host}:{_db_port}\n"
+            f"  If running from host, ensure port-forward is active:\n"
+            f"    kubectl port-forward svc/postgresql 5432:5432\n"
+            f"  Or use: ./deploy/port-forward.sh\n"
+            f"  Or set POSTGRES_HOST/POSTGRES_PORT environment variables"
+        )
+    
     session_factory = get_async_pg_session_factory()
 
     async with session_factory() as session:
@@ -148,7 +211,8 @@ async def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic ingestion
+  # Basic ingestion (from host - requires port-forward)
+  kubectl port-forward svc/postgresql 5432:5432 &
   python ingest_pkg_wasm.py --wasm policy_rules.wasm --version rules@1.4.0
 
   # Ingest and activate
@@ -157,11 +221,24 @@ Examples:
   # Staging environment
   python ingest_pkg_wasm.py --wasm policy_rules.wasm --version rules@1.4.0 --env staging --activate
 
+  # From inside pod (no port-forward needed)
+  kubectl exec -n seedcore-dev <pod> -- python3 /tmp/ingest_pkg_wasm.py \\
+    --wasm /app/data/opt/pkg/policy_rules.wasm --version rules@1.4.0
+
 Environment Variables:
-  PKG_WASM_FILE    Path to WASM file
-  PKG_VERSION      Version string
-  PKG_ENV          Environment (prod/staging/dev)
-  PKG_ACTIVATE     Set to 'true' to activate snapshot
+  PKG_WASM_FILE       Path to WASM file
+  PKG_VERSION         Version string
+  PKG_ENV             Environment (prod/staging/dev)
+  PKG_ACTIVATE        Set to 'true' to activate snapshot
+  POSTGRES_HOST       Database host (default: postgresql, auto-detects localhost if port-forwarded)
+  POSTGRES_PORT        Database port (default: 5432)
+  POSTGRES_DB          Database name (default: postgres)
+  POSTGRES_USER        Database user (default: postgres)
+  POSTGRES_PASSWORD    Database password
+
+Note: When running from host, ensure port-forward is active:
+  kubectl port-forward svc/postgresql 5432:5432
+  Or use deploy/port-forward.sh to forward all services
         """,
     )
 
