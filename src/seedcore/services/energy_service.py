@@ -210,16 +210,37 @@ async def _background_sampler():
             # 1. Fetch Metrics (Perception)
             # -----------------------------------------------------------
             # Calls the corrected client (no args)
-            data = await state.state_client.get_system_metrics()
-
-            if not data.get("success"):
-                # Use exponential backoff if StateService is degraded
+            try:
+                data = await state.state_client.get_system_metrics()
+            except Exception as e:
+                # Circuit breaker may have opened or service is down
                 logger.warning(
-                    f"StateService reported failure (Status: {data.get('meta', {}).get('status')})"
+                    f"Failed to fetch system metrics (circuit breaker may be open): {e}. "
+                    f"Retrying in {retry_delay:.1f}s"
                 )
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(30.0, retry_delay * 1.5)
                 continue
+
+            # Handle error responses from StateService (e.g., when called via RPC)
+            if not data.get("success"):
+                error_msg = data.get("error", "Unknown error")
+                status = data.get("meta", {}).get("status", "error")
+                # Use exponential backoff if StateService is degraded or unavailable
+                logger.warning(
+                    f"StateService reported failure (Status: {status}, Error: {error_msg})"
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(30.0, retry_delay * 1.5)
+                continue
+            
+            # Check for degraded mode - we can still proceed but log it
+            meta = data.get("meta", {})
+            if meta.get("status") == "degraded":
+                logger.debug(
+                    f"StateService in degraded mode: {meta.get('status')}. "
+                    f"Continuing with available data."
+                )
 
             # Success! Reset delay to normal loop speed
             retry_delay = 1.0

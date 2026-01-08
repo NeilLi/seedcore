@@ -201,15 +201,30 @@ async def get_system_metrics(response: Optional[Response] = None):
 
     # 1. Check Vital Aggregator
     if not state.agent_aggregator:
-        raise HTTPException(status_code=503, detail="Agent Aggregator not initialized")
+        error_msg = "Agent Aggregator not initialized"
+        # When called via RPC (response=None), return error dict instead of raising HTTPException
+        # HTTPException cannot be pickled by Ray
+        if response is None:
+            return {
+                "success": False,
+                "error": error_msg,
+                "meta": {"status": "error", "latency_ms": 0.0}
+            }
+        raise HTTPException(status_code=503, detail=error_msg)
 
     # 2. Parallel Fetch (Fail-Safe)
     # We gather data concurrently. If Memory/System aggregators fail, 
     # we continue in DEGRADED mode so the Coordinator/Energy services don't crash.
+    async def _get_e_patterns():
+        """Helper to safely get E_patterns, returning empty list if aggregator is None."""
+        if state.system_aggregator:
+            return await state.system_aggregator.get_E_patterns()
+        return []
+    
     results = await asyncio.gather(
         state.agent_aggregator.get_system_metrics(),
         state.memory_aggregator.get_memory_stats(),
-        state.system_aggregator.get_E_patterns(),
+        _get_e_patterns(),
         state.agent_aggregator.get_last_update_time(),
         state.memory_aggregator.get_last_update_time(),
         return_exceptions=True
@@ -218,8 +233,16 @@ async def get_system_metrics(response: Optional[Response] = None):
     # 3. Unpack Safely
     # Agent Metrics are CRITICAL. If this failed, we must error out.
     if isinstance(results[0], Exception) or not results[0]:
-        logger.error(f"Agent Aggregator failed: {results[0]}")
-        raise HTTPException(status_code=503, detail="Agent Aggregator unavailable")
+        error_msg = f"Agent Aggregator unavailable: {results[0]}"
+        logger.error(error_msg)
+        # When called via RPC (response=None), return error dict instead of raising HTTPException
+        if response is None:
+            return {
+                "success": False,
+                "error": error_msg,
+                "meta": {"status": "error", "latency_ms": (time.perf_counter() - start_ts) * 1000.0}
+            }
+        raise HTTPException(status_code=503, detail=error_msg)
     
     agent_metrics = results[0]
     
@@ -283,10 +306,12 @@ async def get_system_metrics(response: Optional[Response] = None):
     response_obj.timestamp = final_ts
 
     # 7. Set Observability Headers (Using the injected 'response' object)
-    response.headers["X-System-Status"] = status_label
-    response.headers["X-Processing-Time"] = f"{latency_ms:.3f}ms"
-    if is_degraded:
-        response.headers["X-Degraded-Reason"] = "memory_aggregator_unavailable"
+    # Only set headers if response object is provided (not None when called via RPC)
+    if response is not None:
+        response.headers["X-System-Status"] = status_label
+        response.headers["X-Processing-Time"] = f"{latency_ms:.3f}ms"
+        if is_degraded:
+            response.headers["X-Degraded-Reason"] = "memory_aggregator_unavailable"
 
     # Ensure JSON safety (NumPy -> Python)
     return _numpy_to_python(response_obj.to_dict())
@@ -317,13 +342,23 @@ async def update_w_mode(payload: Dict[str, Any] = Body(...)):
 
 
 @app.get("/agent-snapshots")
-async def get_all_agent_snapshots():
+async def get_all_agent_snapshots(response: Optional[Response] = None):
     """
     Returns full raw state for all agents.
     Heavy payload - Use only for deep debugging or cold-start snapshots.
     """
     if not state.agent_aggregator:
-        raise HTTPException(status_code=503, detail="Aggregator not ready")
+        error_msg = "Aggregator not ready"
+        # When called via RPC (response=None), return error dict instead of raising HTTPException
+        if response is None:
+            return {
+                "success": False,
+                "error": error_msg,
+                "count": 0,
+                "snapshots": {},
+                "timestamp": time.time()
+            }
+        raise HTTPException(status_code=503, detail=error_msg)
 
     snapshots = await state.agent_aggregator.get_all_agent_snapshots()
 

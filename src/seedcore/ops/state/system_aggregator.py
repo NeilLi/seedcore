@@ -61,13 +61,51 @@ class SystemAggregator:
                 start_time = time.monotonic()
                 
                 # Poll the endpoint that serves E_patterns
-                # This replaces the local HGNNPatternShim call
-                response = await self._http_client.get("/patterns") # Or "/metrics", etc.
-                response.raise_for_status()
+                # Try multiple possible endpoints for backward compatibility
+                endpoints_to_try = ["/cognitive/patterns", "/patterns", "/metrics"]
+                data = None
+                last_error = None
                 
-                data = response.json()
-                # Assuming /patterns returns {"e_patterns": [0.1, 0.2, ...]}
-                e_patterns_list = data.get("e_patterns", data.get("E_patterns", []))
+                for endpoint in endpoints_to_try:
+                    try:
+                        response = await self._http_client.get(endpoint, timeout=2.0)
+                        if response.status_code == 200:
+                            data = response.json()
+                            # Check if this endpoint has the data we need
+                            if "e_patterns" in data or "E_patterns" in data or "patterns" in data:
+                                break
+                        elif response.status_code == 404:
+                            # Try next endpoint
+                            continue
+                        else:
+                            response.raise_for_status()
+                    except httpx.HTTPStatusError as e:
+                        if e.response.status_code == 404:
+                            # Try next endpoint
+                            continue
+                        last_error = e
+                        raise
+                    except Exception as e:
+                        last_error = e
+                        # Try next endpoint for non-HTTP errors
+                        continue
+                
+                if data is None:
+                    # No endpoint worked, use empty patterns (degraded mode)
+                    logger.warning(
+                        f"Could not fetch E_patterns from CognitiveService. "
+                        f"Tried endpoints: {endpoints_to_try}. Using empty patterns. "
+                        f"Last error: {last_error}"
+                    )
+                    e_patterns_list = []
+                else:
+                    # Extract e_patterns from response
+                    e_patterns_list = (
+                        data.get("e_patterns") or 
+                        data.get("E_patterns") or 
+                        data.get("patterns") or 
+                        []
+                    )
                 
                 new_patterns = np.array(e_patterns_list, dtype=np.float32)
                 
@@ -85,7 +123,13 @@ class SystemAggregator:
                 logger.info("E_patterns poll loop cancelled.")
                 break
             except Exception as e:
-                logger.error(f"Error in E_patterns poll loop: {e}")
+                # Log error but continue polling (degraded mode)
+                logger.warning(f"Error in E_patterns poll loop: {e}. Using empty patterns.")
+                # Use empty patterns as fallback
+                async with self._lock:
+                    self._E_patterns = np.array([], dtype=np.float32)
+                    self._last_update_time = time.time()
+                self._is_running.set()
                 await asyncio.sleep(self.poll_interval)
 
     async def get_E_patterns(self) -> np.ndarray:
