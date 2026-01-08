@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional, Sequence, Tuple, Union
+from typing import List, Dict, Any, Optional, Sequence, Tuple, Union, AsyncGenerator
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException  # type: ignore[reportMissingImports]
 from ray import serve  # type: ignore[reportMissingImports]
 from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
 
 from sqlalchemy import select, delete, and_, or_, text  # pyright: ignore[reportMissingImports]
-from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # pyright: ignore[reportMissingImports]
 
 from ..models.fact import Fact
 from .eventizer_service import EventizerService
@@ -25,6 +26,7 @@ from seedcore.models.eventizer import (
     EventizerResponse,
     EventizerConfig,
 )
+from seedcore.database import get_async_pg_session_factory
 
 # Logging
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
@@ -64,17 +66,19 @@ class FactManagerImpl:
 
     def __init__(
         self,
-        db_session: AsyncSession,
+        db_session_factory: Optional[async_sessionmaker[AsyncSession]] = None,
         eventizer_config: Optional[EventizerConfig] = None,
     ):
         """
         Initialize the FactManagerImpl.
 
         Args:
-            db_session: Database session for fact operations
+            db_session_factory: Database session factory for fact operations.
+                               If None, uses get_async_pg_session_factory() from database.py
             eventizer_config: Optional eventizer configuration
         """
-        self.db = db_session
+        # Use provided factory or get default from database.py
+        self.db_session_factory = db_session_factory or get_async_pg_session_factory()
         self.eventizer_config = eventizer_config or EventizerConfig()
         self._eventizer: Optional[EventizerService] = None
         self._initialized = False
@@ -82,6 +86,18 @@ class FactManagerImpl:
     # -----------------
     # Internal helpers
     # -----------------
+
+    @asynccontextmanager
+    async def _get_db_session(self) -> AsyncGenerator[AsyncSession, None]:
+        """Get a database session from the factory."""
+        async with self.db_session_factory() as session:
+            try:
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
 
     @staticmethod
     def _normalize_uuid(value: Optional[Union[str, uuid.UUID]]) -> Optional[uuid.UUID]:
@@ -97,16 +113,16 @@ class FactManagerImpl:
             )
             return None
 
-    async def _ensure_task_node(self, task_id: uuid.UUID) -> None:
-        await self.db.execute(
+    async def _ensure_task_node(self, db: AsyncSession, task_id: uuid.UUID) -> None:
+        await db.execute(
             text("SELECT ensure_task_node(CAST(:task_id AS uuid))"),
             {"task_id": str(task_id)},
         )
 
-    async def _ensure_fact_nodes(self, fact_ids: Sequence[uuid.UUID]) -> None:
+    async def _ensure_fact_nodes(self, db: AsyncSession, fact_ids: Sequence[uuid.UUID]) -> None:
         if not fact_ids:
             return
-        await self.db.execute(
+        await db.execute(
             text(
                 "SELECT ensure_fact_node(fact_id) "
                 "FROM unnest(CAST(:fact_ids AS uuid[])) AS fact_id"
@@ -116,6 +132,7 @@ class FactManagerImpl:
 
     async def _record_task_produces_fact(
         self,
+        db: AsyncSession,
         task_id: Union[str, uuid.UUID],
         fact_id: Union[str, uuid.UUID],
     ) -> None:
@@ -125,10 +142,10 @@ class FactManagerImpl:
         if not normalized_task_id or not normalized_fact_id:
             return
 
-        await self._ensure_task_node(normalized_task_id)
-        await self._ensure_fact_nodes([normalized_fact_id])
+        await self._ensure_task_node(db, normalized_task_id)
+        await self._ensure_fact_nodes(db, [normalized_fact_id])
 
-        await self.db.execute(
+        await db.execute(
             text(
                 "INSERT INTO task_produces_fact(task_id, fact_id) "
                 "VALUES (CAST(:task_id AS uuid), CAST(:fact_id AS uuid)) "
@@ -142,6 +159,7 @@ class FactManagerImpl:
 
     async def _record_task_reads_fact(
         self,
+        db: AsyncSession,
         task_id: Union[str, uuid.UUID],
         fact_ids: Sequence[Union[str, uuid.UUID]],
     ) -> None:
@@ -158,10 +176,10 @@ class FactManagerImpl:
         # Deduplicate to avoid unnecessary work and conflicts
         unique_fact_ids = list(dict.fromkeys(normalized_fact_ids))
 
-        await self._ensure_task_node(normalized_task_id)
-        await self._ensure_fact_nodes(unique_fact_ids)
+        await self._ensure_task_node(db, normalized_task_id)
+        await self._ensure_fact_nodes(db, unique_fact_ids)
 
-        await self.db.execute(
+        await db.execute(
             text(
                 "WITH payload AS ("
                 "    SELECT CAST(:task_id AS uuid) AS task_id, unnest(CAST(:fact_ids AS uuid[])) AS fact_id"
@@ -218,49 +236,50 @@ class FactManagerImpl:
         Returns:
             Created Fact instance
         """
-        # Normalize input to FactCreate model
-        if isinstance(fact_data, str):
-            # Backward compatibility: treat string as content
-            fact_create = FactCreate(content=fact_data)
-        elif isinstance(fact_data, dict):
-            fact_create = FactCreate(**fact_data)
-        elif isinstance(fact_data, FactCreate):
-            fact_create = fact_data
-        else:
-            raise ValueError(f"Invalid fact_data type: {type(fact_data)}")
+        async with self._get_db_session() as db:
+            # Normalize input to FactCreate model
+            if isinstance(fact_data, str):
+                # Backward compatibility: treat string as content
+                fact_create = FactCreate(content=fact_data)
+            elif isinstance(fact_data, dict):
+                fact_create = FactCreate(**fact_data)
+            elif isinstance(fact_data, FactCreate):
+                fact_create = fact_data
+            else:
+                raise ValueError(f"Invalid fact_data type: {type(fact_data)}")
 
-        # Extract metadata and merge with tags
-        meta_data = fact_create.metadata.copy() if fact_create.metadata else {}
-        
-        # Merge tags from metadata if present
-        if tags is None:
-            tags = meta_data.pop("tags", [])
-        elif "tags" in meta_data:
-            # Merge tags from metadata with provided tags
-            tags = list(set(tags + meta_data.pop("tags", [])))
+            # Extract metadata and merge with tags
+            meta_data = fact_create.metadata.copy() if fact_create.metadata else {}
+            
+            # Merge tags from metadata if present
+            if tags is None:
+                tags = meta_data.pop("tags", [])
+            elif "tags" in meta_data:
+                # Merge tags from metadata with provided tags
+                tags = list(set(tags + meta_data.pop("tags", [])))
 
-        # Use source from FactCreate or provided created_by
-        creator = created_by if created_by is not None else fact_create.source
+            # Use source from FactCreate or provided created_by
+            creator = created_by if created_by is not None else fact_create.source
 
-        fact = Fact(
-            text=fact_create.content,
-            tags=tags or [],
-            meta_data=meta_data,
-            namespace=namespace,
-            created_by=creator,
-        )
+            fact = Fact(
+                text=fact_create.content,
+                tags=tags or [],
+                meta_data=meta_data,
+                namespace=namespace,
+                created_by=creator,
+            )
 
-        self.db.add(fact)
-        await self.db.flush()
+            db.add(fact)
+            await db.flush()
 
-        if produced_by_task_id:
-            await self._record_task_produces_fact(produced_by_task_id, fact.id)
+            if produced_by_task_id:
+                await self._record_task_produces_fact(db, produced_by_task_id, fact.id)
 
-        await self.db.commit()
-        await self.db.refresh(fact)
+            await db.commit()
+            await db.refresh(fact)
 
-        logger.info(f"Created fact {fact.id} in namespace {namespace}")
-        return fact
+            logger.info(f"Created fact {fact.id} in namespace {namespace}")
+            return fact
 
     async def get_fact(
         self,
@@ -276,14 +295,15 @@ class FactManagerImpl:
         Returns:
             Fact instance or None if not found
         """
-        query = select(Fact).where(Fact.id == fact_id)
-        result = await self.db.execute(query)
-        fact = result.scalar_one_or_none()
+        async with self._get_db_session() as db:
+            query = select(Fact).where(Fact.id == fact_id)
+            result = await db.execute(query)
+            fact = result.scalar_one_or_none()
 
-        if fact and reading_task_id:
-            await self._record_task_reads_fact(reading_task_id, [fact.id])
+            if fact and reading_task_id:
+                await self._record_task_reads_fact(db, reading_task_id, [fact.id])
 
-        return fact
+            return fact
 
     async def get_facts_by_namespace(
         self,
@@ -303,23 +323,24 @@ class FactManagerImpl:
         Returns:
             List of Fact instances
         """
-        query = (
-            select(Fact)
-            .where(Fact.namespace == namespace)
-            .order_by(Fact.created_at.desc())
-            .limit(limit)
-            .offset(offset)
-        )
-
-        result = await self.db.execute(query)
-        facts = result.scalars().all()
-
-        if facts and reading_task_id:
-            await self._record_task_reads_fact(
-                reading_task_id, [fact.id for fact in facts]
+        async with self._get_db_session() as db:
+            query = (
+                select(Fact)
+                .where(Fact.namespace == namespace)
+                .order_by(Fact.created_at.desc())
+                .limit(limit)
+                .offset(offset)
             )
 
-        return facts
+            result = await db.execute(query)
+            facts = result.scalars().all()
+
+            if facts and reading_task_id:
+                await self._record_task_reads_fact(
+                    db, reading_task_id, [fact.id for fact in facts]
+                )
+
+            return facts
 
     async def search_fact(
         self,
@@ -346,56 +367,57 @@ class FactManagerImpl:
         Returns:
             List of matching Fact instances
         """
-        # Normalize input to FactQuery model
-        if query_data is None:
-            fact_query = FactQuery()
-        elif isinstance(query_data, str):
-            # Backward compatibility: treat string as query_text
-            fact_query = FactQuery(query_text=query_data)
-        elif isinstance(query_data, dict):
-            fact_query = FactQuery(**query_data)
-        elif isinstance(query_data, FactQuery):
-            fact_query = query_data
-        else:
-            raise ValueError(f"Invalid query_data type: {type(query_data)}")
+        async with self._get_db_session() as db:
+            # Normalize input to FactQuery model
+            if query_data is None:
+                fact_query = FactQuery()
+            elif isinstance(query_data, str):
+                # Backward compatibility: treat string as query_text
+                fact_query = FactQuery(query_text=query_data)
+            elif isinstance(query_data, dict):
+                fact_query = FactQuery(**query_data)
+            elif isinstance(query_data, FactQuery):
+                fact_query = query_data
+            else:
+                raise ValueError(f"Invalid query_data type: {type(query_data)}")
 
-        # Use limit from FactQuery unless explicitly overridden
-        search_limit = limit if limit is not None else fact_query.limit
-        text_query = fact_query.query_text
+            # Use limit from FactQuery unless explicitly overridden
+            search_limit = limit if limit is not None else fact_query.limit
+            text_query = fact_query.query_text
 
-        query = select(Fact)
-        conditions = []
+            query = select(Fact)
+            conditions = []
 
-        if text_query:
-            conditions.append(Fact.text.ilike(f"%{text_query}%"))
+            if text_query:
+                conditions.append(Fact.text.ilike(f"%{text_query}%"))
 
-        if tags:
-            for tag in tags:
-                conditions.append(Fact.tags.contains([tag]))
+            if tags:
+                for tag in tags:
+                    conditions.append(Fact.tags.contains([tag]))
 
-        if namespace:
-            conditions.append(Fact.namespace == namespace)
+            if namespace:
+                conditions.append(Fact.namespace == namespace)
 
-        if subject:
-            conditions.append(Fact.subject == subject)
+            if subject:
+                conditions.append(Fact.subject == subject)
 
-        if predicate:
-            conditions.append(Fact.predicate == predicate)
+            if predicate:
+                conditions.append(Fact.predicate == predicate)
 
-        if conditions:
-            query = query.where(and_(*conditions))
+            if conditions:
+                query = query.where(and_(*conditions))
 
-        query = query.order_by(Fact.created_at.desc()).limit(search_limit)
+            query = query.order_by(Fact.created_at.desc()).limit(search_limit)
 
-        result = await self.db.execute(query)
-        facts = result.scalars().all()
+            result = await db.execute(query)
+            facts = result.scalars().all()
 
-        if facts and reading_task_id:
-            await self._record_task_reads_fact(
-                reading_task_id, [fact.id for fact in facts]
-            )
+            if facts and reading_task_id:
+                await self._record_task_reads_fact(
+                    db, reading_task_id, [fact.id for fact in facts]
+                )
 
-        return facts
+            return facts
 
     # -----------------
     # Eventizer Integration
@@ -458,19 +480,20 @@ class FactManagerImpl:
             )
 
         # Store in database
-        self.db.add(fact)
-        await self.db.flush()
+        async with self._get_db_session() as db:
+            db.add(fact)
+            await db.flush()
 
-        if produced_by_task_id:
-            await self._record_task_produces_fact(produced_by_task_id, fact.id)
+            if produced_by_task_id:
+                await self._record_task_produces_fact(db, produced_by_task_id, fact.id)
 
-        await self.db.commit()
-        await self.db.refresh(fact)
+            await db.commit()
+            await db.refresh(fact)
 
-        logger.info(
-            f"Created fact {fact.id} from eventizer processing with {len(response.event_tags.event_types)} event types"
-        )
-        return fact, response
+            logger.info(
+                f"Created fact {fact.id} from eventizer processing with {len(response.event_tags.event_types)} event types"
+            )
+            return fact, response
 
     async def process_multiple_texts(
         self,
@@ -539,31 +562,32 @@ class FactManagerImpl:
         Returns:
             Created temporal Fact instance
         """
-        fact = Fact.create_temporal(
-            subject=subject,
-            predicate=predicate,
-            object_data=object_data,
-            text=text,
-            valid_from=valid_from,
-            valid_to=valid_to,
-            namespace=namespace,
-            created_by=created_by,
-        )
+        async with self._get_db_session() as db:
+            fact = Fact.create_temporal(
+                subject=subject,
+                predicate=predicate,
+                object_data=object_data,
+                text=text,
+                valid_from=valid_from,
+                valid_to=valid_to,
+                namespace=namespace,
+                created_by=created_by,
+            )
 
-        # PKG validation is now handled upstream by the coordinator
-        # This method just creates the temporal fact
+            # PKG validation is now handled upstream by the coordinator
+            # This method just creates the temporal fact
 
-        self.db.add(fact)
-        await self.db.flush()
+            db.add(fact)
+            await db.flush()
 
-        if produced_by_task_id:
-            await self._record_task_produces_fact(produced_by_task_id, fact.id)
+            if produced_by_task_id:
+                await self._record_task_produces_fact(db, produced_by_task_id, fact.id)
 
-        await self.db.commit()
-        await self.db.refresh(fact)
+            await db.commit()
+            await db.refresh(fact)
 
-        logger.info(f"Created temporal fact {fact.id} for subject {subject}")
-        return fact
+            logger.info(f"Created temporal fact {fact.id} for subject {subject}")
+            return fact
 
     async def get_active_facts(
         self,
@@ -581,29 +605,30 @@ class FactManagerImpl:
         Returns:
             List of active temporal facts
         """
-        now = datetime.now(timezone.utc)
+        async with self._get_db_session() as db:
+            now = datetime.now(timezone.utc)
 
-        query = (
-            select(Fact)
-            .where(
-                and_(
-                    Fact.subject == subject,
-                    Fact.namespace == namespace,
-                    or_(Fact.valid_to.is_(None), Fact.valid_to > now),
+            query = (
+                select(Fact)
+                .where(
+                    and_(
+                        Fact.subject == subject,
+                        Fact.namespace == namespace,
+                        or_(Fact.valid_to.is_(None), Fact.valid_to > now),
+                    )
                 )
-            )
-            .order_by(Fact.created_at.desc())
-        )
-
-        result = await self.db.execute(query)
-        facts = result.scalars().all()
-
-        if facts and reading_task_id:
-            await self._record_task_reads_fact(
-                reading_task_id, [fact.id for fact in facts]
+                .order_by(Fact.created_at.desc())
             )
 
-        return facts
+            result = await db.execute(query)
+            facts = result.scalars().all()
+
+            if facts and reading_task_id:
+                await self._record_task_reads_fact(
+                    db, reading_task_id, [fact.id for fact in facts]
+                )
+
+            return facts
 
     async def get_expired_facts(
         self,
@@ -621,26 +646,27 @@ class FactManagerImpl:
         Returns:
             List of expired temporal facts
         """
-        now = datetime.now(timezone.utc)
+        async with self._get_db_session() as db:
+            now = datetime.now(timezone.utc)
 
-        query = select(Fact).where(
-            and_(Fact.valid_to.is_not(None), Fact.valid_to <= now)
-        )
-
-        if namespace:
-            query = query.where(Fact.namespace == namespace)
-
-        query = query.order_by(Fact.valid_to.desc()).limit(limit)
-
-        result = await self.db.execute(query)
-        facts = result.scalars().all()
-
-        if facts and reading_task_id:
-            await self._record_task_reads_fact(
-                reading_task_id, [fact.id for fact in facts]
+            query = select(Fact).where(
+                and_(Fact.valid_to.is_not(None), Fact.valid_to <= now)
             )
 
-        return facts
+            if namespace:
+                query = query.where(Fact.namespace == namespace)
+
+            query = query.order_by(Fact.valid_to.desc()).limit(limit)
+
+            result = await db.execute(query)
+            facts = result.scalars().all()
+
+            if facts and reading_task_id:
+                await self._record_task_reads_fact(
+                    db, reading_task_id, [fact.id for fact in facts]
+                )
+
+            return facts
 
     async def cleanup_expired_facts(
         self, namespace: Optional[str] = None, dry_run: bool = False
@@ -655,39 +681,40 @@ class FactManagerImpl:
         Returns:
             Number of expired facts processed
         """
-        now = datetime.now(timezone.utc)
+        async with self._get_db_session() as db:
+            now = datetime.now(timezone.utc)
 
-        query = select(Fact).where(
-            and_(Fact.valid_to.is_not(None), Fact.valid_to <= now)
-        )
-
-        if namespace:
-            query = query.where(Fact.namespace == namespace)
-
-        if dry_run:
-            result = await self.db.execute(query)
-            expired_facts = result.scalars().all()
-            logger.info(
-                f"Found {len(expired_facts)} expired facts in namespace {namespace or 'all'}"
+            query = select(Fact).where(
+                and_(Fact.valid_to.is_not(None), Fact.valid_to <= now)
             )
-            return len(expired_facts)
 
-        # Delete expired facts
-        delete_query = delete(Fact).where(
-            and_(Fact.valid_to.is_not(None), Fact.valid_to <= now)
-        )
+            if namespace:
+                query = query.where(Fact.namespace == namespace)
 
-        if namespace:
-            delete_query = delete_query.where(Fact.namespace == namespace)
+            if dry_run:
+                result = await db.execute(query)
+                expired_facts = result.scalars().all()
+                logger.info(
+                    f"Found {len(expired_facts)} expired facts in namespace {namespace or 'all'}"
+                )
+                return len(expired_facts)
 
-        result = await self.db.execute(delete_query)
-        await self.db.commit()
+            # Delete expired facts
+            delete_query = delete(Fact).where(
+                and_(Fact.valid_to.is_not(None), Fact.valid_to <= now)
+            )
 
-        deleted_count = result.rowcount
-        logger.info(
-            f"Cleaned up {deleted_count} expired facts from namespace {namespace or 'all'}"
-        )
-        return deleted_count
+            if namespace:
+                delete_query = delete_query.where(Fact.namespace == namespace)
+
+            result = await db.execute(delete_query)
+            await db.commit()
+
+            deleted_count = result.rowcount
+            logger.info(
+                f"Cleaned up {deleted_count} expired facts from namespace {namespace or 'all'}"
+            )
+            return deleted_count
 
     # -----------------
     # PKG Integration
@@ -715,21 +742,22 @@ class FactManagerImpl:
         Returns:
             List of PKG-governed facts
         """
-        query = select(Fact).where(Fact.validation_status.is_not(None))
+        async with self._get_db_session() as db:
+            query = select(Fact).where(Fact.validation_status.is_not(None))
 
-        if snapshot_id:
-            query = query.where(Fact.snapshot_id == snapshot_id)
+            if snapshot_id:
+                query = query.where(Fact.snapshot_id == snapshot_id)
 
-        if rule_id:
-            query = query.where(Fact.pkg_rule_id == rule_id)
+            if rule_id:
+                query = query.where(Fact.pkg_rule_id == rule_id)
 
-        if namespace:
-            query = query.where(Fact.namespace == namespace)
+            if namespace:
+                query = query.where(Fact.namespace == namespace)
 
-        query = query.order_by(Fact.created_at.desc()).limit(limit)
+            query = query.order_by(Fact.created_at.desc()).limit(limit)
 
-        result = await self.db.execute(query)
-        return result.scalars().all()
+            result = await db.execute(query)
+            return result.scalars().all()
 
     # -----------------
     # Analytics and Reporting
@@ -747,51 +775,52 @@ class FactManagerImpl:
         Returns:
             Dictionary with fact statistics
         """
-        base_query = select(Fact)
+        async with self._get_db_session() as db:
+            base_query = select(Fact)
 
-        if namespace:
-            base_query = base_query.where(Fact.namespace == namespace)
+            if namespace:
+                base_query = base_query.where(Fact.namespace == namespace)
 
-        # Total facts
-        total_result = await self.db.execute(base_query)
-        total_facts = len(total_result.scalars().all())
+            # Total facts
+            total_result = await db.execute(base_query)
+            total_facts = len(total_result.scalars().all())
 
-        # Temporal facts
-        temporal_query = base_query.where(
-            or_(Fact.valid_from.is_not(None), Fact.valid_to.is_not(None))
-        )
-        temporal_result = await self.db.execute(temporal_query)
-        temporal_facts = len(temporal_result.scalars().all())
+            # Temporal facts
+            temporal_query = base_query.where(
+                or_(Fact.valid_from.is_not(None), Fact.valid_to.is_not(None))
+            )
+            temporal_result = await db.execute(temporal_query)
+            temporal_facts = len(temporal_result.scalars().all())
 
-        # PKG governed facts
-        pkg_query = base_query.where(Fact.validation_status.is_not(None))
-        pkg_result = await self.db.execute(pkg_query)
-        pkg_facts = len(pkg_result.scalars().all())
+            # PKG governed facts
+            pkg_query = base_query.where(Fact.validation_status.is_not(None))
+            pkg_result = await db.execute(pkg_query)
+            pkg_facts = len(pkg_result.scalars().all())
 
-        # Expired facts
-        now = datetime.now(timezone.utc)
-        expired_query = base_query.where(
-            and_(Fact.valid_to.is_not(None), Fact.valid_to <= now)
-        )
-        expired_result = await self.db.execute(expired_query)
-        expired_facts = len(expired_result.scalars().all())
+            # Expired facts
+            now = datetime.now(timezone.utc)
+            expired_query = base_query.where(
+                and_(Fact.valid_to.is_not(None), Fact.valid_to <= now)
+            )
+            expired_result = await db.execute(expired_query)
+            expired_facts = len(expired_result.scalars().all())
 
-        # Namespaces
-        namespaces_query = select(Fact.namespace).distinct()
-        if namespace:
-            namespaces_query = namespaces_query.where(Fact.namespace == namespace)
-        namespaces_result = await self.db.execute(namespaces_query)
-        namespaces = [ns[0] for ns in namespaces_result.fetchall()]
+            # Namespaces
+            namespaces_query = select(Fact.namespace).distinct()
+            if namespace:
+                namespaces_query = namespaces_query.where(Fact.namespace == namespace)
+            namespaces_result = await db.execute(namespaces_query)
+            namespaces = [ns[0] for ns in namespaces_result.fetchall()]
 
-        return {
-            "total_facts": total_facts,
-            "temporal_facts": temporal_facts,
-            "pkg_governed_facts": pkg_facts,
-            "expired_facts": expired_facts,
-            "active_facts": temporal_facts - expired_facts,
-            "namespaces": namespaces,
-            "namespace_count": len(namespaces),
-        }
+            return {
+                "total_facts": total_facts,
+                "temporal_facts": temporal_facts,
+                "pkg_governed_facts": pkg_facts,
+                "expired_facts": expired_facts,
+                "active_facts": temporal_facts - expired_facts,
+                "namespaces": namespaces,
+                "namespace_count": len(namespaces),
+            }
 
     async def get_recent_activity(
         self,
@@ -811,24 +840,25 @@ class FactManagerImpl:
         Returns:
             List of recently created facts
         """
-        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        async with self._get_db_session() as db:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        query = select(Fact).where(Fact.created_at >= cutoff_time)
+            query = select(Fact).where(Fact.created_at >= cutoff_time)
 
-        if namespace:
-            query = query.where(Fact.namespace == namespace)
+            if namespace:
+                query = query.where(Fact.namespace == namespace)
 
-        query = query.order_by(Fact.created_at.desc()).limit(limit)
+            query = query.order_by(Fact.created_at.desc()).limit(limit)
 
-        result = await self.db.execute(query)
-        facts = result.scalars().all()
+            result = await db.execute(query)
+            facts = result.scalars().all()
 
-        if facts and reading_task_id:
-            await self._record_task_reads_fact(
-                reading_task_id, [fact.id for fact in facts]
-            )
+            if facts and reading_task_id:
+                await self._record_task_reads_fact(
+                    db, reading_task_id, [fact.id for fact in facts]
+                )
 
-        return facts
+            return facts
 
 
 # --- 2. Define the FastAPI app (Ingress) ---
@@ -857,7 +887,19 @@ class FactManagerService:
             raise e
 
     def _init_fact_manager(self, config: Dict[str, Any]) -> FactManagerImpl:
-        return FactManagerImpl(config)
+        """
+        Initialize FactManagerImpl with database session factory from database.py.
+        
+        Args:
+            config: Optional configuration dict (currently unused, session factory
+                   is obtained from database.py)
+        
+        Returns:
+            Initialized FactManagerImpl instance
+        """
+        # Use get_async_pg_session_factory() from database.py
+        # This creates a session factory using the centralized database configuration
+        return FactManagerImpl(db_session_factory=None)  # None triggers default from database.py
 
     # --- 3. Hybrid Handlers (RPC + HTTP) ---
 
