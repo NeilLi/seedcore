@@ -8,6 +8,7 @@ This module provides the "Coordinator's Reflex" logic. It can:
 3. Map perceived service requirements to agent specializations.
 """
 
+from dataclasses import replace
 from typing import Dict, Any, Optional, List
 from seedcore.logging_setup import ensure_serve_logger
 from seedcore.agents.roles import Specialization
@@ -80,15 +81,23 @@ class IntentEnricher:
             # High confidence historical match
             historical_spec = top_memory.get("metadata", {}).get("intended_specialization")
             
-            if historical_spec and historical_spec != intent.specialization:
-                logger.info(
-                    f"[IntentEnricher] Detected historical spec override: "
-                    f"{intent.specialization} -> {historical_spec} (sim: {top_memory['similarity']:.2f})"
-                )
-                # Boost confidence if we find a historical match
-                intent = intent.model_copy(update={
-                    "confidence": IntentConfidence.HIGH,
-                    "specialization": historical_spec # Optional: Follow the successful historical path
-                })
+            if historical_spec:
+                if historical_spec != intent.specialization:
+                    logger.info(
+                        f"[IntentEnricher] Detected historical spec override: "
+                        f"{intent.specialization} -> {historical_spec} (sim: {top_memory['similarity']:.2f})"
+                    )
+                    # Update both specialization and confidence for different spec
+                    intent = replace(
+                        intent,
+                        confidence=IntentConfidence.HIGH,
+                        specialization=historical_spec
+                    )
+                else:
+                    # Same specialization but high similarity - boost confidence
+                    intent = replace(
+                        intent,
+                        confidence=IntentConfidence.HIGH
+                    )
 
         return intent
