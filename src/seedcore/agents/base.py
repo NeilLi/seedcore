@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple, Union
 # ---- Roles / Skills / RBAC / Routing -------------------------------------------
 
 from seedcore.models import TaskPayload
+from seedcore.models.result_schema import make_envelope
 from .roles import (
     Specialization,
     RoleProfile,
@@ -1396,7 +1397,7 @@ class BaseAgent:
         if self.load > self._load_max:
             self.load = 0.0
 
-        # --- 5) Result Construction (V2 Schema Compliant) ------------------------
+        # --- 5) Result Construction (Canonical Envelope) ------------------------
         finished_ts = self._utc_now_iso()
         latency_ms = self._elapsed_ms(started_monotonic)
 
@@ -1422,34 +1423,39 @@ class BaseAgent:
             "ttl_seconds": tv.ttl_seconds,
         }
 
-        result_payload = {
+        # Build payload data
+        payload_data = {
             "agent_id": self.agent_id,
-            "task_id": tv.task_id,
-            "success": success,
-            "data": {
-                "results": results,
-                "errors": tool_errors,
-                "skill_fit": skill_fit,
-                "quality": quality,
-                "salience": salience,
-            },
-            # Strict V2 'meta' structure
-            "meta": {
-                "exec": exec_meta,
-                "routing_hints": routing_hints_meta,
-                # Interaction context useful for Router sticky logic
-                "interaction": {
-                    "mode": tv.interaction_mode,
-                    "conversation_id": None,  # TaskView doesn't store this, but we preserve structure
-                },
+            "results": results,
+            "errors": tool_errors,
+            "skill_fit": skill_fit,
+            "quality": quality,
+            "salience": salience,
+        }
+
+        # Build metadata
+        meta_data = {
+            "exec": exec_meta,
+            "routing_hints": routing_hints_meta,
+            # Interaction context useful for Router sticky logic
+            "interaction": {
+                "mode": tv.interaction_mode,
+                "conversation_id": None,  # TaskView doesn't store this, but we preserve structure
             },
         }
 
-        # Backward compatibility for flat fields if your system expects them top-level
-        result_payload["results"] = results
-        result_payload["errors"] = tool_errors
-
-        return result_payload
+        # Return canonical envelope
+        return make_envelope(
+            task_id=tv.task_id,
+            success=success,
+            payload=payload_data,
+            error=None if success else (tool_errors[0].get("error") if tool_errors else "execution_failed"),
+            error_type=None if success else "tool_execution_error",
+            retry=True,
+            decision_kind=None,  # Agent doesn't make routing decisions
+            meta=meta_data,
+            path="agent",
+        )
 
     def emit_signal(self, **signals: Any) -> Dict[str, Any]:
         """
@@ -1548,28 +1554,45 @@ class BaseAgent:
     def _reject_result(
         self, tv, reason: str, *, started_ts: str, started_monotonic: float
     ) -> Dict[str, Any]:
-        """Return a structured rejection envelope."""
-        return {
+        """Return a structured rejection envelope in canonical format."""
+        finished_ts = self._utc_now_iso()
+        latency_ms = self._elapsed_ms(started_monotonic)
+        
+        # Build payload data
+        payload_data = {
             "agent_id": self.agent_id,
-            "task_id": tv.task_id,
             "specialization": getattr(
                 self.specialization, "value", self.specialization
             ),
-            "success": False,
             "results": [],
             "errors": [{"error": reason}],
             "quality": 0.0,
             "salience": 0.0,
-            "meta": {
-                "exec": {
-                    "started_at": started_ts,
-                    "finished_at": self._utc_now_iso(),
-                    "latency_ms": self._elapsed_ms(started_monotonic),
-                    "attempt": 1,
-                },
-                "reject_reason": reason,
-            },
         }
+        
+        # Build metadata
+        meta_data = {
+            "exec": {
+                "started_at": started_ts,
+                "finished_at": finished_ts,
+                "latency_ms": latency_ms,
+                "attempt": 1,
+            },
+            "reject_reason": reason,
+        }
+        
+        # Return canonical envelope
+        return make_envelope(
+            task_id=tv.task_id,
+            success=False,
+            payload=payload_data,
+            error=reason,
+            error_type="rejection",
+            retry=False,  # Rejections are typically not retryable
+            decision_kind=None,
+            meta=meta_data,
+            path="agent",
+        )
 
     def _score_skill_match(
         self, materialized: Dict[str, float], desired: Dict[str, float]
@@ -2003,13 +2026,30 @@ class BaseAgent:
         self.state.tasks_processed += 1
         self.state.record_salience(salience)
 
-        return {
+        # Extract task_id from task_info
+        task_id = task_info.get("task_id") or task_info.get("task") or "unknown"
+        
+        # Build payload data
+        payload_data = {
             "agent_id": self.agent_id,
             "specialization": self.specialization.value,
             "salience": salience,
             "decision": decision,
             "h": self.get_private_vector(),
         }
+        
+        # Return canonical envelope
+        return make_envelope(
+            task_id=task_id,
+            success=True,
+            payload=payload_data,
+            error=None,
+            error_type=None,
+            retry=True,
+            decision_kind=None,
+            meta={},
+            path="agent",
+        )
 
     # ============================================================================
     # Decision stub (replace with real policy)

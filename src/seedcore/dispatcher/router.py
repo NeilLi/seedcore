@@ -39,7 +39,7 @@ Routers
     Direct client for the Organism Service (Tier-1).
     Executes tasks through Organs → Agents → Tools.
     Handles agent selection, specialization matching, and tool execution.
-    May escalate to Cognitive Service if result.kind == "cognitive".
+    May escalate to Cognitive Service if result.decision_kind == "cognitive".
 
 - RouterFactory:
     Factory that creates appropriate router instances based on configuration.
@@ -109,7 +109,12 @@ from dataclasses import dataclass
 from seedcore.models import TaskPayload
 from seedcore.serve.base_client import BaseServiceClient, CircuitBreaker, RetryConfig
 from seedcore.models.cognitive import DecisionKind, CognitiveType
-from seedcore.models.result_schema import create_cognitive_result, create_error_result
+from seedcore.models.result_schema import (
+    create_cognitive_result,
+    create_error_result,
+    make_envelope,
+    normalize_envelope,
+)
 from seedcore.serve.cognitive_client import CognitiveServiceClient
 
 
@@ -164,15 +169,18 @@ def _wrap_cognitive_response(
     task_data: Dict[str, Any],
     correlation_id: Optional[str],
     cog_res: Dict[str, Any],
+    task_id: str,
 ) -> Dict[str, Any]:
     """
-    Normalize CognitiveService responses back into TaskResult-shaped envelopes.
+    Normalize CognitiveService responses into canonical envelope format.
     """
     if not isinstance(cog_res, dict):
         raise ValueError("CognitiveService returned non-dict response")
 
     metadata = cog_res.get("metadata") or {}
     meta_kwargs = metadata if isinstance(metadata, dict) else {}
+    if correlation_id:
+        meta_kwargs.setdefault("correlation_id", correlation_id)
 
     agent_id = (
         task_data.get("agent_id")
@@ -201,26 +209,17 @@ def _wrap_cognitive_response(
             **meta_kwargs,
         )
 
-        result_dict = cognitive_result.model_dump()
-
-        merged_meta = dict(result_dict.get("metadata") or {})
-        merged_meta.update(meta_kwargs)
-        if correlation_id:
-            merged_meta.setdefault("correlation_id", correlation_id)
-        result_dict["metadata"] = merged_meta
-
-        payload_dict = result_dict.get("payload") or {}
-        if isinstance(payload_dict, dict):
-            payload_meta = dict(payload_dict.get("metadata") or {})
-            payload_meta.update(meta_kwargs)
-            if correlation_id:
-                payload_meta.setdefault("correlation_id", correlation_id)
-            payload_dict["metadata"] = payload_meta
-            result_dict["payload"] = payload_dict
-
-        result_dict["success"] = True
-        result_dict["error"] = None
-        return result_dict
+        # Extract payload from cognitive result
+        result_payload = cognitive_result.model_dump()
+        
+        return make_envelope(
+            task_id=task_id,
+            success=True,
+            payload=result_payload,
+            decision_kind=DecisionKind.COGNITIVE.value,
+            meta=meta_kwargs,
+            path="cognitive_service",
+        )
 
     # Failure path – wrap as error result while preserving metadata
     error_message = (
@@ -234,28 +233,18 @@ def _wrap_cognitive_response(
         **meta_kwargs,
     )
 
-    err_dict = error_result.model_dump()
-
-    merged_meta = dict(err_dict.get("metadata") or {})
-    merged_meta.update(meta_kwargs)
-    if correlation_id:
-        merged_meta.setdefault("correlation_id", correlation_id)
-    err_dict["metadata"] = merged_meta
-
-    payload_dict = err_dict.get("payload")
-    if isinstance(payload_dict, dict):
-        payload_meta = dict(payload_dict.get("metadata") or {})
-        payload_meta.update(meta_kwargs)
-        if correlation_id:
-            payload_meta.setdefault("correlation_id", correlation_id)
-        payload_dict["metadata"] = payload_meta
-        payload_dict["error"] = error_message
-        payload_dict["original_type"] = DecisionKind.COGNITIVE.value
-        err_dict["payload"] = payload_dict
-
-    err_dict["success"] = False
-    err_dict["error"] = error_message
-    return err_dict
+    error_payload = error_result.model_dump()
+    
+    return make_envelope(
+        task_id=task_id,
+        success=False,
+        payload=error_payload,
+        error=error_message,
+        error_type="cognitive_service_failure",
+        decision_kind=DecisionKind.ERROR.value,
+        meta=meta_kwargs,
+        path="cognitive_service",
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -321,17 +310,17 @@ class OrganismRouter(Router):
     Flow:
       1. POST /route-and-execute (canonical endpoint)
          -> Routes and executes task in one call
-      2. If execute_result.kind == DecisionKind.COGNITIVE ("cognitive"):
+      2. If execute_result.decision_kind == DecisionKind.COGNITIVE ("cognitive"):
             Delegate to the centralized CognitiveService via the unified client.
          Else:
             Return execute_result directly.
 
     NOTE:
     - Uses /route-and-execute endpoint (canonical routing+execution API)
-    - If execute_result.kind == "fast": that's a normal success, return it.
-    - If execute_result.kind == "hgnn": that should already be a fully
+    - If execute_result.decision_kind == "fast": that's a normal success, return it.
+    - If execute_result.decision_kind == "hgnn": that should already be a fully
       decomposed HGNN-style plan (EscalatedResult). We DO NOT forward again.
-    - If execute_result.kind == "error": just return it.
+    - If execute_result.decision_kind == "error": just return it.
     """
 
     def __init__(
@@ -430,32 +419,12 @@ class OrganismRouter(Router):
                 else:
                     raise ValueError(f"OrganismService returned non-dict response (type={type(response).__name__})")
 
-            # Extract result from OrganismResponse format
-            # OrganismResponse: { success, result, error, task_type }
-            result = response.get("result", {})
-            
-            # Ensure result is always a dict (defensive check)
-            # The server's "result" field might be a string or other type, which would cause
-            # AttributeError when calling .setdefault() or .get() methods
-            if not isinstance(result, dict):
-                logger.warning(
-                    f"[OrganismRouter] Server returned non-dict result (type={type(result).__name__}), "
-                    f"wrapping in error dict for task {task_id}"
-                )
-                result = {
-                    "success": False,
-                    "error": str(result) if result is not None else "Server returned None in result field",
-                    "kind": DecisionKind.ERROR.value,
-                    "path": "organism_result_type_error"
-                }
-
-            # Add warnings if success=False
-            if not response.get("success", True):
-                result.setdefault("error", response.get("error"))
-                result.setdefault("success", False)
+            # Response is now a canonical envelope directly (no OrganismResponse wrapper)
+            # Normalize to ensure all required fields are present
+            result = normalize_envelope(response, task_id=task_id, path="organism_service")
 
             # 3. Handle possible cognitive escalation
-            decision_kind = result.get("kind")
+            decision_kind = result.get("decision_kind")
             if decision_kind == DecisionKind.COGNITIVE.value:
                 logger.info(
                     f"[OrganismRouter] Cognitive escalation required for {task_id}; "
@@ -490,6 +459,7 @@ class OrganismRouter(Router):
                             task_data=task_data,
                             correlation_id=correlation_id,
                             cog_res=cog_res,
+                            task_id=task_id,
                         )
 
                 except Exception as exc:
@@ -499,16 +469,20 @@ class OrganismRouter(Router):
                     result.setdefault("warning", f"Cognitive escalation failed: {exc}")
 
         except Exception as e:
+            # Get task_id safely (might not be defined if exception occurs early)
+            safe_task_id = task_payload.task_id if "task_payload" in locals() else "unknown"
             logger.error(
-                f"[OrganismRouter] Failed to route task {task_payload.task_id}: {e}",
+                f"[OrganismRouter] Failed to route task {safe_task_id}: {e}",
                 exc_info=True
             )
-            result = {
-                "kind": DecisionKind.ERROR.value,
-                "success": False,
-                "error": str(e),
-                "path": "organism_router_exception",
-            }
+            result = make_envelope(
+                task_id=safe_task_id,
+                success=False,
+                error=str(e),
+                error_type="organism_router_exception",
+                decision_kind=DecisionKind.ERROR.value,
+                path="organism_router_exception",
+            )
 
         # 4. Attach routing metadata + execution metrics
         selected_agent = result.get("selected_agent_id") or result.get("meta", {}).get(
@@ -522,7 +496,8 @@ class OrganismRouter(Router):
         _attach_routing_decision(result, selected_agent, score)
         _attach_exec_metrics(result, started_at, attempt=1)
 
-        return result
+        # Ensure result is in canonical format before returning
+        return normalize_envelope(result, task_id=task_id, path="organism_router")
 
 
 # -----------------------------------------------------------------------------
@@ -609,37 +584,23 @@ class CoordinatorHttpRouter(Router):
             logger.debug(f"[Router] 📡 Routing via Coordinator HTTP: {task_id}")
 
             # We assume self.client handles network errors and returns Dict
-            result = await self.client.post("/route-and-execute", json=task_data)
+            raw_result = await self.client.post("/route-and-execute", json=task_data)
 
-            # Validation (handle case where JSON response is a string or other type)
-            if not isinstance(result, dict):
-                if isinstance(result, str):
-                    # If result is a JSON string, try to parse it
-                    try:
-                        import json
-                        parsed = json.loads(result)
-                        if isinstance(parsed, dict):
-                            result = parsed
-                        else:
-                            # Parsed JSON is not a dict (e.g., list, number, string)
-                            raise ValueError(f"Coordinator returned non-dict JSON (type={type(parsed).__name__})")
-                    except json.JSONDecodeError:
-                        # Not valid JSON, treat as error message
-                        raise ValueError(f"Coordinator returned non-dict response (string value: {result[:200]})")
-                    except Exception as e:
-                        raise ValueError(f"Coordinator returned non-dict response: {e}")
-                else:
-                    raise ValueError(f"Coordinator returned invalid type: {type(result).__name__}")
+            # Normalize to canonical envelope format
+            result = normalize_envelope(raw_result, task_id=task_id, path="coordinator_service")
 
         except Exception as e:
+            # Get task_id safely (might not be defined if exception occurs early)
+            safe_task_id = task_id if "task_id" in locals() else "unknown"
             logger.error(f"[Router] ❌ Routing failed: {e}", exc_info=True)
-            result = {
-                "kind": "error",  # DecisionKind.ERROR.value
-                "success": False,
-                "error": str(e),
-                "path": "coordinator_http_error",
-                "task_id": str(task_id) if "task_id" in locals() else "unknown",
-            }
+            result = make_envelope(
+                task_id=safe_task_id,
+                success=False,
+                error=str(e),
+                error_type="coordinator_http_error",
+                decision_kind=DecisionKind.ERROR.value,
+                path="coordinator_http_error",
+            )
 
         # 3. Metrics Attachment (Safe Extraction)
         # Using .get chain with defaults to prevent KeyErrors on partial results
@@ -654,7 +615,9 @@ class CoordinatorHttpRouter(Router):
         _attach_routing_decision(result, selected_agent, score)
         _attach_exec_metrics(result, started_at, attempt=1)
 
-        return result
+        # Ensure result is in canonical format before returning
+        safe_task_id = result.get("task_id") or (task_id if "task_id" in locals() else "unknown")
+        return normalize_envelope(result, task_id=safe_task_id, path="coordinator_router")
 
     async def health_check(self) -> Dict[str, Any]:
         """Check Coordinator service health."""

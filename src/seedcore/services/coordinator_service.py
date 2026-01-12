@@ -35,7 +35,10 @@ from ..utils.ray_utils import COG, ML, ORG
 
 # Models
 from ..models.cognitive import DecisionKind, CognitiveType
-from ..models.result_schema import create_error_result
+from ..models.result_schema import (
+    make_envelope,
+    normalize_envelope,
+)
 from ..coordinator.models import (
     AnomalyTriageRequest,
     AnomalyTriageResponse,
@@ -482,14 +485,24 @@ class Coordinator:
 
             # Coerce to TaskPayload
             task_obj, task_dict = coerce_task_payload(task_data)
-            task_type = task_obj.type.lower()
 
             # B. Special Workflows
-            if task_type == "anomaly_triage":
+            # Extract workflow from TaskPayload structure:
+            # 1. Top-level field (task_obj.workflow)
+            # 2. Dict top-level (task_dict.get("workflow"))
+            # 3. params.cognitive.workflow (where it's stored in JSONB)
+            workflow = (
+                task_obj.workflow
+                or task_dict.get("workflow")
+                or task_dict.get("params", {}).get("cognitive", {}).get("workflow")
+                or None
+            )
+            
+            if workflow == "anomaly_triage":
                 req = AnomalyTriageRequest(**task_dict.get("params", {}))
                 return await self._handle_anomaly_triage(req)
 
-            if task_type == "ml_tune_callback":
+            if workflow == "ml_tune_callback":
                 req = TuneCallbackRequest(**task_dict.get("params", {}))
                 return await self._handle_tune_callback(req)
 
@@ -515,104 +528,26 @@ class Coordinator:
                 execution_config=exec_config,
             )
 
-            # CRITICAL: Normalize result to dispatcher-compatible format
-            # Dispatcher expects: {success: bool, error: Optional[str], ...}
-            # Coordinator must always return this format, never raw domain objects
+            # Normalize result to canonical envelope format
             task_id = task_dict.get("task_id") or task_obj.task_id
-
-            if not isinstance(result, dict):
-                logger.error(
-                    f"Coordinator returned non-dict result (type={type(result).__name__}) for task {task_id}"
-                )
-                result = {
-                    "success": False,
-                    "error": f"Invalid result type: {type(result).__name__}",
-                    "kind": "error",
-                    "path": "coordinator_type_error",
-                }
-            else:
-                # Normalize success field - handle different result formats
-                if "success" not in result:
-                    # Case 1: TaskResult format: {kind: "error", payload: {error: ...}}
-                    result_kind = result.get("kind")
-                    if (
-                        result_kind == "error"
-                        or result_kind == DecisionKind.ERROR.value
-                    ):
-                        # TaskResult error format - extract error from payload
-                        payload = result.get("payload", {})
-                        if isinstance(payload, dict):
-                            result["success"] = False
-                            # Extract error message from payload if not at top level
-                            if "error" not in result and "error" in payload:
-                                result["error"] = payload.get("error")
-                            elif "error_type" in payload:
-                                result["error"] = payload.get(
-                                    "error_type", "unknown_error"
-                                )
-                        else:
-                            result["success"] = False
-                            result["error"] = (
-                                result.get("error")
-                                or "TaskResult error without payload"
-                            )
-
-                    # Case 2: OrganismResponse format: {success: bool, result: {...}, error: ...}
-                    # Note: OrganismResponse should already have success, but handle edge cases
-                    elif "result" in result:
-                        # This looks like OrganismResponse - it should have success, but if missing, infer it
-                        if "success" not in result:
-                            # Infer from error field (OrganismResponse.success = not bool(error))
-                            result["success"] = not bool(result.get("error"))
-                            logger.debug(
-                                f"Coordinator inferred success from OrganismResponse format "
-                                f"for task {task_id}: success={result['success']}"
-                            )
-
-                    # Case 3: Raw domain object (no success/error fields)
-                    else:
-                        # Check if it looks like an error (has 'error' field)
-                        has_error = bool(result.get("error"))
-                        if has_error:
-                            result["success"] = False
-                        else:
-                            # Assume success for raw domain objects (they're usually results)
-                            result["success"] = True
-                            logger.debug(
-                                f"Coordinator inferred success=True for raw domain object "
-                                f"(task {task_id}, keys: {list(result.keys())[:5]})"
-                            )
-
-                    logger.debug(
-                        f"Coordinator normalized result for task {task_id}: "
-                        f"success={result.get('success')}, kind={result.get('kind')}, "
-                        f"has_error={bool(result.get('error'))}, keys={list(result.keys())[:10]}"
-                    )
-
-                # Ensure 'error' field exists for consistency (even if None)
-                if "error" not in result:
-                    result["error"] = None
-
-                # Ensure 'kind' field for consistency
-                if "kind" not in result:
-                    result["kind"] = task_type
-
-                # Ensure 'path' field for traceability
-                if "path" not in result:
-                    result["path"] = "coordinator"
-
-                # Log final normalized result structure
-                logger.debug(
-                    f"Coordinator final result for task {task_id}: "
-                    f"success={result.get('success')}, error={result.get('error')}, "
-                    f"kind={result.get('kind')}, path={result.get('path')}"
-                )
-
-            return result
+            return normalize_envelope(result, task_id=task_id, path="coordinator")
 
         except Exception as e:
             logger.exception(f"Coordinator Route/Execute Failed: {e}")
-            return create_error_result(str(e), "coordinator_fatal").model_dump()
+            # Get task_id safely (might not be defined if exception occurs early)
+            task_id = (
+                task_dict.get("task_id") if "task_dict" in locals() 
+                else task_obj.task_id if "task_obj" in locals()
+                else "unknown"
+            )
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                error=str(e),
+                error_type="coordinator_fatal",
+                decision_kind=DecisionKind.ERROR.value,
+                path="coordinator",
+            )
 
     # Configuration loading is now handled by CoordinatorConfig
 
@@ -1160,40 +1095,64 @@ class Coordinator:
                     timeout=organism_timeout,
                 )
 
-                # 4. Handle Result & Back-fill V2 Metadata
+                # 4. Handle Result - OrganismService now returns canonical envelope directly
                 if isinstance(res, dict):
-                    # STRATEGY: Look in V2 locations for the executing organ
-                    # Priority A: result.meta.routing_decision.selected_organ_id (The official telemetry)
-                    # Priority B: params._router.organ_id (The router's internal write-only record)
+                    # Normalize to ensure canonical format (idempotent)
+                    result_envelope = normalize_envelope(
+                        res,
+                        task_id=payload.get("task_id") or "unknown",
+                        path="coordinator_organism_execute"
+                    )
+                    
+                    # STRATEGY: Look for executing organ in canonical envelope
+                    # Priority A: meta.routing_decision.selected_organ_id (The official telemetry)
+                    # Priority B: payload.meta.routing_decision.selected_organ_id (nested in payload)
                     # Priority C: Fallback to the requested organ_id
-
-                    result_meta = res.get("result", {}).get("meta", {})
-                    router_out = res.get("params", {}).get("_router", {})
-
+                    
+                    meta = result_envelope.get("meta", {})
+                    payload_data = result_envelope.get("payload", {})
+                    payload_meta = payload_data.get("meta", {}) if isinstance(payload_data, dict) else {}
+                    
                     final_organ = (
-                        result_meta.get("routing_decision", {}).get("selected_organ_id")
-                        or router_out.get("organ_id")
+                        meta.get("routing_decision", {}).get("selected_organ_id")
+                        or payload_meta.get("routing_decision", {}).get("selected_organ_id")
+                        or (payload_data.get("organ_id") if isinstance(payload_data, dict) else None)
                         or organ_id
                     )
 
-                    # Ensure top-level consistency for the Coordinator's return
-                    res["organ_id"] = final_organ
+                    # Add organ_id to canonical envelope meta (preserves canonical structure)
+                    if "meta" not in result_envelope:
+                        result_envelope["meta"] = {}
+                    result_envelope["meta"]["organ_id"] = final_organ
+                    
+                    # Also add to payload.meta if payload is a dict (for backward compatibility)
+                    if isinstance(payload_data, dict):
+                        if "meta" not in payload_data:
+                            payload_data["meta"] = {}
+                        payload_data["meta"]["organ_id"] = final_organ
+                        result_envelope["payload"] = payload_data
 
-                    # Ensure the result block also carries it (if needed for downstream)
-                    if "result" in res and isinstance(res["result"], dict):
-                        res["result"]["organ_id"] = final_organ
-
-                return res
+                    return result_envelope
+                
+                # Fallback: normalize whatever we got
+                return normalize_envelope(
+                    res,
+                    task_id=payload.get("task_id") or "unknown",
+                    path="coordinator_organism_execute"
+                )
 
             except Exception as e:
                 logger.error(f"Organism execution failed for {organ_id}: {e}")
-                # Return a structure that mimics a failed TaskPayload result
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "organ_id": organ_id,
-                    "task_id": payload.get("task_id"),
-                }
+                # Return canonical envelope format
+                task_id = payload.get("task_id") or "unknown"
+                return make_envelope(
+                    task_id=task_id,
+                    success=False,
+                    error=str(e),
+                    error_type="organism_execution_error",
+                    payload={"organ_id": organ_id},
+                    path="coordinator_organism_execute",
+                )
 
         async def persist_proto_plan_func(repo, tid, kind, plan):
             await self._persist_proto_plan(repo, tid, kind, plan)
@@ -1278,7 +1237,7 @@ class Coordinator:
                 )
             )
 
-        return AnomalyTriageResponse(
+        response = AnomalyTriageResponse(
             agent_id=agent_id,
             anomalies={},
             reason=reason,
@@ -1287,6 +1246,13 @@ class Coordinator:
             },
             correlation_id=cid,
             escalated=should_escalate,
+        )
+        # Convert to dict and normalize to canonical format
+        response_dict = response.model_dump() if hasattr(response, "model_dump") else dict(response)
+        return normalize_envelope(
+            response_dict,
+            task_id=f"triage_{agent_id}",
+            path="coordinator_anomaly_triage",
         )
 
     async def _handle_tune_callback(self, payload: TuneCallbackRequest):
@@ -1313,10 +1279,21 @@ class Coordinator:
                     f"Job {payload.job_id} success. GPU Secs: {payload.gpu_seconds}"
                 )
             self.storage.delete(f"job:{payload.job_id}")
-            return {"success": True}
+            return make_envelope(
+                task_id=f"tune_callback_{payload.job_id}",
+                success=True,
+                payload={"job_id": payload.job_id, "status": payload.status},
+                path="coordinator_tune_callback",
+            )
         except Exception as e:
             logger.error(f"Callback processing failed: {e}")
-            return {"success": False, "error": str(e)}
+            return make_envelope(
+                task_id=f"tune_callback_{payload.job_id if 'payload' in locals() else 'unknown'}",
+                success=False,
+                error=str(e),
+                error_type="tune_callback_error",
+                path="coordinator_tune_callback",
+            )
 
     # ------------------------------------------------------------------
     # 4. Internal Helpers

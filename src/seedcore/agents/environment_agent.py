@@ -27,6 +27,7 @@ except ImportError:
 
 from .base import BaseAgent
 from .roles.specialization import Specialization
+from seedcore.models.result_schema import make_envelope
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
 setup_logging(app_name="seedcore.agents.environment_agent")
@@ -183,13 +184,17 @@ class EnvironmentIntelligenceAgent(BaseAgent):
 
         if ttype in ("env.tick", "environment.tick"):
             res = await self.sense_environment()
-            return {
-                "agent_id": self.agent_id,
-                "task_id": tv.task_id,
-                "success": True,
-                "result": res,
-                "meta": {"exec": {"kind": "env.tick"}},
-            }
+            return make_envelope(
+                task_id=tv.task_id,
+                success=True,
+                payload={"agent_id": self.agent_id, "result": res},
+                error=None,
+                error_type=None,
+                retry=False,
+                decision_kind=None,
+                meta={"exec": {"kind": "env.tick"}},
+                path="agent",
+            )
 
         return self._reject_result(
             tv,

@@ -24,6 +24,7 @@ except ImportError:
 
 from .base import BaseAgent
 from .roles.specialization import Specialization
+from seedcore.models.result_schema import make_envelope
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
@@ -369,18 +370,22 @@ class OrchestrationAgent(BaseAgent):
                     self.agent_id
                 )
                 res = await self.control_tick()
-                result = {
-                    "agent_id": self.agent_id,
-                    "task_id": tv.task_id,
-                    "success": True,
-                    "result": res,
-                    "meta": {
+                result = make_envelope(
+                    task_id=tv.task_id,
+                    success=True,
+                    payload={"agent_id": self.agent_id, "result": res},
+                    error=None,
+                    error_type=None,
+                    retry=False,
+                    decision_kind=None,
+                    meta={
                         "exec": {
                             "kind": "orchestration.tick",
                             "started_at": self._utc_now_iso(),
                         }
                     },
-                }
+                    path="agent",
+                )
                 logger.info(
                     "[%s] ✅ execute_task completed: orchestration.tick, task_id=%s",
                     self.agent_id,
@@ -472,18 +477,22 @@ class OrchestrationAgent(BaseAgent):
             except Exception:
                 task_id = "unknown"
             
-            error_result = {
-                "agent_id": self.agent_id,
-                "task_id": task_id,
-                "success": False,
-                "error": str(e),
-                "meta": {
+            error_result = make_envelope(
+                task_id=task_id,
+                success=False,
+                payload={"agent_id": self.agent_id},
+                error=str(e),
+                error_type="execution_error",
+                retry=True,
+                decision_kind=None,
+                meta={
                     "exec": {
                         "kind": "error",
                         "started_at": self._utc_now_iso(),
                     }
                 },
-            }
+                path="agent",
+            )
             logger.error(
                 "[%s] ✅ execute_task completed: EXCEPTION, task_id=%s, error_result=%s",
                 self.agent_id,
@@ -693,24 +702,31 @@ class OrchestrationAgent(BaseAgent):
                 failure_reasons
             )
 
-        return {
-            "agent_id": self.agent_id,
-            "task_id": tv.task_id,
-            "success": overall_success,
-            "result": {
-                "enqueued": results,
-                "count": len(results),
-                "successful_count": len(successful_commands),
-                "failed_count": len(failed_commands),
-                "skipped_count": len(skipped_commands),
+        return make_envelope(
+            task_id=tv.task_id,
+            success=overall_success,
+            payload={
+                "agent_id": self.agent_id,
+                "result": {
+                    "enqueued": results,
+                    "count": len(results),
+                    "successful_count": len(successful_commands),
+                    "failed_count": len(failed_commands),
+                    "skipped_count": len(skipped_commands),
+                },
             },
-            "meta": {
+            error=None if overall_success else "Some commands failed",
+            error_type=None if overall_success else "command_execution_error",
+            retry=True,
+            decision_kind=None,
+            meta={
                 "exec": {
                     "kind": "orchestration.enqueue_commands",
                     "started_at": self._utc_now_iso(),
                 }
             },
-        }
+            path="agent",
+        )
 
     async def _handle_robot_task(self, tv, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -727,34 +743,46 @@ class OrchestrationAgent(BaseAgent):
             )
 
         if await self._seen_recently(job_id):
-            return {
-                "agent_id": self.agent_id,
-                "task_id": tv.task_id,
-                "success": True,
-                "result": {"dedup": True, "job_id": job_id},
-                "meta": {"exec": {"kind": "orchestration.robot_task"}},
-            }
+            return make_envelope(
+                task_id=tv.task_id,
+                success=True,
+                payload={"agent_id": self.agent_id, "result": {"dedup": True, "job_id": job_id}},
+                error=None,
+                error_type=None,
+                retry=False,
+                decision_kind=None,
+                meta={"exec": {"kind": "orchestration.robot_task"}},
+                path="agent",
+            )
 
         if self.safety_mode and not await self._safety_check(payload):
-            return {
-                "agent_id": self.agent_id,
-                "task_id": tv.task_id,
-                "success": False,
-                "result": {"job_id": job_id, "reason": "safety_check_failed"},
-                "meta": {"exec": {"kind": "orchestration.robot_task"}},
-            }
+            return make_envelope(
+                task_id=tv.task_id,
+                success=False,
+                payload={"agent_id": self.agent_id, "result": {"job_id": job_id}},
+                error="safety_check_failed",
+                error_type="safety_check_failed",
+                retry=False,
+                decision_kind=None,
+                meta={"exec": {"kind": "orchestration.robot_task"}},
+                path="agent",
+            )
 
         resp = await self._safe_tool_write("robots.assign_task", payload)
         ok = bool(resp and (resp.get("ok") is True or resp.get("success") is True))
 
         await self._mark_seen(job_id)
-        return {
-            "agent_id": self.agent_id,
-            "task_id": tv.task_id,
-            "success": ok,
-            "result": {"job_id": job_id, "resp": resp},
-            "meta": {"exec": {"kind": "orchestration.robot_task"}},
-        }
+        return make_envelope(
+            task_id=tv.task_id,
+            success=ok,
+            payload={"agent_id": self.agent_id, "result": {"job_id": job_id, "resp": resp}},
+            error=None if ok else "robot_task_failed",
+            error_type=None if ok else "robot_task_error",
+            retry=True,
+            decision_kind=None,
+            meta={"exec": {"kind": "orchestration.robot_task"}},
+            path="agent",
+        )
 
     async def _handle_energy_optimize(
         self, tv, payload: Dict[str, Any]
@@ -791,13 +819,17 @@ class OrchestrationAgent(BaseAgent):
                 tv, enqueue if isinstance(enqueue, list) else [enqueue]
             )
 
-        return {
-            "agent_id": self.agent_id,
-            "task_id": tv.task_id,
-            "success": True,
-            "result": {"energy": energy, "recommendation": rec},
-            "meta": {"exec": {"kind": "orchestration.energy_optimize"}},
-        }
+        return make_envelope(
+            task_id=tv.task_id,
+            success=True,
+            payload={"agent_id": self.agent_id, "result": {"energy": energy, "recommendation": rec}},
+            error=None,
+            error_type=None,
+            retry=False,
+            decision_kind=None,
+            meta={"exec": {"kind": "orchestration.energy_optimize"}},
+            path="agent",
+        )
 
     # -------------------------------------------------------------------------
     # Capability & Vendor Checks

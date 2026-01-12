@@ -28,6 +28,7 @@ except ImportError:
 
 from .base import BaseAgent
 from .roles.specialization import Specialization
+from seedcore.models.result_schema import make_envelope
 
 from seedcore.logging_setup import ensure_serve_logger,setup_logging
 
@@ -331,26 +332,34 @@ class UtilityAgent(BaseAgent):
 
         if ttype in ("ula.observe", "ula_observe"):
             res = await self.observe_and_tune_system()
-            return {
-                "agent_id": self.agent_id,
-                "task_id": tv.task_id,
-                "success": True,
-                "result": res,
-                "meta": {"exec": {"kind": "ula.observe"}},
-            }
+            return make_envelope(
+                task_id=tv.task_id,
+                success=True,
+                payload={"agent_id": self.agent_id, "result": res},
+                error=None,
+                error_type=None,
+                retry=False,
+                decision_kind=None,
+                meta={"exec": {"kind": "ula.observe"}},
+                path="agent",
+            )
 
         if ttype in ("ula.tune", "ula_tune"):
             prev = self.apply_changes
             try:
                 self.apply_changes = True
                 res = await self.observe_and_tune_system()
-                return {
-                    "agent_id": self.agent_id,
-                    "task_id": tv.task_id,
-                    "success": True,
-                    "result": res,
-                    "meta": {"exec": {"kind": "ula.tune_forced"}},
-                }
+                return make_envelope(
+                    task_id=tv.task_id,
+                    success=True,
+                    payload={"agent_id": self.agent_id, "result": res},
+                    error=None,
+                    error_type=None,
+                    retry=False,
+                    decision_kind=None,
+                    meta={"exec": {"kind": "ula.tune_forced"}},
+                    path="agent",
+                )
             finally:
                 self.apply_changes = prev
 

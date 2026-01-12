@@ -22,12 +22,12 @@ from seedcore.organs.organism_core import OrganismCore
 from seedcore.organs.router import RoutingDirectory
 from seedcore.models import TaskPayload
 from seedcore.models.organism import (
-    OrganismResponse,
     OrganismStatusResponse,
     RouterDecisionResponse,
     RouteOnlyRequest,
     RouteAndExecuteRequest,
 )
+from seedcore.models.result_schema import make_envelope, normalize_envelope
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 
 # --- Configuration ---
@@ -417,17 +417,19 @@ class OrganismService:
                 is_high_stakes=False,
             )
 
-    @app.post("/route-and-execute", response_model=OrganismResponse)
-    async def route_and_execute(self, request: RouteAndExecuteRequest):
+    @app.post("/route-and-execute")
+    async def route_and_execute(self, request: RouteAndExecuteRequest) -> Dict[str, Any]:
         """
         Routing + Execution endpoint.
+        
+        Returns canonical response envelope directly (no wrapper).
         """
         # 1. Barrier: Wait for init
         await self._ensure_initialized()
 
         task_dict = request.task or {}
         task_type = task_dict.get("type", "query")
-        task_id = task_dict.get("task_id", "unknown")
+        task_id = task_dict.get("task_id") or task_dict.get("id") or "unknown"
 
         logger.info(f"[route-and-execute] 🎯 Task {task_id} ({task_type})")
 
@@ -436,27 +438,39 @@ class OrganismService:
             task_payload = self._normalize_payload(task_dict)
 
             # 3. Delegation (Optimized Call)
+            # Router returns canonical envelope
             result = await self.router.route_and_execute(
                 payload=task_payload,
                 current_epoch=request.current_epoch,
             )
 
-            # 4. Response
-            error_msg = result.get("error")
-            return OrganismResponse(
-                success=not bool(error_msg),
-                result=result,
-                task_type=task_type,
-                error=str(error_msg) if error_msg else None,
+            # 4. Ensure result is in canonical format (idempotent normalization)
+            # Router should already return canonical envelope, but normalize to be safe
+            canonical_result = normalize_envelope(
+                result,
+                task_id=task_id,
+                path="organism_service"
             )
+            
+            # Add task_type to meta for backward compatibility if needed
+            if "meta" not in canonical_result:
+                canonical_result["meta"] = {}
+            canonical_result["meta"]["task_type"] = task_type
+
+            return canonical_result
 
         except Exception as e:
             logger.exception(f"[route-and-execute] Critical: {e}")
-            return OrganismResponse(
+            # Return canonical envelope for errors
+            return make_envelope(
+                task_id=task_id,
                 success=False,
-                result={},
                 error=f"Service Error: {str(e)}",
-                task_type=task_type,
+                error_type="organism_service_error",
+                retry=True,
+                decision_kind=None,
+                meta={"task_type": task_type},
+                path="organism_service",
             )
 
     # --- Evolution and Memory Endpoints ---

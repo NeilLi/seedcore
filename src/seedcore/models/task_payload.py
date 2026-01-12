@@ -98,6 +98,8 @@ class TaskPayload(BaseModel):
     force_rag: Optional[bool] = None
     force_deep_reasoning: Optional[bool] = None
     force_fast: Optional[bool] = None
+    
+    workflow: Optional[str] = None  # Explicit internal override for workflow execution
 
     # --- 4. CHAT ENVELOPE (params.chat) ---
     chat_message: Optional[str] = None
@@ -247,6 +249,7 @@ class TaskPayload(BaseModel):
             "force_rag": self.force_rag,
             "force_deep_reasoning": self.force_deep_reasoning,
             "force_fast": self.force_fast,
+            "workflow": self.workflow,
         }
         cognitive_dict = {k: v for k, v in cognitive_env.items() if v is not None}
         if cognitive_dict:
@@ -415,6 +418,7 @@ class TaskPayload(BaseModel):
             force_rag=cognitive.get("force_rag"),
             force_deep_reasoning=cognitive.get("force_deep_reasoning"),
             force_fast=cognitive.get("force_fast"),
+            workflow=cognitive.get("workflow"),
 
             # Chat
             chat_message=chat.get("message"),

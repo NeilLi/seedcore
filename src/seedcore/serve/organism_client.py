@@ -135,7 +135,7 @@ class OrganismServiceClient(BaseServiceClient):
             current_epoch: Optional epoch for instance validation
             
         Returns:
-            OrganismResponse with execution result and routing metadata
+            Canonical response envelope (Dict[str, Any]) with execution result and routing metadata
         """
         request_data = {
             "task": task,

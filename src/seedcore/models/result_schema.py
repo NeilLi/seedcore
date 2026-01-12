@@ -415,3 +415,178 @@ def to_db_dict(tr: TaskResult) -> Dict[str, Any]:
 def from_db_dict(d: Dict[str, Any]) -> TaskResult:
     """Create TaskResult from a database dict."""
     return TaskResult.model_validate(d)
+
+
+# Canonical response envelope for router responses
+# Every router call returns exactly this structure (no kind field)
+# Derive valid decision kinds from the DecisionKind enum to avoid duplication
+DECISION_KINDS = {dk.value for dk in DecisionKind}
+
+
+def make_envelope(
+    *,
+    task_id: str,
+    success: bool,
+    payload: Any = None,
+    error: Optional[str] = None,
+    error_type: Optional[str] = None,
+    retry: bool = True,
+    decision_kind: Optional[str] = None,
+    meta: Optional[Dict[str, Any]] = None,
+    path: str = "coordinator",
+) -> Dict[str, Any]:
+    """
+    Create a canonical response envelope for router responses.
+    
+    This is the single source of truth for all router return values.
+    Every router call returns exactly this structure (no kind field).
+    
+    Args:
+        task_id: Task identifier
+        success: Whether the task completed successfully
+        payload: The actual result data (any type)
+        error: Optional error message
+        error_type: Optional machine-readable error type
+        retry: Whether the dispatcher should retry on failure
+        decision_kind: Optional DecisionKind value (fast|planner|hgnn|error)
+        meta: Optional metadata dict (routing decisions, scores, metrics)
+        path: Producer trace path (default: "coordinator")
+    
+    Returns:
+        Dict[str, Any] with canonical envelope structure
+    """
+    return {
+        "task_id": str(task_id),
+        "success": bool(success),
+        "error": error,
+        "error_type": error_type,
+        "retry": bool(retry),
+        "decision_kind": decision_kind,
+        "payload": payload,
+        "meta": meta or {},
+        "path": path,
+    }
+
+
+def normalize_envelope(raw: Any, *, task_id: str, path: str) -> Dict[str, Any]:
+    """
+    Convert legacy results into the new canonical envelope format.
+    
+    This is the single source of truth for understanding legacy shapes.
+    Handles conversion from:
+    - TaskResult-like dict: {"kind": DecisionKind, "payload": ..., "metadata": ...}
+    - Old router dicts containing kind=timeout/cancelled/error
+    - Already-envelope dicts containing "success"
+    - Anything else => type error envelope
+    
+    Args:
+        raw: Raw result in any legacy or current format
+        task_id: Task identifier to include in envelope
+        path: Producer trace path
+    
+    Returns:
+        Dict[str, Any] in canonical envelope format
+    """
+    # Already in new envelope format
+    if isinstance(raw, dict) and "success" in raw and "payload" in raw and "error_type" in raw:
+        raw.setdefault("task_id", str(task_id))
+        raw.setdefault("path", path)
+        raw.setdefault("meta", {})
+        raw.setdefault("retry", True)
+        raw.setdefault("decision_kind", None)
+        # Ensure no stray kind
+        raw.pop("kind", None)
+        return raw
+
+    # TaskResult-like dict (internal): {"kind": "...", "payload": ..., "metadata": ...}
+    if isinstance(raw, dict) and "payload" in raw and "kind" in raw:
+        k = raw.get("kind")
+        payload = raw.get("payload")
+        metadata = raw.get("metadata") or raw.get("meta") or {}
+        if k in DECISION_KINDS:
+            # DecisionKind mapped to decision_kind
+            if k == "error":
+                # payload is ErrorPathResult-like dict
+                err = payload.get("error") if isinstance(payload, dict) else "unknown_error"
+                err_type = payload.get("error_type") if isinstance(payload, dict) else "error"
+                return make_envelope(
+                    task_id=task_id,
+                    success=False,
+                    payload=payload,
+                    error=err,
+                    error_type=err_type,
+                    retry=True,
+                    decision_kind="error",
+                    meta=metadata,
+                    path=path,
+                )
+            return make_envelope(
+                task_id=task_id,
+                success=True,
+                payload=payload,
+                error=None,
+                error_type=None,
+                retry=True,
+                decision_kind=str(k),
+                meta=metadata,
+                path=path,
+            )
+
+        # Legacy: kind used as error_type ("timeout", "cancelled", "error", etc.)
+        # Convert to envelope using kind => error_type
+        if k in {"timeout", "cancelled"}:
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                payload=raw,
+                error=raw.get("error") or f"{k}",
+                error_type=k,
+                retry=True,
+                decision_kind=None,
+                meta=raw.get("meta") or {},
+                path=path,
+            )
+
+        # Unknown kind: treat as generic error
+        return make_envelope(
+            task_id=task_id,
+            success=False,
+            payload=raw,
+            error=raw.get("error") or "unknown_error",
+            error_type="unknown_error",
+            retry=True,
+            decision_kind=None,
+            meta=raw.get("meta") or {},
+            path=path,
+        )
+
+    # Old envelope-like dict without error_type/payload fields
+    if isinstance(raw, dict) and "success" in raw:
+        # Best-effort upgrade
+        payload = raw.get("payload", raw.get("result", raw))
+        error = raw.get("error")
+        success = bool(raw.get("success"))
+        return make_envelope(
+            task_id=task_id,
+            success=success,
+            payload=payload,
+            error=error,
+            error_type=None if success else "error",
+            retry=bool(raw.get("retry", True)),
+            decision_kind=raw.get("decision_kind"),
+            meta=raw.get("meta") or {},
+            path=raw.get("path") or path,
+        )
+
+    # Non-dict => type error
+    return make_envelope(
+        task_id=task_id,
+        success=False,
+        payload=raw,
+        error=f"Invalid result type: {type(raw).__name__}",
+        error_type="coordinator_type_error",
+        retry=True,
+        decision_kind=None,
+        meta={},
+        path=path,
+    )

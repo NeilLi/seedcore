@@ -488,24 +488,41 @@ class ConversationAgent(BaseAgent):
             assistant_msg = None
 
             # --------------------------
-            # Extract assistant output
+            # Extract assistant output from canonical envelope
             # --------------------------
             try:
                 if isinstance(result, dict):
-                    # Standard SeedCore shape: { "result": {...} }
-                    res = result.get("result") or result
-
-                    if isinstance(res, dict):
-                        # Most common return shapes
-                        assistant_msg = (
-                            res.get("response") or
-                            res.get("assistant_reply") or
-                            res.get("message")
-                        )
-
-                    # Raw string (rare but possible)
-                    if not assistant_msg and isinstance(res, str):
-                        assistant_msg = res
+                    # Canonical envelope shape: { "payload": {...}, ... }
+                    payload = result.get("payload") or {}
+                    
+                    # Handle payload being a dict with nested data/result
+                    if isinstance(payload, dict):
+                        # Check nested result/data fields
+                        nested_result = payload.get("result") or payload.get("data") or payload
+                        
+                        if isinstance(nested_result, dict):
+                            # Most common return shapes
+                            assistant_msg = (
+                                nested_result.get("response") or
+                                nested_result.get("assistant_reply") or
+                                nested_result.get("message")
+                            )
+                        
+                        # Raw string (rare but possible)
+                        if not assistant_msg and isinstance(nested_result, str):
+                            assistant_msg = nested_result
+                    
+                    # Also check top-level result for backward compatibility
+                    if not assistant_msg:
+                        res = result.get("result") or result
+                        if isinstance(res, dict):
+                            assistant_msg = (
+                                res.get("response") or
+                                res.get("assistant_reply") or
+                                res.get("message")
+                            )
+                        elif isinstance(res, str):
+                            assistant_msg = res
 
             except Exception:
                 pass

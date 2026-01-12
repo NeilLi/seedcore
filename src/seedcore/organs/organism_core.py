@@ -62,6 +62,7 @@ from seedcore.serve.cognitive_client import CognitiveServiceClient
 from seedcore.serve.energy_client import EnergyServiceClient
 from seedcore.models import TaskPayload
 from seedcore.models.holon import Holon, HolonType, HolonScope
+from seedcore.models.result_schema import make_envelope, normalize_envelope
 
 from seedcore.organs.organ import Organ  # ← NEW ORGAN CLASS
 from seedcore.organs.tunnel_policy import TunnelActivationPolicy
@@ -1389,9 +1390,24 @@ class OrganismCore:
         3. Manage Session (Tunnel Lifecycle)
         """
         # --- 1. Validation & Setup ---
+        # Extract task_id for canonical envelope
+        if hasattr(payload, "task_id"):
+            task_id = payload.task_id
+        elif isinstance(payload, dict):
+            task_id = payload.get("task_id") or payload.get("id") or "unknown"
+        else:
+            task_id = "unknown"
+        
         organ = self.organs.get(organ_id)
         if not organ:
-            return {"success": False, "error": f"Organ '{organ_id}' not found"}
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                error=f"Organ '{organ_id}' not found",
+                error_type="organ_not_found",
+                retry=False,
+                path="organism_core",
+            )
 
         # Normalize Payload to Dict (Mutable)
         task_dict = (
@@ -1407,11 +1423,14 @@ class OrganismCore:
             )
 
             if not agent_handle:
-                return {
-                    "success": False,
-                    "error": f"Agent '{agent_id}' could not be provisioned.",
-                    "retry": True,  # Allow retry after respawn completes
-                }
+                return make_envelope(
+                    task_id=task_id,
+                    success=False,
+                    error=f"Agent '{agent_id}' could not be provisioned.",
+                    error_type="agent_provisioning_failed",
+                    retry=True,  # Allow retry after respawn completes
+                    path="organism_core",
+                )
 
             # --- 2.5. Agent Readiness Check (prevent execution on respawning agents) ---
             # Check if agent is ready by attempting a lightweight ping
@@ -1450,12 +1469,15 @@ class OrganismCore:
                         )
             
             if not agent_ready:
-                return {
-                    "success": False,
-                    "error": f"Agent '{agent_id}' is not ready (may be respawning). Please retry.",
-                    "retry": True,  # Allow retry after agent becomes ready
-                    "agent_status": "respawning_or_unavailable",
-                }
+                return make_envelope(
+                    task_id=task_id,
+                    success=False,
+                    error=f"Agent '{agent_id}' is not ready (may be respawning). Please retry.",
+                    error_type="agent_not_ready",
+                    retry=True,  # Allow retry after agent becomes ready
+                    meta={"agent_status": "respawning_or_unavailable"},
+                    path="organism_core",
+                )
 
             if agent_handle:
                 self.logger.info(
@@ -1500,12 +1522,29 @@ class OrganismCore:
             await self._manage_tunnel_lifecycle(task_dict, result, agent_id)
 
             # --- 5. Return Standardized Response ---
-            return {
-                "success": True,
-                "organ_id": organ_id,
-                "agent_id": agent_id,
-                "result": result,
-            }
+            # Normalize agent result to canonical envelope if needed
+            if isinstance(result, dict) and "success" in result:
+                # Agent already returned canonical format, normalize it
+                normalized = normalize_envelope(result, task_id=task_id, path="organism_core")
+                # Merge organism-specific metadata
+                normalized["meta"] = {
+                    **normalized.get("meta", {}),
+                    "organ_id": organ_id,
+                    "agent_id": agent_id,
+                }
+                return normalized
+            else:
+                # Agent returned legacy format, wrap in canonical envelope
+                return make_envelope(
+                    task_id=task_id,
+                    success=True,
+                    payload=result,
+                    meta={
+                        "organ_id": organ_id,
+                        "agent_id": agent_id,
+                    },
+                    path="organism_core",
+                )
 
         except asyncio.CancelledError:
             # Task was cancelled - likely due to agent respawning or upstream cancellation
@@ -1513,21 +1552,38 @@ class OrganismCore:
                 f"[Execute] Task execution cancelled for {agent_id}. "
                 f"Agent may be respawning or request was cancelled upstream."
             )
-            return {
-                "success": False,
-                "error": f"Task execution was cancelled. Agent '{agent_id}' may be respawning.",
-                "retry": True,  # Allow retry after agent becomes ready
-                "agent_status": "cancelled_or_respawning",
-            }
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                error=f"Task execution was cancelled. Agent '{agent_id}' may be respawning.",
+                error_type="cancelled",
+                retry=True,  # Allow retry after agent becomes ready
+                meta={"agent_status": "cancelled_or_respawning"},
+                path="organism_core",
+            )
         except asyncio.TimeoutError:
             self.logger.error(f"[Execute] Timeout on {agent_id} after {timeout}s")
-            return {"success": False, "error": "Execution Timed Out"}
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                error="Execution Timed Out",
+                error_type="timeout",
+                retry=True,
+                path="organism_core",
+            )
 
         except Exception as e:
             self.logger.error(
                 f"[Execute] Critical failure on {agent_id}: {e}", exc_info=True
             )
-            return {"success": False, "error": f"Execution Exception: {str(e)}"}
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                error=f"Execution Exception: {str(e)}",
+                error_type="execution_error",
+                retry=True,
+                path="organism_core",
+            )
 
     # =========================================================
     # 🔧 HELPER: JIT PROVISIONING

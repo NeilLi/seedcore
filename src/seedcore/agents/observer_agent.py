@@ -27,6 +27,7 @@ except ImportError:
 
 from .base import BaseAgent
 from .roles.specialization import Specialization
+from seedcore.models.result_schema import make_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -201,13 +202,17 @@ class ObserverAgent(BaseAgent):
 
         if ttype in ("observer.proactive_cache", "observer.observe"):
             await self._proactive_pass()
-            return {
-                "agent_id": self.agent_id,
-                "task_id": tv.task_id,
-                "success": True,
-                "result": {"kind": "observer.pass_executed"},
-                "meta": {"exec": {"started_at": self._utc_now_iso(), "kind": ttype}},
-            }
+            return make_envelope(
+                task_id=tv.task_id,
+                success=True,
+                payload={"agent_id": self.agent_id, "result": {"kind": "observer.pass_executed"}},
+                error=None,
+                error_type=None,
+                retry=False,
+                decision_kind=None,
+                meta={"exec": {"started_at": self._utc_now_iso(), "kind": ttype}},
+                path="agent",
+            )
 
         # everything else is not applicable for this agent
         return self._reject_result(tv, reason="agent_is_observer", started_ts=self._utc_now_iso(),

@@ -54,8 +54,9 @@ from seedcore.models.task import TaskType
 from seedcore.models.task_payload import TaskPayload
 from seedcore.models.result_schema import (
     create_cognitive_path_result,
-    create_error_result,
     create_fast_path_result,
+    make_envelope,
+    normalize_envelope,
 )
 from ..utils import extract_from_nested
 from .policies import SurpriseComputer
@@ -126,6 +127,7 @@ class TaskContext:
 
     task_id: str
     task_type: str
+    workflow: str | None  # Optional execution workflow override (e.g., "anomaly_triage")
     domain: str | None
     description: str  # Refined description (processed_text from Eventizer if available)
     params: dict[str, Any]
@@ -148,6 +150,7 @@ class TaskContext:
         return cls(
             task_id=d["task_id"],
             task_type=d["task_type"],
+            workflow=d.get("workflow"),  # Optional, derived from TaskPayload
             domain=d["domain"],
             description=d.get("description") or "",
             params=d["params"],
@@ -415,7 +418,8 @@ async def execute_task(
             logger.info(
                 f"[Coordinator] Semantic Cache HIT for task {ctx.task_id} - returning cached result"
             )
-            return cached_result
+            # Normalize cached result to canonical format
+            return normalize_envelope(cached_result, task_id=ctx.task_id, path="coordinator_cache")
 
     routing_dec = await _compute_routing_decision(
         task=task,
@@ -431,7 +435,7 @@ async def execute_task(
     router_result_payload = routing_dec["result"]
 
     if decision_kind == DecisionKind.FAST_PATH.value:
-        return await _handle_fast_path(
+        result = await _handle_fast_path(
             task=task,
             routing_hints=extract_from_nested(
                 router_result_payload,
@@ -444,21 +448,28 @@ async def execute_task(
             or {},
             config=execution_config,
         )
+        # Normalize to canonical format (idempotent - safe even if already canonical)
+        # organism_execute now returns canonical envelope, but normalization ensures
+        # all required fields are present and task_id/path are set correctly
+        return normalize_envelope(result, task_id=ctx.task_id, path="coordinator_fast_path")
 
     if decision_kind == DecisionKind.COGNITIVE.value:
-        return await _handle_cognitive_path(
+        result = await _handle_cognitive_path(
             task=task,
             decision_payload=router_result_payload,
             decision_kind=DecisionKind(decision_kind),
             config=execution_config,
             ctx=ctx,  # Pass TaskContext with Eventizer signals
         )
+        # Normalize to canonical format
+        return normalize_envelope(result, task_id=ctx.task_id, path="coordinator_cognitive_path")
 
     logger.warning(
         "[Coordinator] Routing decision '%s' not handled; returning router payload",
         decision_kind,
     )
-    return router_result_payload
+    # Normalize router payload to canonical format
+    return normalize_envelope(router_result_payload, task_id=ctx.task_id, path="coordinator_unknown")
 
 
 # =========================================================================
@@ -493,7 +504,14 @@ async def _handle_fast_path(
         )
     except Exception as e:
         logger.error("[Coordinator] Fast Path delegation failed: %s", e, exc_info=True)
-        return create_error_result(str(e), "execution_error").model_dump()
+        return make_envelope(
+            task_id=task.task_id,
+            success=False,
+            error=str(e),
+            error_type="execution_error",
+            decision_kind=DecisionKind.ERROR.value,
+            path="coordinator_fast_path",
+        )
 
 
 # =========================================================================
@@ -510,7 +528,14 @@ async def _handle_cognitive_path(
 ) -> Dict[str, Any]:
     if not config.cognitive_client:
         logger.error("[Coordinator] Cognitive Client missing.")
-        return create_error_result("System 2 unavailable", "config_error").model_dump()
+        return make_envelope(
+            task_id=task.task_id,
+            success=False,
+            error="System 2 unavailable",
+            error_type="config_error",
+            decision_kind=DecisionKind.ERROR.value,
+            path="coordinator_cognitive_path",
+        )
 
     try:
         proto_plan_from_router = decision_payload.get("proto_plan") or {}
@@ -536,10 +561,14 @@ async def _handle_cognitive_path(
         # 2a) Enforce MAX_STEPS before persistence (prevents DB pollution)
         max_steps_limit = int(config.max_steps or MAX_STEPS_DEFAULT)
         if solution_steps and len(solution_steps) > max_steps_limit:
-            return create_error_result(
-                f"Refusing to execute {len(solution_steps)} steps (max_steps={max_steps_limit})",
-                "plan_too_large",
-            ).model_dump()
+            return make_envelope(
+                task_id=task.task_id,
+                success=False,
+                error=f"Refusing to execute {len(solution_steps)} steps (max_steps={max_steps_limit})",
+                error_type="plan_too_large",
+                decision_kind=DecisionKind.ERROR.value,
+                path="coordinator_cognitive_path",
+            )
 
         # 2b) Persist proto-plan (PKG-first; fallback to cognitive)
         proto_plan_to_persist = (
@@ -592,12 +621,13 @@ async def _handle_cognitive_path(
         # 3) Handle direct response (no steps)
         if not solution_steps:
             # Cognitive agent returned direct response (no steps)
-            # Coordinator can still normalize higher up if needed.
-            return (
+            # Normalize to canonical format
+            direct_result = (
                 plan_res
                 if isinstance(plan_res, dict)
                 else {"success": True, "result": plan_res, "error": None}
             )
+            return normalize_envelope(direct_result, task_id=task.task_id, path="coordinator_cognitive_path")
 
         # 4) Execute steps (dependency-aware)
 
@@ -639,7 +669,14 @@ async def _handle_cognitive_path(
 
     except Exception as e:
         logger.error("[Coordinator] Cognitive Path failed: %s", e, exc_info=True)
-        return create_error_result(str(e), "cognitive_error").model_dump()
+        return make_envelope(
+            task_id=task.task_id,
+            success=False,
+            error=str(e),
+            error_type="cognitive_error",
+            decision_kind=DecisionKind.ERROR.value,
+            path="coordinator_cognitive_path",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1432,9 +1469,19 @@ async def _process_task_input(
         or ""
     )
 
+    # 4. Extract workflow (optional execution override)
+    # Source of truth: TaskPayload.workflow (if present) or params.workflow
+    # This is derived, not inferred - we copy what's explicitly set
+    workflow = (
+        merged_dict.get("workflow")
+        or merged_dict.get("params", {}).get("workflow")
+        or None
+    )
+
     return {
         "task_id": task.task_id,
         "task_type": task.type,
+        "workflow": workflow,  # Optional execution workflow override
         "domain": normalize_domain(task.domain),
         "description": refined_description,  # GROUNDED TEXT (e.g., 6 PM -> 18:00)
         "params": merged_dict.get("params", {}) or {},

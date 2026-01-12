@@ -13,6 +13,7 @@ import ray  # pyright: ignore[reportMissingImports]
 from seedcore.dispatcher.persistence.interfaces import TaskRepositoryProtocol
 from seedcore.dispatcher.router import CoordinatorHttpRouter, OrganismRouter
 from seedcore.models import TaskPayload
+from seedcore.models.result_schema import make_envelope, normalize_envelope
 from seedcore.database import get_asyncpg_pool, PG_DSN
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 from seedcore.dispatcher.config import MAX_ATTEMPTS
@@ -252,37 +253,43 @@ class Dispatcher:
                     # Lazy initialization: create OrganismRouter only when first needed
                     if self._organism_router is None:
                         self._organism_router = OrganismRouter()
-                    result = await self._organism_router.route_and_execute(payload)
+                    raw_result = await self._organism_router.route_and_execute(payload)
                 else:
                     # Standard routing through Coordinator
-                    result = await self._router.route_and_execute(payload)
+                    raw_result = await self._router.route_and_execute(payload)
+                
+                # Normalize router result to canonical envelope format
+                result = normalize_envelope(raw_result, task_id=task_id, path="dispatcher")
+                
             except asyncio.TimeoutError as timeout_error:
                 # Router call timed out - this is a retryable error
                 logger.warning(
                     "[%s] ⏱️ Router timeout for task %s: %s",
                     self.name, task_id, timeout_error
                 )
-                result = {
-                    "success": False,
-                    "error": f"Router timeout: {str(timeout_error)}",
-                    "kind": "timeout",
-                    "path": "router_timeout",
-                    "retry": True,  # Timeouts are retryable
-                }
+                result = make_envelope(
+                    task_id=task_id,
+                    success=False,
+                    error=f"Router timeout: {str(timeout_error)}",
+                    error_type="timeout",
+                    retry=True,
+                    path="router_timeout",
+                )
             except asyncio.CancelledError as cancelled_error:
                 # Router call was cancelled - likely due to agent respawning or upstream cancellation
                 logger.warning(
                     "[%s] 🛑 Router call cancelled for task %s: %s",
                     self.name, task_id, cancelled_error
                 )
-                result = {
-                    "success": False,
-                    "error": f"Router call cancelled: {str(cancelled_error)}",
-                    "kind": "cancelled",
-                    "path": "router_cancelled",
-                    "retry": True,  # Cancellations due to respawning are retryable
-                    "agent_status": "cancelled_or_respawning",
-                }
+                result = make_envelope(
+                    task_id=task_id,
+                    success=False,
+                    error=f"Router call cancelled: {str(cancelled_error)}",
+                    error_type="cancelled",
+                    retry=True,
+                    meta={"agent_status": "cancelled_or_respawning"},
+                    path="router_cancelled",
+                )
             except Exception as router_error:
                 # Catch any other exceptions from routers and convert to error result
                 # This ensures the dispatcher never crashes due to router errors
@@ -290,52 +297,21 @@ class Dispatcher:
                     "[%s] ❌ Router exception for task %s: %s",
                     self.name, task_id, router_error, exc_info=True
                 )
-                result = {
-                    "success": False,
-                    "error": f"Router exception: {str(router_error)}",
-                    "kind": "error",
-                    "path": "router_exception"
-                }
-
-            # C. Normalize result to dict (defensive check)
-            # Handle case where router returns a string, None, or other non-dict type
-            # This is a critical safety check to prevent AttributeError on .get() calls
-            # The router should always return a dict, but we defensively handle edge cases
-            if not isinstance(result, dict):
-                logger.error(
-                    "[%s] ❌ Router returned non-dict result (type=%s, value=%s) for task %s",
-                    self.name, type(result).__name__, str(result)[:200], task_id
+                result = make_envelope(
+                    task_id=task_id,
+                    success=False,
+                    error=f"Router exception: {str(router_error)}",
+                    error_type="router_exception",
+                    path="router_exception",
                 )
-                # Convert any non-dict result to proper error dict format
-                result = {
-                    "success": False,
-                    "error": str(result) if result is not None else "Router returned None",
-                    "kind": "error",
-                    "path": "router_type_error"
-                }
             
-            # D. Settle - Additional safeguard: ensure result is dict before accessing
-            # This final check protects against any edge cases where result might not be a dict
-            if not isinstance(result, dict):
-                # This should never happen after normalization, but handle it defensively
-                logger.critical(
-                    "[%s] ❌ CRITICAL: Result is not a dict before access (type=%s) for task %s",
-                    self.name, type(result).__name__, task_id
-                )
-                result = {
-                    "success": False,
-                    "error": f"Critical: Result is not a dict (type={type(result).__name__})",
-                    "kind": "error",
-                    "path": "result_type_critical_error"
-                }
-            
-            # Now safely access result.get() - we've guaranteed result is a dict
+            # Now safely access result.get() - normalize_envelope guarantees canonical format
             success = result.get("success")
             
-            # Defensive check: log if success field is missing or invalid
+            # Defensive check: log if success field is missing (shouldn't happen after normalization)
             if success is None:
                 logger.error(
-                    "[%s] ❌ Coordinator returned result without 'success' field for task %s. "
+                    "[%s] ❌ Result missing 'success' field after normalization for task %s. "
                     "Result keys: %s, Result sample: %s",
                     self.name, task_id, list(result.keys())[:10], str(result)[:500]
                 )
@@ -343,7 +319,7 @@ class Dispatcher:
                 success = False
                 result["success"] = False
                 if "error" not in result:
-                    result["error"] = "coordinator_response_missing_success_field"
+                    result["error"] = "result_missing_success_field"
             
             if success:
                 # Mark task as completed with result
@@ -351,7 +327,8 @@ class Dispatcher:
                 logger.info("[%s] ✅ Task %s done", self.name, task_id)
             else:
                 err = str(result.get("error") or "unknown_error")
-                agent_status = result.get("agent_status")
+                # agent_status is stored in meta dict, not top-level
+                agent_status = result.get("meta", {}).get("agent_status")
                 should_retry = result.get("retry", True)  # Default to retry unless explicitly False
                 
                 # Check if max attempts reached - fail immediately if exceeded
@@ -379,7 +356,7 @@ class Dispatcher:
                         "[%s] 🔁 Task %s failed: %s (attempt %d/%d, cancelled/respawning, delay=%ds)",
                         self.name, task_id, err, current_attempts, MAX_ATTEMPTS, delay_seconds
                     )
-                elif result.get("kind") == "timeout":
+                elif result.get("error_type") == "timeout":
                     # Timeout errors - use moderate delay
                     delay_seconds = 20
                     logger.info(
