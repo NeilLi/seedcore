@@ -1,9 +1,25 @@
 #!/usr/bin/env python3
 """
-Fact Manager Service - Unified fact management with PKG integration.
+Fact Manager Service - Persistence, Lineage & Governance Service.
 
-This service provides a unified interface for fact management, combining the enhanced
-Fact model with eventizer processing and PKG governance capabilities.
+This service provides a unified interface for fact persistence, lineage tracking,
+and PKG governance. It is a downstream service that records decisions made upstream
+by the Coordinator and EventizerService.
+
+Architectural Role:
+- Persistence: Store facts (textual, structured, temporal)
+- Lineage: Track task_produces_fact and task_reads_fact relationships
+- Governance: Store PKG metadata (snapshot_id, rule_id, provenance, validation_status)
+- Query & Analytics: Temporal queries, namespace queries, statistics
+
+This service does NOT:
+- Normalize text (handled by TextNormalizer upstream)
+- Perform eventization (handled by EventizerService upstream)
+- Make routing decisions (handled by Coordinator upstream)
+- Evaluate PKG policies (handled by PKG upstream)
+
+Facts are effects, not causes. This service records what was decided, not what
+should be decided.
 """
 
 from __future__ import annotations
@@ -20,12 +36,7 @@ from sqlalchemy import select, delete, and_, or_, text  # pyright: ignore[report
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # pyright: ignore[reportMissingImports]
 
 from ..models.fact import Fact
-from .eventizer_service import EventizerService
-from seedcore.models.eventizer import (
-    EventizerRequest,
-    EventizerResponse,
-    EventizerConfig,
-)
+from seedcore.models.eventizer import EventizerResponse
 from seedcore.database import get_async_pg_session_factory
 
 # Logging
@@ -54,20 +65,30 @@ class FactResponse(BaseModel):
 
 class FactManagerImpl:
     """
-    Unified fact management with PKG integration.
+    Fact Persistence, Lineage & Governance Service.
 
-    This class provides a comprehensive interface for fact management, including:
-    - Traditional fact creation and retrieval
-    - Eventizer-based text processing and fact creation
-    - PKG-governed temporal facts
-    - Policy validation and provenance tracking
-    - Automatic cleanup of expired facts
+    This class provides a downstream service for recording facts that have already
+    been processed and decided upon by upstream services (EventizerService, Coordinator, PKG).
+
+    Responsibilities:
+    - Fact persistence: Store facts (textual, structured, temporal) with namespace isolation
+    - Lineage tracking: Record task_produces_fact and task_reads_fact relationships
+    - PKG governance: Store PKG metadata (snapshot_id, rule_id, provenance, validation_status)
+    - Query & analytics: Temporal queries, namespace queries, governance queries, statistics
+    - Expiry management: Automatic cleanup of expired temporal facts
+
+    This service does NOT perform cognitive work:
+    - Text normalization (handled by TextNormalizer upstream)
+    - Eventization (handled by EventizerService upstream)
+    - Routing decisions (handled by Coordinator upstream)
+    - PKG evaluation (handled by PKG upstream)
+
+    Facts are effects, not causes. This service records what was decided.
     """
 
     def __init__(
         self,
         db_session_factory: Optional[async_sessionmaker[AsyncSession]] = None,
-        eventizer_config: Optional[EventizerConfig] = None,
     ):
         """
         Initialize the FactManagerImpl.
@@ -75,13 +96,9 @@ class FactManagerImpl:
         Args:
             db_session_factory: Database session factory for fact operations.
                                If None, uses get_async_pg_session_factory() from database.py
-            eventizer_config: Optional eventizer configuration
         """
         # Use provided factory or get default from database.py
         self.db_session_factory = db_session_factory or get_async_pg_session_factory()
-        self.eventizer_config = eventizer_config or EventizerConfig()
-        self._eventizer: Optional[EventizerService] = None
-        self._initialized = False
 
     # -----------------
     # Internal helpers
@@ -194,22 +211,6 @@ class FactManagerImpl:
             },
         )
 
-    async def initialize(self) -> None:
-        """Initialize the eventizer service."""
-        if self._initialized:
-            return
-
-        try:
-            # Initialize eventizer service
-            self._eventizer = EventizerService(config=self.eventizer_config)
-            await self._eventizer.initialize()
-
-            self._initialized = True
-            logger.info("FactManagerImpl initialized successfully")
-
-        except Exception as e:
-            logger.error(f"Failed to initialize FactManagerImpl: {e}")
-            raise
 
     # -----------------
     # Basic Fact Operations
@@ -420,62 +421,61 @@ class FactManagerImpl:
             return facts
 
     # -----------------
-    # Eventizer Integration
+    # Eventizer Integration (Downstream Recording)
     # -----------------
 
-    async def create_from_text(
+    async def create_from_eventizer_response(
         self,
-        text: str,
+        *,
+        eventizer_response: EventizerResponse,
         domain: str = "default",
-        process_with_pkg: bool = True,
-        preserve_pii: bool = False,
         produced_by_task_id: Optional[Union[str, uuid.UUID]] = None,
-    ) -> Tuple[Fact, EventizerResponse]:
+        namespace: str = "default",
+        created_by: str = "coordinator",
+    ) -> Fact:
         """
-        Create fact from text with eventizer processing.
+        Create fact from pre-processed EventizerResponse.
+
+        This is the correct way to create facts from eventizer processing. The eventization
+        and PKG evaluation should have already happened upstream (in Coordinator).
 
         Args:
-            text: Input text to process
+            eventizer_response: Pre-processed EventizerResponse from upstream services
             domain: Processing domain
-            process_with_pkg: Whether to enable PKG processing
-            preserve_pii: Whether to preserve PII in output
+            produced_by_task_id: Task ID that produced this fact (required for lineage)
+            namespace: Fact namespace
+            created_by: Creator identifier
 
         Returns:
-            Tuple of (created Fact, EventizerResponse)
+            Created Fact instance with PKG governance attached
+
+        Note:
+            This method records what was decided upstream. It does NOT perform eventization
+            or PKG evaluation. Use Coordinator -> EventizerService -> PKG -> FactManager flow.
         """
-        if not self._initialized:
-            await self.initialize()
-
-        # Configure eventizer request
-        request = EventizerRequest(
-            text=text,
-            domain=domain,
-            preserve_pii=preserve_pii,
-            include_pkg_hint=process_with_pkg,
-        )
-
-        # Process through eventizer
-        response = await self._eventizer.process_text(request)
-
         # Create fact from response
         fact = Fact.create_from_eventizer(
-            processed_text=response.processed_text,
-            event_types=[tag.value for tag in response.event_tags.event_types],
-            attributes=response.attributes.model_dump(),
-            pkg_hint=response.pkg_hint.model_dump() if response.pkg_hint else None,
-            snapshot_id=response.pkg_snapshot_id,
+            processed_text=eventizer_response.processed_text,
+            event_types=[tag.value for tag in eventizer_response.event_tags.event_types],
+            attributes=eventizer_response.attributes.model_dump(),
+            pkg_hint=eventizer_response.pkg_hint.model_dump() if eventizer_response.pkg_hint else None,
+            snapshot_id=eventizer_response.pkg_snapshot_id,
             domain=domain,
         )
 
+        # Set namespace and creator
+        fact.namespace = namespace
+        fact.created_by = created_by
+
         # Add PKG governance if available
-        if process_with_pkg and response.pkg_hint and response.pkg_hint.provenance:
+        if eventizer_response.pkg_hint and eventizer_response.pkg_hint.provenance:
             fact.add_pkg_governance(
-                rule_id=response.pkg_hint.provenance[0].rule_id
-                if response.pkg_hint.provenance
+                rule_id=eventizer_response.pkg_hint.provenance[0].rule_id
+                if eventizer_response.pkg_hint.provenance
                 else "unknown",
-                provenance=[prov.model_dump() for prov in response.pkg_hint.provenance],
+                provenance=[prov.model_dump() for prov in eventizer_response.pkg_hint.provenance],
                 validation_status="pkg_validated"
-                if response.pkg_validation_status
+                if eventizer_response.pkg_validation_status
                 else "pkg_validation_failed",
             )
 
@@ -491,9 +491,48 @@ class FactManagerImpl:
             await db.refresh(fact)
 
             logger.info(
-                f"Created fact {fact.id} from eventizer processing with {len(response.event_tags.event_types)} event types"
+                f"Created fact {fact.id} from eventizer response with {len(eventizer_response.event_tags.event_types)} event types"
             )
-            return fact, response
+            return fact
+
+    async def create_from_text(
+        self,
+        text: str,
+        domain: str = "default",
+        process_with_pkg: bool = True,
+        preserve_pii: bool = False,
+        produced_by_task_id: Optional[Union[str, uuid.UUID]] = None,
+    ) -> Tuple[Fact, EventizerResponse]:
+        """
+        [DEPRECATED] Create fact from text with eventizer processing.
+
+        ⚠️ DEPRECATED: This method violates architectural separation of concerns.
+        It re-runs eventization and creates a competing entry point into cognition.
+
+        Use Coordinator -> EventizerService -> PKG -> FactManager.create_from_eventizer_response() instead.
+
+        This method will be removed in a future version. It is kept temporarily for
+        backward compatibility during migration.
+
+        Args:
+            text: Input text to process
+            domain: Processing domain
+            process_with_pkg: Whether to enable PKG processing
+            preserve_pii: Whether to preserve PII in output
+            produced_by_task_id: Task ID that produced this fact
+
+        Returns:
+            Tuple of (created Fact, EventizerResponse)
+        """
+        logger.warning(
+            "create_from_text() is deprecated. Use Coordinator -> EventizerService -> "
+            "FactManager.create_from_eventizer_response() instead. This method will be removed."
+        )
+        raise NotImplementedError(
+            "create_from_text() has been removed. Eventization must happen upstream. "
+            "Use Coordinator -> EventizerService -> FactManager.create_from_eventizer_response() "
+            "instead. This ensures single source of cognition and proper PKG governance."
+        )
 
     async def process_multiple_texts(
         self,
@@ -503,32 +542,29 @@ class FactManagerImpl:
         produced_by_task_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> List[Tuple[Fact, EventizerResponse]]:
         """
-        Process multiple texts and create facts.
+        [DEPRECATED] Process multiple texts and create facts.
+
+        ⚠️ DEPRECATED: This method violates architectural separation of concerns.
+        Use Coordinator -> EventizerService -> PKG -> FactManager.create_from_eventizer_response() instead.
 
         Args:
             texts: List of texts to process
             domain: Processing domain
             process_with_pkg: Whether to enable PKG processing
+            produced_by_task_id: Task ID that produced these facts
 
         Returns:
             List of (Fact, EventizerResponse) tuples
         """
-        results = []
-
-        for text in texts:  # noqa: F402
-            try:
-                fact, response = await self.create_from_text(
-                    text=text,
-                    domain=domain,
-                    process_with_pkg=process_with_pkg,
-                    produced_by_task_id=produced_by_task_id,
-                )
-                results.append((fact, response))
-            except Exception as e:
-                logger.error(f"Failed to process text '{text[:50]}...': {e}")
-                # Continue processing other texts
-
-        return results
+        logger.warning(
+            "process_multiple_texts() is deprecated. Use Coordinator -> EventizerService -> "
+            "FactManager.create_from_eventizer_response() instead. This method will be removed."
+        )
+        raise NotImplementedError(
+            "process_multiple_texts() has been removed. Eventization must happen upstream. "
+            "Use Coordinator -> EventizerService -> FactManager.create_from_eventizer_response() "
+            "instead. This ensures single source of cognition and proper PKG governance."
+        )
 
     # -----------------
     # Temporal Facts
@@ -717,11 +753,12 @@ class FactManagerImpl:
             return deleted_count
 
     # -----------------
-    # PKG Integration
+    # PKG Integration (Passive Metadata Storage)
     # -----------------
 
-    # validate_with_pkg method removed - PKG validation is now handled upstream by the coordinator
-    # Facts should receive PKG governance data from the coordinator after evaluation
+    # Note: PKG validation and evaluation happens upstream by the Coordinator.
+    # This service only stores PKG metadata (snapshot_id, rule_id, provenance, validation_status)
+    # that was attached to facts by upstream services.
 
     async def get_pkg_governed_facts(
         self,
@@ -871,7 +908,13 @@ app = FastAPI(docs_url=None, redoc_url=None)  # Disable docs - only accessed via
 @serve.ingress(app)
 class FactManagerService:
     """
-    Hybrid Service: Accepts Pydantic models via HTTP and Dicts via RPC.
+    Fact Persistence, Lineage & Governance Service (Ray Serve Deployment).
+
+    This service provides HTTP/RPC endpoints for fact persistence, lineage tracking,
+    and PKG governance. It is a downstream service that records decisions made
+    upstream by the Coordinator and EventizerService.
+
+    Accepts Pydantic models via HTTP and Dicts via RPC.
     """
 
     def __init__(self, db_config: Dict[str, Any] = None):
