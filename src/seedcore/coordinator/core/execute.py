@@ -440,8 +440,9 @@ async def execute_task(
             routing_hints=extract_from_nested(
                 router_result_payload,
                 key_paths=[
-                    ("metadata", "routing_params"),
-                    ("metadata", "routing", "params"),
+                    ("payload", "metadata", "routing_params"),  # FastPathResult.metadata.routing_params
+                    ("metadata", "routing_params"),  # Top-level fallback
+                    ("metadata", "routing", "params"),  # Alternative structure
                 ],
                 value_type=dict,
             )
@@ -1099,7 +1100,8 @@ async def _compute_routing_decision(
         # PKG provides routing hints even for simple tasks
         # ENHANCEMENT: Pass embedding for semantic context hydration
         try:
-            pkg_meta, proto_plan = await _try_run_pkg_evaluation(
+            # Explicitly unpack tuple return to prevent contract mismatch
+            pkg_eval_result = await _try_run_pkg_evaluation(
                 ctx=ctx,
                 cfg=route_cfg,
                 intent=None,  # PKG doesn't need pre-computed intent
@@ -1107,6 +1109,8 @@ async def _compute_routing_decision(
                 drift_state=drift_state,
                 embedding=embedding,  # Pass embedding for Unified Memory hydration
             )
+            # Explicit tuple unpacking: (pkg_meta, proto_plan)
+            pkg_meta, proto_plan = pkg_eval_result
         except Exception as e:
             logger.debug(f"[Coordinator] PKG evaluation failed: {e}, using fallback")
 
@@ -1129,8 +1133,10 @@ async def _compute_routing_decision(
         if validation_errors:
             logger.warning(
                 f"[Coordinator] Intent validation errors for task {ctx.task_id}: "
-                f"{'; '.join(validation_errors)}"
+                f"{'; '.join(validation_errors)}. Falling back to baseline intent."
             )
+            # Reset invalid intent to trigger baseline synthesis fallback
+            intent = None
 
     # Second: Use config-driven resolver if provided (LEGACY - deprecated)
     if not intent and route_cfg.intent_resolver:
@@ -1217,9 +1223,20 @@ async def _compute_routing_decision(
     if insight:
         payload_common["insight"] = insight.to_dict()
 
+    # Preserve both dimensions explicitly for observability/analytics
+    # task_category: semantic category (e.g., "chat", "query", "action")
+    # workflow: execution-specific override (e.g., "anomaly_triage", "ml_tune_callback")
+    # This ensures we never lose the distinction in logs, DB, and analytics
+    payload_common["task_category"] = ctx.task_type
+    payload_common["workflow"] = ctx.workflow
+
     if is_escalated:
+        # Use workflow if present (e.g., "anomaly_triage", "deep_planning"), 
+        # otherwise fall back to task_type (category like "chat", "query")
+        # workflow is the execution workflow override, task_type is the semantic category
+        cognitive_task_type = ctx.workflow or ctx.task_type
         task_result = create_cognitive_path_result(
-            task_type=ctx.task_type,
+            task_type=cognitive_task_type,
             result={
                 "status": "escalated_by_ocps",
                 "drift_severity": getattr(drift_state, "severity", None),
@@ -1470,10 +1487,12 @@ async def _process_task_input(
     )
 
     # 4. Extract workflow (optional execution override)
-    # Source of truth: TaskPayload.workflow (if present) or params.workflow
+    # Source of truth: TaskPayload.workflow (if present) or params.cognitive.workflow or params.workflow
     # This is derived, not inferred - we copy what's explicitly set
+    # workflow is execution-specific (e.g., "anomaly_triage"), distinct from task_type (semantic category)
     workflow = (
         merged_dict.get("workflow")
+        or merged_dict.get("params", {}).get("cognitive", {}).get("workflow")
         or merged_dict.get("params", {}).get("workflow")
         or None
     )

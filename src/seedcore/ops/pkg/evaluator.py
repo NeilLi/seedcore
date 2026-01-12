@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # --- Optional WASM Runtime Support ---
 _WASMTIME_AVAILABLE = False
 try:
-    import wasmtime  # type: ignore
+    import wasmtime  
     _WASMTIME_AVAILABLE = True
 except ImportError:
     logger.warning("wasmtime not available - WASM engine will use fallback mode")

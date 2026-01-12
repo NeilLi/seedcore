@@ -733,6 +733,9 @@ class EventizerResponse(BaseModel):
     pattern_compilation: Optional[List[PatternCompilationResult]] = None
 
     pii: Optional[PIIAudit] = None
+    # PII detection flags (from FastEventizer reflex sensor)
+    # FastEventizer detects PII presence without redaction; EventizerService performs actual redaction
+    pii_detected: Dict[str, bool] = Field(default_factory=dict)
     event_tags: EventTags = Field(default_factory=EventTags)
     attributes: EventAttributes = Field(default_factory=EventAttributes)
     signals: EventSignals = Field(default_factory=EventSignals)

@@ -1,0 +1,125 @@
+{
+    "schema_version": "1.0",
+    "pack_id": "seedcore.fast_eventizer.core",
+    "pack_version": "1.2.0",
+    "defaults": {
+      "max_chars": 16384,
+      "time_budget_ms": 2.0,
+      "fallback_event_type": "routine"
+    },
+  
+    "pii_redaction": [
+      {
+        "id": "email",
+        "regex": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b",
+        "flags": ["IGNORECASE"],
+        "replacement": "[EMAIL_REDACTED]"
+      },
+      {
+        "id": "phone",
+        "regex": "\\b(?:\\+?1[\\s.-]?)?(?:\\(\\d{3}\\)|\\d{3})[\\s.-]?\\d{3}[\\s.-]?\\d{4}\\b",
+        "flags": ["IGNORECASE"],
+        "replacement": "[PHONE_REDACTED]"
+      },
+      {
+        "id": "ssn",
+        "regex": "\\b\\d{3}-\\d{2}-\\d{4}\\b",
+        "flags": [],
+        "replacement": "[SSN_REDACTED]"
+      },
+      {
+        "id": "cc_candidate",
+        "regex": "\\b(?:\\d[ -]?){13,19}\\b",
+        "flags": [],
+        "replacement": "[CC_REDACTED]",
+        "validator": { "type": "luhn" }
+      }
+    ],
+  
+    "keyword_lexicon": {
+      "terms": [
+        "emergency","urgent","critical","fire","evacuate","help","911",
+        "security","breach","unauthorized","intrusion","suspicious","threat",
+        "maintenance","update","upgrade","patch","fix","broken","malfunction","issue","problem",
+        "vip","executive","presidential","concierge",
+        "privacy","confidential","private","sensitive","restricted",
+        "allergen","allergy","peanut","nuts","dairy","gluten","shellfish","sesame",
+        "hvac","temperature","thermostat","heating","cooling","ventilation","stuffy",
+        "luggage","baggage","lost","mishandled","custody",
+        "room","floor","building","lobby","suite",
+        "now","immediate","asap"
+      ]
+    },
+  
+    "location_patterns": [
+      { "id": "room", "regex": "\\b(room|floor|building|office|suite)\\s+([A-Za-z0-9-]+)\\b", "flags": ["IGNORECASE"] },
+      { "id": "host", "regex": "\\b(server|host|node)\\s+([A-Za-z0-9.-]+)\\b", "flags": ["IGNORECASE"] },
+      { "id": "ipv4", "regex": "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", "flags": [] }
+    ],
+  
+    "timestamp_patterns": [
+      { "id": "iso_dt", "regex": "\\b\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}\\b", "flags": [] },
+      { "id": "clock", "regex": "\\b\\d{2}:\\d{2}(:\\d{2})?\\s*(am|pm)?\\b", "flags": ["IGNORECASE"] },
+      { "id": "us_date", "regex": "\\b\\d{1,2}/\\d{1,2}/\\d{4}\\b", "flags": [] }
+    ],
+  
+    "patterns": [
+      {
+        "id": "emergency",
+        "regex": "\\b(emergency|urgent|critical|fire|evacuate|evacuation|immediate|asap|help|assistance|911)\\b",
+        "flags": ["IGNORECASE"],
+        "emit": { "event_types": ["emergency"], "priority": 10 },
+        "keywords": ["emergency"],
+        "early_exit": true
+      },
+      {
+        "id": "security",
+        "regex": "\\b(security|breach|unauthorized|intrusion|hack|attack|access\\s+denied|credential|password|suspicious|malware|virus|threat)\\b",
+        "flags": ["IGNORECASE"],
+        "emit": { "event_types": ["security"], "priority": 8 },
+        "keywords": ["security"]
+      },
+  
+      { "id": "vip", "regex": "\\b(vip|executive|presidential\\s*suite|ceo|director|cxo|concierge|priority\\s*guest)\\b", "flags": ["IGNORECASE"],
+        "emit": { "event_types": ["vip"], "priority": 7 }, "keywords": ["vip"]
+      },
+      { "id": "privacy", "regex": "\\b(privacy|confidential|private|sensitive|restricted|classified)\\b", "flags": ["IGNORECASE"],
+        "emit": { "event_types": ["privacy"], "priority": 7 }, "keywords": ["privacy"]
+      },
+      { "id": "allergen", "regex": "\\b(allergen|allergy|peanut|nuts|dairy|gluten|shellfish|sesame|food\\s*safety)\\b", "flags": ["IGNORECASE"],
+        "emit": { "event_types": ["allergen"], "priority": 9 }, "keywords": ["allergen"]
+      },
+  
+      {
+        "id": "hvac_fault",
+        "regex": "(?=.*\\b(hvac|temperature|thermostat|heating|cooling|air\\s*conditioning|ventilation)\\b)(?=.*\\b(fault|issue|problem|malfunction|broken|not\\s*working|too\\s*(?:hot|cold|high|low))\\b)",
+        "flags": ["IGNORECASE", "DOTALL"],
+        "emit": { "event_types": ["hvac"], "priority": 6 },
+        "keywords": ["hvac"]
+      },
+  
+      {
+        "id": "luggage_custody",
+        "regex": "\\b(luggage|baggage|bag).*(lost|mishandled|wrong\\s*room|misdeliver|custody|chain)\\b",
+        "flags": ["IGNORECASE", "DOTALL"],
+        "emit": { "event_types": ["luggage_custody"], "priority": 6 },
+        "keywords": ["luggage"]
+      },
+  
+      {
+        "id": "maintenance",
+        "regex": "\\b(maintenance|update|upgrade|patch|fix|schedule|planned|routine|preventive|backup|restore|recovery|cleanup)\\b",
+        "flags": ["IGNORECASE"],
+        "emit": { "event_types": ["maintenance"], "priority": 4 },
+        "keywords": ["maintenance"]
+      },
+      {
+        "id": "warning",
+        "regex": "\\b(warning|caution|alert|notice|issue|problem|failing|degraded|slow|timeout|error)\\b",
+        "flags": ["IGNORECASE"],
+        "emit": { "event_types": ["routine"], "priority": 5 },
+        "keywords": ["issue"]
+      }
+    ]
+  }
+  

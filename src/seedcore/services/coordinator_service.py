@@ -87,10 +87,9 @@ from ..serve.state_client import StateServiceClient
 from ..serve.energy_client import EnergyServiceClient
 
 # FastEventizer for dual-stage perception (local reflex before remote brain)
-from ..ops.eventizer.fast_eventizer import (
-    get_fast_eventizer,
-    fast_result_to_eventizer_response,
-)
+from ..ops.eventizer.fast_eventizer import get_fast_eventizer
+# Text normalization (before FastEventizer)
+from ..ops.eventizer.utils.text_normalizer import TextNormalizer, NormalizationTier
 
 # Multimodal Context Refinement (bridges perception to Unified Memory)
 from ..ops.eventizer.utils.context_refiner import MultimodalContextRefiner
@@ -105,6 +104,9 @@ logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
 # --- Constants & Configuration Models ---
 CONFIG_PATH = os.getenv(
     "COORDINATOR_CONFIG_PATH", "/app/config/coordinator_config.yaml"
+)
+FAST_EVENTIZER_PATTERNS_PATH = os.getenv(
+    "FAST_EVENTIZER_PATTERNS_PATH", "/app/config/fast_eventizer_patterns.json"
 )
 FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
 router_prefix = ""
@@ -585,29 +587,56 @@ class Coordinator:
             )
 
         # Stage 3: Remote Brain (Deep Semantic Reasoning)
+        # Pass FastEventizer output for refinement (complementary mode)
         try:
+            # Convert resp_obj to dict if it's a Pydantic model
+            fast_output = (
+                resp_obj.model_dump() if hasattr(resp_obj, "model_dump") 
+                else resp_obj if isinstance(resp_obj, dict)
+                else resp_obj.dict() if hasattr(resp_obj, "dict")
+                else {}
+            )
+            
             remote_data = await self._call_remote_eventizer(
-                text, task_dict, multimodal_ctx, refinement
+                text, task_dict, multimodal_ctx, refinement, fast_eventizer_output=fast_output
             )
             return self._format_eventizer_output(remote_data)
         except Exception as e:
             logger.warning(f"Remote Eventizer failed, using refined Fast-Path: {e}")
             return self._format_eventizer_output(
-                self._merge_refinement(resp_obj.model_dump(), refinement)
+                self._merge_refinement(resp_obj.model_dump() if hasattr(resp_obj, "model_dump") else resp_obj, refinement)
             )
 
     def _run_fast_reflex(self, text: str, task_dict: Dict[str, Any]):
-        """Run FastEventizer for local deterministic perception (regex, PII, emergency detection)."""
-        fast_ev = get_fast_eventizer()
-        fast_res = fast_ev.process_text(
-            text,
+        """
+        Run FastEventizer for local deterministic perception (regex, PII detection, emergency detection).
+        
+        Architecture: Normalization happens BEFORE FastEventizer (reflex sensor).
+        This ensures single normalization point and consistent pattern matching.
+        """
+        # Step 1: Normalize text (AGGRESSIVE tier for fast, deterministic matching)
+        # This happens BEFORE FastEventizer to ensure single normalization point
+        normalizer = TextNormalizer(
+            tier=NormalizationTier.AGGRESSIVE,
+            case="lower",
+            fold_accents=False,
+            standardize_units=True,  # Essential for unit grounding ("6 PM" -> "18:00")
+            strip_audio_tags=True,  # Essential for voice-to-text transcripts
+            join_split_tokens=True,  # De-obfuscation for security bypass prevention
+        )
+        normalized_text, _ = normalizer.normalize(text, build_map=True)
+        
+        # Step 2: FastEventizer (reflex sensor) receives pre-normalized text
+        fast_ev = get_fast_eventizer(FAST_EVENTIZER_PATTERNS_PATH)
+        task_id = task_dict.get("task_id") or task_dict.get("id")
+        # FastEventizer returns EventizerResponse directly (no conversion needed)
+        return fast_ev.process_text(
+            normalized_text=normalized_text,
+            original_text=text,
             task_type=task_dict.get("type", ""),
             domain=task_dict.get("domain", ""),
-            include_original_text=True,
+            task_id=task_id,
         )
-        # Use task_id or id, with fallback for compatibility
-        task_id = task_dict.get("task_id") or task_dict.get("id")
-        return fast_result_to_eventizer_response(fast_res, text, task_id=task_id)
 
     def _refine_multimodal_context(
         self, text: str, task_dict: Dict[str, Any], multimodal_ctx: Dict[str, Any]
@@ -691,13 +720,21 @@ class Coordinator:
         task_dict: Dict[str, Any],
         multimodal_ctx: dict,
         refinement: dict,
+        fast_eventizer_output: Optional[Dict[str, Any]] = None,
     ):
         """
         Call remote EventizerService with refined text and multimodal context.
 
         Architecture: This stage only runs if FastEventizer is uncertain or needs
-        deep reasoning. The refined text (with temporal grounding and vision narrative)
-        is passed to improve LLM accuracy.
+        deep reasoning. The service refines FastEventizer output rather than redoing
+        all processing, ensuring complementary operation.
+
+        Args:
+            text: Original text
+            task_dict: Task dictionary
+            multimodal_ctx: Multimodal context
+            refinement: Multimodal refinement data
+            fast_eventizer_output: Optional FastEventizer output for refinement mode
         """
         # Determine normalization tier based on task type
         # COGNITIVE preserves sentiment for CHAT tasks (guest interactions)
@@ -711,14 +748,33 @@ class Coordinator:
         if vision_narrative:
             final_text = f"{vision_narrative} | {final_text}"
 
-        payload = {
-            "text": final_text,  # Use REFINED text (cleaned + temporally grounded)
-            "domain": task_dict.get("domain"),
-            "task_type": task_dict.get("type"),  # Preserve original case
-            "media_context": multimodal_ctx,  # Essential for v2.5 multimodal caching
-            "include_pkg_hint": tier
-            == "cognitive",  # Hint for TextNormalizer tier selection
-        }
+        # Build payload - if FastEventizer output is provided, use it for refinement
+        if fast_eventizer_output:
+            # Refinement mode: Pass FastEventizer output to EventizerService
+            # EventizerService will skip redundant normalization/PII and refine instead
+            payload = {
+                "text": final_text,  # Use REFINED text (cleaned + temporally grounded)
+                "domain": task_dict.get("domain"),
+                "task_type": task_dict.get("type"),  # Preserve original case
+                "media_context": multimodal_ctx,  # Essential for v2.5 multimodal caching
+                "include_pkg_hint": tier == "cognitive",  # Hint for TextNormalizer tier selection
+                # Pass FastEventizer output for refinement
+                "processed_text": fast_eventizer_output.get("processed_text") or final_text,
+                "normalized_text": fast_eventizer_output.get("normalized_text") or final_text,
+                "_fast_eventizer_processed": True,
+                "_fast_eventizer_pii_redacted": fast_eventizer_output.get("pii_redacted", False),
+                "_fast_eventizer_normalized": True,
+            }
+            logger.debug("EventizerService: Refining FastEventizer output (complementary mode)")
+        else:
+            # Full processing mode (no FastEventizer preprocessing)
+            payload = {
+                "text": final_text,  # Use REFINED text (cleaned + temporally grounded)
+                "domain": task_dict.get("domain"),
+                "task_type": task_dict.get("type"),  # Preserve original case
+                "media_context": multimodal_ctx,  # Essential for v2.5 multimodal caching
+                "include_pkg_hint": tier == "cognitive",  # Hint for TextNormalizer tier selection
+            }
 
         remote_resp = await self.eventizer.process(payload)
 
@@ -839,7 +895,18 @@ class Coordinator:
 
         Architecture: PKG is the authoritative source of routing hints.
         This adapter normalizes PKG output to proto_plan contract expected by core.execute.
+        
+        NOTE: RouteConfig is cached per-instance to avoid rebuilding on every request.
         """
+        # Cache RouteConfig to avoid rebuilding on every request
+        if not hasattr(self, '_cached_route_config'):
+            self._cached_route_config = None
+        
+        # Cache pkg_timeout value to avoid env var lookup on every request
+        # NOTE: pkg_timeout_s should be a *PKG timeout*, not serve_call_s.
+        if not hasattr(self, '_cached_pkg_timeout'):
+            self._cached_pkg_timeout = int(os.getenv("PKG_TIMEOUT_S", str(min(5, self.timeout_s or 2))))
+        pkg_timeout = self._cached_pkg_timeout
 
         async def evaluate_pkg_func(tags, signals, context, timeout_s, embedding=None):
             """
@@ -857,15 +924,27 @@ class Coordinator:
             """
             pkg_mgr = get_global_pkg_manager()
             if not pkg_mgr:
-                logger.warning("[PKG] PKG manager not available")
-                raise RuntimeError("PKG manager not available")
+                logger.warning("[PKG] PKG manager not available - degrading to fallback routing")
+                # Return minimal proto_plan instead of raising (graceful degradation)
+                return {
+                    "version": None,
+                    "steps": [{"task": context.get("raw_task", {})}] if context else [],
+                    "edges": [],
+                    "routing": {},
+                }
 
             evaluator = pkg_mgr.get_active_evaluator()
             if not evaluator:
                 logger.warning(
-                    "[PKG] Evaluator not available - PKG manager exists but no active evaluator"
+                    "[PKG] Evaluator not available - degrading to fallback routing"
                 )
-                raise RuntimeError("PKG evaluator not available")
+                # Return minimal proto_plan instead of raising (graceful degradation)
+                return {
+                    "version": None,
+                    "steps": [{"task": context.get("raw_task", {})}] if context else [],
+                    "edges": [],
+                    "routing": {},
+                }
 
             logger.debug(
                 f"[PKG] Evaluator active: version={getattr(evaluator, 'version', 'unknown')}, "
@@ -874,22 +953,48 @@ class Coordinator:
             )
 
             # Build task_facts payload for PKG evaluation
+            # Include stable identifiers for task correlation and debugging
             task_facts = {
                 "tags": list(tags or []),
                 "signals": signals or {},
-                "context": context or {},
+                "context": {
+                    **(context or {}),
+                    # Ensure stable identifiers are always present
+                    "task_id": context.get("task_id"),
+                    "domain": context.get("domain"),
+                    "type": context.get("type"),
+                    "workflow": context.get("workflow"),
+                    "correlation_id": context.get("correlation_id"),
+                },
             }
 
             # Use PKGManager's evaluate_task for async hydration -> evaluation pipeline
             # This performs: Hydration (if embedding provided) -> Injection -> Execution
+            # Use RouteConfig.pkg_timeout_s consistently (ignore passed timeout_s parameter)
+            pkg_timeout_actual = float(pkg_timeout or 2)
             try:
                 res = await asyncio.wait_for(
                     pkg_mgr.evaluate_task(task_facts, embedding=embedding),
-                    timeout=float(timeout_s or 2)
+                    timeout=pkg_timeout_actual
                 )
             except asyncio.TimeoutError:
-                logger.warning(f"[PKG] Evaluation timed out after {timeout_s}s")
-                raise RuntimeError(f"PKG evaluation timeout after {timeout_s}s")
+                logger.warning(f"[PKG] Evaluation timed out after {pkg_timeout_actual}s - degrading to fallback routing")
+                # Return minimal proto_plan instead of raising (graceful degradation)
+                return {
+                    "version": None,
+                    "steps": [{"task": context.get("raw_task", {})}] if context else [],
+                    "edges": [],
+                    "routing": {},
+                }
+            except Exception as e:
+                logger.warning(f"[PKG] Evaluation failed: {e} - degrading to fallback routing", exc_info=True)
+                # Return minimal proto_plan instead of raising (graceful degradation)
+                return {
+                    "version": None,
+                    "steps": [{"task": context.get("raw_task", {})}] if context else [],
+                    "edges": [],
+                    "routing": {},
+                }
 
             # Verification: Log PKG output structure
             logger.debug(
@@ -919,14 +1024,16 @@ class Coordinator:
                 )
 
             # 2. Extract routing hints from subtask params (if PKG embeds them there)
-            # Aggregate routing hints from all subtasks (prefer first non-empty)
+            # Strategy: Top-level routing wins, then aggregate from subtasks
+            # For specialization: prefer first non-empty (not accumulation)
+            # For skills: merge with max intensity (accumulation is intentional)
             for st in subtasks:
                 if isinstance(st, dict):
                     subtask_params = st.get("params", {})
                     if isinstance(subtask_params, dict):
                         subtask_routing = subtask_params.get("routing", {})
                         if isinstance(subtask_routing, dict):
-                            # Merge routing hints (child overrides parent)
+                            # Specialization: prefer first non-empty (don't overwrite if already set)
                             if subtask_routing.get(
                                 "required_specialization"
                             ) and not extracted_routing.get("required_specialization"):
@@ -939,12 +1046,16 @@ class Coordinator:
                                 extracted_routing["specialization"] = subtask_routing[
                                     "specialization"
                                 ]
+                            # Skills: merge with max intensity (accumulation is intentional)
                             if subtask_routing.get("skills"):
                                 existing_skills = extracted_routing.get("skills", {})
-                                extracted_routing["skills"] = {
-                                    **existing_skills,
-                                    **(subtask_routing["skills"] or {}),
-                                }
+                                merged_skills = {}
+                                for skill, val in {**existing_skills, **(subtask_routing["skills"] or {})}.items():
+                                    merged_skills[skill] = max(
+                                        existing_skills.get(skill, 0.0),
+                                        float(subtask_routing["skills"].get(skill, 0.0))
+                                    )
+                                extracted_routing["skills"] = merged_skills
 
             # IMPORTANT: "steps" is the canonical field expected downstream.
             # Each step should be a dict with at minimum {"task": {...}}.
@@ -965,30 +1076,40 @@ class Coordinator:
                     task_params = step["task"].setdefault("params", {})
 
                     # Embed routing hints into step.task.params.routing
-                    # Merge extracted routing with any existing routing in the step
+                    # Merge strategy: PKG-extracted routing takes precedence over subtask routing
                     step_routing = task_params.setdefault("routing", {})
+                    
+                    # First: Apply any existing routing from the subtask (lower precedence)
+                    if isinstance(step_task.get("params", {}).get("routing"), dict):
+                        step_routing.update(step_task["params"]["routing"])
+                    
+                    # Second: Apply extracted routing from PKG (higher precedence - overwrites subtask)
                     if extracted_routing:
-                        # Merge: extracted routing (from PKG) takes precedence
                         step_routing.update(extracted_routing)
-                        # Also merge any existing routing from the subtask
-                        if isinstance(step_task.get("params", {}).get("routing"), dict):
-                            step_routing.update(step_task["params"]["routing"])
-                        task_params["routing"] = step_routing
+                    
+                    task_params["routing"] = step_routing
 
                     steps.append(step)
                 else:
                     # object-like fallback
                     steps.append({"task": getattr(st, "task", st)})
 
+            # Always include routing key (even if empty) for downstream consistency
+            # Preserve metadata and semantic_context from PKG output for enrichment
             proto_plan = {
                 "version": version,
                 "steps": steps,
                 "edges": dag,
+                "routing": extracted_routing or {},  # Always present, even if empty
+                "metadata": res.get("metadata", {}) or {},  # Preserve PKG metadata
             }
+            
+            # Preserve semantic_context if PKG provides it (for Unified Memory enrichment)
+            if "semantic_context" in res:
+                proto_plan["semantic_context"] = res["semantic_context"]
 
-            # Embed top-level routing hints if we extracted any
+            # Log routing status
             if extracted_routing:
-                proto_plan["routing"] = extracted_routing
                 required_spec = extracted_routing.get("required_specialization")
                 specialization = extracted_routing.get("specialization")
 
@@ -1005,10 +1126,9 @@ class Coordinator:
                     f"specialization={specialization}"
                 )
             else:
-                logger.warning(
+                logger.debug(
                     "[PKG] No routing hints found in PKG output. "
-                    "PKG should provide routing hints via top-level 'routing' or subtask.params.routing. "
-                    "Downstream routing extraction may fall back to minimal intent."
+                    "Downstream routing extraction will fall back to baseline intent."
                 )
 
             # Verification: Log final proto_plan structure
@@ -1021,21 +1141,22 @@ class Coordinator:
 
             return proto_plan
 
-        # NOTE: pkg_timeout_s should be a *PKG timeout*, not serve_call_s.
-        pkg_timeout = int(os.getenv("PKG_TIMEOUT_S", str(min(5, self.timeout_s or 2))))
-
-        return RouteConfig(
-            surprise_computer=self.surprise_computer,
-            tau_fast_exit=self.tau_fast_exit,
-            tau_plan_exit=self.tau_plan_exit,
-            ocps_valve=self.ocps_valve,
-            signal_enricher=self.signal_enricher,
-            evaluate_pkg_func=evaluate_pkg_func,
-            ood_to01=self.ood_to01,
-            pkg_timeout_s=pkg_timeout,
-            # Keep intent_resolver unset to discourage non-PKG routing
-            intent_resolver=None,
-        )
+        # Return cached RouteConfig if available, otherwise build and cache
+        if self._cached_route_config is None:
+            self._cached_route_config = RouteConfig(
+                surprise_computer=self.surprise_computer,
+                tau_fast_exit=self.tau_fast_exit,
+                tau_plan_exit=self.tau_plan_exit,
+                ocps_valve=self.ocps_valve,
+                signal_enricher=self.signal_enricher,
+                evaluate_pkg_func=evaluate_pkg_func,
+                ood_to01=self.ood_to01,
+                pkg_timeout_s=pkg_timeout,
+                # Keep intent_resolver unset to discourage non-PKG routing
+                intent_resolver=None,
+            )
+        
+        return self._cached_route_config
 
     def _build_execution_config(self, cid: str) -> ExecutionConfig:
         """Builds execution dependency container."""

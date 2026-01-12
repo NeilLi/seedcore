@@ -156,6 +156,16 @@ class EventizerServiceImpl:
     # -----------------
 
     async def process_text(self, request: EventizerRequest) -> EventizerResponse:
+        """
+        Process text through eventizer pipeline with FastEventizer refinement support.
+        
+        Architecture: This service complements FastEventizer by:
+        - Accepting FastEventizer output for refinement (skips redundant processing)
+        - Adding comprehensive normalization, PII, signals, and deep pattern matching
+        - Providing full EventizerResponse with all metadata
+        
+        If request contains FastEventizer metadata, this service refines rather than redoes work.
+        """
         if not self._initialized:
             await self.initialize()
 
@@ -167,23 +177,72 @@ class EventizerServiceImpl:
             budget_ms = float(self.config.max_processing_time_ms)
             budget_deadline = stats.start_ms + budget_ms
 
+            # Check if this is a refinement request (FastEventizer already processed)
+            # FastEventizer output includes metadata flags in the request
+            fast_eventizer_processed = getattr(request, '_fast_eventizer_processed', False)
+            fast_eventizer_pii_redacted = getattr(request, '_fast_eventizer_pii_redacted', False)
+            fast_eventizer_normalized = getattr(request, '_fast_eventizer_normalized', False)
+            
+            # Also check if processed_text is provided (from FastEventizer output)
+            fast_processed_text = getattr(request, 'processed_text', None)
+            fast_normalized_text = getattr(request, 'normalized_text', None)
+
             # 1. Normalize (with tiered normalization based on request context)
-            norm_text, span_map = await self._normalize_with_map(request.text, request)
+            # Skip if FastEventizer already normalized (use its normalized text)
+            if fast_eventizer_normalized and fast_normalized_text:
+                # FastEventizer already normalized - use its normalized text
+                norm_text = fast_normalized_text
+                # Create identity span map (normalized text = original text in this case)
+                # Since FastEventizer normalized, we create a simple identity mapping
+                from ..ops.eventizer.utils.text_normalizer import SpanMap
+                # Identity span map: each char maps to itself
+                orig_len = len(request.text)
+                norm_len = len(norm_text)
+                # Create identity mapping (simplified - assumes 1:1 mapping)
+                span_map = SpanMap(
+                    norm_to_orig=list(range(min(orig_len, norm_len))),
+                    orig_to_norm=list(range(min(orig_len, norm_len)))
+                )
+                log.append("Using FastEventizer normalized text (skipping normalization)")
+            else:
+                # Full normalization (FastEventizer didn't normalize or refinement mode disabled)
+                norm_text, span_map = await self._normalize_with_map(request.text, request)
 
             # 2. PII Redaction
+            # Skip if FastEventizer already did minimal PII redaction
+            # Note: FastEventizer does minimal PII, EventizerService does comprehensive
+            # We can skip if FastEventizer already redacted AND user doesn't need comprehensive
             redacted_text = norm_text
             pii_audit = None
             if self.config.enable_pii_redaction and self._pii_client:
-                redacted_text, pii_audit = self._pii_client.redact_with_audit(
-                    norm_text,
-                    entities=request.pii_entities,
-                    mode=request.redact_mode,
-                    span_map=span_map,
-                )
-                if redacted_text != norm_text:
-                    stats.pii_redacted = True
+                # If FastEventizer already redacted, we still do comprehensive PII
+                # (FastEventizer only does minimal/emergency-focused PII)
+                # However, we can optimize by using FastEventizer's processed_text as starting point
+                if fast_eventizer_pii_redacted and fast_processed_text:
+                    # Use FastEventizer's processed text as starting point
+                    # Still do comprehensive PII redaction (Presidio is more thorough)
+                    redacted_text, pii_audit = self._pii_client.redact_with_audit(
+                        fast_processed_text,  # Start from FastEventizer's processed text
+                        entities=request.pii_entities,
+                        mode=request.redact_mode,
+                        span_map=span_map,
+                    )
+                    if redacted_text != fast_processed_text:
+                        stats.pii_redacted = True
+                    log.append("Refining FastEventizer PII redaction with comprehensive Presidio")
+                else:
+                    # Full PII redaction (no FastEventizer preprocessing)
+                    redacted_text, pii_audit = self._pii_client.redact_with_audit(
+                        norm_text,
+                        entities=request.pii_entities,
+                        mode=request.redact_mode,
+                        span_map=span_map,
+                    )
+                    if redacted_text != norm_text:
+                        stats.pii_redacted = True
+                
                 # Fixup audit spans to original coordinates
-                if pii_audit and pii_audit.spans:
+                if pii_audit and pii_audit.spans and span_map:
                     pii_audit.spans = self._map_pii_spans_to_original(
                         pii_audit.spans, span_map, request.text
                     )

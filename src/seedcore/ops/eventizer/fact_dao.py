@@ -5,8 +5,8 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Iterable, List, Optional, Sequence, Union
 
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from seedcore.models.fact import Fact
 

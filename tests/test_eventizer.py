@@ -19,9 +19,10 @@ from mock_eventizer_dependencies import MockEventizerService
 # Add the src directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from seedcore.ops.eventizer import EventizerRequest, EventizerConfig
+from seedcore.models.eventizer import EventizerRequest, EventizerConfig
 
 
+@pytest.mark.asyncio
 async def test_eventizer_basic():
     """Test basic eventizer functionality."""
     print("🧪 Testing Eventizer Service - Basic Functionality")
@@ -129,6 +130,7 @@ async def test_eventizer_basic():
             print(f"   Errors: {', '.join(response.errors)}")
 
 
+@pytest.mark.asyncio
 async def test_eventizer_pii_redaction():
     """Test PII redaction functionality."""
     print("\n\n🔒 Testing Eventizer Service - PII Redaction")
@@ -174,6 +176,7 @@ async def test_eventizer_pii_redaction():
         print(f"   Expected: {'✅' if test_case['should_redact'] else '❌'}")
 
 
+@pytest.mark.asyncio
 async def test_eventizer_integration():
     """Test eventizer integration with task creation simulation."""
     print("\n\n🔗 Testing Eventizer Integration - Task Creation Simulation")

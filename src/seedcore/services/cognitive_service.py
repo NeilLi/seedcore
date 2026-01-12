@@ -1059,10 +1059,25 @@ class CognitiveService:
             input_data=input_data,
         )
 
-        self.logger.info(
-            f"[CognitiveCore] Task {request.task_id} | "
-            f"Agent={agent_id} | CogType={cog_type.value} | Kind={decision_kind.value}"
+        # Extract workflow if present (execution workflow override)
+        # workflow is stored in params.cognitive.workflow or top-level workflow field
+        workflow = (
+            request.workflow
+            or params.get("cognitive", {}).get("workflow")
+            or params.get("workflow")
+            or None
         )
+        task_type = request.type or "unknown"
+
+        # Log with workflow awareness: workflow is execution-specific, task_type is semantic category
+        log_msg = (
+            f"[CognitiveCore] Task {request.task_id} | "
+            f"Agent={agent_id} | CogType={cog_type.value} | Kind={decision_kind.value} | "
+            f"TaskType={task_type}"
+        )
+        if workflow:
+            log_msg += f" | Workflow={workflow}"
+        self.logger.info(log_msg)
 
         # ----------------------------------------------------------------------
         # 4. Execute using CognitiveService orchestrator
