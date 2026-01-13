@@ -575,19 +575,18 @@ async def _handle_cognitive_path(
         # Extract metadata from TaskResult.payload.metadata (CognitivePathResult.metadata)
         payload_metadata = decision_payload.get("payload", {}).get("metadata", {})
         proto_plan_from_router = payload_metadata.get("proto_plan") or {}
-        pkg_meta = payload_metadata.get("pkg_meta") or {}
         ocps_payload = (
             payload_metadata.get("ocps") or payload_metadata.get("ocps_payload") or {}
         )
 
         # 1) Ask cognitive service to refine / expand plan
+        # Note: pkg_meta is embedded in proto_plan.metadata, no need to pass separately
         plan_res = await config.cognitive_client.execute_async(
             agent_id="coordinator_service",
             cog_type=CognitiveType.TASK_PLANNING,
             decision_kind=decision_kind,
             task=task,
             proto_plan=proto_plan_from_router or None,
-            pkg_meta=pkg_meta or None,
             ocps=ocps_payload or None,
         )
 
@@ -696,7 +695,7 @@ async def _handle_cognitive_path(
             solution_steps=solution_steps,
             step_results=step_results,
             decision_kind=decision_kind.value,
-            original_meta={"pkg_meta": pkg_meta, "ocps": ocps_payload},
+            original_meta={"ocps": ocps_payload},
         )
 
     except Exception as e:
@@ -1123,16 +1122,14 @@ async def _compute_routing_decision(
     # 2) PKG Evaluation (Primary Source of Routing Intent)
     # Architecture: PKG is the policy layer that decides WHAT and IN WHAT ORDER.
     # PKG should always be evaluated (not optional) to provide routing hints.
-    pkg_meta: Dict[str, Any] = {"evaluated": False}
-    proto_plan: Dict[str, Any] = {}
+    proto_plan: Dict[str, Any] = {"metadata": {"evaluated": False}}
 
     if route_cfg.evaluate_pkg_func:
         # PKG evaluation should happen for both FAST_PATH and COGNITIVE paths
         # PKG provides routing hints even for simple tasks
         # ENHANCEMENT: Pass embedding for semantic context hydration
         try:
-            # Explicitly unpack tuple return to prevent contract mismatch
-            pkg_eval_result = await _try_run_pkg_evaluation(
+            proto_plan = await _try_run_pkg_evaluation(
                 ctx=ctx,
                 cfg=route_cfg,
                 intent=None,  # PKG doesn't need pre-computed intent
@@ -1140,10 +1137,10 @@ async def _compute_routing_decision(
                 drift_state=drift_state,
                 embedding=embedding,  # Pass embedding for Unified Memory hydration
             )
-            # Explicit tuple unpacking: (pkg_meta, proto_plan)
-            pkg_meta, proto_plan = pkg_eval_result
         except Exception as e:
             logger.debug(f"[Coordinator] PKG evaluation failed: {e}, using fallback")
+            # Ensure proto_plan has evaluated=False when PKG fails
+            proto_plan = {"metadata": {"evaluated": False}}
 
     # 3) Extract Routing Intent (PKG-First)
     # Priority: proto_plan > config resolver > minimal fallback
@@ -1234,10 +1231,10 @@ async def _compute_routing_decision(
         )
 
     # Prepare payload common with insight metadata
+    # Note: pkg_meta is now embedded in proto_plan.metadata, no need to extract separately
     payload_common = _create_payload_common(
         task_id=ctx.task_id,
         decision_kind=decision_kind,
-        pkg_meta=pkg_meta,
         proto_plan=proto_plan,
         router_latency_ms=router_latency_ms,
         correlation_id=correlation_id,
@@ -1310,7 +1307,7 @@ async def _try_run_pkg_evaluation(
     raw_drift: float,
     drift_state: Any,
     embedding: Optional[List[float]] = None,
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Evaluate PKG policy to produce proto_plan with routing hints.
 
@@ -1319,9 +1316,10 @@ async def _try_run_pkg_evaluation(
 
     Note: PKG does NOT need pre-computed intent. PKG evaluates policy independently
     and produces routing hints as part of the plan.
+    
+    Returns proto_plan with evaluation metadata embedded in proto_plan.metadata.
     """
-    pkg_meta = {"evaluated": False}
-    proto_plan: Dict[str, Any] = {}
+    proto_plan: Dict[str, Any] = {"metadata": {"evaluated": False}}
 
     try:
         # Extract Eventizer signals (x1..x6) from TaskContext
@@ -1382,12 +1380,17 @@ async def _try_run_pkg_evaluation(
         )
 
         proto_plan = pkg_res or {}
-        pkg_meta = {"evaluated": True, "version": proto_plan.get("version")}
+        # Embed evaluation metadata directly in proto_plan
+        if not proto_plan.get("metadata"):
+            proto_plan["metadata"] = {}
+        proto_plan["metadata"]["evaluated"] = True
+        # version is already at top level of proto_plan, accessible via proto_plan.get("version")
 
     except Exception as e:
         logger.debug("[Coordinator] PKG evaluation failed: %s", e)
+        proto_plan = {"metadata": {"evaluated": False}}
 
-    return pkg_meta, proto_plan
+    return proto_plan
 
 
 # ---------------------------------------------------------------------------

@@ -173,7 +173,6 @@ class CognitiveServiceClient(BaseServiceClient):
         llm_model_override: Optional[str] = None,
         # NEW: coordinator / PKG metadata
         proto_plan: Optional[Dict[str, Any]] = None,
-        pkg_meta: Optional[Dict[str, Any]] = None,
         ocps: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
@@ -184,7 +183,7 @@ class CognitiveServiceClient(BaseServiceClient):
 
         NEW:
           - proto_plan: Optional PKG- or router-generated DAG / plan scaffold
-          - pkg_meta:   Optional PKG metadata (version, snapshot, tags, etc.)
+                        (contains pkg_meta embedded in proto_plan.metadata)
           - ocps:       Optional OCPS / drift state payload
         """
         resolved_type = self._resolve_cog_type(cog_type)
@@ -222,10 +221,9 @@ class CognitiveServiceClient(BaseServiceClient):
         # ------------------------------------------------------------------
         # 2b. NEW: Coordinator / PKG-specific metadata
         # ------------------------------------------------------------------
+        # Note: pkg_meta is embedded in proto_plan.metadata, no need to pass separately
         if proto_plan is not None:
             cognitive_section["proto_plan"] = proto_plan
-        if pkg_meta is not None:
-            cognitive_section["pkg_meta"] = pkg_meta
         if ocps is not None:
             cognitive_section["ocps"] = ocps
 
@@ -286,7 +284,6 @@ class CognitiveServiceClient(BaseServiceClient):
         llm_model_override: Optional[str] = None,
         # NEW: coordinator / PKG metadata
         proto_plan: Optional[Dict[str, Any]] = None,
-        pkg_meta: Optional[Dict[str, Any]] = None,
         ocps: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
@@ -305,7 +302,6 @@ class CognitiveServiceClient(BaseServiceClient):
                 llm_provider_override=llm_provider_override,
                 llm_model_override=llm_model_override,
                 proto_plan=proto_plan,
-                pkg_meta=pkg_meta,
                 ocps=ocps,
             )
 

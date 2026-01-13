@@ -255,7 +255,8 @@ def create_cognitive_path_result(
 
     Args:
         confidence_score: Optional confidence in the decision to escalate.
-        **metadata: Context (OCPS drift scores, trace IDs, proto_plan, pkg_meta, ocps_payload, etc.).
+        **metadata: Context (OCPS drift scores, trace IDs, proto_plan, ocps_payload, etc.).
+                     Note: pkg_meta is embedded in proto_plan.metadata.
 
     Returns:
         TaskResult with kind=DecisionKind.COGNITIVE.
@@ -269,7 +270,7 @@ def create_cognitive_path_result(
         agent_id="coordinator_service",
         result={},  # Empty result - all data is in metadata
         confidence_score=confidence_score,
-        metadata=metadata,  # Contains proto_plan, pkg_meta, ocps_payload, insight, etc.
+        metadata=metadata,  # Contains proto_plan (with pkg_meta embedded), ocps_payload, insight, etc.
     )
 
     # TaskResult.metadata contains top-level routing/execution metadata
