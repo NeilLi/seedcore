@@ -1,0 +1,416 @@
+# SeedCore Dynamic Specializations Configuration
+# ==============================================
+# This file defines dynamic specializations that can be registered at runtime.
+# These complement the static Specialization enum and allow the system to evolve
+# without code changes.
+#
+# Format:
+#   dynamic_specializations:
+#     <specialization_value>:
+#       name: "<Display Name>"
+#       metadata:
+#         category: "<category>"
+#         description: "<description>"
+#         version: "<version>"
+#       role_profile:
+#         default_skills:
+#           <skill_name>: <value_0_to_1>
+#         allowed_tools:
+#           - <tool1>
+#           - <tool2>
+#         routing_tags:
+#           - <tag1>
+#         safety_policies:
+#           <policy_name>: <value>
+
+dynamic_specializations:
+  # =============================================================
+  #  CORE USER EXPERIENCE SPECIALIZATIONS
+  # =============================================================
+  
+  user_liaison_v2:
+    name: "User Liaison V2"
+    metadata:
+      category: "user_experience"
+      description: "Enhanced user interaction and dialog management"
+      version: "2.0"
+      evolution: "Improved context awareness and personalization"
+    role_profile:
+      default_skills:
+        communication: 0.9
+        empathy: 0.8
+        context_understanding: 0.85
+        personalization: 0.75
+      allowed_tools:
+        - notify.send
+        - dialog.respond
+        - context.retrieve
+        - preference.update
+      routing_tags:
+        - user_facing
+        - conversational
+        - high_priority
+      safety_policies:
+        max_response_time_ms: 2000
+        require_confirmation_for_actions: true
+
+  mood_inference_agent_v2:
+    name: "Mood Inference Agent V2"
+    metadata:
+      category: "user_experience"
+      description: "Advanced mood and emotional state detection"
+      version: "2.0"
+    role_profile:
+      default_skills:
+        emotional_intelligence: 0.9
+        pattern_recognition: 0.85
+        context_analysis: 0.8
+      allowed_tools:
+        - sensor.read
+        - ml.predict
+        - context.analyze
+      routing_tags:
+        - user_experience
+        - emotional_ai
+      safety_policies:
+        privacy_level: "high"
+        require_consent: true
+
+  # =============================================================
+  #  CORE ENVIRONMENT INTELLIGENCE SPECIALIZATIONS
+  # =============================================================
+  
+  environment_intelligence_v2:
+    name: "Environment Intelligence V2"
+    metadata:
+      category: "environment"
+      description: "Enhanced world modeling and situational awareness"
+      version: "2.0"
+    role_profile:
+      default_skills:
+        world_modeling: 0.9
+        sensor_fusion: 0.85
+        spatial_reasoning: 0.8
+        temporal_reasoning: 0.75
+      allowed_tools:
+        - sensor.read_all
+        - model.predict
+        - graph.query
+        - state.update
+      routing_tags:
+        - environment
+        - world_model
+        - high_frequency
+      safety_policies:
+        update_frequency_ms: 1000
+        require_validation: true
+
+  anomaly_detector_v2:
+    name: "Anomaly Detector V2"
+    metadata:
+      category: "environment"
+      description: "Advanced anomaly detection with ML-based patterns"
+      version: "2.0"
+    role_profile:
+      default_skills:
+        anomaly_detection: 0.95
+        pattern_recognition: 0.9
+        statistical_analysis: 0.85
+        alert_prioritization: 0.8
+      allowed_tools:
+        - sensor.read
+        - ml.detect_anomaly
+        - alert.send
+        - log.record
+      routing_tags:
+        - safety_critical
+        - real_time
+        - monitoring
+      safety_policies:
+        false_positive_threshold: 0.1
+        alert_escalation_timeout_s: 30
+        require_human_review: false
+
+  # =============================================================
+  #  CORE ORCHESTRATION SPECIALIZATIONS
+  # =============================================================
+  
+  device_orchestrator_v2:
+    name: "Device Orchestrator V2"
+    metadata:
+      category: "orchestration"
+      description: "Enhanced device coordination with energy awareness"
+      version: "2.0"
+    role_profile:
+      default_skills:
+        device_coordination: 0.95
+        energy_optimization: 0.9
+        conflict_resolution: 0.85
+        scheduling: 0.8
+      allowed_tools:
+        - device.control
+        - device.status
+        - energy.optimize
+        - schedule.create
+      routing_tags:
+        - device_control
+        - orchestration
+        - energy_aware
+      safety_policies:
+        max_concurrent_devices: 50
+        require_confirmation_for_high_power: true
+        energy_budget_limit_kwh: 10.0
+
+  energy_manager_v2:
+    name: "Energy Manager V2"
+    metadata:
+      category: "orchestration"
+      description: "Advanced energy optimization and cost management"
+      version: "2.0"
+    role_profile:
+      default_skills:
+        energy_optimization: 0.95
+        cost_analysis: 0.9
+        demand_forecasting: 0.85
+        grid_coordination: 0.8
+      allowed_tools:
+        - energy.monitor
+        - energy.optimize
+        - cost.calculate
+        - grid.interact
+      routing_tags:
+        - energy
+        - cost_optimization
+        - sustainability
+      safety_policies:
+        max_power_draw_kw: 100.0
+        cost_threshold_usd: 1000.0
+        require_approval_for_overrides: true
+
+  # =============================================================
+  #  CORE EXECUTION SPECIALIZATIONS
+  # =============================================================
+  
+  cleaning_robot_v2:
+    name: "Cleaning Robot V2"
+    metadata:
+      category: "execution"
+      description: "Enhanced autonomous cleaning with obstacle avoidance"
+      version: "2.0"
+    role_profile:
+      default_skills:
+        navigation: 0.9
+        obstacle_avoidance: 0.95
+        cleaning_efficiency: 0.85
+        battery_management: 0.8
+      allowed_tools:
+        - robot.move
+        - robot.clean
+        - sensor.scan
+        - battery.check
+      routing_tags:
+        - physical_execution
+        - autonomous
+        - safety_critical
+      safety_policies:
+        max_operation_time_min: 120
+        require_obstacle_detection: true
+        emergency_stop_enabled: true
+
+  # =============================================================
+  #  CORE VERIFICATION SPECIALIZATIONS
+  # =============================================================
+  
+  result_verifier_v2:
+    name: "Result Verifier V2"
+    metadata:
+      category: "verification"
+      description: "Enhanced result validation with multi-modal checks"
+      version: "2.0"
+    role_profile:
+      default_skills:
+        validation: 0.95
+        quality_assurance: 0.9
+        error_detection: 0.85
+        feedback_integration: 0.8
+      allowed_tools:
+        - verify.result
+        - sensor.validate
+        - feedback.collect
+        - log.record
+      routing_tags:
+        - verification
+        - quality_assurance
+        - feedback_loop
+      safety_policies:
+        require_validation_before_completion: true
+        false_negative_threshold: 0.05
+        feedback_integration_required: true
+
+  # =============================================================
+  #  CORE LEARNING SPECIALIZATIONS
+  # =============================================================
+  
+  critic_v2:
+    name: "Critic V2"
+    metadata:
+      category: "learning"
+      description: "Enhanced performance evaluation and feedback generation"
+      version: "2.0"
+    role_profile:
+      default_skills:
+        performance_evaluation: 0.95
+        feedback_generation: 0.9
+        pattern_analysis: 0.85
+        improvement_suggestions: 0.8
+      allowed_tools:
+        - evaluate.performance
+        - feedback.generate
+        - pattern.analyze
+        - model.update
+      routing_tags:
+        - learning
+        - feedback
+        - optimization
+      safety_policies:
+        require_evidence_for_criticism: true
+        feedback_confidence_threshold: 0.7
+
+  adaptive_learner_v2:
+    name: "Adaptive Learner V2"
+    metadata:
+      category: "learning"
+      description: "Enhanced continuous learning with transfer learning"
+      version: "2.0"
+    role_profile:
+      default_skills:
+        learning: 0.95
+        adaptation: 0.9
+        transfer_learning: 0.85
+        knowledge_integration: 0.8
+      allowed_tools:
+        - learn.from_experience
+        - model.update
+        - knowledge.store
+        - pattern.extract
+      routing_tags:
+        - learning
+        - adaptation
+        - continuous_improvement
+      safety_policies:
+        require_validation_before_deployment: true
+        learning_rate_limit: 0.1
+        require_human_oversight: false
+
+  # =============================================================
+  #  CORE UTILITY SPECIALIZATIONS
+  # =============================================================
+  
+  observer_v2:
+    name: "Observer V2"
+    metadata:
+      category: "utility"
+      description: "Enhanced observation and monitoring capabilities"
+      version: "2.0"
+    role_profile:
+      default_skills:
+        observation: 0.9
+        monitoring: 0.85
+        data_collection: 0.8
+        reporting: 0.75
+      allowed_tools:
+        - observe.all
+        - monitor.system
+        - data.collect
+        - report.generate
+      routing_tags:
+        - monitoring
+        - observation
+        - low_priority
+      safety_policies:
+        read_only_mode: true
+        require_permission_for_sensitive_data: true
+
+  generalist_v2:
+    name: "Generalist V2"
+    metadata:
+      category: "utility"
+      description: "Enhanced general-purpose agent with broader capabilities"
+      version: "2.0"
+    role_profile:
+      default_skills:
+        general_knowledge: 0.7
+        problem_solving: 0.75
+        coordination: 0.7
+        learning: 0.65
+      allowed_tools:
+        - task.delegate
+        - context.retrieve
+        - coordinate.agents
+        - learn.adapt
+      routing_tags:
+        - general
+        - fallback
+        - flexible
+      safety_policies:
+        require_confirmation_for_critical_actions: true
+        max_complexity_level: 5
+
+  # =============================================================
+  #  EVOLUTIONARY SPECIALIZATIONS (Examples for Future Growth)
+  # =============================================================
+  
+  # Example: A specialization that evolved from multiple others
+  multi_modal_coordinator:
+    name: "Multi-Modal Coordinator"
+    metadata:
+      category: "orchestration"
+      description: "Coordinates across voice, vision, and sensor modalities"
+      version: "1.0"
+      evolved_from:
+        - device_orchestrator_v2
+        - environment_intelligence_v2
+    role_profile:
+      default_skills:
+        multi_modal_fusion: 0.9
+        cross_modal_reasoning: 0.85
+        coordination: 0.8
+      allowed_tools:
+        - modal.fuse
+        - coordinate.cross_modal
+        - sensor.integrate
+      routing_tags:
+        - multi_modal
+        - advanced
+        - experimental
+      safety_policies:
+        require_validation: true
+        experimental_mode: true
+
+  # Example: Domain-specific specialization
+  hospitality_specialist:
+    name: "Hospitality Specialist"
+    metadata:
+      category: "user_experience"
+      description: "Specialized for hotel/hospitality scenarios"
+      version: "1.0"
+      domain: "hospitality"
+    role_profile:
+      default_skills:
+        guest_relations: 0.95
+        service_coordination: 0.9
+        hospitality_knowledge: 0.85
+        cultural_awareness: 0.8
+      allowed_tools:
+        - guest.manage
+        - service.coordinate
+        - preference.track
+        - feedback.collect
+      routing_tags:
+        - hospitality
+        - guest_services
+        - high_touch
+      safety_policies:
+        require_privacy_compliance: true
+        cultural_sensitivity_required: true
+        service_quality_threshold: 0.9
