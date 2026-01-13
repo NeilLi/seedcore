@@ -1,9 +1,0 @@
-feat: add agent distribution analysis tools and documentation
-
-- Add analyze_agent_distribution.py script for basic cluster analysis
-- Add detailed_agent_placement.py script for detailed placement analysis
-- Create AGENT_DISTRIBUTION_ANALYSIS.md comprehensive guide
-- Document current distribution: 3 agents across 3 workers (concentrated pattern)
-- Include optimization recommendations and troubleshooting procedures
-
-Improves observability and helps optimize agent placement across Ray workers. 
