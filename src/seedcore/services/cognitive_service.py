@@ -120,7 +120,7 @@ from typing import Any, Dict, List, Optional, Protocol
 
 # 2) Third-party light deps (safe at import time)
 import httpx  # type: ignore[reportMissingImports]
-from fastapi import FastAPI, HTTPException  # type: ignore[reportMissingImports]
+from fastapi import FastAPI, HTTPException, Body  # type: ignore[reportMissingImports]
 from pydantic import BaseModel  # type: ignore[reportMissingImports]
 from ray import serve  # type: ignore[reportMissingImports]
 import dspy  # pyright: ignore[reportMissingImports]
@@ -989,18 +989,10 @@ class CognitiveService:
         }
 
     @app.post("/execute", response_model=CognitiveResponse)
-    async def execute_cognitive_task(self, request: TaskPayload):
+    async def execute_cognitive_task(self, request: TaskPayload = Body(...)):
         """
         CognitiveCore v2 endpoint.
         Executes cognitive tasks using the final TaskPayload v2 contract.
-
-        Required structure (enforced):
-            params.cognitive = {
-                agent_id: str,
-                cog_type: str (CognitiveType),
-                decision_kind: str (DecisionKind),
-                ...
-            }
 
         Notes:
         - ChatSignature requires params.chat.{message, history}

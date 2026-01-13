@@ -226,6 +226,23 @@ class CognitiveServiceClient(BaseServiceClient):
             cognitive_section["proto_plan"] = proto_plan
         if ocps is not None:
             cognitive_section["ocps"] = ocps
+        
+        # ------------------------------------------------------------------
+        # 2c. Performance flags: Skip RAG for TASK_PLANNING
+        # ------------------------------------------------------------------
+        # ARCHITECTURAL INVARIANT: TASK_PLANNING must skip RAG to maintain
+        # closed-world PKG evaluation guarantees (Case A invariants):
+        #
+        # 1. Eventizer emits bounded tags + signals
+        # 2. PKG evaluates closed-world task_facts (no open-world RAG contamination)
+        # 3. PKG emits proto-subtasks (intent only, policy-driven)
+        # 4. Execution plane enforces deny-by-default (PKG is authoritative)
+        # 5. Snapshot version + provenance logged
+        #
+        # Mixing RAG (open-world) with PKG (closed-world) would violate these
+        # invariants. PKG's proto_plan is the single source of truth for planning.
+        if resolved_type == CognitiveType.TASK_PLANNING:
+            cognitive_section["skip_retrieval"] = True
 
         params["cognitive"] = cognitive_section
 
