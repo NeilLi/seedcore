@@ -127,7 +127,6 @@ class TaskContext:
 
     task_id: str
     task_type: str
-    workflow: str | None  # Optional execution workflow override (e.g., "anomaly_triage")
     domain: str | None
     description: str  # Refined description (processed_text from Eventizer if available)
     params: dict[str, Any]
@@ -150,7 +149,6 @@ class TaskContext:
         return cls(
             task_id=d["task_id"],
             task_type=d["task_type"],
-            workflow=d.get("workflow"),  # Optional, derived from TaskPayload
             domain=d["domain"],
             description=d.get("description") or "",
             params=d["params"],
@@ -396,10 +394,8 @@ async def execute_task(
     route_config: RouteConfig,
     execution_config: ExecutionConfig,
 ) -> Dict[str, Any]:
-    merged_dict = task.model_dump()
     task_context_dict = await _process_task_input(
         task=task,
-        merged_dict=merged_dict,
         eventizer_helper=execution_config.eventizer_helper,
         normalize_domain=execution_config.normalize_domain,
     )
@@ -423,30 +419,52 @@ async def execute_task(
 
     routing_dec = await _compute_routing_decision(
         task=task,
-        task_dict=merged_dict,
         ctx=ctx,
         route_cfg=route_config,
         exec_cfg=execution_config,
-        correlation_id=merged_dict.get("correlation_id") or execution_config.cid,
+        correlation_id=task.correlation_id or execution_config.cid,
         embedding=embedding_vector,  # Pass embedding for PKG hydration
     )
 
-    decision_kind = routing_dec["decision_kind"]
-    router_result_payload = routing_dec["result"]
+    # Extract decision_kind from TaskResult.kind and payload from TaskResult
+    decision_kind = routing_dec.get("kind") or routing_dec.get("decision_kind")
+    router_result_payload = routing_dec
 
     if decision_kind == DecisionKind.FAST_PATH.value:
+        # Extract routing information from FastPathResult
+        routing_params = extract_from_nested(
+            router_result_payload,
+            key_paths=[
+                ("payload", "metadata", "routing_params"),  # FastPathResult.metadata.routing_params
+                ("metadata", "routing_params"),  # Top-level fallback
+                ("metadata", "routing", "params"),  # Alternative structure
+            ],
+            value_type=dict,
+        ) or {}
+        
+        interaction_mode = extract_from_nested(
+            router_result_payload,
+            key_paths=[
+                ("payload", "metadata", "interaction_mode"),  # FastPathResult.metadata.interaction_mode
+                ("metadata", "interaction_mode"),  # Top-level fallback
+            ],
+            value_type=str,
+        ) or "coordinator_routed"
+        
+        target_organ_id = extract_from_nested(
+            router_result_payload,
+            key_paths=[
+                ("payload", "organ_id"),  # FastPathResult.organ_id
+                ("payload", "routed_to"),  # FastPathResult.routed_to (fallback)
+            ],
+            value_type=str,
+        ) or "organism"
+        
         result = await _handle_fast_path(
             task=task,
-            routing_hints=extract_from_nested(
-                router_result_payload,
-                key_paths=[
-                    ("payload", "metadata", "routing_params"),  # FastPathResult.metadata.routing_params
-                    ("metadata", "routing_params"),  # Top-level fallback
-                    ("metadata", "routing", "params"),  # Alternative structure
-                ],
-                value_type=dict,
-            )
-            or {},
+            routing_params=routing_params,
+            interaction_mode=interaction_mode,
+            target_organ_id=target_organ_id,
             config=execution_config,
         )
         # Normalize to canonical format (idempotent - safe even if already canonical)
@@ -460,7 +478,6 @@ async def execute_task(
             decision_payload=router_result_payload,
             decision_kind=DecisionKind(decision_kind),
             config=execution_config,
-            ctx=ctx,  # Pass TaskContext with Eventizer signals
         )
         # Normalize to canonical format
         return normalize_envelope(result, task_id=ctx.task_id, path="coordinator_cognitive_path")
@@ -480,25 +497,42 @@ async def execute_task(
 
 async def _handle_fast_path(
     task: TaskPayload,
-    routing_hints: Dict[str, Any],
+    routing_params: Dict[str, Any],
+    interaction_mode: str,
+    target_organ_id: str,
     config: ExecutionConfig,
 ) -> Dict[str, Any]:
+    """
+    Handle fast path execution by merging routing information from FastPathResult into TaskPayload.
+    
+    This function correctly extracts and applies:
+    - routing_params: Merged into params.routing (specialization, skills, etc.)
+    - interaction_mode: Merged into params.interaction.mode
+    - target_organ_id: Used as the target organ for execution (from FastPathResult.organ_id)
+    """
     task_payload_dict = task.model_dump()
     params = task_payload_dict.setdefault("params", {})
 
-    # Merge into params.routing (never replace wholesale)
-    if routing_hints:
+    # Merge routing_params into params.routing (never replace wholesale)
+    if routing_params:
         existing = params.get("routing") or {}
         if isinstance(existing, dict):
-            params["routing"] = {**existing, **routing_hints}
+            params["routing"] = {**existing, **routing_params}
         else:
-            params["routing"] = dict(routing_hints)
+            params["routing"] = dict(routing_params)
+
+    # Merge interaction_mode into params.interaction.mode
+    interaction = params.setdefault("interaction", {})
+    if isinstance(interaction, dict):
+        interaction["mode"] = interaction_mode
+    else:
+        params["interaction"] = {"mode": interaction_mode}
 
     timeout = _clamp_timeout_s((config.fast_path_latency_slo_ms / 1000.0) * 2.0)
 
     try:
         return await config.organism_execute(
-            "organism",
+            target_organ_id,  # Use target_organ_id from FastPathResult instead of hardcoded "organism"
             task_payload_dict,
             timeout,
             config.cid,
@@ -525,7 +559,6 @@ async def _handle_cognitive_path(
     decision_payload: Dict[str, Any],
     decision_kind: DecisionKind,
     config: ExecutionConfig,
-    ctx: TaskContext,  # TaskContext with Eventizer signals
 ) -> Dict[str, Any]:
     if not config.cognitive_client:
         logger.error("[Coordinator] Cognitive Client missing.")
@@ -539,15 +572,17 @@ async def _handle_cognitive_path(
         )
 
     try:
-        proto_plan_from_router = decision_payload.get("proto_plan") or {}
-        pkg_meta = decision_payload.get("pkg_meta") or {}
+        # Extract metadata from TaskResult.payload.metadata (CognitivePathResult.metadata)
+        payload_metadata = decision_payload.get("payload", {}).get("metadata", {})
+        proto_plan_from_router = payload_metadata.get("proto_plan") or {}
+        pkg_meta = payload_metadata.get("pkg_meta") or {}
         ocps_payload = (
-            decision_payload.get("ocps") or decision_payload.get("ocps_payload") or {}
+            payload_metadata.get("ocps") or payload_metadata.get("ocps_payload") or {}
         )
 
         # 1) Ask cognitive service to refine / expand plan
         plan_res = await config.cognitive_client.execute_async(
-            agent_id="system_2_core",
+            agent_id="coordinator_service",
             cog_type=CognitiveType.TASK_PLANNING,
             decision_kind=decision_kind,
             task=task,
@@ -643,12 +678,8 @@ async def _handle_cognitive_path(
         # Extract routing intent from proto_plan for step injection
         routing_intent = None
         if proto_plan_from_router:
-            # Use the TaskContext that was already built with Eventizer signals
-            # This ensures routing intent extraction has access to all context
-            routing_intent = PKGPlanIntentExtractor.extract(
-                proto_plan_from_router,
-                ctx,  # Use the TaskContext built in execute_task() with Eventizer data
-            )
+            # PKGPlanIntentExtractor.extract() only uses proto_plan, not ctx
+            routing_intent = PKGPlanIntentExtractor.extract(proto_plan_from_router)
 
         step_results = await _execute_steps_dependency_aware(
             parent_task=task,
@@ -1063,7 +1094,6 @@ def _aggregate_execution_results(
 async def _compute_routing_decision(
     *,
     task: TaskPayload,
-    task_dict: Dict[str, Any],
     ctx: TaskContext,
     route_cfg: RouteConfig,
     exec_cfg: ExecutionConfig,
@@ -1073,6 +1103,8 @@ async def _compute_routing_decision(
     t0 = time.perf_counter()
 
     # 1) Drift + OCPS
+    # Derive task_dict from task when needed (for drift score computation)
+    task_dict = task.model_dump()
     raw_drift = await _call_compute_drift_score(
         exec_cfg.compute_drift_score,
         task_dict=task_dict,
@@ -1087,7 +1119,6 @@ async def _compute_routing_decision(
     decision_kind = (
         DecisionKind.COGNITIVE.value if is_escalated else DecisionKind.FAST_PATH.value
     )
-    path_label = "system_2_escalation" if is_escalated else "system_1_reflex"
 
     # 2) PKG Evaluation (Primary Source of Routing Intent)
     # Architecture: PKG is the policy layer that decides WHAT and IN WHAT ORDER.
@@ -1206,7 +1237,6 @@ async def _compute_routing_decision(
     payload_common = _create_payload_common(
         task_id=ctx.task_id,
         decision_kind=decision_kind,
-        path_label=path_label,
         pkg_meta=pkg_meta,
         proto_plan=proto_plan,
         router_latency_ms=router_latency_ms,
@@ -1220,38 +1250,35 @@ async def _compute_routing_decision(
     )
     
     # Attach insight to payload_common metadata for auditability
+    confidence_score: Optional[float] = None
     if insight:
         payload_common["insight"] = insight.to_dict()
-
-    # Preserve both dimensions explicitly for observability/analytics
-    # task_category: semantic category (e.g., "chat", "query", "action")
-    # workflow: execution-specific override (e.g., "anomaly_triage", "ml_tune_callback")
-    # This ensures we never lose the distinction in logs, DB, and analytics
-    payload_common["task_category"] = ctx.task_type
-    payload_common["workflow"] = ctx.workflow
+        confidence_score = insight.confidence_score
 
     if is_escalated:
-        # Use workflow if present (e.g., "anomaly_triage", "deep_planning"), 
-        # otherwise fall back to task_type (category like "chat", "query")
-        # workflow is the execution workflow override, task_type is the semantic category
-        cognitive_task_type = ctx.workflow or ctx.task_type
+        # Note: The cognitive service uses cog_type=TASK_PLANNING (hardcoded),
+        # so task_type here is primarily for metadata/observability
         task_result = create_cognitive_path_result(
-            task_type=cognitive_task_type,
-            result={
-                "status": "escalated_by_ocps",
-                "drift_severity": getattr(drift_state, "severity", None),
-                "intended_specialization": intent.specialization,
-            },
+            confidence_score=confidence_score,
             **payload_common,
         )
     else:
+        # Extract interaction_mode from TaskPayload (top-level or params.interaction.mode)
+        interaction_mode = (
+            task.interaction_mode
+            or (task.params or {}).get("interaction", {}).get("mode")
+            or "coordinator_routed"  # Default fallback
+        )
+        
+        # Use RoutingIntent.to_routing_params() to generate correct routing envelope
+        # This correctly handles required_specialization (HARD) vs specialization (SOFT)
+        # based on whether intent is explicit (PKG) or synthesized (fallback)
+        routing_params = intent.to_routing_params()
+        
         task_result = create_fast_path_result(
             target_organ_id=target_organ,
-            routing_params={
-                "required_specialization": intent.specialization,
-                "skills": intent.skills or {},
-            },
-            interaction_mode="coordinator_routed",
+            routing_params=routing_params,
+            interaction_mode=interaction_mode,
             processing_time_ms=router_latency_ms,
             **payload_common,
         )
@@ -1268,11 +1295,11 @@ async def _compute_routing_decision(
                 "record_router_telemetry_func failed (non-blocking)", exc_info=True
             )
 
-    return {
-        "decision_kind": decision_kind,
-        "result": task_result.model_dump(),
-        "organ_id": target_organ,
-    }
+    # Return task_result.model_dump() directly - it contains all routing information:
+    # - kind: DecisionKind (decision_kind)
+    # - payload: FastPathResult or CognitivePathResult (contains organ_id, routing_params, etc.)
+    # - metadata: path, target, exec_time_ms, etc.
+    return task_result.model_dump()
 
 
 async def _try_run_pkg_evaluation(
@@ -1442,7 +1469,6 @@ async def _check_semantic_cache(
 async def _process_task_input(
     *,
     task: TaskPayload,
-    merged_dict: Dict[str, Any],
     eventizer_helper: Callable[[Any], Any] | None,
     normalize_domain: Callable[[str | None], str | None],
 ) -> Dict[str, Any]:
@@ -1459,11 +1485,14 @@ async def _process_task_input(
     downstream ML models and PKG evaluation, as it has been normalized and
     de-obfuscated.
     """
+    # Derive task_dict from task when needed (for eventizer_helper)
+    task_dict = task.model_dump()
+    
     # 1. Execute Eventizer Helper (The 'Reflex' / System 1)
     eventizer_data: Dict[str, Any] = {}
     if eventizer_helper:
         try:
-            res = await _maybe_await(eventizer_helper(merged_dict))
+            res = await _maybe_await(eventizer_helper(task_dict))
             eventizer_data = res or {}
         except Exception:
             logger.debug("Eventizer failed (non-blocking)", exc_info=True)
@@ -1482,28 +1511,16 @@ async def _process_task_input(
         eventizer_data.get("processed_text")
         or eventizer_data.get("normalized_text")
         or task.description
-        or merged_dict.get("description")
+        or task_dict.get("description")
         or ""
-    )
-
-    # 4. Extract workflow (optional execution override)
-    # Source of truth: TaskPayload.workflow (if present) or params.cognitive.workflow or params.workflow
-    # This is derived, not inferred - we copy what's explicitly set
-    # workflow is execution-specific (e.g., "anomaly_triage"), distinct from task_type (semantic category)
-    workflow = (
-        merged_dict.get("workflow")
-        or merged_dict.get("params", {}).get("cognitive", {}).get("workflow")
-        or merged_dict.get("params", {}).get("workflow")
-        or None
     )
 
     return {
         "task_id": task.task_id,
         "task_type": task.type,
-        "workflow": workflow,  # Optional execution workflow override
         "domain": normalize_domain(task.domain),
         "description": refined_description,  # GROUNDED TEXT (e.g., 6 PM -> 18:00)
-        "params": merged_dict.get("params", {}) or {},
+        "params": task.params or {},
         "eventizer_data": eventizer_data,
         "eventizer_tags": event_tags,
         "tags": tags,

@@ -26,7 +26,7 @@ class PKGPlanIntentExtractor:
     @staticmethod
     def extract(
         proto_plan: Dict[str, Any],
-        ctx: Any,  # TaskContext
+        ctx: Any = None,  # TaskContext (optional, not currently used)
     ) -> Optional[RoutingIntent]:
         """
         Extract routing intent from PKG proto_plan across three logical phases.
