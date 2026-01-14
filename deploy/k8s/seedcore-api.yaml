@@ -63,6 +63,8 @@ spec:
               mountPath: /tmp/seedcore-logs
             - name: data-volume
               mountPath: /app/data
+            - name: project-src
+              mountPath: /app
           readinessProbe:
             httpGet:
               path: /readyz
@@ -100,20 +102,25 @@ spec:
         - name: data-volume
           persistentVolumeClaim:
             claimName: seedcore-data-pvc
+        - name: project-src
+          hostPath:
+            path: /project
+            type: Directory
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: ${SERVICE_NAME}
-  namespace: ${NAMESPACE}
-  labels:
-    app: ${SERVICE_NAME}
+  name: seedcore-api
+  namespace: seedcore-dev
 spec:
-  type: ClusterIP
+  type: NodePort           # 👈 REQUIRED
   selector:
-    app: ${SERVICE_NAME}
+    app: seedcore-api
   ports:
     - name: http
       port: 8002
       targetPort: 8002
+      nodePort: 30002      # 👈 Explicit NodePort
+
+
 

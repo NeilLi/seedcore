@@ -27,6 +27,12 @@ from enum import Enum
 from typing import Optional, Dict, Any, Tuple, List
 from collections import OrderedDict
 
+# Redis exceptions for better error handling
+try:
+    import redis.exceptions as redis_exceptions  # pyright: ignore[reportMissingImports]
+except ImportError:
+    redis_exceptions = None  # type: ignore
+
 # Models
 from .evaluator import PKGEvaluator
 from .client import PKGClient
@@ -360,11 +366,17 @@ class PKGManager:
         
         P1: Implements exponential backoff reconnection loop.
         """
+        if self._redis_client is None:
+            logger.warning("Redis client is None; PKG hot-swap listener disabled")
+            return
+        
         backoff_delay = REDIS_RECONNECT_BASE_DELAY
         
         while True:
             try:
                 pubsub = self._redis_client.pubsub()
+                if pubsub is None:
+                    raise ValueError("Redis pubsub() returned None")
                 await pubsub.subscribe(PKG_REDIS_CHANNEL)
                 
                 # Reset backoff on successful connection
@@ -386,8 +398,17 @@ class PKGManager:
                 except asyncio.CancelledError:
                     # Normal shutdown
                     raise
+                except (TimeoutError, ConnectionError, OSError) as e:
+                    # Network/timeout errors - reconnect
+                    logger.warning(f"Redis listener connection error (will reconnect): {e}")
+                    # Break inner loop to reconnect
+                    break
                 except Exception as e:
-                    logger.error(f"Redis listener error: {e}", exc_info=True)
+                    # Check if it's a Redis-specific timeout error
+                    if redis_exceptions and isinstance(e, redis_exceptions.TimeoutError):
+                        logger.warning(f"Redis timeout error (will reconnect): {e}")
+                    else:
+                        logger.error(f"Redis listener error: {e}", exc_info=True)
                     # Break inner loop to reconnect
                     break
                 finally:

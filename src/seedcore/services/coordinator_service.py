@@ -1574,14 +1574,14 @@ class Coordinator:
         # 3.5. Initialize PKG Manager (if not already initialized)
         try:
             from ..ops.pkg import initialize_global_pkg_manager, PKGClient
-            from ..database import get_async_pg_session_factory
+            from ..database import get_async_pg_session_factory, get_async_redis_client
             
             pkg_mgr = get_global_pkg_manager()
             if not pkg_mgr:
                 # Initialize PKG manager with database client
                 session_factory = get_async_pg_session_factory()
                 pkg_client = PKGClient(session_factory)
-                redis_client = get_redis_client()
+                redis_client = await get_async_redis_client()
                 await initialize_global_pkg_manager(pkg_client, redis_client)
                 logger.info("✅ PKG Manager initialized and ready")
             else:

@@ -12,6 +12,7 @@ from .loader import GraphLoader
 from .gnn_models import HeteroSAGE, MemoryFusion
 # reuse your existing upsert helper (pgvector)
 from .embeddings import upsert_embeddings  # ray.remote fn that writes into graph_embeddings
+from seedcore.logging_setup import ensure_serve_logger
 
 PG_DSN = os.getenv("SEEDCORE_PG_DSN", os.getenv("PG_DSN", "postgresql://postgres:postgres@postgresql:5432/seedcore"))
 LTM_ACTOR_MEMORY_BYTES = int(os.getenv("LTM_ACTOR_MEMORY_BYTES", str(512 * 1024 * 1024)))
@@ -49,6 +50,7 @@ class LTMEmbedder:
         self.hetero: Optional[HeteroSAGE] = None
         self.memfuse: Optional[MemoryFusion] = None
         self._in_dims: Optional[Dict[str, int]] = None
+        self.logger = ensure_serve_logger("seedcore.graph.ltm_embeddings")
 
     # ---------- lifecycle ----------
     def ping(self) -> str:
@@ -86,7 +88,13 @@ class LTMEmbedder:
         hg, idx_maps, x_dict, ew = self.loader.load_k_hop_hetero(
             start_ids=start_task_ids, k=k, decay_half_life_s=DECAY_HALF_LIFE_S
         )
-        if hg is None or hg.num_nodes() == 0:
+        if hg is None:
+            self.logger.info(
+                "Skipping LTM embedding: no heterograph for start_task_ids=%s",
+                start_task_ids[:10],
+            )
+            return {}
+        if hg.num_nodes() == 0:
             return {}
 
         in_dims = {nt: x.shape[1] for nt, x in x_dict.items()}
@@ -114,6 +122,12 @@ class LTMEmbedder:
         hg, idx_maps, x_dict, ew = self.loader.load_k_hop_hetero(
             start_ids=memory_cell_ids, k=k, decay_half_life_s=DECAY_HALF_LIFE_S
         )
+        if hg is None:
+            self.logger.info(
+                "Skipping LTM embedding: no heterograph for memory_cell_ids=%s",
+                memory_cell_ids[:10],
+            )
+            return {}
         if hg.num_nodes() == 0:
             return {}
 

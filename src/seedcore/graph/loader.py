@@ -298,10 +298,38 @@ class GraphLoader:
             edge_weight_dict.setdefault(key, []).append(float(w))
 
         # 6) create heterograph
-        hg = dgl.heterograph({
-            k: (torch.tensor(v[0], dtype=torch.int64), torch.tensor(v[1], dtype=torch.int64))
-            for k, v in edge_dict.items()
-        }, num_nodes_dict={nt: len(arr) for nt, arr in by_type.items()})
+        # DGL requires at least ONE relation with >=1 edge
+
+        rel_data = {}
+        for etype, (srcs, dsts) in edge_dict.items():
+            if len(srcs) == 0:
+                continue
+            rel_data[etype] = (
+                torch.tensor(srcs, dtype=torch.int64),
+                torch.tensor(dsts, dtype=torch.int64),
+            )
+
+        if not rel_data:
+            logger.info(
+                "load_k_hop_hetero: edge_dict contained no usable relations after filtering. "
+                "start_ids=%s k=%d raw_edges=%d",
+                start_ids[:10], k, len(raw_edges) if raw_edges else 0,
+            )
+            return None, idx_maps, {}, {}
+
+        # ABSOLUTE SAFETY NET — should never reach DGL with empty rel_data
+        if not rel_data:
+            logger.warning(
+                "load_k_hop_hetero: rel_data empty at final construction step "
+                "(this should not happen). start_ids=%s",
+                start_ids[:10],
+            )
+            return None, idx_maps, {}, {}
+
+        hg = dgl.heterograph(
+            rel_data,
+            num_nodes_dict={nt: len(arr) for nt, arr in by_type.items()},
+        )
 
         # 7) features per node type
         #    simple, robust recipe: [deg_in, deg_out, hashed_label(K=feature_bins), recency(optional)]

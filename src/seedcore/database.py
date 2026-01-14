@@ -30,8 +30,10 @@ except ImportError:
 # ✅ Redis client (optional)
 try:
     import redis  # pyright: ignore[reportMissingImports]
+    import redis.asyncio as aioredis  # pyright: ignore[reportMissingImports]
 except ImportError:
     redis = None  # type: ignore
+    aioredis = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,7 @@ __all__ = [
     
     # Redis
     "get_redis_client",
+    "get_async_redis_client",
 ]
 
 # ─────────────────────────────────────────────────────────────────────
@@ -131,6 +134,10 @@ REDIS_HOST = get_env_setting("REDIS_HOST", "localhost")
 REDIS_PORT = get_env_int_setting("REDIS_PORT", 6379)
 REDIS_DB = get_env_int_setting("REDIS_DB", 0)
 REDIS_URL = get_env_setting("REDIS_URL", f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
+# Socket timeout for Redis operations (in seconds). Use longer timeout for pubsub operations.
+# Default 30 seconds allows pubsub.listen() to wait for messages without timing out too quickly.
+REDIS_SOCKET_TIMEOUT = get_env_int_setting("REDIS_SOCKET_TIMEOUT", 30)
+REDIS_SOCKET_CONNECT_TIMEOUT = get_env_int_setting("REDIS_SOCKET_CONNECT_TIMEOUT", 5)
 
 # Neo4j
 NEO4J_HOST = get_env_setting("NEO4J_HOST", "neo4j")
@@ -528,7 +535,7 @@ def get_mysql_pool_stats():
 @lru_cache
 def get_redis_client():
     """
-    Get a cached Redis client using centralized settings.
+    Get a cached synchronous Redis client using centralized settings.
     Returns None if redis library is missing.
     """
     if redis is None:
@@ -548,4 +555,32 @@ def get_redis_client():
         return client
     except Exception as e:
         logger.error(f"Failed to create Redis client: {e}")
+        return None
+
+async def get_async_redis_client():
+    """
+    Get an async Redis client using centralized settings.
+    Returns None if redis.asyncio library is missing.
+    
+    Note: This is NOT cached with @lru_cache because async functions cannot be cached.
+    Callers should cache the returned client instance themselves if needed.
+    """
+    if aioredis is None:
+        logger.warning("Redis async library not installed. Install via 'pip install redis'.")
+        return None
+
+    try:
+        # Create async client (lazy connection)
+        # Use from_url for consistency with tunnel_manager pattern
+        # Use longer socket_timeout for pubsub operations (pubsub.listen() waits for messages)
+        client = aioredis.from_url(
+            REDIS_URL,
+            encoding="utf-8",
+            decode_responses=True,
+            socket_connect_timeout=REDIS_SOCKET_CONNECT_TIMEOUT,
+            socket_timeout=REDIS_SOCKET_TIMEOUT
+        )
+        return client
+    except Exception as e:
+        logger.error(f"Failed to create async Redis client: {e}")
         return None
