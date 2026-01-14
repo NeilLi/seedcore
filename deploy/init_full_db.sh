@@ -11,21 +11,22 @@ DB_PASS="${DB_PASS:-postgres}"
 # Resolve migration file paths relative to this script
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 MIGRATION_001="${SCRIPT_DIR}/migrations/001_create_tasks_table.sql"
-MIGRATION_002="${SCRIPT_DIR}/migrations/002_graph_embeddings.sql"
+MIGRATION_002="${SCRIPT_DIR}/migrations/002_dual_dimension_embeddings.sql"
 MIGRATION_003="${SCRIPT_DIR}/migrations/003_task_multimodal_embeddings.sql"
-MIGRATION_007="${SCRIPT_DIR}/migrations/007_hgnn_graph_schema.sql"
+MIGRATION_007="${SCRIPT_DIR}/migrations/007_hgnn_core_topology.sql"
 # HGNN base graph schema (task layer)
 MIGRATION_008="${SCRIPT_DIR}/migrations/008_hgnn_agent_layer.sql"
 # HGNN agent/organ layer extensions
-MIGRATION_009="${SCRIPT_DIR}/migrations/009_create_facts_table.sql"
-MIGRATION_010="${SCRIPT_DIR}/migrations/010_task_fact_integration.sql"
-MIGRATION_011="${SCRIPT_DIR}/migrations/011_add_runtime_registry.sql"
-MIGRATION_012="${SCRIPT_DIR}/migrations/012_runtime_registry_functions.sql"
+# Runtime registry (must come before facts)
+MIGRATION_009="${SCRIPT_DIR}/migrations/009_runtime_instance_registry.sql"
+MIGRATION_010="${SCRIPT_DIR}/migrations/010_runtime_control_logic.sql"
+MIGRATION_011="${SCRIPT_DIR}/migrations/011_create_facts_table.sql"
+MIGRATION_012="${SCRIPT_DIR}/migrations/012_task_fact_integration.sql"
 MIGRATION_013="${SCRIPT_DIR}/migrations/013_pkg_core.sql"
 MIGRATION_014="${SCRIPT_DIR}/migrations/014_pkg_ops.sql"
 MIGRATION_015="${SCRIPT_DIR}/migrations/015_pkg_views_functions.sql"
 MIGRATION_016="${SCRIPT_DIR}/migrations/016_fact_pkg_integration.sql"
-MIGRATION_017="${SCRIPT_DIR}/migrations/017_task_embedding_support.sql"
+MIGRATION_017="${SCRIPT_DIR}/migrations/017_unified_cortex.sql"
 MIGRATION_018="${SCRIPT_DIR}/migrations/018_task_outbox_hardening.sql"
 MIGRATION_019="${SCRIPT_DIR}/migrations/019_task_router_telemetry.sql"
 
@@ -50,10 +51,10 @@ echo "   - 002: Create separate embedding tables (graph_embeddings_128 and graph
 echo "   - 003: Task-level multimodal embeddings (voice, vision, sensor) with direct FK to tasks"
 echo "   - 007: HGNN base graph schema (task layer)"
 echo "   - 008: HGNN agent/organ layer + relations"
-echo "   - 009: Create facts table"
-echo "   - 010: Task-Fact integration + view update"
-echo "   - 011: Runtime registry tables & views"
-echo "   - 012: Runtime registry functions"
+echo "   - 009: Runtime registry tables & views"
+echo "   - 010: Runtime registry functions"
+echo "   - 011: Create facts table"
+echo "   - 012: Task-Fact integration + view update"
 echo "   - 013: PKG core catalog (snapshots, rules, conditions, emissions, artifacts)"
 echo "   - 014: PKG operations (deployments, temporal facts, validation, promotions, device coverage)"
 echo "   - 015: PKG views and helper functions"
@@ -137,72 +138,72 @@ echo "📂 Copying and running migrations..."
 # Migration 001
 echo "⚙️  Running migration 001: Create tasks table..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_001" "$POSTGRES_POD:/tmp/001_create_tasks_table.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/001_create_tasks_table.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/001_create_tasks_table.sql"
 
 # Migration 002
 echo "⚙️  Running migration 002: Create separate embedding tables (graph_embeddings_128 and graph_embeddings_1024) + migrate from old table..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_002" "$POSTGRES_POD:/tmp/002_graph_embeddings.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/002_graph_embeddings.sql"
+kubectl -n "$NAMESPACE" cp "$MIGRATION_002" "$POSTGRES_POD:/tmp/002_dual_dimension_embeddings.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/002_dual_dimension_embeddings.sql"
 
 # Migration 003
 echo "⚙️  Running migration 003: Task-level multimodal embeddings (voice, vision, sensor)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_003" "$POSTGRES_POD:/tmp/003_task_multimodal_embeddings.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/003_task_multimodal_embeddings.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/003_task_multimodal_embeddings.sql"
 
 # Migration 007
 echo "⚙️  Running migration 007: HGNN base graph schema..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_007" "$POSTGRES_POD:/tmp/007_hgnn_graph_schema.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/007_hgnn_graph_schema.sql"
+kubectl -n "$NAMESPACE" cp "$MIGRATION_007" "$POSTGRES_POD:/tmp/007_hgnn_core_topology.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/007_hgnn_core_topology.sql"
 
 # Migration 008
 echo "⚙️  Running migration 008: HGNN agent/organ layer + relations..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_008" "$POSTGRES_POD:/tmp/008_hgnn_agent_layer.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/008_hgnn_agent_layer.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/008_hgnn_agent_layer.sql"
 
-# Migration 009 (NEW)
-echo "⚙️  Running migration 009: Create facts table..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_009" "$POSTGRES_POD:/tmp/009_create_facts_table.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/009_create_facts_table.sql"
+# Migration 009 (Runtime Registry)
+echo "⚙️  Running migration 009: Runtime registry tables & views..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_009" "$POSTGRES_POD:/tmp/009_runtime_instance_registry.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/009_runtime_instance_registry.sql"
 
-# Migration 010 (NEW)
-echo "⚙️  Running migration 010: Task-Fact integration + view update..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_010" "$POSTGRES_POD:/tmp/010_task_fact_integration.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/010_task_fact_integration.sql"
+# Migration 010 (Runtime Registry)
+echo "⚙️  Running migration 010: Runtime registry functions..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_010" "$POSTGRES_POD:/tmp/010_runtime_control_logic.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/010_runtime_control_logic.sql"
 
-# Migration 011 (NEW)
-echo "⚙️  Running migration 011: Runtime registry tables & views..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_011" "$POSTGRES_POD:/tmp/011_add_runtime_registry.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/011_add_runtime_registry.sql"
+# Migration 011 (Facts Table)
+echo "⚙️  Running migration 011: Create facts table..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_011" "$POSTGRES_POD:/tmp/011_create_facts_table.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/011_create_facts_table.sql"
 
-# Migration 012 (NEW)
-echo "⚙️  Running migration 012: Runtime registry functions..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_012" "$POSTGRES_POD:/tmp/012_runtime_registry_functions.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/012_runtime_registry_functions.sql"
+# Migration 012 (Task-Fact Integration)
+echo "⚙️  Running migration 012: Task-Fact integration + view update..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_012" "$POSTGRES_POD:/tmp/012_task_fact_integration.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/012_task_fact_integration.sql"
 
 # Migration 013 (NEW - PKG Core)
 echo "⚙️  Running migration 013: PKG core catalog (snapshots, rules, conditions, emissions, artifacts)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_013" "$POSTGRES_POD:/tmp/013_pkg_core.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/013_pkg_core.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/013_pkg_core.sql"
 
 # Migration 014 (NEW - PKG Operations)
 echo "⚙️  Running migration 014: PKG operations (deployments, temporal facts, validation, promotions, device coverage)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_014" "$POSTGRES_POD:/tmp/014_pkg_ops.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/014_pkg_ops.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/014_pkg_ops.sql"
 
 # Migration 015 (NEW - PKG Views and Functions)
 echo "⚙️  Running migration 015: PKG views and helper functions..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_015" "$POSTGRES_POD:/tmp/015_pkg_views_functions.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/015_pkg_views_functions.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/015_pkg_views_functions.sql"
 
 # Migration 016 (NEW - Fact PKG Integration)
 echo "⚙️  Running migration 016: Fact model PKG integration (temporal facts, policy governance, eventizer support)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_016" "$POSTGRES_POD:/tmp/016_fact_pkg_integration.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/016_fact_pkg_integration.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/016_fact_pkg_integration.sql"
 
 # Migration 017 (NEW - Task Embedding Support)
 echo "⚙️  Running migration 017: Task embedding support (views/functions/backfill)..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_017" "$POSTGRES_POD:/tmp/017_task_embedding_support.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/017_task_embedding_support.sql"
+kubectl -n "$NAMESPACE" cp "$MIGRATION_017" "$POSTGRES_POD:/tmp/017_unified_cortex.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/017_unified_cortex.sql"
 # Verify key views were created
 echo "✅ Verifying migration 017 views..."
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
@@ -222,12 +223,12 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
 # Migration 018 (Task Outbox Hardening)
 echo "⚙️  Running migration 018: Task outbox hardening (available_at, attempts, index)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_018" "$POSTGRES_POD:/tmp/018_task_outbox_hardening.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/018_task_outbox_hardening.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/018_task_outbox_hardening.sql"
 
 # Migration 019 (Task Router Telemetry)
 echo "⚙️  Running migration 019: Task router telemetry (OCPS signals, surprise scores, routing decisions)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_019" "$POSTGRES_POD:/tmp/019_task_router_telemetry.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -f "/tmp/019_task_router_telemetry.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/019_task_router_telemetry.sql"
 
 # 6) Verify schema
 echo "✅ Verifying schema..."

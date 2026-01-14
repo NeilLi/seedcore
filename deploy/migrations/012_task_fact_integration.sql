@@ -1,4 +1,4 @@
--- 010_task_fact_integration.sql
+-- 012_task_fact_integration.sql
 -- Purpose: Integrate the 'facts' table into the HGNN, completing the memory-action loop.
 
 BEGIN;

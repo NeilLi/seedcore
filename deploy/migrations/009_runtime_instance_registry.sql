@@ -1,4 +1,4 @@
--- migrations/011_add_runtime_registry.sql
+-- migrations/009_runtime_instance_registry.sql
 BEGIN;
 
 -- Single-row cluster metadata with updated_at

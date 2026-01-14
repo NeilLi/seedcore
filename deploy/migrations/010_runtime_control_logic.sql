@@ -1,4 +1,4 @@
--- migrations/012_runtime_registry_functions.sql
+-- migrations/010_runtime_control_logic.sql
 BEGIN;
 
 -- Get/Rotate epoch under advisory lock (prevents split brain on bootstrap)
