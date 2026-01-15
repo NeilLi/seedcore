@@ -122,6 +122,15 @@ class PKGManager:
                 pass
         logger.info("PKGManager stopped")
 
+    async def __aenter__(self):
+        """Async context manager entry."""
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        """Async context manager exit."""
+        await self.stop()
+
     # --- Core Logic: Hot Swap ---
 
     async def _load_and_activate_snapshot(self, snapshot: PKGSnapshotData, source: str):
@@ -335,6 +344,29 @@ class PKGManager:
                 self._evaluators[self._active_version] = (evaluator, time.time())
                 return evaluator
             return None
+
+    def get_evaluator_by_version(self, version: str) -> Optional[PKGEvaluator]:
+        """
+        Thread-safe access to a specific evaluator by version.
+        
+        P2: Updates LRU cache access time (moves to end of OrderedDict).
+        
+        Args:
+            version: Snapshot version string
+            
+        Returns:
+            PKGEvaluator if found, None otherwise
+        """
+        with self._swap_lock:
+            entry = self._evaluators.get(version)
+            if not entry:
+                return None
+            
+            evaluator, _ = entry
+            # P2: Update access time (move to end for LRU)
+            self._evaluators.move_to_end(version)
+            self._evaluators[version] = (evaluator, time.time())
+            return evaluator
 
     def get_metadata(self) -> Dict[str, Any]:
         """Operational metadata for /status endpoints."""
