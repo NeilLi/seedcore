@@ -21,6 +21,7 @@ LEFT JOIN pkg_subtask_types st ON st.id = e.subtask_type_id
 JOIN pkg_snapshots s ON s.id = r.snapshot_id;
 
 -- Deployment coverage: how many devices are running the snapshot we intended
+-- Handles router, edge:robot, edge:door targets correctly
 CREATE OR REPLACE VIEW pkg_deployment_coverage AS
 SELECT
   d.target, d.region, d.snapshot_id, s.version,
@@ -28,8 +29,13 @@ SELECT
   count(*) AS devices_total
 FROM pkg_deployments d
 LEFT JOIN pkg_device_versions dv
-  ON ((d.region = dv.region OR d.region = 'global')
-      AND split_part(d.target, ':', 1) = split_part(dv.device_type, ':', 1))
+  ON ( (d.region = dv.region OR d.region = 'global')
+       AND (
+         dv.device_type = d.target
+         OR dv.device_type = split_part(d.target, ':', 2)     -- edge:robot -> robot
+         OR d.target = 'router'                               -- routers aren't devices
+       )
+     )
 JOIN pkg_snapshots s ON s.id = d.snapshot_id
 GROUP BY d.target, d.region, d.snapshot_id, s.version;
 

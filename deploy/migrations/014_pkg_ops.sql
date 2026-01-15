@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS pkg_deployments (
 );
 CREATE INDEX IF NOT EXISTS idx_pkg_deploy_snapshot ON pkg_deployments(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_pkg_deploy_target   ON pkg_deployments(target, region);
+-- Unique constraint prevents duplicate deployments for same target/region lane
+ALTER TABLE pkg_deployments
+ADD CONSTRAINT uq_pkg_deploy_lane UNIQUE (target, region);
 
 -- ===== Temporal policy facts (e.g., temporary access) =====
 CREATE TABLE IF NOT EXISTS pkg_facts (
@@ -82,3 +85,19 @@ CREATE TABLE IF NOT EXISTS pkg_device_versions (
   last_seen   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_pkg_device_type_region ON pkg_device_versions(device_type, region);
+
+-- ===== Rollout events audit (canary control history) =====
+CREATE TABLE IF NOT EXISTS pkg_rollout_events (
+  id            BIGSERIAL PRIMARY KEY,
+  target        TEXT NOT NULL,
+  region        TEXT NOT NULL DEFAULT 'global',
+  snapshot_id   INT NOT NULL REFERENCES pkg_snapshots(id) ON DELETE CASCADE,
+  from_percent  INT,
+  to_percent    INT NOT NULL,
+  is_rollback   BOOLEAN NOT NULL DEFAULT FALSE,
+  actor         TEXT NOT NULL DEFAULT 'system',
+  validation_run_id BIGINT REFERENCES pkg_validation_runs(id) ON DELETE SET NULL,
+  reason        TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_rollout_events_lane ON pkg_rollout_events(target, region, created_at DESC);
