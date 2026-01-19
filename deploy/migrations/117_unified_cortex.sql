@@ -1,10 +1,13 @@
--- Migration 017: Task Embedding Support & Unified Memory Integration
+-- Migration 117: Task Embedding Support & Unified Memory Integration
 -- Purpose: Creates views for separate embedding tables (128d and 1024d) and integrates
 --          multimodal embeddings with graph embeddings into a unified memory system.
+--          Enhanced with snapshot_id scoping (from migration 017) to enable snapshot-aware
+--          semantic search and prevent historical bleed.
 -- If an old graph_embeddings table exists, it will be migrated to graph_embeddings_128.
 -- Safe to run multiple times.
 --
--- Dependencies: 001 (tasks), 002 (graph_embeddings), 003 (task_multimodal_embeddings), 007 (graph_node_map)
+-- Dependencies: 001 (tasks), 002 (graph_embeddings_1024), 003 (task_multimodal_embeddings), 
+--               007 (graph_node_map), 017 (pkg_tasks_snapshot_scoping)
 --
 -- Architecture:
 -- - 128d embeddings: Fast HGNN routing (graph structure)
@@ -176,7 +179,7 @@ SELECT t.id AS task_id,
  WHERE e.node_id IS NULL;
 
 -- Convenience view for the primary task embedding label (1024d)
--- Enhanced with memory_tier and memory_label for Unified Memory integration
+-- Enhanced with memory_tier, memory_label, and snapshot_id for Unified Memory integration
 -- Drop first to handle column name changes (CREATE OR REPLACE cannot rename columns)
 DROP VIEW IF EXISTS task_embeddings_primary_1024 CASCADE;
 CREATE VIEW task_embeddings_primary_1024 AS
@@ -187,6 +190,7 @@ SELECT t.id         AS task_id,
        e.props      AS props,
        e.label      AS memory_label,
        'knowledge_base'::TEXT AS memory_tier,
+       COALESCE(t.snapshot_id, e.snapshot_id, m.snapshot_id) AS snapshot_id,
        e.content_sha256,
        e.created_at,
        e.updated_at
@@ -253,20 +257,26 @@ WHERE e.label = 'task.primary'
 -- ============================================================================
 -- Unified Memory Integration: The Unified Cortex View
 -- ============================================================================
--- This view merges three memory tiers:
+-- This view merges three memory tiers with snapshot_id scoping (from migration 017):
 --   A) Multimodal Task Events (The "Now" - System 1 / Working Memory)
 --      - Direct FK to tasks, fast "Living System" response times
 --      - Voice, vision, sensor perception events
+--      - snapshot_id from tasks table (enables snapshot-aware filtering)
 --   B) Knowledge Graph Tasks (The "Rules" - System 2 / Structural Memory)
 --      - Tasks linked through graph_node_map to graph_embeddings_1024
 --      - Structural knowledge and task relationships
+--      - snapshot_id from tasks/graph_embeddings_1024/graph_node_map (COALESCE)
 --   C) General Graph Entities (The "World" - Context Memory)
 --      - All other graph nodes (agents, organs, artifacts, etc.)
 --      - Broader knowledge base context
+--      - snapshot_id from graph_embeddings_1024 table
 --
 -- The view uses TEXT casting for polymorphic IDs (UUID -> TEXT, BIGINT -> TEXT)
 -- to resolve the impedance mismatch between Knowledge Graph (BIGINT) and
 -- Multimodal Events (UUID).
+--
+-- IMPORTANT: All queries should filter by snapshot_id to prevent historical bleed:
+--   SELECT * FROM v_unified_cortex_memory WHERE snapshot_id = :current_snapshot_id
 -- ============================================================================
 
 CREATE OR REPLACE VIEW v_unified_cortex_memory AS
@@ -277,6 +287,7 @@ SELECT
     t.type                        AS category, 
     t.description                 AS content, 
     'event_working'::TEXT          AS memory_tier,
+    t.snapshot_id                 AS snapshot_id,
     te.emb                        AS vector,
     jsonb_build_object(
         'multimodal', t.params->'multimodal',
@@ -298,6 +309,7 @@ SELECT
     'task_graph'::TEXT            AS category,
     'KG Task Reference'::TEXT     AS content,
     'knowledge_base'::TEXT         AS memory_tier,
+    snapshot_id                   AS snapshot_id,
     emb                           AS vector,
     jsonb_build_object(
         'node_id', node_id,
@@ -318,6 +330,7 @@ SELECT
     label                         AS category,
     'Graph Entity'::TEXT          AS content,
     'knowledge_base'::TEXT         AS memory_tier,
+    snapshot_id                   AS snapshot_id,
     emb                           AS vector,
     jsonb_build_object(
         'node_id', node_id,
@@ -356,7 +369,7 @@ WHERE te.task_id IS NULL AND ge.node_id IS NULL;
 -- ============================================================================
 
 COMMENT ON VIEW v_unified_cortex_memory IS 
-    'Unified Memory View: Merges multimodal events (working memory), knowledge graph tasks (structural memory), and general graph entities (world memory). Uses TEXT casting for polymorphic IDs to resolve UUID/BIGINT impedance mismatch. The Coordinator can filter by memory_tier for fast-path queries, while PKG can query the entire view for deep reasoning.';
+    'Unified Memory View: Merges multimodal events (working memory), knowledge graph tasks (structural memory), and general graph entities (world memory). Uses TEXT casting for polymorphic IDs to resolve UUID/BIGINT impedance mismatch. Includes snapshot_id for snapshot-aware filtering to prevent historical bleed. The Coordinator can filter by memory_tier for fast-path queries, while PKG can query the entire view for deep reasoning. IMPORTANT: Always filter by snapshot_id in production queries (e.g., WHERE snapshot_id = :current_snapshot_id) to ensure reproducible runs and safe retrieval.';
 
 COMMENT ON VIEW tasks_missing_any_embedding_1024 IS 
     'Identifies tasks missing 1024d embeddings in either multimodal or graph tables (or both). Useful for backfill operations to ensure complete embedding coverage.';
@@ -366,6 +379,9 @@ COMMENT ON COLUMN task_embeddings_primary_1024.memory_tier IS
 
 COMMENT ON COLUMN task_embeddings_primary_1024.memory_label IS 
     'Label from graph_embeddings_1024 (typically task.primary) for memory organization';
+
+COMMENT ON COLUMN task_embeddings_primary_1024.snapshot_id IS 
+    'PKG snapshot ID (COALESCE from tasks, graph_embeddings_1024, or graph_node_map). Critical for snapshot-aware semantic search and preventing historical bleed.';
 
 -- ============================================================================
 -- Performance Optimization: Partial GIN Index for Multimodal Tasks

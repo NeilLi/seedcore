@@ -78,8 +78,8 @@ def _parse_since(val: str | None):
 def _fuzzy(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, (a or "").lower(), (b or "").lower()).ratio()
 
-def _http_get(path: str):
-    r = requests.get(path, timeout=20)
+def _http_get(path: str, params: dict | None = None):
+    r = requests.get(path, params=params, timeout=20)
     r.raise_for_status()
     return r.json()
 
@@ -168,9 +168,12 @@ def api_eventizer_test(text: str, task_type: str = "", domain: str = "", preserv
     except Exception as e:
         print(f"❌ Eventizer test failed: {e}")
 
-def api_list_tasks(status=None, typ=None, since=None, limit=None):
+def api_list_tasks(status=None, typ=None, since=None, snapshot_id=None, limit=None):
     try:
-        j = _http_get(f"{API_V1_BASE}/tasks")
+        params = {}
+        if snapshot_id is not None:
+            params["snapshot_id"] = snapshot_id
+        j = _http_get(f"{API_V1_BASE}/tasks", params=params) if params else _http_get(f"{API_V1_BASE}/tasks")
     except Exception as e:
         print(f"❌ Could not list tasks: {e}")
         return
@@ -197,11 +200,13 @@ def api_list_tasks(status=None, typ=None, since=None, limit=None):
     print(f"📝 Tasks ({len(items)}/{j.get('total', len(items))})"
           f"{' | status='+status if status else ''}"
           f"{' | type='+typ if typ else ''}"
+          f"{' | snapshot_id='+str(snapshot_id) if snapshot_id else ''}"
           f"{' | since='+since if since else ''}"
           f"{' | limit='+str(limit) if limit else ''}")
     for t in items:
-        desc = (t.get("description") or "")[:60]
-        print(f"  - {t['id'][:8]} [{t.get('type')}] {(t.get('status') or '').upper():<10} | {desc:<60} | Updated: {_fmt_dt(t.get('updated_at'))}")
+        desc = (t.get("description") or "")[:50]
+        snapshot_id_str = f"snapshot={t.get('snapshot_id', 'N/A')}"
+        print(f"  - {t['id'][:8]} [{t.get('type')}] {(t.get('status') or '').upper():<10} | {desc:<50} | {snapshot_id_str:<15} | Updated: {_fmt_dt(t.get('updated_at'))}")
 
 def api_task_status(prefix: str):
     try:
@@ -219,15 +224,18 @@ def api_task_status(prefix: str):
         tid = matches[0]["id"]
         t = _http_get(f"{API_V1_BASE}/tasks/{tid}")
         print(f"📊 {t['id']} [{t.get('type')}] {(t.get('status') or '').upper()}")
-        print(f"   Drift: {t.get('drift_score')}  Updated: {_fmt_dt(t.get('updated_at'))}")
+        print(f"   Snapshot: {t.get('snapshot_id', 'N/A')}  Drift: {t.get('drift_score')}  Updated: {_fmt_dt(t.get('updated_at'))}")
         if t.get("error"):  print(f"   🔴 {t['error']}")
         if t.get("result"): print(f"   ✅ {json.dumps(t['result'])[:200]}{'…' if len(json.dumps(t['result']))>200 else ''}")
     except Exception as e:
         print(f"❌ Status failed: {e}")
 
-def api_search(q, status=None, typ=None, since=None, limit=None):
+def api_search(q, status=None, typ=None, since=None, snapshot_id=None, limit=None):
     try:
-        j = _http_get(f"{API_V1_BASE}/tasks")
+        params = {}
+        if snapshot_id is not None:
+            params["snapshot_id"] = snapshot_id
+        j = _http_get(f"{API_V1_BASE}/tasks", params=params) if params else _http_get(f"{API_V1_BASE}/tasks")
     except Exception as e:
         print(f"❌ Could not search tasks: {e}")
         return
@@ -549,6 +557,7 @@ def build_parser():
     tp = sub.add_parser("tasks", help="List tasks with optional filters")
     tp.add_argument("--status", help="Filter by status (queued, running, completed, failed)")
     tp.add_argument("--type", help="Filter by task type (chat, query, action, graph, maintenance, unknown)")
+    tp.add_argument("--snapshot-id", type=int, help="Filter by snapshot_id (for snapshot-aware queries)")
     tp.add_argument("--since", help="Filter by updated time (e.g., 1h, 24h, 2d, 2024-01-01)")
     tp.add_argument("--limit", type=int, help="Limit number of tasks shown")
 
@@ -556,6 +565,7 @@ def build_parser():
     sp.add_argument("query", help="Search query string")
     sp.add_argument("--status", help="Filter by status")
     sp.add_argument("--type", help="Filter by task type")
+    sp.add_argument("--snapshot-id", type=int, help="Filter by snapshot_id")
     sp.add_argument("--since", help="Filter by updated time")
     sp.add_argument("--limit", type=int, help="Limit results")
 
@@ -638,9 +648,9 @@ def main():
         api_eventizer_test(args.text, args.type, args.domain, args.preserve_original); return
 
     if args.cmd == "tasks":
-        api_list_tasks(args.status, args.type, args.since, args.limit); return
+        api_list_tasks(args.status, args.type, args.since, args.snapshot_id, args.limit); return
     if args.cmd == "search":
-        api_search(args.query, args.status, args.type, args.since, args.limit); return
+        api_search(args.query, args.status, args.type, args.since, args.snapshot_id, args.limit); return
     if args.cmd == "status" or args.cmd == "taskstatus":
         api_task_status(args.prefix); return
     if args.cmd == "ask":

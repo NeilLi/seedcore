@@ -380,6 +380,46 @@ class PKGManager:
                 "cortex_enabled": self._client is not None
             }
 
+    # --- Approve & Promote: Tier 1 → Tier 2/3 Promotion ---
+
+    async def approve_and_promote_seed(
+        self, 
+        task_id: str, 
+        actor: str,
+        preserve_multimodal: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Promotes a task from Tier 1 (Multimodal Event Memory) to Tier 2/3 (Knowledge Graph).
+        
+        This bridges the gap between short-term working perception and long-term structured knowledge.
+        The promotion process follows a "Read-Transform-Write" pattern:
+        
+        1. **Read**: Fetch the task and its multimodal embeddings from `tasks` and `task_multimodal_embeddings`
+        2. **Transform**: Ensure graph_node_map entry exists (creates BIGINT node_id)
+        3. **Embed**: Copy the 1024d multimodal vector to `graph_embeddings_1024` with label 'task.primary'
+        4. **Register**: Task now appears in `v_unified_cortex_memory` under Tier 2/3 (knowledge_base)
+        
+        Delegates to PKGClient.cortex DAO for database operations, maintaining separation of concerns.
+        
+        Args:
+            task_id: UUID string of the task to promote
+            actor: Actor identifier (e.g., 'admin', 'mother') for audit trail
+            preserve_multimodal: If True, keeps the original multimodal embedding (default: True)
+                               If False, removes it after promotion (not recommended)
+        
+        Returns:
+            Dictionary with:
+            - ok: bool - Success/failure status
+            - msg: str - Human-readable message
+            - new_node_id: Optional[int] - The BIGINT node_id from graph_node_map
+            - task_id: str - The original task UUID
+        """
+        return await self._client.promote_task_to_knowledge_graph(
+            task_id=task_id,
+            actor=actor,
+            preserve_multimodal=preserve_multimodal
+        )
+
     # --- Internals ---
 
     async def _load_initial_snapshot(self):

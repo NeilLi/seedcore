@@ -54,6 +54,21 @@ async def _verify_graph_node_support(engine: AsyncEngine) -> None:
             )
     logger.info("Verified ensure_task_node(uuid) exists in the database")
 
+async def _verify_snapshot_support(engine: AsyncEngine) -> None:
+    """Verify snapshot_id support exists (migration 017)."""
+    async with engine.connect() as conn:
+        # Check if pkg_active_snapshot_id function exists
+        result = await conn.execute(
+            text("SELECT to_regprocedure('pkg_active_snapshot_id(pkg_env)')")
+        )
+        if result.scalar_one_or_none() is None:
+            logger.warning(
+                "pkg_active_snapshot_id function not found. Snapshot scoping will be disabled. "
+                "Apply migration 017_pkg_tasks_snapshot_scoping.sql to enable snapshot support."
+            )
+        else:
+            logger.info("Verified snapshot_id support (migration 017) exists in the database")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -63,6 +78,7 @@ async def lifespan(app: FastAPI):
     app.state.db_engine = engine
     await init_db(engine)
     await _verify_graph_node_support(engine)
+    await _verify_snapshot_support(engine)
     logger.info("Database initialized successfully")
     
     # Task processing is handled by Dispatcher Ray actors (started by bootstrap scripts)

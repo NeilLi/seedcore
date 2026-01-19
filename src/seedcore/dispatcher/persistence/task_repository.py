@@ -15,6 +15,7 @@ from .task_sql import (
     RELEASE_TASK_SQL,
     RENEW_LEASE_SQL,
     RECOVER_STALE_SQL,
+    ENFORCE_SNAPSHOT_ID_SQL,
 )
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
@@ -150,6 +151,7 @@ class TaskRepository:
                     "domain": r["domain"],
                     "drift_score": float(r["drift_score"] or 0.0),
                     "attempts": int(r["attempts"] or 0),
+                    "snapshot_id": r.get("snapshot_id"),  # Include snapshot_id for server-side enforcement
                 }
             )
 
@@ -257,3 +259,61 @@ class TaskRepository:
             logger.warning(f"🧹 [Janitor] Recovered {count} stale tasks: {[r['id'] for r in rows]}")
             
         return count
+
+    # -------------------------------------------
+    # Snapshot scoping enforcement
+    # -------------------------------------------
+    async def enforce_snapshot_id_for_batch(self, task_ids: List[str]) -> int:
+        """
+        Ensure tasks have snapshot_id set (server-side enforcement).
+        
+        Updates tasks without snapshot_id to use the active PKG snapshot.
+        This is called by the Dispatcher to enforce snapshot scoping for
+        reproducible runs and multi-world isolation.
+        
+        Args:
+            task_ids: List of task UUIDs (as strings) to update
+            
+        Returns:
+            Number of tasks updated (0 if no active snapshot or no tasks need updating)
+        """
+        if not task_ids:
+            return 0
+        
+        async with self.pool.acquire() as con:
+            # Get active snapshot_id
+            active_snapshot_id = await con.fetchval(
+                "SELECT pkg_active_snapshot_id('prod')"
+            )
+            
+            if active_snapshot_id is None:
+                logger.debug(
+                    "[%s] No active snapshot found - cannot enforce snapshot scoping",
+                    self.dispatcher_name
+                )
+                return 0
+            
+            # Update tasks without snapshot_id
+            result = await con.execute(
+                ENFORCE_SNAPSHOT_ID_SQL,
+                active_snapshot_id,
+                task_ids
+            )
+            
+            # Extract rowcount from result (asyncpg returns "UPDATE N" string)
+            updated_count = 0
+            if isinstance(result, str) and result.startswith("UPDATE "):
+                try:
+                    updated_count = int(result.split()[1])
+                except (ValueError, IndexError):
+                    pass
+            
+            if updated_count > 0:
+                logger.debug(
+                    "[%s] Updated %d tasks with snapshot_id=%d",
+                    self.dispatcher_name,
+                    updated_count,
+                    active_snapshot_id
+                )
+            
+            return updated_count

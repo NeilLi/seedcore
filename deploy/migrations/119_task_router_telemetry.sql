@@ -1,4 +1,4 @@
--- Migration 019: Task Router Telemetry
+-- Migration 119: Task Router Telemetry
 -- Purpose: Store router telemetry snapshots for coordinator routing decisions
 -- This table captures OCPS (Online Change Point Detection) signals, surprise scores,
 -- and routing decisions for observability and debugging.

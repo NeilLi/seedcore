@@ -6,7 +6,7 @@ import asyncio
 import time
 from datetime import datetime, timezone
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 import ray  # pyright: ignore[reportMissingImports]
 
@@ -175,6 +175,46 @@ class Dispatcher:
         return "started"
 
     # ----------------------------
+    # 0. Snapshot Scoping Enforcement (Server-Side)
+    # ----------------------------
+    async def _ensure_snapshot_id_for_batch(self, batch: List[Dict[str, Any]]) -> None:
+        """
+        Ensure all tasks in the batch have snapshot_id set (server-side enforcement).
+        
+        This is called by the Dispatcher (server-side) to enforce snapshot scoping
+        for reproducible runs and multi-world isolation. Tasks without snapshot_id
+        are updated with the active snapshot.
+        
+        Delegates to TaskRepository for database operations (DAO pattern).
+        """
+        if not batch or not self._repo:
+            return
+        
+        try:
+            # Extract task IDs without snapshot_id
+            task_ids_without_snapshot = [
+                str(row["id"]) for row in batch 
+                if row.get("snapshot_id") is None
+            ]
+            
+            if task_ids_without_snapshot:
+                # Delegate to repository (DAO pattern)
+                updated_count = await self._repo.enforce_snapshot_id_for_batch(task_ids_without_snapshot)
+                if updated_count > 0:
+                    logger.debug(
+                        "[%s] Enforced snapshot_id for %d tasks in batch",
+                        self.name,
+                        updated_count
+                    )
+        except Exception as e:
+            logger.warning(
+                "[%s] Failed to enforce snapshot_id for batch: %s (non-fatal)",
+                self.name,
+                e
+            )
+            # Non-fatal - continue processing tasks even if snapshot update fails
+
+    # ----------------------------
     # 1. MAIN LOOP (Claim & Spawn)
     # ----------------------------
     async def _main_loop(self):
@@ -208,7 +248,10 @@ class Dispatcher:
                     await asyncio.sleep(self.main_interval)
                     continue
 
-                # 2. Spawn Workers
+                # 2. Ensure snapshot_id for claimed tasks (server-side enforcement)
+                await self._ensure_snapshot_id_for_batch(batch)
+
+                # 3. Spawn Workers
                 for row in batch:
                     task_id = str(row["id"])
 

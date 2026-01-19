@@ -131,6 +131,7 @@ def _parse_task_args(argv):
     parser.add_argument("--status", type=str, help="Filter by status (e.g., running, completed, queued)")
     parser.add_argument("--type", type=str, help="Filter by task type")
     parser.add_argument("--since", type=str, help="Filter by time (e.g., 24h, 7d, 2024-01-01)")
+    parser.add_argument("--snapshot-id", type=int, help="Filter by snapshot_id (for snapshot-aware queries)")
     parser.add_argument("--limit", type=int, help="Limit number of results")
     
     try:
@@ -139,8 +140,11 @@ def _parse_task_args(argv):
         # argparse will exit on invalid args, but we want to handle this gracefully
         return None
 
-def _fetch_tasks():
-    r = requests.get(f"{API_V1_BASE}/tasks")
+def _fetch_tasks(snapshot_id=None):
+    params = {}
+    if snapshot_id is not None:
+        params["snapshot_id"] = snapshot_id
+    r = requests.get(f"{API_V1_BASE}/tasks", params=params)
     r.raise_for_status()
     data = r.json()
     return data.get("items", []), data.get("total", len(data))
@@ -572,16 +576,18 @@ def _print_task_row(t, prefix="  - "):
     status = (t.get('status') or 'N/A').upper()
     desc = t.get('description', '')
     updated = _format_datetime(t.get('updated_at'))
+    snapshot_id = t.get('snapshot_id')
     
     # Truncate description more intelligently - try to break at word boundaries
-    if len(desc) > 50:
-        # Try to find a good break point around 50 characters
-        trunc_desc = desc[:47] + "..."
+    if len(desc) > 45:
+        # Try to find a good break point around 45 characters
+        trunc_desc = desc[:42] + "..."
     else:
         trunc_desc = desc
     
     # Use dynamic width for better alignment
-    print(f"{prefix}{t['id'][:8]} [{t.get('type','N/A')}] {status:<10} | {trunc_desc:<53} | Updated: {updated}")
+    snapshot_str = f"snapshot={snapshot_id}" if snapshot_id else "snapshot=N/A"
+    print(f"{prefix}{t['id'][:8]} [{t.get('type','N/A')}] {status:<10} | {trunc_desc:<45} | {snapshot_str:<15} | Updated: {updated}")
 
 def list_tasks_with_filters(args):
     """tasks [--status X] [--type Y] [--since 24h|YYYY-MM-DD] [--limit N]"""
@@ -593,10 +599,11 @@ def list_tasks_with_filters(args):
     want_status = parsed_args.status
     want_type   = parsed_args.type
     since_dt    = _parse_since(parsed_args.since or "")
+    snapshot_id = parsed_args.snapshot_id
     limit_n     = parsed_args.limit
 
     try:
-        items, total = _fetch_tasks()
+        items, total = _fetch_tasks(snapshot_id=snapshot_id)
         # newest first
         items = sorted(items, key=lambda x: x.get('created_at') or "", reverse=True)
 
@@ -613,6 +620,7 @@ def list_tasks_with_filters(args):
         print(f"📝 Tasks (showing {len(filtered)}/{total}"
               f"{' | status='+str(want_status) if want_status else ''}"
               f"{' | type='+str(want_type) if want_type else ''}"
+              f"{' | snapshot_id='+str(snapshot_id) if snapshot_id else ''}"
               f"{' | since set' if since_dt else ''}"
               f"{' | limit='+str(limit_n) if limit_n else ''}):")
         for t in filtered:
@@ -644,10 +652,11 @@ def task_status(tid: str):
         status = (t.get('status') or 'N/A').upper()
         updated = _format_datetime(t.get('updated_at'))
         print(f"📊 Task {t['id'][:8]}")
-        print(f"   Status:    {status}")
-        print(f"   Type:      {t.get('type')}")
-        print(f"   Updated:   {updated}")
-        print(f"   Drift:     {t.get('drift_score')}")
+        print(f"   Status:     {status}")
+        print(f"   Type:       {t.get('type')}")
+        print(f"   Snapshot:   {t.get('snapshot_id', 'N/A')}")
+        print(f"   Updated:    {updated}")
+        print(f"   Drift:      {t.get('drift_score')}")
         if t.get("error"):
             print(f"   🔴 Error: {t['error']}")
         if t.get("result"):
@@ -659,19 +668,20 @@ def _fuzzy_score(haystack: str, needle: str) -> float:
     return difflib.SequenceMatcher(None, haystack.lower(), needle.lower()).ratio()
 
 def search_tasks(query: str, args=None):
-    """search <query> [--status X] [--type Y] [--since ...] [--limit N]"""
+    """search <query> [--status X] [--type Y] [--snapshot-id N] [--since ...] [--limit N]"""
     parsed_args = _parse_task_args(args or [])
     if parsed_args is None:
-        print("❌ Invalid arguments. Use: search <query> [--status <status>] [--type <type>] [--since <time>] [--limit <number>]")
+        print("❌ Invalid arguments. Use: search <query> [--status <status>] [--type <type>] [--snapshot-id <id>] [--since <time>] [--limit <number>]")
         return
     
     want_status = parsed_args.status
     want_type   = parsed_args.type
+    snapshot_id = parsed_args.snapshot_id
     since_dt    = _parse_since(parsed_args.since or "")
     limit_n     = parsed_args.limit
 
     try:
-        items, _ = _fetch_tasks()
+        items, _ = _fetch_tasks(snapshot_id=snapshot_id)
         # candidate score based on id/type/description/result (max of fields)
         scored = []
         for t in items:
@@ -703,6 +713,7 @@ def search_tasks(query: str, args=None):
         print(f"🔍 Found {len(filtered)} task(s) matching '{query}'"
               f"{' | status='+str(want_status) if want_status else ''}"
               f"{' | type='+str(want_type) if want_type else ''}"
+              f"{' | snapshot_id='+str(snapshot_id) if snapshot_id else ''}"
               f"{' | since set' if since_dt else ''}"
               f"{' | limit='+str(limit_n) if limit_n else ''}:")
         for t in filtered:
@@ -764,9 +775,9 @@ def show_help():
     print("                           - Create ACTION/QUERY task with multimodal vision envelope")
     print("")
     print("Task Inspection:")
-    print("  tasks [--status S] [--type T] [--since V] [--limit N]")
-    print("                           - List tasks with filters")
-    print("  search <q> [--status S] [--type T] [--since V] [--limit N]")
+    print("  tasks [--status S] [--type T] [--snapshot-id N] [--since V] [--limit N]")
+    print("                           - List tasks with filters (snapshot-aware)")
+    print("  search <q> [--status S] [--type T] [--snapshot-id N] [--since V] [--limit N]")
     print("                           - Fuzzy search across id/type/description/result")
     print("  taskstatus <id>           - Detailed status (accepts short IDs)")
     print("  status <id>               - Quick status (accepts short IDs)")

@@ -58,6 +58,7 @@ class TaskPayload(BaseModel):
     domain: Optional[str] = None
     drift_score: float = 0.0
     correlation_id: Optional[str] = None
+    snapshot_id: Optional[int] = None  # PKG snapshot reference for snapshot-aware operations
     
     # The source-of-truth JSONB container
     params: Dict[str, Any] = Field(default_factory=dict)
@@ -303,6 +304,7 @@ class TaskPayload(BaseModel):
             "description": self.description,
             "domain": self.domain,
             "drift_score": self.drift_score,
+            "snapshot_id": self.snapshot_id,
             "params": self.to_db_params() # Pack it up
         }
 
@@ -391,6 +393,7 @@ class TaskPayload(BaseModel):
             description=row.get("description") or "",
             domain=row.get("domain"),
             drift_score=float(row.get("drift_score") or 0.0),
+            snapshot_id=row.get("snapshot_id"),
             params=params,
 
             # Interaction

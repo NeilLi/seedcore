@@ -82,6 +82,31 @@ class PKGClient:
             exclude_task_id=exclude_task_id
         )
 
+    async def promote_task_to_knowledge_graph(
+        self,
+        task_id: str,
+        actor: str,
+        preserve_multimodal: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Promotes a task from Tier 1 (Multimodal Event Memory) to Tier 2/3 (Knowledge Graph).
+        
+        This bridges the gap between short-term working perception and long-term structured knowledge.
+        
+        Args:
+            task_id: UUID string of the task to promote
+            actor: Actor identifier (e.g., 'admin', 'mother') for audit trail
+            preserve_multimodal: If True, keeps the original multimodal embedding (default: True)
+        
+        Returns:
+            Dictionary with ok, msg, new_node_id, task_id
+        """
+        return await self.cortex.promote_task_to_knowledge_graph(
+            task_id=task_id,
+            actor=actor,
+            preserve_multimodal=preserve_multimodal
+        )
+
     # =========================
     # Snapshots (delegate to DAO)
     # =========================

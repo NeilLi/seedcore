@@ -68,6 +68,19 @@ class TaskMetadataRepository:
         params = task_dict.get("params") if isinstance(task_dict.get("params"), dict) else {}
         domain = task_dict.get("domain")
         drift_score = self._coerce_float(task_dict.get("drift_score"))
+        
+        # Server-side snapshot_id enforcement (Coordinator creates tasks)
+        snapshot_id = task_dict.get("snapshot_id")
+        if snapshot_id is None:
+            # Get active snapshot_id if not provided
+            try:
+                result = await session.execute(text("SELECT pkg_active_snapshot_id('prod')"))
+                snapshot_id = result.scalar_one_or_none()
+                if snapshot_id is None:
+                    logger.debug("No active snapshot found for task %s - creating without snapshot_id", task_id)
+            except Exception as e:
+                logger.warning("Could not get active snapshot_id for task %s: %s (non-fatal)", task_id, e)
+                snapshot_id = None
 
         try:
             # The caller is responsible for `session.begin()`
@@ -89,6 +102,10 @@ class TaskMetadataRepository:
                 if drift_score is not None and task_obj.drift_score != drift_score:
                     task_obj.drift_score = drift_score
                     updated = True
+                # Update snapshot_id if missing (server-side enforcement)
+                if snapshot_id is not None and task_obj.snapshot_id is None:
+                    task_obj.snapshot_id = snapshot_id
+                    updated = True
                 if updated:
                     await session.flush()
             else:
@@ -99,6 +116,7 @@ class TaskMetadataRepository:
                     params=params,
                     domain=domain,
                     drift_score=drift_score if drift_score is not None else 0.0,
+                    snapshot_id=snapshot_id,
                 )
                 session.add(task_obj)
                 await session.flush()
@@ -198,6 +216,30 @@ class TaskMetadataRepository:
             )
             raise
 
+    async def get_task_snapshot_id(
+        self,
+        session: AsyncSession,
+        task_id: Union[str, uuid.UUID],
+    ) -> Optional[int]:
+        """Get snapshot_id for a task (for snapshot-aware operations).
+
+        Args:
+            session: The AsyncSession to use for database operations.
+            task_id: The UUID or string ID of the task to fetch.
+
+        Returns:
+            The snapshot_id if found, None otherwise.
+        """
+        tid = self._coerce_task_id(task_id)
+        try:
+            task_obj = await session.get(Task, tid)
+            if task_obj:
+                return task_obj.snapshot_id
+            return None
+        except Exception as e:
+            logger.debug(f"Failed to get snapshot_id for task {tid}: {e}")
+            return None
+
     async def get_task_context(
         self,
         session: AsyncSession,
@@ -228,7 +270,8 @@ class TaskMetadataRepository:
                 "description": task_obj.description,
                 "params": task_obj.params,
                 "domain": task_obj.domain,
-                "drift_score": task_obj.drift_score
+                "drift_score": task_obj.drift_score,
+                "snapshot_id": task_obj.snapshot_id,
             }
 
             # 2. Fetch Dependency Graph (Optional but useful for Context)
@@ -463,7 +506,8 @@ class TaskMetadataRepository:
         query_embedding: List[float],
         k: int = 5,
         min_similarity: float = 0.7,
-        tier_filter: Optional[str] = None
+        tier_filter: Optional[str] = None,
+        snapshot_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """Perform semantic search across the entire Unified Memory View.
 
@@ -476,6 +520,7 @@ class TaskMetadataRepository:
             k: Number of nearest neighbors to return (default: 5).
             min_similarity: Minimum similarity threshold (default: 0.7).
             tier_filter: Optional filter for memory tier (e.g., "event_working", "knowledge_base").
+            snapshot_id: Optional snapshot_id filter for snapshot-aware queries (prevents historical bleed).
 
         Returns:
             List of dictionaries containing memory information and similarity scores.
@@ -485,13 +530,16 @@ class TaskMetadataRepository:
 
         # Build the dynamic filter for tiers (event_working vs knowledge_base)
         tier_clause = "AND memory_tier = :tier" if tier_filter else ""
+        
+        # Build snapshot_id filter (critical for snapshot-aware semantic search)
+        snapshot_clause = "AND snapshot_id = :snapshot_id" if snapshot_id is not None else ""
 
         stmt = text(f"""
             SELECT 
-                id, category, content, memory_tier, metadata,
+                id, category, content, memory_tier, metadata, snapshot_id,
                 1 - (vector <=> CAST(:vec AS vector)) as similarity
             FROM v_unified_cortex_memory
-            WHERE 1=1 {tier_clause}
+            WHERE 1=1 {tier_clause} {snapshot_clause}
             AND 1 - (vector <=> CAST(:vec AS vector)) >= :min_sim
             ORDER BY vector <=> CAST(:vec AS vector)
             LIMIT :k
@@ -501,6 +549,8 @@ class TaskMetadataRepository:
             params = {"vec": query_vec, "k": k, "min_sim": min_similarity}
             if tier_filter:
                 params["tier"] = tier_filter
+            if snapshot_id is not None:
+                params["snapshot_id"] = snapshot_id
 
             result = await session.execute(stmt, params)
 
@@ -512,6 +562,7 @@ class TaskMetadataRepository:
                     "content": row.content,
                     "tier": row.memory_tier,
                     "metadata": row.metadata,
+                    "snapshot_id": getattr(row, "snapshot_id", None),
                     "similarity": float(row.similarity) if row.similarity is not None else 0.0,
                 })
             return memories
@@ -532,7 +583,8 @@ class TaskMetadataRepository:
         embedding: List[float],
         threshold: float = 0.98,
         limit: int = 1,
-        hours_back: int = 24
+        hours_back: int = 24,
+        snapshot_id: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
         """Find a similar completed task by embedding similarity.
         
@@ -545,11 +597,15 @@ class TaskMetadataRepository:
             threshold: Minimum similarity threshold (default: 0.98 for near-exact matches).
             limit: Maximum number of results to return (default: 1).
             hours_back: Number of hours to look back (default: 24).
+            snapshot_id: Optional snapshot_id filter for snapshot-aware queries (prevents historical bleed).
         
         Returns:
             Dictionary with task id, result, and similarity score, or None if no match found.
         """
         embedding_str = json.dumps(embedding)
+        
+        # Build snapshot_id filter (critical for snapshot-aware semantic caching)
+        snapshot_clause = "AND t.snapshot_id = :snapshot_id" if snapshot_id is not None else ""
         
         stmt = text(f"""
             SELECT 
@@ -557,6 +613,7 @@ class TaskMetadataRepository:
                 t.result,
                 t.description,
                 t.created_at,
+                t.snapshot_id,
                 1 - (tme.emb <=> CAST(:vec AS vector)) as similarity
             FROM tasks t
             INNER JOIN task_multimodal_embeddings tme ON t.id = tme.task_id
@@ -564,17 +621,22 @@ class TaskMetadataRepository:
                 AND t.result IS NOT NULL
                 AND tme.source_modality = 'text'
                 AND t.created_at >= NOW() - INTERVAL '{hours_back} hours'
+                {snapshot_clause}
                 AND 1 - (tme.emb <=> CAST(:vec AS vector)) >= :threshold
             ORDER BY tme.emb <=> CAST(:vec AS vector)
             LIMIT :limit
         """)
         
         try:
-            result = await session.execute(stmt, {
+            params = {
                 "vec": embedding_str,
                 "threshold": threshold,
                 "limit": limit
-            })
+            }
+            if snapshot_id is not None:
+                params["snapshot_id"] = snapshot_id
+            
+            result = await session.execute(stmt, params)
             
             row = result.fetchone()
             if row:

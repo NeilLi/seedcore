@@ -25,7 +25,7 @@ SET status='running',
     attempts = t.attempts + 1
 FROM c
 WHERE t.id = c.id
-RETURNING t.id, t.type, t.description, t.params, t.domain, t.drift_score, t.attempts;
+RETURNING t.id, t.type, t.description, t.params, t.domain, t.drift_score, t.attempts, t.snapshot_id;
 """
 
 COMPLETE_TASK_SQL = """
@@ -82,6 +82,14 @@ SET status = 'retry',
 WHERE status = 'running'
   AND lease_expires_at < NOW()
 RETURNING id;
+"""
+
+# Snapshot scoping enforcement
+ENFORCE_SNAPSHOT_ID_SQL = """
+UPDATE tasks
+SET snapshot_id = $1
+WHERE id = ANY($2::uuid[])
+  AND snapshot_id IS NULL
 """
 
 # ---------------------------------------------------------------------

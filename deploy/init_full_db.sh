@@ -26,16 +26,17 @@ MIGRATION_013="${SCRIPT_DIR}/migrations/013_pkg_core.sql"
 MIGRATION_014="${SCRIPT_DIR}/migrations/014_pkg_ops.sql"
 MIGRATION_015="${SCRIPT_DIR}/migrations/015_pkg_views_functions.sql"
 MIGRATION_016="${SCRIPT_DIR}/migrations/016_fact_pkg_integration.sql"
-MIGRATION_017="${SCRIPT_DIR}/migrations/017_unified_cortex.sql"
-MIGRATION_018="${SCRIPT_DIR}/migrations/018_task_outbox_hardening.sql"
-MIGRATION_019="${SCRIPT_DIR}/migrations/019_task_router_telemetry.sql"
+MIGRATION_017="${SCRIPT_DIR}/migrations/017_pkg_tasks_snapshot_scoping.sql"
+MIGRATION_117="${SCRIPT_DIR}/migrations/117_unified_cortex.sql"
+MIGRATION_118="${SCRIPT_DIR}/migrations/118_task_outbox_hardening.sql"
+MIGRATION_119="${SCRIPT_DIR}/migrations/119_task_router_telemetry.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_007" \
   "$MIGRATION_008" "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" \
   "$MIGRATION_012" "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" \
-  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_018" "$MIGRATION_019"
+  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -59,9 +60,10 @@ echo "   - 013: PKG core catalog (snapshots, rules, conditions, emissions, artif
 echo "   - 014: PKG operations (deployments, temporal facts, validation, promotions, device coverage)"
 echo "   - 015: PKG views and helper functions"
 echo "   - 016: Fact model PKG integration (temporal facts, policy governance, eventizer support)"
-echo "   - 017: Task embedding support (views/functions/backfill for separate 128d/1024d tables)"
-echo "   - 018: Task outbox hardening (available_at, attempts, index)"
-echo "   - 019: Task router telemetry (OCPS signals, surprise scores, routing decisions)"
+echo "   - 017: PKG tasks snapshot scoping (add snapshot_id to tasks, graph_embeddings_1024, graph_node_map)"
+echo "   - 117: Task embedding support (views/functions/backfill for separate 128d/1024d tables)"
+echo "   - 118: Task outbox hardening (available_at, attempts, index)"
+echo "   - 119: Task router telemetry (OCPS signals, surprise scores, routing decisions)"
 
 find_pg_pod() {
   local sel pod
@@ -200,12 +202,17 @@ echo "⚙️  Running migration 016: Fact model PKG integration (temporal facts,
 kubectl -n "$NAMESPACE" cp "$MIGRATION_016" "$POSTGRES_POD:/tmp/016_fact_pkg_integration.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/016_fact_pkg_integration.sql"
 
-# Migration 017 (NEW - Task Embedding Support)
-echo "⚙️  Running migration 017: Task embedding support (views/functions/backfill)..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_017" "$POSTGRES_POD:/tmp/017_unified_cortex.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/017_unified_cortex.sql"
+# Migration 017 (PKG Tasks Snapshot Scoping)
+echo "⚙️  Running migration 017: PKG tasks snapshot scoping (add snapshot_id to tasks, graph_embeddings_1024, graph_node_map)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_017" "$POSTGRES_POD:/tmp/017_pkg_tasks_snapshot_scoping.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/017_pkg_tasks_snapshot_scoping.sql"
+
+# Migration 117 (Task Embedding Support / Unified Cortex)
+echo "⚙️  Running migration 117: Task embedding support (views/functions/backfill)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_117" "$POSTGRES_POD:/tmp/117_unified_cortex.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/117_unified_cortex.sql"
 # Verify key views were created
-echo "✅ Verifying migration 017 views..."
+echo "✅ Verifying migration 117 views..."
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -c "
     SELECT 
@@ -220,15 +227,15 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
       END AS status;
   "
 
-# Migration 018 (Task Outbox Hardening)
-echo "⚙️  Running migration 018: Task outbox hardening (available_at, attempts, index)..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_018" "$POSTGRES_POD:/tmp/018_task_outbox_hardening.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/018_task_outbox_hardening.sql"
+# Migration 118 (Task Outbox Hardening)
+echo "⚙️  Running migration 118: Task outbox hardening (available_at, attempts, index)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_118" "$POSTGRES_POD:/tmp/118_task_outbox_hardening.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/118_task_outbox_hardening.sql"
 
-# Migration 019 (Task Router Telemetry)
-echo "⚙️  Running migration 019: Task router telemetry (OCPS signals, surprise scores, routing decisions)..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_019" "$POSTGRES_POD:/tmp/019_task_router_telemetry.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/019_task_router_telemetry.sql"
+# Migration 119 (Task Router Telemetry)
+echo "⚙️  Running migration 119: Task router telemetry (OCPS signals, surprise scores, routing decisions)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_119" "$POSTGRES_POD:/tmp/119_task_router_telemetry.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/119_task_router_telemetry.sql"
 
 # 6) Verify schema
 echo "✅ Verifying schema..."

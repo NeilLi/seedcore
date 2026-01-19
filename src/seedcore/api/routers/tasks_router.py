@@ -34,6 +34,7 @@ class TaskRead(BaseModel):
     domain: str | None
     drift_score: float
     status: TaskStatus
+    snapshot_id: int | None
     result: Dict[str, Any] | None
     error: str | None
     created_at: datetime
@@ -109,6 +110,8 @@ async def create_task(
     
     The 'QueueDispatcher' (background service) or 'Coordinator' will pick it up.
     We DO NOT run Eventizer here anymore. The Coordinator handles ingestion analysis.
+    
+    Automatically sets snapshot_id from the active PKG snapshot if available.
     """
     # 1. Extract minimal fields
     task_type = payload.get("type", "unknown_task")
@@ -121,14 +124,28 @@ async def create_task(
     # If false, status defaults to CREATED (draft).
     run_immediately = bool(payload.get("run_immediately", True)) 
 
-    # 3. Persist to DB
+    # 3. Get active snapshot_id (if PKG is available)
+    snapshot_id = payload.get("snapshot_id")  # Allow explicit override
+    if snapshot_id is None:
+        try:
+            # Use SQL function for efficient lookup (migration 015)
+            result = await session.execute(text("SELECT pkg_active_snapshot_id('prod')"))
+            snapshot_id = result.scalar_one_or_none()
+            if snapshot_id is None:
+                logger.debug("No active PKG snapshot found. Task will be created without snapshot_id.")
+        except Exception as e:
+            logger.warning(f"Could not get active snapshot_id: {e}. Task will be created without snapshot_id.")
+            snapshot_id = None
+
+    # 4. Persist to DB
     new_task = Task(
         type=task_type,
         description=description,
         domain=domain,
         params=params,
         drift_score=0.0, # Calculated later by Coordinator
-        status=TaskStatus.QUEUED if run_immediately else TaskStatus.CREATED
+        status=TaskStatus.QUEUED if run_immediately else TaskStatus.CREATED,
+        snapshot_id=snapshot_id
     )
     
     session.add(new_task)
@@ -153,10 +170,23 @@ async def create_task(
 async def list_tasks(
     session: AsyncSession = Depends(get_async_pg_session),
     limit: int = 50,
-    offset: int = 0
+    offset: int = 0,
+    snapshot_id: int | None = None
 ) -> TaskListResponse:
-    # Added pagination for safety
-    stmt = select(Task).order_by(Task.created_at.desc()).limit(limit).offset(offset)
+    """
+    List tasks with optional snapshot_id filtering.
+    
+    If snapshot_id is provided, only tasks belonging to that snapshot are returned.
+    This enables snapshot-aware queries for reproducible runs and multi-world isolation.
+    """
+    # Build query with optional snapshot filtering
+    stmt = select(Task)
+    
+    if snapshot_id is not None:
+        stmt = stmt.where(Task.snapshot_id == snapshot_id)
+    
+    stmt = stmt.order_by(Task.created_at.desc()).limit(limit).offset(offset)
+    
     result = await session.execute(stmt)
     tasks = result.scalars().all()
     

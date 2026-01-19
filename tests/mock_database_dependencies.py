@@ -546,6 +546,67 @@ mock_database_module.check_neo4j_health = mock_check_neo4j_health
 mock_database_module.get_pg_pool_stats = mock_get_pg_pool_stats
 mock_database_module.get_mysql_pool_stats = mock_get_mysql_pool_stats
 
+# Mock asyncpg pool for TaskRepository
+class MockAsyncPGPool:
+    """Mock asyncpg.Pool for testing."""
+    
+    def __init__(self):
+        self._closed = False
+    
+    async def acquire(self):
+        """Mock acquire method - returns a mock connection."""
+        return MockAsyncPGConnection()
+    
+    async def close(self):
+        """Mock close method."""
+        self._closed = True
+    
+    def is_closed(self):
+        """Mock is_closed method."""
+        return self._closed
+
+class MockAsyncPGConnection:
+    """Mock asyncpg.Connection for testing."""
+    
+    async def execute(self, query, *args):
+        """Mock execute method."""
+        return "UPDATE 0"
+    
+    async def fetchval(self, query, *args):
+        """Mock fetchval method."""
+        return None
+    
+    async def fetchrow(self, query, *args):
+        """Mock fetchrow method."""
+        return None
+    
+    async def fetch(self, query, *args):
+        """Mock fetch method."""
+        return []
+    
+    async def close(self):
+        """Mock close method."""
+        pass
+    
+    def __enter__(self):
+        """Mock context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Mock context manager exit."""
+        pass
+
+async def mock_get_asyncpg_pool(
+    min_size: Optional[int] = None,
+    max_size: Optional[int] = None,
+    command_timeout: Optional[float] = None,
+):
+    """Mock get_asyncpg_pool function."""
+    return MockAsyncPGPool()
+
+# Mock PG_DSN constant
+PG_DSN = os.getenv("PG_DSN", "postgresql://postgres:postgres@localhost:5432/seedcore")
+
 # Mock the database metrics module as a proper module to avoid bound methods
 mock_database_metrics_module = types.ModuleType('seedcore.monitoring.database_metrics')
 mock_database_metrics_module.DatabaseMetrics = MockDatabaseMetrics
@@ -553,6 +614,10 @@ mock_database_metrics_module.monitor_query = mock_monitor_query
 mock_database_metrics_module.monitor_health_check = mock_monitor_health_check
 mock_database_metrics_module.start_metrics_collection = mock_start_metrics_collection
 mock_database_metrics_module.stop_metrics_collection = mock_stop_metrics_collection
+
+# Add get_asyncpg_pool and PG_DSN to mock database module
+mock_database_module.get_asyncpg_pool = mock_get_asyncpg_pool
+mock_database_module.PG_DSN = PG_DSN
 
 # Mock the modules in sys.modules before they're imported
 sys.modules['seedcore.database'] = mock_database_module

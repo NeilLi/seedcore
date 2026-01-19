@@ -1426,13 +1426,26 @@ async def _check_semantic_cache(
     try:
         session_factory = execution_config.resolve_session_factory_func()
         async with session_factory() as session:
+            # Get snapshot_id for current task (for snapshot-aware semantic caching)
+            # Use repository method instead of direct SQL (DAO pattern)
+            snapshot_id = None
+            try:
+                snapshot_id = await execution_config.graph_task_repo.get_task_snapshot_id(
+                    session=session,
+                    task_id=ctx.task_id,
+                )
+            except Exception as e:
+                logger.debug(f"Could not get snapshot_id for task {ctx.task_id}: {e}")
+            
             # Query for similar completed tasks with high precision threshold
+            # Pass snapshot_id to ensure snapshot-aware semantic caching (prevents historical bleed)
             cached_task = await execution_config.graph_task_repo.find_similar_task(
                 session=session,
                 embedding=embedding,
                 threshold=0.98,  # High precision for near-exact matches
                 limit=1,
                 hours_back=24,  # Look back 24 hours
+                snapshot_id=snapshot_id,  # Snapshot-aware caching
             )
             
             if cached_task and cached_task.get("result"):

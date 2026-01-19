@@ -146,6 +146,13 @@ class Task(Base):
         comment="Model/policy drift indicator (0..1)",
     )
 
+    # --- PKG Snapshot Scoping ---
+    snapshot_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Reference to PKG snapshot that evaluated/created this task. Critical for reproducible runs, multi-world isolation, and time travel debugging.",
+    )
+
     # --- Timestamps ---
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -173,6 +180,9 @@ class Task(Base):
         #   ix_tasks_params_routing_spec
         #   ix_tasks_params_routing_priority
         #   ix_tasks_params_routing_deadline
+        # Snapshot scoping indexes defined in migration 017_pkg_tasks_snapshot_scoping.sql:
+        #   idx_tasks_snapshot_id
+        #   idx_tasks_snapshot_status
     )
 
     # --- Helpers ---

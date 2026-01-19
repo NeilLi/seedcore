@@ -886,6 +886,205 @@ class PKGCortexDAO:
             res = await session.execute(sql, params)
             return [dict(r._mapping) for r in res]
 
+    async def promote_task_to_knowledge_graph(
+        self,
+        task_id: str,
+        actor: str,
+        preserve_multimodal: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Promotes a task from Tier 1 (Multimodal Event Memory) to Tier 2/3 (Knowledge Graph).
+        
+        This bridges the gap between short-term working perception and long-term structured knowledge.
+        The promotion process follows a "Read-Transform-Write" pattern:
+        
+        1. **Read**: Fetch the task and its multimodal embeddings
+        2. **Transform**: Ensure graph_node_map entry exists (creates BIGINT node_id)
+        3. **Embed**: Copy the 1024d multimodal vector to `graph_embeddings_1024` with label 'task.primary'
+        4. **Register**: Task now appears in `v_unified_cortex_memory` under Tier 2/3 (knowledge_base)
+        
+        Args:
+            task_id: UUID string of the task to promote
+            actor: Actor identifier (e.g., 'admin', 'mother') for audit trail
+            preserve_multimodal: If True, keeps the original multimodal embedding (default: True)
+                               If False, removes it after promotion (not recommended)
+        
+        Returns:
+            Dictionary with:
+            - ok: bool - Success/failure status
+            - msg: str - Human-readable message
+            - new_node_id: Optional[int] - The BIGINT node_id from graph_node_map
+            - task_id: str - The original task UUID
+        """
+        import uuid
+        import json
+        import time
+        
+        try:
+            # Validate task_id format
+            try:
+                task_uuid = uuid.UUID(task_id)
+            except ValueError:
+                return {
+                    "ok": False,
+                    "msg": f"Invalid task_id format: {task_id}",
+                    "new_node_id": None,
+                    "task_id": task_id
+                }
+            
+            async with self._sf() as session:
+                async with session.begin():  # Transaction
+                    # 1. Fetch task and verify it exists
+                    task_sql = text("""
+                        SELECT 
+                            t.id,
+                            t.type,
+                            t.description,
+                            t.params,
+                            t.status,
+                            t.created_at
+                        FROM tasks t
+                        WHERE t.id = CAST(:task_id AS uuid)
+                    """)
+                    
+                    task_result = await session.execute(task_sql, {"task_id": str(task_uuid)})
+                    task_row = task_result.mappings().first()
+                    
+                    if not task_row:
+                        return {
+                            "ok": False,
+                            "msg": f"Task {task_id} not found in tasks table",
+                            "new_node_id": None,
+                            "task_id": task_id
+                        }
+                    
+                    # 2. Ensure graph_node_map entry exists (creates BIGINT node_id)
+                    ensure_node_sql = text("SELECT ensure_task_node(CAST(:task_id AS uuid)) AS node_id")
+                    node_result = await session.execute(ensure_node_sql, {"task_id": str(task_uuid)})
+                    node_id = node_result.scalar_one()
+                    
+                    if not node_id:
+                        return {
+                            "ok": False,
+                            "msg": f"Failed to create graph_node_map entry for task {task_id}",
+                            "new_node_id": None,
+                            "task_id": task_id
+                        }
+                    
+                    # 3. Fetch source metadata first (for inclusion in props)
+                    metadata_sql = text("""
+                        SELECT source_modality, model_version
+                        FROM task_multimodal_embeddings
+                        WHERE task_id = CAST(:task_id AS uuid)
+                        LIMIT 1
+                    """)
+                    metadata_result = await session.execute(metadata_sql, {"task_id": str(task_uuid)})
+                    metadata_row = metadata_result.mappings().first()
+                    
+                    if not metadata_row:
+                        return {
+                            "ok": False,
+                            "msg": f"Task {task_id} has no multimodal embedding in task_multimodal_embeddings",
+                            "new_node_id": None,
+                            "task_id": task_id
+                        }
+                    
+                    source_modality = metadata_row.get("source_modality", "unknown")
+                    model_version = metadata_row.get("model_version", "unknown")
+                    
+                    # 4. Copy embedding from task_multimodal_embeddings to graph_embeddings_1024
+                    # Use SQL to directly copy the vector (more efficient than Python conversion)
+                    # Store promotion metadata in props JSONB
+                    props_json = json.dumps({
+                        "promoted_from": "multimodal",
+                        "source_modality": source_modality,
+                        "model_version": model_version,
+                        "promoted_by": actor,
+                        "promoted_at": time.time(),
+                        "memory_label": "approved_seed"
+                    })
+                    
+                    # Direct SQL copy: select from task_multimodal_embeddings and insert into graph_embeddings_1024
+                    # This handles vector type conversion automatically
+                    copy_embedding_sql = text("""
+                        INSERT INTO graph_embeddings_1024 (
+                            node_id, 
+                            label, 
+                            emb, 
+                            model,
+                            props
+                        )
+                        SELECT 
+                            :node_id,
+                            'task.primary',
+                            tme.emb,
+                            tme.model_version,
+                            CAST(:props AS jsonb)
+                        FROM task_multimodal_embeddings tme
+                        WHERE tme.task_id = CAST(:task_id AS uuid)
+                        LIMIT 1
+                        ON CONFLICT (node_id, label)
+                        DO UPDATE SET
+                            emb = EXCLUDED.emb,
+                            model = EXCLUDED.model,
+                            props = EXCLUDED.props,
+                            updated_at = NOW()
+                    """)
+                    
+                    result = await session.execute(
+                        copy_embedding_sql,
+                        {
+                            "node_id": node_id,
+                            "task_id": str(task_uuid),
+                            "props": props_json
+                        }
+                    )
+                    
+                    # Verify embedding was copied
+                    rows_affected = result.rowcount
+                    if rows_affected == 0:
+                        return {
+                            "ok": False,
+                            "msg": f"Failed to copy embedding for task {task_id}",
+                            "new_node_id": None,
+                            "task_id": task_id
+                        }
+                    
+                    # 5. Optional: Remove multimodal embedding if preserve_multimodal=False
+                    # (Not recommended - multimodal embeddings are useful for fast perception queries)
+                    if not preserve_multimodal:
+                        delete_multimodal_sql = text("""
+                            DELETE FROM task_multimodal_embeddings
+                            WHERE task_id = CAST(:task_id AS uuid)
+                        """)
+                        await session.execute(delete_multimodal_sql, {"task_id": str(task_uuid)})
+                        logger.info(f"Removed multimodal embedding for task {task_id} after promotion")
+                    
+                    # Transaction commits automatically via context manager
+                    logger.info(
+                        f"Successfully promoted task {task_id} to Knowledge Graph "
+                        f"(node_id={node_id}, actor={actor}, modality={source_modality}, model={model_version})"
+                    )
+                    
+                    return {
+                        "ok": True,
+                        "msg": f"Seed successfully promoted to Knowledge Graph (node_id={node_id})",
+                        "new_node_id": node_id,
+                        "task_id": task_id,
+                        "preserved_multimodal": preserve_multimodal
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Failed to promote task {task_id}: {e}", exc_info=True)
+            return {
+                "ok": False,
+                "msg": f"Promotion failed: {str(e)}",
+                "new_node_id": None,
+                "task_id": task_id,
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
+
 
 # =========================
 # Integrity Helper

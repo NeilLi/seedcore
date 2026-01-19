@@ -15,8 +15,21 @@ CREATE TABLE IF NOT EXISTS pkg_deployments (
 CREATE INDEX IF NOT EXISTS idx_pkg_deploy_snapshot ON pkg_deployments(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_pkg_deploy_target   ON pkg_deployments(target, region);
 -- Unique constraint prevents duplicate deployments for same target/region lane
-ALTER TABLE pkg_deployments
-ADD CONSTRAINT uq_pkg_deploy_lane UNIQUE (target, region);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        WHERE c.conname = 'uq_pkg_deploy_lane'
+          AND c.conrelid = 'pkg_deployments'::regclass
+    ) THEN
+        ALTER TABLE pkg_deployments
+        ADD CONSTRAINT uq_pkg_deploy_lane UNIQUE (target, region);
+        RAISE NOTICE '✅ Added unique constraint uq_pkg_deploy_lane';
+    ELSE
+        RAISE NOTICE 'ℹ️  Unique constraint uq_pkg_deploy_lane already exists';
+    END IF;
+END $$;
 
 -- ===== Temporal policy facts (e.g., temporary access) =====
 CREATE TABLE IF NOT EXISTS pkg_facts (

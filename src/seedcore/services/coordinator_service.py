@@ -511,6 +511,27 @@ class Coordinator:
             # C. Core Pipeline
             # 1. Persist Inbox (System of Record)
             correlation_id = task_dict.get("correlation_id") or uuid.uuid4().hex
+            
+            # Server-side snapshot_id enforcement: Ensure task has snapshot_id
+            # This is done at the Coordinator level (server-side) to enforce snapshot scoping
+            if task_dict.get("snapshot_id") is None:
+                try:
+                    async with self._session_factory() as session:
+                        result = await session.execute(text("SELECT pkg_active_snapshot_id('prod')"))
+                        active_snapshot_id = result.scalar_one_or_none()
+                        if active_snapshot_id is not None:
+                            task_dict["snapshot_id"] = active_snapshot_id
+                            logger.debug(
+                                "Coordinator: Set snapshot_id=%d for task %s",
+                                active_snapshot_id,
+                                task_dict.get("task_id") or task_dict.get("id")
+                            )
+                except Exception as e:
+                    logger.warning(
+                        "Coordinator: Could not get active snapshot_id: %s (non-fatal)",
+                        e
+                    )
+            
             if self.graph_task_repo and self._session_factory:
                 async with self._session_factory() as session:
                     async with session.begin():
