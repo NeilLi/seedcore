@@ -25,6 +25,10 @@ from .graph.task_embedding_worker import (
     task_embedding_worker,
 )
 from .api.routers.control_router import router as control_router
+from .api.routers.pkg_router import router as pkg_router
+from .ops.pkg import PKGClient, get_global_pkg_manager, initialize_global_pkg_manager
+from .ops.pkg.manager import PKGMode
+from .database import get_async_pg_session_factory, get_async_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +84,22 @@ async def lifespan(app: FastAPI):
     await _verify_graph_node_support(engine)
     await _verify_snapshot_support(engine)
     logger.info("Database initialized successfully")
+
+    # Initialize PKG Manager (non-fatal if unavailable)
+    try:
+        if not get_global_pkg_manager():
+            session_factory = get_async_pg_session_factory()
+            pkg_client = PKGClient(session_factory)
+            try:
+                redis_client = await get_async_redis_client()
+            except Exception:
+                redis_client = None
+            mode_str = os.getenv("PKG_MODE", PKGMode.ADVISORY.value).lower().strip()
+            mode = PKGMode.CONTROL if mode_str == PKGMode.CONTROL.value else PKGMode.ADVISORY
+            await initialize_global_pkg_manager(pkg_client, redis_client, mode=mode)
+            logger.info("PKG Manager initialized (mode=%s)", mode.value)
+    except Exception as e:
+        logger.warning("PKG Manager initialization failed (non-fatal): %s", e)
     
     # Task processing is handled by Dispatcher Ray actors (started by bootstrap scripts)
     # No local task worker needed
@@ -143,6 +163,7 @@ app.add_middleware(
 
 app.include_router(tasks_router, prefix="/api/v1", tags=["Tasks"])
 app.include_router(control_router, prefix="/api/v1", tags=["Control"])
+app.include_router(pkg_router, prefix="/api/v1", tags=["PKG"])
 
 @app.get("/health")
 async def health_check():

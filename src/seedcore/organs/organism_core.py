@@ -1775,7 +1775,8 @@ class OrganismCore:
         """
         Tries to fetch an agent handle. If missing, attempts JIT spawn.
         
-        Behavior Plugin System: Extracts behaviors from params.executor if present.
+        Behavior Plugin System: Extracts agent_class, behaviors, and behavior_config 
+        from params.executor if present (from pkg_subtask_types.default_params.executor).
         """
         # 1. Optimistic Fetch (Fast Path)
         handle = await organ.get_agent_handle.remote(agent_id)
@@ -1795,14 +1796,16 @@ class OrganismCore:
             or "GENERALIST"
         )
 
-        # Extract behaviors from executor hints (Behavior Plugin System)
+        # Extract executor config from executor hints (Behavior Plugin System + agent class)
         executor = params.get("executor", {})
         jit_behaviors = executor.get("behaviors") if isinstance(executor, dict) else None
         jit_behavior_config = executor.get("behavior_config") if isinstance(executor, dict) else None
+        jit_agent_class = executor.get("agent_class") if isinstance(executor, dict) else None
 
         # Spawn via Organ Actor
         spawn_success = await self._jit_spawn_agent(
             organ, organ_id, agent_id, spec_str,
+            agent_class_name=jit_agent_class,
             behaviors=jit_behaviors,
             behavior_config=jit_behavior_config,
         )
@@ -1819,6 +1822,7 @@ class OrganismCore:
         organ_id: str,
         agent_id: str,
         spec_str: str,
+        agent_class_name: Optional[str] = None,
         behaviors: Optional[List[str]] = None,
         behavior_config: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> bool:
@@ -1828,13 +1832,14 @@ class OrganismCore:
         This is called when an agent is requested but doesn't exist yet.
         It creates the agent on-demand with the specified specialization.
         
-        Behavior Plugin System: Accepts behaviors from executor hints in task params.
+        Behavior Plugin System: Accepts behaviors and agent_class from executor hints in task params.
         
         Args:
             organ: Ray actor handle for the Organ
             organ_id: ID of the organ
             agent_id: ID of the agent to spawn
             spec_str: Specialization string (e.g., "user_liaison", "GENERALIST")
+            agent_class_name: Optional agent class name from executor hints (defaults to "BaseAgent")
             behaviors: Optional list of behavior names from executor hints
             behavior_config: Optional behavior config dict from executor hints
         
@@ -1853,9 +1858,9 @@ class OrganismCore:
                 )
                 spec = Specialization.GENERALIST
 
-            # Get agent class name from specialization (default to BaseAgent)
-            # In the future, this could be looked up from a mapping
-            agent_class_name = "BaseAgent"
+            # Get agent class name from executor hints (graceful fallback to BaseAgent)
+            # This allows pkg_subtask_types to specify custom agent classes via executor.agent_class
+            agent_class_name = agent_class_name or "BaseAgent"
 
             # Get configuration-driven agent actor options
             agent_opts = self._get_agent_actor_options(agent_id)
@@ -1875,7 +1880,8 @@ class OrganismCore:
             self.agent_to_organ_map[agent_id] = organ_id
 
             self.logger.info(
-                f"[{organ_id}] ✅ JIT spawned agent {agent_id} with specialization {spec.value}"
+                f"[{organ_id}] ✅ JIT spawned agent {agent_id} with specialization {spec.value} "
+                f"(class: {agent_class_name})"
             )
             return True
 

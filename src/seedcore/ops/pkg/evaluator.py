@@ -871,6 +871,19 @@ class PKGEvaluator:
             return task_facts
 
         try:
+            # If caller didn't pass snapshot_id explicitly, allow passing it via task_facts.
+            # This enables snapshot-scoped governed-facts hydration from API payloads while
+            # keeping the PKGManager input contract (snapshot_id can live under context).
+            if snapshot_id is None and isinstance(task_facts, dict):
+                ctx = task_facts.get("context") if isinstance(task_facts.get("context"), dict) else {}
+                maybe_snapshot_id = (
+                    task_facts.get("snapshot_id")
+                    if isinstance(task_facts.get("snapshot_id"), int)
+                    else ctx.get("snapshot_id")
+                )
+                if isinstance(maybe_snapshot_id, int):
+                    snapshot_id = maybe_snapshot_id
+
             # Use current snapshot if not provided
             if snapshot_id is None:
                 snapshot = await self.pkg_client.get_active_snapshot()
@@ -965,7 +978,14 @@ class PKGEvaluator:
         hydrated_facts = await self.hydrate_governed_facts(hydrated_facts)
         
         # 3. EVALUATION: Run the actual engine (synchronous)
-        return self.evaluate(hydrated_facts)
+        output = self.evaluate(hydrated_facts)
+        # Preserve key hydrated bundles for audit/provenance consumers (API, logs).
+        # Backward compatible: adds optional keys without changing the core shape.
+        output["_hydrated"] = {
+            "governed_facts": hydrated_facts.get("governed_facts"),
+            "semantic_context": hydrated_facts.get("semantic_context"),
+        }
+        return output
 
     def evaluate(self, task_facts: Dict[str, Any]) -> Dict[str, Any]:
         """

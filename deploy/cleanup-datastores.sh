@@ -62,9 +62,9 @@ uninstall_release() {
 # ---------------------------
 # Cleanup Helm releases
 # ---------------------------
-uninstall_release "neo4j"
-uninstall_release "redis"
-uninstall_release "mysql"
+#uninstall_release "neo4j"
+#uninstall_release "redis"
+#uninstall_release "mysql"
 uninstall_release "postgresql"
 
 # ---------------------------

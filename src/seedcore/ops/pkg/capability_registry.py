@@ -345,15 +345,17 @@ class CapabilityRegistry:
         - If `executor.specialization` exists → sets `params.routing.required_specialization` (HARD)
         - If `routing.*` exists → merges into `params.routing.*` (emission params can override)
         - `executor.*` is preserved in `params.executor` for downstream JIT agent spawning
+          - `executor.agent_class` → agent class name (defaults to "BaseAgent" if not specified)
           - `executor.behaviors` → list of behavior names for Behavior Plugin System
           - `executor.behavior_config` → behavior-specific configuration dict
         - Specializations are validated against SpecializationManager (if available)
         
         Behavior Plugin System Integration:
+        - Agent class can be defined in `pkg_subtask_types.default_params.executor.agent_class`
         - Behaviors can be defined in `pkg_subtask_types.default_params.executor.behaviors`
         - Behavior configs can be defined in `pkg_subtask_types.default_params.executor.behavior_config`
         - These are preserved in `params.executor` for agent creation
-        - Agent creation code can use these to dynamically configure agent behaviors
+        - Agent creation code can use these to dynamically configure agent behaviors and class
         """
         st = dict(subtask or {})
         capability = st.get("type") or st.get("subtask_type") or st.get("capability")
@@ -436,10 +438,11 @@ class CapabilityRegistry:
         params["capability_params"] = merged
 
         # Preserve executor as first-class for JIT agent spawning / dynamic agent creation
-        # This includes behaviors and behavior_config for Behavior Plugin System
+        # This includes agent_class, behaviors, and behavior_config for Behavior Plugin System
         if isinstance(executor_hints, dict) and executor_hints:
             params["executor"] = dict(executor_hints)
             # Ensure behaviors and behavior_config are preserved if present
+            # (agent_class is automatically preserved via dict copy above)
             if "behaviors" in executor_hints:
                 params["executor"]["behaviors"] = executor_hints["behaviors"]
             if "behavior_config" in executor_hints:
