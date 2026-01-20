@@ -37,6 +37,7 @@ except ImportError:
 from .evaluator import PKGEvaluator
 from .client import PKGClient
 from .dao import PKGSnapshotData  # Assuming legacy DAO mapped to new models
+from .capability_registry import CapabilityRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,10 @@ class PKGManager:
         self._client = pkg_client  # Now used for both Snapshots AND Cortex queries
         self._redis_client = redis_client
         self._mode = mode  # P0: Control vs Advisory mode
+
+        # Capability registry (DNA -> executor hints)
+        # Refreshed on snapshot activation (startup + hot-swap).
+        self.capabilities = CapabilityRegistry(pkg_client)
         
         # P2: True LRU Cache using OrderedDict
         # OrderedDict maintains insertion order, we move to end on access
@@ -188,6 +193,17 @@ class PKGManager:
                         del self._evaluators[oldest_key]
                     else:
                         break  # Only active version remains
+
+            # 3. Refresh capability registry outside the swap lock (async I/O)
+            # This keeps snapshot activation fast and avoids blocking readers.
+            try:
+                await self.capabilities.refresh(snapshot.id)
+            except Exception as e:
+                logger.warning(
+                    "CapabilityRegistry refresh failed for snapshot_id=%s: %s",
+                    snapshot.id,
+                    e,
+                )
             
             duration = (time.perf_counter() - start) * 1000
             logger.info(f"Activated PKG {version} (src={source}, mode={self._mode.value}) with Cortex-support in {duration:.1f}ms")

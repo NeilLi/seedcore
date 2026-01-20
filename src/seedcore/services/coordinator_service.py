@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
 
 from fastapi import FastAPI, Request, Body  # pyright: ignore[reportMissingImports]
 from ray import serve  # pyright: ignore[reportMissingImports]
+from sqlalchemy import text  # pyright: ignore[reportMissingImports]
 
 # --- Internal Imports ---
 from ..logging_setup import ensure_serve_logger, setup_logging
@@ -1033,6 +1034,19 @@ class Coordinator:
                 or getattr(evaluator, "version", None)
             )
 
+            # ---- Capability enrichment (DNA registry -> executor hints) ----
+            # The PKG emits subtasks with `type=<pkg_subtask_types.name>`.
+            # We convert them into executable step tasks by:
+            # - looking up default_params in `pkg_subtask_types`
+            # - merging default_params with emission params (emission wins)
+            # - stamping params.capability / params.executor / params.routing (if provided)
+            #
+            # This keeps SeedCore core abstract: the mapping lives in DB JSON.
+            try:
+                cap_registry = getattr(pkg_mgr, "capabilities", None)
+            except Exception:
+                cap_registry = None
+
             # Extract routing hints from PKG output (Option A: adapt wrapper)
             # Strategy: Check top-level routing first, then extract from subtask params
             extracted_routing = {}
@@ -1084,9 +1098,14 @@ class Coordinator:
             steps = []
             for st in subtasks:
                 if isinstance(st, dict):
-                    # allow either {"task": {...}} or raw task dict
-                    if "task" in st and isinstance(st["task"], dict):
-                        step_task = st["task"]
+                    # Convert PKG subtask -> executable task dict.
+                    # If capabilities registry is available, use it; otherwise fall back
+                    # to passing the raw subtask through (legacy behavior).
+                    if cap_registry and hasattr(cap_registry, "build_step_task_from_subtask"):
+                        try:
+                            step_task = cap_registry.build_step_task_from_subtask(st)
+                        except Exception:
+                            step_task = st
                     else:
                         step_task = st
 
@@ -1095,6 +1114,16 @@ class Coordinator:
 
                     # Ensure task has params dict
                     task_params = step["task"].setdefault("params", {})
+
+                    # CRITICAL: Preserve params.executor from capability registry (for JIT agent spawning)
+                    # CapabilityRegistry.build_step_task_from_subtask() creates params.executor with:
+                    # - executor.specialization
+                    # - executor.behaviors (for Behavior Plugin System)
+                    # - executor.behavior_config (for Behavior Plugin System)
+                    # This must be preserved for OrganismCore._ensure_agent_handle() to extract behaviors
+                    step_executor = step_task.get("params", {}).get("executor")
+                    if isinstance(step_executor, dict) and step_executor:
+                        task_params["executor"] = dict(step_executor)  # Preserve executor hints
 
                     # Embed routing hints into step.task.params.routing
                     # Merge strategy: PKG-extracted routing takes precedence over subtask routing

@@ -73,6 +73,8 @@ def _sanitize_task_data_for_tool(task_data: Any) -> Dict[str, Any]:
 @ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
 class ConversationAgent(BaseAgent):
     """
+    DEPRECATED: Use BaseAgent with behaviors=["chat_history", "tool_auto_injection"] instead.
+    
     Stateful agent responsible for TaskPayload v2 conversational execution.
 
     Semantic Owner (not schema owner):
@@ -80,6 +82,13 @@ class ConversationAgent(BaseAgent):
     - Owns: params.chat.history (windowed context for CognitiveCore)
     - Owns: conversation_history (top-level ChatSignature compatibility)
     - Owns: Episodic memory buffer (agent-local only, respects cognitive flags)
+    
+    Migration: Replace with BaseAgent + behaviors:
+        class: "BaseAgent"
+        behaviors: ["chat_history", "tool_auto_injection"]
+        behavior_config:
+          chat_history: {limit: 50}
+          tool_auto_injection: {auto_add_general_query: true}
     """
 
     def __init__(

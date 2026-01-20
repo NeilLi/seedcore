@@ -2,6 +2,7 @@
 
 import time
 import logging
+import importlib.util
 from typing import Any, Dict, Optional, List, Protocol, runtime_checkable
 from dataclasses import dataclass
 
@@ -12,11 +13,8 @@ from .client import PKGClient
 logger = logging.getLogger(__name__)
 
 # --- Optional WASM Runtime Support ---
-_WASMTIME_AVAILABLE = False
-try:
-    import wasmtime  
-    _WASMTIME_AVAILABLE = True
-except ImportError:
+_WASMTIME_AVAILABLE = importlib.util.find_spec("wasmtime") is not None
+if not _WASMTIME_AVAILABLE:
     logger.warning("wasmtime not available - WASM engine will use fallback mode")
 
 
@@ -742,6 +740,9 @@ class PKGEvaluator:
         """
         self.version: str = snapshot.version  # [cite: 87]
         self.engine_type: str = snapshot.engine  # [cite: 88]
+        # Expose snapshot identity for downstream orchestration (capability discovery, audit)
+        self.snapshot_id: int = snapshot.id
+        self.snapshot = snapshot
         self.loaded_at: float = time.time()  # [cite: 89]
         self.pkg_client = pkg_client
         self.engine: Optional[PolicyEngine] = None

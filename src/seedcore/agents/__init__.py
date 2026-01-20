@@ -22,6 +22,20 @@ from .conversation_agent import ConversationAgent
 from .observer_agent import ObserverAgent
 from .utility_agent import UtilityAgent
 
+# Behavior Plugin System
+from .behaviors import (
+    AgentBehavior,
+    BehaviorRegistry,
+    create_behavior_registry,
+    ChatHistoryBehavior,
+    BackgroundLoopBehavior,
+    TaskFilterBehavior,
+    ToolRegistrationBehavior,
+    DedupBehavior,
+    SafetyCheckBehavior,
+    ToolAutoInjectionBehavior,
+)
+
 # Lifecycle management
 from .lifecycle import evaluate_lifecycle, LifecycleDecision
 
@@ -36,6 +50,18 @@ __all__ = [
     'ConversationAgent', 
     'ObserverAgent',
     'UtilityAgent',
+    
+    # Behavior Plugin System
+    'AgentBehavior',
+    'BehaviorRegistry',
+    'create_behavior_registry',
+    'ChatHistoryBehavior',
+    'BackgroundLoopBehavior',
+    'TaskFilterBehavior',
+    'ToolRegistrationBehavior',
+    'DedupBehavior',
+    'SafetyCheckBehavior',
+    'ToolAutoInjectionBehavior',
     
     # Lifecycle management
     'evaluate_lifecycle',

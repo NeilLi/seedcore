@@ -52,7 +52,14 @@ import ray  # type: ignore
 #  SeedCore Imports
 # ---------------------------------------------------------------------
 from seedcore.agents.roles import RoleProfile
-from seedcore.agents.roles.specialization import Specialization, RoleRegistry
+from seedcore.agents.roles.specialization import (
+    Specialization,
+    DynamicSpecialization,
+    SpecializationProtocol,
+    SpecializationManager,
+    get_specialization,
+    RoleRegistry,
+)
 from seedcore.agents.roles.skill_vector import SkillStoreProtocol
 from seedcore.agents.roles.generic_defaults import DEFAULT_ROLE_REGISTRY
 from seedcore.organs.tunnel_manager import TunnelManager
@@ -242,7 +249,8 @@ class OrganismCore:
 
         # Specialization → organ mapping (for registry API only, NOT for routing decisions)
         # This is maintained for get_specialization_map() registry API
-        self.specialization_to_organ: Dict[Specialization, str] = {}
+        # Supports both static Specialization enum and DynamicSpecialization
+        self.specialization_to_organ: Dict[SpecializationProtocol, str] = {}
 
         # String-based specialization → organ mapping (for router lookup)
         # Maps specialization name (string) to organ_id
@@ -912,36 +920,148 @@ class OrganismCore:
         """
         Extract all specializations from config and ensure they're registered in RoleRegistry.
         This implements Option A: Strict Ordering - all roles must be registered before agents are created.
+        
+        Supports both static Specialization enum and dynamic specializations.
+        
+        Integration with specializations.yaml:
+        - Loads specializations.yaml first (if exists) to register dynamic specializations with their role profiles
+        - Then processes organs.yaml to ensure all referenced specializations are registered
+        - Role profiles from specializations.yaml provide default_behaviors and behavior_config
+        - organs.yaml can override these defaults per-agent
         """
         logger.info("--- Registering all role profiles from config ---")
         
-        # Collect all unique specializations from config
-        specializations_needed: Set[Specialization] = set()
+        spec_manager = SpecializationManager.get_instance()
+        
+        # Step 1: Load specializations.yaml first (if exists) to register dynamic specializations
+        # This ensures role profiles with default_behaviors and behavior_config are available
+        specializations_config_path = os.getenv(
+            "SPECIALIZATIONS_CONFIG_PATH",
+            str(Path(self.config_path).parent / "specializations.yaml")
+        )
+        specializations_path = Path(specializations_config_path)
+        
+        if specializations_path.exists():
+            try:
+                loaded_count = spec_manager.load_from_config(specializations_path)
+                logger.info(
+                    f"✅ Loaded {loaded_count} dynamic specializations from {specializations_path.name}"
+                )
+                
+                # Register role profiles from specializations.yaml into RoleRegistry
+                # This ensures default_behaviors and behavior_config are available
+                # Get all dynamic specializations and their role profiles
+                dynamic_specs = spec_manager.list_dynamic()
+                registered_dynamic_count = 0
+                for dynamic_spec in dynamic_specs:
+                    profile = spec_manager.get_role_profile(dynamic_spec)
+                    if not profile:
+                        continue
+                    
+                    # Check if already registered (might have been registered from DEFAULT_ROLE_REGISTRY)
+                    existing = self.role_registry.get_safe(profile.name)
+                    if existing:
+                        # Merge behaviors if existing profile doesn't have them
+                        if not existing.default_behaviors and profile.default_behaviors:
+                            # Update existing profile with behaviors from specializations.yaml
+                            existing.default_behaviors = list(profile.default_behaviors)
+                            existing.behavior_config = dict(profile.behavior_config)
+                            logger.debug(
+                                f"  📝 Updated behaviors for {dynamic_spec.value} from specializations.yaml"
+                            )
+                    else:
+                        # Register new profile
+                        self.role_registry.register(profile)
+                        registered_dynamic_count += 1
+                        logger.debug(
+                            f"  ✅ Registered role profile for {dynamic_spec.value} from specializations.yaml "
+                            f"(behaviors={profile.default_behaviors})"
+                        )
+                
+                if registered_dynamic_count > 0:
+                    logger.info(
+                        f"✅ Registered {registered_dynamic_count} role profiles from specializations.yaml"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ Failed to load specializations.yaml from {specializations_path}: {e}. "
+                    "Continuing without dynamic specializations.",
+                    exc_info=True,
+                )
+        else:
+            logger.debug(
+                f"ℹ️ Specializations config not found at {specializations_path}. "
+                "Skipping dynamic specialization loading."
+            )
+        
+        # Step 2: Collect all unique specializations from organs.yaml config
+        specialization_strings: Set[str] = set()
         
         for cfg in self.organ_configs:
             agent_defs = cfg.get("agents", [])
             for block in agent_defs:
                 spec_str = block.get("specialization")
                 if spec_str:
-                    try:
-                        spec = Specialization[spec_str.upper()]
-                        specializations_needed.add(spec)
-                    except KeyError:
-                        logger.warning(
-                            f"⚠️ Unknown specialization '{spec_str}' in config, skipping"
-                        )
+                    specialization_strings.add(str(spec_str).strip())
         
-        # Register missing specializations with default profiles
+        # Step 3: Resolve specializations (static or dynamic)
+        specializations_needed: Set[SpecializationProtocol] = set()
+        
+        for spec_str in specialization_strings:
+            try:
+                # Use get_specialization() which handles both static and dynamic
+                spec = get_specialization(spec_str)
+                specializations_needed.add(spec)
+            except KeyError:
+                # Specialization not found - try to register as dynamic
+                try:
+                    logger.info(
+                        f"⚠️ Specialization '{spec_str}' not found, attempting to register as dynamic"
+                    )
+                    # Register as dynamic specialization (will be created if needed)
+                    spec = spec_manager.register_dynamic(
+                        value=spec_str,
+                        name=spec_str.replace("_", " ").title(),
+                        metadata={"source": "organ_config"},
+                    )
+                    specializations_needed.add(spec)
+                    logger.info(f"  ✅ Registered dynamic specialization '{spec_str}'")
+                except Exception as e:
+                    logger.warning(
+                        f"⚠️ Failed to register specialization '{spec_str}': {e}. Skipping."
+                    )
+        
+        # Step 4: Register missing specializations with default profiles
+        # Priority: 1) SpecializationManager (from specializations.yaml), 2) DEFAULT_ROLE_REGISTRY, 3) Minimal default
         registered_count = 0
         for spec in specializations_needed:
             # Check if already registered
             if self.role_registry.get_safe(spec) is None:
-                # Try to get from DEFAULT_ROLE_REGISTRY first (may have better defaults)
+                # Try to get from SpecializationManager first (may have been loaded from specializations.yaml)
+                spec_manager_profile = None
+                if spec_manager.is_registered(spec.value if hasattr(spec, 'value') else str(spec)):
+                    # Get the role profile from SpecializationManager if it exists
+                    try:
+                        spec_obj = get_specialization(spec.value if hasattr(spec, 'value') else str(spec))
+                        # Check if SpecializationManager has a role profile for this specialization
+                        # (This would have been set during load_from_config)
+                        # Note: SpecializationManager doesn't directly expose role profiles,
+                        # but they're registered in RoleRegistry when load_from_config is called
+                        # So we check DEFAULT_ROLE_REGISTRY next
+                        pass
+                    except Exception:
+                        pass
+                
+                # Try to get from DEFAULT_ROLE_REGISTRY (may have better defaults including behaviors)
                 default_profile = DEFAULT_ROLE_REGISTRY.get_safe(spec)
                 if default_profile:
                     # Use the default profile from DEFAULT_ROLE_REGISTRY
+                    # This includes default_behaviors and behavior_config if defined
                     self.role_registry.register(default_profile)
-                    logger.info(f"  ✅ Registered profile for {spec.value} from DEFAULT_ROLE_REGISTRY")
+                    logger.info(
+                        f"  ✅ Registered profile for {spec.value} from DEFAULT_ROLE_REGISTRY "
+                        f"(behaviors={default_profile.default_behaviors})"
+                    )
                 else:
                     # Create a minimal default RoleProfile for this specialization
                     profile = RoleProfile(
@@ -950,6 +1070,8 @@ class OrganismCore:
                         allowed_tools=set(),  # Empty defaults - can be customized later
                         routing_tags=set(),
                         safety_policies={},
+                        default_behaviors=[],  # Empty behaviors - can be customized via organs.yaml
+                        behavior_config={},  # Empty config - can be customized via organs.yaml
                     )
                     self.role_registry.register(profile)
                     logger.info(f"  ✅ Registered minimal default profile for {spec.value}")
@@ -1202,40 +1324,93 @@ class OrganismCore:
                 count = int(block.get("count", 1))
                 agent_class_name = block.get("class", "BaseAgent")
 
-                # 1. Resolve Specialization
+                # 1. Resolve Specialization (supports both static and dynamic)
                 try:
-                    spec = Specialization[spec_str.upper()]
+                    spec = get_specialization(spec_str)
                 except KeyError:
                     logger.error(
-                        f"❌ Invalid specialization '{spec_str}' in organ {organ_id}"
+                        f"❌ Invalid specialization '{spec_str}' in organ {organ_id}. "
+                        "Ensure it's registered in SpecializationManager."
                     )
                     continue
 
-                # 1a. Architectural Rule: USER_LIAISON → ConversationAgent (implicit)
-                # ConversationAgent is a runtime capability, not a specialization.
-                # Only USER_LIAISON agents should be ConversationAgents by default.
-                # This ensures proper ownership of params.chat and episodic conversation memory.
-                #
-                # Production semantics: Only USER_LIAISON owns params.chat and agent-tunnel
-                # interactions. YAML can override for debugging/experimentation, but this is
-                # discouraged in production.
-                if agent_class_name == "ConversationAgent" and spec != Specialization.USER_LIAISON:
-                    logger.warning(
-                        f"[OrganismCore] ConversationAgent used for non-USER_LIAISON specialization "
-                        f"({spec.value}) in {organ_id}. This is supported for development but "
-                        "discouraged in production. Only USER_LIAISON should own params.chat."
-                    )
+                # 1a. Behavior Plugin System Migration: Prefer BaseAgent + behaviors
+                # If behaviors are specified in config, use BaseAgent (even for USER_LIAISON)
+                # Legacy: Auto-assign ConversationAgent only if no behaviors specified
+                user_liaison_value = Specialization.USER_LIAISON.value
+                agent_behaviors = block.get("behaviors", [])
                 
-                if spec == Specialization.USER_LIAISON and agent_class_name == "BaseAgent":
-                    agent_class_name = "ConversationAgent"
-                    logger.info(
-                        f"[OrganismCore] Auto-assigning ConversationAgent to USER_LIAISON in {organ_id}"
+                # If behaviors are explicitly configured, use BaseAgent (migrated approach)
+                if agent_behaviors and agent_class_name == "BaseAgent":
+                    logger.debug(
+                        f"[OrganismCore] Using BaseAgent with behaviors for {spec.value} in {organ_id}"
+                    )
+                # Legacy: Auto-assign ConversationAgent for USER_LIAISON if no behaviors specified
+                elif spec.value == user_liaison_value and agent_class_name == "BaseAgent" and not agent_behaviors:
+                    # Check if RoleProfile has default behaviors
+                    role_profile = self.role_registry.get(spec)
+                    has_default_behaviors = (
+                        role_profile and 
+                        hasattr(role_profile, 'default_behaviors') and 
+                        role_profile.default_behaviors
+                    )
+                    
+                    if not has_default_behaviors:
+                        # No behaviors configured - use legacy ConversationAgent for backward compatibility
+                        agent_class_name = "ConversationAgent"
+                        logger.info(
+                            f"[OrganismCore] Auto-assigning ConversationAgent to USER_LIAISON in {organ_id} "
+                            f"(no behaviors specified, using legacy class)"
+                        )
+                    else:
+                        logger.debug(
+                            f"[OrganismCore] Using BaseAgent with RoleProfile default behaviors for USER_LIAISON in {organ_id}"
+                        )
+                
+                # Warn if legacy classes are used with behaviors (should use BaseAgent instead)
+                if agent_behaviors and agent_class_name != "BaseAgent":
+                    logger.warning(
+                        f"[OrganismCore] Agent class '{agent_class_name}' specified with behaviors. "
+                        f"Consider migrating to BaseAgent + behaviors. Behaviors will be ignored for legacy classes."
                     )
 
                 # 2. Update Routing Map (Last Write Wins)
                 spec_val = spec.value
                 self.organ_specs[spec_val] = organ_id
 
+                # 2.5. Extract behaviors from agent config (Behavior Plugin System)
+                # Merge defaults from RoleProfile with explicit overrides from organs.yaml
+                role_profile = self.role_registry.get_safe(spec)
+                if role_profile:
+                    # Start with RoleProfile defaults (from specializations.yaml or DEFAULT_ROLE_REGISTRY)
+                    agent_behaviors = list(role_profile.default_behaviors) if role_profile.default_behaviors else []
+                    agent_behavior_config = dict(role_profile.behavior_config) if role_profile.behavior_config else {}
+                    
+                    # Override with explicit values from organs.yaml (if provided)
+                    if "behaviors" in block:
+                        agent_behaviors = block.get("behaviors", [])
+                        logger.debug(
+                            f"[OrganismCore] Overriding behaviors for {spec.value} in {organ_id}: "
+                            f"{agent_behaviors}"
+                        )
+                    if "behavior_config" in block:
+                        # Merge behavior_config (organs.yaml overrides RoleProfile defaults)
+                        override_config = block.get("behavior_config", {})
+                        agent_behavior_config = role_profile.merge_behavior_config(override_config)
+                        logger.debug(
+                            f"[OrganismCore] Merged behavior_config for {spec.value} in {organ_id}: "
+                            f"{list(agent_behavior_config.keys())}"
+                        )
+                else:
+                    # No RoleProfile found - use explicit values from organs.yaml only
+                    agent_behaviors = block.get("behaviors", [])
+                    agent_behavior_config = block.get("behavior_config", {})
+                    if agent_behaviors or agent_behavior_config:
+                        logger.debug(
+                            f"[OrganismCore] Using explicit behaviors for {spec.value} in {organ_id} "
+                            f"(no RoleProfile defaults found)"
+                        )
+                
                 # 3. Schedule Agent Checks/Creation
                 for i in range(count):
                     agent_id = f"{organ_id}_{spec_val}_{i}".lower()
@@ -1248,6 +1423,8 @@ class OrganismCore:
                             organ_handle=organ_handle,
                             spec=spec,
                             agent_class_name=agent_class_name,
+                            behaviors=agent_behaviors,  # Pass behaviors from config
+                            behavior_config=agent_behavior_config,  # Pass behavior config
                         )
                     )
 
@@ -1274,8 +1451,10 @@ class OrganismCore:
         agent_id: str,
         organ_id: str,
         organ_handle: Any,
-        spec: Specialization,
+        spec: SpecializationProtocol,
         agent_class_name: str,
+        behaviors: Optional[List[str]] = None,
+        behavior_config: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> bool:
         """
         Helper: Ensures a specific agent exists.
@@ -1311,6 +1490,8 @@ class OrganismCore:
             specialization=spec,
             organ_id=organ_id,
             agent_class_name=agent_class_name,
+            behaviors=behaviors,  # Pass behaviors from config
+            behavior_config=behavior_config,  # Pass behavior config
             **agent_opts,  # Unpack: name, num_cpus, lifetime
         )
 
@@ -1593,6 +1774,8 @@ class OrganismCore:
     ) -> Optional[Any]:
         """
         Tries to fetch an agent handle. If missing, attempts JIT spawn.
+        
+        Behavior Plugin System: Extracts behaviors from params.executor if present.
         """
         # 1. Optimistic Fetch (Fast Path)
         handle = await organ.get_agent_handle.remote(agent_id)
@@ -1612,8 +1795,17 @@ class OrganismCore:
             or "GENERALIST"
         )
 
+        # Extract behaviors from executor hints (Behavior Plugin System)
+        executor = params.get("executor", {})
+        jit_behaviors = executor.get("behaviors") if isinstance(executor, dict) else None
+        jit_behavior_config = executor.get("behavior_config") if isinstance(executor, dict) else None
+
         # Spawn via Organ Actor
-        spawn_success = await self._jit_spawn_agent(organ, organ_id, agent_id, spec_str)
+        spawn_success = await self._jit_spawn_agent(
+            organ, organ_id, agent_id, spec_str,
+            behaviors=jit_behaviors,
+            behavior_config=jit_behavior_config,
+        )
 
         if spawn_success:
             # 3. Retry Fetch
@@ -1622,7 +1814,13 @@ class OrganismCore:
         return None
 
     async def _jit_spawn_agent(
-        self, organ: Any, organ_id: str, agent_id: str, spec_str: str
+        self,
+        organ: Any,
+        organ_id: str,
+        agent_id: str,
+        spec_str: str,
+        behaviors: Optional[List[str]] = None,
+        behavior_config: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> bool:
         """
         JIT (Just-In-Time) spawn an agent when it's missing during execution.
@@ -1630,32 +1828,30 @@ class OrganismCore:
         This is called when an agent is requested but doesn't exist yet.
         It creates the agent on-demand with the specified specialization.
         
+        Behavior Plugin System: Accepts behaviors from executor hints in task params.
+        
         Args:
             organ: Ray actor handle for the Organ
             organ_id: ID of the organ
             agent_id: ID of the agent to spawn
             spec_str: Specialization string (e.g., "user_liaison", "GENERALIST")
+            behaviors: Optional list of behavior names from executor hints
+            behavior_config: Optional behavior config dict from executor hints
         
         Returns:
             True if spawn succeeded, False otherwise
         """
         try:
-            # Normalize specialization string to Specialization enum
-            spec_str_upper = spec_str.upper()
+            # Resolve specialization (supports both static and dynamic)
             try:
-                # Try as enum name first (e.g., "USER_LIAISON")
-                spec = Specialization[spec_str_upper]
+                spec = get_specialization(spec_str)
             except KeyError:
-                try:
-                    # Try as enum value (e.g., "user_liaison")
-                    spec = Specialization(spec_str.lower())
-                except ValueError:
-                    # Fallback to GENERALIST if unknown specialization
-                    self.logger.warning(
-                        f"[{organ_id}] Unknown specialization '{spec_str}', "
-                        "defaulting to GENERALIST for JIT spawn"
-                    )
-                    spec = Specialization.GENERALIST
+                # Fallback to GENERALIST if unknown specialization
+                self.logger.warning(
+                    f"[{organ_id}] Unknown specialization '{spec_str}', "
+                    "defaulting to GENERALIST for JIT spawn"
+                )
+                spec = Specialization.GENERALIST
 
             # Get agent class name from specialization (default to BaseAgent)
             # In the future, this could be looked up from a mapping
@@ -1664,12 +1860,14 @@ class OrganismCore:
             # Get configuration-driven agent actor options
             agent_opts = self._get_agent_actor_options(agent_id)
 
-            # Spawn agent via Organ actor
+            # Spawn agent via Organ actor (with behaviors from executor hints)
             await organ.create_agent.remote(
                 agent_id=agent_id,
                 specialization=spec,
                 organ_id=organ_id,
                 agent_class_name=agent_class_name,
+                behaviors=behaviors,  # Pass behaviors from executor hints
+                behavior_config=behavior_config,  # Pass behavior config from executor hints
                 **agent_opts,
             )
 
@@ -1823,10 +2021,10 @@ class OrganismCore:
         Get specialization -> organ_id mapping.
 
         Returns:
-            Dict mapping specialization name -> organ_id
+            Dict mapping specialization value -> organ_id
         """
         return {
-            spec.name: organ_id
+            spec.value if hasattr(spec, 'value') else str(spec): organ_id
             for spec, organ_id in self.specialization_to_organ.items()
         }
 
@@ -2151,7 +2349,7 @@ class OrganismCore:
             Ray actor handle for the organ, or None if not found
         """
         try:
-            spec = Specialization[spec_name.upper()]
+            spec = get_specialization(spec_name)
         except KeyError:
             logger.error(f"[evolve] Invalid specialization: {spec_name}")
             return None
@@ -2188,7 +2386,7 @@ class OrganismCore:
             return {"success": False, "error": f"No organ found for {spec_name}"}
 
         try:
-            spec = Specialization[spec_name.upper()]
+            spec = get_specialization(spec_name)
         except KeyError:
             return {"success": False, "error": f"Invalid specialization: {spec_name}"}
 
@@ -2899,7 +3097,7 @@ class OrganismCore:
         # Respawn agents
         for agent_def in cfg.get("agents", []):
             try:
-                spec = Specialization[agent_def["specialization"].upper()]
+                spec = get_specialization(agent_def["specialization"])
             except KeyError:
                 logger.error(
                     f"Invalid specialization '{agent_def['specialization']}' in config for organ {organ_id}"

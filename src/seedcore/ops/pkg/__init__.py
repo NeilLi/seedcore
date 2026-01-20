@@ -37,6 +37,10 @@ from .client import (
     PKGClient,
     PKGSnapshotData,
 )
+from .capability_registry import (
+    CapabilityRegistry,
+    CapabilityDef,
+)
 from .dao import (
     PKGSnapshotsDAO,
     PKGDeploymentsDAO,
@@ -56,6 +60,9 @@ __all__ = [
     # Client (facade for database operations)
     "PKGClient",
     "PKGSnapshotData",
+    # Capabilities (DNA registry)
+    "CapabilityRegistry",
+    "CapabilityDef",
     # DAOs (modular data access)
     "PKGSnapshotsDAO",
     "PKGDeploymentsDAO",

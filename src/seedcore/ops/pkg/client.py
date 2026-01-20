@@ -152,6 +152,15 @@ class PKGClient:
     async def get_snapshot_by_version(self, version: str) -> Optional[PKGSnapshotData]:
         """Get a specific snapshot by its version string."""
         return await self.snapshots.get_snapshot_by_version(version)
+
+    async def get_subtask_types(self, snapshot_id: int) -> List[Dict[str, Any]]:
+        """
+        Return the "DNA registry" of subtask types for a given snapshot.
+
+        This is the canonical read-path for `pkg_subtask_types` and is intended to
+        power dynamic capability discovery / executor binding at runtime.
+        """
+        return await self.snapshots.list_subtask_types(snapshot_id)
     
     async def get_active_artifact(self, env: str = "prod") -> Optional[Dict[str, Any]]:
         """Get active artifact information using the view."""

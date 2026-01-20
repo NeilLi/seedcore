@@ -152,6 +152,55 @@ class PKGSnapshotsDAO:
 
             return await self._build_snapshot_data(snapshot_mapping, session)
 
+    async def list_subtask_types(self, snapshot_id: int) -> List[Dict[str, Any]]:
+        """
+        List subtask type definitions (the "DNA registry") for a snapshot.
+
+        Reads from `pkg_subtask_types` scoped by snapshot_id.
+
+        Returns:
+            List[Dict[str, Any]] where each entry contains:
+              - id: UUID (as string)
+              - snapshot_id: int
+              - name: str (subtask type name)
+              - default_params: dict (JSONB)
+              - created_at: timestamptz/str (driver dependent)
+        """
+        sql = text("""
+            SELECT
+                id,
+                snapshot_id,
+                name,
+                default_params,
+                created_at
+            FROM pkg_subtask_types
+            WHERE snapshot_id = :snapshot_id
+            ORDER BY name ASC
+        """)
+
+        async with self._sf() as session:
+            res = await session.execute(sql, {"snapshot_id": snapshot_id})
+            rows = await _maybe_await(res.fetchall())
+
+            out: List[Dict[str, Any]] = []
+            for row in rows or []:
+                mapping = await _row_mapping(row)
+                if not mapping:
+                    continue
+                # Normalize UUID to string for JSON safety
+                if mapping.get("id") is not None:
+                    mapping["id"] = str(mapping["id"])
+                # Ensure default_params is always a dict
+                dp = mapping.get("default_params")
+                if dp is None:
+                    mapping["default_params"] = {}
+                elif not isinstance(dp, dict):
+                    # Defensive: if driver returns JSON as string, keep raw and let caller handle.
+                    mapping["default_params"] = dp
+                out.append(mapping)
+
+            return out
+
     async def _build_snapshot_data(
         self, snapshot_row: Dict[str, Any], session: AsyncSession
     ) -> PKGSnapshotData:

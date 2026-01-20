@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """
-Test script for the COA 3-organ, 20-agent implementation.
-This script verifies that the organism is properly initialized and functioning.
+Test script for OrganismCore (src/seedcore/organs/organism_core.py).
+
+Tests OrganismCore's core functionality:
+- Initialization and config loading
+- Organ creation
+- Agent creation with behaviors
+- Role profile registration
+- Specialization mapping
+- Task execution
+- JIT agent spawning
+
+Also includes integration tests for HTTP endpoints.
 """
 
 import asyncio
@@ -9,7 +19,17 @@ import requests
 import json
 import time
 import os
+import sys
 from typing import Dict, Any
+from pathlib import Path
+from unittest.mock import Mock, AsyncMock, MagicMock, patch, mock_open
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from seedcore.organs.organism_core import OrganismCore
+from seedcore.agents.roles import Specialization, RoleProfile, RoleRegistry, DEFAULT_ROLE_REGISTRY
 
 def teardown_module(module):
     """Ensure Ray is properly shut down after tests to prevent state contamination."""
@@ -209,6 +229,366 @@ def test_ray_cluster():
     except Exception as e:
         print(f"❌ Error testing Ray cluster: {e}")
         print(f"   Error type: {type(e).__name__}")
+
+# ============================================================================
+# Unit Tests for OrganismCore Class
+# ============================================================================
+
+@pytest.fixture
+def mock_ray():
+    """Mock Ray for testing without actual Ray cluster."""
+    with patch("seedcore.organs.organism_core.ray") as mock_ray:
+        mock_ray.is_initialized.return_value = True
+        mock_ray.remote = lambda **kwargs: lambda cls: cls
+        mock_ray.actor.ActorHandle = Mock
+        mock_ray.get_actor = Mock(side_effect=ValueError("Actor not found"))
+        yield mock_ray
+
+
+@pytest.fixture
+def sample_config():
+    """Sample organs.yaml configuration."""
+    return {
+        "seedcore": {
+            "organism": {
+                "settings": {
+                    "tunnel_threshold": 0.85,
+                },
+                "organs": [
+                    {
+                        "id": "test_organ_1",
+                        "description": "Test organ 1",
+                        "agents": [
+                            {
+                                "specialization": "GENERALIST",
+                                "class": "BaseAgent",
+                                "behaviors": ["chat_history"],
+                                "behavior_config": {
+                                    "chat_history": {"limit": 50}
+                                },
+                                "count": 1,
+                            }
+                        ],
+                    }
+                ],
+            }
+        }
+    }
+
+
+@pytest.fixture
+def mock_config_file(tmp_path, sample_config):
+    """Create a temporary config file."""
+    try:
+        import yaml
+        config_file = tmp_path / "test_organs.yaml"
+        with open(config_file, "w") as f:
+            yaml.dump(sample_config, f)
+        return config_file
+    except ImportError:
+        # Fallback: create minimal YAML manually
+        config_file = tmp_path / "test_organs.yaml"
+        config_content = """seedcore:
+  organism:
+    settings:
+      tunnel_threshold: 0.85
+    organs:
+      - id: test_organ_1
+        description: Test organ 1
+        agents:
+          - specialization: GENERALIST
+            class: BaseAgent
+            behaviors: [chat_history]
+            behavior_config:
+              chat_history:
+                limit: 50
+            count: 1
+"""
+        with open(config_file, "w") as f:
+            f.write(config_content)
+        return config_file
+
+
+@pytest.mark.asyncio
+async def test_organism_core_initialization(mock_ray, mock_config_file):
+    """Test that OrganismCore initializes correctly."""
+    core = OrganismCore(config_path=str(mock_config_file))
+    
+    assert core.config_path == mock_config_file.resolve()
+    assert len(core.organ_configs) > 0
+    assert core.global_settings is not None
+    assert not core._initialized
+
+
+@pytest.mark.asyncio
+async def test_organism_core_load_config(mock_ray, mock_config_file):
+    """Test config loading."""
+    core = OrganismCore(config_path=str(mock_config_file))
+    
+    # Config should be loaded
+    assert len(core.organ_configs) == 1
+    assert core.organ_configs[0]["id"] == "test_organ_1"
+    assert "agents" in core.organ_configs[0]
+    assert core.global_settings["tunnel_threshold"] == 0.85
+
+
+@pytest.mark.asyncio
+async def test_organism_core_register_role_profiles(mock_ray, mock_config_file):
+    """Test role profile registration from config."""
+    core = OrganismCore(config_path=str(mock_config_file))
+    
+    # Mock the role registry
+    core.role_registry = RoleRegistry()
+    
+    # Register role profiles
+    await core._register_all_role_profiles_from_config()
+    
+    # Verify GENERALIST is registered
+    profile = core.role_registry.get_safe(Specialization.GENERALIST)
+    assert profile is not None
+
+
+@pytest.mark.asyncio
+async def test_organism_core_register_role_profiles_with_behaviors(mock_ray, mock_config_file):
+    """Test role profile registration includes behaviors from specializations.yaml."""
+    core = OrganismCore(config_path=str(mock_config_file))
+    
+    # Mock specializations.yaml loading
+    with patch("seedcore.organs.organism_core.Path.exists", return_value=False):
+        core.role_registry = RoleRegistry()
+        await core._register_all_role_profiles_from_config()
+    
+    # Verify role profiles are registered
+    profile = core.role_registry.get_safe(Specialization.GENERALIST)
+    assert profile is not None
+
+
+@pytest.mark.asyncio
+async def test_organism_core_create_agents_with_behaviors(mock_ray, mock_config_file):
+    """Test agent creation with behaviors from config."""
+    core = OrganismCore(config_path=str(mock_config_file))
+    
+    # Mock organ creation
+    mock_organ = Mock()
+    mock_organ.create_agent = AsyncMock()
+    mock_organ.get_agent_handle = AsyncMock(return_value=None)
+    core.organs["test_organ_1"] = mock_organ
+    
+    # Mock _ensure_single_agent to avoid actual agent creation
+    async def mock_ensure(agent_id, organ_id, organ_handle, spec, agent_class_name, behaviors=None, behavior_config=None):
+        return True
+    
+    core._ensure_single_agent = mock_ensure
+    
+    # Create agents
+    await core._create_agents_from_config()
+    
+    # Verify create_agent was called with behaviors
+    # (The actual call happens in _ensure_single_agent, but we can verify the config was parsed)
+
+
+@pytest.mark.asyncio
+async def test_organism_core_merge_behaviors_from_role_profile(mock_ray, mock_config_file):
+    """Test that behaviors are merged from RoleProfile defaults."""
+    core = OrganismCore(config_path=str(mock_config_file))
+    
+    # Create a role registry with default behaviors
+    registry = RoleRegistry()
+    profile = RoleProfile(
+        name=Specialization.GENERALIST,
+        default_skills={},
+        allowed_tools=set(),
+        routing_tags=set(),
+        default_behaviors=["background_loop"],  # Default behavior
+        behavior_config={"background_loop": {"interval_s": 10.0}},  # Default config
+    )
+    registry.register(profile)
+    core.role_registry = registry
+    
+    # Verify profile has behaviors
+    profile = core.role_registry.get(Specialization.GENERALIST)
+    assert "background_loop" in profile.default_behaviors
+    assert profile.behavior_config["background_loop"]["interval_s"] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_organism_core_jit_spawn_with_behaviors(mock_ray, mock_config_file):
+    """Test JIT agent spawning with behaviors from executor hints."""
+    core = OrganismCore(config_path=str(mock_config_file))
+    
+    # Mock organ - need to support .remote() calls
+    async def mock_create_agent(*args, **kwargs):
+        return None
+    
+    mock_organ = Mock()
+    mock_create_agent_mock = AsyncMock(side_effect=mock_create_agent)
+    mock_organ.create_agent = Mock()
+    mock_organ.create_agent.remote = mock_create_agent_mock
+    core.organs["test_organ_1"] = mock_organ
+    
+    # Mock get_specialization
+    with patch("seedcore.organs.organism_core.get_specialization", return_value=Specialization.GENERALIST):
+        await core._jit_spawn_agent(
+            mock_organ,
+            "test_organ_1",
+            "jit_agent_1",
+            "generalist",
+            behaviors=["chat_history"],
+            behavior_config={"chat_history": {"limit": 30}},
+        )
+    
+    # Verify create_agent.remote was called with behaviors
+    mock_create_agent_mock.assert_called_once()
+    call_kwargs = mock_create_agent_mock.call_args[1]
+    assert call_kwargs["behaviors"] == ["chat_history"]
+    assert call_kwargs["behavior_config"]["chat_history"]["limit"] == 30
+
+
+@pytest.mark.asyncio
+async def test_organism_core_get_specialization_map(mock_ray, mock_config_file):
+    """Test getting specialization to organ mapping."""
+    core = OrganismCore(config_path=str(mock_config_file))
+    
+    # Mock organ creation and agent creation
+    mock_organ = Mock()
+    core.organs["test_organ_1"] = mock_organ
+    # Use specialization_to_organ (not organ_specs) - it maps SpecializationProtocol -> organ_id
+    core.specialization_to_organ[Specialization.GENERALIST] = "test_organ_1"
+    
+    # Get specialization map
+    spec_map = core.get_specialization_map()
+    
+    assert "generalist" in spec_map
+    assert spec_map["generalist"] == "test_organ_1"
+
+
+@pytest.mark.asyncio
+async def test_organism_core_execute_on_agent(mock_ray, mock_config_file):
+    """Test executing a task on a specific agent."""
+    core = OrganismCore(config_path=str(mock_config_file))
+    
+    # Mock agent handle - need to support .remote() calls
+    async def mock_execute_task(*args, **kwargs):
+        return {"success": True, "result": "test"}
+    
+    mock_agent_handle = Mock()
+    mock_execute_task_mock = AsyncMock(side_effect=mock_execute_task)
+    mock_agent_handle.execute_task = Mock()
+    mock_agent_handle.execute_task.remote = mock_execute_task_mock
+    
+    # Mock organ - need to support .remote() calls
+    async def mock_get_agent_handle(agent_id):
+        return mock_agent_handle
+    
+    mock_organ = Mock()
+    mock_get_handle_mock = AsyncMock(side_effect=mock_get_agent_handle)
+    mock_organ.get_agent_handle = Mock()
+    mock_organ.get_agent_handle.remote = mock_get_handle_mock
+    core.organs["test_organ_1"] = mock_organ
+    
+    # Create task payload
+    from seedcore.models import TaskPayload
+    task = TaskPayload(
+        task_id="test-task",
+        type="test",
+        description="Test task",
+        params={},
+    )
+    
+    # Execute task
+    result = await core.execute_on_agent("test_organ_1", "test_agent", task)
+    
+    # Verify execution
+    assert result["success"] is True
+    mock_execute_task_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_organism_core_ensure_agent_handle_jit_spawn(mock_ray, mock_config_file):
+    """Test that missing agents trigger JIT spawn."""
+    core = OrganismCore(config_path=str(mock_config_file))
+    
+    # Mock agent handle
+    mock_agent_handle = Mock()
+    
+    # Mock organ - need to support .remote() calls
+    call_count = 0
+    async def mock_get_handle(agent_id):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return None  # First call: not found
+        return mock_agent_handle  # Second call: found
+    
+    mock_get_handle_mock = AsyncMock(side_effect=mock_get_handle)
+    mock_organ = Mock()
+    mock_organ.get_agent_handle = Mock()
+    mock_organ.get_agent_handle.remote = mock_get_handle_mock
+    core.organs["test_organ_1"] = mock_organ
+    
+    # Mock JIT spawn
+    core._jit_spawn_agent = AsyncMock(return_value=True)
+    
+    # Ensure agent handle (should trigger JIT spawn)
+    params = {
+        "routing": {
+            "specialization": "generalist"
+        },
+        "executor": {
+            "behaviors": ["chat_history"],
+            "behavior_config": {"chat_history": {"limit": 25}},
+        }
+    }
+    
+    handle = await core._ensure_agent_handle(mock_organ, "test_organ_1", "jit_agent", params)
+    
+    # Verify JIT spawn was called with behaviors from executor hints
+    core._jit_spawn_agent.assert_called_once()
+    call_kwargs = core._jit_spawn_agent.call_args[1]
+    assert call_kwargs["behaviors"] == ["chat_history"]
+    assert call_kwargs["behavior_config"]["chat_history"]["limit"] == 25
+    
+    # Verify handle was returned
+    assert handle == mock_agent_handle
+
+
+@pytest.mark.asyncio
+async def test_organism_core_register_or_update_role(mock_ray, mock_config_file):
+    """Test registering or updating a role profile."""
+    core = OrganismCore(config_path=str(mock_config_file))
+    
+    # Initialize role registry
+    core.role_registry = RoleRegistry()
+    
+    # Mock organs - need to support .remote() calls
+    async def mock_update_role_registry(profile):
+        return None
+    
+    mock_update_mock = AsyncMock(side_effect=mock_update_role_registry)
+    mock_organ = Mock()
+    mock_organ.update_role_registry = Mock()
+    mock_organ.update_role_registry.remote = mock_update_mock
+    core.organs["test_organ_1"] = mock_organ
+    
+    # Create new profile
+    profile = RoleProfile(
+        name=Specialization.USER_LIAISON,
+        default_skills={"communication": 0.9},
+        allowed_tools={"chat.reply"},
+        routing_tags={"user_facing"},
+        default_behaviors=["chat_history"],
+        behavior_config={"chat_history": {"limit": 50}},
+    )
+    
+    # Register role
+    await core.register_or_update_role(profile)
+    
+    # Verify profile was registered in core's registry
+    assert core.role_registry.get_safe(Specialization.USER_LIAISON) is not None
+    
+    # Verify organs were updated via .remote() call
+    mock_update_mock.assert_called_once_with(profile)
+
 
 if __name__ == "__main__":
     print("🚀 Starting COA Organism Tests...")

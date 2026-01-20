@@ -15,10 +15,8 @@ THIS ACTOR IS PASSIVE. It does not run its own loops for polling or routing.
 That logic is centralized in the OrganismCore and StateService.
 
 The Organ supports multiple agent types:
-- BaseAgent (default): Stateless, generic executor
-- PersistentAgent: Stateful wrapper with memory (Mw/Mlt) and checkpointing
-- ObserverAgent: Proactive cache warmer
-- UtilityLearningAgent: System observer and tuner
+- BaseAgent (default): Generic executor with Behavior Plugin System
+- UtilityAgent: System observer and tuner (specialized learning agent)
 """
 
 from __future__ import annotations
@@ -40,7 +38,11 @@ from seedcore.serve.ml_client import MLServiceClient
 from ..logging_setup import ensure_serve_logger, setup_logging
 
 # Runtime imports for things used in code
-from ..agents.roles.specialization import Specialization  # ← needed at runtime
+from ..agents.roles.specialization import (
+    Specialization,
+    SpecializationProtocol,
+    get_specialization,
+)  # ← needed at runtime
 
 # Type alias for readability (after ray import)
 AgentHandle = ray.actor.ActorHandle
@@ -84,7 +86,7 @@ def _resolve_classpath(agent_class_name: str, class_map: Dict[str, str]) -> str:
     Resolve agent class name to fully-qualified classpath.
 
     Accepts either:
-      - Short name: "ConversationAgent" -> uses class_map
+      - Short name: "BaseAgent" or "UtilityAgent" -> uses class_map
       - Full path: "seedcore.agents.foo.BarAgent" -> uses directly
 
     Args:
@@ -166,28 +168,6 @@ def _ensure_ray_actor_class(
     return ray.remote(**default_remote_kwargs)(cls)
 
 
-def _extra_init_kwargs_for(agent_class_name: str, organ: Any) -> Dict[str, Any]:
-    """
-    Central registry for class-specific init kwargs.
-
-    Add entries here instead of special-casing in create_agent.
-    This makes the factory extensible without modifying core logic.
-
-    Args:
-        agent_class_name: Short name of agent class (e.g., "ConversationAgent")
-        organ: Organ instance (for accessing organ-specific configs)
-
-    Returns:
-        Dict of extra kwargs to pass to agent __init__
-    """
-    if agent_class_name == "ConversationAgent":
-        return {
-            "mw_manager_organ_id": organ.organ_id,
-            "checkpoint_cfg": getattr(organ, "_checkpoint_cfg", None),
-        }
-    return {}
-
-
 class AgentIDFactory:
     """
     Factory for generating agent IDs based on organ_id and specialization.
@@ -201,7 +181,7 @@ class AgentIDFactory:
     register_agent() without changing their ID.
     """
 
-    def new(self, organ_id: str, spec: Specialization) -> str:
+    def new(self, organ_id: str, spec: SpecializationProtocol) -> str:
         """
         Generate a stable, unique agent ID.
 
@@ -211,7 +191,7 @@ class AgentIDFactory:
 
         Args:
             organ_id: ID of the organ this agent belongs to (at creation time)
-            spec: Agent specialization
+            spec: Agent specialization (static or dynamic)
 
         Returns:
             Generated agent ID string (format: agent_{organ_id}_{spec_safe}_{unique12})
@@ -223,7 +203,8 @@ class AgentIDFactory:
 
         # Normalize specialization value to be safe in Ray actor names
         # Replace potentially unsafe characters: / . - → _
-        spec_safe = spec.value.replace("/", "_").replace(".", "_").replace("-", "_")
+        spec_value = spec.value if hasattr(spec, 'value') else str(spec)
+        spec_safe = spec_value.replace("/", "_").replace(".", "_").replace("-", "_")
 
         return f"agent_{organ_id}_{spec_safe}_{unique_id}"
 
@@ -240,14 +221,12 @@ class Organ:
     """
 
     # Central Registry for Agent Class Resolution
+    # Legacy classes (ConversationAgent, ObserverAgent, OrchestrationAgent, EnvironmentIntelligenceAgent)
+    # have been removed - use BaseAgent + behaviors instead
     AGENT_CLASS_MAP = {
         "BaseAgent": "seedcore.agents.base.BaseAgent",
-        "ConversationAgent": "seedcore.agents.conversation_agent.ConversationAgent",
-        "ObserverAgent": "seedcore.agents.observer_agent.ObserverAgent",
         "UtilityAgent": "seedcore.agents.utility_agent.UtilityAgent",
         "UtilityLearningAgent": "seedcore.agents.utility_agent.UtilityAgent",  # Alias for UtilityAgent
-        "OrchestrationAgent": "seedcore.agents.orchestration_agent.OrchestrationAgent",
-        "EnvironmentIntelligenceAgent": "seedcore.agents.environment_agent.EnvironmentIntelligenceAgent",
     }
 
     def __init__(
@@ -501,10 +480,12 @@ class Organ:
     async def create_agent(
         self,
         agent_id: str,
-        specialization: "Specialization",
+        specialization: "SpecializationProtocol",
         organ_id: str,
         agent_class_name: str = "BaseAgent",
         session: Optional[Any] = None,
+        behaviors: Optional[List[str]] = None,
+        behavior_config: Optional[Dict[str, Dict[str, Any]]] = None,
         **agent_actor_options,
     ) -> None:
         """
@@ -570,8 +551,15 @@ class Organ:
                 "mcp_client_cfg": getattr(self, "_mcp_client_cfg", None),
             }
 
-            # 3. Optional per-class init kwargs (central registry)
-            agent_params.update(_extra_init_kwargs_for(agent_class_name, self))
+            # 3. Behavior Plugin System: Pass behaviors to agent
+            # Behaviors can come from:
+            # - organs.yaml agent definition (behaviors, behavior_config) - passed via create_agent()
+            # - RoleProfile.default_behaviors (handled in BaseAgent.__init__)
+            # - pkg_subtask_types.default_params.executor (via executor hints in task, handled during JIT spawning)
+            if behaviors is not None:
+                agent_params["behaviors"] = behaviors
+            if behavior_config is not None:
+                agent_params["behavior_config"] = behavior_config
 
             # 4. Spawn actor
             actor_opts = {
@@ -669,18 +657,14 @@ class Organ:
             "specialization_name", "user_liaison"
         )
 
-        # Try to resolve as value first (most common case with new factory)
+        # Resolve specialization (supports both static and dynamic)
         try:
-            spec = Specialization(spec_str)
-        except ValueError:
-            # Fallback: try as name (uppercase)
-            try:
-                spec = Specialization[spec_str.upper()]
-            except KeyError:
-                logger.warning(
-                    f"[{self.organ_id}] Unknown specialization '{spec_str}' for respawn, defaulting to USER_LIAISON"
-                )
-                spec = Specialization.USER_LIAISON
+            spec = get_specialization(spec_str)
+        except KeyError:
+            logger.warning(
+                f"[{self.organ_id}] Unknown specialization '{spec_str}' for respawn, defaulting to GENERALIST"
+            )
+            spec = Specialization.GENERALIST
 
         agent_class_name = info.get("class", "BaseAgent")  # Get the class
 
@@ -1021,7 +1005,7 @@ class Organ:
             )
             return False
 
-    def generate_agent_id(self, specialization: "Specialization") -> str:
+    def generate_agent_id(self, specialization: "SpecializationProtocol") -> str:
         """
         Generate a new agent ID using AgentIDFactory if available.
 
@@ -1030,7 +1014,7 @@ class Organ:
         use cases where Organ might need to generate IDs dynamically.
 
         Args:
-            specialization: Agent specialization
+            specialization: Agent specialization (static or dynamic)
 
         Returns:
             Generated agent ID string
@@ -1039,7 +1023,8 @@ class Organ:
             return self.agent_id_factory.new(self.organ_id, specialization)
         # Fallback: simple ID generation if factory not available
         unique_id = uuid.uuid4().hex[:12]
-        return f"agent_{self.organ_id}_{specialization.value}_{unique_id}"
+        spec_value = specialization.value if hasattr(specialization, 'value') else str(specialization)
+        return f"agent_{self.organ_id}_{spec_value}_{unique_id}"
 
     # ==========================================================
     # Routing (Called by OrganismCore/Router)

@@ -20,7 +20,15 @@ seedcore:
         description: "User dialog, mood inference, preference management."
         agents:
           - specialization: "USER_LIAISON"
-            class: "ConversationAgent"
+            class: "BaseAgent"  # Using Behavior Plugin System
+            behaviors: ["chat_history", "tool_auto_injection"]
+            behavior_config:
+              chat_history:
+                limit: 50
+              tool_auto_injection:
+                auto_add_general_query: true
+            # Legacy: ConversationAgent class still supported but deprecated
+            # class: "ConversationAgent"
             count: 1
           - specialization: "MOOD_INFERENCE_AGENT"
             count: 0
@@ -38,10 +46,30 @@ seedcore:
         description: "World modeling, predictions, anomalies, emergency detection."
         agents:
           - specialization: "ENVIRONMENT"
-            class: "EnvironmentIntelligenceAgent"
+            class: "BaseAgent"  # Using Behavior Plugin System
+            behaviors: ["background_loop", "task_filter"]
+            behavior_config:
+              background_loop:
+                interval_s: 10.0
+                method: "sense_environment"
+                max_errors: 3
+              task_filter:
+                allowed_types: ["env.tick", "environment.tick"]
+            # Legacy: EnvironmentIntelligenceAgent class still supported but deprecated
+            # class: "EnvironmentIntelligenceAgent"
             count: 1
           - specialization: "ANOMALY_DETECTOR"
-            class: "EnvironmentIntelligenceAgent"
+            class: "BaseAgent"  # Using Behavior Plugin System
+            behaviors: ["background_loop", "task_filter"]
+            behavior_config:
+              background_loop:
+                interval_s: 10.0
+                method: "sense_environment"
+                max_errors: 3
+              task_filter:
+                allowed_types: ["env.tick", "environment.tick"]
+            # Legacy: EnvironmentIntelligenceAgent class still supported but deprecated
+            # class: "EnvironmentIntelligenceAgent"
             count: 1
           - specialization: "FORECASTER"
             count: 0
@@ -57,7 +85,23 @@ seedcore:
         description: "Device control, robot task coordination, energy optimization."
         agents:
           - specialization: "DEVICE_ORCHESTRATOR"
-            class: "OrchestrationAgent"
+            class: "BaseAgent"  # Using Behavior Plugin System
+            behaviors: ["background_loop", "task_filter", "tool_registration", "dedup", "safety_check"]
+            behavior_config:
+              background_loop:
+                interval_s: 5.0
+                method: "control_tick"
+                max_errors: 5
+              task_filter:
+                allowed_types: ["orchestration.tick", "orchestration.enqueue_commands", "orchestration.device_command", "orchestration.robot_task", "orchestration.energy_optimize", "action"]
+              tool_registration:
+                tools: ["tuya.send_command", "robots.assign_task", "energy.optimize"]
+              dedup:
+                ttl_s: 60.0
+              safety_check:
+                enabled: true
+            # Legacy: OrchestrationAgent class still supported but deprecated
+            # class: "OrchestrationAgent"
             count: 1
           - specialization: "ROBOT_COORDINATOR"
             count: 0
@@ -134,7 +178,16 @@ seedcore:
         description: "Specialized agents for pre-development and experimentation."
         agents:
           - specialization: "OBSERVER"
-            class: "ObserverAgent"
+            class: "BaseAgent"  # Using Behavior Plugin System
+            behaviors: ["background_loop", "task_filter"]
+            behavior_config:
+              background_loop:
+                interval_s: 2.0
+                method: "_proactive_pass"
+              task_filter:
+                allowed_types: ["observer.proactive_cache", "observer.observe"]
+            # Legacy: ObserverAgent class still supported but deprecated
+            # class: "ObserverAgent"
             count: 1            
           - specialization: "UTILITY"
             class: "UtilityAgent"

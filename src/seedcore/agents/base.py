@@ -33,6 +33,9 @@ from seedcore.models import TaskPayload
 from seedcore.models.result_schema import make_envelope
 from .roles import (
     Specialization,
+    DynamicSpecialization,
+    SpecializationProtocol,
+    get_specialization,
     RoleProfile,
     RoleRegistry,
     DEFAULT_ROLE_REGISTRY,
@@ -45,6 +48,14 @@ from .roles import (
 )
 from .state import AgentState
 from .private_memory import AgentPrivateMemory, PeerEvent
+from .behaviors import (
+    BehaviorRegistry,
+    create_behavior_registry,
+    AgentBehavior,
+)
+from .behaviors.task_filter import TaskRejectedError
+from .behaviors.dedup import TaskDedupedError
+from .behaviors.safety_check import SafetyCheckFailedError
 
 if TYPE_CHECKING:
     import numpy as np
@@ -110,10 +121,14 @@ class BaseAgent:
         ml_client_cfg: Optional[Dict[str, Any]] = None,
         mcp_client_cfg: Optional[Dict[str, Any]] = None,
         # --- Identity & State ---
-        specialization: Specialization = Specialization.GENERALIST,
+        specialization: SpecializationProtocol = Specialization.GENERALIST,
         initial_capability: float = 0.5,
         initial_mem_util: float = 0.0,
         organ_id: Optional[str] = None,
+        # --- Behavior Plugin System ---
+        behaviors: Optional[List[str]] = None,  # List of behavior names
+        behavior_config: Optional[Dict[str, Dict[str, Any]]] = None,  # Behavior-specific configs
+        behavior_registry: Optional[BehaviorRegistry] = None,  # Custom registry (optional)
         # --- Legacy Parameters (Deprecated) ---
         tool_handler: Optional[Any] = None,
         role_registry: Optional[RoleRegistry] = None,
@@ -154,24 +169,51 @@ class BaseAgent:
         else:
             self._role_registry = role_registry or DEFAULT_ROLE_REGISTRY
 
-        # Normalize specialization: accept str | Specialization for serialization safety
+        # Normalize specialization: accept str | SpecializationProtocol for serialization safety
         # Factory passes strings to avoid Ray serialization issues with enums
+        # Supports both static Specialization enum and DynamicSpecialization
         if isinstance(specialization, str):
             try:
-                # Try to find by value first (most common case)
-                specialization = Specialization(specialization)
-            except ValueError:
-                # Fallback: try by name (uppercase)
-                try:
-                    specialization = Specialization[specialization.upper()]
-                except KeyError:
-                    logger.warning(
-                        f"Unknown specialization string '{specialization}', defaulting to GENERALIST"
-                    )
-                    specialization = Specialization.GENERALIST
+                # Use get_specialization() which handles both static and dynamic
+                specialization = get_specialization(specialization)
+            except KeyError:
+                logger.warning(
+                    f"Unknown specialization string '{specialization}', defaulting to GENERALIST"
+                )
+                specialization = Specialization.GENERALIST
 
         self.specialization = specialization
         self.role_profile = self._role_registry.get(self.specialization)
+
+        # 3.5. Behavior Plugin System Initialization
+        # Merge behaviors from: RoleProfile defaults + constructor args + role_profile behavior_config
+        role_profile_behaviors = list(self.role_profile.default_behaviors) if hasattr(self.role_profile, 'default_behaviors') else []
+        constructor_behaviors = behaviors or []
+        # Constructor behaviors override role profile defaults
+        final_behaviors = constructor_behaviors if constructor_behaviors else role_profile_behaviors
+        
+        # Merge behavior configs: role_profile defaults + constructor overrides
+        role_profile_config = self.role_profile.behavior_config.copy() if hasattr(self.role_profile, 'behavior_config') else {}
+        constructor_config = behavior_config or {}
+        # Merge configs (constructor overrides role_profile)
+        final_behavior_config = dict(role_profile_config)
+        for behavior_name, config in constructor_config.items():
+            if behavior_name in final_behavior_config:
+                # Merge nested configs
+                final_behavior_config[behavior_name] = {**final_behavior_config[behavior_name], **config}
+            else:
+                final_behavior_config[behavior_name] = dict(config)
+        
+        # Create behavior registry
+        self._behavior_registry = behavior_registry or create_behavior_registry()
+        
+        # Initialize behaviors (will be initialized asynchronously)
+        self._behaviors: List[AgentBehavior] = []
+        self._behaviors_initialized = False
+        self._behaviors_to_init = {
+            "names": final_behaviors,
+            "configs": final_behavior_config
+        }
 
         # 4. Tool Handling
         if tool_handler_shards:
@@ -223,11 +265,128 @@ class BaseAgent:
         # 7. Go Live
         self.lifecycle = "active"
         logger.debug(
-            "✅ BaseAgent %s (%s) online. org=%s",
+            "✅ BaseAgent %s (%s) online. org=%s, behaviors=%s",
             self.agent_id,
             self.specialization.value,
             self.organ_id,
+            self._behaviors_to_init["names"],
         )
+        
+        # 7.5. Initialize behaviors asynchronously (schedule for after init completes)
+        # We can't await here in __init__, so we'll initialize on first execute_task call
+        # or create an async initialization method
+
+    # ------------------------------------------------------------------
+    #  Behavior Plugin System
+    # ------------------------------------------------------------------
+    
+    async def _initialize_behaviors(self) -> None:
+        """
+        Initialize behaviors (lazy initialization on first execute_task call).
+        
+        This merges behaviors from:
+        1. RoleProfile.default_behaviors (specialization-level defaults)
+        2. Constructor behaviors parameter
+        3. Behavior configs from RoleProfile and constructor
+        """
+        if self._behaviors_initialized:
+            return
+
+        behavior_names = self._behaviors_to_init["names"]
+        behavior_configs = self._behaviors_to_init["configs"]
+
+        if not behavior_names:
+            logger.debug(f"[{self.agent_id}] No behaviors configured")
+            self._behaviors_initialized = True
+            return
+
+        # Create behavior instances
+        self._behaviors = self._behavior_registry.create_behaviors(
+            agent=self,
+            behavior_names=behavior_names,
+            behavior_configs=behavior_configs,
+        )
+
+        # Initialize each behavior
+        for behavior in self._behaviors:
+            try:
+                await behavior.initialize()
+            except Exception as e:
+                logger.error(
+                    f"[{self.agent_id}] Failed to initialize behavior "
+                    f"{behavior.__class__.__name__}: {e}",
+                    exc_info=True,
+                )
+
+        self._behaviors_initialized = True
+        logger.info(
+            f"[{self.agent_id}] ✅ Initialized {len(self._behaviors)} behaviors: "
+            f"{[b.__class__.__name__ for b in self._behaviors]}"
+        )
+
+    async def shutdown(self) -> None:
+        """
+        Shutdown agent and all behaviors.
+        
+        This method should be called when the agent is being destroyed.
+        """
+        logger.debug(f"[{self.agent_id}] Shutting down agent and behaviors...")
+        
+        # Shutdown all behaviors
+        for behavior in self._behaviors:
+            try:
+                await behavior.shutdown()
+            except Exception as e:
+                logger.warning(
+                    f"[{self.agent_id}] Error shutting down behavior "
+                    f"{behavior.__class__.__name__}: {e}",
+                    exc_info=True,
+                )
+        
+        self._behaviors.clear()
+        self.lifecycle = "shutdown"
+        logger.info(f"[{self.agent_id}] ✅ Agent shutdown complete")
+
+    # ------------------------------------------------------------------
+    #  Background Loop Methods (for BackgroundLoopBehavior)
+    # ------------------------------------------------------------------
+    # These methods are called by BackgroundLoopBehavior. They can be
+    # overridden in subclasses or extended via custom behaviors.
+    
+    async def sense_environment(self) -> Dict[str, Any]:
+        """
+        Stub method for environment sensing.
+        
+        Override in subclasses or extend via behaviors to implement
+        environment monitoring, anomaly detection, etc.
+        
+        Returns:
+            Dict with sensing results
+        """
+        logger.debug(f"[{self.agent_id}] sense_environment() called (stub implementation)")
+        return {"status": "stub", "agent_id": self.agent_id}
+    
+    async def control_tick(self) -> Dict[str, Any]:
+        """
+        Stub method for periodic control tick.
+        
+        Override in subclasses or extend via behaviors to implement
+        orchestration logic, device control, etc.
+        
+        Returns:
+            Dict with control results
+        """
+        logger.debug(f"[{self.agent_id}] control_tick() called (stub implementation)")
+        return {"status": "stub", "agent_id": self.agent_id}
+    
+    async def _proactive_pass(self) -> None:
+        """
+        Stub method for proactive cache warming or observation pass.
+        
+        Override in subclasses or extend via behaviors to implement
+        proactive caching, monitoring, etc.
+        """
+        logger.debug(f"[{self.agent_id}] _proactive_pass() called (stub implementation)")
 
     # ------------------------------------------------------------------
     #  Helpers: Logic Encapsulation
@@ -281,19 +440,23 @@ class BaseAgent:
             RoleProfile,
             RoleRegistry,
         )  # Local import to avoid circular deps
+        from .roles.specialization import get_specialization  # Import here to avoid circular deps
 
         registry = RoleRegistry()
 
         for spec_name, profile_data in snapshot.items():
             try:
-                # Convert string key back to Enum
-                spec = Specialization[spec_name.upper()]
+                # Resolve specialization (supports both static and dynamic)
+                spec = get_specialization(spec_name)
                 profile = RoleProfile(
                     name=spec,
                     default_skills=profile_data.get("default_skills", {}),
                     allowed_tools=set(profile_data.get("allowed_tools", [])),
                     routing_tags=set(profile_data.get("routing_tags", [])),
                     safety_policies=dict(profile_data.get("safety_policies", {})),
+                    # Behavior Plugin System support
+                    default_behaviors=list(profile_data.get("default_behaviors", [])),
+                    behavior_config=dict(profile_data.get("behavior_config", {})),
                 )
                 registry.register(profile)
             except Exception as e:
@@ -1113,6 +1276,11 @@ class BaseAgent:
         """
         Normalize inbound task payloads and orchestrate tool execution with RBAC.
         Compatible with TaskPayload v2 logic.
+        
+        Behavior Plugin System Integration:
+        - Behaviors are initialized on first execute_task call (lazy init)
+        - execute_task_pre hooks are called before execution (can modify task, reject, or dedup)
+        - execute_task_post hooks are called after execution (can modify result)
         """
         started_ts = self._utc_now_iso()
         started_monotonic = self._now_monotonic()
@@ -1121,8 +1289,59 @@ class BaseAgent:
             f"[{self.agent_id}] 📥 Task execution started (spec={getattr(self.specialization, 'value', self.specialization)})"
         )
 
-        # Coerce to V2 TaskView
-        tv = self._coerce_task_view(task)
+        # Initialize behaviors on first call (lazy init)
+        if not self._behaviors_initialized:
+            await self._initialize_behaviors()
+
+        # Convert task to dict for behavior hooks (preserve original for TaskView)
+        original_task = task
+        if isinstance(task, dict):
+            task_dict = dict(task)  # Make a copy for behavior modifications
+        else:
+            # Convert TaskPayload or other objects to dict
+            if hasattr(task, "model_dump"):
+                try:
+                    task_dict = task.model_dump(mode="json")
+                except Exception:
+                    task_dict = task.model_dump()
+            elif hasattr(task, "__dict__"):
+                task_dict = dict(task.__dict__)
+            else:
+                task_dict = {"task": task}
+
+        # --- Behavior Plugin System: Pre-execution hooks ---
+        try:
+            for behavior in self._behaviors:
+                if behavior.is_enabled():
+                    try:
+                        modified = await behavior.execute_task_pre(original_task, task_dict)
+                        if modified:
+                            task_dict = modified
+                            # Update original task if it's a dict
+                            if isinstance(original_task, dict):
+                                original_task.update(task_dict)
+                    except (TaskRejectedError, TaskDedupedError, SafetyCheckFailedError) as e:
+                        # Behavior rejected/deduped/failed safety check - return early
+                        if isinstance(e, TaskRejectedError):
+                            return e.rejection_result
+                        elif isinstance(e, TaskDedupedError):
+                            return e.dedup_result
+                        elif isinstance(e, SafetyCheckFailedError):
+                            return e.safety_result
+                    except Exception as e:
+                        logger.warning(
+                            f"[{self.agent_id}] Behavior {behavior.__class__.__name__} "
+                            f"execute_task_pre hook failed: {e}",
+                            exc_info=True,
+                        )
+        except Exception as e:
+            logger.error(
+                f"[{self.agent_id}] Error in behavior pre-execution hooks: {e}",
+                exc_info=True,
+            )
+
+        # Coerce to V2 TaskView (use original_task, which may have been modified by behaviors)
+        tv = self._coerce_task_view(original_task)
         logger.debug(
             f"[{self.agent_id}] TaskView coerced: task_id={tv.task_id}, type={getattr(task, 'type', 'unknown')}, "
             f"tools_count={len(tv.tools)}"
@@ -1443,9 +1662,44 @@ class BaseAgent:
                 "conversation_id": None,  # TaskView doesn't store this, but we preserve structure
             },
         }
+        
+        # Build result envelope
+        result = make_envelope(
+            task_id=tv.task_id,
+            success=success,
+            payload=payload_data,
+            error=None if success else f"{len(tool_errors)} tool error(s)",
+            error_type=None if success else "tool_execution_error",
+            retry=len(tool_errors) > 0,  # Retry if there were errors
+            decision_kind=None,
+            meta=meta_data,
+            path="agent",
+        )
+        
+        # --- Behavior Plugin System: Post-execution hooks ---
+        try:
+            for behavior in self._behaviors:
+                if behavior.is_enabled():
+                    try:
+                        modified = await behavior.execute_task_post(task, task_dict, result)
+                        if modified:
+                            result = modified
+                    except Exception as e:
+                        logger.warning(
+                            f"[{self.agent_id}] Behavior {behavior.__class__.__name__} "
+                            f"execute_task_post hook failed: {e}",
+                            exc_info=True,
+                        )
+        except Exception as e:
+            logger.error(
+                f"[{self.agent_id}] Error in behavior post-execution hooks: {e}",
+                exc_info=True,
+            )
+        
+        return result
 
-        # Return canonical envelope
-        return make_envelope(
+        # Build result envelope
+        result = make_envelope(
             task_id=tv.task_id,
             success=success,
             payload=payload_data,
@@ -1456,6 +1710,28 @@ class BaseAgent:
             meta=meta_data,
             path="agent",
         )
+        
+        # --- Behavior Plugin System: Post-execution hooks ---
+        try:
+            for behavior in self._behaviors:
+                if behavior.is_enabled():
+                    try:
+                        modified = await behavior.execute_task_post(task, task_dict, result)
+                        if modified:
+                            result = modified
+                    except Exception as e:
+                        logger.warning(
+                            f"[{self.agent_id}] Behavior {behavior.__class__.__name__} "
+                            f"execute_task_post hook failed: {e}",
+                            exc_info=True,
+                        )
+        except Exception as e:
+            logger.error(
+                f"[{self.agent_id}] Error in behavior post-execution hooks: {e}",
+                exc_info=True,
+            )
+        
+        return result
 
     def emit_signal(self, **signals: Any) -> Dict[str, Any]:
         """

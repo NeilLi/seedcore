@@ -1010,6 +1010,19 @@ def _prepare_step_task_payload(
     # Inherit parent params (shallow merge)
     parent_params = dict(parent_task.params or {})
 
+    # CRITICAL: Preserve params.executor from step_task (for JIT agent spawning)
+    # CapabilityRegistry.build_step_task_from_subtask() creates params.executor with:
+    # - executor.specialization
+    # - executor.behaviors (for Behavior Plugin System)
+    # - executor.behavior_config (for Behavior Plugin System)
+    # This must be preserved for OrganismCore._ensure_agent_handle() to extract behaviors
+    step_executor = params.get("executor")
+    if not step_executor:
+        # If step doesn't have executor, inherit from parent (fallback)
+        step_executor = parent_params.get("executor")
+    if isinstance(step_executor, dict) and step_executor:
+        params["executor"] = dict(step_executor)  # Preserve executor hints
+
     # Merge routing (child overrides)
     parent_routing = dict(parent_params.get("routing", {}) or {})
     child_routing = dict(params.get("routing", {}) or {})

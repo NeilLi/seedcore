@@ -47,7 +47,14 @@ def create_default_registry() -> RoleRegistry:
     registry.register(RoleProfile(
         name=Specialization.USER_LIAISON,
         default_skills={"dialogue": 0.95, "empathy": 0.9, "compliance": 0.95},
-        allowed_tools={"chat.reply", "user.profile.read"}
+        allowed_tools={"chat.reply", "user.profile.read"},
+        # Behavior Plugin System: Default behaviors for USER_LIAISON
+        # Can be overridden by organs.yaml or pkg_subtask_types.default_params
+        default_behaviors=["chat_history", "tool_auto_injection"],
+        behavior_config={
+            "chat_history": {"limit": 50},
+            "tool_auto_injection": {"auto_add_general_query": True}
+        }
     ))
     registry.register(RoleProfile(
         name=Specialization.MOOD_INFERENCE_AGENT,
@@ -67,12 +74,36 @@ def create_default_registry() -> RoleRegistry:
     registry.register(RoleProfile(
         name=Specialization.ENVIRONMENT,
         default_skills={"data_ingestion": 0.95, "state_tracking": 0.9},
-        allowed_tools={"sensors.read_all", "graph.write_state"}
+        allowed_tools={"sensors.read_all", "graph.write_state"},
+        # Behavior Plugin System: Default behaviors for ENVIRONMENT
+        default_behaviors=["background_loop", "task_filter"],
+        behavior_config={
+            "background_loop": {
+                "interval_s": 10.0,
+                "method": "sense_environment",
+                "max_errors": 3
+            },
+            "task_filter": {
+                "allowed_types": ["env.tick", "environment.tick"]
+            }
+        }
     ))
     registry.register(RoleProfile(
         name=Specialization.ANOMALY_DETECTOR,
         default_skills={"pattern_matching": 0.95, "threshold_monitoring": 0.9},
-        allowed_tools={"system.alert", "sensors.read_stream"}
+        allowed_tools={"system.alert", "sensors.read_stream"},
+        # Behavior Plugin System: Default behaviors for ANOMALY_DETECTOR
+        default_behaviors=["background_loop", "task_filter"],
+        behavior_config={
+            "background_loop": {
+                "interval_s": 10.0,
+                "method": "sense_environment",
+                "max_errors": 3
+            },
+            "task_filter": {
+                "allowed_types": ["env.tick", "environment.tick"]
+            }
+        }
     ))
     registry.register(RoleProfile(
         name=Specialization.SAFETY_MONITOR,
@@ -87,7 +118,31 @@ def create_default_registry() -> RoleRegistry:
     registry.register(RoleProfile(
         name=Specialization.DEVICE_ORCHESTRATOR,
         default_skills={"iot_protocol": 0.95, "device_control": 0.9},
-        allowed_tools={"iot.write", "iot.read"}
+        allowed_tools={"iot.write", "iot.read"},
+        # Behavior Plugin System: Default behaviors for DEVICE_ORCHESTRATOR
+        default_behaviors=["background_loop", "task_filter", "tool_registration", "dedup", "safety_check"],
+        behavior_config={
+            "background_loop": {
+                "interval_s": 5.0,
+                "method": "control_tick",
+                "max_errors": 5
+            },
+            "task_filter": {
+                "allowed_types": [
+                    "orchestration.tick",
+                    "orchestration.enqueue_commands",
+                    "orchestration.device_command",
+                    "orchestration.robot_task",
+                    "orchestration.energy_optimize",
+                    "action"
+                ]
+            },
+            "tool_registration": {
+                "tools": ["tuya.send_command", "robots.assign_task", "energy.optimize"]
+            },
+            "dedup": {"ttl_s": 60.0},
+            "safety_check": {"enabled": True}
+        }
     ))
     registry.register(RoleProfile(
         name=Specialization.ROBOT_COORDINATOR,
@@ -119,7 +174,32 @@ def create_default_registry() -> RoleRegistry:
     registry.register(RoleProfile(
         name=Specialization.GENERALIST,
         default_skills={"tool_usage": 0.8, "basic_reasoning": 0.6},
-        allowed_tools={"search.web", "memory.read", "utils.*"}
+        allowed_tools={"search.web", "memory.read", "utils.*"},
+        # Behavior Plugin System: GENERALIST has no default behaviors
+        # Behaviors can be added via config or pkg_subtask_types
+        default_behaviors=[],
+        behavior_config={}
+    ))
+    
+    # =============================================================
+    # 6. OBSERVER (CACHE WARMER)
+    # =============================================================
+    # Proactive cache warming agent
+    registry.register(RoleProfile(
+        name=Specialization.OBSERVER,
+        default_skills={"cache_management": 0.9, "pattern_detection": 0.8},
+        allowed_tools={"mw.topn", "cache.get", "cache.set", "ltm.query_by_id"},
+        # Behavior Plugin System: Default behaviors for OBSERVER
+        default_behaviors=["background_loop", "task_filter"],
+        behavior_config={
+            "background_loop": {
+                "interval_s": 2.0,
+                "method": "_proactive_pass"
+            },
+            "task_filter": {
+                "allowed_types": ["observer.proactive_cache", "observer.observe"]
+            }
+        }
     ))
 
     return registry

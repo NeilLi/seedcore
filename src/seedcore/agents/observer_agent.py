@@ -43,11 +43,23 @@ else:
 @ObserverAgentDecorator
 class ObserverAgent(BaseAgent):
     """
+    DEPRECATED: Use BaseAgent with behaviors=["background_loop", "task_filter"] instead.
+    
     Monitors working-memory miss patterns and proactively warms the cache
     with full records fetched from LTM.
 
     This agent is infra-facing (not guest-facing). It should be scheduled by
     maintenance flows or run in the background loop.
+    
+    Migration: Replace with BaseAgent + behaviors:
+        class: "BaseAgent"
+        behaviors: ["background_loop", "task_filter"]
+        behavior_config:
+          background_loop:
+            interval_s: 2.0
+            method: "_proactive_pass"
+          task_filter:
+            allowed_types: ["observer.proactive_cache", "observer.observe"]
     """
 
     def __init__(

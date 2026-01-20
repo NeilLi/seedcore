@@ -17,6 +17,11 @@ Exposed modules:
 
 from .specialization import (
     Specialization,
+    DynamicSpecialization,
+    SpecializationProtocol,
+    SpecializationManager,
+    get_specialization,
+    register_specialization,
     RoleProfile,
     RoleRegistry,
     AgentSpec,
@@ -54,6 +59,11 @@ from .routing import (
 __all__ = [
     # specialization
     "Specialization",
+    "DynamicSpecialization",
+    "SpecializationProtocol",
+    "SpecializationManager",
+    "get_specialization",
+    "register_specialization",
     "RoleProfile",
     "RoleRegistry",
     "AgentSpec",

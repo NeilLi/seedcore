@@ -51,6 +51,8 @@ class CommandResult:
 @ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
 class OrchestrationAgent(BaseAgent):
     """
+    DEPRECATED: Use BaseAgent with behaviors=["background_loop", "task_filter", "tool_registration", "dedup", "safety_check"] instead.
+    
     Infra-facing orchestrator for device & robot actions.
 
     Typical responsibilities:
@@ -60,6 +62,21 @@ class OrchestrationAgent(BaseAgent):
       - periodic control: energy optimization, health checks, backlog drain
 
     This agent MUST NOT handle guest-facing conversational tasks.
+    
+    Migration: Replace with BaseAgent + behaviors:
+        class: "BaseAgent"
+        behaviors: ["background_loop", "task_filter", "tool_registration", "dedup", "safety_check"]
+        behavior_config:
+          background_loop:
+            interval_s: 5.0
+            method: "control_tick"
+            max_errors: 5
+          task_filter:
+            allowed_types: ["orchestration.tick", "orchestration.enqueue_commands", ...]
+          tool_registration:
+            tools: ["tuya.send_command", "robots.assign_task", "energy.optimize"]
+          dedup: {ttl_s: 60.0}
+          safety_check: {enabled: true}
     """
 
     def __init__(

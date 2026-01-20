@@ -128,6 +128,19 @@ class RoleProfile:
     Used by Router to check if an agent has the default skills/tools required.
     
     Supports both static (Enum) and dynamic specializations.
+    
+    Behaviors define runtime capabilities that can be dynamically configured:
+    - chat_history: Manages conversation history ring buffer
+    - background_loop: Runs periodic background tasks
+    - task_filter: Filters tasks by type/pattern
+    - tool_registration: Registers tools dynamically
+    - dedup: Manages idempotency cache
+    - safety_check: Performs safety validation
+    
+    Behavior configs are merged from:
+    1. RoleProfile.default_behaviors (specialization-level defaults)
+    2. Agent config (organs.yaml or pkg_subtask_types)
+    3. Runtime overrides (executor.behavior_config)
     """
     name: Union[Specialization, DynamicSpecialization]
     default_skills: Dict[str, float] = field(default_factory=dict)
@@ -135,6 +148,9 @@ class RoleProfile:
     visibility_scopes: Set[str] = field(default_factory=set)
     routing_tags: Set[str] = field(default_factory=set)
     safety_policies: Dict[str, float] = field(default_factory=dict)
+    # Behavior Plugin System support
+    default_behaviors: List[str] = field(default_factory=list)  # e.g., ["chat_history", "background_loop"]
+    behavior_config: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # e.g., {"chat_history": {"limit": 50}}
 
     def materialize_skills(self, deltas: Optional[Dict[str, float]] = None) -> Dict[str, float]:
         """Combine default_skills with agent deltas, clamped to [0,1]."""
@@ -174,7 +190,31 @@ class RoleProfile:
             "mem_util": float(mem_util) if mem_util is not None else None,
             "routing_tags": sorted(self.routing_tags),
             "safety": self.safety_policies.copy(),
+            "behaviors": self.default_behaviors.copy(),
         }
+    
+    def get_behavior_config(self, behavior_name: str) -> Dict[str, Any]:
+        """Get configuration for a specific behavior."""
+        return self.behavior_config.get(behavior_name, {}).copy()
+    
+    def merge_behavior_config(self, override_config: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """
+        Merge behavior configs with overrides (override wins).
+        
+        Args:
+            override_config: Behavior configs to merge (e.g., from executor.behavior_config)
+            
+        Returns:
+            Merged behavior config dict
+        """
+        merged = dict(self.behavior_config)
+        for behavior_name, config in override_config.items():
+            if behavior_name in merged:
+                # Merge nested configs
+                merged[behavior_name] = {**merged[behavior_name], **config}
+            else:
+                merged[behavior_name] = dict(config)
+        return merged
 
 
 class RoleRegistry:
@@ -257,6 +297,8 @@ class RoleRegistry:
             p.name.value: {
                 "default_skills": p.default_skills,
                 "allowed_tools": sorted(p.allowed_tools),
+                "default_behaviors": p.default_behaviors,
+                "behavior_config": p.behavior_config,
             }
             for p in self._profiles.values()
         }
@@ -446,6 +488,7 @@ class SpecializationManager:
                 
                 # Create a RoleProfile with the actual dynamic specialization
                 # This ensures the profile.name matches the registered spec
+                # Preserve all fields including default_behaviors and behavior_config
                 profile = RoleProfile(
                     name=actual_spec,
                     default_skills=role_profile.default_skills,
@@ -453,6 +496,8 @@ class SpecializationManager:
                     visibility_scopes=role_profile.visibility_scopes,
                     routing_tags=role_profile.routing_tags,
                     safety_policies=role_profile.safety_policies,
+                    default_behaviors=list(role_profile.default_behaviors),
+                    behavior_config=dict(role_profile.behavior_config),
                 )
                 self._role_profiles[value_lower] = profile
         
@@ -511,6 +556,7 @@ class SpecializationManager:
         """List only dynamically registered specializations."""
         with self._lock:
             return list(self._dynamic_specs.values())
+    
     
     def load_from_config(self, config_path: Union[str, Path]) -> int:
         """
@@ -575,9 +621,12 @@ class SpecializationManager:
                         visibility_scopes=set(role_profile_data.get('visibility_scopes', [])),
                         routing_tags=set(role_profile_data.get('routing_tags', [])),
                         safety_policies=role_profile_data.get('safety_policies', {}),
+                        # Behavior Plugin System: Load default_behaviors and behavior_config from YAML
+                        default_behaviors=list(role_profile_data.get('default_behaviors', [])),
+                        behavior_config=dict(role_profile_data.get('behavior_config', {})),
                     )
                 
-                self.register_dynamic(
+                dynamic_spec =                 self.register_dynamic(
                     value=value,
                     name=spec_config.get('name'),
                     metadata=metadata,
@@ -637,19 +686,34 @@ class SpecializationManager:
         self._config_path = config_path
     
     def get_role_profile(self, spec: Union[Specialization, DynamicSpecialization, str]) -> Optional[RoleProfile]:
-        """Get role profile for a specialization."""
-        if isinstance(spec, str):
-            spec = self.get_safe(spec)
-            if not spec:
-                return None
+        """
+        Get role profile for a specialization (static or dynamic).
         
-        # Normalize to lowercase value for lookup
-        if hasattr(spec, 'value'):
-            value = spec.value.lower()
-        else:
-            value = str(spec).lower()
-        
-        return self._role_profiles.get(value)
+        Args:
+            spec: Specialization enum, DynamicSpecialization, or string value
+            
+        Returns:
+            RoleProfile if found, None otherwise
+        """
+        with self._lock:
+            if isinstance(spec, str):
+                spec = self.get_safe(spec)
+                if not spec:
+                    return None
+            
+            # Normalize to lowercase value for lookup
+            if hasattr(spec, 'value'):
+                value = spec.value.lower()
+            else:
+                value = str(spec).lower()
+            
+            # Check dynamic specializations (stored in _role_profiles)
+            if value in self._role_profiles:
+                return self._role_profiles[value]
+            
+            # Static specializations don't store profiles here
+            # Caller should check DEFAULT_ROLE_REGISTRY
+            return None
     
     def register_role_profile(self, profile: RoleProfile) -> None:
         """Register a role profile for a specialization."""

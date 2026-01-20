@@ -36,8 +36,21 @@ logger = ensure_serve_logger("seedcore.agents.environment_agent", level="DEBUG")
 @ray.remote(max_restarts=2, max_task_retries=0, max_concurrency=1)
 class EnvironmentIntelligenceAgent(BaseAgent):
     """
+    DEPRECATED: Use BaseAgent with behaviors=["background_loop", "task_filter"] instead.
+    
     Hardened agent for environment / world modeling / anomaly detection.
     Runs a self-loop and never handles guest-facing tasks.
+    
+    Migration: Replace with BaseAgent + behaviors:
+        class: "BaseAgent"
+        behaviors: ["background_loop", "task_filter"]
+        behavior_config:
+          background_loop:
+            interval_s: 10.0
+            method: "sense_environment"
+            max_errors: 3
+          task_filter:
+            allowed_types: ["env.tick", "environment.tick"]
     """
 
     def __init__(
