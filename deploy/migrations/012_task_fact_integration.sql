@@ -4,6 +4,7 @@
 BEGIN;
 
 -- 1) Helper: ensure a numeric node_id exists for a fact (UUID-keyed)
+-- Note: snapshot_id will be set by the application layer or migration 017 backfill
 CREATE OR REPLACE FUNCTION ensure_fact_node(p_fact_id UUID)
 RETURNS BIGINT AS $$
 DECLARE

@@ -239,6 +239,128 @@ class TestPKGClient:
         )
     
     @pytest.mark.asyncio
+    async def test_get_semantic_context(self, client):
+        """Test getting semantic context through facade."""
+        mock_context = [
+            {
+                'id': 'task-123',
+                'category': 'guest_request',
+                'content': 'Guest wants room service',
+                'memory_tier': 'TIER_1',
+                'similarity': 0.95
+            }
+        ]
+        
+        client.cortex.get_semantic_context = AsyncMock(return_value=mock_context)
+        
+        embedding = [0.1] * 1024
+        context = await client.get_semantic_context(
+            embedding=embedding,
+            limit=5,
+            min_similarity=0.8,
+            exclude_task_id='task-999'
+        )
+        
+        assert context == mock_context
+        client.cortex.get_semantic_context.assert_called_once_with(
+            embedding=embedding,
+            limit=5,
+            min_similarity=0.8,
+            exclude_task_id='task-999'
+        )
+    
+    @pytest.mark.asyncio
+    async def test_get_active_governed_facts(self, client):
+        """Test getting active governed facts through facade."""
+        mock_facts = [
+            {
+                'id': 'fact-uuid-1',
+                'namespace': 'default',
+                'subject': 'guest:Ben',
+                'predicate': 'hasTemporaryAccess',
+                'object_data': {'service': 'lounge'},
+                'pkg_rule_id': 'rule-001',
+                'snapshot_id': 1,
+                'valid_from': None,
+                'valid_to': None
+            }
+        ]
+        
+        client.cortex.get_active_governed_facts = AsyncMock(return_value=mock_facts)
+        
+        facts = await client.get_active_governed_facts(
+            snapshot_id=1,
+            namespace='default',
+            subject='guest:Ben',
+            limit=100
+        )
+        
+        assert facts == mock_facts
+        client.cortex.get_active_governed_facts.assert_called_once_with(
+            snapshot_id=1,
+            namespace='default',
+            subject='guest:Ben',
+            predicate=None,
+            limit=100
+        )
+    
+    @pytest.mark.asyncio
+    async def test_get_active_governed_facts_with_predicate(self, client):
+        """Test getting active governed facts with predicate filter."""
+        mock_facts = [
+            {
+                'id': 'fact-uuid-1',
+                'subject': 'guest:Ben',
+                'predicate': 'hasTemporaryAccess',
+                'object_data': {'service': 'lounge'}
+            }
+        ]
+        
+        client.cortex.get_active_governed_facts = AsyncMock(return_value=mock_facts)
+        
+        facts = await client.get_active_governed_facts(
+            snapshot_id=1,
+            namespace='default',
+            subject='guest:Ben',
+            predicate='hasTemporaryAccess',
+            limit=100
+        )
+        
+        assert facts == mock_facts
+        client.cortex.get_active_governed_facts.assert_called_once_with(
+            snapshot_id=1,
+            namespace='default',
+            subject='guest:Ben',
+            predicate='hasTemporaryAccess',
+            limit=100
+        )
+    
+    @pytest.mark.asyncio
+    async def test_promote_task_to_knowledge_graph(self, client):
+        """Test promoting task to knowledge graph through facade."""
+        mock_result = {
+            'ok': True,
+            'msg': 'Task promoted successfully',
+            'new_node_id': 12345,
+            'task_id': 'task-uuid-123'
+        }
+        
+        client.cortex.promote_task_to_knowledge_graph = AsyncMock(return_value=mock_result)
+        
+        result = await client.promote_task_to_knowledge_graph(
+            task_id='task-uuid-123',
+            actor='admin',
+            preserve_multimodal=True
+        )
+        
+        assert result == mock_result
+        client.cortex.promote_task_to_knowledge_graph.assert_called_once_with(
+            task_id='task-uuid-123',
+            actor='admin',
+            preserve_multimodal=True
+        )
+    
+    @pytest.mark.asyncio
     async def test_check_integrity(self, client):
         """Test checking integrity."""
         from seedcore.ops.pkg.dao import check_pkg_integrity

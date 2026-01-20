@@ -886,6 +886,109 @@ class PKGCortexDAO:
             res = await session.execute(sql, params)
             return [dict(r._mapping) for r in res]
 
+    async def get_active_governed_facts(
+        self,
+        snapshot_id: int,
+        namespace: Optional[str] = None,
+        subject: Optional[str] = None,
+        predicate: Optional[str] = None,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """
+        Query active PKG-governed facts for policy evaluation.
+        
+        Returns only facts that:
+        - Are PKG-governed (pkg_rule_id IS NOT NULL)
+        - Belong to the specified snapshot
+        - Are currently valid (within temporal validity window)
+        
+        Uses facts_current_truth view for efficient queries (latest fact per triple).
+        This enables policy feedback loops where rules can query facts emitted by previous evaluations.
+        
+        Args:
+            snapshot_id: PKG snapshot ID to filter facts
+            namespace: Optional namespace filter (defaults to 'default' if not provided)
+            subject: Optional subject filter - only return facts for this subject (for subject-specific hydration)
+            predicate: Optional predicate filter - only return facts with this predicate
+            limit: Maximum number of facts to return (default: 100)
+        
+        Returns:
+            List of fact dictionaries with keys: id, namespace, subject, predicate, object_data,
+            valid_from, valid_to, pkg_rule_id, snapshot_id, created_at
+        
+        Note:
+            Subject-specific hydration is recommended to keep task_facts payload small.
+            Only hydrate facts where subject matches the current task's subject.
+        """
+        # Build WHERE conditions
+        where_conditions = [
+            "f.snapshot_id = :snapshot_id",
+            "f.pkg_rule_id IS NOT NULL",  # Only PKG-governed facts
+            # Temporal validity: currently active facts
+            "(f.valid_from IS NULL OR f.valid_from <= NOW())",
+            "(f.valid_to IS NULL OR f.valid_to > NOW())"
+        ]
+        
+        params = {
+            "snapshot_id": snapshot_id,
+            "limit": limit
+        }
+        
+        # Add namespace filter (default to 'default' if not provided)
+        namespace_filter = namespace or "default"
+        where_conditions.append("f.namespace = :namespace")
+        params["namespace"] = namespace_filter
+        
+        # Add subject filter if provided (for subject-specific hydration)
+        if subject:
+            where_conditions.append("f.subject = :subject")
+            params["subject"] = subject
+        
+        # Add predicate filter if provided
+        if predicate:
+            where_conditions.append("f.predicate = :predicate")
+            params["predicate"] = predicate
+        
+        where_clause = " WHERE " + " AND ".join(where_conditions)
+        
+        # Query facts_current_truth view for efficient latest-fact-per-triple queries
+        # This view uses DISTINCT ON for optimal performance and already filters for
+        # active temporal facts (valid_to > now() AND valid_from <= now())
+        # Note: We still add temporal checks in WHERE clause for clarity, though redundant
+        sql = text(f"""
+            SELECT 
+                f.id,
+                f.namespace,
+                f.subject,
+                f.predicate,
+                f.object_data,
+                f.valid_from,
+                f.valid_to,
+                f.pkg_rule_id,
+                f.snapshot_id,
+                f.created_at,
+                f.created_by,
+                f.validation_status
+            FROM facts_current_truth f
+            {where_clause}
+            ORDER BY f.created_at DESC
+            LIMIT :limit
+        """)
+        
+        async with self._sf() as session:
+            res = await session.execute(sql, params)
+            facts = [dict(r._mapping) for r in res]
+            
+            logger.debug(
+                f"[PKG] Queried {len(facts)} active governed facts "
+                f"(snapshot={snapshot_id}, namespace={namespace_filter}"
+                + (f", subject={subject}" if subject else "")
+                + (f", predicate={predicate}" if predicate else "")
+                + ")"
+            )
+            
+            return facts
+
     async def promote_task_to_knowledge_graph(
         self,
         task_id: str,

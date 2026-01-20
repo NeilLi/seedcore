@@ -13,6 +13,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 MIGRATION_001="${SCRIPT_DIR}/migrations/001_create_tasks_table.sql"
 MIGRATION_002="${SCRIPT_DIR}/migrations/002_dual_dimension_embeddings.sql"
 MIGRATION_003="${SCRIPT_DIR}/migrations/003_task_multimodal_embeddings.sql"
+MIGRATION_004="${SCRIPT_DIR}/migrations/004_create_holons_table.sql"
 MIGRATION_007="${SCRIPT_DIR}/migrations/007_hgnn_core_topology.sql"
 # HGNN base graph schema (task layer)
 MIGRATION_008="${SCRIPT_DIR}/migrations/008_hgnn_agent_layer.sql"
@@ -33,7 +34,7 @@ MIGRATION_119="${SCRIPT_DIR}/migrations/119_task_router_telemetry.sql"
 
 # Check if all migration files exist
 for migration in \
-  "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_007" \
+  "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_007" \
   "$MIGRATION_008" "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" \
   "$MIGRATION_012" "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" \
   "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119"
@@ -107,34 +108,7 @@ echo "🔌 Ensuring extension 'vector' is installed..."
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
   psql -U "$DB_USER" -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
-# 4) Holons table (kept from your baseline)
-# NOTE: Holons use 768-dimensional embeddings (e.g., OpenAI text-embedding-3-large, CLIP-style)
-# This is INTENTIONAL and separate from graph embeddings:
-#   - graph_embeddings_128: 128-d for fast HGNN routing
-#   - graph_embeddings_1024: 1024-d for deep graph semantics
-#   - holons.embedding: 768-d for cognitive memory objects (not graph nodes)
-echo "🏗️  Creating holons table..."
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
-  psql -U "$DB_USER" -d "$DB_NAME" -c "
-CREATE TABLE IF NOT EXISTS holons (
-    id           SERIAL PRIMARY KEY,
-    uuid         UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
-    embedding    VECTOR(768),  -- 768-d for cognitive memory (separate from graph embeddings)
-    meta         JSONB,
-    created_at   TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS holons_embedding_idx ON holons USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX IF NOT EXISTS holons_uuid_idx ON holons (uuid);
-CREATE INDEX IF NOT EXISTS holons_created_at_idx ON holons (created_at);
-CREATE INDEX IF NOT EXISTS holons_meta_idx ON holons USING GIN (meta);
-INSERT INTO holons (uuid, embedding, meta) VALUES
-  (gen_random_uuid(), array_fill(0.1, ARRAY[768])::vector, '{\"type\": \"sample\", \"description\": \"Test holon 1\"}'),
-  (gen_random_uuid(), array_fill(0.2, ARRAY[768])::vector, '{\"type\": \"sample\", \"description\": \"Test holon 2\"}'),
-  (gen_random_uuid(), array_fill(0.3, ARRAY[768])::vector, '{\"type\": \"sample\", \"description\": \"Test holon 3\"}')
-ON CONFLICT (uuid) DO NOTHING;
-"
-
-# 5) Copy and run migrations in sequence
+# 4) Copy and run migrations in sequence
 echo "📂 Copying and running migrations..."
 
 # Migration 001
@@ -151,6 +125,11 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 echo "⚙️  Running migration 003: Task-level multimodal embeddings (voice, vision, sensor)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_003" "$POSTGRES_POD:/tmp/003_task_multimodal_embeddings.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/003_task_multimodal_embeddings.sql"
+
+# Migration 004
+echo "⚙️  Running migration 004: Create holons table (cognitive memory objects with 768-d embeddings)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_004" "$POSTGRES_POD:/tmp/004_create_holons_table.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/004_create_holons_table.sql"
 
 # Migration 007
 echo "⚙️  Running migration 007: HGNN base graph schema..."

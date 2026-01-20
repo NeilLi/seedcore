@@ -264,6 +264,81 @@ class TestNativeRuleEngine:
         
         assert matches is True
     
+    def test_native_engine_check_condition_fact(self, engine):
+        """Test checking FACT condition with governed facts."""
+        condition = {
+            'condition_type': 'FACT',
+            'condition_key': 'guest:Ben',
+            'predicate': 'hasTemporaryAccess',
+            'operator': 'EXISTS',
+            'value': None
+        }
+        
+        context = {
+            'governed_facts': [
+                {
+                    'subject': 'guest:Ben',
+                    'predicate': 'hasTemporaryAccess',
+                    'object_data': {'service': 'lounge'},
+                    'pkg_rule_id': 'rule-001'
+                }
+            ]
+        }
+        
+        matches = engine._check_condition(condition, context, condition_type='FACT')
+        
+        assert matches is True
+    
+    def test_native_engine_check_condition_fact_not_exists(self, engine):
+        """Test checking FACT condition when fact does not exist."""
+        condition = {
+            'condition_type': 'FACT',
+            'condition_key': 'guest:Ben',
+            'predicate': 'hasTemporaryAccess',
+            'operator': 'EXISTS',
+            'value': None
+        }
+        
+        context = {
+            'governed_facts': [
+                {
+                    'subject': 'guest:Alice',
+                    'predicate': 'hasTemporaryAccess',
+                    'object_data': {'service': 'lounge'}
+                }
+            ]
+        }
+        
+        matches = engine._check_condition(condition, context, condition_type='FACT')
+        
+        assert matches is False
+    
+    def test_native_engine_check_condition_fact_value_comparison(self, engine):
+        """Test checking FACT condition with value comparison."""
+        condition = {
+            'condition_type': 'FACT',
+            'condition_key': 'guest:Ben',
+            'predicate': 'hasTemporaryAccess',
+            'operator': '=',
+            'value': 'lounge'
+        }
+        
+        context = {
+            'governed_facts': [
+                {
+                    'subject': 'guest:Ben',
+                    'predicate': 'hasTemporaryAccess',
+                    'object_data': {'service': 'lounge'},
+                    'pkg_rule_id': 'rule-001'
+                }
+            ]
+        }
+        
+        matches = engine._check_condition(condition, context, condition_type='FACT')
+        
+        # Should match if 'lounge' is in object_data values
+        assert matches is True
+    
     def test_native_engine_evaluate_operator(self, engine):
         """Test operator evaluation."""
         assert engine._evaluate_operator(5, '>', 3) is True
@@ -472,6 +547,170 @@ class TestPKGEvaluator:
         
         with pytest.raises(RuntimeError, match="engine not initialized"):
             evaluator.evaluate({})
+    
+    @pytest.mark.asyncio
+    async def test_pkg_evaluator_hydrate_governed_facts(self, native_snapshot):
+        """Test hydrating governed facts."""
+        from seedcore.ops.pkg.client import PKGClient
+        
+        mock_client = AsyncMock()
+        mock_snapshot = PKGSnapshotData(
+            id=1,
+            version='rules@1.0.0',
+            engine='native',
+            wasm_artifact=None,
+            checksum='abc',
+            rules=[]
+        )
+        mock_client.get_active_snapshot = AsyncMock(return_value=mock_snapshot)
+        mock_client.get_active_governed_facts = AsyncMock(return_value=[
+            {
+                'id': 'fact-1',
+                'subject': 'guest:Ben',
+                'predicate': 'hasTemporaryAccess',
+                'object_data': {'service': 'lounge'},
+                'pkg_rule_id': 'rule-001',
+                'snapshot_id': 1
+            }
+        ])
+        
+        evaluator = PKGEvaluator(native_snapshot, pkg_client=mock_client)
+        
+        task_facts = {
+            'tags': ['vip'],
+            'signals': {},
+            'context': {'subject': 'guest:Ben', 'namespace': 'default'}
+        }
+        
+        hydrated = await evaluator.hydrate_governed_facts(task_facts)
+        
+        assert 'governed_facts' in hydrated
+        assert len(hydrated['governed_facts']) == 1
+        assert 'governed_facts_by_subject' in hydrated
+        assert 'guest:Ben' in hydrated['governed_facts_by_subject']
+        assert 'governed_predicates' in hydrated
+        assert 'hasTemporaryAccess' in hydrated['governed_predicates']
+        mock_client.get_active_governed_facts.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_pkg_evaluator_hydrate_governed_facts_no_client(self, native_snapshot):
+        """Test hydrating governed facts when no client available."""
+        evaluator = PKGEvaluator(native_snapshot, pkg_client=None)
+        
+        task_facts = {'tags': ['vip'], 'signals': {}, 'context': {}}
+        hydrated = await evaluator.hydrate_governed_facts(task_facts)
+        
+        # Should return unchanged when no client
+        assert hydrated == task_facts
+        assert 'governed_facts' not in hydrated
+    
+    @pytest.mark.asyncio
+    async def test_pkg_evaluator_hydrate_governed_facts_no_snapshot(self, native_snapshot):
+        """Test hydrating governed facts when no active snapshot."""
+        from seedcore.ops.pkg.client import PKGClient
+        
+        mock_client = AsyncMock()
+        mock_client.get_active_snapshot = AsyncMock(return_value=None)
+        
+        evaluator = PKGEvaluator(native_snapshot, pkg_client=mock_client)
+        
+        task_facts = {'tags': ['vip'], 'signals': {}, 'context': {}}
+        hydrated = await evaluator.hydrate_governed_facts(task_facts)
+        
+        # Should return unchanged when no snapshot
+        assert hydrated == task_facts
+        assert 'governed_facts' not in hydrated
+    
+    @pytest.mark.asyncio
+    async def test_pkg_evaluator_evaluate_async_with_hydration(self, native_snapshot):
+        """Test evaluate_async with full hydration (semantic + governed facts)."""
+        from seedcore.ops.pkg.client import PKGClient
+        
+        mock_client = AsyncMock()
+        mock_snapshot = PKGSnapshotData(
+            id=1,
+            version='rules@1.0.0',
+            engine='native',
+            wasm_artifact=None,
+            checksum='abc',
+            rules=[]
+        )
+        mock_client.get_active_snapshot = AsyncMock(return_value=mock_snapshot)
+        mock_client.get_semantic_context = AsyncMock(return_value=[
+            {'id': 'task-1', 'category': 'guest_request', 'similarity': 0.9}
+        ])
+        mock_client.get_active_governed_facts = AsyncMock(return_value=[
+            {
+                'id': 'fact-1',
+                'subject': 'guest:Ben',
+                'predicate': 'hasTemporaryAccess',
+                'object_data': {'service': 'lounge'},
+                'pkg_rule_id': 'rule-001',
+                'snapshot_id': 1
+            }
+        ])
+        
+        evaluator = PKGEvaluator(native_snapshot, pkg_client=mock_client)
+        
+        task_facts = {
+            'tags': ['vip'],
+            'signals': {},
+            'context': {'subject': 'guest:Ben', 'namespace': 'default'}
+        }
+        embedding = [0.1] * 1024
+        
+        result = await evaluator.evaluate_async(task_facts, embedding=embedding)
+        
+        assert isinstance(result, dict)
+        assert 'subtasks' in result
+        assert 'snapshot' in result
+        # Verify hydration was called
+        mock_client.get_semantic_context.assert_called_once()
+        mock_client.get_active_governed_facts.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_pkg_evaluator_evaluate_async_without_embedding(self, native_snapshot):
+        """Test evaluate_async without embedding (should still hydrate governed facts)."""
+        from seedcore.ops.pkg.client import PKGClient
+        
+        mock_client = AsyncMock()
+        mock_snapshot = PKGSnapshotData(
+            id=1,
+            version='rules@1.0.0',
+            engine='native',
+            wasm_artifact=None,
+            checksum='abc',
+            rules=[]
+        )
+        mock_client.get_active_snapshot = AsyncMock(return_value=mock_snapshot)
+        mock_client.get_active_governed_facts = AsyncMock(return_value=[
+            {
+                'id': 'fact-1',
+                'subject': 'guest:Ben',
+                'predicate': 'hasTemporaryAccess',
+                'object_data': {'service': 'lounge'},
+                'pkg_rule_id': 'rule-001',
+                'snapshot_id': 1
+            }
+        ])
+        
+        evaluator = PKGEvaluator(native_snapshot, pkg_client=mock_client)
+        
+        task_facts = {
+            'tags': ['vip'],
+            'signals': {},
+            'context': {'subject': 'guest:Ben', 'namespace': 'default'}
+        }
+        
+        result = await evaluator.evaluate_async(task_facts, embedding=None)
+        
+        assert isinstance(result, dict)
+        assert 'subtasks' in result
+        assert 'snapshot' in result
+        # Semantic hydration should NOT be called (no embedding)
+        mock_client.get_semantic_context.assert_not_called()
+        # Governed facts hydration SHOULD be called
+        mock_client.get_active_governed_facts.assert_called_once()
 
 
 class TestEngineRegistry:

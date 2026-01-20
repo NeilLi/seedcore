@@ -12,7 +12,6 @@ Services:
 
 from .eventizer_service import EventizerService
 from .fact_service import FactManagerService
-from seedcore.ops.eventizer.fact_dao import FactDAO
 
 # Optional import - eventizer_features may not exist in all deployments
 try:
@@ -20,7 +19,6 @@ try:
     __all__ = [
         "EventizerService",
         "FactManagerService",
-        "FactDAO",
         "features_from_payload",
     ]
 except ImportError:
@@ -28,6 +26,5 @@ except ImportError:
     __all__ = [
         "EventizerService",
         "FactManagerService",
-        "FactDAO",
     ]
 

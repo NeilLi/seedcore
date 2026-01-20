@@ -82,6 +82,40 @@ class PKGClient:
             exclude_task_id=exclude_task_id
         )
 
+    async def get_active_governed_facts(
+        self,
+        snapshot_id: int,
+        namespace: Optional[str] = None,
+        subject: Optional[str] = None,
+        predicate: Optional[str] = None,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """
+        Get active PKG-governed facts for policy evaluation.
+        
+        Returns facts that are:
+        - PKG-governed (created by PKG rules)
+        - Currently valid (within temporal validity window)
+        - Scoped to the specified snapshot
+        
+        Args:
+            snapshot_id: PKG snapshot ID to filter facts
+            namespace: Optional namespace filter (defaults to 'default')
+            subject: Optional subject filter for subject-specific hydration
+            predicate: Optional predicate filter
+            limit: Maximum number of facts to return
+        
+        Returns:
+            List of fact dictionaries with SPO triple structure
+        """
+        return await self.cortex.get_active_governed_facts(
+            snapshot_id=snapshot_id,
+            namespace=namespace,
+            subject=subject,
+            predicate=predicate,
+            limit=limit
+        )
+
     async def promote_task_to_knowledge_graph(
         self,
         task_id: str,

@@ -1,140 +1,147 @@
 -- 016_fact_pkg_integration.sql
--- Purpose: Add PKG integration fields to facts table for policy-driven fact management
+-- Purpose: PKG integration enhancements for facts table
+--          Note: Migration 011 already creates the facts table with all PKG columns.
+--          This migration adds foreign key constraints, helper functions, and data conversions.
+--
+-- Dependencies: 011 (facts table), 013 (pkg_snapshots)
 
 BEGIN;
 
--- Add PKG integration columns to facts table
-ALTER TABLE facts ADD COLUMN IF NOT EXISTS snapshot_id INTEGER;
-ALTER TABLE facts ADD COLUMN IF NOT EXISTS namespace TEXT NOT NULL DEFAULT 'default';
-ALTER TABLE facts ADD COLUMN IF NOT EXISTS subject TEXT;
-ALTER TABLE facts ADD COLUMN IF NOT EXISTS predicate TEXT;
-ALTER TABLE facts ADD COLUMN IF NOT EXISTS object_data JSONB;
-ALTER TABLE facts ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ;
-ALTER TABLE facts ADD COLUMN IF NOT EXISTS valid_to TIMESTAMPTZ;
-ALTER TABLE facts ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT 'system';
-ALTER TABLE facts ADD COLUMN IF NOT EXISTS pkg_rule_id TEXT;
-ALTER TABLE facts ADD COLUMN IF NOT EXISTS pkg_provenance JSONB;
-ALTER TABLE facts ADD COLUMN IF NOT EXISTS validation_status TEXT;
+-- ============================================================================
+-- Foreign Key Constraint to PKG Snapshots
+-- ============================================================================
+-- Add foreign key constraint to PKG snapshots (if pkg_snapshots table exists)
 
--- Add foreign key constraint to PKG snapshots
 DO $$
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint c
-        WHERE c.conname = 'fk_facts_snapshot_id'
-          AND c.conrelid = 'facts'::regclass
+    -- Check if pkg_snapshots table exists (migration 013)
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'pkg_snapshots'
     ) THEN
-        ALTER TABLE facts ADD CONSTRAINT fk_facts_snapshot_id
-            FOREIGN KEY (snapshot_id) REFERENCES pkg_snapshots(id) ON DELETE SET NULL;
+        -- Add foreign key constraint
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            WHERE c.conname = 'fk_facts_snapshot_id'
+              AND c.conrelid = 'public.facts'::regclass
+        ) THEN
+            ALTER TABLE public.facts ADD CONSTRAINT fk_facts_snapshot_id
+                FOREIGN KEY (snapshot_id) REFERENCES pkg_snapshots(id) ON DELETE SET NULL;
+            RAISE NOTICE '✅ Added foreign key constraint fk_facts_snapshot_id';
+        ELSE
+            RAISE NOTICE 'ℹ️  Foreign key constraint fk_facts_snapshot_id already exists';
+        END IF;
+    ELSE
+        RAISE NOTICE 'ℹ️  pkg_snapshots table not found - skipping foreign key constraint (will be added after migration 013)';
     END IF;
 END
 $$;
 
--- Add indexes for performance
-CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject);
-CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate);
-CREATE INDEX IF NOT EXISTS idx_facts_namespace ON facts(namespace);
-CREATE INDEX IF NOT EXISTS idx_facts_temporal ON facts(valid_from, valid_to);
-CREATE INDEX IF NOT EXISTS idx_facts_snapshot ON facts(snapshot_id);
-CREATE INDEX IF NOT EXISTS idx_facts_created_by ON facts(created_by);
-CREATE INDEX IF NOT EXISTS idx_facts_pkg_rule ON facts(pkg_rule_id);
-CREATE INDEX IF NOT EXISTS idx_facts_validation_status ON facts(validation_status);
+-- ============================================================================
+-- Issue C: Temporal Modeling - Set Default valid_from
+-- ============================================================================
+-- Set valid_from = created_at for facts without temporal information
+-- This enables "what was true yesterday?" queries
 
--- Add composite indexes for common queries
-CREATE INDEX IF NOT EXISTS idx_facts_subject_namespace ON facts(subject, namespace);
-CREATE INDEX IF NOT EXISTS idx_facts_temporal_namespace ON facts(valid_from, valid_to, namespace);
-CREATE INDEX IF NOT EXISTS idx_facts_created_at_namespace ON facts(created_at, namespace);
-
--- Add constraints
 DO $$
+DECLARE
+    updated_count INTEGER;
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint c
-        WHERE c.conname = 'chk_facts_temporal'
-          AND c.conrelid = 'facts'::regclass
-    ) THEN
-        ALTER TABLE facts ADD CONSTRAINT chk_facts_temporal
-            CHECK (valid_from IS NULL OR valid_to IS NULL OR valid_from <= valid_to);
-    END IF;
+    UPDATE public.facts
+    SET valid_from = created_at
+    WHERE valid_from IS NULL
+      AND (subject IS NOT NULL OR pkg_rule_id IS NOT NULL);  -- Only for structured/PKG facts
+    
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+    RAISE NOTICE '✅ Set valid_from for % facts (enables temporal queries)', updated_count;
 END
 $$;
 
+-- ============================================================================
+-- Issue D: Convert Text-Only Facts to Structured Triples
+-- ============================================================================
+-- Convert text-only facts in default namespace to structured triples
+
 DO $$
+DECLARE
+    fact_record RECORD;
+    new_subject TEXT;
+    new_predicate TEXT;
+    new_object_data JSONB;
+    converted_count INTEGER := 0;
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint c
-        WHERE c.conname = 'chk_facts_namespace_not_empty'
-          AND c.conrelid = 'facts'::regclass
-    ) THEN
-        ALTER TABLE facts ADD CONSTRAINT chk_facts_namespace_not_empty
-            CHECK (namespace IS NOT NULL AND length(trim(namespace)) > 0);
-    END IF;
+    FOR fact_record IN 
+        SELECT id, text, tags, meta_data, created_at
+        FROM public.facts
+        WHERE namespace = 'default'
+          AND subject IS NULL
+          AND predicate IS NULL
+          AND text IS NOT NULL
+    LOOP
+        -- Heuristic conversion based on text patterns
+        IF fact_record.text ~* '^([A-Za-z0-9_]+) is a (.+)$' THEN
+            -- Pattern: "X is a Y" -> subject=X, predicate=hasType, object={type: Y}
+            new_subject := (regexp_match(fact_record.text, '^([A-Za-z0-9_]+) is a (.+)$'))[1];
+            new_predicate := 'hasType';
+            new_object_data := jsonb_build_object(
+                'type', (regexp_match(fact_record.text, '^([A-Za-z0-9_]+) is a (.+)$'))[2],
+                'description', fact_record.text,
+                'original_tags', fact_record.tags,
+                'converted_from_text', true
+            );
+        ELSIF fact_record.text ~* '^([A-Za-z0-9_]+) provides (.+)$' THEN
+            -- Pattern: "X provides Y" -> subject=X, predicate=provides, object={description: Y}
+            new_subject := (regexp_match(fact_record.text, '^([A-Za-z0-9_]+) provides (.+)$'))[1];
+            new_predicate := 'provides';
+            new_object_data := jsonb_build_object(
+                'description', (regexp_match(fact_record.text, '^([A-Za-z0-9_]+) provides (.+)$'))[2],
+                'full_text', fact_record.text,
+                'original_tags', fact_record.tags,
+                'converted_from_text', true
+            );
+        ELSIF fact_record.text ~* '^([A-Za-z0-9_]+) offers (.+)$' THEN
+            -- Pattern: "X offers Y" -> subject=X, predicate=offers, object={description: Y}
+            new_subject := (regexp_match(fact_record.text, '^([A-Za-z0-9_]+) offers (.+)$'))[1];
+            new_predicate := 'offers';
+            new_object_data := jsonb_build_object(
+                'description', (regexp_match(fact_record.text, '^([A-Za-z0-9_]+) offers (.+)$'))[2],
+                'full_text', fact_record.text,
+                'original_tags', fact_record.tags,
+                'converted_from_text', true
+            );
+        ELSE
+            -- Fallback: use first word as subject, "hasDescription" as predicate
+            new_subject := split_part(fact_record.text, ' ', 1);
+            new_predicate := 'hasDescription';
+            new_object_data := jsonb_build_object(
+                'description', fact_record.text,
+                'original_tags', fact_record.tags,
+                'converted_from_text', true
+            );
+        END IF;
+        
+        -- Update the fact with structured triple
+        UPDATE public.facts
+        SET 
+            subject = new_subject,
+            predicate = new_predicate,
+            object_data = new_object_data,
+            valid_from = fact_record.created_at  -- Set temporal info
+        WHERE id = fact_record.id;
+        
+        converted_count := converted_count + 1;
+    END LOOP;
+    
+    RAISE NOTICE '✅ Converted % text-only facts to structured triples', converted_count;
 END
 $$;
 
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint c
-        WHERE c.conname = 'chk_facts_created_by_not_empty'
-          AND c.conrelid = 'facts'::regclass
-    ) THEN
-        ALTER TABLE facts ADD CONSTRAINT chk_facts_created_by_not_empty
-            CHECK (created_by IS NOT NULL AND length(trim(created_by)) > 0);
-    END IF;
-END
-$$;
-
--- Update existing facts to have default namespace
-UPDATE facts SET namespace = 'default' WHERE namespace IS NULL;
-
--- Add comments for documentation
-COMMENT ON COLUMN facts.snapshot_id IS 'Reference to PKG snapshot for policy governance';
-COMMENT ON COLUMN facts.namespace IS 'Fact namespace for organization and access control';
-COMMENT ON COLUMN facts.subject IS 'Fact subject (e.g., guest:john_doe)';
-COMMENT ON COLUMN facts.predicate IS 'Fact predicate (e.g., hasTemporaryAccess)';
-COMMENT ON COLUMN facts.object_data IS 'Fact object data as JSON';
-COMMENT ON COLUMN facts.valid_from IS 'Fact validity start time (NULL = immediate)';
-COMMENT ON COLUMN facts.valid_to IS 'Fact validity end time (NULL = indefinite)';
-COMMENT ON COLUMN facts.created_by IS 'Creator identifier for audit trail';
-COMMENT ON COLUMN facts.pkg_rule_id IS 'PKG rule that created this fact';
-COMMENT ON COLUMN facts.pkg_provenance IS 'PKG rule provenance data for governance';
-COMMENT ON COLUMN facts.validation_status IS 'PKG validation status (pkg_validated, pkg_validation_failed, etc.)';
-
--- Create a view for active temporal facts
-CREATE OR REPLACE VIEW active_temporal_facts AS
-SELECT 
-    id,
-    text,
-    tags,
-    meta_data,
-    namespace,
-    subject,
-    predicate,
-    object_data,
-    valid_from,
-    valid_to,
-    created_by,
-    snapshot_id,
-    pkg_rule_id,
-    validation_status,
-    created_at,
-    updated_at,
-    CASE 
-        WHEN valid_to IS NULL THEN 'indefinite'
-        WHEN valid_to > now() THEN 'active'
-        ELSE 'expired'
-    END AS status
-FROM facts
-WHERE 
-    (valid_from IS NOT NULL OR valid_to IS NOT NULL)
-    AND (valid_to IS NULL OR valid_to > now());
-
-COMMENT ON VIEW active_temporal_facts IS 'View of non-expired temporal facts with status indicator';
+-- ============================================================================
+-- Helper Functions for Fact Management
+-- ============================================================================
+-- Note: Views (facts_structured, facts_text_only, facts_with_capabilities, 
+--       active_temporal_facts, facts_current_truth) are already created in migration 011
 
 -- Create a function to get facts by subject with temporal filtering
 CREATE OR REPLACE FUNCTION get_facts_by_subject(
@@ -180,7 +187,7 @@ CREATE OR REPLACE FUNCTION get_facts_by_subject(
         f.updated_at,
         (f.valid_from IS NOT NULL OR f.valid_to IS NOT NULL) AS is_temporal,
         (f.valid_to IS NOT NULL AND f.valid_to <= now()) AS is_expired
-    FROM facts f
+    FROM public.facts f
     WHERE 
         f.subject = p_subject 
         AND f.namespace = p_namespace
@@ -200,7 +207,7 @@ DECLARE
 BEGIN
     -- Count expired facts
     SELECT COUNT(*) INTO expired_count
-    FROM facts
+    FROM public.facts
     WHERE 
         valid_to IS NOT NULL 
         AND valid_to <= now()
@@ -211,7 +218,7 @@ BEGIN
         RETURN expired_count;
     ELSE
         -- Delete expired facts
-        DELETE FROM facts
+        DELETE FROM public.facts
         WHERE 
             valid_to IS NOT NULL 
             AND valid_to <= now()
@@ -236,7 +243,7 @@ CREATE OR REPLACE FUNCTION get_fact_statistics(
     namespaces TEXT[]
 ) LANGUAGE SQL STABLE AS $$
     WITH namespace_filter AS (
-        SELECT * FROM facts 
+        SELECT * FROM public.facts 
         WHERE p_namespace IS NULL OR namespace = p_namespace
     ),
     stats AS (
@@ -264,5 +271,59 @@ CREATE OR REPLACE FUNCTION get_fact_statistics(
 $$;
 
 COMMENT ON FUNCTION get_fact_statistics IS 'Get comprehensive statistics about facts';
+
+-- ============================================================================
+-- Note: Views are already created in migration 011:
+--   - facts_structured
+--   - facts_text_only  
+--   - facts_with_capabilities
+--   - active_temporal_facts
+--   - facts_current_truth
+-- ============================================================================
+
+-- Function: Get facts at a specific point in time (temporal queries)
+CREATE OR REPLACE FUNCTION get_facts_at_time(
+    p_namespace TEXT DEFAULT NULL,
+    p_point_in_time TIMESTAMPTZ DEFAULT NOW()
+) RETURNS TABLE (
+    id UUID,
+    namespace TEXT,
+    subject TEXT,
+    predicate TEXT,
+    object_data JSONB,
+    valid_from TIMESTAMPTZ,
+    valid_to TIMESTAMPTZ,
+    created_at TIMESTAMPTZ
+) LANGUAGE SQL STABLE AS $$
+    SELECT 
+        f.id,
+        f.namespace,
+        f.subject,
+        f.predicate,
+        f.object_data,
+        f.valid_from,
+        f.valid_to,
+        f.created_at
+    FROM public.facts f
+    WHERE 
+        (p_namespace IS NULL OR f.namespace = p_namespace)
+        AND f.subject IS NOT NULL
+        AND f.predicate IS NOT NULL
+        AND (
+            (f.valid_from IS NULL OR f.valid_from <= p_point_in_time)
+            AND (f.valid_to IS NULL OR f.valid_to > p_point_in_time)
+        )
+    ORDER BY f.created_at DESC;
+$$;
+
+COMMENT ON FUNCTION get_facts_at_time IS 
+    'Get facts that were valid at a specific point in time. Enables "what was true yesterday?" queries.';
+
+-- ============================================================================
+-- Note: Enhanced indexes are already created in migration 011:
+--   - idx_facts_spo_namespace
+--   - idx_facts_object_capabilities
+--   - idx_facts_object_type
+-- ============================================================================
 
 COMMIT;

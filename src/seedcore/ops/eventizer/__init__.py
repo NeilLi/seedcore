@@ -15,17 +15,12 @@ Architecture:
 Note: EventizerService is exported from seedcore.services, not from this package.
 """
 
-from .fact_dao import FactDAO
-
 # Optional import - eventizer_features may not exist in all deployments
 try:
     from .eventizer_features import features_from_payload
     __all__ = [
-        "FactDAO",
         "features_from_payload",
     ]
 except ImportError:
     # eventizer_features not available (e.g., in test environments)
-    __all__ = [
-        "FactDAO",
-    ]
+    __all__ = []

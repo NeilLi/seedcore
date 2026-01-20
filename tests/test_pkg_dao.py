@@ -23,6 +23,7 @@ from seedcore.ops.pkg.dao import (
     PKGValidationDAO,
     PKGPromotionsDAO,
     PKGDevicesDAO,
+    PKGCortexDAO,
     PKGSnapshotData,
     check_pkg_integrity,
 )
@@ -643,4 +644,173 @@ class TestPKGIntegrity:
         
         assert integrity['ok'] is False
         assert 'mismatch' in integrity['msg']
+
+
+class TestPKGCortexDAO:
+    """Tests for PKGCortexDAO."""
+    
+    @pytest.fixture
+    def mock_session_factory(self):
+        """Create a mock session factory."""
+        def _create_session():
+            session = AsyncMock()
+            session.__aenter__ = AsyncMock(return_value=session)
+            session.__aexit__ = AsyncMock(return_value=None)
+            return session
+        return _create_session
+    
+    @pytest.fixture
+    def dao(self, mock_session_factory):
+        """Create a PKGCortexDAO instance."""
+        return PKGCortexDAO(session_factory=mock_session_factory)
+    
+    @pytest.mark.asyncio
+    async def test_get_semantic_context(self, dao, mock_session_factory):
+        """Test getting semantic context from Unified Memory."""
+        session = mock_session_factory()
+        dao._sf = lambda: session
+        
+        result = AsyncMock()
+        row1 = Mock()
+        row1._mapping = {
+            'id': 'task-123',
+            'category': 'guest_request',
+            'content': 'Guest wants room service',
+            'memory_tier': 'TIER_1',
+            'metadata': {},
+            'similarity': 0.95
+        }
+        row2 = Mock()
+        row2._mapping = {
+            'id': 'task-456',
+            'category': 'room_service',
+            'content': 'Previous room service order',
+            'memory_tier': 'TIER_2',
+            'metadata': {},
+            'similarity': 0.88
+        }
+        result.__iter__ = Mock(return_value=iter([row1, row2]))
+        session.execute = AsyncMock(return_value=result)
+        
+        embedding = [0.1] * 1024  # 1024d embedding
+        context = await dao.get_semantic_context(
+            embedding=embedding,
+            limit=5,
+            min_similarity=0.8,
+            exclude_task_id='task-999'
+        )
+        
+        assert len(context) == 2
+        assert context[0]['id'] == 'task-123'
+        assert context[0]['similarity'] == 0.95
+        session.execute.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_get_active_governed_facts(self, dao, mock_session_factory):
+        """Test getting active PKG-governed facts."""
+        session = mock_session_factory()
+        dao._sf = lambda: session
+        
+        result = AsyncMock()
+        row1 = Mock()
+        row1._mapping = {
+            'id': 'fact-uuid-1',
+            'namespace': 'default',
+            'subject': 'guest:Ben',
+            'predicate': 'hasTemporaryAccess',
+            'object_data': {'service': 'lounge'},
+            'valid_from': datetime.now(),
+            'valid_to': None,
+            'pkg_rule_id': 'rule-001',
+            'snapshot_id': 1,
+            'created_at': datetime.now(),
+            'created_by': 'system',
+            'validation_status': 'validated'
+        }
+        row2 = Mock()
+        row2._mapping = {
+            'id': 'fact-uuid-2',
+            'namespace': 'default',
+            'subject': 'guest:Ben',
+            'predicate': 'hasAllergen',
+            'object_data': {'allergen': 'peanuts'},
+            'valid_from': datetime.now(),
+            'valid_to': None,
+            'pkg_rule_id': 'rule-002',
+            'snapshot_id': 1,
+            'created_at': datetime.now(),
+            'created_by': 'system',
+            'validation_status': 'validated'
+        }
+        result.__iter__ = Mock(return_value=iter([row1, row2]))
+        session.execute = AsyncMock(return_value=result)
+        
+        facts = await dao.get_active_governed_facts(
+            snapshot_id=1,
+            namespace='default',
+            subject='guest:Ben',
+            limit=100
+        )
+        
+        assert len(facts) == 2
+        assert facts[0]['subject'] == 'guest:Ben'
+        assert facts[0]['predicate'] == 'hasTemporaryAccess'
+        assert facts[0]['pkg_rule_id'] == 'rule-001'
+        assert facts[0]['snapshot_id'] == 1
+        session.execute.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_get_active_governed_facts_with_predicate_filter(self, dao, mock_session_factory):
+        """Test getting active governed facts with predicate filter."""
+        session = mock_session_factory()
+        dao._sf = lambda: session
+        
+        result = AsyncMock()
+        row = Mock()
+        row._mapping = {
+            'id': 'fact-uuid-1',
+            'namespace': 'default',
+            'subject': 'guest:Ben',
+            'predicate': 'hasTemporaryAccess',
+            'object_data': {'service': 'lounge'},
+            'valid_from': datetime.now(),
+            'valid_to': None,
+            'pkg_rule_id': 'rule-001',
+            'snapshot_id': 1,
+            'created_at': datetime.now(),
+            'created_by': 'system',
+            'validation_status': 'validated'
+        }
+        result.__iter__ = Mock(return_value=iter([row]))
+        session.execute = AsyncMock(return_value=result)
+        
+        facts = await dao.get_active_governed_facts(
+            snapshot_id=1,
+            namespace='default',
+            subject='guest:Ben',
+            predicate='hasTemporaryAccess',
+            limit=100
+        )
+        
+        assert len(facts) == 1
+        assert facts[0]['predicate'] == 'hasTemporaryAccess'
+        session.execute.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_get_active_governed_facts_empty(self, dao, mock_session_factory):
+        """Test getting active governed facts when none exist."""
+        session = mock_session_factory()
+        dao._sf = lambda: session
+        
+        result = AsyncMock()
+        result.__iter__ = Mock(return_value=iter([]))
+        session.execute = AsyncMock(return_value=result)
+        
+        facts = await dao.get_active_governed_facts(
+            snapshot_id=1,
+            namespace='default'
+        )
+        
+        assert len(facts) == 0
+        session.execute.assert_called_once()
 

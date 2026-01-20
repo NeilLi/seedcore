@@ -439,11 +439,40 @@ class NativeRuleEngine:
             return self._evaluate_operator(field_value, operator, value)
         
         elif condition_type == "FACT":
-            # For FACT conditions, use PredicateEvaluator if available
-            # For now, use field path resolution
-            field_path = condition.get("field_path", condition_key)
-            field_value = self._get_field_value(field_path, context)
-            return self._evaluate_operator(field_value, operator, value)
+            # For FACT conditions, query governed_facts injected by hydrate_governed_facts()
+            # condition_key is the subject, predicate comes from condition, operator checks existence/value
+            governed_facts = context.get("governed_facts", [])
+            subject = condition_key  # e.g., "guest:Ben"
+            predicate = condition.get("predicate") or condition.get("field_path", "")
+            expected_value = value
+            
+            # Filter facts matching subject and predicate
+            matching_facts = [
+                f for f in governed_facts
+                if f.get("subject") == subject and f.get("predicate") == predicate
+            ]
+            
+            if operator == "EXISTS" or operator == "=":
+                # Check if fact exists
+                return len(matching_facts) > 0
+            elif operator == "!=":
+                # Check if fact does NOT exist
+                return len(matching_facts) == 0
+            elif matching_facts:
+                # For other operators, check object_data value
+                # Use the latest fact (first in list, already sorted by created_at DESC)
+                fact_object = matching_facts[0].get("object_data", {})
+                if isinstance(fact_object, dict):
+                    # Check if expected_value matches any value in object_data
+                    if expected_value in fact_object.values():
+                        return True
+                    # Or check if expected_value matches object_data itself
+                    return self._evaluate_operator(fact_object, operator, expected_value)
+                else:
+                    # If object_data is not a dict, compare directly
+                    return self._evaluate_operator(fact_object, operator, expected_value)
+            
+            return False
         
         elif condition_type == "SEMANTIC":
             # Check if a specific category exists in our recent semantic context
@@ -802,19 +831,123 @@ class PKGEvaluator:
             logger.error(f"[PKG] Semantic hydration failed: {e}", exc_info=True)
             return task_facts
 
+    async def hydrate_governed_facts(
+        self,
+        task_facts: Dict[str, Any],
+        snapshot_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Hydrates task_facts with active PKG-governed facts.
+        
+        This enables policy feedback loops where facts emitted by previous rule evaluations
+        become available for subsequent evaluations. The system transforms from a "stateless
+        rule-checker" into a "stateful, cognitive operating system" that remembers the
+        consequences of its own prior decisions.
+        
+        Queries facts table for:
+        - Active facts (valid_from <= now() AND (valid_to IS NULL OR valid_to > now()))
+        - PKG-governed (pkg_rule_id IS NOT NULL)
+        - Snapshot-scoped (snapshot_id matches current snapshot)
+        
+        Uses subject-specific hydration to keep payload small - only hydrates facts where
+        subject matches the current task's subject (if available).
+        
+        Args:
+            task_facts: Input facts dictionary (will be modified in-place)
+            snapshot_id: Optional snapshot ID (defaults to current snapshot if not provided)
+        
+        Returns:
+            Hydrated task_facts dictionary with governed_facts injected.
+        
+        Note:
+            Facts are injected as structured SPO triples, maintaining abstraction.
+            Rules can query them using the FACT condition type in NativeRuleEngine.
+            
+            Future enhancement: Consider caching active facts in Redis, keyed by
+            (snapshot_id, subject), and invalidating on fact emission.
+        """
+        if not self.pkg_client:
+            return task_facts
+
+        try:
+            # Use current snapshot if not provided
+            if snapshot_id is None:
+                snapshot = await self.pkg_client.get_active_snapshot()
+                if not snapshot:
+                    logger.debug("[PKG] No active snapshot found - skipping governed facts hydration")
+                    return task_facts
+                snapshot_id = snapshot.id
+            
+            # Extract subject from task_facts for subject-specific hydration
+            # Check multiple possible locations for subject
+            task_subject = (
+                task_facts.get("subject")
+                or task_facts.get("context", {}).get("subject")
+                or task_facts.get("context", {}).get("entity_id")
+            )
+            
+            # Extract namespace (default to 'default')
+            namespace = (
+                task_facts.get("namespace")
+                or task_facts.get("context", {}).get("namespace")
+                or "default"
+            )
+            
+            # Query active governed facts (subject-specific if subject available)
+            facts = await self.pkg_client.get_active_governed_facts(
+                snapshot_id=snapshot_id,
+                namespace=namespace,
+                subject=task_subject,  # Subject-specific hydration
+                limit=100
+            )
+            
+            # Inject facts into task_facts as structured triples
+            task_facts["governed_facts"] = facts
+            
+            # Group facts by subject for easier rule access
+            facts_by_subject = {}
+            for fact in facts:
+                subj = fact.get("subject")
+                if subj:
+                    if subj not in facts_by_subject:
+                        facts_by_subject[subj] = []
+                    facts_by_subject[subj].append(fact)
+            
+            task_facts["governed_facts_by_subject"] = facts_by_subject
+            
+            # Extract predicates for easier rule access
+            task_facts["governed_predicates"] = list(set(
+                f.get("predicate") for f in facts if f.get("predicate")
+            ))
+            
+            logger.debug(
+                f"[PKG] Hydrated {len(facts)} active governed facts "
+                f"(snapshot={snapshot_id}, namespace={namespace}"
+                + (f", subject={task_subject}" if task_subject else "")
+                + ")"
+            )
+            
+            return task_facts
+        except Exception as e:
+            logger.error(f"[PKG] Governed facts hydration failed: {e}", exc_info=True)
+            return task_facts
+
     async def evaluate_async(
         self, 
         task_facts: Dict[str, Any], 
         embedding: Optional[List[float]] = None
     ) -> Dict[str, Any]:
         """
-        Asynchronous evaluation wrapper that performs hydration before execution.
+        Asynchronous evaluation wrapper that performs full hydration before execution.
         
         This is the recommended entry point when semantic context is available.
         It follows the three-step dance:
-        1. Hydration: Fetching the "Semantic Memory Bundle" based on task embedding
-        2. Injection: Merging this bundle into the task_facts dictionary
+        1. Semantic Hydration: Fetching the "Semantic Memory Bundle" based on task embedding
+        2. Governed Facts Hydration: Fetching active PKG-governed facts (policy feedback loop)
         3. Execution: Running the WASM or Native rules against enriched context
+        
+        This integration transforms SeedCore from a "stateless rule-checker" into a
+        "stateful, cognitive operating system" that remembers consequences of prior decisions.
         
         Args:
             task_facts: Input facts dictionary with tags, signals, context
@@ -824,10 +957,13 @@ class PKGEvaluator:
             A dictionary containing the policy output (subtasks, dag, provenance)
             and the snapshot version that was used.
         """
-        # 1. HYDRATION: Fetch semantic context from Cortex
+        # 1. HYDRATION: Fetch semantic context from Cortex (historical tasks)
         hydrated_facts = await self.hydrate_semantic_context(task_facts.copy(), embedding)
         
-        # 2. EVALUATION: Run the actual engine (synchronous)
+        # 2. HYDRATION: Fetch active PKG-governed facts (policy feedback loop)
+        hydrated_facts = await self.hydrate_governed_facts(hydrated_facts)
+        
+        # 3. EVALUATION: Run the actual engine (synchronous)
         return self.evaluate(hydrated_facts)
 
     def evaluate(self, task_facts: Dict[str, Any]) -> Dict[str, Any]:

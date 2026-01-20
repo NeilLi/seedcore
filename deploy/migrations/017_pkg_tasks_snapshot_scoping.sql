@@ -242,6 +242,9 @@ END $$;
 -- PHASE 6: Add constraint to facts table for PKG-governed facts (P1 Enhancement)
 -- ============================================================================
 -- This ensures that any fact created by a PKG rule must have a non-null snapshot_id
+-- Note: Migration 011 already creates the facts table with snapshot_id column and
+--       chk_facts_pkg_requires_triple constraint. This adds an additional constraint
+--       requiring snapshot_id when pkg_rule_id is set.
 
 DO $$
 BEGIN
@@ -249,9 +252,9 @@ BEGIN
         SELECT 1
         FROM pg_constraint c
         WHERE c.conname = 'chk_facts_pkg_rule_requires_snapshot'
-          AND c.conrelid = 'facts'::regclass
+          AND c.conrelid = 'public.facts'::regclass
     ) THEN
-        ALTER TABLE facts ADD CONSTRAINT chk_facts_pkg_rule_requires_snapshot
+        ALTER TABLE public.facts ADD CONSTRAINT chk_facts_pkg_rule_requires_snapshot
             CHECK (pkg_rule_id IS NULL OR snapshot_id IS NOT NULL);
         RAISE NOTICE '✅ Added constraint: PKG-governed facts must have snapshot_id';
     ELSE

@@ -1,7 +1,6 @@
 import uuid
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
-import json
 
 from sqlalchemy import text  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # pyright: ignore[reportMissingImports]
@@ -20,10 +19,14 @@ class FactCore:
 
     This core bridges the gap between Python and the Migration SQL (011, 012, 016).
     It handles:
-    - SPO (Subject-Predicate-Object) temporal facts (Mig 016)
+    - SPO (Subject-Predicate-Object) temporal facts (Mig 011, 016)
     - HGNN Lineage tracking (Mig 012)
-    - PKG Policy integration (Mig 016)
+    - PKG Policy integration (Mig 011, 016)
     - Optimized analytics via DB functions (Mig 016)
+    
+    Note: Migration 011 creates the facts table with all columns including
+    tags, meta_data, and PKG fields. Migration 016 adds foreign keys and
+    helper functions.
     """
 
     def __init__(
@@ -45,27 +48,47 @@ class FactCore:
         """
         Records the relationship between a Task and Facts in the HGNN.
         Relies on Mig 012 tables: task_produces_fact / task_reads_fact.
+        
+        Uses batch operations for better performance when recording multiple facts.
         """
+        if not fact_ids:
+            return
+            
         table = (
             "task_produces_fact" if relationship == "produces" else "task_reads_fact"
         )
 
         # Ensure Task exists in HGNN node map
-        await session.execute(text("SELECT ensure_task_node(:tid)"), {"tid": task_id})
+        await session.execute(
+            text("SELECT ensure_task_node(CAST(:tid AS uuid))"), 
+            {"tid": str(task_id)}
+        )
 
-        for fid in fact_ids:
-            # Ensure Fact exists in HGNN node map
-            await session.execute(text("SELECT ensure_fact_node(:fid)"), {"fid": fid})
+        # Ensure all Facts exist in HGNN node map (batch operation)
+        await session.execute(
+            text(
+                "SELECT ensure_fact_node(fact_id) "
+                "FROM unnest(CAST(:fact_ids AS uuid[])) AS fact_id"
+            ),
+            {"fact_ids": [str(fid) for fid in fact_ids]},
+        )
 
-            # Insert Edge
-            await session.execute(
-                text(f"""
-                    INSERT INTO {table} (task_id, fact_id) 
-                    VALUES (:tid, :fid) 
-                    ON CONFLICT DO NOTHING
-                """),
-                {"tid": task_id, "fid": fid},
-            )
+        # Insert edges in batch
+        await session.execute(
+            text(f"""
+                WITH payload AS (
+                    SELECT CAST(:task_id AS uuid) AS task_id, 
+                           unnest(CAST(:fact_ids AS uuid[])) AS fact_id
+                )
+                INSERT INTO {table} (task_id, fact_id)
+                SELECT task_id, fact_id FROM payload
+                ON CONFLICT (task_id, fact_id) DO NOTHING
+            """),
+            {
+                "task_id": str(task_id),
+                "fact_ids": [str(fid) for fid in fact_ids],
+            },
+        )
 
     # -------------------------------------------------------------------------
     # 2. Fact Creation & Governance (Migration 011 & 016)
@@ -83,42 +106,65 @@ class FactCore:
         produced_by_task: Optional[uuid.UUID] = None,
         pkg_metadata: Optional[Dict] = None,
         created_by: str = "system",
+        tags: Optional[List[str]] = None,
+        meta_data: Optional[Dict] = None,
     ) -> uuid.UUID:
         """
         Creates a fact with full SPO and PKG support.
+        
+        Note: Migration 011 creates the facts table with all columns including
+        tags and meta_data. Migration 016 sets valid_from = created_at for
+        structured/PKG facts, but we set it explicitly here for new facts.
         """
         async with self.session_factory() as session:
-            # Insert using the expanded schema from Migration 016
+            # Insert using the schema from Migration 011 (all columns defined there)
+            # Use CAST for JSONB columns to ensure proper type handling
             sql = text("""
-                INSERT INTO facts (
+                INSERT INTO public.facts (
                     text, namespace, subject, predicate, object_data,
                     valid_from, valid_to, created_by,
-                    snapshot_id, pkg_rule_id, pkg_provenance, validation_status
+                    snapshot_id, pkg_rule_id, pkg_provenance, validation_status,
+                    tags, meta_data
                 ) VALUES (
-                    :txt, :ns, :sub, :pred, :obj,
+                    :txt, :ns, :sub, :pred, 
+                    CASE WHEN :obj IS NULL THEN NULL ELSE CAST(:obj AS jsonb) END,
                     :v_from, :v_to, :by,
-                    :snap, :rule, :prov, :v_status
+                    :snap, :rule, 
+                    CASE WHEN :prov IS NULL THEN NULL ELSE CAST(:prov AS jsonb) END,
+                    :v_status,
+                    :tags, 
+                    CASE WHEN :meta IS NULL THEN NULL ELSE CAST(:meta AS jsonb) END
                 ) RETURNING id
             """)
 
             pkg = pkg_metadata or {}
+            
+            # Set valid_from for structured/PKG facts (consistent with migration 016 logic)
+            # If not provided and it's a structured fact or PKG-governed, set to now()
+            should_set_valid_from = (
+                valid_from is None 
+                and (subject is not None or pkg.get("rule_id") is not None)
+            )
+            
             params = {
                 "txt": text_content,
                 "ns": namespace,
                 "sub": subject,
                 "pred": predicate,
-                # Use json.dumps to convert dict to string
-                "obj": json.dumps(object_data) if object_data else None,
-                "v_from": valid_from or datetime.now(timezone.utc),
+                # Pass dict directly - CAST in SQL will handle JSONB conversion
+                "obj": object_data,
+                "v_from": valid_from if valid_from is not None else (
+                    datetime.now(timezone.utc) if should_set_valid_from else None
+                ),
                 "v_to": valid_to,
                 "by": created_by,
                 "snap": pkg.get("snapshot_id"),
                 "rule": pkg.get("rule_id"),
-                # Same here for provenance
-                "prov": json.dumps(pkg.get("provenance"))
-                if pkg.get("provenance")
-                else None,
-                "v_status": pkg.get("validation_status", "pending"),
+                # Pass dict directly - CAST in SQL will handle JSONB conversion
+                "prov": pkg.get("provenance"),
+                "v_status": pkg.get("validation_status"),
+                "tags": tags or [],
+                "meta": meta_data,
             }
 
             result = await session.execute(sql, params)
