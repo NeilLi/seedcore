@@ -812,24 +812,92 @@ class BaseAgent:
     async def update_role_profile(self, profile: RoleProfile) -> None:
         """
         Hot-swap the role profile at runtime.
-        Called by the parent Organ when a policy update occurs.
+        Called by the parent Organ when a policy update occurs (e.g., from CapabilityMonitor).
+        
+        This method handles:
+        - Role profile updates (skills, tools, routing tags, safety policies)
+        - Behavior config updates (reinitializes behaviors if needed)
+        - Zone affinity and environment constraints updates
+        - Dynamic specialization support (both static and dynamic)
         """
         # 1. Update internal registry (Keep it consistent for future lookups)
         self._role_registry.register(profile)
 
         # 2. Check if this update applies to ME
-        if profile.name == self.specialization:
-            logger.debug(
+        # Support both static Specialization enum and DynamicSpecialization
+        # Use value comparison for compatibility
+        profile_spec_value = profile.name.value if hasattr(profile.name, 'value') else str(profile.name)
+        my_spec_value = self.specialization.value if hasattr(self.specialization, 'value') else str(self.specialization)
+        
+        if profile_spec_value.lower() == my_spec_value.lower():
+            logger.info(
                 f"[{self.agent_id}] 🔄 Hot-swapping RoleProfile: {profile.name.value}"
             )
 
-            # 3. Apply the new profile
+            # 3. Store old values BEFORE updating (for comparison)
+            old_role_profile = self.role_profile
+            old_behaviors = set(old_role_profile.default_behaviors if hasattr(old_role_profile, 'default_behaviors') else [])
+            new_behaviors = set(profile.default_behaviors if hasattr(profile, 'default_behaviors') else [])
+            behaviors_changed = old_behaviors != new_behaviors
+            
+            old_behavior_config = old_role_profile.behavior_config if hasattr(old_role_profile, 'behavior_config') else {}
+            new_behavior_config = profile.behavior_config if hasattr(profile, 'behavior_config') else {}
+            behavior_config_changed = old_behavior_config != new_behavior_config
+
+            old_tools = old_role_profile.allowed_tools if hasattr(old_role_profile, 'allowed_tools') else set()
+            new_tools = profile.allowed_tools if hasattr(profile, 'allowed_tools') else set()
+
+            # 4. Apply the new profile
             self.role_profile = profile
 
-            # 4. (Optional) Immediate Side Effects
-            # If the update changed 'allowed_tools', we might want to log it
-            # or clear any RBAC caches if you implemented caching.
-            # logger.debug(f"New allowed tools: {self.role_profile.allowed_tools}")
+            # 5. Update state.p (role probabilities) if E/S/O weights changed
+            # This ensures routing decisions use updated probabilities
+            self.state.p = profile.to_p_dict()
+
+            # 6. Handle behavior updates if needed
+            if behaviors_changed or behavior_config_changed:
+                logger.info(
+                    f"[{self.agent_id}] 🔄 Behaviors changed, reinitializing: "
+                    f"behaviors={behaviors_changed}, config={behavior_config_changed}"
+                )
+                # Update behavior configs
+                self._behaviors_to_init = {
+                    "names": list(profile.default_behaviors) if hasattr(profile, 'default_behaviors') else [],
+                    "configs": dict(profile.behavior_config) if hasattr(profile, 'behavior_config') else {}
+                }
+                # Reinitialize behaviors (if already initialized)
+                if self._behaviors_initialized:
+                    # Shutdown existing behaviors
+                    for behavior in self._behaviors:
+                        try:
+                            if hasattr(behavior, 'shutdown'):
+                                await behavior.shutdown()
+                        except Exception as e:
+                            logger.warning(f"[{self.agent_id}] Error shutting down behavior {behavior}: {e}")
+                    
+                    # Clear and reinitialize
+                    self._behaviors = []
+                    self._behaviors_initialized = False
+                    await self._initialize_behaviors()
+
+            # 7. Log zone affinity and environment constraints updates (for monitoring)
+            if hasattr(profile, 'zone_affinity') and profile.zone_affinity:
+                logger.debug(
+                    f"[{self.agent_id}] Zone affinity updated: {profile.zone_affinity}"
+                )
+            if hasattr(profile, 'environment_constraints') and profile.environment_constraints:
+                logger.debug(
+                    f"[{self.agent_id}] Environment constraints updated: {profile.environment_constraints}"
+                )
+
+            # 8. Log tool changes (for RBAC awareness)
+            if old_tools != new_tools:
+                added_tools = new_tools - old_tools
+                removed_tools = old_tools - new_tools
+                if added_tools:
+                    logger.info(f"[{self.agent_id}] ✅ New tools available: {added_tools}")
+                if removed_tools:
+                    logger.info(f"[{self.agent_id}] ⚠️ Tools removed: {removed_tools}")
 
     async def update_state(
         self,

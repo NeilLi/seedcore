@@ -56,16 +56,6 @@ def create_default_registry() -> RoleRegistry:
             "tool_auto_injection": {"auto_add_general_query": True}
         }
     ))
-    registry.register(RoleProfile(
-        name=Specialization.MOOD_INFERENCE_AGENT,
-        default_skills={"sentiment_analysis": 0.9, "signal_processing": 0.8},
-    ))
-    # 'Oracle' here acts as a specialized tool-runner for calendar APIs
-    registry.register(RoleProfile(
-        name=Specialization.SCHEDULE_ORACLE,
-        default_skills={"calendar_management": 0.95, "api_interaction": 0.9},
-        allowed_tools={"calendar.read", "calendar.write"}
-    ))
 
     # =============================================================
     # 2. ENVIRONMENT SENSING (DIGITAL TWIN)
@@ -105,11 +95,6 @@ def create_default_registry() -> RoleRegistry:
             }
         }
     ))
-    registry.register(RoleProfile(
-        name=Specialization.SAFETY_MONITOR,
-        default_skills={"compliance": 1.0, "hazard_detection": 0.95},
-        allowed_tools={"system.emergency_stop", "sensors.read_critical"}
-    ))
 
     # =============================================================
     # 3. ORCHESTRATION & DRIVERS
@@ -144,17 +129,6 @@ def create_default_registry() -> RoleRegistry:
             "safety_check": {"enabled": True}
         }
     ))
-    registry.register(RoleProfile(
-        name=Specialization.ROBOT_COORDINATOR,
-        default_skills={"fleet_management": 0.9, "spatial_coordination": 0.85},
-        allowed_tools={"robot.command", "robot.status"}
-    ))
-    registry.register(RoleProfile(
-        name=Specialization.HVAC_CONTROLLER,
-        default_skills={"thermodynamics": 0.8, "iot_control": 0.9},
-        allowed_tools={"hvac.set_point", "hvac.get_status"}
-    ))
-    # ... (Lighting, Energy, Cleaning Managers follow similar pattern)
 
     # =============================================================
     # 4. PHYSICAL EXECUTION (ROBOTS)

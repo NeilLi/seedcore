@@ -585,10 +585,11 @@ class Organ:
                 "status": "ready",
             }
 
-            # 6. Optional tier-1 registration
-            if self.organ_registry and session:
+            # 6. Optional tier-1 registration (with DB persistence)
+            # If session is provided, use it. Otherwise, OrganRegistry will create one if session_factory is available.
+            if self.organ_registry:
                 await self.organ_registry.register_agent(
-                    session,
+                    session,  # Can be None - registry will create session if session_factory available
                     agent_id=agent_id,
                     organ_id=self.organ_id,
                     specialization=spec_value,
@@ -686,16 +687,32 @@ class Organ:
     async def update_role_registry(self, profile: RoleProfile) -> None:
         """
         Receive a role definition update from OrganismCore and propagate to Agents.
+        
+        This is called by OrganismCore.handle_capability_changes() when capability
+        changes are detected. It implements selective broadcasting - only agents
+        with matching specializations receive updates.
+        
+        Supports both static Specialization enum and DynamicSpecialization.
         """
-        # 1. Update the Organ's LOCAL copy
-        self.role_registry.register(profile)
+        # 1. Update the Organ's LOCAL copy (if role_registry exists)
+        if self.role_registry:
+            self.role_registry.register(profile)
+        
+        # Get specialization value for logging and matching
+        spec_value = (
+            profile.name.value.lower() 
+            if hasattr(profile.name, 'value') 
+            else str(profile.name).lower()
+        )
+        
         logger.info(
-            f"[{self.organ_id}] 📥 Synced role definition: {profile.name.value}"
+            f"[{self.organ_id}] 📥 Synced role definition: {spec_value}"
         )
 
         # 2. Broadcast to relevant Agents
         # We only need to notify agents that actually HOLD this specialization.
-        target_spec_val = profile.name.value.lower()
+        # Support both static Specialization enum and DynamicSpecialization
+        # Use the spec_value we already computed above
 
         futures = []
         for agent_id, handle in self.agents.items():
@@ -708,7 +725,12 @@ class Organ:
                 info.get("specialization", "") or info.get("specialization_value", "")
             ).lower()
 
-            if agent_spec == target_spec_val:
+            # Also check specialization_name for compatibility
+            agent_spec_name = info.get("specialization_name", "").lower()
+
+            # Match if agent's specialization matches the profile's specialization
+            # This works for both static and dynamic specializations
+            if agent_spec == spec_value or agent_spec_name == spec_value:
                 # 3. Remote Call to Agent
                 # Fire-and-forget logic usually, or gather if you want confirmation
                 ref = handle.update_role_profile.remote(profile)

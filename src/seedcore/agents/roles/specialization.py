@@ -56,66 +56,38 @@ class OrganKind(str, Enum):
 
 class Specialization(str, Enum):
     """
-    Agent specialization taxonomy for AI-driven smart habitats.
-    Aligned with SeedCore v2 Organ Configuration.
+    Core agent specialization taxonomy for AI-driven smart habitats.
+    
+    This enum defines only the most essential, commonly-used specializations.
+    Additional specializations are dynamically registered from pkg_subtask_types
+    via CapabilityMonitor, which takes precedence over static configurations.
     """
 
     # =============================================================
-    #  USER EXPERIENCE & INTERACTION
+    #  CORE SPECIALIZATIONS (Most Common Cases)
     # =============================================================
+    
+    # User Experience
     USER_LIAISON = "user_liaison"
-    MOOD_INFERENCE_AGENT = "mood_inference_agent"
-    SCHEDULE_ORACLE = "schedule_oracle"
-    PREFERENCE_MODEL = "preference_model"
-
-    # =============================================================
-    #  ENVIRONMENT UNDERSTANDING
-    # =============================================================
+    
+    # Environment Intelligence
     ENVIRONMENT = "environment"
     ANOMALY_DETECTOR = "anomaly_detector"
-    FORECASTER = "forecaster"
-    SAFETY_MONITOR = "safety_monitor"
-
-    # =============================================================
-    #  DEVICE & ROBOT ORCHESTRATION
-    # =============================================================
+    
+    # Orchestration
     DEVICE_ORCHESTRATOR = "device_orchestrator"
-    ROBOT_COORDINATOR = "robot_coordinator"
-    HVAC_CONTROLLER = "hvac_controller"
-    LIGHTING_CONTROLLER = "lighting_controller"
-    ENERGY_MANAGER = "energy_manager"
-    CLEANING_MANAGER = "cleaning_manager"
-    SECURITY_DRONE_MANAGER = "security_drone_manager"
-    MAINTENANCE_MANAGER = "maintenance_manager"
-
-    # =============================================================
-    #  ROBOT EXECUTION (Physical Layer)
-    # =============================================================
-    EXECUTION_ROBOT = "execution_robot" # Base/Abstract
+    
+    # Execution
     CLEANING_ROBOT = "cleaning_robot"
-    DELIVERY_ROBOT = "delivery_robot"
-    SECURITY_DRONE = "security_drone"
-    INSPECTION_ROBOT = "inspection_robot"
-
-    # =============================================================
-    #  VERIFICATION & FEEDBACK
-    # =============================================================
+    
+    # Verification
     RESULT_VERIFIER = "result_verifier"
-    RESULT_VALIDATOR = "result_validator"
-    FEEDBACK_INTEGRATOR = "feedback_integrator"
-    FEEDBACK_VERIFIER = "feedback_verifier"
-
-    # =============================================================
-    #  LEARNING & ADAPTATION
-    # =============================================================
+    
+    # Learning
     CRITIC = "critic"
     ADAPTIVE_LEARNER = "adaptive_learner"
-    FAILURE_ANALYZER = "failure_analyzer"
-    PLAN_REFINER = "plan_refiner"
-
-    # =============================================================
-    #  SPECIALIST / UTILITY
-    # =============================================================
+    
+    # Utility (Fallback/Default)
     GENERALIST = "generalist"
     OBSERVER = "observer"
     UTILITY = "utility"
@@ -141,6 +113,10 @@ class RoleProfile:
     1. RoleProfile.default_behaviors (specialization-level defaults)
     2. Agent config (organs.yaml or pkg_subtask_types)
     3. Runtime overrides (executor.behavior_config)
+    
+    Zone affinity and environment constraints enable zone-scoped role profiles:
+    - zone_affinity: Preferred zones (e.g., ["magic_atelier", "journey_studio"])
+    - environment_constraints: Physical/environmental constraints (e.g., {"max_temperature": 30, "requires_ventilation": true})
     """
     name: Union[Specialization, DynamicSpecialization]
     default_skills: Dict[str, float] = field(default_factory=dict)
@@ -151,6 +127,9 @@ class RoleProfile:
     # Behavior Plugin System support
     default_behaviors: List[str] = field(default_factory=list)  # e.g., ["chat_history", "background_loop"]
     behavior_config: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # e.g., {"chat_history": {"limit": 50}}
+    # Zone-scoped role profiles (for 2030+ Hotel scenario)
+    zone_affinity: List[str] = field(default_factory=list)  # Preferred zones (e.g., ["magic_atelier", "journey_studio"])
+    environment_constraints: Dict[str, Any] = field(default_factory=dict)  # Physical constraints (e.g., {"max_temperature": 30, "requires_ventilation": True})
 
     def materialize_skills(self, deltas: Optional[Dict[str, float]] = None) -> Dict[str, float]:
         """Combine default_skills with agent deltas, clamped to [0,1]."""
@@ -191,6 +170,8 @@ class RoleProfile:
             "routing_tags": sorted(self.routing_tags),
             "safety": self.safety_policies.copy(),
             "behaviors": self.default_behaviors.copy(),
+            "zone_affinity": self.zone_affinity.copy(),
+            "environment_constraints": self.environment_constraints.copy(),
         }
     
     def get_behavior_config(self, behavior_name: str) -> Dict[str, Any]:
@@ -235,36 +216,62 @@ class RoleRegistry:
         """
         Static helper for E/S/O mapping to allow usage without a registry instance.
         Supports both static (Enum) and dynamic specializations.
+        
+        Priority order:
+        1. Check DynamicSpecialization.metadata["eso_weights"] if available (explicit override)
+        2. Fall back to keyword-based heuristic
+        3. Fall back to uniform distribution (1/1/1) if no keywords match
         """
-        # Normalize to string value
+        # Check for explicit ESO weights in metadata (for dynamic specializations)
+        if isinstance(spec, DynamicSpecialization):
+            meta = spec.metadata
+            if isinstance(meta, dict) and "eso_weights" in meta:
+                eso_weights = meta["eso_weights"]
+                if isinstance(eso_weights, dict):
+                    # Use explicit weights if provided: {"E": 0.8, "S": 0.2, "O": 0.0}
+                    # Normalize to ensure they sum to 1.0
+                    e_val = float(eso_weights.get("E", 0.0))
+                    s_val = float(eso_weights.get("S", 0.0))
+                    o_val = float(eso_weights.get("O", 0.0))
+                    total = e_val + s_val + o_val
+                    if total > 0:
+                        return {
+                            "E": e_val / total,
+                            "S": s_val / total,
+                            "O": o_val / total,
+                        }
+                    # If all zeros, fall through to keyword heuristic
+        
+        # Normalize to string value for keyword matching
         if isinstance(spec, str):
             spec_name = spec.lower()
         elif isinstance(spec, DynamicSpecialization):
-            spec_name = spec.value
+            spec_name = spec.value.lower()
         else:
             spec_name = spec.value.lower()
         
         # 1. Execution (Action, Physical, Control)
         execution_kw = [
             "execution", "robot", "device", "orchestrator", "controller", 
-            "manager", "coordinator", "drone", "actuator", "action"
+            "manager", "coordinator", "drone", "actuator", "action", "renderer"
         ]
         # 2. Synthesis (Planning, Reasoning, Learning, Social)
         synthesis_kw = [
             "planner", "synthesizer", "critic", "analyzer", "refiner",
-            "learner", "model", "preference", "liaison", "reasoning", "social"
+            "learner", "model", "preference", "liaison", "reasoning", "social",
+            "director", "promoter", "design"
         ]
         # 3. Observation (Sensing, Verification, Prediction)
         observation_kw = [
             "observer", "monitor", "detector", "forecaster", "verifier",
-            "validator", "inference", "oracle", "integrator"
+            "validator", "inference", "oracle", "integrator", "guardian"
         ]
         
         e_score = sum(1.0 for kw in execution_kw if kw in spec_name)
         s_score = sum(1.0 for kw in synthesis_kw if kw in spec_name)
         o_score = sum(1.0 for kw in observation_kw if kw in spec_name)
         
-        # Fallback
+        # Fallback: uniform distribution if no keywords match
         if e_score == 0 and s_score == 0 and o_score == 0:
             e_score, s_score, o_score = 1.0, 1.0, 1.0
         
@@ -299,6 +306,8 @@ class RoleRegistry:
                 "allowed_tools": sorted(p.allowed_tools),
                 "default_behaviors": p.default_behaviors,
                 "behavior_config": p.behavior_config,
+                "zone_affinity": p.zone_affinity,
+                "environment_constraints": p.environment_constraints,
             }
             for p in self._profiles.values()
         }
@@ -413,6 +422,15 @@ class SpecializationManager:
     - Dynamic specializations can be registered at runtime
     - Supports loading from config files, database, or API
     - Thread-safe for concurrent registration
+    
+    Registry Synchronization (Distributed Systems):
+    In a distributed Ray cluster, dynamic role registrations on one node may not
+    immediately propagate to other nodes. Consider implementing:
+    - Redis-backed store for dynamic specializations (shared state)
+    - Registry Sync subtask that periodically syncs SpecializationManager across nodes
+    - Event-driven sync via Ray pub/sub or similar mechanism
+    - Or ensure all dynamic registrations happen on the Control Plane and are
+      broadcast to all Organs via Organ.update_role_registry()
     """
     
     _instance: Optional['SpecializationManager'] = None
@@ -488,7 +506,7 @@ class SpecializationManager:
                 
                 # Create a RoleProfile with the actual dynamic specialization
                 # This ensures the profile.name matches the registered spec
-                # Preserve all fields including default_behaviors and behavior_config
+                # Preserve all fields including default_behaviors, behavior_config, zone_affinity, and environment_constraints
                 profile = RoleProfile(
                     name=actual_spec,
                     default_skills=role_profile.default_skills,
@@ -498,6 +516,8 @@ class SpecializationManager:
                     safety_policies=role_profile.safety_policies,
                     default_behaviors=list(role_profile.default_behaviors),
                     behavior_config=dict(role_profile.behavior_config),
+                    zone_affinity=list(role_profile.zone_affinity),
+                    environment_constraints=dict(role_profile.environment_constraints),
                 )
                 self._role_profiles[value_lower] = profile
         
@@ -603,8 +623,13 @@ class SpecializationManager:
         if not config or 'dynamic_specializations' not in config:
             return 0
         
+        # Handle case where dynamic_specializations is None or empty (e.g., empty YAML section)
+        dynamic_specs = config.get('dynamic_specializations')
+        if not dynamic_specs or not isinstance(dynamic_specs, dict):
+            return 0
+        
         loaded = 0
-        for value, spec_config in config['dynamic_specializations'].items():
+        for value, spec_config in dynamic_specs.items():
             try:
                 metadata = spec_config.get('metadata', {})
                 role_profile_data = spec_config.get('role_profile', {})
@@ -624,9 +649,12 @@ class SpecializationManager:
                         # Behavior Plugin System: Load default_behaviors and behavior_config from YAML
                         default_behaviors=list(role_profile_data.get('default_behaviors', [])),
                         behavior_config=dict(role_profile_data.get('behavior_config', {})),
+                        # Zone-scoped role profiles
+                        zone_affinity=list(role_profile_data.get('zone_affinity', [])),
+                        environment_constraints=dict(role_profile_data.get('environment_constraints', {})),
                     )
                 
-                dynamic_spec =                 self.register_dynamic(
+                self.register_dynamic(
                     value=value,
                     name=spec_config.get('name'),
                     metadata=metadata,
@@ -676,6 +704,10 @@ class SpecializationManager:
                         'visibility_scopes': sorted(profile.visibility_scopes),
                         'routing_tags': sorted(profile.routing_tags),
                         'safety_policies': profile.safety_policies,
+                        'default_behaviors': profile.default_behaviors,
+                        'behavior_config': profile.behavior_config,
+                        'zone_affinity': profile.zone_affinity,
+                        'environment_constraints': profile.environment_constraints,
                     }
                 
                 config['dynamic_specializations'][value] = spec_config

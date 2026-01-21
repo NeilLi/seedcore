@@ -56,10 +56,13 @@ class TopologyManager:
 
         YAML Format:
             strong_pairs:
-              - agents: ["A", "B"]
+              - agents: ["A", "B"]  # Specialization names (case-insensitive)
                 weight: 0.9
                 description: "...text..."
             cross_organ_bonds: [...]
+        
+        Supports both static (USER_LIAISON) and dynamic (custom_agent_v2) specializations.
+        Specialization names are normalized to lowercase for consistent lookup.
         """
         if not topology_cfg:
             logger.info("No topology section found in organism YAML.")
@@ -73,7 +76,10 @@ class TopologyManager:
 
         for bond in groups:
             try:
-                spec_a, spec_b = [s.upper() for s in bond["agents"]]
+                # Normalize specialization names to lowercase for consistency
+                # This ensures compatibility with both static (USER_LIAISON) and dynamic (custom_agent_v2) specializations
+                # The registry stores specializations as lowercase, so we normalize here too
+                spec_a, spec_b = [str(s).strip().lower() for s in bond["agents"]]
                 weight = float(bond.get("weight", 0.5))
                 bond_kind = bond.get("bond_kind") or "topology"
                 meta = {
@@ -81,6 +87,7 @@ class TopologyManager:
                     "source": "yaml_topology",
                 }
 
+                # Lookup agents by normalized specialization (works for both static and dynamic)
                 agents_a = spec_to_agent_ids.get(spec_a, [])
                 agents_b = spec_to_agent_ids.get(spec_b, [])
 

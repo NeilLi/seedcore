@@ -12,41 +12,29 @@ seedcore:
 
     organs:
       # =============================================================
-      #  USER EXPERIENCE & INTERACTION ORGAN
+      #  CORE ORGANS (Minimal Essential Configuration)
       # =============================================================
-      # Handles user-facing intelligence: dialog, mood inference,
-      # personalization, and preference modeling.
+      # Note: Additional agents are dynamically spawned from pkg_subtask_types
+      # via CapabilityMonitor. Static config here is for baseline initialization only.
+      
       - id: "user_experience_organ"
-        description: "User dialog, mood inference, preference management."
+        description: "User dialog and interaction."
         agents:
           - specialization: "USER_LIAISON"
-            class: "BaseAgent"  # Using Behavior Plugin System
+            class: "BaseAgent"
             behaviors: ["chat_history", "tool_auto_injection"]
             behavior_config:
               chat_history:
                 limit: 50
               tool_auto_injection:
                 auto_add_general_query: true
-            # Legacy: ConversationAgent class still supported but deprecated
-            # class: "ConversationAgent"
             count: 1
-          - specialization: "MOOD_INFERENCE_AGENT"
-            count: 0
-          - specialization: "SCHEDULE_ORACLE"
-            count: 0
-          - specialization: "PREFERENCE_MODEL"
-            count: 0
 
-      # =============================================================
-      #  ENVIRONMENT UNDERSTANDING ORGAN
-      # =============================================================
-      # Responsible for situational awareness, world modeling,
-      # anomaly detection, forecasting, and safety interpretation.
       - id: "environment_intelligence_organ"
-        description: "World modeling, predictions, anomalies, emergency detection."
+        description: "World modeling and anomaly detection."
         agents:
           - specialization: "ENVIRONMENT"
-            class: "BaseAgent"  # Using Behavior Plugin System
+            class: "BaseAgent"
             behaviors: ["background_loop", "task_filter"]
             behavior_config:
               background_loop:
@@ -55,11 +43,9 @@ seedcore:
                 max_errors: 3
               task_filter:
                 allowed_types: ["env.tick", "environment.tick"]
-            # Legacy: EnvironmentIntelligenceAgent class still supported but deprecated
-            # class: "EnvironmentIntelligenceAgent"
             count: 1
           - specialization: "ANOMALY_DETECTOR"
-            class: "BaseAgent"  # Using Behavior Plugin System
+            class: "BaseAgent"
             behaviors: ["background_loop", "task_filter"]
             behavior_config:
               background_loop:
@@ -68,24 +54,13 @@ seedcore:
                 max_errors: 3
               task_filter:
                 allowed_types: ["env.tick", "environment.tick"]
-            # Legacy: EnvironmentIntelligenceAgent class still supported but deprecated
-            # class: "EnvironmentIntelligenceAgent"
             count: 1
-          - specialization: "FORECASTER"
-            count: 0
-          - specialization: "SAFETY_MONITOR"
-            count: 0
 
-      # =============================================================
-      #  DEVICE & ROBOT ORCHESTRATION ORGAN
-      # =============================================================
-      # Manages all device-level and robot-level coordination,
-      # including energy optimization and task assignment.
       - id: "orchestration_organ"
-        description: "Device control, robot task coordination, energy optimization."
+        description: "Device control and coordination."
         agents:
           - specialization: "DEVICE_ORCHESTRATOR"
-            class: "BaseAgent"  # Using Behavior Plugin System
+            class: "BaseAgent"
             behaviors: ["background_loop", "task_filter", "tool_registration", "dedup", "safety_check"]
             behavior_config:
               background_loop:
@@ -100,85 +75,33 @@ seedcore:
                 ttl_s: 60.0
               safety_check:
                 enabled: true
-            # Legacy: OrchestrationAgent class still supported but deprecated
-            # class: "OrchestrationAgent"
             count: 1
-          - specialization: "ROBOT_COORDINATOR"
-            count: 0
-          - specialization: "HVAC_CONTROLLER"
-            count: 0
-          - specialization: "LIGHTING_CONTROLLER"
-            count: 0
-          - specialization: "ENERGY_MANAGER"
-            count: 0
-          - specialization: "CLEANING_MANAGER"
-            count: 0
-          - specialization: "SECURITY_DRONE_MANAGER"
-            count: 0
-          - specialization: "MAINTENANCE_MANAGER"
-            count: 0
 
-      # =============================================================
-      #  ROBOT EXECUTION ORGAN (PHYSICAL ACTUATION)
-      # =============================================================
-      # Contains the physical actuation layer: robots, drones, and
-      # mobile units that execute tasks in the real environment.
       - id: "robot_execution_organ"
-        description: "Autonomous physical robots: movement, cleaning, delivery."
+        description: "Physical robot execution."
         agents:
           - specialization: "CLEANING_ROBOT"
             count: 1
-          - specialization: "DELIVERY_ROBOT"
-            count: 0
-          - specialization: "SECURITY_DRONE"
-            count: 0
-          - specialization: "INSPECTION_ROBOT"
-            count: 0
 
-      # =============================================================
-      #  VERIFICATION & FEEDBACK ORGAN
-      # =============================================================
-      # Performs real-world validation, quality assurance, and
-      # integrates feedback signals back into the organism.
       - id: "verification_organ"
-        description: "Real-world verification, QA, feedback integration."
+        description: "Result verification and QA."
         agents:
           - specialization: "RESULT_VERIFIER"
             count: 1
-          - specialization: "RESULT_VALIDATOR"
-            count: 0
-          - specialization: "FEEDBACK_INTEGRATOR"
-            count: 0
-          - specialization: "FEEDBACK_VERIFIER"
-            count: 0
 
-      # =============================================================
-      #  LEARNING & ADAPTATION ORGAN
-      # =============================================================
-      # Drives continuous improvement: learning from experience,
-      # analyzing failures, refining plans, and self-correcting.
       - id: "learning_organ"
-        description: "Continuous adaptation, strategy optimization, self-correction."
+        description: "Continuous learning and adaptation."
         agents:
           - specialization: "CRITIC"
             count: 1
           - specialization: "ADAPTIVE_LEARNER"
             count: 1
-          - specialization: "FAILURE_ANALYZER"
-            count: 0
-          - specialization: "PLAN_REFINER"
-            count: 0
 
-      # =============================================================
-      #  SPECIALIST & PREDEVELOPED ORGAN
-      # =============================================================
-      # Hosts pre-built or prototype agents used for testing,
-      # debugging, and rapid insertion of new experimental roles.
       - id: "utility_organ"
-        description: "Specialized agents for pre-development and experimentation."
+        description: "Utility and observation agents."
         agents:
           - specialization: "OBSERVER"
-            class: "BaseAgent"  # Using Behavior Plugin System
+            class: "BaseAgent"
             behaviors: ["background_loop", "task_filter"]
             behavior_config:
               background_loop:
@@ -186,12 +109,10 @@ seedcore:
                 method: "_proactive_pass"
               task_filter:
                 allowed_types: ["observer.proactive_cache", "observer.observe"]
-            # Legacy: ObserverAgent class still supported but deprecated
-            # class: "ObserverAgent"
-            count: 1            
+            count: 1
           - specialization: "UTILITY"
             class: "UtilityAgent"
-            count: 1            
+            count: 1
           - specialization: "GENERALIST"
             count: 1
 
@@ -200,39 +121,24 @@ seedcore:
     # =============================================================
 
     topology:
-      # --- Strong Functional Couplings (Agent-to-Agent Clusters)
-      strong_pairs:
-        - agents: ["USER_LIAISON", "SCHEDULE_ORACLE"]
-          weight: 0.9
-          description: "Calendar negotiation pipeline"
-
-        - agents: ["ENVIRONMENT_MODEL", "FORECASTER"]
-          weight: 0.85
-          description: "World state → predictive model"
-
-        - agents: ["DEVICE_ORCHESTRATOR", "ENERGY_MANAGER"]
-          weight: 0.95
-          description: "Energy-aware device actuation"
-
-      # --- Cross-Organ Integration Bonds
+      # Minimal topology configuration
+      # Additional bonds are dynamically discovered from agent interactions
+      
+      # Cross-Organ Integration Bonds
       cross_organ_bonds:
         - agents: ["USER_LIAISON", "DEVICE_ORCHESTRATOR"]
           weight: 0.7
           description: "User → device execution loop"
 
-        - agents: ["ANOMALY_DETECTOR", "SAFETY_MONITOR"]
-          weight: 0.8
-          description: "Safety-awareness loop"
-
-      # --- Optional: Learning-driven bonds (seeded statically)
+      # Learning-driven bonds
       learned_bonds:
         - agents: ["CRITIC", "ADAPTIVE_LEARNER"]
           weight: 0.65
           description: "Reinforcement-learning policy update"
 
-      # --- Global defaults
+      # Global defaults
       defaults:
         min_weight_threshold: 0.1
-        symmetry: true # If true → W[i,j] = W[j,i]
-        max_partners: 4 # Prevent endless cascade
+        symmetry: true
+        max_partners: 4
         seed_missing_agents: true

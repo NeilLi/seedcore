@@ -9,6 +9,7 @@ The caller is responsible for session lifecycle and transaction management
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Optional, Dict, Any
@@ -145,15 +146,18 @@ class AgentGraphRepository:
             kind: Type/kind of organ (e.g., 'utility', 'actuator', 'retriever').
             props: Additional properties as JSONB.
         """
+        # Convert props dict to JSON string for asyncpg JSONB compatibility
+        props_json = json.dumps(props) if props else None
+        
         await session.execute(
             text("""
                 INSERT INTO organ_registry (organ_id, kind, props)
-                VALUES (:organ_id, :kind, COALESCE(:props, '{}'::jsonb))
+                VALUES (:organ_id, :kind, COALESCE(CAST(:props AS jsonb), '{}'::jsonb))
                 ON CONFLICT (organ_id) DO UPDATE
                 SET kind = COALESCE(EXCLUDED.kind, organ_registry.kind),
                     props = COALESCE(EXCLUDED.props, organ_registry.props)
             """),
-            {"organ_id": organ_id, "kind": kind, "props": props},
+            {"organ_id": organ_id, "kind": kind, "props": props_json},
         )
         await session.execute(
             text("SELECT ensure_organ_node(:organ_id)"), {"organ_id": organ_id}
@@ -175,15 +179,18 @@ class AgentGraphRepository:
             display_name: Human-readable name for the agent.
             props: Additional properties as JSONB.
         """
+        # Convert props dict to JSON string for asyncpg JSONB compatibility
+        props_json = json.dumps(props) if props else None
+        
         await session.execute(
             text("""
                 INSERT INTO agent_registry (agent_id, display_name, props)
-                VALUES (:agent_id, :display_name, COALESCE(:props, '{}'::jsonb))
+                VALUES (:agent_id, :display_name, COALESCE(CAST(:props AS jsonb), '{}'::jsonb))
                 ON CONFLICT (agent_id) DO UPDATE
                 SET display_name = COALESCE(EXCLUDED.display_name, agent_registry.display_name),
                     props = COALESCE(EXCLUDED.props, agent_registry.props)
             """),
-            {"agent_id": agent_id, "display_name": display_name, "props": props},
+            {"agent_id": agent_id, "display_name": display_name, "props": props_json},
         )
         await session.execute(
             text("SELECT ensure_agent_node(:agent_id)"), {"agent_id": agent_id}
@@ -373,9 +380,12 @@ class AgentGraphRepository:
             {"aid": dst_agent},
         )
 
+        # Convert meta dict to JSON string for asyncpg JSONB compatibility
+        meta_json = json.dumps(meta) if meta else None
+        
         q = """
         INSERT INTO agent_collab_agent (src_agent, dst_agent, weight, bond_kind, meta)
-        VALUES (:src, :dst, :weight, :bond_kind, COALESCE(:meta, '{}'::jsonb))
+        VALUES (:src, :dst, :weight, :bond_kind, COALESCE(CAST(:meta AS jsonb), '{}'::jsonb))
         ON CONFLICT (src_agent, dst_agent) DO UPDATE
         SET weight    = EXCLUDED.weight,
             bond_kind = EXCLUDED.bond_kind,
@@ -387,7 +397,7 @@ class AgentGraphRepository:
             "dst": dst_agent,
             "weight": float(weight),
             "bond_kind": bond_kind,
-            "meta": meta,
+            "meta": meta_json,
         }
 
         # Upsert both directions to keep the table effectively undirected

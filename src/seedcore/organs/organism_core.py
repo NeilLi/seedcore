@@ -317,6 +317,9 @@ class OrganismCore:
         self._recon_interval = int(os.getenv("RECONCILE_INTERVAL_S", "20"))
         self._shutdown_event = asyncio.Event()
         self._reconcile_queue: List[tuple] = []
+        # Track agent creation times to avoid false positives during initialization
+        self._agent_creation_times: Dict[str, float] = {}  # agent_id -> creation timestamp
+        self._agent_health_grace_period = float(os.getenv("AGENT_HEALTH_GRACE_PERIOD_S", "30.0"))  # Grace period before health checks
 
         # State service (lazy connection)
         self._state_service: Optional[Any] = None
@@ -405,6 +408,15 @@ class OrganismCore:
         Phase 2: Adapters & Logic (SkillStore, ToolManager, Registries)
         Phase 3: Actor Spawning (Organs, Agents)
         Phase 4: Background Loops (Health, Reconciliation)
+
+        Architecture Philosophy:
+        - **Static Initialization (YAML)**: `organs.yaml` and `specializations.yaml` provide
+          the initial baseline configuration. This is ONLY used for first-time static setup.
+        - **Dynamic Evolution (PKG)**: After initialization, `CapabilityMonitor` in `CoordinatorService`
+          continuously watches `pkg_subtask_types` for changes and notifies `OrganismService` via RPC.
+          The system becomes dynamically driven by database capabilities, not just YAML configs.
+        - **Runtime Monitoring**: `CapabilityMonitor` automatically registers dynamic specializations
+          and notifies `OrganismService` to update role profiles and manage agents accordingly.
         """
         if self._initialized:
             logger.warning("[OrganismCore] Already initialized.")
@@ -906,10 +918,40 @@ class OrganismCore:
     async def _init_organ_registry(self):
         try:
             agent_repo = AgentGraphRepository()
-            self.organ_registry = OrganRegistry(agent_repo)
+            # Get session factory for database persistence
+            try:
+                from seedcore.database import get_async_pg_session_factory
+                session_factory = get_async_pg_session_factory()
+            except Exception as e:
+                logger.warning(f"⚠️ Could not get session factory for OrganRegistry: {e}")
+                session_factory = None
+            self.organ_registry = OrganRegistry(agent_repo, session_factory=session_factory)
         except Exception as e:
             logger.warning(f"⚠️ OrganRegistry init failed: {e}")
             self.organ_registry = None
+    
+    def _create_serializable_organ_registry(self) -> Optional[OrganRegistry]:
+        """
+        Create a lightweight OrganRegistry copy without session_factory for Ray serialization.
+        
+        The session_factory contains thread locks that cannot be pickled by Ray.
+        This lightweight copy can be passed to Organ actors. The Organ will work
+        in-memory only or pass sessions explicitly when needed.
+        
+        Returns:
+            Lightweight OrganRegistry instance without session_factory, or None if
+            self.organ_registry is None
+        """
+        if not self.organ_registry:
+            return None
+        
+        from seedcore.graph.agent_repository import AgentGraphRepository
+        # Create a new registry instance without session_factory to avoid serialization issues
+        lightweight_registry = OrganRegistry(
+            repo=AgentGraphRepository(),
+            session_factory=None,  # Don't pass session_factory to avoid serialization issues
+        )
+        return lightweight_registry
 
     async def _verify_neo4j(self, graph_client):
         """Optional hook to verify Neo4j connectivity asynchronously."""
@@ -1183,6 +1225,9 @@ class OrganismCore:
                 # --- Get configuration-driven actor options ---
                 actor_opts = self._get_organ_actor_options(organ_id)
                 
+                # --- Create lightweight OrganRegistry copy without session_factory for serialization ---
+                lightweight_registry = self._create_serializable_organ_registry()
+                
                 # --- Pass all dependencies to the Organ actor ---
                 organ = Organ.options(**actor_opts).remote(
                     organ_id=organ_id,
@@ -1197,8 +1242,8 @@ class OrganismCore:
                     # Stateful dependencies (pass config/ID instead of instances)
                     mw_manager_organ_id=organ_id,  # Pass organ_id, create MwManager locally in actor
                     checkpoint_cfg=self.checkpoint_cfg,
-                    # OrganRegistry for Tier-1 registration (currently kept for backward compatibility)
-                    organ_registry=self.organ_registry,
+                    # OrganRegistry for Tier-1 registration (lightweight copy without session_factory)
+                    organ_registry=lightweight_registry,
                 )
 
                 # Sanity check
@@ -1209,9 +1254,20 @@ class OrganismCore:
 
                 self.organs[organ_id] = organ
 
-                # Register organ in Tier-1 registry
+                # Register organ in Tier-1 registry (with DB persistence)
                 if self.organ_registry:
-                    self.organ_registry.record_organ(organ_id, organ)
+                    # Extract organ metadata from config
+                    organ_kind = cfg.get("kind") or cfg.get("description", "").split(".")[0] if cfg.get("description") else None
+                    organ_props = {
+                        "description": cfg.get("description"),
+                        "config": cfg,
+                    }
+                    await self.organ_registry.record_organ(
+                        organ_id, 
+                        organ,
+                        kind=organ_kind,
+                        props=organ_props,
+                    )
 
             except Exception as e:
                 logger.error(
@@ -1244,6 +1300,9 @@ class OrganismCore:
                 # --- Get configuration-driven actor options ---
                 actor_opts = self._get_organ_actor_options(organ_id)
                 
+                # --- Create lightweight OrganRegistry copy without session_factory for serialization ---
+                lightweight_registry = self._create_serializable_organ_registry()
+                
                 # --- Pass all dependencies to the Organ actor ---
                 organ = Organ.options(**actor_opts).remote(
                     organ_id=organ_id,
@@ -1258,8 +1317,8 @@ class OrganismCore:
                     # Stateful dependencies (pass config/ID instead of instances)
                     mw_manager_organ_id=organ_id,  # Pass organ_id, create MwManager locally in actor
                     checkpoint_cfg=self.checkpoint_cfg,
-                    # OrganRegistry for Tier-1 registration (currently kept for backward compatibility)
-                    organ_registry=self.organ_registry,
+                    # OrganRegistry for Tier-1 registration (lightweight copy without session_factory)
+                    organ_registry=lightweight_registry,
                 )
 
                 # Sanity check
@@ -1270,9 +1329,20 @@ class OrganismCore:
 
                 new_organs[organ_id] = organ
 
-                # Register organ in Tier-1 registry
+                # Register organ in Tier-1 registry (with DB persistence)
                 if self.organ_registry:
-                    self.organ_registry.record_organ(organ_id, organ)
+                    # Extract organ metadata from config
+                    organ_kind = cfg.get("kind") or cfg.get("description", "").split(".")[0] if cfg.get("description") else None
+                    organ_props = {
+                        "description": cfg.get("description"),
+                        "config": cfg,
+                    }
+                    await self.organ_registry.record_organ(
+                        organ_id, 
+                        organ,
+                        kind=organ_kind,
+                        props=organ_props,
+                    )
 
             except Exception as e:
                 logger.error(
@@ -1342,9 +1412,9 @@ class OrganismCore:
                 
                 # If behaviors are explicitly configured, use BaseAgent (migrated approach)
                 if agent_behaviors and agent_class_name == "BaseAgent":
-                    logger.debug(
-                        f"[OrganismCore] Using BaseAgent with behaviors for {spec.value} in {organ_id}"
-                    )
+                    # Only log at debug level, and only if behaviors are actually configured
+                    # (avoid redundant logging since we'll log the actual behaviors list below)
+                    pass  # Logging moved to behavior extraction section below
                 # Legacy: Auto-assign ConversationAgent for USER_LIAISON if no behaviors specified
                 elif spec.value == user_liaison_value and agent_class_name == "BaseAgent" and not agent_behaviors:
                     # Check if RoleProfile has default behaviors
@@ -1390,17 +1460,25 @@ class OrganismCore:
                     if "behaviors" in block:
                         agent_behaviors = block.get("behaviors", [])
                         logger.debug(
-                            f"[OrganismCore] Overriding behaviors for {spec.value} in {organ_id}: "
-                            f"{agent_behaviors}"
+                            f"[OrganismCore] Configuring {spec.value} in {organ_id} with behaviors: {agent_behaviors}"
                         )
+                    elif agent_behaviors:
+                        # Using RoleProfile defaults (no override in organs.yaml)
+                        logger.debug(
+                            f"[OrganismCore] Using RoleProfile default behaviors for {spec.value} in {organ_id}: {agent_behaviors}"
+                        )
+                    
                     if "behavior_config" in block:
                         # Merge behavior_config (organs.yaml overrides RoleProfile defaults)
                         override_config = block.get("behavior_config", {})
                         agent_behavior_config = role_profile.merge_behavior_config(override_config)
-                        logger.debug(
-                            f"[OrganismCore] Merged behavior_config for {spec.value} in {organ_id}: "
-                            f"{list(agent_behavior_config.keys())}"
-                        )
+                        # Only log if there are actual config overrides (avoid noise when no configs)
+                        if override_config:
+                            config_keys = list(override_config.keys())
+                            logger.debug(
+                                f"[OrganismCore] Merged behavior_config for {spec.value} in {organ_id}: "
+                                f"overriding configs for {len(config_keys)} behavior(s): {config_keys}"
+                            )
                 else:
                     # No RoleProfile found - use explicit values from organs.yaml only
                     agent_behaviors = block.get("behaviors", [])
@@ -1472,6 +1550,8 @@ class OrganismCore:
             ray.get_actor(agent_id, namespace=RAY_NAMESPACE)
 
             self.agent_to_organ_map[agent_id] = organ_id
+            # Track re-hydration time for grace period (treat as "new" for health checks)
+            self._agent_creation_times[agent_id] = asyncio.get_running_loop().time()
             logger.info(f"♻️ Agent {agent_id} found in Ray (re-hydrated).")
             return False
 
@@ -1485,6 +1565,9 @@ class OrganismCore:
         # Get configuration-driven agent actor options
         agent_opts = self._get_agent_actor_options(agent_id)
 
+        # Get database session for agent registration persistence
+        # Note: We pass None as session since Organ.create_agent() will handle DB persistence
+        # via OrganRegistry if available. The session is managed within the Organ actor.
         await organ_handle.create_agent.remote(
             agent_id=agent_id,
             specialization=spec,
@@ -1496,6 +1579,8 @@ class OrganismCore:
         )
 
         self.agent_to_organ_map[agent_id] = organ_id
+        # Track agent creation time for grace period in health checks
+        self._agent_creation_times[agent_id] = asyncio.get_running_loop().time()
         return True
 
     # ==================================================================
@@ -1878,6 +1963,8 @@ class OrganismCore:
 
             # Update local mapping
             self.agent_to_organ_map[agent_id] = organ_id
+            # Track JIT spawn time for grace period
+            self._agent_creation_times[agent_id] = asyncio.get_running_loop().time()
 
             self.logger.info(
                 f"[{organ_id}] ✅ JIT spawned agent {agent_id} with specialization {spec.value} "
@@ -2098,6 +2185,451 @@ class OrganismCore:
             # Just extract the keys (agent IDs) from the handles dictionary
             handles = await self.get_all_agent_handles()
             return list(handles.keys())
+
+    # =====================================================================
+    #  CAPABILITY CHANGE MANAGEMENT (PKG Integration)
+    # =====================================================================
+
+    async def handle_capability_changes(
+        self,
+        changes: List[Dict[str, Any]],
+        active_snapshot_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Handle capability change notifications from CapabilityMonitor.
+        
+        **PRIORITY: Dynamic updates from pkg_subtask_types override static YAML configs.**
+        
+        This processes changes to pkg_subtask_types and updates role profiles
+        for affected agents. Implements selective broadcasting and snapshot validation.
+        
+        When a capability is updated, this method:
+        1. Rebuilds the role profile from the capability data (pkg_subtask_types)
+        2. Registers it with SpecializationManager (overriding any static YAML profile)
+        3. Broadcasts the update to relevant organs/agents
+        
+        Args:
+            changes: List of change dictionaries with:
+                - capability_name: str
+                - change_type: str ("added", "updated", "removed")
+                - specialization: Optional[str]
+                - snapshot_id: int (for version consistency validation)
+                - new_capability: Optional[Dict] - Full capability data from pkg_subtask_types
+            active_snapshot_id: Optional active snapshot ID for validation.
+                              If None, will be fetched from PKG.
+        
+        Returns:
+            Dict with success status and processing details
+        """
+        try:
+            from seedcore.agents.roles.specialization import SpecializationManager
+            from seedcore.ops.pkg.client import PKGClient
+            from seedcore.database import get_async_pg_session_factory
+            
+            # Validate snapshot consistency if not provided
+            if active_snapshot_id is None:
+                session_factory = get_async_pg_session_factory()
+                pkg_client = PKGClient(session_factory)
+                active_snapshot = await pkg_client.get_active_snapshot()
+                
+                if not active_snapshot:
+                    self.logger.warning("No active PKG snapshot found, rejecting capability changes")
+                    return {
+                        "success": False,
+                        "error": "No active PKG snapshot found",
+                        "rejected_changes": len(changes),
+                    }
+                
+                active_snapshot_id = active_snapshot.id
+            
+            processed = {
+                "added": 0,
+                "updated": 0,
+                "removed": 0,
+                "rejected": 0,
+                "errors": [],
+            }
+
+            spec_manager = SpecializationManager.get_instance()
+
+            for change in changes:
+                change_type = change.get("change_type")
+                spec_str = change.get("specialization")
+                snapshot_id = change.get("snapshot_id")
+                capability_name = change.get("capability_name", "unknown")
+                new_capability = change.get("new_capability")  # Full capability data
+                
+                # Version consistency check (Snapshot Locking)
+                if snapshot_id is not None and snapshot_id != active_snapshot_id:
+                    self.logger.warning(
+                        f"⚠️ Rejecting capability change for '{capability_name}': "
+                        f"snapshot_id mismatch (change: {snapshot_id}, active: {active_snapshot_id}). "
+                        "This prevents logic drift from mixing DNA from different versions."
+                    )
+                    processed["rejected"] += 1
+                    continue
+                
+                # If specialization not provided, try to derive from capability name
+                if not spec_str:
+                    # Derive specialization from capability name (e.g., "monitor_zone_safety" -> "monitor_zone_safety")
+                    spec_str = capability_name.lower()
+                    self.logger.debug(
+                        f"No specialization provided for '{capability_name}', "
+                        f"deriving from capability name: '{spec_str}'"
+                    )
+
+                spec_str = str(spec_str).strip().lower()
+                if not spec_str:
+                    self.logger.warning(
+                        f"Could not determine specialization for capability '{capability_name}', skipping"
+                    )
+                    continue
+
+                try:
+                    if change_type == "added":
+                        # New capability - register/update role profile from capability data
+                        # This ensures dynamic pkg_subtask_types data overrides static YAML
+                        role_profile = self._build_role_profile_from_capability(
+                            spec_str, capability_name, new_capability
+                        )
+                        
+                        if role_profile:
+                            # Register/update role profile (overrides static YAML config)
+                            spec_manager.register_role_profile(role_profile)
+                            self.logger.info(
+                                f"✅ Registered role profile for '{spec_str}' from pkg_subtask_types "
+                                f"(overrides static YAML config if present)"
+                            )
+                        
+                        self.logger.info(
+                            f"➕ Capability '{capability_name}' added "
+                            f"with specialization '{spec_str}'. Agents will spawn on-demand."
+                        )
+                        processed["added"] += 1
+
+                    elif change_type == "updated":
+                        # Updated capability - rebuild role profile from capability data and override static config
+                        # **PRIORITY: pkg_subtask_types data takes precedence over static YAML**
+                        role_profile = self._build_role_profile_from_capability(
+                            spec_str, capability_name, new_capability
+                        )
+                        
+                        if not role_profile:
+                            self.logger.debug(
+                                f"Could not build role profile for '{spec_str}' from capability data, "
+                                "trying to get existing profile"
+                            )
+                            # Fallback: try to get existing profile
+                            role_profile = spec_manager.get_role_profile(spec_str)
+                        
+                        if role_profile:
+                            # **CRITICAL: Register the rebuilt profile to override static YAML config**
+                            # This ensures pkg_subtask_types is the source of truth
+                            spec_manager.register_role_profile(role_profile)
+                            self.logger.info(
+                                f"🔄 Updated role profile for '{spec_str}' from pkg_subtask_types "
+                                f"(overrides static YAML config)"
+                            )
+                            
+                            # Selective Broadcasting: Only notify organs with agents matching this specialization
+                            target_organs = await self.find_organs_with_specialization(spec_str)
+                            
+                            if not target_organs:
+                                self.logger.debug(
+                                    f"No organs found with specialization '{spec_str}', "
+                                    "role profile updated but no agents to notify"
+                                )
+                            else:
+                                self.logger.info(
+                                    f"📢 Broadcasting updated role profile for '{spec_str}' "
+                                    f"to {len(target_organs)} organ(s): {', '.join(target_organs)}"
+                                )
+                                
+                                # Broadcast only to relevant organs
+                                for organ_id in target_organs:
+                                    organ_handle = self.organs.get(organ_id)
+                                    if not organ_handle:
+                                        self.logger.warning(f"Organ {organ_id} not found, skipping update")
+                                        continue
+                                    
+                                    try:
+                                        await organ_handle.update_role_registry.remote(role_profile)
+                                        self.logger.debug(
+                                            f"✅ Updated role profile for '{spec_str}' in organ {organ_id}"
+                                        )
+                                    except Exception as e:
+                                        self.logger.warning(
+                                            f"Failed to update role registry in organ {organ_id}: {e}"
+                                        )
+                            processed["updated"] += 1
+                        else:
+                            self.logger.debug(
+                                f"Role profile not found for '{spec_str}', skipping update. "
+                                "Capability may not have executor/routing hints."
+                            )
+
+                    elif change_type == "removed":
+                        # Removed capability - log suggestion
+                        self.logger.info(
+                            f"➖ Capability '{capability_name}' removed "
+                            f"with specialization '{spec_str}'. "
+                            "Consider scaling down agents if no longer needed."
+                        )
+                        processed["removed"] += 1
+
+                except Exception as e:
+                    error_msg = f"Error processing change for '{capability_name}': {e}"
+                    self.logger.error(error_msg, exc_info=True)
+                    processed["errors"].append(error_msg)
+
+            return {
+                "success": True,
+                "processed": processed,
+                "total_changes": len(changes),
+                "active_snapshot_id": active_snapshot_id,
+            }
+
+        except Exception as e:
+            self.logger.error(f"Failed to process capability changes: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    def _build_role_profile_from_capability(
+        self,
+        spec_str: str,
+        capability_name: str,
+        capability_data: Optional[Dict[str, Any]],
+    ) -> Optional["RoleProfile"]:
+        """
+        Build RoleProfile from pkg_subtask_types capability data.
+        
+        **PRIORITY: This method ensures dynamic pkg_subtask_types data overrides static YAML configs.**
+        
+        Extracts role profile information from capability's default_params.executor and
+        default_params.routing fields, ensuring the database is the source of truth.
+        
+        Args:
+            spec_str: Specialization string (normalized, lowercase)
+            capability_name: Capability name from pkg_subtask_types
+            capability_data: Full capability dictionary from pkg_subtask_types
+            
+        Returns:
+            RoleProfile if capability data contains executor/routing hints, None otherwise
+        """
+        if not capability_data:
+            return None
+        
+        try:
+            from seedcore.agents.roles.specialization import RoleProfile, DynamicSpecialization
+            
+            default_params = capability_data.get("default_params", {})
+            if not isinstance(default_params, dict):
+                return None
+            
+            executor = default_params.get("executor", {})
+            routing = default_params.get("routing", {})
+            
+            # Handle legacy format: if executor/routing don't exist, try to derive from flat structure
+            if not isinstance(executor, dict) and not isinstance(routing, dict):
+                # Legacy format: check if we have agent_behavior or other hints
+                agent_behavior = default_params.get("agent_behavior", [])
+                if agent_behavior:
+                    # Create minimal executor structure from agent_behavior
+                    executor = {
+                        "behaviors": agent_behavior if isinstance(agent_behavior, list) else [agent_behavior],
+                    }
+                    routing = {}
+                else:
+                    # No executor/routing structure and no agent_behavior - can't build role profile
+                    return None
+            
+            # Ensure executor and routing are dicts
+            if not isinstance(executor, dict):
+                executor = {}
+            if not isinstance(routing, dict):
+                routing = {}
+            
+            # Extract skills from routing hints
+            skills = {}
+            if isinstance(routing, dict):
+                skills = routing.get("skills", {}) or {}
+            
+            # Extract tools (from both executor and routing)
+            tools = set()
+            if isinstance(executor, dict):
+                executor_tools = executor.get("tools", [])
+                if isinstance(executor_tools, list):
+                    tools.update(executor_tools)
+            if isinstance(routing, dict):
+                routing_tools = routing.get("tools", [])
+                if isinstance(routing_tools, list):
+                    tools.update(routing_tools)
+            
+            # Extract routing tags
+            tags = set()
+            if isinstance(routing, dict):
+                routing_tags = routing.get("routing_tags", [])
+                if isinstance(routing_tags, list):
+                    tags.update(routing_tags)
+            
+            # Extract behaviors and behavior_config (Behavior Plugin System)
+            behaviors = []
+            behavior_config = {}
+            if isinstance(executor, dict):
+                behaviors = executor.get("behaviors", [])
+                behavior_config = executor.get("behavior_config", {})
+                if not isinstance(behaviors, list):
+                    behaviors = []
+                if not isinstance(behavior_config, dict):
+                    behavior_config = {}
+            
+            # Handle legacy format: check for agent_behavior in default_params
+            if not behaviors and isinstance(default_params, dict):
+                agent_behavior = default_params.get("agent_behavior", [])
+                if agent_behavior:
+                    if isinstance(agent_behavior, list):
+                        behaviors = agent_behavior
+                    else:
+                        behaviors = [agent_behavior]
+            
+            # Extract zone_affinity and environment_constraints (if present)
+            zone_affinity = []
+            environment_constraints = {}
+            if isinstance(routing, dict):
+                zone_affinity = routing.get("zone_affinity", [])
+                environment_constraints = routing.get("environment_constraints", {})
+                if not isinstance(zone_affinity, list):
+                    zone_affinity = []
+                if not isinstance(environment_constraints, dict):
+                    environment_constraints = {}
+            
+            # Get or create specialization
+            from seedcore.agents.roles.specialization import get_specialization
+            
+            try:
+                spec = get_specialization(spec_str)
+            except KeyError:
+                # Create dynamic specialization if not found
+                spec = DynamicSpecialization(
+                    spec_str,
+                    capability_name.replace("_", " ").title(),
+                    metadata={
+                        "source": "pkg_subtask_types",
+                        "capability": capability_name,
+                    }
+                )
+            
+            # Create role profile from capability data
+            # This ensures pkg_subtask_types is the source of truth
+            role_profile = RoleProfile(
+                name=spec,
+                default_skills=skills,
+                allowed_tools=tools,
+                routing_tags=tags,
+                default_behaviors=list(behaviors),
+                behavior_config=dict(behavior_config),
+                zone_affinity=list(zone_affinity),
+                environment_constraints=dict(environment_constraints),
+            )
+            
+            return role_profile
+            
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to build role profile from capability '{capability_name}': {e}"
+            )
+            self.logger.debug("Build error details:", exc_info=True)
+            return None
+
+    async def find_organs_with_specialization(self, spec_str: str) -> List[str]:
+        """
+        Find organs that have agents with the given specialization.
+        
+        This implements selective broadcasting - only organs with relevant agents
+        receive role profile updates, reducing network traffic.
+        
+        Args:
+            spec_str: Specialization string (normalized, lowercase)
+            
+        Returns:
+            List of organ IDs that have agents with this specialization
+        """
+        target_organs = []
+        
+        if not self.organs:
+            return []
+        
+        # Method 1: Use organ_specs mapping (specialization -> organ_id)
+        # This is populated during agent creation and provides fast lookup
+        organ_id = self.organ_specs.get(spec_str)
+        if organ_id and organ_id in self.organs:
+            target_organs.append(organ_id)
+        
+        # Method 2: Check specialization_to_organ mapping (reverse lookup)
+        # This maps Specialization enum/DynamicSpecialization -> organ_id
+        for spec_protocol, organ_id in self.specialization_to_organ.items():
+            spec_value = (
+                spec_protocol.value if hasattr(spec_protocol, "value") else str(spec_protocol)
+            ).lower()
+            if spec_value == spec_str and organ_id not in target_organs and organ_id in self.organs:
+                target_organs.append(organ_id)
+        
+        # Method 3: Query organs directly to find agents with this specialization
+        # This is the most accurate as it checks actual agent state
+        # Query all organs in parallel for efficiency
+        async def check_organ(organ_id: str, organ_handle: Any) -> Optional[str]:
+            """Check if organ has agents with the specialization."""
+            try:
+                # List all agents in the organ
+                agent_ids_ref = organ_handle.list_agents.remote()
+                agent_ids = await self._ray_await(agent_ids_ref)
+                
+                if not agent_ids:
+                    return None
+                
+                # Check each agent's specialization
+                for agent_id in agent_ids:
+                    agent_info_ref = organ_handle.get_agent_info.remote(agent_id)
+                    agent_info = await self._ray_await(agent_info_ref)
+                    
+                    # Check specialization in agent info
+                    agent_spec = (
+                        agent_info.get("specialization", "") or 
+                        agent_info.get("specialization_name", "") or
+                        agent_info.get("specialization_value", "")
+                    ).lower()
+                    
+                    if agent_spec == spec_str:
+                        return organ_id
+                
+                return None
+            except Exception as e:
+                self.logger.debug(f"Error checking organ {organ_id} for specialization {spec_str}: {e}")
+                return None
+        
+        # Query all organs in parallel
+        check_tasks = [
+            check_organ(organ_id, organ_handle)
+            for organ_id, organ_handle in self.organs.items()
+            if organ_id not in target_organs  # Skip already found organs
+        ]
+        
+        if check_tasks:
+            results = await asyncio.gather(*check_tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, str) and result not in target_organs:
+                    target_organs.append(result)
+                elif isinstance(result, Exception):
+                    self.logger.debug(f"Error in organ check: {result}")
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_organs = []
+        for organ_id in target_organs:
+            if organ_id not in seen:
+                seen.add(organ_id)
+                unique_organs.append(organ_id)
+        
+        return unique_organs
 
     async def get_agent_info(self, agent_id: str) -> Dict[str, Any]:
         """
@@ -2423,6 +2955,8 @@ class OrganismCore:
 
                 await self._ray_await(ref)
                 self.agent_to_organ_map[agent_id] = organ_id
+                # Track evolution-created agent time for grace period
+                self._agent_creation_times[agent_id] = asyncio.get_running_loop().time()
                 new_agent_ids.append(agent_id)
                 logger.info(f"[evolve] Created agent {agent_id}")
 
@@ -2660,6 +3194,8 @@ class OrganismCore:
                     remove_ref = src_organ_handle.remove_agent.remote(agent_id)
                     await self._ray_await(remove_ref)
                     self.agent_to_organ_map[agent_id] = organ_id
+                    # Track migration time for grace period (migrated agents need time to stabilize)
+                    self._agent_creation_times[agent_id] = asyncio.get_running_loop().time()
                     total_agents_moved += 1
 
                 # Remove source organ from registry
@@ -2721,6 +3257,8 @@ class OrganismCore:
                     )
                     await self._ray_await(register_ref)
                     self.agent_to_organ_map[agent_id] = migrate_to
+                    # Track migration time for grace period (migrated agents need time to stabilize)
+                    self._agent_creation_times[agent_id] = asyncio.get_running_loop().time()
                     agents_migrated += 1
 
             # Remove organ from registry
@@ -2781,11 +3319,26 @@ class OrganismCore:
                             )
                             continue
 
-                        unhealthy_agents = [
-                            a
-                            for a, st in status.get("agents", {}).items()
-                            if not st.get("alive", False)
-                        ]
+                        # Filter out agents that are still in grace period (recently created)
+                        current_time = asyncio.get_running_loop().time()
+                        unhealthy_agents = []
+                        for agent_id, st in status.get("agents", {}).items():
+                            if not st.get("alive", False):
+                                # Check if agent is still in grace period
+                                creation_time = self._agent_creation_times.get(agent_id)
+                                if creation_time:
+                                    age = current_time - creation_time
+                                    if age < self._agent_health_grace_period:
+                                        # Agent is still initializing - skip health check
+                                        logger.debug(
+                                            f"[HealthLoop] Agent {agent_id} still initializing "
+                                            f"(age={age:.1f}s < grace_period={self._agent_health_grace_period}s), "
+                                            "skipping health check"
+                                        )
+                                        continue
+                                # Agent is unhealthy and past grace period
+                                unhealthy_agents.append(agent_id)
+                        
                         if unhealthy_agents:
                             logger.warning(
                                 f"[HealthLoop] Unhealthy agents in {organ_id}: {unhealthy_agents}"
@@ -2846,6 +3399,8 @@ class OrganismCore:
                             try:
                                 ref = organ.respawn_agent.remote(agent_id)
                                 await self._ray_await(ref)
+                                # Update creation time for respawned agent (grace period reset)
+                                self._agent_creation_times[agent_id] = asyncio.get_running_loop().time()
                             except Exception as e:
                                 logger.error(
                                     f"[Reconcile] Failed to respawn agent {agent_id}: {e}",
@@ -3072,6 +3627,9 @@ class OrganismCore:
             # Get configuration-driven actor options
             actor_opts = self._get_organ_actor_options(organ_id)
             
+            # --- Create lightweight OrganRegistry copy without session_factory for serialization ---
+            lightweight_registry = self._create_serializable_organ_registry()
+            
             new_organ = Organ.options(**actor_opts).remote(
                 organ_id=organ_id,
                 # Stateless dependencies
@@ -3085,8 +3643,8 @@ class OrganismCore:
                 # Stateful dependencies (pass config/ID instead of instances)
                 mw_manager_organ_id=organ_id,  # Pass organ_id, create MwManager locally in actor
                 checkpoint_cfg=self.checkpoint_cfg,
-                # OrganRegistry for Tier-1 registration (currently kept for backward compatibility)
-                organ_registry=self.organ_registry,
+                # OrganRegistry for Tier-1 registration (lightweight copy without session_factory)
+                organ_registry=lightweight_registry,
             )
         except Exception as e:
             logger.error(f"[OrganismCore] Failed to recreate organ: {e}")
@@ -3094,9 +3652,21 @@ class OrganismCore:
 
         self.organs[organ_id] = new_organ
 
-        # Register organ in Tier-1 registry
+        # Register organ in Tier-1 registry (with DB persistence)
         if self.organ_registry:
-            self.organ_registry.record_organ(organ_id, new_organ)
+            # Get organ config for metadata
+            cfg = next((c for c in self.organ_configs if c["id"] == organ_id), {})
+            organ_kind = cfg.get("kind") or cfg.get("description", "").split(".")[0] if cfg.get("description") else None
+            organ_props = {
+                "description": cfg.get("description"),
+                "config": cfg,
+            }
+            await self.organ_registry.record_organ(
+                organ_id, 
+                new_organ,
+                kind=organ_kind,
+                props=organ_props,
+            )
 
         logger.info(f"[OrganismCore] Organ `{organ_id}` recreated")
 

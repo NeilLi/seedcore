@@ -76,6 +76,9 @@ from ..predicates.safe_storage import SafeStorage
 
 # Operations
 from ..ops.pkg.manager import get_global_pkg_manager
+from ..ops.pkg.capability_monitor import CapabilityMonitor
+from ..ops.pkg.capability_registry import CapabilityRegistry
+from ..ops.pkg.client import PKGClient
 
 # Clients
 from ..serve.cognitive_client import CognitiveServiceClient
@@ -421,8 +424,129 @@ class Coordinator:
         self.routing_remote_enabled = False
         self.routing_remote_types = set()
 
+        # Capability Monitor (initialized lazily on startup)
+        self._capability_monitor: Optional[CapabilityMonitor] = None
+        self._capability_monitor_task: Optional[asyncio.Task] = None
+
         self._register_routes()
+        
+        # Start capability monitor in background (non-blocking)
+        # Use asyncio.create_task if we're in an async context, otherwise defer
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._start_capability_monitor())
+        except RuntimeError:
+            # No running loop - will start on first request or via endpoint
+            pass
+        
         logger.info("✅ Coordinator (Tier-0) initialized")
+
+    async def _ensure_capability_monitor(self) -> Optional[CapabilityMonitor]:
+        """
+        Lazy initialization of CapabilityMonitor.
+        Starts monitoring pkg_subtask_types changes and notifies OrganismService.
+        """
+        if self._capability_monitor is not None:
+            return self._capability_monitor
+
+        try:
+            # Initialize PKG components
+            session_factory = get_async_pg_session_factory()
+            pkg_client = PKGClient(session_factory)
+            capability_registry = CapabilityRegistry(pkg_client)
+
+            # Initial refresh
+            active_snapshot = await pkg_client.get_active_snapshot()
+            if active_snapshot:
+                await capability_registry.refresh(
+                    active_snapshot.id,
+                    register_dynamic_specs=True,
+                )
+                logger.info(
+                    f"✅ CapabilityRegistry initialized with snapshot {active_snapshot.id}"
+                )
+
+            # Create callback to notify OrganismService
+            async def on_capability_changes(changes: list) -> None:
+                """Callback when capability changes are detected."""
+                if not changes:
+                    return
+                
+                logger.info(
+                    f"📢 Notifying OrganismService of {len(changes)} capability changes"
+                )
+                try:
+                    # Notify OrganismService via RPC
+                    # Convert CapabilityChange objects to dicts for serialization
+                    # Include snapshot_id for version consistency validation
+                    # Include new_capability data so OrganismCore can rebuild role profiles
+                    # **PRIORITY: This ensures pkg_subtask_types data overrides static YAML configs**
+                    changes_dict = [{
+                        "capability_name": c.capability_name,
+                        "change_type": c.change_type,
+                        "specialization": c.specialization,
+                        "snapshot_id": c.snapshot_id,
+                        "new_capability": c.new_capability,  # Include full capability data for role profile rebuild
+                    } for c in changes]
+                    
+                    # Use Ray remote call if available, otherwise HTTP
+                    if hasattr(self.organism_client, "rpc_notify_capability_changes"):
+                        await self.organism_client.rpc_notify_capability_changes.remote(
+                            changes=changes_dict
+                        )
+                    else:
+                        # Fallback to HTTP POST if RPC not available
+                        await self.organism_client.post(
+                            "/capability-changes",
+                            json={"changes": changes_dict}
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to notify OrganismService of capability changes: {e}",
+                        exc_info=True
+                    )
+
+            # Create monitor (without organism_core - we notify via RPC instead)
+            monitor = CapabilityMonitor(
+                pkg_client=pkg_client,
+                capability_registry=capability_registry,
+                organism_core=None,  # We notify via RPC instead
+                poll_interval=float(os.getenv("CAPABILITY_MONITOR_POLL_INTERVAL", "30.0")),
+                auto_register_specs=True,
+                auto_manage_agents=False,  # OrganismService handles agent management
+                on_changes_callback=on_capability_changes,
+            )
+
+            # Start monitoring
+            await monitor.start()
+            self._capability_monitor = monitor
+
+            logger.info("✅ CapabilityMonitor started in CoordinatorService")
+            return monitor
+
+        except Exception as e:
+            logger.error(f"Failed to initialize CapabilityMonitor: {e}", exc_info=True)
+            return None
+
+    async def _start_capability_monitor(self) -> None:
+        """Start capability monitor in background."""
+        if self._capability_monitor_task is not None:
+            return
+
+        async def _init_and_start():
+            try:
+                monitor = await self._ensure_capability_monitor()
+                if monitor:
+                    logger.info("✅ CapabilityMonitor started successfully")
+            except Exception as e:
+                logger.error(f"CapabilityMonitor startup failed: {e}", exc_info=True)
+
+        # Start in background (use get_event_loop for compatibility)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+        self._capability_monitor_task = loop.create_task(_init_and_start())
 
     def _register_routes(self) -> None:
         """Unified Route Registration."""
@@ -447,6 +571,16 @@ class Coordinator:
             self.get_metrics,
             methods=["GET"],
             include_in_schema=False,
+        )
+        self.app.add_api_route(
+            f"{router_prefix}/capability-monitor/status",
+            self.capability_monitor_status,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
+            f"{router_prefix}/capability-monitor/start",
+            self.start_capability_monitor_endpoint,
+            methods=["POST"],
         )
         self.app.add_api_route(
             f"{router_prefix}/pkg-status",
@@ -1835,6 +1969,27 @@ class Coordinator:
                 "engine_type": None,
                 "error": str(e),
             }
+
+    async def capability_monitor_status(self):
+        """Get status of capability monitor."""
+        if self._capability_monitor is None:
+            return {
+                "enabled": False,
+                "running": False,
+                "error": "CapabilityMonitor not initialized",
+            }
+        
+        stats = self._capability_monitor.get_stats()
+        return {
+            "enabled": True,
+            "running": stats.get("is_running", False),
+            "stats": stats,
+        }
+
+    async def start_capability_monitor_endpoint(self):
+        """Manually start capability monitor."""
+        await self._start_capability_monitor()
+        return {"success": True, "message": "CapabilityMonitor startup initiated"}
 
 
 # Deployment Bind

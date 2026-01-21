@@ -19,22 +19,33 @@ class RayServeMetricsFilter(Filter):
     """
 
     def filter(self, record):
+        msg = record.getMessage()
+        pathname = record.pathname or ""
+        
         # Suppress "Ray Client is not connected" errors from metrics_utils
-        if "metrics_utils.py" in record.pathname or "router.py" in record.pathname:
-            if "Ray Client is not connected" in record.getMessage():
+        if "metrics_utils.py" in pathname or "router.py" in pathname:
+            if "Ray Client is not connected" in msg:
                 return False
-            if "push_metrics_to_controller" in record.getMessage():
+            if "push_metrics_to_controller" in msg:
                 return False
 
-        # Suppress Ray Client cleanup errors (harmless threading exceptions)
-        if "ray_client_streaming_rpc" in record.getMessage():
+        # Suppress Ray Client cleanup errors (harmless threading exceptions and callback errors)
+        if "ray_client_streaming_rpc" in msg:
             return False
-        if "ray/util/client" in record.pathname:
+        
+        # Suppress dataclient callback errors (harmless race condition when futures are cancelled)
+        if "ray/util/client" in pathname or "dataclient" in pathname.lower():
             if (
-                "InvalidStateError" in record.getMessage()
-                or "CANCELLED" in record.getMessage()
+                "InvalidStateError" in msg
+                or "CANCELLED" in msg
+                or "Callback error" in msg
+                or "set_result" in msg
             ):
                 return False
+        
+        # Suppress queue length deadline warnings (can be configured via env var)
+        if "queue length" in msg.lower() or "RAY_SERVE_QUEUE_LENGTH_RESPONSE_DEADLINE_S" in msg:
+            return False
 
         return True
 
@@ -142,6 +153,7 @@ def setup_logging(app_name: str = "", config_path_env: str = "SEEDCORE_LOGCFG"):
         logging.getLogger("ray.serve._private.router"),
         logging.getLogger("ray.util.client"),
         logging.getLogger("ray.util.client.dataclient"),
+        logging.getLogger("ray.util.client.common"),  # Also catches set_future errors
     ]
     for logger in ray_loggers:
         logger.addFilter(metrics_filter)
@@ -154,12 +166,19 @@ def setup_logging(app_name: str = "", config_path_env: str = "SEEDCORE_LOGCFG"):
 
     def filtered_excepthook(args):
         # Suppress harmless Ray Client cleanup errors
-        if "ray_client_streaming_rpc" in str(args.thread) or "ray/util/client" in str(
-            args.exc_type
+        # This includes both thread exceptions and callback errors from dataclient
+        exc_type_str = str(args.exc_type)
+        exc_value_str = str(args.exc_value) if args.exc_value else ""
+        thread_str = str(args.thread) if hasattr(args, 'thread') else ""
+        
+        # Check if it's from Ray's client/dataclient (harmless cleanup race condition)
+        if (
+            "ray_client_streaming_rpc" in thread_str 
+            or "ray/util/client" in exc_type_str
+            or "dataclient" in exc_type_str.lower()
+            or "dataclient" in exc_value_str.lower()
         ):
-            if "InvalidStateError" in str(args.exc_value) or "CANCELLED" in str(
-                args.exc_value
-            ):
+            if "InvalidStateError" in exc_value_str or "CANCELLED" in exc_value_str:
                 # This is a harmless cleanup race condition, suppress it
                 return
         # Call original handler for all other exceptions

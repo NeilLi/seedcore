@@ -22,14 +22,17 @@ class IntentEnricher:
     """
 
     # Mapping perceived 'required_service' attributes to canonical Specializations
+    # Note: Removed specializations (HVAC_CONTROLLER, LIGHTING_CONTROLLER, etc.) are now
+    # dynamically registered from pkg_subtask_types. Fallback to GENERALIST for unmapped services.
     SERVICE_MAP = {
-        "hvac_service": Specialization.HVAC_CONTROLLER,
-        "lighting_service": Specialization.LIGHTING_CONTROLLER,
-        "security_service": Specialization.SECURITY_DRONE_MANAGER,
-        "maintenance_service": Specialization.MAINTENANCE_MANAGER,
-        "robot_service": Specialization.ROBOT_COORDINATOR,
         "guest_request": Specialization.USER_LIAISON,
         "graph_query": Specialization.GENERALIST,
+        # Legacy service mappings fallback to GENERALIST (will be dynamically resolved from pkg_subtask_types)
+        "hvac_service": Specialization.GENERALIST,
+        "lighting_service": Specialization.GENERALIST,
+        "security_service": Specialization.GENERALIST,
+        "maintenance_service": Specialization.GENERALIST,
+        "robot_service": Specialization.GENERALIST,
     }
 
     @staticmethod
@@ -46,11 +49,10 @@ class IntentEnricher:
         if not spec:
             if ctx.domain == "device":
                 spec = Specialization.DEVICE_ORCHESTRATOR
-            elif ctx.domain == "robot":
-                spec = Specialization.ROBOT_COORDINATOR
             elif ctx.task_type == "chat":
                 spec = Specialization.USER_LIAISON
             else:
+                # Default fallback - specific specializations will be dynamically resolved from pkg_subtask_types
                 spec = Specialization.GENERALIST
 
         return RoutingIntent(

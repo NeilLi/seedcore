@@ -41,6 +41,11 @@ from .capability_registry import (
     CapabilityRegistry,
     CapabilityDef,
 )
+from .capability_monitor import (
+    CapabilityMonitor,
+    CapabilityChange,
+    CapabilitySnapshot,
+)
 from .dao import (
     PKGSnapshotsDAO,
     PKGDeploymentsDAO,
@@ -63,6 +68,10 @@ __all__ = [
     # Capabilities (DNA registry)
     "CapabilityRegistry",
     "CapabilityDef",
+    # Capability Monitor (runtime change detection)
+    "CapabilityMonitor",
+    "CapabilityChange",
+    "CapabilitySnapshot",
     # DAOs (modular data access)
     "PKGSnapshotsDAO",
     "PKGDeploymentsDAO",

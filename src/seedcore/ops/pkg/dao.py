@@ -102,6 +102,10 @@ class PKGSnapshotsDAO:
                              project's default.
         """
         self._sf = session_factory or get_async_pg_session_factory()
+        # Cache for active snapshot to avoid rebuilding when unchanged
+        self._cached_snapshot: Optional[PKGSnapshotData] = None
+        self._cached_snapshot_id: Optional[int] = None
+        self._cached_snapshot_checksum: Optional[str] = None
 
     async def get_active_snapshot(self) -> Optional[PKGSnapshotData]:
         """
@@ -109,6 +113,9 @@ class PKGSnapshotsDAO:
 
         This queries the pkg_snapshots table for the is_active=TRUE row
         and builds the complete PKGSnapshotData object.
+        
+        Uses caching to avoid rebuilding the snapshot if it hasn't changed
+        (based on snapshot ID and checksum).
         """
         sql = text("""
             SELECT s.id, s.version, s.checksum, s.notes
@@ -124,9 +131,30 @@ class PKGSnapshotsDAO:
 
             if not snapshot_mapping:
                 logger.warning("No active PKG snapshot found in database.")
+                self._cached_snapshot = None
+                self._cached_snapshot_id = None
+                self._cached_snapshot_checksum = None
                 return None
 
-            return await self._build_snapshot_data(snapshot_mapping, session)
+            snapshot_id = snapshot_mapping.get("id")
+            snapshot_checksum = snapshot_mapping.get("checksum")
+            
+            # Check cache: return cached snapshot if ID and checksum match
+            if (self._cached_snapshot is not None 
+                and self._cached_snapshot_id == snapshot_id 
+                and self._cached_snapshot_checksum == snapshot_checksum):
+                # Snapshot unchanged - return cached version (no logging)
+                return self._cached_snapshot
+
+            # Snapshot changed or not cached - rebuild
+            snapshot_data = await self._build_snapshot_data(snapshot_mapping, session)
+            
+            # Update cache
+            self._cached_snapshot = snapshot_data
+            self._cached_snapshot_id = snapshot_id
+            self._cached_snapshot_checksum = snapshot_checksum
+            
+            return snapshot_data
 
     async def get_snapshot_by_version(self, version: str) -> Optional[PKGSnapshotData]:
         """

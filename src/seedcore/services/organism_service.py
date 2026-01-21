@@ -11,7 +11,7 @@ import time
 import asyncio
 import uuid
 import traceback
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 import ray  # pyright: ignore[reportMissingImports]
 from ray import serve  # pyright: ignore[reportMissingImports]
@@ -513,6 +513,41 @@ class OrganismService:
         if not self._initialized:
             return {}
         return await self.organism_core.get_all_agent_handles()
+
+    async def rpc_notify_capability_changes(self, changes: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        RPC method to handle capability change notifications from CoordinatorService.
+        
+        This is a thin wrapper that delegates to OrganismCore.handle_capability_changes().
+        The core logic lives in OrganismCore to maintain separation of concerns.
+        
+        Args:
+            changes: List of change dictionaries with:
+                - capability_name: str
+                - change_type: str ("added", "updated", "removed")
+                - specialization: Optional[str]
+                - snapshot_id: int (for version consistency validation)
+        
+        Returns:
+            Dict with success status and details
+        """
+        if not self._initialized:
+            logger.warning("OrganismService not initialized, ignoring capability changes")
+            return {"success": False, "error": "Service not initialized"}
+
+        # Delegate to OrganismCore (core business logic)
+        return await self.organism_core.handle_capability_changes(changes)
+
+    @app.post("/capability-changes")
+    async def notify_capability_changes(self, request: Dict[str, Any]):
+        """
+        HTTP endpoint to handle capability change notifications.
+        
+        This is called by CoordinatorService's CapabilityMonitor when changes are detected.
+        """
+        changes = request.get("changes", [])
+        result = await self.rpc_notify_capability_changes(changes)
+        return result
 
     # ------------------------------------------------------------------
     #  HELPER METHODS
