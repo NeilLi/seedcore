@@ -155,7 +155,16 @@ class PKGManager:
             # P2: Validate snapshot integrity before loading
             integrity_ok, integrity_error = await self._validate_snapshot_integrity(snapshot)
             if not integrity_ok:
-                raise ValueError(f"Snapshot integrity check failed: {integrity_error}")
+                # In ADVISORY mode, warn but continue (allows recovery from checksum mismatches)
+                # In CONTROL mode, fail strictly (security requirement)
+                if self._mode == PKGMode.ADVISORY:
+                    logger.warning(
+                        f"Snapshot integrity check failed for {version} (ADVISORY mode - continuing): {integrity_error}. "
+                        f"Consider updating the checksum in the database to match the calculated value."
+                    )
+                else:
+                    # CONTROL mode: strict enforcement
+                    raise ValueError(f"Snapshot integrity check failed: {integrity_error}")
             
             # P1: Offload evaluator creation to thread pool (heavy operation)
             # This compiles WASM/Rego or loads native rules
@@ -395,6 +404,56 @@ class PKGManager:
                 "mode": self._mode.value,
                 "cortex_enabled": self._client is not None
             }
+    
+    async def reload_active_snapshot(self) -> Dict[str, Any]:
+        """
+        Manually reload the active snapshot from the database.
+        
+        Useful for debugging or recovering from load failures.
+        Clears the snapshot cache to force a fresh load from the database.
+        Returns a dictionary with success status and details.
+        """
+        try:
+            # Clear the snapshot cache to force fresh load
+            if hasattr(self._client, 'snapshots') and hasattr(self._client.snapshots, '_cached_snapshot'):
+                logger.info("Clearing snapshot cache to force fresh reload")
+                self._client.snapshots._cached_snapshot = None
+                self._client.snapshots._cached_snapshot_id = None
+                self._client.snapshots._cached_snapshot_checksum = None
+            
+            snap = await self._client.get_active_snapshot()
+            if snap:
+                logger.info(f"Reloading active snapshot: {snap.version} (id={snap.id})")
+                await self._load_and_activate_snapshot(snap, source="manual_reload")
+                evaluator = self.get_active_evaluator()
+                if evaluator:
+                    return {
+                        "success": True,
+                        "message": f"Successfully reloaded snapshot {snap.version}",
+                        "version": snap.version,
+                        "snapshot_id": snap.id,
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": "Snapshot loaded but evaluator creation failed",
+                        "version": snap.version,
+                        "snapshot_id": snap.id,
+                        "error": self._status.get("error"),
+                    }
+            else:
+                return {
+                    "success": False,
+                    "message": "No active snapshot found in database",
+                    "error": "No active snapshot",
+                }
+        except Exception as e:
+            logger.error(f"Manual snapshot reload failed: {e}", exc_info=True)
+            return {
+                "success": False,
+                "message": f"Failed to reload snapshot: {str(e)}",
+                "error": str(e),
+            }
 
     # --- Approve & Promote: Tier 1 → Tier 2/3 Promotion ---
 
@@ -439,14 +498,26 @@ class PKGManager:
     # --- Internals ---
 
     async def _load_initial_snapshot(self):
+        """Load the active snapshot on startup, with detailed error reporting."""
         try:
             snap = await self._client.get_active_snapshot()
             if snap:
+                logger.info(f"Found active snapshot: {snap.version} (id={snap.id})")
                 await self._load_and_activate_snapshot(snap, source="startup")
             else:
                 logger.warning("No active PKG snapshot found in DB")
+                self._status.update({
+                    "healthy": False,
+                    "error": "No active snapshot in database",
+                    "version": None
+                })
         except Exception as e:
-            logger.error(f"Initial load failed: {e}")
+            logger.error(f"Initial snapshot load failed: {e}", exc_info=True)
+            self._status.update({
+                "healthy": False,
+                "error": f"Snapshot load failed: {str(e)}",
+                "version": None
+            })
 
     async def _redis_listen_loop(self):
         """

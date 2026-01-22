@@ -88,15 +88,16 @@ class PKGClient:
         namespace: Optional[str] = None,
         subject: Optional[str] = None,
         predicate: Optional[str] = None,
-        limit: int = 100
+        limit: int = 100,
+        governed_only: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        Get active PKG-governed facts for policy evaluation.
+        Get active facts for policy evaluation.
         
         Returns facts that are:
-        - PKG-governed (created by PKG rules)
         - Currently valid (within temporal validity window)
         - Scoped to the specified snapshot
+        - Optionally filtered to PKG-governed facts only (if governed_only=True)
         
         Args:
             snapshot_id: PKG snapshot ID to filter facts
@@ -104,6 +105,7 @@ class PKGClient:
             subject: Optional subject filter for subject-specific hydration
             predicate: Optional predicate filter
             limit: Maximum number of facts to return
+            governed_only: If True, only return PKG-governed facts. If False (default), return all active facts.
         
         Returns:
             List of fact dictionaries with SPO triple structure
@@ -113,7 +115,8 @@ class PKGClient:
             namespace=namespace,
             subject=subject,
             predicate=predicate,
-            limit=limit
+            limit=limit,
+            governed_only=governed_only
         )
 
     async def promote_task_to_knowledge_graph(

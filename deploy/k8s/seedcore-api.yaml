@@ -45,6 +45,8 @@ spec:
               value: "127.0.0.1:8002"
             - name: SEEDCORE_SKIP_EAGER_RAY
               value: "1"
+            - name: OPA_KEEP_TEMP
+              value: "1"
           envFrom:
             - configMapRef:
                 name: seedcore-env
@@ -88,6 +90,8 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
           # ✅ Replaces ENTRYPOINT+CMD from Dockerfile
+          # Set file descriptor limit to prevent "too many open files" errors
+          # This is critical for WASM evaluation which may open many file descriptors
           command: ["/bin/bash", "-c"]
           args:
             - >
@@ -96,6 +100,12 @@ spec:
               --port 8002
               --proxy-headers
               --forwarded-allow-ips "*"
+          securityContext:
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
       volumes:
         - name: logs-volume
           emptyDir: {}

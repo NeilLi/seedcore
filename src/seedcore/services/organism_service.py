@@ -132,7 +132,7 @@ class OrganismService:
                 # We don't raise here to keep the actor alive for retries
                 # but readiness checks will fail.
 
-    async def _ensure_initialized(self, timeout: float = 180.0):
+    async def _ensure_initialized(self, timeout: float = 300.0):  # Increased from 180s to 300s (5 min) to account for agent grace period + initialization
         """
         Barrier method: Waits for initialization to complete.
         Call this at the start of every business-critical endpoint.
@@ -307,7 +307,7 @@ class OrganismService:
         """Manually trigger init (HTTP endpoint)."""
         # Trigger init if needed, then wait for completion
         self._start_init_if_needed()
-        timeout = float(os.getenv("ORG_INIT_TIMEOUT_S", "180"))
+        timeout = float(os.getenv("ORG_INIT_TIMEOUT_S", "300"))  # Increased from 180s to 300s (5 min) to account for agent grace period + initialization
         await self._ensure_initialized(timeout=timeout)
         return {"success": True, "message": "Organism initialized"}
 

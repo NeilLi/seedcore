@@ -33,6 +33,13 @@ prometheus_client==0.20.0
 aiorwlock==1.4.0
 aiofiles>=23.2.0  # Required for async file operations in MCP tools
 jsonschema>=4.22.0
+wasmtime==41.0.0  # WASM runtime for PKG policy evaluation
+
+# --- External Binary Dependencies (not Python packages) ---
+# OPA (Open Policy Agent) binary is required for PKG WASM compilation
+# Install via: curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64 && chmod +x opa && sudo mv opa /usr/local/bin/
+# Or see Dockerfile installation steps below
+# Verify: opa version
 
 # --- Data Handling ---
 pandas==2.2.2

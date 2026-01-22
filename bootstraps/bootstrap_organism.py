@@ -36,7 +36,7 @@ logger = ensure_serve_logger("seedcore.bootstrap.organism")
 ORGANISM_URL = ORG
 RAY_NAMESPACE = os.getenv("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
 
-HEALTH_TIMEOUT_S = int(os.getenv("ORGANISM_HEALTH_TIMEOUT_S", "180"))
+HEALTH_TIMEOUT_S = int(os.getenv("ORGANISM_HEALTH_TIMEOUT_S", "300"))  # Increased from 180s to 300s (5 min) to account for agent grace period + initialization
 HEALTH_INTERVAL_S = float(os.getenv("ORGANISM_HEALTH_INTERVAL_S", "2.0"))
 
 INIT_TRIGGER_TIMEOUT_S = int(os.getenv("ORGANISM_INIT_TRIGGER_TIMEOUT_S", "60"))

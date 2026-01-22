@@ -92,11 +92,19 @@ class SystemAggregator:
                 
                 if data is None:
                     # No endpoint worked, use empty patterns (degraded mode)
-                    logger.warning(
-                        f"Could not fetch E_patterns from CognitiveService. "
-                        f"Tried endpoints: {endpoints_to_try}. Using empty patterns. "
-                        f"Last error: {last_error}"
-                    )
+                    # Only log warning if there was an actual error (not just 404s)
+                    if last_error is not None:
+                        logger.warning(
+                            f"Could not fetch E_patterns from CognitiveService. "
+                            f"Tried endpoints: {endpoints_to_try}. Using empty patterns. "
+                            f"Last error: {last_error}"
+                        )
+                    else:
+                        # All endpoints returned 404 - this is expected if CognitiveService is not deployed
+                        logger.debug(
+                            "E_patterns endpoints not available (404 on all endpoints). "
+                            "Using empty patterns (degraded mode)."
+                        )
                     e_patterns_list = []
                 else:
                     # Extract e_patterns from response

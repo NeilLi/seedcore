@@ -2,9 +2,10 @@
 
 import time
 import logging
-import importlib.util
+import uuid
 from typing import Any, Dict, Optional, List, Protocol, runtime_checkable
 from dataclasses import dataclass
+from datetime import datetime
 
 # Import snapshot data structure and client
 from .dao import PKGSnapshotData
@@ -13,9 +14,30 @@ from .client import PKGClient
 logger = logging.getLogger(__name__)
 
 # --- Optional WASM Runtime Support ---
-_WASMTIME_AVAILABLE = importlib.util.find_spec("wasmtime") is not None
-if not _WASMTIME_AVAILABLE:
-    logger.warning("wasmtime not available - WASM engine will use fallback mode")
+def is_wasmtime_available() -> bool:
+    """
+    Runtime check for wasmtime availability.
+    
+    This function is called at runtime rather than module import time,
+    ensuring correct detection even if the environment changes after startup.
+    
+    Returns:
+        True if wasmtime can be imported and used, False otherwise
+    """
+    try:
+        import wasmtime  # type: ignore
+        # Verify wasmtime is actually usable by checking version
+        try:
+            # Try to create an engine to verify it works
+            test_engine = wasmtime.Engine()
+            del test_engine
+            return True
+        except Exception as e:
+            logger.warning(f"wasmtime imported but Engine() creation failed: {type(e).__name__}: {e}")
+            return False
+    except Exception as e:
+        logger.debug(f"wasmtime import failed: {type(e).__name__}: {repr(e)}")
+        return False
 
 
 @dataclass
@@ -57,20 +79,62 @@ _WASM_CACHE: Dict[str, Any] = {}  # Cache keyed by checksum
 def _get_cached_wasm(checksum: Optional[str], wasm_bytes: bytes) -> Optional[Any]:
     """Get cached WASM engine or None if not cached."""
     if checksum and checksum in _WASM_CACHE:
+        cached = _WASM_CACHE[checksum]
         logger.debug(f"Using cached WASM engine for checksum {checksum[:8]}...")
-        return _WASM_CACHE[checksum]
+        # Ensure cached instance has entrypoints resolved (for instances cached before this feature)
+        if hasattr(cached, '_entrypoint_name') and cached._entrypoint_name is None:
+            if cached._wasmtime_available and cached._instance:
+                logger.debug("Cached instance missing entrypoint resolution, resolving now...")
+                cached._resolve_entrypoint()
+        return cached
     return None
 
 
 def _cache_wasm(checksum: Optional[str], engine: Any) -> None:
-    """Cache WASM engine by checksum."""
+    """
+    Cache WASM engine by checksum.
+    
+    Uses simple FIFO eviction (keeps last 10 entries).
+    For systems with many policy snapshots, consider upgrading to LRU cache.
+    """
     if checksum:
         _WASM_CACHE[checksum] = engine
         logger.debug(f"Cached WASM engine for checksum {checksum[:8]}...")
-        # Limit cache size (keep last 10)
+        # Limit cache size (keep last 10) - FIFO eviction
+        # Note: If you have many personalized policies, consider upgrading to LRU cache
         if len(_WASM_CACHE) > 10:
             oldest_key = next(iter(_WASM_CACHE))
+            logger.debug(f"Evicting oldest WASM cache entry: {oldest_key[:8]}... (cache size limit: 10)")
             del _WASM_CACHE[oldest_key]
+
+
+def _json_safe(obj: Any) -> Any:
+    """
+    Recursively sanitize objects for JSON serialization.
+    
+    Converts UUID objects to strings, datetime objects to ISO format strings,
+    and handles nested dicts/lists. This prevents JSON serialization errors
+    when task_facts contains database objects with UUID or datetime fields.
+    
+    Args:
+        obj: Object to sanitize (can be dict, list, UUID, datetime, or any other type)
+        
+    Returns:
+        JSON-serializable version of the object
+    """
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_json_safe(v) for v in obj)
+    if isinstance(obj, set):
+        return [_json_safe(v) for v in obj]
+    return obj
 
 
 class OpaWasm:
@@ -93,24 +157,100 @@ class OpaWasm:
         self._checksum = checksum
         self._engine = None
         self._instance = None
+        self._memory = None  # Store reference to imported memory
         self._wasmtime_available = False
+        self._entrypoint_id = 0  # Default fallback entrypoint ID
+        self._entrypoint_name = None  # Resolved entrypoint name (e.g., 'pkg/result', 'authz/allow')
         
-        if _WASMTIME_AVAILABLE:
+        # Runtime check for wasmtime availability (not frozen at import time)
+        if is_wasmtime_available():
             try:
                 # Initialize wasmtime engine
                 import wasmtime  # type: ignore
+                logger.debug("wasmtime import successful, creating Engine...")
                 engine = wasmtime.Engine()
+                logger.debug("wasmtime Engine created, creating Module...")
                 module = wasmtime.Module(engine, wasm_bytes)
+                logger.debug("wasmtime Module created, creating Store...")
                 store = wasmtime.Store(engine)
-                self._instance = wasmtime.Instance(store, module, [])
+                
+                # OPA WASM modules require host function imports
+                # Check what imports the module expects
+                imports = module.imports  # imports is a property, not a method
+                
+                # Build import info list (module, name, type are properties, not methods)
+                import_info = []
+                for imp in imports:
+                    module_name = imp.module
+                    func_name = imp.name
+                    ty = imp.type
+                    import_info.append((module_name, func_name, ty))
+                
+                logger.debug(f"WASM module requires {len(import_info)} imports: {[(m, n) for m, n, _ in import_info]}")
+                
+                # Create linker and provide stub implementations for OPA host functions
+                linker = wasmtime.Linker(engine)
+                
+                # Helper functions for version-safe type detection
+                def _ft_results(ft: "wasmtime.FuncType"):
+                    r = ft.results
+                    return list(r() if callable(r) else r)
+                
+                def _is_i32(v) -> bool:
+                    return str(v) in ("i32", "ValType.i32")
+                
+                def _is_i64(v) -> bool:
+                    return str(v) in ("i64", "ValType.i64")
+                
+                def make_stub(func_name: str, ty: "wasmtime.FuncType"):
+                    results = _ft_results(ty)
+                    if results and (_is_i32(results[0]) or _is_i64(results[0])):
+                        return lambda *args: 0
+                    return lambda *args: None
+                
+                # 1) Define memory exactly as declared by the module
+                mem_import_ty = None
+                for mod_name, name, ty in import_info:
+                    if mod_name == "env" and name == "memory":
+                        if not isinstance(ty, wasmtime.MemoryType):
+                            raise RuntimeError(f"env::memory import is not MemoryType: {ty}")
+                        mem_import_ty = ty
+                        break
+                
+                if mem_import_ty is None:
+                    raise RuntimeError("OPA WASM expects env::memory import but it was not found")
+                
+                memory = wasmtime.Memory(store, mem_import_ty)
+                self._memory = memory  # Keep reference for evaluation
+                linker.define(store, "env", "memory", memory)
+                logger.debug(f"Defined env::memory import using module-declared type: {mem_import_ty}")
+                
+                # 2) Define function imports
+                for mod_name, name, ty in import_info:
+                    if mod_name == "env" and name == "memory":
+                        continue
+                    
+                    if isinstance(ty, wasmtime.FuncType):
+                        stub = make_stub(name, ty)
+                        func = wasmtime.Func(store, ty, stub)
+                        linker.define(store, mod_name, name, func)
+                    else:
+                        logger.warning(f"Unsupported import type {mod_name}::{name}: {ty}")
+                
+                logger.debug("wasmtime Linker configured with host functions, creating Instance...")
+                self._instance = linker.instantiate(store, module)
                 self._store = store
                 self._wasmtime_available = True
-                logger.info(f"OPA WASM engine loaded with wasmtime ({len(wasm_bytes)} bytes, checksum={checksum[:8] if checksum else 'N/A'}...)")
+                
+                # Resolve entrypoint by name during initialization (package-agnostic)
+                self._resolve_entrypoint()
+                
+                logger.info(f"OPA WASM engine loaded with wasmtime ({len(wasm_bytes)} bytes, checksum={checksum[:8] if checksum else 'N/A'}..., entrypoint={self._entrypoint_name or 'default'})")
             except Exception as e:
-                logger.warning(f"Failed to load WASM with wasmtime: {e}. Using fallback mode.")
+                logger.warning(f"Failed to load WASM with wasmtime: {type(e).__name__}: {e}. Using fallback mode.", exc_info=True)
                 self._wasmtime_available = False
         else:
-            logger.warning(f"OPA WASM engine loaded in fallback mode ({len(wasm_bytes)} bytes)")
+            logger.warning(f"wasmtime import check failed - OPA WASM engine loaded in fallback mode ({len(wasm_bytes)} bytes)")
             self._wasmtime_available = False
 
     @staticmethod
@@ -135,11 +275,379 @@ class OpaWasm:
         engine = OpaWasm(wasm_bytes, checksum)
         
         # Cache if checksum provided
-        if checksum and _WASMTIME_AVAILABLE:
+        # Only cache if engine actually has wasmtime loaded (not fallback mode)
+        if checksum and engine._wasmtime_available:
             _cache_wasm(checksum, engine)
         
         return engine
 
+    def _wasm_write(self, memory: Any, store: Any, addr: int, data: bytes) -> None:
+        """
+        Version-safe WASM memory write helper.
+        
+        Args:
+            memory: wasmtime.Memory instance
+            store: wasmtime.Store instance
+            addr: Memory address offset
+            data: Bytes to write
+        """
+        if hasattr(memory, 'write'):
+            # Most common API: write(store, data, offset)
+            memory.write(store, data, addr)
+        elif hasattr(memory, 'data'):
+            # Newer API: data() returns a memoryview/buffer
+            memory_data = memory.data(store)
+            memory_data[addr:addr + len(data)] = data
+        elif hasattr(memory, 'data_ptr'):
+            # Older API: data_ptr() returns a pointer, need ctypes
+            import ctypes
+            ptr = memory.data_ptr(store)
+            size = memory.data_len(store)
+            memory_data = (ctypes.c_uint8 * size).from_address(ptr)
+            memory_data[addr:addr + len(data)] = data
+        else:
+            raise RuntimeError("Unsupported wasmtime Memory API - no write/data/data_ptr methods found")
+    
+    def _wasm_read(self, memory: Any, store: Any, addr: int, length: int) -> bytes:
+        """
+        Version-safe WASM memory read helper.
+        
+        Args:
+            memory: wasmtime.Memory instance
+            store: wasmtime.Store instance
+            addr: Memory address offset
+            length: Number of bytes to read
+            
+        Returns:
+            Bytes read from memory
+        """
+        if hasattr(memory, 'read'):
+            # Most common API: read(store, offset, length) returns bytes
+            return bytes(memory.read(store, addr, length))
+        elif hasattr(memory, 'data'):
+            # Newer API: data() returns a memoryview/buffer
+            memory_data = memory.data(store)
+            return bytes(memory_data[addr:addr + length])
+        elif hasattr(memory, 'data_ptr'):
+            # Older API: data_ptr() returns a pointer, need ctypes
+            import ctypes
+            ptr = memory.data_ptr(store)
+            size = memory.data_len(store)
+            memory_data = (ctypes.c_uint8 * size).from_address(ptr)
+            return bytes(memory_data[addr:addr + length])
+        else:
+            raise RuntimeError("Unsupported wasmtime Memory API - no read/data/data_ptr methods found")
+    
+    def _wasm_get_memory_size(self, memory: Any, store: Any) -> int:
+        """
+        Get the size of WASM memory in bytes.
+        
+        Args:
+            memory: wasmtime.Memory instance
+            store: wasmtime.Store instance
+            
+        Returns:
+            Memory size in bytes
+        """
+        if hasattr(memory, 'data_len'):
+            # Most common API: data_len(store) returns size
+            return memory.data_len(store)
+        elif hasattr(memory, 'data'):
+            # Newer API: data() returns a memoryview/buffer with len()
+            memory_data = memory.data(store)
+            return len(memory_data)
+        elif hasattr(memory, 'data_ptr'):
+            # Older API: data_len() method exists
+            return memory.data_len(store)
+        else:
+            # Fallback: try to read a byte to see if memory is accessible
+            try:
+                self._wasm_read(memory, store, 0, 1)
+                # If we can read, estimate size (conservative)
+                return 1024 * 1024  # 1MB default
+            except Exception:
+                return 1024 * 1024  # 1MB default
+    
+    def _prepare_task_facts_for_wasm(self, task_facts: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Prepare task_facts for WASM evaluation by sanitizing non-serializable types
+        and stripping DB-only fields from governed_facts.
+        
+        This ensures:
+        1. UUID objects are converted to strings
+        2. datetime objects are converted to ISO format strings
+        3. DB metadata fields (id, created_at, etc.) are removed from governed_facts
+           to reduce payload size and keep ABI clean
+        
+        Args:
+            task_facts: Original task_facts dictionary
+            
+        Returns:
+            Sanitized task_facts dictionary safe for JSON serialization
+        """
+        # Create a copy to avoid mutating the original
+        prepared = task_facts.copy()
+        
+        # Strip DB-only fields from governed_facts if present
+        if "governed_facts" in prepared and isinstance(prepared["governed_facts"], list):
+            prepared["governed_facts"] = [
+                {
+                    "subject": f.get("subject"),
+                    "predicate": f.get("predicate"),
+                    "object_data": f.get("object_data"),
+                    "pkg_rule_id": f.get("pkg_rule_id"),
+                    # Note: We keep pkg_rule_id as it may be needed by policy rules
+                    # but strip: id, fact_id, created_at, valid_from, valid_to, snapshot_id, etc.
+                }
+                for f in prepared["governed_facts"]
+            ]
+        
+        # Strip DB-only fields from governed_facts_by_subject if present
+        if "governed_facts_by_subject" in prepared and isinstance(prepared["governed_facts_by_subject"], dict):
+            prepared["governed_facts_by_subject"] = {
+                subject: [
+                    {
+                        "subject": f.get("subject"),
+                        "predicate": f.get("predicate"),
+                        "object_data": f.get("object_data"),
+                        "pkg_rule_id": f.get("pkg_rule_id"),
+                    }
+                    for f in facts_list
+                ]
+                for subject, facts_list in prepared["governed_facts_by_subject"].items()
+            }
+        
+        # Recursively sanitize all remaining fields (UUID, datetime, etc.)
+        return _json_safe(prepared)
+    
+    def _wasm_read_null_terminated(self, memory: Any, store: Any, addr: int, max_size: int = 1024 * 1024) -> bytes:
+        """
+        Read a null-terminated string from WASM memory using chunked reading.
+        
+        This is safer than scanning byte-by-byte, especially with read() API
+        which doesn't allow unbounded scanning.
+        
+        Args:
+            memory: wasmtime.Memory instance
+            store: wasmtime.Store instance
+            addr: Memory address offset where string starts
+            max_size: Maximum size to read (safety limit)
+            
+        Returns:
+            Bytes read until null terminator (excluding null)
+        """
+        buf = bytearray()
+        offset = addr
+        chunk_size = 4096  # Read in 4KB chunks
+        
+        # Read first chunk to check if string starts with null terminator (empty string)
+        first_chunk = self._wasm_read(memory, store, offset, min(chunk_size, 1024))
+        if not first_chunk:
+            # Empty read - return empty bytes
+            return b""
+        
+        # Check if first byte is null terminator (empty string)
+        if first_chunk[0] == 0:
+            return b""
+        
+        # Look for null terminator in first chunk
+        null_pos = first_chunk.find(b"\x00")
+        if null_pos != -1:
+            # Found null terminator in first chunk
+            buf.extend(first_chunk[:null_pos])
+            return bytes(buf)
+        
+        # No null terminator in first chunk - append it and continue
+        buf.extend(first_chunk)
+        offset += len(first_chunk)
+        
+        while len(buf) < max_size:
+            # Read next chunk
+            remaining = max_size - len(buf)
+            read_len = min(chunk_size, remaining)
+            chunk = self._wasm_read(memory, store, offset, read_len)
+            
+            if not chunk:
+                break
+            
+            # Look for null terminator in chunk
+            null_pos = chunk.find(b"\x00")
+            if null_pos != -1:
+                # Found null terminator - append up to it and stop
+                buf.extend(chunk[:null_pos])
+                break
+            
+            # No null terminator - append whole chunk and continue
+            buf.extend(chunk)
+            offset += len(chunk)
+            
+            if len(buf) >= max_size:
+                raise ValueError(f"Result JSON string exceeds {max_size} byte limit")
+        
+        return bytes(buf)
+    
+    def _resolve_entrypoint(self) -> None:
+        """
+        Resolve entrypoint by name at runtime instead of assuming Index 0.
+        
+        This makes the evaluator package-agnostic. It queries the WASM module's
+        entrypoints export to get the mapping (e.g., {'pkg/result': 0, 'authz/allow': 1}),
+        then selects the appropriate entrypoint based on priority:
+        1. 'authz/allow' (preferred for authorization policies)
+        2. 'pkg/result' (common for PKG policies)
+        3. First available entrypoint
+        4. Index 0 (fallback)
+        
+        Stores the resolved entrypoint_id and entrypoint_name as instance variables
+        for use during evaluation.
+        """
+        if not self._wasmtime_available or not self._instance or not self._memory:
+            logger.debug("Cannot resolve entrypoints: wasmtime not available or instance not initialized")
+            self._entrypoint_id = 0
+            self._entrypoint_name = None
+            return
+        
+        try:
+            import json
+            logger.debug("Resolving OPA entrypoints by name...")
+            exports = self._instance.exports(self._store)
+            entrypoints_func = exports.get("entrypoints")
+            opa_json_dump = exports.get("opa_json_dump")
+            
+            if not entrypoints_func:
+                logger.warning("entrypoints function not available in WASM exports, using default entrypoint 0")
+                self._entrypoint_id = 0
+                self._entrypoint_name = None
+                return
+            
+            if not opa_json_dump:
+                logger.warning("opa_json_dump function not available in WASM exports, using default entrypoint 0")
+                self._entrypoint_id = 0
+                self._entrypoint_name = None
+                return
+            
+            # Call entrypoints() to get object pointer
+            entrypoints_obj_ptr = entrypoints_func(self._store)
+            logger.debug(f"entrypoints() returned object pointer: {entrypoints_obj_ptr}")
+            
+            if entrypoints_obj_ptr == 0:
+                logger.warning("entrypoints() returned null pointer, using default entrypoint 0")
+                self._entrypoint_id = 0
+                self._entrypoint_name = None
+                return
+            
+            # Dump the entrypoints object to JSON string
+            # Try opa_json_dump first, fallback to opa_value_dump if available
+            opa_value_dump = exports.get("opa_value_dump")
+            entrypoints_json_ptr = opa_json_dump(self._store, entrypoints_obj_ptr)
+            logger.debug(f"opa_json_dump returned JSON pointer: {entrypoints_json_ptr}")
+            
+            # If opa_json_dump fails or returns 0, try opa_value_dump
+            if entrypoints_json_ptr == 0 and opa_value_dump:
+                logger.debug("opa_json_dump returned 0, trying opa_value_dump...")
+                try:
+                    entrypoints_json_ptr = opa_value_dump(self._store, entrypoints_obj_ptr)
+                    logger.debug(f"opa_value_dump returned JSON pointer: {entrypoints_json_ptr}")
+                except Exception as e:
+                    logger.debug(f"opa_value_dump failed: {e}")
+            
+            if entrypoints_json_ptr == 0:
+                logger.warning("Both opa_json_dump and opa_value_dump returned null pointer for entrypoints, using default entrypoint 0")
+                self._entrypoint_id = 0
+                self._entrypoint_name = None
+                return
+            
+            # Read the JSON string from memory using tmp.py approach:
+            # Read ENTIRE memory buffer first, then slice from json_ptr (handles imported memory correctly)
+            try:
+                # Get memory size using helper method
+                memory_size = self._wasm_get_memory_size(self._memory, self._store)
+                
+                logger.debug(f"Reading entire memory buffer (size: {memory_size}) to find entrypoints JSON at {entrypoints_json_ptr}")
+                
+                # Read entire memory buffer (like tmp.py does)
+                # This ensures we're reading from the same buffer OPA wrote to
+                raw_mem = self._wasm_read(self._memory, self._store, 0, memory_size)
+                logger.debug(f"Read {len(raw_mem)} bytes from memory buffer")
+                
+                if entrypoints_json_ptr >= len(raw_mem):
+                    logger.warning(f"Entrypoints JSON pointer {entrypoints_json_ptr} is beyond memory size {len(raw_mem)}")
+                    self._entrypoint_id = 0
+                    self._entrypoint_name = None
+                    return
+                
+                # Slice from json_ptr and split on null terminator (exactly like tmp.py)
+                # raw_mem[json_ptr:] gets everything from json_ptr to end
+                # .split(b'\0')[0] gets everything up to first null terminator
+                data_slice = raw_mem[entrypoints_json_ptr:]
+                entrypoints_json_bytes = data_slice.split(b'\0')[0]
+                
+                logger.debug(f"Extracted {len(entrypoints_json_bytes)} bytes from memory at offset {entrypoints_json_ptr}")
+                
+                # Log first few bytes for debugging
+                if entrypoints_json_bytes:
+                    logger.debug(f"First 100 bytes (hex): {entrypoints_json_bytes[:100].hex()}")
+                    logger.debug(f"First 100 bytes (ascii): {repr(entrypoints_json_bytes[:100])}")
+                else:
+                    # Check what's actually at that address
+                    logger.debug(f"Memory at {entrypoints_json_ptr}: first 50 bytes (hex): {data_slice[:50].hex()}")
+                    logger.debug(f"Memory at {entrypoints_json_ptr}: first 50 bytes (ascii): {repr(data_slice[:50])}")
+                    
+                    # Also check heap pointer (like tmp.py does)
+                    heap_ptr_get = exports.get("opa_heap_ptr_get")
+                    if heap_ptr_get:
+                        heap_ptr = heap_ptr_get(self._store)
+                        logger.debug(f"OPA heap pointer: {heap_ptr}")
+                        if heap_ptr > 0 and heap_ptr < len(raw_mem):
+                            # Try reading from heap area
+                            heap_slice = raw_mem[max(0, heap_ptr - 100):heap_ptr + 200]
+                            logger.debug(f"Memory around heap pointer (hex): {heap_slice.hex()[:200]}")
+                
+            except Exception as e:
+                logger.error(f"Error reading entrypoints JSON from memory using tmp.py approach: {e}", exc_info=True)
+                entrypoints_json_bytes = b""
+            
+            if not entrypoints_json_bytes:
+                logger.warning(f"Could not read entrypoints JSON from memory at address {entrypoints_json_ptr}, using default entrypoint 0")
+                self._entrypoint_id = 0
+                self._entrypoint_name = None
+                return
+            
+            # Parse the entrypoint mapping
+            entrypoints_json_str = entrypoints_json_bytes.decode('utf-8').strip()
+            logger.debug(f"Entrypoints JSON string: {entrypoints_json_str}")
+            entrypoint_map = json.loads(entrypoints_json_str)
+            
+            logger.info(f"OPA entrypoints mapping resolved: {entrypoint_map}")
+            
+            # Priority Resolution: Look for 'authz/allow', then fallback to 'pkg/result'
+            if "authz/allow" in entrypoint_map:
+                self._entrypoint_id = entrypoint_map["authz/allow"]
+                self._entrypoint_name = "authz/allow"
+                logger.info(f"Resolved entrypoint: 'authz/allow' -> index {self._entrypoint_id}")
+            elif "pkg/result" in entrypoint_map:
+                self._entrypoint_id = entrypoint_map["pkg/result"]
+                self._entrypoint_name = "pkg/result"
+                logger.info(f"Resolved entrypoint: 'pkg/result' -> index {self._entrypoint_id}")
+            elif entrypoint_map:
+                # Use first available entrypoint if neither preferred one exists
+                self._entrypoint_name = list(entrypoint_map.keys())[0]
+                self._entrypoint_id = entrypoint_map[self._entrypoint_name]
+                logger.info(
+                    f"Resolved entrypoint: '{self._entrypoint_name}' -> index {self._entrypoint_id} "
+                    f"(first available from {list(entrypoint_map.keys())})"
+                )
+            else:
+                # Fallback to 0 if nothing matches, but log a warning
+                self._entrypoint_id = 0
+                self._entrypoint_name = None
+                logger.warning("No known entrypoints found in mapping, falling back to index 0")
+                
+        except Exception as e:
+            logger.error(f"Could not resolve entrypoints by name: {e}, falling back to entrypoint 0", exc_info=True)
+            self._entrypoint_id = 0
+            self._entrypoint_name = None
+    
     def evaluate(self, task_facts: Dict[str, Any]) -> EvaluationResult:
         """
         Runs the WASM policy evaluation.
@@ -162,24 +670,312 @@ class OpaWasm:
         
         if self._wasmtime_available and self._instance:
             try:
-                # Call OPA WASM entrypoint with task_facts
-                # OPA WASM expects input as JSON string
+                # OPA WASM ABI calling convention
+                # See: https://www.openpolicyagent.org/docs/wasm/
                 import json
-                input_json = json.dumps(task_facts)
                 
-                # Get the evaluate function from WASM instance
-                # Note: Actual function name depends on OPA WASM compilation
-                # This is a placeholder - adjust based on your OPA WASM interface
-                # Real OPA WASM uses: opa_eval(ctx, data_addr, data_len, input_addr, input_len, ...)
+                # Access exports - wasmtime API uses .get() method
                 exports = self._instance.exports(self._store)
-                evaluate_func = exports.get("evaluate") or exports.get("opa_eval")
                 
-                if evaluate_func:
-                    result_json = evaluate_func(self._store, input_json)
-                    result = json.loads(result_json) if isinstance(result_json, str) else result_json
+                # Use the memory we created in __init__ (imported memory, not exported)
+                memory = getattr(self, "_memory", None)
+                if memory is None:
+                    logger.warning("No memory attached to instance; cannot evaluate")
+                    return self._fallback_evaluate(task_facts)
+                
+                # Log available exports for debugging
+                available_exports = list(exports.keys())
+                logger.debug(f"Available WASM exports: {available_exports}")
+                
+                # Get OPA ABI functions from exports
+                # IMPORTANT: Use opa_eval (not eval) - opa_eval is the correct OPA ABI function
+                opa_eval_ctx_new = exports.get("opa_eval_ctx_new")
+                opa_eval_ctx_set_input = exports.get("opa_eval_ctx_set_input")
+                opa_eval_ctx_set_entrypoint = exports.get("opa_eval_ctx_set_entrypoint")
+                opa_eval_ctx_set_data = exports.get("opa_eval_ctx_set_data")
+                
+                # Use eval (standard OPA ABI function with signature: eval(ctx_addr) -> i32)
+                # opa_eval may have a different signature (e.g., 7 parameters) and should NOT be used
+                eval_func = exports.get("eval")
+                opa_eval_func = exports.get("opa_eval")  # Keep for reference but don't use
+                
+                # CRITICAL: Use eval, not opa_eval (opa_eval expects 7 params, eval expects 1)
+                opa_eval = eval_func
+                if not opa_eval:
+                    logger.warning("'eval' export not found - this may cause evaluation failures")
+                    # Fallback to opa_eval only if eval doesn't exist (will likely fail)
+                    opa_eval = opa_eval_func
+                
+                opa_eval_ctx_get_result = exports.get("opa_eval_ctx_get_result")
+                opa_json_parse = exports.get("opa_json_parse")
+                opa_json_dump = exports.get("opa_json_dump")
+                opa_malloc = exports.get("opa_malloc")
+                
+                # Heap pointer functions (may be needed for some OPA ABI versions)
+                opa_heap_ptr_get = exports.get("opa_heap_ptr_get")
+                opa_heap_ptr_set = exports.get("opa_heap_ptr_set")
+                
+                # Prefer "opa_free" over "opa_value_free" (both may exist)
+                opa_free = exports.get("opa_free") or exports.get("opa_value_free")
+                
+                # Use cached entrypoint resolved during initialization (package-agnostic)
+                # This was resolved by _resolve_entrypoint() during __init__
+                # If not resolved yet (e.g., cached instance), resolve now
+                if self._entrypoint_name is None and self._wasmtime_available:
+                    logger.debug("Entrypoint not resolved yet, resolving now...")
+                    self._resolve_entrypoint()
+                
+                target_entrypoint_id = self._entrypoint_id
+                target_rule_name = self._entrypoint_name
+                
+                if target_rule_name:
+                    logger.info(f"Using entrypoint: '{target_rule_name}' -> index {target_entrypoint_id}")
                 else:
-                    # Fallback: try default entrypoint pattern
-                    result = self._call_opa_entrypoint(task_facts)
+                    logger.warning(f"Using default entrypoint index {target_entrypoint_id} (entrypoint name not resolved - policy may not match input structure)")
+                
+                # Check if we have the required functions
+                required_funcs = {
+                    "opa_eval_ctx_new": opa_eval_ctx_new,
+                    "opa_eval_ctx_set_input": opa_eval_ctx_set_input,
+                    "eval": opa_eval,  # Must use eval, not opa_eval
+                    "opa_eval_ctx_get_result": opa_eval_ctx_get_result,
+                    "opa_json_parse": opa_json_parse,
+                    "opa_json_dump": opa_json_dump,
+                    "opa_malloc": opa_malloc,
+                }
+                
+                missing_funcs = [name for name, func in required_funcs.items() if func is None]
+                if missing_funcs:
+                    logger.warning(f"WASM module missing required OPA ABI functions: {missing_funcs} - using fallback")
+                    return self._fallback_evaluate(task_facts)
+                
+                if opa_eval == eval_func:
+                    logger.debug("Using 'eval' export (standard OPA ABI signature)")
+                elif opa_eval == opa_eval_func:
+                    logger.warning("Using 'opa_eval' export (may have incorrect signature - expect failures)")
+                
+                # Sanitize task_facts for JSON serialization (UUID, datetime, etc.)
+                # Also strip DB-only fields from governed_facts to reduce payload size
+                safe_task_facts = self._prepare_task_facts_for_wasm(task_facts)
+                
+                # Serialize input to JSON (now safe from UUID/datetime serialization errors)
+                input_json = json.dumps(safe_task_facts).encode('utf-8')
+                input_len = len(input_json)
+                
+                # Debug: Log input JSON structure (truncated for readability)
+                input_json_str = input_json.decode('utf-8')
+                logger.debug(f"Input JSON length: {input_len} bytes")
+                logger.debug(f"Input JSON (first 500 chars): {input_json_str[:500]}")
+                if "governed_facts" in safe_task_facts:
+                    logger.debug(f"Input contains {len(safe_task_facts.get('governed_facts', []))} governed_facts")
+                    if safe_task_facts.get("governed_facts"):
+                        logger.debug(f"First governed_fact: {safe_task_facts['governed_facts'][0]}")
+                
+                # Allocate memory for input JSON using opa_malloc
+                # opa_malloc returns an integer address
+                input_addr = opa_malloc(self._store, input_len)
+                
+                # Write input JSON to WASM memory using version-safe helper
+                self._wasm_write(memory, self._store, input_addr, input_json)
+                
+                # Parse JSON to get value address
+                input_value_addr = opa_json_parse(self._store, input_addr, input_len)
+                
+                # Parse empty data JSON (some policies may require data to be set)
+                # Set data to empty object {} if policy expects it
+                data_json = b"{}"
+                data_addr = opa_malloc(self._store, len(data_json))
+                self._wasm_write(memory, self._store, data_addr, data_json)
+                data_value_addr = opa_json_parse(self._store, data_addr, len(data_json))
+                
+                # Use the resolved entrypoint ID (by name) instead of iterating
+                # OPA WASM entrypoints map to package/rule paths:
+                # - Entrypoint 0 = first entrypoint (usually data.pkg.result or data.pkg.allow)
+                # - Entrypoint 1+ = additional rules/packages
+                # If wrong entrypoint is used, result may be empty even if rules match
+                result_bytes = None
+                result_json_str = None
+                successful_entrypoint = None
+                result = None
+                
+                # Create evaluation context (takes no parameters)
+                ctx_addr = opa_eval_ctx_new(self._store)
+                
+                # Set data if function is available (some policies require data)
+                if opa_eval_ctx_set_data:
+                    opa_eval_ctx_set_data(self._store, ctx_addr, data_value_addr)
+                
+                # Set entrypoint using the resolved ID
+                if opa_eval_ctx_set_entrypoint:
+                    logger.debug(f"Using OPA entrypoint {target_entrypoint_id} ({target_rule_name or 'unnamed'})")
+                    opa_eval_ctx_set_entrypoint(self._store, ctx_addr, target_entrypoint_id)
+                else:
+                    logger.debug("opa_eval_ctx_set_entrypoint not available - using default entrypoint")
+                
+                # Set input
+                opa_eval_ctx_set_input(self._store, ctx_addr, input_value_addr)
+                
+                # Initialize heap pointer if needed (some OPA ABI versions require this)
+                if opa_heap_ptr_set and opa_heap_ptr_get:
+                    try:
+                        # Get current heap pointer and set it (ensures heap is initialized)
+                        current_heap = opa_heap_ptr_get(self._store)
+                        if current_heap == 0:
+                            # Initialize heap pointer to a safe value
+                            opa_heap_ptr_set(self._store, 1024)  # Start heap at 1KB offset
+                            logger.debug("Initialized OPA heap pointer to 1024")
+                        else:
+                            logger.debug(f"OPA heap pointer already set: {current_heap}")
+                    except Exception as e:
+                        logger.debug(f"Could not initialize heap pointer (may not be needed): {e}")
+                
+                # Evaluate using eval (standard OPA ABI: eval(ctx_addr) -> i32)
+                # In wasmtime, we pass store as first parameter: eval(store, ctx_addr)
+                try:
+                    eval_result = opa_eval(self._store, ctx_addr)
+                    logger.debug(f"OPA eval returned status {eval_result} for entrypoint {target_entrypoint_id} ({target_rule_name or 'unnamed'})")
+                except Exception as e:
+                    error_msg = str(e)
+                    if "too few parameters" in error_msg or "too many parameters" in error_msg:
+                        logger.error(f"eval function signature mismatch: {e}. This indicates the WASM module may not be compatible.")
+                        # Return empty result on signature mismatch
+                        if opa_free:
+                            opa_free(self._store, input_addr)
+                        return self._fallback_evaluate(task_facts)
+                    else:
+                        # Re-raise non-signature errors
+                        raise
+                
+                if eval_result != 0:
+                    logger.debug(f"OPA evaluation returned non-zero status {eval_result} for entrypoint {target_entrypoint_id} (non-zero usually means error)")
+                    # Return empty result on evaluation error
+                    if opa_free:
+                        opa_free(self._store, input_addr)
+                    return EvaluationResult(subtasks=[], dag=[], provenance=[])
+                
+                # Get result value address
+                result_value_addr = opa_eval_ctx_get_result(self._store, ctx_addr)
+                
+                logger.debug(
+                    f"OPA result addresses for entrypoint {target_entrypoint_id} ({target_rule_name or 'unnamed'}): "
+                    f"eval_result={eval_result}, result_value_addr={result_value_addr} "
+                    f"(0=undefined/null, non-zero=valid OPA value)"
+                )
+                
+                if result_value_addr == 0:
+                    logger.debug(f"OPA evaluation returned undefined/null (result_value_addr=0) for entrypoint {target_entrypoint_id} - policy rule did not match or returned undefined")
+                    # Return empty result when rule doesn't match
+                    if opa_free:
+                        opa_free(self._store, input_addr)
+                    return EvaluationResult(subtasks=[], dag=[], provenance=[])
+                
+                # Check if result_value_addr looks suspicious (very small or constant)
+                if result_value_addr < 1024:
+                    logger.warning(f"OPA result_value_addr={result_value_addr} is suspiciously small (may be invalid)")
+                
+                # Dump result to JSON string in memory
+                result_str_addr = opa_json_dump(self._store, result_value_addr)
+                
+                logger.debug(
+                    f"OPA json_dump for entrypoint {target_entrypoint_id}: "
+                    f"result_value_addr={result_value_addr} -> result_str_addr={result_str_addr}"
+                )
+                
+                if result_str_addr == 0:
+                    logger.debug(f"OPA json_dump returned null address (result_str_addr=0) for entrypoint {target_entrypoint_id} - value may not be JSON-serializable")
+                    # Return empty result when JSON dump fails
+                    if opa_free:
+                        opa_free(self._store, input_addr)
+                    return EvaluationResult(subtasks=[], dag=[], provenance=[])
+                
+                # Check if result_str_addr looks suspicious
+                if result_str_addr < 1024:
+                    logger.warning(f"OPA result_str_addr={result_str_addr} is suspiciously small (may be invalid)")
+                
+                # Read result JSON string from memory using same approach as entrypoints
+                # (read entire memory buffer, then slice - handles imported memory correctly)
+                try:
+                    memory_size = self._wasm_get_memory_size(memory, self._store)
+                    logger.debug(f"Reading result JSON from memory at address {result_str_addr} (memory size: {memory_size})")
+                    
+                    if result_str_addr >= memory_size:
+                        logger.warning(f"Result JSON pointer {result_str_addr} is beyond memory size {memory_size}")
+                        result_bytes = b""
+                    else:
+                        # Read entire memory buffer (like we do for entrypoints)
+                        raw_mem = self._wasm_read(memory, self._store, 0, memory_size)
+                        
+                        # Slice from result_str_addr and split on null terminator
+                        result_slice = raw_mem[result_str_addr:]
+                        result_bytes = result_slice.split(b'\0')[0]
+                        
+                        logger.debug(
+                            f"OPA result read for entrypoint {target_entrypoint_id} ({target_rule_name or 'unnamed'}): "
+                            f"result_str_addr={result_str_addr}, bytes_read={len(result_bytes) if result_bytes else 0}"
+                        )
+                        
+                        # Log first bytes for debugging if empty
+                        if not result_bytes:
+                            logger.debug(f"Result memory at {result_str_addr}: first 50 bytes (hex): {result_slice[:50].hex()}")
+                            logger.debug(f"Result memory at {result_str_addr}: first 50 bytes (ascii): {repr(result_slice[:50])}")
+                            
+                            # Check heap pointer for diagnostics
+                            heap_ptr_get = exports.get("opa_heap_ptr_get")
+                            if heap_ptr_get:
+                                heap_ptr = heap_ptr_get(self._store)
+                                logger.debug(f"OPA heap pointer: {heap_ptr}")
+                except Exception as e:
+                    logger.warning(f"Error reading result JSON using full-memory approach: {e}, falling back to null-terminated read", exc_info=True)
+                    # Fallback to original method
+                    result_bytes = self._wasm_read_null_terminated(memory, self._store, result_str_addr)
+                
+                if result_bytes:
+                    # Check first byte to see if it's null-terminated immediately
+                    if len(result_bytes) == 0:
+                        logger.debug(f"Entrypoint {target_entrypoint_id} returned empty string (first byte was null terminator)")
+                    else:
+                        result_json_str = result_bytes.decode('utf-8').strip()
+                        logger.debug(f"Entrypoint {target_entrypoint_id} result (first 100 chars): {result_json_str[:100]}")
+                        
+                        if result_json_str and result_json_str != "null":
+                            successful_entrypoint = target_entrypoint_id
+                            logger.info(f"Found non-empty result at entrypoint {target_entrypoint_id} ({target_rule_name or 'unnamed'}): {len(result_bytes)} bytes, content: {result_json_str[:200]}")
+                        elif result_json_str == "null":
+                            logger.debug(f"Entrypoint {target_entrypoint_id} returned JSON null (policy returned null/undefined)")
+                        else:
+                            logger.debug(f"Entrypoint {target_entrypoint_id} returned empty string after decode/strip")
+                else:
+                    logger.debug(f"Entrypoint {target_entrypoint_id} returned empty bytes (null-terminated string starts with \\0)")
+                
+                # Free data memory
+                if opa_free:
+                    opa_free(self._store, data_addr)
+                
+                if not result_bytes or not result_json_str or result_json_str == "null":
+                    if successful_entrypoint is None:
+                        logger.debug(f"Entrypoint {target_entrypoint_id} ({target_rule_name or 'unnamed'}) returned empty/null results - policy may have no matches")
+                        if opa_free:
+                            opa_free(self._store, input_addr)
+                        return EvaluationResult(subtasks=[], dag=[], provenance=[])
+                
+                # Parse result JSON (result_json_str already decoded and stripped above)
+                try:
+                    logger.debug(f"OPA result JSON (first 200 chars): {result_json_str[:200]}")
+                    result = json.loads(result_json_str)
+                except UnicodeDecodeError as e:
+                    logger.error(f"Failed to decode OPA result as UTF-8: {e}. Raw bytes (hex, first 100): {result_bytes[:100].hex() if result_bytes else 'N/A'}")
+                    return self._fallback_evaluate(task_facts)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse OPA result JSON: {e}. Result string (first 500 chars): {result_json_str[:500] if result_json_str else 'N/A'}")
+                    # Log raw bytes for debugging
+                    if result_bytes:
+                        logger.debug(f"Raw bytes (hex, first 200): {result_bytes[:200].hex()}")
+                    return self._fallback_evaluate(task_facts)
+                
+                # Free allocated memory
+                if opa_free:
+                    opa_free(self._store, input_addr)
+                    # Note: OPA manages its own memory for value_addr and result_str_addr
                 
                 parsed_result = self._parse_opa_result(result)
                 
@@ -207,14 +1003,68 @@ class OpaWasm:
             }
         }
     
-    def _parse_opa_result(self, opa_result: Dict[str, Any]) -> EvaluationResult:
-        """Parse OPA result into EvaluationResult format."""
-        result_data = opa_result.get("result", {})
-        return EvaluationResult(
-            subtasks=result_data.get("subtasks", []),
-            dag=result_data.get("dag", []),
-            provenance=result_data.get("rules", result_data.get("provenance", []))
-        )
+    def _parse_opa_result(self, opa_result: Any) -> EvaluationResult:
+        """
+        Parse OPA result into EvaluationResult format.
+        
+        Handles multiple OPA result formats:
+        1. Dict with "result" key: {"result": {"subtasks": [...], ...}}
+        2. List of dicts with "result" keys: [{"result": {"subtasks": [...], ...}}, ...]
+        3. List directly: [{"subtasks": [...], ...}]
+        
+        Args:
+            opa_result: Parsed JSON result from OPA (can be dict or list)
+            
+        Returns:
+            EvaluationResult with subtasks, dag, and provenance
+        """
+        # Handle list format (OPA sometimes returns list of results)
+        if isinstance(opa_result, list):
+            if not opa_result:
+                return EvaluationResult(subtasks=[], dag=[], provenance=[])
+            
+            # If list contains dicts with "result" keys, extract and merge them
+            all_subtasks = []
+            all_dag = []
+            all_provenance = []
+            
+            for item in opa_result:
+                if isinstance(item, dict):
+                    # Check if item has "result" key
+                    if "result" in item:
+                        result_data = item["result"]
+                    else:
+                        # Item itself is the result
+                        result_data = item
+                    
+                    # Extract fields
+                    if isinstance(result_data, dict):
+                        all_subtasks.extend(result_data.get("subtasks", []))
+                        all_dag.extend(result_data.get("dag", []))
+                        all_provenance.extend(result_data.get("rules", result_data.get("provenance", [])))
+            
+            return EvaluationResult(
+                subtasks=all_subtasks,
+                dag=all_dag,
+                provenance=all_provenance
+            )
+        
+        # Handle dict format
+        elif isinstance(opa_result, dict):
+            result_data = opa_result.get("result", opa_result)  # Fallback to opa_result itself if no "result" key
+            if not isinstance(result_data, dict):
+                result_data = {}
+            
+            return EvaluationResult(
+                subtasks=result_data.get("subtasks", []),
+                dag=result_data.get("dag", []),
+                provenance=result_data.get("rules", result_data.get("provenance", []))
+            )
+        
+        # Unknown format - return empty result
+        else:
+            logger.warning(f"Unexpected OPA result format: {type(opa_result)}, expected dict or list")
+            return EvaluationResult(subtasks=[], dag=[], provenance=[])
     
     def _fallback_evaluate(self, task_facts: Dict[str, Any]) -> EvaluationResult:
         """Fallback evaluation when WASM runtime is unavailable."""
@@ -838,7 +1688,7 @@ class PKGEvaluator:
         snapshot_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Hydrates task_facts with active PKG-governed facts.
+        Hydrates task_facts with active facts from the facts table.
         
         This enables policy feedback loops where facts emitted by previous rule evaluations
         become available for subsequent evaluations. The system transforms from a "stateless
@@ -847,7 +1697,7 @@ class PKGEvaluator:
         
         Queries facts table for:
         - Active facts (valid_from <= now() AND (valid_to IS NULL OR valid_to > now()))
-        - PKG-governed (pkg_rule_id IS NOT NULL)
+        - All facts (not filtered to PKG-governed only) - includes system facts, initialization facts, etc.
         - Snapshot-scoped (snapshot_id matches current snapshot)
         
         Uses subject-specific hydration to keep payload small - only hydrates facts where
@@ -907,12 +1757,15 @@ class PKGEvaluator:
                 or "default"
             )
             
-            # Query active governed facts (subject-specific if subject available)
+            # Query active facts (subject-specific if subject available)
+            # Use governed_only=False to hydrate with all active facts, not just PKG-governed ones
+            # This allows policies to query all facts relevant to the snapshot
             facts = await self.pkg_client.get_active_governed_facts(
                 snapshot_id=snapshot_id,
                 namespace=namespace,
                 subject=task_subject,  # Subject-specific hydration
-                limit=100
+                limit=100,
+                governed_only=False  # Include all facts, not just PKG-governed
             )
             
             # Inject facts into task_facts as structured triples
@@ -935,7 +1788,7 @@ class PKGEvaluator:
             ))
             
             logger.debug(
-                f"[PKG] Hydrated {len(facts)} active governed facts "
+                f"[PKG] Hydrated {len(facts)} active facts "
                 f"(snapshot={snapshot_id}, namespace={namespace}"
                 + (f", subject={task_subject}" if task_subject else "")
                 + ")"

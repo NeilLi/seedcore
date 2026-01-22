@@ -88,18 +88,32 @@ async def lifespan(app: FastAPI):
     # Initialize PKG Manager (non-fatal if unavailable)
     try:
         if not get_global_pkg_manager():
+            logger.info("Initializing PKG Manager...")
             session_factory = get_async_pg_session_factory()
             pkg_client = PKGClient(session_factory)
             try:
                 redis_client = await get_async_redis_client()
-            except Exception:
+                logger.debug("Redis client available for PKG hot-swap")
+            except Exception as redis_err:
+                logger.warning("Redis unavailable for PKG hot-swap: %s", redis_err)
                 redis_client = None
             mode_str = os.getenv("PKG_MODE", PKGMode.ADVISORY.value).lower().strip()
             mode = PKGMode.CONTROL if mode_str == PKGMode.CONTROL.value else PKGMode.ADVISORY
-            await initialize_global_pkg_manager(pkg_client, redis_client, mode=mode)
-            logger.info("PKG Manager initialized (mode=%s)", mode.value)
+            pkg_mgr = await initialize_global_pkg_manager(pkg_client, redis_client, mode=mode)
+            
+            # Verify initialization succeeded
+            if pkg_mgr:
+                evaluator = pkg_mgr.get_active_evaluator()
+                if evaluator:
+                    logger.info("PKG Manager initialized successfully (mode=%s, version=%s)", mode.value, evaluator.version)
+                else:
+                    logger.warning("PKG Manager initialized but no active evaluator available. Check if snapshots exist in database.")
+            else:
+                logger.error("PKG Manager initialization returned None")
+        else:
+            logger.info("PKG Manager already initialized")
     except Exception as e:
-        logger.warning("PKG Manager initialization failed (non-fatal): %s", e)
+        logger.error("PKG Manager initialization failed (non-fatal): %s", e, exc_info=True)
     
     # Task processing is handled by Dispatcher Ray actors (started by bootstrap scripts)
     # No local task worker needed

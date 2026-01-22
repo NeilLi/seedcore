@@ -140,10 +140,12 @@ class PKGSnapshotsDAO:
             snapshot_checksum = snapshot_mapping.get("checksum")
             
             # Check cache: return cached snapshot if ID and checksum match
+            # NOTE: Cache is cleared when snapshot is reloaded via reload endpoint
             if (self._cached_snapshot is not None 
                 and self._cached_snapshot_id == snapshot_id 
                 and self._cached_snapshot_checksum == snapshot_checksum):
-                # Snapshot unchanged - return cached version (no logging)
+                # Snapshot unchanged - return cached version
+                logger.debug(f"Returning cached snapshot {snapshot_id} (checksum: {snapshot_checksum[:16]}...)")
                 return self._cached_snapshot
 
             # Snapshot changed or not cached - rebuild
@@ -155,6 +157,34 @@ class PKGSnapshotsDAO:
             self._cached_snapshot_checksum = snapshot_checksum
             
             return snapshot_data
+
+    async def get_snapshot_by_id(self, snapshot_id: int) -> Optional[PKGSnapshotData]:
+        """
+        Get a specific snapshot by its ID.
+
+        Args:
+            snapshot_id: Snapshot ID
+
+        Returns:
+            PKGSnapshotData if found, None otherwise
+        """
+        sql = text("""
+            SELECT s.id, s.version, s.checksum, s.notes
+            FROM pkg_snapshots s
+            WHERE s.id = :snapshot_id
+            LIMIT 1
+        """)
+
+        async with self._sf() as session:
+            res = await session.execute(sql, {"snapshot_id": snapshot_id})
+            snapshot_row = await _maybe_await(res.first())
+            snapshot_mapping = await _row_mapping(snapshot_row)
+
+            if not snapshot_mapping:
+                logger.error(f"Snapshot ID '{snapshot_id}' not found in database.")
+                return None
+
+            return await self._build_snapshot_data(snapshot_mapping, session)
 
     async def get_snapshot_by_version(self, version: str) -> Optional[PKGSnapshotData]:
         """
@@ -179,6 +209,81 @@ class PKGSnapshotsDAO:
                 return None
 
             return await self._build_snapshot_data(snapshot_mapping, session)
+    
+    async def store_wasm_artifact(
+        self,
+        snapshot_id: int,
+        wasm_bytes: bytes,
+        sha256: str,
+        created_by: str = "system"
+    ) -> None:
+        """
+        Store WASM artifact in pkg_snapshot_artifacts table.
+        
+        Args:
+            snapshot_id: Snapshot ID
+            wasm_bytes: WASM binary bytes
+            sha256: SHA256 checksum (64 hex chars)
+            created_by: Creator identifier (default: "system")
+        """
+        sql = text("""
+            INSERT INTO pkg_snapshot_artifacts 
+                (snapshot_id, artifact_type, artifact_bytes, sha256, created_by)
+            VALUES 
+                (:snapshot_id, 'wasm_pack', :artifact_bytes, :sha256, :created_by)
+            ON CONFLICT (snapshot_id) 
+            DO UPDATE SET
+                artifact_type = 'wasm_pack',
+                artifact_bytes = EXCLUDED.artifact_bytes,
+                sha256 = EXCLUDED.sha256,
+                created_by = EXCLUDED.created_by,
+                created_at = NOW()
+        """)
+        
+        async with self._sf() as session:
+            async with session.begin():
+                await session.execute(
+                    sql,
+                    {
+                        "snapshot_id": snapshot_id,
+                        "artifact_bytes": wasm_bytes,
+                        "sha256": sha256,
+                        "created_by": created_by
+                    }
+                )
+                logger.info(
+                    f"Stored WASM artifact for snapshot {snapshot_id}: "
+                    f"{len(wasm_bytes)} bytes, checksum: {sha256[:16]}..."
+                )
+    
+    async def update_snapshot_checksum(
+        self,
+        snapshot_id: int,
+        checksum: str
+    ) -> None:
+        """
+        Update snapshot checksum to match artifact.
+        
+        Args:
+            snapshot_id: Snapshot ID
+            checksum: SHA256 checksum (64 hex chars)
+        """
+        sql = text("""
+            UPDATE pkg_snapshots
+            SET checksum = :checksum
+            WHERE id = :snapshot_id
+        """)
+        
+        async with self._sf() as session:
+            async with session.begin():
+                await session.execute(
+                    sql,
+                    {
+                        "snapshot_id": snapshot_id,
+                        "checksum": checksum
+                    }
+                )
+                logger.info(f"Updated checksum for snapshot {snapshot_id}: {checksum[:16]}...")
 
     async def list_subtask_types(self, snapshot_id: int) -> List[Dict[str, Any]]:
         """
@@ -259,9 +364,32 @@ class PKGSnapshotsDAO:
 
         wasm_artifact: Optional[bytes] = None
         if artifact_dict:
+            artifact_type = artifact_dict.get("artifact_type")
+            artifact_bytes = artifact_dict.get("artifact_bytes")
+            
+            logger.info(
+                f"Found artifact for snapshot {snapshot_id}: type={artifact_type}, "
+                f"bytes_size={len(artifact_bytes) if artifact_bytes else 0}, "
+                f"artifact_bytes_type={type(artifact_bytes).__name__}"
+            )
+            
             # Only use if it's a WASM artifact
-            if artifact_dict.get("artifact_type") == "wasm_pack":
-                wasm_artifact = artifact_dict.get("artifact_bytes")
+            if artifact_type == "wasm_pack":
+                if artifact_bytes and len(artifact_bytes) > 0:
+                    wasm_artifact = artifact_bytes
+                    logger.info(f"✅ WASM artifact loaded successfully: {len(wasm_artifact)} bytes for snapshot {snapshot_id}")
+                else:
+                    logger.error(
+                        f"❌ WASM artifact found but artifact_bytes is NULL/empty for snapshot {snapshot_id}. "
+                        f"Type: {type(artifact_bytes)}, Value: {artifact_bytes}"
+                    )
+            else:
+                logger.info(
+                    f"Artifact type '{artifact_type}' is not 'wasm_pack' (expected 'wasm_pack'), "
+                    f"treating snapshot {snapshot_id} as native engine"
+                )
+        else:
+            logger.info(f"No artifact found for snapshot {snapshot_id}, using native engine")
 
         engine: str
         rules_list: List[Dict[str, Any]] = []
@@ -969,17 +1097,18 @@ class PKGCortexDAO:
         namespace: Optional[str] = None,
         subject: Optional[str] = None,
         predicate: Optional[str] = None,
-        limit: int = 100
+        limit: int = 100,
+        governed_only: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        Query active PKG-governed facts for policy evaluation.
+        Query active facts for policy evaluation.
         
-        Returns only facts that:
-        - Are PKG-governed (pkg_rule_id IS NOT NULL)
+        Returns facts that:
         - Belong to the specified snapshot
         - Are currently valid (within temporal validity window)
+        - Optionally filtered to PKG-governed facts only (if governed_only=True)
         
-        Uses facts_current_truth view for efficient queries (latest fact per triple).
+        Queries facts table directly using DISTINCT ON for latest fact per triple.
         This enables policy feedback loops where rules can query facts emitted by previous evaluations.
         
         Args:
@@ -988,6 +1117,8 @@ class PKGCortexDAO:
             subject: Optional subject filter - only return facts for this subject (for subject-specific hydration)
             predicate: Optional predicate filter - only return facts with this predicate
             limit: Maximum number of facts to return (default: 100)
+            governed_only: If True, only return PKG-governed facts (pkg_rule_id IS NOT NULL).
+                          If False (default), return all active facts for the snapshot.
         
         Returns:
             List of fact dictionaries with keys: id, namespace, subject, predicate, object_data,
@@ -1000,11 +1131,14 @@ class PKGCortexDAO:
         # Build WHERE conditions
         where_conditions = [
             "f.snapshot_id = :snapshot_id",
-            "f.pkg_rule_id IS NOT NULL",  # Only PKG-governed facts
             # Temporal validity: currently active facts
             "(f.valid_from IS NULL OR f.valid_from <= NOW())",
             "(f.valid_to IS NULL OR f.valid_to > NOW())"
         ]
+        
+        # Optionally filter for PKG-governed facts only
+        if governed_only:
+            where_conditions.append("f.pkg_rule_id IS NOT NULL")
         
         params = {
             "snapshot_id": snapshot_id,
@@ -1028,12 +1162,11 @@ class PKGCortexDAO:
         
         where_clause = " WHERE " + " AND ".join(where_conditions)
         
-        # Query facts_current_truth view for efficient latest-fact-per-triple queries
-        # This view uses DISTINCT ON for optimal performance and already filters for
-        # active temporal facts (valid_to > now() AND valid_from <= now())
-        # Note: We still add temporal checks in WHERE clause for clarity, though redundant
+        # Query facts table directly (instead of facts_current_truth view)
+        # Use DISTINCT ON to get latest fact per (namespace, subject, predicate) triple
+        # This gives us more control and avoids view dependencies
         sql = text(f"""
-            SELECT 
+            SELECT DISTINCT ON (f.namespace, f.subject, f.predicate)
                 f.id,
                 f.namespace,
                 f.subject,
@@ -1046,9 +1179,14 @@ class PKGCortexDAO:
                 f.created_at,
                 f.created_by,
                 f.validation_status
-            FROM facts_current_truth f
+            FROM facts f
             {where_clause}
-            ORDER BY f.created_at DESC
+            AND f.subject IS NOT NULL
+            AND f.predicate IS NOT NULL
+            ORDER BY 
+                f.namespace, f.subject, f.predicate,
+                COALESCE(f.valid_from, f.created_at) DESC,
+                f.created_at DESC
             LIMIT :limit
         """)
         
@@ -1057,10 +1195,11 @@ class PKGCortexDAO:
             facts = [dict(r._mapping) for r in res]
             
             logger.debug(
-                f"[PKG] Queried {len(facts)} active governed facts "
+                f"[PKG] Queried {len(facts)} active facts "
                 f"(snapshot={snapshot_id}, namespace={namespace_filter}"
                 + (f", subject={subject}" if subject else "")
                 + (f", predicate={predicate}" if predicate else "")
+                + (", governed_only=True" if governed_only else ", all_facts=True")
                 + ")"
             )
             

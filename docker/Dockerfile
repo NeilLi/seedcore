@@ -25,6 +25,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       # Useful for debugging network issues inside pods
       iputils-ping dnsutils
 
+# Install OPA (Open Policy Agent) binary for PKG WASM compilation
+RUN curl -L -o /usr/local/bin/opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64 \
+    && chmod +x /usr/local/bin/opa \
+    && opa version
+
 # ---- Python Environment Setup ----
 USER ray
 # Upgrade pip first

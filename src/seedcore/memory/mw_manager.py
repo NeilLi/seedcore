@@ -579,6 +579,7 @@ class MwManager:
             logger.error(
                 "get_hot_items_async error",
                 extra={"organ": self.organ_id, "namespace": self.namespace, "error": str(e2)},
+                exc_info=True,  # Include full exception traceback for debugging
             )
             return []
 

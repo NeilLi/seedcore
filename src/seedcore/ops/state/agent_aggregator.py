@@ -266,7 +266,7 @@ class AgentAggregator:
         - etc.
         """
         if not self.is_running():
-            logger.warning("get_system_metrics called before first poll.")
+            logger.debug("get_system_metrics called before first poll - returning empty metrics (not ready yet).")
             return {}
 
         async with self._lock:

@@ -232,8 +232,9 @@ async def get_system_metrics(response: Optional[Response] = None):
 
     # 3. Unpack Safely
     # Agent Metrics are CRITICAL. If this failed, we must error out.
-    if isinstance(results[0], Exception) or not results[0]:
-        error_msg = f"Agent Aggregator unavailable: {results[0]}"
+    # Distinguish between exceptions (actual errors) and empty dicts (not ready yet)
+    if isinstance(results[0], Exception):
+        error_msg = f"Agent Aggregator error: {results[0]}"
         logger.error(error_msg)
         # When called via RPC (response=None), return error dict instead of raising HTTPException
         if response is None:
@@ -241,6 +242,18 @@ async def get_system_metrics(response: Optional[Response] = None):
                 "success": False,
                 "error": error_msg,
                 "meta": {"status": "error", "latency_ms": (time.perf_counter() - start_ts) * 1000.0}
+            }
+        raise HTTPException(status_code=503, detail=error_msg)
+    elif not results[0]:
+        # Empty dict means aggregator hasn't completed first poll yet (not ready)
+        error_msg = "Agent Aggregator not ready yet (no metrics available)"
+        logger.debug(error_msg)
+        # When called via RPC (response=None), return error dict instead of raising HTTPException
+        if response is None:
+            return {
+                "success": False,
+                "error": error_msg,
+                "meta": {"status": "not_ready", "latency_ms": (time.perf_counter() - start_ts) * 1000.0}
             }
         raise HTTPException(status_code=503, detail=error_msg)
     
