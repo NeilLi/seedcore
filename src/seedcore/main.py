@@ -8,7 +8,6 @@ OrganismManager Serve deployment.
 """
 
 import os
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI  # pyright: ignore[reportMissingImports]
@@ -20,10 +19,6 @@ from .database import get_async_pg_engine  # must return postgresql+asyncpg engi
 from .models import TaskBase
 from .models.fact import Base as FactBase
 from .api.routers.tasks_router import router as tasks_router
-from .graph.task_embedding_worker import (
-    task_embedding_backfill_loop,
-    task_embedding_worker,
-)
 from .api.routers.control_router import router as control_router
 from .api.routers.pkg_router import router as pkg_router
 from .ops.pkg import PKGClient, get_global_pkg_manager, initialize_global_pkg_manager
@@ -119,13 +114,9 @@ async def lifespan(app: FastAPI):
     # No local task worker needed
     logger.info("Task processing handled by Dispatcher Ray actors")
 
-    if not hasattr(app.state, "task_embedding_queue"):
-        app.state.task_embedding_queue = asyncio.Queue()
-        app.state.task_embedding_pending = set()
-        app.state.task_embedding_pending_lock = asyncio.Lock()
-    app.state.task_embedding_worker = asyncio.create_task(task_embedding_worker(app.state))
-    app.state.task_embedding_backfill = asyncio.create_task(task_embedding_backfill_loop(app.state))
-    logger.info("Task embedding workers started")
+    # Note: Task embedding logic has been moved out of seedcore-api
+    # Embedding workers should be managed by a separate service/process
+    # See: src/seedcore/graph/task_embedding_worker.py
     
     logger.info("SeedCore API application startup complete")
     yield
@@ -135,23 +126,7 @@ async def lifespan(app: FastAPI):
     
     # Cancel background workers
     # Note: Dispatcher Ray actors are managed by bootstrap scripts, not by this FastAPI app
-
-    if hasattr(app.state, "task_embedding_backfill"):
-        logger.info("Stopping task embedding backfill...")
-        app.state.task_embedding_backfill.cancel()
-        try:
-            await app.state.task_embedding_backfill
-        except asyncio.CancelledError:
-            pass
-
-    if hasattr(app.state, "task_embedding_worker"):
-        logger.info("Stopping task embedding worker...")
-        app.state.task_embedding_worker.cancel()
-        try:
-            await app.state.task_embedding_worker
-        except asyncio.CancelledError:
-            pass
-        logger.info("Task embedding worker stopped")
+    # Note: Task embedding workers are managed separately (moved out of seedcore-api)
     
     # Dispose database engine
     eng: AsyncEngine = app.state.db_engine

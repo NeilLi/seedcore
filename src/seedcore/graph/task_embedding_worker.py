@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -249,12 +250,118 @@ async def task_embedding_worker(app_state: Any) -> None:
                     await session.rollback()
                     LTM_EMBED_JOB_REQUEUED.labels(job.reason, "exception").inc()
                     continue
+                
+                upserted_count = result.get("upserted", 0)
                 logger.debug(
                     "Task %s embedding updated via LTM (node_id=%s, upserted=%s)",
                     task_id,
                     node_id,
-                    result.get("upserted"),
+                    upserted_count,
                 )
+                
+                # If no embeddings were actually inserted, verify if embedding exists
+                # This can happen if embed_tasks_with_memory returns empty (e.g., no graph edges)
+                if upserted_count == 0:
+                    # Verify if embedding actually exists in database
+                    verify_result = await session.execute(
+                        text(
+                            """
+                            SELECT node_id
+                              FROM graph_embeddings_128
+                             WHERE node_id = :nid
+                               AND label = :label
+                            """
+                        ),
+                        {"nid": int(node_id), "label": TASK_EMBED_LABEL},
+                    )
+                    embedding_exists = verify_result.scalar_one_or_none() is not None
+                    
+                    if not embedding_exists:
+                        logger.warning(
+                            "Task %s (node_id=%s) embedding generation returned upserted=0 and no embedding exists. "
+                            "This likely means the task has no graph edges (isolated node) or the graph loader failed. "
+                            "Inserting placeholder to prevent backfill loop. "
+                            "Consider checking if the task has relationships in the graph.",
+                            task_id,
+                            node_id,
+                        )
+                        LTM_EMBED_JOB_SKIPPED.labels(job.reason, "no_graph_edges").inc()
+                        # Insert a placeholder record to prevent backfill loop
+                        # Use a special marker in props to indicate this is a failed embedding attempt
+                        try:
+                            await session.execute(
+                                text(
+                                    """
+                                    INSERT INTO graph_embeddings_128 (node_id, label, emb, props, model, content_sha256)
+                                    VALUES (
+                                        :nid,
+                                        :label,
+                                        CAST(:zero_vec AS vector),
+                                        CAST(:props AS jsonb),
+                                        :model,
+                                        :content_hash
+                                    )
+                                    ON CONFLICT (node_id, label) DO NOTHING
+                                    """
+                                ),
+                                {
+                                    "nid": int(node_id),
+                                    "label": TASK_EMBED_LABEL,
+                                    "zero_vec": json.dumps([0.0] * 128),  # Placeholder zero vector
+                                    "props": json.dumps({**props, "embedding_failed": True, "reason": "no_graph_edges"}),
+                                    "model": TASK_EMBED_MODEL,
+                                    "content_hash": content_hash,
+                                },
+                            )
+                            await session.commit()
+                            
+                            # Verify placeholder was actually inserted (or already exists)
+                            verify_placeholder = await session.execute(
+                                text(
+                                    """
+                                    SELECT node_id
+                                      FROM graph_embeddings_128
+                                     WHERE node_id = :nid
+                                       AND label = :label
+                                    """
+                                ),
+                                {"nid": int(node_id), "label": TASK_EMBED_LABEL},
+                            )
+                            placeholder_exists = verify_placeholder.scalar_one_or_none() is not None
+                            
+                            if placeholder_exists:
+                                logger.debug(
+                                    "Task %s placeholder inserted successfully (node_id=%s). "
+                                    "Task will be excluded from future backfill runs.",
+                                    task_id,
+                                    node_id,
+                                )
+                            else:
+                                logger.error(
+                                    "Task %s placeholder insertion failed or was skipped (node_id=%s). "
+                                    "This may cause repeated processing. Check database constraints.",
+                                    task_id,
+                                    node_id,
+                                )
+                        except Exception as placeholder_exc:
+                            await session.rollback()
+                            logger.error(
+                                "Failed to insert placeholder for task %s (node_id=%s): %s. "
+                                "Task may be processed repeatedly.",
+                                task_id,
+                                node_id,
+                                placeholder_exc,
+                                exc_info=True,
+                            )
+                        # Continue to remove from pending set (task is handled, even if placeholder failed)
+                        continue
+                    else:
+                        # Embedding exists (maybe from a previous run), so we're good
+                        logger.debug(
+                            "Task %s embedding already exists despite upserted=0 (likely no changes)",
+                            task_id,
+                        )
+                
                 await session.commit()
                 LTM_EMBED_JOB_PROCESSED.labels(job.reason).inc()
         except SQLAlchemyError as exc:
@@ -313,6 +420,9 @@ async def task_embedding_backfill_loop(app_state: Any) -> None:
     while True:
         try:
             async with session_factory() as session:
+                # Query tasks missing embeddings
+                # Note: The view excludes tasks that have ANY embedding record (including placeholders),
+                # so failed embeddings with placeholders won't be returned
                 rows = await session.execute(
                     text(
                         """
