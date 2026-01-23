@@ -1,5 +1,5 @@
 -- 014_pkg_ops.sql
--- Purpose: canary deployments, temporal facts, validation/promotion audit, device coverage
+-- Purpose: canary deployments, validation/promotion audit, device coverage
 
 -- ===== Targeted deployments (router/edge classes) =====
 CREATE TABLE IF NOT EXISTS pkg_deployments (
@@ -30,27 +30,6 @@ BEGIN
         RAISE NOTICE 'ℹ️  Unique constraint uq_pkg_deploy_lane already exists';
     END IF;
 END $$;
-
--- ===== Temporal policy facts (e.g., temporary access) =====
-CREATE TABLE IF NOT EXISTS pkg_facts (
-  id          BIGSERIAL PRIMARY KEY,
-  snapshot_id INT REFERENCES pkg_snapshots(id) ON DELETE CASCADE,
-  namespace   TEXT NOT NULL DEFAULT 'default',
-  subject     TEXT NOT NULL,                   -- e.g., 'guest:Ben'
-  predicate   TEXT NOT NULL,                   -- e.g., 'hasTemporaryAccess'
-  object      JSONB NOT NULL,                  -- e.g., {"service":"lounge"}
-  valid_from  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  valid_to    TIMESTAMPTZ,                     -- NULL = indefinite
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  created_by  TEXT NOT NULL DEFAULT 'system'
-);
-CREATE INDEX IF NOT EXISTS idx_pkg_facts_subject   ON pkg_facts(subject);
-CREATE INDEX IF NOT EXISTS idx_pkg_facts_predicate ON pkg_facts(predicate);
-CREATE INDEX IF NOT EXISTS idx_pkg_facts_window    ON pkg_facts(valid_from, valid_to);
-CREATE INDEX IF NOT EXISTS idx_pkg_facts_snapshot  ON pkg_facts(snapshot_id);
-
--- (Optional) Partition hint:
--- -- ALTER TABLE pkg_facts PARTITION BY RANGE (valid_from);
 
 -- ===== Validation fixtures & runs =====
 CREATE TABLE IF NOT EXISTS pkg_validation_fixtures (
