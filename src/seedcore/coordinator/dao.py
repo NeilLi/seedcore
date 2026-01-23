@@ -181,7 +181,11 @@ class TaskOutboxDAO:
         
         This method uses row-level locking to ensure concurrent-safe processing:
         - FOR UPDATE SKIP LOCKED prevents multiple workers from processing the same event
+        - Filters by available_at (scheduling/backoff) and attempts (poison pill protection)
         - Returns events that are ready to be processed (not locked by other workers)
+        
+        Production Tip: This query enables multiple Coordinator pods to process different
+        outbox rows concurrently without contention. Each pod claims different rows atomically.
         
         Args:
             session: Active database session (must be in a transaction).
@@ -196,8 +200,10 @@ class TaskOutboxDAO:
               SELECT id, payload
                 FROM {self._TABLE_NAME}
                WHERE event_type = 'nim_task_embed'
-            ORDER BY id
-               FOR UPDATE SKIP LOCKED
+                 AND available_at <= NOW()  -- Only claim events that are ready (respects backoff)
+                 AND COALESCE(attempts, 0) < 10  -- Poison pill protection (max 10 retries)
+            ORDER BY available_at ASC, id ASC  -- Process oldest available events first
+               FOR UPDATE SKIP LOCKED  -- The "Magic" concurrency command - prevents pod contention
                LIMIT :limit
             )
             SELECT id, payload FROM cte

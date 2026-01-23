@@ -1,4 +1,8 @@
-"""Asynchronous task embedding producer/consumer for LTM embeddings."""
+"""
+Unified Task Embedding System for SeedCore.
+Focuses on 1024d embeddings for the Knowledge Graph and Unified Cortex.
+This module supports both synchronous execution (Coordinator) and background workers.
+"""
 
 from __future__ import annotations
 
@@ -6,22 +10,22 @@ import asyncio
 import json
 import logging
 import os
+import hashlib
 from dataclasses import dataclass
-from hashlib import sha256
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List, Union
 from uuid import UUID
 
 from sqlalchemy import text  # pyright: ignore[reportMissingImports]
-from sqlalchemy.exc import SQLAlchemyError  # pyright: ignore[reportMissingImports]
+from prometheus_client import Counter  # pyright: ignore[reportMissingImports]
 
 from seedcore.database import get_async_pg_session_factory
 from seedcore.utils.ray_utils import ensure_ray_initialized
-from prometheus_client import Counter  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
+# --- Configuration Constants ---
 TASK_EMBED_LABEL = os.getenv("TASK_EMBED_LABEL", "task.primary")
-TASK_EMBED_MODEL = os.getenv("TASK_EMBED_MODEL", "seedcore-ltm-fusion-v1")
+TASK_EMBED_MODEL = os.getenv("TASK_EMBED_MODEL", "text-embedding-004")
 TASK_EMBED_K_HOPS = int(os.getenv("TASK_EMBED_K_HOPS", "2"))
 TASK_EMBED_TEXT_MAX_CHARS = int(os.getenv("TASK_EMBED_TEXT_MAX_CHARS", "16000"))
 TASK_EMBED_BACKFILL_INTERVAL_S = int(os.getenv("TASK_EMBED_BACKFILL_INTERVAL_S", "120"))
@@ -34,11 +38,27 @@ VALID_TASK_EMBED_LABELS = frozenset({"task.primary", "task.output", "default"})
 
 if TASK_EMBED_LABEL not in VALID_TASK_EMBED_LABELS:
     logger.warning(
-        "TASK_EMBED_LABEL=%s is not in the recognised label set %s; downstream consumers must "
-        "be prepared for this custom label.",
+        "TASK_EMBED_LABEL=%s not in recognised set %s; ensure views are aligned.",
         TASK_EMBED_LABEL,
         sorted(VALID_TASK_EMBED_LABELS),
     )
+
+# --- Metrics ---
+LTM_EMBED_ENQUEUE_OK = Counter(
+    "ltm_embed_enqueue_ok_total", "Jobs enqueued", ["reason"]
+)
+LTM_EMBED_ENQUEUE_DEDUPE = Counter(
+    "ltm_embed_enqueue_dedupe_total", "Enqueues skipped (already pending)", ["reason"]
+)
+LTM_EMBED_JOB_PROCESSED = Counter(
+    "ltm_embed_jobs_processed_total", "Successful 1024d embeddings", ["reason"]
+)
+LTM_EMBED_JOB_SKIPPED = Counter(
+    "ltm_embed_jobs_skipped_total", "Skipped embeddings", ["reason", "why"]
+)
+LTM_EMBED_JOB_REQUEUED = Counter(
+    "ltm_embed_jobs_requeued_total", "Transient failures re-queued", ["reason", "why"]
+)
 
 
 @dataclass(frozen=True)
@@ -47,446 +67,247 @@ class TaskEmbeddingJob:
     reason: str = "unspecified"
 
 
-async def enqueue_task_embedding_job(
-    app_state: Any, task_id: UUID | str, *, reason: str = "manual"
-) -> bool:
-    """Enqueue a task for embedding if the background worker is available."""
+# --- Shared Logic ---
 
+
+def build_task_text(
+    description: Optional[str], task_type: Optional[str], params_pretty: Optional[str]
+) -> str:
+    """Builds the deterministic text payload used for hashing and embedding."""
+    parts = [
+        p.strip() for p in [description, task_type, params_pretty] if p and p.strip()
+    ]
+    text_blob = "\n".join(parts)
+    return text_blob[:TASK_EMBED_TEXT_MAX_CHARS]
+
+
+async def _get_embedder_handle():
+    """Obtains the Ray Actor handle for the LTM Embedder."""
+    if not ensure_ray_initialized():
+        logger.warning("Ray not initialized; cannot obtain LTM embedder")
+        return None
+    import ray  # pyright: ignore[reportMissingImports]
+
+    try:
+        return ray.get_actor(LTM_EMBEDDER_ACTOR_NAME, namespace=AGENT_NAMESPACE)
+    except ValueError:
+        logger.debug("Creating LTMEmbedder actor '%s'", LTM_EMBEDDER_ACTOR_NAME)
+        # In production, usually the bootstrap script starts this, but we provide a fallback
+        from seedcore.graph.ltm_embeddings import LTMEmbedder
+
+        return LTMEmbedder.options(
+            name=LTM_EMBEDDER_ACTOR_NAME, namespace=AGENT_NAMESPACE, lifetime="detached"
+        ).remote()
+
+
+# --- The "Coordinator" Direct Execution Function ---
+
+
+async def generate_and_persist_task_embedding(
+    task_id: Union[UUID, str],
+    description: Optional[str],
+    task_type: Optional[str],
+    params: Dict[str, Any],
+    reason: str = "coordinator_execute",
+) -> Optional[List[float]]:
+    """
+    Primary 1024d embedding logic.
+    1. Checks for changes via SHA256.
+    2. Calls Ray for 1024d vector.
+    3. Persists to graph_embeddings_1024.
+    """
+    task_id_str = str(task_id)
+    params_pretty = json.dumps(params, indent=2)
+    text_blob = build_task_text(description, task_type, params_pretty)
+
+    if not text_blob:
+        logger.debug("Task %s has empty embedding payload; skipping", task_id_str)
+        LTM_EMBED_JOB_SKIPPED.labels(reason, "empty_content").inc()
+        return None
+
+    content_hash = hashlib.sha256(text_blob.encode("utf-8")).hexdigest()
+    session_factory = get_async_pg_session_factory()
+
+    try:
+        async with session_factory() as session:
+            # 1. Ensure node mapping exists
+            ensure_result = await session.execute(
+                text("SELECT ensure_task_node(CAST(:tid AS uuid))"),
+                {"tid": task_id_str},
+            )
+            node_id = ensure_result.scalar_one_or_none()
+            if node_id is None:
+                logger.warning("ensure_task_node returned NULL for %s", task_id_str)
+                return None
+
+            # 2. Check for existing identical embedding
+            existing = await session.execute(
+                text("""
+                    SELECT emb FROM graph_embeddings_1024 
+                    WHERE node_id = :nid AND label = :label AND content_sha256 = :hash
+                """),
+                {"nid": node_id, "label": TASK_EMBED_LABEL, "hash": content_hash},
+            )
+            vec = existing.scalar_one_or_none()
+            if vec:
+                logger.debug(
+                    "Task %s 1024d embedding up-to-date; skipping Ray call", task_id_str
+                )
+                LTM_EMBED_JOB_SKIPPED.labels(reason, "up_to_date").inc()
+                return vec
+
+            # 3. Ray Execution
+            embedder = await _get_embedder_handle()
+            if not embedder:
+                return None
+
+            import ray  # pyright: ignore[reportMissingImports]
+
+            # Note: We use the remote actor to generate the 1024d vector
+            # The 'k' hops logic is handled within the actor's upsert if necessary
+            result = await asyncio.to_thread(
+                ray.get,
+                embedder.upsert_task_embeddings.remote(
+                    [int(node_id)],
+                    k=TASK_EMBED_K_HOPS,
+                    label=TASK_EMBED_LABEL,
+                    props_map={
+                        int(node_id): {"sha256": content_hash, "source": reason}
+                    },
+                    model_map={int(node_id): TASK_EMBED_MODEL},
+                    content_hash_map={int(node_id): content_hash},
+                ),
+            )
+
+            upserted = result.get("upserted", 0)
+            if upserted == 0:
+                # 4. Isolated Node/Placeholder Handling
+                await _handle_no_upsert(session, node_id, content_hash, reason)
+                await session.commit()
+                return None
+
+            # 5. Retrieve and Return for Coordinator context
+            final_res = await session.execute(
+                text(
+                    "SELECT emb FROM graph_embeddings_1024 WHERE node_id = :nid AND label = :label"
+                ),
+                {"nid": node_id, "label": TASK_EMBED_LABEL},
+            )
+            await session.commit()
+            LTM_EMBED_JOB_PROCESSED.labels(reason).inc()
+            return final_res.scalar_one_or_none()
+
+    except Exception:
+        logger.exception("Unexpected error embedding task %s", task_id_str)
+        return None
+
+
+async def _handle_no_upsert(session, node_id, content_hash, reason):
+    """Checks if embedding exists; if not, inserts placeholder to stop backfill loop."""
+    check = await session.execute(
+        text(
+            "SELECT 1 FROM graph_embeddings_1024 WHERE node_id = :nid AND label = :label"
+        ),
+        {"nid": node_id, "label": TASK_EMBED_LABEL},
+    )
+    if not check.scalar_one_or_none():
+        logger.warning("Task node %s is isolated; inserting 1024d placeholder", node_id)
+        LTM_EMBED_JOB_SKIPPED.labels(reason, "no_graph_edges").inc()
+        await session.execute(
+            text("""
+                INSERT INTO graph_embeddings_1024 (node_id, label, emb, props, model, content_sha256)
+                VALUES (:nid, :label, CAST(:zero AS vector), :props, :mod, :hash)
+                ON CONFLICT (node_id, label) DO NOTHING
+            """),
+            {
+                "nid": node_id,
+                "label": TASK_EMBED_LABEL,
+                "zero": [0.0] * 1024,
+                "props": json.dumps({"reason": "isolated_node", "source": reason}),
+                "mod": TASK_EMBED_MODEL,
+                "hash": content_hash,
+            },
+        )
+
+
+# --- Background Worker Infrastructure ---
+
+
+async def enqueue_task_embedding_job(
+    app_state: Any, task_id: Union[UUID, str], *, reason: str = "manual"
+) -> bool:
+    """Safely adds a task to the background processing queue."""
     queue = getattr(app_state, "task_embedding_queue", None)
     pending = getattr(app_state, "task_embedding_pending", None)
     lock = getattr(app_state, "task_embedding_pending_lock", None)
 
-    if queue is None or pending is None or lock is None:
-        logger.debug(
-            "Task embedding queue not initialized; skipping enqueue for %s", task_id
-        )
+    if not all([queue, pending, lock]):
         return False
 
-    task_id_str = str(task_id)
+    tid = str(task_id)
     async with lock:
-        if task_id_str in pending:
-            logger.debug(
-                "Task %s already pending embedding (reason=%s)", task_id_str, reason
-            )
+        if tid in pending:
             LTM_EMBED_ENQUEUE_DEDUPE.labels(reason).inc()
             return False
-        pending.add(task_id_str)
-        await queue.put(TaskEmbeddingJob(task_id=task_id_str, reason=reason))
-        logger.debug("Enqueued task %s for embedding (reason=%s)", task_id_str, reason)
+        pending.add(tid)
+        await queue.put(TaskEmbeddingJob(task_id=tid, reason=reason))
         LTM_EMBED_ENQUEUE_OK.labels(reason).inc()
         return True
 
 
 async def task_embedding_worker(app_state: Any) -> None:
-    """Background worker that refreshes task embeddings using the LTM embedder."""
-
+    """Async background consumer for task embeddings."""
     queue = getattr(app_state, "task_embedding_queue", None)
     pending = getattr(app_state, "task_embedding_pending", None)
     lock = getattr(app_state, "task_embedding_pending_lock", None)
-    if queue is None:
-        logger.warning("Task embedding queue missing; worker exiting")
+    if not queue:
         return
 
     session_factory = get_async_pg_session_factory()
-    embedder_handle = None
-
-    def _get_embedder():
-        nonlocal embedder_handle
-        if embedder_handle is not None:
-            return embedder_handle
-        if not ensure_ray_initialized():
-            logger.warning("Ray not initialized; cannot obtain LTM embedder")
-            return None
-        import ray  # pyright: ignore[reportMissingImports]
-        from seedcore.graph.ltm_embeddings import LTMEmbedder
-
-        try:
-            embedder_handle = ray.get_actor(
-                LTM_EMBEDDER_ACTOR_NAME, namespace=AGENT_NAMESPACE
-            )
-            logger.debug(
-                "Reusing existing LTMEmbedder actor '%s'", LTM_EMBEDDER_ACTOR_NAME
-            )
-        except ValueError:
-            logger.info(
-                "Creating LTMEmbedder actor '%s' (namespace=%s)",
-                LTM_EMBEDDER_ACTOR_NAME,
-                AGENT_NAMESPACE,
-            )
-            embedder_handle = LTMEmbedder.options(
-                name=LTM_EMBEDDER_ACTOR_NAME,
-                namespace=AGENT_NAMESPACE,
-                lifetime="detached",
-            ).remote()
-        return embedder_handle
 
     while True:
         job: TaskEmbeddingJob = await queue.get()
         try:
             async with session_factory() as session:
-                task_id = job.task_id
-
-                # Ensure the task node exists and fetch the numeric node id.
-                ensure_result = await session.execute(
-                    text("SELECT ensure_task_node(CAST(:tid AS uuid)) AS node_id"),
-                    {"tid": task_id},
-                )
-                node_id = ensure_result.scalar_one_or_none()
-                if node_id is None:
-                    logger.warning(
-                        "ensure_task_node returned NULL for task %s", task_id
-                    )
-                    await session.rollback()
-                    continue
-
-                await session.commit()
-
-                task_row = await session.execute(
+                res = await session.execute(
                     text(
-                        """
-                        SELECT
-                          t.id::text AS task_id,
-                          t.type,
-                          t.description,
-                          jsonb_pretty(t.params) AS params_pretty
-                        FROM tasks t
-                        WHERE t.id = CAST(:tid AS uuid)
-                        """
+                        "SELECT type, description, params FROM tasks WHERE id = CAST(:tid AS uuid)"
                     ),
-                    {"tid": task_id},
+                    {"tid": job.task_id},
                 )
-                row = task_row.mappings().first()
-                if not row:
-                    logger.debug(
-                        "Task %s no longer exists; skipping embedding", task_id
+                row = res.mappings().first()
+                if row:
+                    await generate_and_persist_task_embedding(
+                        job.task_id,
+                        row["description"],
+                        row["type"],
+                        row["params"],
+                        reason=job.reason,
                     )
-                    await session.rollback()
-                    continue
-
-                text_blob = build_task_text(
-                    description=row.get("description"),
-                    task_type=row.get("type"),
-                    params_pretty=row.get("params_pretty"),
-                )
-                if not text_blob:
-                    logger.debug(
-                        "Task %s has empty embedding payload; skipping", task_id
-                    )
-                    await session.rollback()
-                    continue
-                content_hash = sha256(text_blob.encode("utf-8")).hexdigest()
-
-                existing_hash = await session.execute(
-                    text(
-                        """
-                        SELECT content_sha256
-                          FROM graph_embeddings_128
-                         WHERE node_id = :nid
-                           AND label = :label
-                        """
-                    ),
-                    {"nid": int(node_id), "label": TASK_EMBED_LABEL},
-                )
-                existing = existing_hash.scalar_one_or_none()
-                if existing and existing == content_hash:
-                    logger.debug(
-                        "Task %s embedding up-to-date (hash=%s); skipping",
-                        task_id,
-                        content_hash,
-                    )
-                    await session.rollback()
-                    LTM_EMBED_JOB_SKIPPED.labels(job.reason, "up_to_date").inc()
-                    continue
-
-                embedder = _get_embedder()
-                if embedder is None:
-                    logger.warning(
-                        "No LTM embedder available; task %s re-queued", task_id
-                    )
-                    await queue.put(job)
-                    await asyncio.sleep(1)
-                    await session.rollback()
-                    continue
-
-                props: Dict[str, Any] = {
-                    "source": "tasks.description+type+params",
-                    "len_chars": len(text_blob),
-                    "sha256": content_hash,
-                    "reason": job.reason,
-                    "model": TASK_EMBED_MODEL,
-                }
-
-                import ray  # pyright: ignore[reportMissingImports]
-                from ray.exceptions import RayActorError  # pyright: ignore[reportMissingImports]
-
-                try:
-                    result = await asyncio.to_thread(
-                        ray.get,
-                        embedder.upsert_task_embeddings.remote(
-                            [int(node_id)],
-                            k=TASK_EMBED_K_HOPS,
-                            label=TASK_EMBED_LABEL,
-                            props_map={int(node_id): props},
-                            model_map={int(node_id): TASK_EMBED_MODEL},
-                            content_hash_map={int(node_id): content_hash},
-                        ),
-                    )
-                except RayActorError as exc:
-                    logger.warning(
-                        "Ray actor error while embedding task %s: %s; recreating actor and re-queuing",
-                        task_id,
-                        exc,
-                    )
-                    embedder_handle = None
-                    await queue.put(job)
-                    await asyncio.sleep(1)
-                    await session.rollback()
-                    LTM_EMBED_JOB_REQUEUED.labels(job.reason, "actor_error").inc()
-                    continue
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception("Embedding failed for task %s: %s", task_id, exc)
-                    await queue.put(job)
-                    await asyncio.sleep(1)
-                    await session.rollback()
-                    LTM_EMBED_JOB_REQUEUED.labels(job.reason, "exception").inc()
-                    continue
-                
-                upserted_count = result.get("upserted", 0)
-                logger.debug(
-                    "Task %s embedding updated via LTM (node_id=%s, upserted=%s)",
-                    task_id,
-                    node_id,
-                    upserted_count,
-                )
-                
-                # If no embeddings were actually inserted, verify if embedding exists
-                # This can happen if embed_tasks_with_memory returns empty (e.g., no graph edges)
-                if upserted_count == 0:
-                    # Verify if embedding actually exists in database
-                    verify_result = await session.execute(
-                        text(
-                            """
-                            SELECT node_id
-                              FROM graph_embeddings_128
-                             WHERE node_id = :nid
-                               AND label = :label
-                            """
-                        ),
-                        {"nid": int(node_id), "label": TASK_EMBED_LABEL},
-                    )
-                    embedding_exists = verify_result.scalar_one_or_none() is not None
-                    
-                    if not embedding_exists:
-                        logger.warning(
-                            "Task %s (node_id=%s) embedding generation returned upserted=0 and no embedding exists. "
-                            "This likely means the task has no graph edges (isolated node) or the graph loader failed. "
-                            "Inserting placeholder to prevent backfill loop. "
-                            "Consider checking if the task has relationships in the graph.",
-                            task_id,
-                            node_id,
-                        )
-                        LTM_EMBED_JOB_SKIPPED.labels(job.reason, "no_graph_edges").inc()
-                        # Insert a placeholder record to prevent backfill loop
-                        # Use a special marker in props to indicate this is a failed embedding attempt
-                        try:
-                            await session.execute(
-                                text(
-                                    """
-                                    INSERT INTO graph_embeddings_128 (node_id, label, emb, props, model, content_sha256)
-                                    VALUES (
-                                        :nid,
-                                        :label,
-                                        CAST(:zero_vec AS vector),
-                                        CAST(:props AS jsonb),
-                                        :model,
-                                        :content_hash
-                                    )
-                                    ON CONFLICT (node_id, label) DO NOTHING
-                                    """
-                                ),
-                                {
-                                    "nid": int(node_id),
-                                    "label": TASK_EMBED_LABEL,
-                                    "zero_vec": json.dumps([0.0] * 128),  # Placeholder zero vector
-                                    "props": json.dumps({**props, "embedding_failed": True, "reason": "no_graph_edges"}),
-                                    "model": TASK_EMBED_MODEL,
-                                    "content_hash": content_hash,
-                                },
-                            )
-                            await session.commit()
-                            
-                            # Verify placeholder was actually inserted (or already exists)
-                            verify_placeholder = await session.execute(
-                                text(
-                                    """
-                                    SELECT node_id
-                                      FROM graph_embeddings_128
-                                     WHERE node_id = :nid
-                                       AND label = :label
-                                    """
-                                ),
-                                {"nid": int(node_id), "label": TASK_EMBED_LABEL},
-                            )
-                            placeholder_exists = verify_placeholder.scalar_one_or_none() is not None
-                            
-                            if placeholder_exists:
-                                logger.debug(
-                                    "Task %s placeholder inserted successfully (node_id=%s). "
-                                    "Task will be excluded from future backfill runs.",
-                                    task_id,
-                                    node_id,
-                                )
-                            else:
-                                logger.error(
-                                    "Task %s placeholder insertion failed or was skipped (node_id=%s). "
-                                    "This may cause repeated processing. Check database constraints.",
-                                    task_id,
-                                    node_id,
-                                )
-                        except Exception as placeholder_exc:
-                            await session.rollback()
-                            logger.error(
-                                "Failed to insert placeholder for task %s (node_id=%s): %s. "
-                                "Task may be processed repeatedly.",
-                                task_id,
-                                node_id,
-                                placeholder_exc,
-                                exc_info=True,
-                            )
-                        # Continue to remove from pending set (task is handled, even if placeholder failed)
-                        continue
-                    else:
-                        # Embedding exists (maybe from a previous run), so we're good
-                        logger.debug(
-                            "Task %s embedding already exists despite upserted=0 (likely no changes)",
-                            task_id,
-                        )
-                
-                await session.commit()
-                LTM_EMBED_JOB_PROCESSED.labels(job.reason).inc()
-        except SQLAlchemyError as exc:
-            logger.exception(
-                "Database error while processing embedding for %s: %s", job.task_id, exc
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception(
-                "Unexpected error while embedding task %s: %s", job.task_id, exc
-            )
+        except Exception:
+            logger.exception("Worker failed processing task %s", job.task_id)
         finally:
-            if lock is not None and pending is not None:
+            if lock and pending:
                 async with lock:
                     pending.discard(job.task_id)
             queue.task_done()
 
 
-# Prometheus metrics
-LTM_EMBED_ENQUEUE_OK = Counter(
-    "ltm_embed_enqueue_ok_total",
-    "Number of LTM embedding jobs enqueued",
-    ["reason"],
-)
-LTM_EMBED_ENQUEUE_DEDUPE = Counter(
-    "ltm_embed_enqueue_dedupe_total",
-    "Number of LTM embedding enqueues deduped/skipped",
-    ["reason"],
-)
-LTM_EMBED_JOB_PROCESSED = Counter(
-    "ltm_embed_jobs_processed_total",
-    "Number of LTM embedding jobs processed successfully",
-    ["reason"],
-)
-LTM_EMBED_JOB_SKIPPED = Counter(
-    "ltm_embed_jobs_skipped_total",
-    "Number of LTM embedding jobs skipped",
-    ["reason", "why"],
-)
-LTM_EMBED_JOB_REQUEUED = Counter(
-    "ltm_embed_jobs_requeued_total",
-    "Number of LTM embedding jobs requeued after transient failures",
-    ["reason", "why"],
-)
-
-
 async def task_embedding_backfill_loop(app_state: Any) -> None:
-    """Periodic job that enqueues tasks missing embeddings."""
-
-    queue = getattr(app_state, "task_embedding_queue", None)
-    if queue is None:
-        logger.debug("Task embedding queue missing; backfill loop exiting")
-        return
-
-    session_factory = get_async_pg_session_factory()
-
+    """Periodic check for tasks that slipped through the cracks."""
     while True:
         try:
+            session_factory = get_async_pg_session_factory()
             async with session_factory() as session:
-                # Query tasks missing embeddings
-                # Note: The view excludes tasks that have ANY embedding record (including placeholders),
-                # so failed embeddings with placeholders won't be returned
+                # Note: View name updated to reflect 1024d focus
                 rows = await session.execute(
                     text(
-                        """
-                        SELECT task_id::text
-                          FROM tasks_missing_embeddings_128
-                         LIMIT :limit
-                        """
+                        "SELECT task_id::text FROM tasks_missing_embeddings_1024 LIMIT :limit"
                     ),
                     {"limit": TASK_EMBED_BACKFILL_BATCH},
                 )
-                for row in rows.scalars():
-                    await enqueue_task_embedding_job(
-                        app_state,
-                        row,
-                        reason="backfill",
-                    )
-
-                stale_rows = await session.execute(
-                    text(
-                        """
-                        SELECT DISTINCT task_id::text
-                          FROM task_embeddings_stale_128
-                         LIMIT :limit
-                        """
-                    ),
-                    {"limit": TASK_EMBED_BACKFILL_BATCH},
-                )
-                for row in stale_rows.scalars():
-                    await enqueue_task_embedding_job(
-                        app_state,
-                        row,
-                        reason="stale",
-                    )
-        except SQLAlchemyError as exc:
-            logger.exception("Database error during embedding backfill: %s", exc)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Unexpected error during embedding backfill: %s", exc)
-
-        await asyncio.sleep(max(5, TASK_EMBED_BACKFILL_INTERVAL_S))
-
-
-def build_task_text(
-    *,
-    description: Optional[str],
-    task_type: Optional[str],
-    params_pretty: Optional[str],
-) -> str:
-    """Build the deterministic text payload used for hashing and observability."""
-
-    parts = []
-    if description:
-        trimmed = description.strip()
-        if trimmed:
-            parts.append(trimmed)
-    if task_type:
-        trimmed = task_type.strip()
-        if trimmed:
-            parts.append(trimmed)
-    if params_pretty:
-        trimmed = params_pretty.strip()
-        if trimmed:
-            parts.append(trimmed)
-
-    text_blob = "\n".join(parts)
-    if len(text_blob) > TASK_EMBED_TEXT_MAX_CHARS:
-        text_blob = text_blob[:TASK_EMBED_TEXT_MAX_CHARS]
-    return text_blob
+                for tid in rows.scalars():
+                    await enqueue_task_embedding_job(app_state, tid, reason="backfill")
+        except Exception as e:
+            logger.error("Backfill error: %s", e)
+        await asyncio.sleep(TASK_EMBED_BACKFILL_INTERVAL_S)

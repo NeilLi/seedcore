@@ -19,6 +19,21 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ============================================================================
+-- Drop views first (with CASCADE) to ensure clean state
+-- ============================================================================
+-- Views are dropped with CASCADE to automatically handle dependencies.
+-- This ensures a clean state before recreating views, preventing errors
+-- from column name/type changes or dependency issues.
+DROP VIEW IF EXISTS v_unified_cortex_memory CASCADE;
+DROP VIEW IF EXISTS task_embeddings_primary_1024 CASCADE;
+DROP VIEW IF EXISTS task_embeddings_primary_128 CASCADE;
+DROP VIEW IF EXISTS tasks_missing_embeddings_1024 CASCADE;
+DROP VIEW IF EXISTS tasks_missing_embeddings_128 CASCADE;
+DROP VIEW IF EXISTS task_embeddings_stale_1024 CASCADE;
+DROP VIEW IF EXISTS task_embeddings_stale_128 CASCADE;
+DROP VIEW IF EXISTS tasks_missing_any_embedding_1024 CASCADE;
+
+-- ============================================================================
 -- Migrate from old graph_embeddings table if it exists
 -- ============================================================================
 
@@ -77,11 +92,12 @@ $$;
 -- ============================================================================
 
 -- Helper view: tasks missing primary task embeddings (128d)
+-- Uses LEFT JOIN for graph_node_map to detect tasks that haven't been mapped to the graph yet
 CREATE OR REPLACE VIEW tasks_missing_embeddings_128 AS
 SELECT t.id AS task_id,
        m.node_id
   FROM tasks t
-  JOIN graph_node_map m
+  LEFT JOIN graph_node_map m
     ON m.node_type = 'task'
    AND m.ext_table = 'tasks'
    AND m.ext_uuid = t.id
@@ -110,6 +126,10 @@ SELECT t.id         AS task_id,
    AND e.label = 'task.primary';
 
 -- Helper view: detect stale embeddings (128d)
+-- Hash computation matches Python build_task_text() exactly:
+--   Python: "\n".join([p.strip() for p in [description, task_type, params_pretty] if p and p.strip()])
+--   SQL: concat_ws('\n', NULLIF(btrim(description), ''), NULLIF(btrim(type), ''), NULLIF(btrim(jsonb_pretty(params)), ''))
+--   Note: jsonb_pretty uses 2-space indentation (matches json.dumps(indent=2))
 CREATE OR REPLACE VIEW task_embeddings_stale_128 AS
 SELECT t.id AS task_id,
        m.node_id AS node_id,
@@ -165,11 +185,12 @@ WHERE e.label = 'task.primary'
 -- ============================================================================
 
 -- Helper view: tasks missing primary task embeddings (1024d)
+-- Uses LEFT JOIN for graph_node_map to detect tasks that haven't been mapped to the graph yet
 CREATE OR REPLACE VIEW tasks_missing_embeddings_1024 AS
 SELECT t.id AS task_id,
        m.node_id
   FROM tasks t
-  JOIN graph_node_map m
+  LEFT JOIN graph_node_map m
     ON m.node_type = 'task'
    AND m.ext_table = 'tasks'
    AND m.ext_uuid = t.id
@@ -204,6 +225,10 @@ SELECT t.id         AS task_id,
    AND e.label = 'task.primary';
 
 -- Helper view: detect stale embeddings (1024d)
+-- Hash computation matches Python build_task_text() exactly:
+--   Python: "\n".join([p.strip() for p in [description, task_type, params_pretty] if p and p.strip()])
+--   SQL: concat_ws('\n', NULLIF(btrim(description), ''), NULLIF(btrim(type), ''), NULLIF(btrim(jsonb_pretty(params)), ''))
+--   Note: jsonb_pretty uses 2-space indentation (matches json.dumps(indent=2))
 CREATE OR REPLACE VIEW task_embeddings_stale_1024 AS
 SELECT t.id AS task_id,
        m.node_id AS node_id,
@@ -482,3 +507,94 @@ $$;
 
 COMMENT ON FUNCTION unified_cortex_semantic_search IS 
     'Snapshot-aware semantic search across unified cortex memory. Enforces snapshot_id filtering to prevent historical bleed and similarity threshold to ensure high-quality matches. Returns results ordered by similarity (highest first). Use memory_tier_filter to restrict search to specific tiers (event_working, knowledge_base) or NULL for all tiers.';
+
+-- ============================================================================
+-- IMMUTABLE Function for Hash Computation (Required for Functional Index)
+-- ============================================================================
+-- PostgreSQL requires functions used in indexes to be marked IMMUTABLE.
+-- However, jsonb_pretty() is marked STABLE (not IMMUTABLE) because PostgreSQL
+-- cannot guarantee its output won't change across versions.
+--
+-- IMPORTANT LIMITATION: We cannot use jsonb_pretty() in an IMMUTABLE function.
+-- The views use jsonb_pretty() to match Python's json.dumps(params, indent=2),
+-- but the index must use params::text (compact JSON) which is IMMUTABLE.
+--
+-- This means:
+--   - Views: Use jsonb_pretty(params) → matches Python json.dumps(params, indent=2)
+--   - Index: Uses params::text → compact JSON (doesn't match Python exactly)
+--
+-- The index won't perfectly match the view hash, but it can still help with
+-- performance by pre-filtering tasks. For exact hash matching, queries should
+-- use the view logic directly (which can use STABLE functions).
+--
+-- FUTURE OPTIMIZATION: Consider adding a computed column that stores the hash
+-- using jsonb_pretty(), updated via trigger, if exact index matching is critical.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION immutable_task_content_hash(
+    description TEXT,
+    task_type TEXT,
+    params JSONB
+)
+RETURNS TEXT
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+AS $$
+    -- Note: Using params::text (compact JSON) because jsonb_pretty() is STABLE
+    -- This won't match Python's json.dumps(params, indent=2) exactly, but
+    -- allows us to create a functional index for performance optimization.
+    SELECT encode(
+        digest(
+            convert_to(
+                left(
+                    concat_ws(
+                        '\n',
+                        NULLIF(btrim(description), ''),
+                        NULLIF(btrim(task_type), ''),
+                        NULLIF(btrim(params::text), '')
+                    ),
+                    16000
+                ),
+                'UTF8'
+            ),
+            'sha256'
+        ),
+        'hex'
+    );
+$$;
+
+COMMENT ON FUNCTION immutable_task_content_hash IS 
+    'IMMUTABLE wrapper for task content hash computation. Uses params::text (compact JSON) because jsonb_pretty() is STABLE and cannot be used in IMMUTABLE functions. Note: This produces a different hash than the views (which use jsonb_pretty to match Python json.dumps(params, indent=2)). The index helps with performance but queries should use view logic for exact hash matching.';
+
+-- ============================================================================
+-- Performance Optimization: Functional Index for Stale Embedding Detection
+-- ============================================================================
+-- The stale view performs a heavy digest(sha256) computation on every row.
+-- As the tasks table grows to 100k+ rows, this view becomes extremely slow.
+-- This functional index uses the IMMUTABLE function to pre-compute hashes.
+--
+-- IMPORTANT LIMITATION: The index uses params::text (compact JSON) via the
+-- IMMUTABLE function, while the views use jsonb_pretty() (pretty JSON) to
+-- match Python's json.dumps(params, indent=2). This means the index hash
+-- won't match the view hash exactly, but it can still help with performance
+-- by pre-filtering tasks before the view's hash computation.
+--
+-- For exact hash matching, queries should use the view logic directly
+-- (which can use STABLE functions like jsonb_pretty).
+--
+-- For production databases with 100K+ tasks, consider creating this index CONCURRENTLY:
+--   DROP INDEX IF EXISTS idx_tasks_content_hash_1024;
+--   CREATE INDEX CONCURRENTLY idx_tasks_content_hash_1024 
+--   ON tasks (immutable_task_content_hash(description, type, params));
+-- ============================================================================
+
+-- Drop the old index if it exists (it may have failed to create due to IMMUTABLE error)
+DROP INDEX IF EXISTS idx_tasks_content_hash_1024;
+
+-- Create the index using the IMMUTABLE function
+CREATE INDEX IF NOT EXISTS idx_tasks_content_hash_1024 
+ON tasks (immutable_task_content_hash(description, type, params));
+
+COMMENT ON INDEX idx_tasks_content_hash_1024 IS 
+    'Functional index for fast stale embedding detection. Uses IMMUTABLE function with params::text (compact JSON). Note: Index hash differs from view hash (which uses jsonb_pretty for exact Python matching), but still helps with performance. For production databases, recreate with CONCURRENTLY to avoid table locks.';

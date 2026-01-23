@@ -416,7 +416,15 @@ class Coordinator:
         self.storage = SafeStorage(redis_client)
 
         # Runtime Context for Workers
-        self.runtime_ctx = {"storage": self.storage, "metrics": self.metrics}
+        # Initialize task embedding queue infrastructure for 1024d worker
+        # This implements the Transactional Outbox Pattern for reliable embedding delivery
+        self.runtime_ctx = {
+            "storage": self.storage,
+            "metrics": self.metrics,
+            "task_embedding_queue": asyncio.Queue(maxsize=2000),
+            "task_embedding_pending": set(),
+            "task_embedding_pending_lock": asyncio.Lock(),
+        }
 
         # State Flags
         self._bg_started = False
@@ -1482,6 +1490,8 @@ class Coordinator:
             resolve_session_factory_func=resolve_session_factory,
             fast_path_latency_slo_ms=self.fast_path_latency_slo_ms,
             eventizer_helper=self._run_eventizer,
+            coordinator=self,  # Pass coordinator reference for embedding enqueue
+            enable_consolidation=True,  # Enable Phase 2 result consolidation
         )
 
     # ------------------------------------------------------------------
@@ -1688,33 +1698,77 @@ class Coordinator:
     async def _enqueue_task_embedding_now(
         self, task_id: str, reason: str = "router"
     ) -> bool:
+        """
+        Fast-path embedding enqueue for immediate task processing.
+        
+        This is the first layer of the three-layer safety system:
+        1. Fast Path (this method): Immediate enqueue upon task creation
+        2. Reliability Layer (Outbox): Retries if fast path fails
+        3. Safety Net (Backfill): Catches tasks that slipped through
+        
+        Uses the new 1024d task embedding worker architecture with proper
+        deduplication and non-blocking queue operations.
+        """
         try:
             from ..graph.task_embedding_worker import enqueue_task_embedding_job
 
-            for _ in range(2):
+            # Try twice with a small backoff if the queue is full
+            # The queue operations should be sub-millisecond, so 1.0s timeout is safe
+            for attempt in range(2):
                 try:
-                    await asyncio.wait_for(
+                    success = await asyncio.wait_for(
                         enqueue_task_embedding_job(
                             self.runtime_ctx, task_id, reason=reason
                         ),
-                        timeout=2.0,
+                        timeout=1.0,  # Reduced from 2.0; queue ops should be sub-millisecond
                     )
-                    return True
-                except Exception:
+                    if success:
+                        return True
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Embedding queue full, attempt {attempt+1} timed out for task {task_id}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error enqueuing task {task_id} (attempt {attempt+1}): {e}")
+                
+                # Small backoff between retries
+                if attempt < 1:  # Don't sleep after the last attempt
                     await asyncio.sleep(0.1)
+            
             return False
-        except ImportError:
+        except ImportError as e:
+            logger.critical(
+                f"Deployment Error: task_embedding_worker not found! {e}. "
+                "This indicates a broken deployment or missing module."
+            )
             return False
         except Exception as e:
-            logger.warning(f"Fast-embed failed: {e}")
+            logger.warning(f"Fast-embed failed for task {task_id}: {e}")
             return False
 
     async def _task_outbox_flusher_loop(self):
+        """
+        Reliability Layer: Transactional Outbox Pattern for 1024d embeddings.
+        
+        This is the second layer of the three-layer safety system:
+        1. Fast Path: Immediate enqueue upon task creation (_enqueue_task_embedding_now)
+        2. Reliability Layer (this method): Retries if fast path fails or pod crashes
+        3. Safety Net: Backfill loop catches tasks that slipped through (in worker)
+        
+        Uses FOR UPDATE SKIP LOCKED to enable concurrent processing across multiple
+        Coordinator pods without contention. Each pod claims different rows atomically.
+        
+        Production Tip: The claim_pending_nim_task_embeds method uses SELECT ... FOR UPDATE
+        SKIP LOCKED, allowing multiple Coordinator pods to process different outbox rows
+        concurrently without fighting over the same events.
+        """
         while True:
             try:
                 if self._session_factory:
                     async with self._session_factory() as s:
                         async with s.begin():
+                            # Claim pending events with row-level locking (SKIP LOCKED)
+                            # This allows multiple Coordinator pods to process different rows concurrently
                             rows = await self.outbox_dao.claim_pending_nim_task_embeds(
                                 s, limit=50
                             )
@@ -1723,8 +1777,10 @@ class Coordinator:
                                 if await self._enqueue_task_embedding_now(
                                     tid, "outbox"
                                 ):
+                                    # Successfully enqueued - remove from outbox
                                     await self.outbox_dao.delete(s, row["id"])
                                 else:
+                                    # Failed to enqueue - backoff for retry
                                     await self.outbox_dao.backoff(s, row["id"])
             except Exception as e:
                 logger.debug(f"Outbox flush error: {e}")
@@ -1775,11 +1831,41 @@ class Coordinator:
             # Continue without PKG - system will use fallback routing
 
         # 4. Launch The Infinite Loop (Maintenance)
-        # This runs forever to flush the outbox
+        # This runs forever to flush the outbox (Reliability Layer)
         t_outbox = asyncio.create_task(
             self._task_outbox_flusher_loop(), name="loop_outbox"
         )
         self._bg_tasks.append(t_outbox)
+        
+        # 4.5. Start the task embedding worker (consumes from queue)
+        # This is the background consumer that processes embedding jobs from the queue
+        try:
+            from ..graph.task_embedding_worker import task_embedding_worker
+            
+            t_worker = asyncio.create_task(
+                task_embedding_worker(self.runtime_ctx), name="task_embedding_worker"
+            )
+            self._bg_tasks.append(t_worker)
+            logger.info("✅ Task embedding worker started")
+        except ImportError as e:
+            logger.warning(f"⚠️ Task embedding worker not available: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to start task embedding worker: {e}")
+        
+        # 4.6. Start the backfill loop (Safety Net)
+        # This catches tasks that slipped through the cracks (e.g., direct DB imports)
+        try:
+            from ..graph.task_embedding_worker import task_embedding_backfill_loop
+            
+            t_backfill = asyncio.create_task(
+                task_embedding_backfill_loop(self.runtime_ctx), name="task_embedding_backfill"
+            )
+            self._bg_tasks.append(t_backfill)
+            logger.info("✅ Task embedding backfill loop started")
+        except ImportError as e:
+            logger.warning(f"⚠️ Task embedding backfill not available: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to start task embedding backfill: {e}")
 
         # 5. Launch The One-Off Warmup (Optimization)
         # This runs once to load heavy math/matrices so the first API call isn't slow.

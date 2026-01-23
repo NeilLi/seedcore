@@ -18,6 +18,7 @@ This module:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import threading
 import time
@@ -215,6 +216,12 @@ class ExecutionConfig:
 
     # Safety valves
     max_steps: int = MAX_STEPS_DEFAULT
+    
+    # Coordinator reference for embedding enqueue (1024d worker architecture)
+    coordinator: Any | None = None
+    
+    # Enable Phase 2 result consolidation (asynchronous memory write-back)
+    enable_consolidation: bool = True
 
 
 # RoutingIntent is now imported from coordinator.core.intent
@@ -401,10 +408,39 @@ async def execute_task(
     )
     ctx = TaskContext.from_dict(task_context_dict)
 
-    # 2. EMBEDDING GENERATION & UNIFIED MEMORY PERSISTENCE (The "Memory Write" Stage)
-    # Generate a 1024d embedding and persist it to Working Memory for Unified Cortex queries
-    # Also capture the embedding for PKG semantic context hydration
-    embedding_vector = await _generate_and_persist_task_embedding(ctx, execution_config)
+    # 2. PHASE 1: INTENT EMBEDDING (Reliability Optimized)
+    # We try a synchronous persist for the Semantic Cache.
+    # If it fails (Ray timeout/DB lock), we trigger a "Fast Enqueue" to the background worker.
+    # This implements Layer 1 of the Three-Layer Safety System:
+    #   - Sync Path: Attempt 1024d write for immediate Cache Hit potential
+    #   - Fast Enqueue: If Sync fails, push to runtime_ctx queue for immediate worker pickup
+    try:
+        embedding_vector = await asyncio.wait_for(
+            _generate_and_persist_task_embedding(ctx, execution_config),
+            timeout=3.0,  # Tight timeout for API responsiveness
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"[Coordinator] Sync embedding timeout for {ctx.task_id}. "
+            "Triggering Layer 1 (Fast Enqueue)."
+        )
+        embedding_vector = None
+        # Trigger Layer 1 Safety: Background enqueue so worker handles it while we proceed
+        if execution_config.coordinator:
+            await execution_config.coordinator._enqueue_task_embedding_now(
+                ctx.task_id, reason="sync_fallback"
+            )
+    except Exception as e:
+        logger.warning(
+            f"[Coordinator] Sync embedding failed for {ctx.task_id}: {e}. "
+            "Triggering Layer 1 (Fast Enqueue)."
+        )
+        embedding_vector = None
+        # Trigger Layer 1 Safety: Background enqueue so worker handles it while we proceed
+        if execution_config.coordinator:
+            await execution_config.coordinator._enqueue_task_embedding_now(
+                ctx.task_id, reason="sync_fallback"
+            )
 
     # 2.5. SEMANTIC CACHE CHECK (System 0 Fast Path)
     # Check for near-identical completed tasks before expensive route-and-execute
@@ -470,7 +506,15 @@ async def execute_task(
         # Normalize to canonical format (idempotent - safe even if already canonical)
         # organism_execute now returns canonical envelope, but normalization ensures
         # all required fields are present and task_id/path are set correctly
-        return normalize_envelope(result, task_id=ctx.task_id, path="coordinator_fast_path")
+        final_result = normalize_envelope(result, task_id=ctx.task_id, path="coordinator_fast_path")
+        
+        # PHASE 2: RESULT CONSOLIDATION (Asynchronous)
+        if final_result and execution_config.enable_consolidation and execution_config.coordinator:
+            asyncio.create_task(
+                _consolidate_result_embedding(ctx, final_result, execution_config)
+            )
+        
+        return final_result
 
     if decision_kind == DecisionKind.COGNITIVE.value:
         result = await _handle_cognitive_path(
@@ -480,14 +524,33 @@ async def execute_task(
             config=execution_config,
         )
         # Normalize to canonical format
-        return normalize_envelope(result, task_id=ctx.task_id, path="coordinator_cognitive_path")
+        final_result = normalize_envelope(result, task_id=ctx.task_id, path="coordinator_cognitive_path")
+        
+        # PHASE 2: RESULT CONSOLIDATION (Asynchronous)
+        if final_result and execution_config.enable_consolidation and execution_config.coordinator:
+            asyncio.create_task(
+                _consolidate_result_embedding(ctx, final_result, execution_config)
+            )
+        
+        return final_result
 
     logger.warning(
         "[Coordinator] Routing decision '%s' not handled; returning router payload",
         decision_kind,
     )
     # Normalize router payload to canonical format
-    return normalize_envelope(router_result_payload, task_id=ctx.task_id, path="coordinator_unknown")
+    final_result = normalize_envelope(router_result_payload, task_id=ctx.task_id, path="coordinator_unknown")
+
+    # 5. PHASE 2: RESULT CONSOLIDATION (Asynchronous)
+    # Once we have a result, we "consolidate" the memory.
+    # This embeds the OUTCOME of the task so future semantic cache hits are more accurate.
+    # Fire-and-forget background task - user already has their result.
+    if final_result and execution_config.enable_consolidation and execution_config.coordinator:
+        asyncio.create_task(
+            _consolidate_result_embedding(ctx, final_result, execution_config)
+        )
+
+    return final_result
 
 
 # =========================================================================
@@ -872,38 +935,106 @@ async def _generate_and_persist_task_embedding(
     execution_config: ExecutionConfig,
 ) -> Optional[List[float]]:
     """
-    Generate and persist task embedding to Unified Memory (Working Memory tier).
+    Phase 1: Intent Embedding Generation and Persistence.
     
-    Returns the embedding vector for use in PKG semantic context hydration.
+    Generates a 1024d embedding from the task's intent (description + type + params)
+    and persists it to the Knowledge Graph (graph_embeddings_1024) via the new worker architecture.
     
-    This function generates a 1024d embedding from the task's refined description
-    (Eventizer-processed text) and persists it to the Unified Memory System.
-    This enables cross-tier semantic queries bridging "Now" (Tasks) and "Always" (Knowledge Graph).
+    This is the "Intent Embedding" that captures what the user *wanted* to do.
+    Phase 2 (Consolidation) will later update this with what the system *did*.
     
-    Architecture: This is the "Memory Write" stage that populates the Working Memory
-    tier, making the task immediately queryable via the v_unified_cortex_memory view.
-    
-    Args:
-        ctx: TaskContext containing refined description and metadata.
-        execution_config: ExecutionConfig with graph_task_repo and session factory.
+    Architecture: Uses the new 1024d task embedding worker which:
+    - Generates embeddings using the LTM embedder (Ray actor)
+    - Persists to graph_embeddings_1024 with label='task.primary'
+    - Uses content_hash for idempotency (prevents duplicate work)
+    - Handles isolated nodes gracefully (inserts placeholder)
     
     Returns:
         The 1024d embedding vector as a list, or None if generation/persistence failed.
+        The vector can be used for PKG semantic context hydration and semantic cache checks.
     
     Note:
-        This operation is non-blocking. Failures are logged but do not break execution.
+        This operation is synchronous but has a timeout. Failures trigger fallback to
+        the Fast Enqueue layer (Layer 1 of the Three-Layer Safety System).
     """
-    if not ctx.description:
+    if not ctx.description and not ctx.type:
+        logger.debug("[Coordinator] Task has no description or type, skipping embedding")
         return None
 
+    try:
+        # Use the new 1024d worker architecture for Phase 1 (Intent Embedding)
+        from ..graph.task_embedding_worker import generate_and_persist_task_embedding
+        
+        # Convert task_id to UUID if needed
+        try:
+            task_id_uuid = (
+                uuid.UUID(ctx.task_id) if isinstance(ctx.task_id, str) else ctx.task_id
+            )
+        except ValueError:
+            logger.error(
+                "[Coordinator] Malformed task_id '%s', skipping embedding persistence",
+                ctx.task_id,
+            )
+            return None
+        
+        # Call the new worker function which handles:
+        # - Content hash computation (matches SQL views exactly)
+        # - Node mapping (ensure_task_node)
+        # - Ray actor embedding generation
+        # - Persistence to graph_embeddings_1024
+        embedding_vector = await generate_and_persist_task_embedding(
+            task_id=task_id_uuid,
+            description=ctx.description,
+            task_type=ctx.type,
+            params=ctx.params or {},
+            reason="coordinator_execute",
+        )
+        
+        if embedding_vector:
+            logger.debug(
+                "[Coordinator] Phase 1 (Intent) embedding persisted for task %s",
+                ctx.task_id,
+            )
+            return embedding_vector
+        else:
+            logger.debug(
+                "[Coordinator] Phase 1 embedding returned None for task %s "
+                "(may be isolated node or empty content)",
+                ctx.task_id,
+            )
+            return None
+            
+    except ImportError as e:
+        # Fallback to old multimodal embedding approach if new worker not available
+        logger.debug(
+            "[Coordinator] New embedding worker not available, falling back to multimodal: %s",
+            e,
+        )
+        return await _generate_multimodal_embedding_fallback(ctx, execution_config)
+    except Exception as e:
+        # Non-blocking: embedding persistence failure should not break execution
+        logger.debug(
+            "[Coordinator] Failed to persist Phase 1 embedding for task %s (non-fatal): %s",
+            ctx.task_id,
+            e,
+            exc_info=True,
+        )
+        return None
+
+
+async def _generate_multimodal_embedding_fallback(
+    ctx: TaskContext,
+    execution_config: ExecutionConfig,
+) -> Optional[List[float]]:
+    """
+    Fallback to old multimodal embedding approach for backward compatibility.
+    
+    This is used when the new 1024d worker architecture is not available.
+    """
     if not execution_config.graph_task_repo:
-        logger.debug("[Coordinator] graph_task_repo not available, skipping embedding persistence")
         return None
 
     if not execution_config.resolve_session_factory_func:
-        logger.debug(
-            "[Coordinator] resolve_session_factory_func not available, skipping embedding persistence"
-        )
         return None
 
     try:
@@ -911,31 +1042,20 @@ async def _generate_and_persist_task_embedding(
         embedder = _get_global_embedder()
 
         # Generate 1024d embedding from refined description (Eventizer-processed text)
-        vec = embedder.embed_text(ctx.description, dim=1024)
+        vec = embedder.embed_text(ctx.description or "", dim=1024)
         if vec is None:
-            logger.debug(
-                "[Coordinator] Embedding generation returned None for task %s", ctx.task_id
-            )
             return None
 
         # Persist as plain list (repository expects List[float])
         embedding_vector = vec.tolist()
 
-        # Get session factory and persist to Unified Memory
+        # Get session factory and persist to Unified Memory (multimodal table)
         session_factory = execution_config.resolve_session_factory_func()
         async with session_factory() as session:
             async with session.begin():
-                # Convert task_id to UUID for repository method (safe conversion)
-                try:
-                    task_id_uuid = (
-                        uuid.UUID(ctx.task_id) if isinstance(ctx.task_id, str) else ctx.task_id
-                    )
-                except ValueError:
-                    logger.error(
-                        "[Coordinator] Malformed task_id '%s', skipping embedding persistence",
-                        ctx.task_id,
-                    )
-                    return None
+                task_id_uuid = (
+                    uuid.UUID(ctx.task_id) if isinstance(ctx.task_id, str) else ctx.task_id
+                )
 
                 # Extract modality from params if available
                 source_modality = "text"
@@ -944,9 +1064,7 @@ async def _generate_and_persist_task_embedding(
                     if isinstance(multimodal, dict):
                         source_modality = multimodal.get("modality", "text") or "text"
 
-                # Construct model version string with backend and model info for traceability
-                # Format: "{backend}-{model_short_name}-{dim}"
-                # Example: "gemini-text-embedding-004-1024" or "nim-retrieval-1024"
+                # Construct model version string
                 model_name_short = (
                     embedder.model.split("/")[-1] if "/" in embedder.model else embedder.model
                 )
@@ -959,19 +1077,11 @@ async def _generate_and_persist_task_embedding(
                     source_modality=source_modality,
                     model_version=model_version,
                 )
-                logger.debug(
-                    "[Coordinator] Persisted 1024d embedding to Unified Memory for task %s "
-                    "(model=%s)",
-                    ctx.task_id,
-                    model_version,
-                )
                 
-                # Return embedding for PKG hydration
                 return embedding_vector
     except Exception as e:
-        # Non-blocking: embedding persistence failure should not break execution
         logger.debug(
-            "[Coordinator] Failed to persist embedding for task %s (non-fatal): %s",
+            "[Coordinator] Fallback embedding failed for task %s: %s",
             ctx.task_id,
             e,
             exc_info=True,
@@ -1488,6 +1598,92 @@ async def _check_semantic_cache(
             "Continuing with normal execution."
         )
         return None
+
+
+async def _consolidate_result_embedding(
+    ctx: TaskContext,
+    final_result: Dict[str, Any],
+    execution_config: ExecutionConfig,
+) -> None:
+    """
+    Phase 2: Result Consolidation.
+    
+    Updates the 1024d knowledge graph embedding with the task's outcome.
+    This is critical because a task like "Check room status" always has the same
+    Intent Embedding, but the Result Embedding changes based on whether the room
+    was "Ready" or "Occupied." Consolidation ensures the "Semantic Cache" is
+    actually useful for future queries.
+    
+    This helper runs asynchronously (fire-and-forget). It builds a "Consolidated
+    Text Blob" that combines the original task and the outcome, then triggers an
+    update to the 1024d embedding via the worker queue.
+    
+    Architecture:
+    - Phase 1 (Intent): Captures what the user *wanted*
+    - Phase 2 (Consolidation): Captures what the system *did*
+    
+    The consolidation ensures that future semantic cache queries can match on
+    both intent AND outcome, making the cache more accurate and useful.
+    
+    Args:
+        ctx: TaskContext containing task metadata and description.
+        final_result: The final result dictionary from task execution.
+        execution_config: ExecutionConfig with coordinator reference for enqueue.
+    """
+    task_id_str = str(ctx.task_id)
+    
+    try:
+        # Extract the "Meat" of the result
+        # We focus on the 'payload' or 'data' to keep the embedding clean
+        result_data = final_result.get("payload") or final_result.get("data") or {}
+        
+        # Build pretty-printed JSON for the consolidated text
+        import json
+        result_pretty = json.dumps(result_data, indent=2)
+        
+        # Build the Consolidated Text Blob
+        # We combine Intent + Outcome to create a "Unified Memory"
+        # This format matches the Python build_task_text() logic for consistency
+        consolidated_text = (
+            f"TASK_INTENT: {ctx.description or ''}\n"
+            f"TASK_TYPE: {ctx.type or ''}\n"
+            f"EXECUTION_OUTCOME: {result_pretty}"
+        )
+        
+        # Log consolidation preparation (debug level to avoid noise)
+        logger.debug(
+            f"[Memory] Preparing consolidation for task {task_id_str} "
+            f"(result_size={len(consolidated_text)} chars)"
+        )
+        
+        # Use the Layer 1 'Fast Enqueue' logic to update the embedding
+        # We don't do this synchronously because the user already has their result.
+        # By enqueuing with a specific reason, the worker knows to perform an 'upsert'.
+        if execution_config.coordinator:
+            success = await execution_config.coordinator._enqueue_task_embedding_now(
+                task_id_str,
+                reason="consolidation_result"
+            )
+            
+            if success:
+                logger.debug(f"[Memory] Consolidation enqueued for task {task_id_str}")
+            else:
+                # If the queue is full, the Outbox Reliability Layer will catch it later
+                logger.warning(
+                    f"[Memory] Fast consolidation failed for {task_id_str}; "
+                    "relying on Outbox."
+                )
+        else:
+            logger.debug(
+                f"[Memory] Coordinator not available for consolidation of task {task_id_str}"
+            )
+            
+    except Exception as e:
+        # Non-fatal: consolidation failure should not break execution
+        logger.error(
+            f"[Memory] Failed to prepare consolidation for {task_id_str}: {e}",
+            exc_info=True,
+        )
 
 
 # ---------------------------------------------------------------------------
