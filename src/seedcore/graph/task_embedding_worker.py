@@ -213,6 +213,8 @@ async def _handle_no_upsert(session, node_id, content_hash, reason):
     if not check.scalar_one_or_none():
         logger.warning("Task node %s is isolated; inserting 1024d placeholder", node_id)
         LTM_EMBED_JOB_SKIPPED.labels(reason, "no_graph_edges").inc()
+        # Convert list to JSON array string for pgvector CAST(:zero AS vector)
+        zero_vec_str = json.dumps([0.0] * 1024)
         await session.execute(
             text("""
                 INSERT INTO graph_embeddings_1024 (node_id, label, emb, props, model, content_sha256)
@@ -222,7 +224,7 @@ async def _handle_no_upsert(session, node_id, content_hash, reason):
             {
                 "nid": node_id,
                 "label": TASK_EMBED_LABEL,
-                "zero": [0.0] * 1024,
+                "zero": zero_vec_str,
                 "props": json.dumps({"reason": "isolated_node", "source": reason}),
                 "mod": TASK_EMBED_MODEL,
                 "hash": content_hash,

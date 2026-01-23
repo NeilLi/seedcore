@@ -1710,7 +1710,7 @@ class Coordinator:
         deduplication and non-blocking queue operations.
         """
         try:
-            from ..graph.task_embedding_worker import enqueue_task_embedding_job
+            from seedcore.graph.task_embedding_worker import enqueue_task_embedding_job
 
             # Try twice with a small backoff if the queue is full
             # The queue operations should be sub-millisecond, so 1.0s timeout is safe
@@ -1840,7 +1840,7 @@ class Coordinator:
         # 4.5. Start the task embedding worker (consumes from queue)
         # This is the background consumer that processes embedding jobs from the queue
         try:
-            from ..graph.task_embedding_worker import task_embedding_worker
+            from seedcore.graph.task_embedding_worker import task_embedding_worker
             
             t_worker = asyncio.create_task(
                 task_embedding_worker(self.runtime_ctx), name="task_embedding_worker"
@@ -1855,7 +1855,7 @@ class Coordinator:
         # 4.6. Start the backfill loop (Safety Net)
         # This catches tasks that slipped through the cracks (e.g., direct DB imports)
         try:
-            from ..graph.task_embedding_worker import task_embedding_backfill_loop
+            from seedcore.graph.task_embedding_worker import task_embedding_backfill_loop
             
             t_backfill = asyncio.create_task(
                 task_embedding_backfill_loop(self.runtime_ctx), name="task_embedding_backfill"

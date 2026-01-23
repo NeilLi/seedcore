@@ -372,8 +372,14 @@ UNION ALL
 SELECT 
     node_id::TEXT                 AS id,
     label                         AS category,
-    'Graph Entity'::TEXT          AS content,
-    'knowledge_base'::TEXT         AS memory_tier,
+    COALESCE(
+        props->>'name',
+        props->>'description',
+        props->>'title',
+        props->>'specialization',
+        'Graph Entity'
+    )                             AS content,
+    'world_memory'::TEXT          AS memory_tier,
     snapshot_id                   AS snapshot_id,
     emb                           AS vector,
     jsonb_build_object(

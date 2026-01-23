@@ -957,13 +957,13 @@ async def _generate_and_persist_task_embedding(
         This operation is synchronous but has a timeout. Failures trigger fallback to
         the Fast Enqueue layer (Layer 1 of the Three-Layer Safety System).
     """
-    if not ctx.description and not ctx.type:
+    if not ctx.description and not ctx.task_type:
         logger.debug("[Coordinator] Task has no description or type, skipping embedding")
         return None
 
     try:
         # Use the new 1024d worker architecture for Phase 1 (Intent Embedding)
-        from ..graph.task_embedding_worker import generate_and_persist_task_embedding
+        from seedcore.graph.task_embedding_worker import generate_and_persist_task_embedding
         
         # Convert task_id to UUID if needed
         try:
@@ -985,7 +985,7 @@ async def _generate_and_persist_task_embedding(
         embedding_vector = await generate_and_persist_task_embedding(
             task_id=task_id_uuid,
             description=ctx.description,
-            task_type=ctx.type,
+            task_type=ctx.task_type,
             params=ctx.params or {},
             reason="coordinator_execute",
         )
@@ -1646,7 +1646,7 @@ async def _consolidate_result_embedding(
         # This format matches the Python build_task_text() logic for consistency
         consolidated_text = (
             f"TASK_INTENT: {ctx.description or ''}\n"
-            f"TASK_TYPE: {ctx.type or ''}\n"
+            f"TASK_TYPE: {ctx.task_type or ''}\n"
             f"EXECUTION_OUTCOME: {result_pretty}"
         )
         
