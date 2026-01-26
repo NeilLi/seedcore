@@ -174,15 +174,6 @@ async def ready_check():
         deps["db"] = f"error: {e}"
         all_ready = False
     
-    # 2. Optional vendor integrations (non-blocking)
-    try:
-        from seedcore.config.tuya_config import TuyaConfig
-        tuya_config = TuyaConfig()
-        deps["tuya"] = "enabled" if tuya_config.enabled else "disabled"
-    except Exception as e:
-        # Tuya config check failed - mark as unavailable but don't block readiness
-        deps["tuya"] = f"unavailable: {e}"
-    
     status = "ready" if all_ready else "not_ready"
     return {"status": status, "deps": deps}
 

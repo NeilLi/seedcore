@@ -1919,16 +1919,6 @@ class Coordinator:
         # Background tasks status
         deps["background_tasks"] = "started" if self._bg_started else "not_started"
 
-        # Optional vendor integrations (non-blocking for overall readiness)
-        try:
-            from seedcore.config.tuya_config import TuyaConfig
-
-            tuya_config = TuyaConfig()
-            deps["tuya"] = "enabled" if tuya_config.enabled else "disabled"
-        except Exception as e:
-            # Tuya config check failed - mark as unavailable but don't block readiness
-            deps["tuya"] = f"unavailable: {e}"
-
         return {"ready": all_ready, "deps": deps}
 
     async def get_metrics(self):
