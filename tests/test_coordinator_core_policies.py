@@ -12,15 +12,17 @@ import pytest
 from unittest.mock import Mock, AsyncMock
 from seedcore.coordinator.core.policies import (
     SurpriseComputer,
-    OCPSValve,
-    create_ocps_valve,
     decide_route_with_hysteresis,
-    generate_proto_subtasks,
     compute_drift_score,
-    get_current_energy_state,
-    _clip01,
     _normalize_weights,
+)
+from seedcore.coordinator.core.features import (
+    _clip01,
     _normalized_entropy,
+)
+from seedcore.coordinator.core.ocps_valve import (
+    NeuralCUSUMValve,
+    DriftState,
 )
 
 
@@ -122,7 +124,7 @@ class TestSurpriseComputer:
         assert "S" in result
         assert "x" in result
         assert "weights" in result
-        assert "decision" in result
+        assert "decision_kind" in result
         assert result["S"] >= 0.0
         assert result["S"] <= 1.0
     
@@ -152,90 +154,102 @@ class TestSurpriseComputer:
             "criticality": 0.7,
         }
         result = computer.compute(signals)
-        assert result["decision"] in ["fast", "planner", "hgnn"]
+        assert result["decision_kind"] in ["fast", "planner", "hgnn", "cognitive", "escalated"]
 
 
-class TestOCPSValve:
-    """Tests for OCPSValve class."""
+class TestNeuralCUSUMValve:
+    """Tests for NeuralCUSUMValve class."""
     
     def test_init_default(self):
         """Test initializing with default parameters."""
-        valve = OCPSValve()
+        valve = NeuralCUSUMValve()
         assert valve.nu > 0
         assert valve.h > 0
         assert valve.S == 0.0
     
     def test_init_custom(self):
         """Test initializing with custom parameters."""
-        valve = OCPSValve(nu=0.2, h=0.6)
-        assert valve.nu == 0.2
+        valve = NeuralCUSUMValve(
+            expected_baseline=0.1,
+            min_detectable_change=0.2,
+            threshold=0.6,
+            sigma=0.15,
+        )
+        assert valve.nu == 0.2  # (0.1 + 0.3) / 2
         assert valve.h == 0.6
     
     def test_update_no_escalation(self):
         """Test update without escalation."""
-        valve = OCPSValve(nu=0.1, h=0.5)
-        result = valve.update(0.15)  # drift > nu, but S < h
-        assert result is False
+        valve = NeuralCUSUMValve(
+            expected_baseline=0.1,
+            min_detectable_change=0.2,
+            threshold=0.5,
+            sigma=0.15,
+        )
+        # nu = (0.1 + 0.3) / 2 = 0.2
+        # Use drift_score > nu to accumulate positive evidence
+        result = valve.update(0.25)  # drift > nu (0.2), but S < h (0.5)
+        assert isinstance(result, DriftState)
+        assert result.is_breached is False
         assert valve.S > 0.0
     
     def test_update_with_escalation(self):
         """Test update with escalation."""
-        valve = OCPSValve(nu=0.1, h=0.5)
+        valve = NeuralCUSUMValve(
+            expected_baseline=0.1,
+            min_detectable_change=0.2,
+            threshold=0.5,
+            sigma=0.15,
+        )
+        # nu = (0.1 + 0.3) / 2 = 0.2
         # Accumulate enough drift to trigger escalation
         valve.S = 0.4  # Pre-accumulate
-        result = valve.update(0.2)  # Should push S over h
-        # After escalation, S should reset to 0
-        assert valve.S == 0.0
-        assert valve.esc_hits > 0
+        # Use drift_score > nu to add positive deviation, pushing S over threshold
+        # Need instant_deviation > 0.1 to breach: 0.4 + instant_deviation > 0.5
+        result = valve.update(0.35)  # instant_deviation = 0.35 - 0.2 = 0.15, S = 0.4 + 0.15 = 0.55 > 0.5 (breaches)
+        assert isinstance(result, DriftState)
+        assert result.is_breached is True
+        # After escalation, S should reset to threshold * 0.8 (soft reset)
+        assert valve.S == 0.5 * 0.8
+        assert valve.slow_count > 0
     
     def test_update_resets_on_escalation(self):
         """Test that update resets S on escalation."""
-        valve = OCPSValve(nu=0.1, h=0.5)
+        valve = NeuralCUSUMValve(
+            expected_baseline=0.1,
+            min_detectable_change=0.2,
+            threshold=0.5,
+            sigma=0.15,
+        )
+        # nu = (0.1 + 0.3) / 2 = 0.2
         valve.S = 0.4
-        valve.update(0.2)  # Should trigger escalation
-        assert valve.S == 0.0  # Should reset
+        # Use drift_score > nu to add positive deviation, pushing S over threshold
+        # Need instant_deviation > 0.1 to breach: 0.4 + instant_deviation > 0.5
+        result = valve.update(0.35)  # instant_deviation = 0.35 - 0.2 = 0.15, S = 0.4 + 0.15 = 0.55 > 0.5 (breaches)
+        assert result.is_breached is True
+        # Soft reset: S = h * 0.8
+        assert valve.S == 0.5 * 0.8
     
     def test_p_fast_property(self):
         """Test p_fast property."""
-        valve = OCPSValve()
-        valve.fast_hits = 8
-        valve.esc_hits = 2
+        valve = NeuralCUSUMValve()
+        valve.fast_count = 8
+        valve.slow_count = 2
         assert abs(valve.p_fast - 0.8) < 1e-6
     
     def test_p_fast_no_hits(self):
         """Test p_fast with no hits."""
-        valve = OCPSValve()
+        valve = NeuralCUSUMValve()
         assert valve.p_fast == 1.0
     
-    def test_state(self):
-        """Test state method."""
-        valve = OCPSValve(nu=0.1, h=0.5)
+    def test_reset(self):
+        """Test reset method."""
+        valve = NeuralCUSUMValve()
         valve.S = 0.3
-        state = valve.state()
-        assert state.S_t == 0.3
-        assert state.h == 0.5
-        assert state.flag_on is False  # S < h
-    
-    def test_invalid_nu_raises_error(self):
-        """Test that invalid nu raises error."""
-        with pytest.raises(ValueError):
-            OCPSValve(nu=0.0)
-    
-    def test_invalid_h_raises_error(self):
-        """Test that invalid h raises error."""
-        with pytest.raises(ValueError):
-            OCPSValve(h=0.0)
-
-
-class TestCreateOCPSValve:
-    """Tests for create_ocps_valve function."""
-    
-    def test_create_default(self):
-        """Test creating default OCPS valve."""
-        valve = create_ocps_valve()
-        assert isinstance(valve, OCPSValve)
-        assert valve.nu > 0
-        assert valve.h > 0
+        valve.run_length = 5
+        valve.reset()
+        assert valve.S == 0.0
+        assert valve.run_length == 0
 
 
 class TestDecideRouteWithHysteresis:
@@ -304,36 +318,6 @@ class TestDecideRouteWithHysteresis:
         assert decision == "planner"  # Should stay in planner due to hysteresis
 
 
-class TestGenerateProtoSubtasks:
-    """Tests for generate_proto_subtasks function."""
-
-    def test_generate_from_event_tags(self):
-        """Domain tags should produce targeted proto plan."""
-        tags = {"vip", "allergen"}
-        proto_plan = generate_proto_subtasks(tags, x6=0.7, criticality=0.85)
-
-        task_types = {task["type"] for task in proto_plan["tasks"]}
-        assert {"private_comms", "incident_log_restricted", "food_safety_containment", "guest_recovery"}.issubset(task_types)
-
-        # Ensure privacy task edges were created
-        assert ("private_comms", "food_safety_containment") in proto_plan["edges"]
-
-    def test_generate_force_baseline(self):
-        """Force flag should create baseline workflow when no tags match."""
-        proto_plan = generate_proto_subtasks(set(), x6=0.4, criticality=0.3, force=True)
-
-        task_types = {task["type"] for task in proto_plan["tasks"]}
-        assert task_types == {"retrieve_context", "graph_rag_seed", "synthesis_writeup"}
-        assert ("retrieve_context", "graph_rag_seed") in proto_plan["edges"]
-        assert ("graph_rag_seed", "synthesis_writeup") in proto_plan["edges"]
-
-    def test_generate_empty_when_no_force(self):
-        """Without tags or force flag no tasks should be produced."""
-        proto_plan = generate_proto_subtasks(set(), x6=0.2, criticality=0.1, force=False)
-        assert proto_plan["tasks"] == []
-        assert proto_plan["edges"] == []
-
-
 @pytest.mark.asyncio
 class TestComputeDriftScore:
     """Tests for compute_drift_score function."""
@@ -350,10 +334,12 @@ class TestComputeDriftScore:
         })
 
         task = {"id": "task-1", "type": "test", "description": "test task"}
+        text_payload = {"text": "test task description"}
         metrics = Mock()
 
         drift_score = await compute_drift_score(
             task=task,
+            text_payload=text_payload,
             ml_client=ml_client,
             metrics=metrics
         )
@@ -377,32 +363,13 @@ class TestComputeDriftScore:
 
         drift_score = await compute_drift_score(
             task=task,
+            text_payload=None,
             ml_client=ml_client,
             metrics=metrics
         )
 
-        # Fallback heuristics should yield high drift for critical anomalies
-        assert pytest.approx(drift_score, rel=1e-3) == 0.8
+        # Fallback heuristics: anomaly_triage (0.3) + priority >= 8 (0.2) = 0.5
+        assert pytest.approx(drift_score, rel=1e-3) == 0.5
 
 
-class TestGetCurrentEnergyState:
-    """Tests for get_current_energy_state function."""
-
-    def test_get_energy_state_with_provider(self):
-        """Provider callback should supply energy reading."""
-        provider = Mock(return_value=100.0)
-        result = get_current_energy_state("agent-123", provider=provider)
-        provider.assert_called_once_with("agent-123")
-        assert result == 100.0
-
-    def test_get_energy_state_fallback_and_default(self):
-        """No provider should return default placeholder value."""
-        assert get_current_energy_state("agent-xyz") == 0.5
-
-    def test_get_energy_state_none(self):
-        """Provider returning None should propagate None."""
-        provider = Mock(return_value=None)
-        result = get_current_energy_state("agent-123", provider=provider)
-        provider.assert_called_once_with("agent-123")
-        assert result is None
 

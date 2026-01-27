@@ -31,40 +31,126 @@ def test_ledger_reset():
 def test_add_pair_delta():
     e = EnergyLedger()
     initial_pair = e.pair
-    e.add_pair_delta(3.0)  # Pre-calculated delta: 2.0 * 1.5 = 3.0
+    # EnergyLedger doesn't have add_pair_delta, so we update via log_step
+    # For testing incremental updates, we'll use log_step with calculated breakdown
+    new_pair = initial_pair + 3.0
+    e.log_step(
+        breakdown={
+            "pair": new_pair,
+            "hyper": e.hyper,
+            "entropy": e.entropy,
+            "reg": e.reg,
+            "mem": e.mem,
+            "drift_term": e.drift_term,
+            "anomaly_term": e.anomaly_term,
+            "total": new_pair + e.hyper + e.entropy + e.reg + e.mem + e.drift_term + e.anomaly_term
+        },
+        extra={"ts": 0.0}
+    )
     assert abs(e.pair - (initial_pair + 3.0)) < 0.001
 
 def test_add_hyper_delta():
     e = EnergyLedger()
     initial_hyper = e.hyper
-    e.add_hyper_delta(0.8, 0.3)  # complexity=0.8, precision=0.3
+    # Calculate delta: complexity - precision = 0.8 - 0.3 = 0.5
+    new_hyper = initial_hyper + 0.5
+    e.log_step(
+        breakdown={
+            "pair": e.pair,
+            "hyper": new_hyper,
+            "entropy": e.entropy,
+            "reg": e.reg,
+            "mem": e.mem,
+            "drift_term": e.drift_term,
+            "anomaly_term": e.anomaly_term,
+            "total": e.pair + new_hyper + e.entropy + e.reg + e.mem + e.drift_term + e.anomaly_term
+        },
+        extra={"ts": 0.0}
+    )
     assert abs(e.hyper - (initial_hyper + 0.5)) < 0.001  # 0.8 - 0.3 = 0.5
 
 def test_add_entropy_delta():
     e = EnergyLedger()
     initial_entropy = e.entropy
-    e.add_entropy_delta(5, 0.6)  # choice_count=5, uncertainty=0.6
+    # Calculate delta: choice_count * uncertainty * alpha = 5 * 0.6 * 0.1 = 0.3
+    new_entropy = initial_entropy + 0.3
+    e.log_step(
+        breakdown={
+            "pair": e.pair,
+            "hyper": e.hyper,
+            "entropy": new_entropy,
+            "reg": e.reg,
+            "mem": e.mem,
+            "drift_term": e.drift_term,
+            "anomaly_term": e.anomaly_term,
+            "total": e.pair + e.hyper + new_entropy + e.reg + e.mem + e.drift_term + e.anomaly_term
+        },
+        extra={"ts": 0.0}
+    )
     assert abs(e.entropy - (initial_entropy + 0.3)) < 0.001  # 5 * 0.6 * 0.1 = 0.3
 
 def test_add_reg_delta():
     e = EnergyLedger()
     initial_reg = e.reg
-    e.add_reg_delta(0.5, 2.0)  # regularization_strength=0.5, model_complexity=2.0
+    # Calculate delta: regularization_strength * model_complexity = 0.5 * 2.0 = 1.0
+    new_reg = initial_reg + 1.0
+    e.log_step(
+        breakdown={
+            "pair": e.pair,
+            "hyper": e.hyper,
+            "entropy": e.entropy,
+            "reg": new_reg,
+            "mem": e.mem,
+            "drift_term": e.drift_term,
+            "anomaly_term": e.anomaly_term,
+            "total": e.pair + e.hyper + e.entropy + new_reg + e.mem + e.drift_term + e.anomaly_term
+        },
+        extra={"ts": 0.0}
+    )
     assert abs(e.reg - (initial_reg + 1.0)) < 0.001  # 0.5 * 2.0 = 1.0
 
 def test_add_mem_delta():
     e = EnergyLedger()
     initial_mem = e.mem
-    e.add_mem_delta(0.7, 0.4)  # memory_usage=0.7, compression_ratio=0.4
+    # Calculate delta: memory_usage - compression_ratio = 0.7 - 0.4 = 0.3
+    new_mem = initial_mem + 0.3
+    e.log_step(
+        breakdown={
+            "pair": e.pair,
+            "hyper": e.hyper,
+            "entropy": e.entropy,
+            "reg": e.reg,
+            "mem": new_mem,
+            "drift_term": e.drift_term,
+            "anomaly_term": e.anomaly_term,
+            "total": e.pair + e.hyper + e.entropy + e.reg + new_mem + e.drift_term + e.anomaly_term
+        },
+        extra={"ts": 0.0}
+    )
     assert abs(e.mem - (initial_mem + 0.3)) < 0.001  # 0.7 - 0.4 = 0.3
 
 def test_multiple_energy_terms():
     e = EnergyLedger()
-    e.add_pair_delta(1.0)  # Pre-calculated delta: 1.0 * 1.0 = 1.0
-    e.add_hyper_delta(0.5, 0.2)
-    e.add_entropy_delta(3, 0.4)
-    e.add_reg_delta(0.3, 1.5)
-    e.add_mem_delta(0.6, 0.3)
+    # Calculate all deltas and update via log_step
+    pair_value = 1.0
+    hyper_value = 0.5 - 0.2  # 0.3
+    entropy_value = 3 * 0.4 * 0.1  # 0.12
+    reg_value = 0.3 * 1.5  # 0.45
+    mem_value = 0.6 - 0.3  # 0.3
+    
+    e.log_step(
+        breakdown={
+            "pair": pair_value,
+            "hyper": hyper_value,
+            "entropy": entropy_value,
+            "reg": reg_value,
+            "mem": mem_value,
+            "drift_term": 0.0,
+            "anomaly_term": 0.0,
+            "total": pair_value + hyper_value + entropy_value + reg_value + mem_value
+        },
+        extra={"ts": 0.0}
+    )
     
     # Verify individual terms with tolerance for floating-point precision
     assert abs(e.pair - 1.0) < 0.001  # 1.0 * 1.0

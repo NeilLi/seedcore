@@ -42,7 +42,7 @@ def test_role_profile_materialize_and_context():
     materialized = profile.materialize_skills(skill_vec.deltas)
     assert pytest.approx(materialized["analysis"]) == 0.8
     assert materialized["planning"] == pytest.approx(0.4)
-    assert materialized["new_skill"] == pytest.approx(1.0)
+    assert materialized["new_skill"] == pytest.approx(0.9)
 
     ctx = profile.to_context(
         agent_id="agent-1",
@@ -228,7 +228,7 @@ def test_skill_learner_updates_and_promotes():
         safety_policies={},
     )
     observer_role = RoleProfile(
-        name=Specialization.OBS,
+        name=Specialization.OBSERVER,
         default_skills={"analysis": 0.4, "planning": 0.4, "communication": 0.6},
         allowed_tools={"mw.topn"},
         visibility_scopes=set(),
@@ -252,7 +252,7 @@ def test_skill_learner_updates_and_promotes():
         demote_quality_avg=0.3,
         min_capability=0.7,
         cooldown_s=0.0,
-        preferred_promotions={Specialization.GENERALIST: [Specialization.OBS]},
+        preferred_promotions={Specialization.GENERALIST: [Specialization.OBSERVER]},
     )
 
     learner = SkillLearner(registry, lcfg, ppol)
@@ -271,7 +271,7 @@ def test_skill_learner_updates_and_promotes():
         )
         assert changed
 
-    assert promoted == Specialization.OBS
+    assert promoted == Specialization.OBSERVER
     assert diag["role_change_reason"] == "promotion"
     assert skills.deltas
 

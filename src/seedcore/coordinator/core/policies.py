@@ -215,11 +215,10 @@ async def compute_drift_score(
             "text",
             "description",
         ]
-
-    for field in preferred_fields:
-        if isinstance(text_payload, dict) and text_payload.get(field):
-            text_for_drift = text_payload[field]
-            break
+        for field in preferred_fields:
+            if text_payload.get(field):
+                text_for_drift = text_payload[field]
+                break
 
     if not text_for_drift:
         text_for_drift = task.get("description") or ""

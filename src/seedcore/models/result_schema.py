@@ -101,7 +101,7 @@ class CognitivePathResult(BaseModel):
     model_config = {"extra": "ignore"}
 
     agent_id: str = Field(..., description="ID of the cognitive agent")
-    task_type: str = Field(..., description="Type of cognitive task performed")
+    task_type: Optional[str] = Field(None, description="Type of cognitive task performed")
     result: JSONValue = Field(..., description="Cognitive reasoning result")
     confidence_score: Optional[float] = Field(
         None, description="Confidence in the result"
@@ -557,7 +557,9 @@ def normalize_envelope(raw: Any, *, task_id: str, path: str) -> Dict[str, Any]:
         raw.setdefault("path", path)
         raw.setdefault("meta", {})
         raw.setdefault("retry", True)
-        raw.setdefault("decision_kind", None)
+        # Preserve existing decision_kind if present, don't override with None
+        if "decision_kind" not in raw:
+            raw.setdefault("decision_kind", None)
         # Ensure no stray kind
         raw.pop("kind", None)
         return raw

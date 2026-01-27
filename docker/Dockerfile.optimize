@@ -1,0 +1,154 @@
+# docker/Dockerfile.optimize
+# Python 3.11 + Ray (multi-arch capable: arm64 / amd64)
+# Uses python:3.11-slim base + pip-installed Ray for native arm64 support
+# BuildKit automatically uses the target platform from build context
+FROM python:3.11-slim
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+ARG BUILD_DATE
+ARG VCS_REF
+LABEL org.opencontainers.image.title="seedcore-serve" \
+      org.opencontainers.image.description="SeedCore Serve on Ray (Py3.11, native arm64/amd64)" \
+      org.opencontainers.image.version="2.33.0-py311" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="seedcore"
+
+# ---- System deps (minimal) ----
+USER root
+
+# Keep apt cache between layers (helps BuildKit caching)
+RUN rm -f /etc/apt/apt.conf.d/docker-clean; \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+      build-essential curl git ca-certificates \
+      libglib2.0-0 libsm6 libxrender1 libxext6 \
+      iputils-ping dnsutils \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- Create ray user (matching rayproject/ray image convention) ----
+RUN groupadd -r ray --gid=1000 && \
+    useradd -r -g ray --uid=1000 --create-home --shell /bin/bash ray
+
+# ---- Install OPA (Open Policy Agent) - multi-arch aware ----
+RUN arch="$(uname -m)" && \
+    case "$arch" in \
+      x86_64)  opa_arch="amd64" ;; \
+      aarch64|arm64) opa_arch="arm64" ;; \
+      *) echo "Unsupported arch for OPA: $arch" && exit 1 ;; \
+    esac && \
+    curl -L -o /usr/local/bin/opa "https://openpolicyagent.org/downloads/latest/opa_linux_${opa_arch}" && \
+    chmod +x /usr/local/bin/opa && \
+    opa version
+
+# ---- Install Ray (via pip for native arm64/amd64 support) ----
+# Install Ray with default extras - pip will pick the appropriate wheel for the platform
+# Upgrade pip first, then install Ray system-wide
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade pip wheel setuptools && \
+    python -m pip install "ray[default]"
+
+# ---- Python Environment Setup ----
+USER ray
+
+# Ensure pip is up to date for ray user (may already be updated, but safe to run)
+RUN python -m pip install --upgrade pip wheel setuptools --user
+
+# ---- Clean Pre-installed DGL/CUDA (Crucial for CPU images) ----
+RUN set -eux; \
+  pip freeze | awk -F'[= ]' '/^dgl($|==)|^dgl-cu/ {print $1}' | xargs -r pip uninstall -y || true; \
+  python - <<'PY'
+import site, glob, os, shutil
+paths = set(site.getsitepackages() + [site.getusersitepackages()])
+for s in paths:
+    if not s or not os.path.isdir(s):
+        continue
+    for pat in ("*-gl*", "dgl*.dist-info", "dgl*.egg-info"):
+        for p in glob.glob(os.path.join(s, pat)):
+            print(f"Cleaning {p}")
+            shutil.rmtree(p, ignore_errors=True)
+PY
+
+# ---- Core Numerical Stack ----
+# Pin NumPy < 2.0.0 (good compatibility for Py3.11 + Torch 2.x)
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    python -m pip install "numpy==1.26.4"
+
+# ---- Torch & DGL (CPU Optimized) ----
+# NOTE:
+# - torch cpu wheels exist for linux/amd64 and linux/arm64
+# - Using torch==2.2.2 (without +cpu suffix) as the CPU index provides this version
+# - If you ever hit issues on arm64, consider bumping torch version accordingly.
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    python -m pip install \
+      torch==2.2.2 \
+      --index-url https://download.pytorch.org/whl/cpu
+
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    python -m pip install torchdata==0.7.1
+
+# Install SciPy explicitly (DGL dependency, not available in DGL wheel repo)
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    python -m pip install "scipy>=1.10,<2.0"
+
+# DGL wheels are platform-specific. With native arm64/amd64 base, pip will
+# automatically select the correct wheel for the target platform.
+# Note: Removed --no-index to allow pip to fetch SciPy and other deps from PyPI
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    python -m pip install \
+      -f https://data.dgl.ai/wheels/torch-2.2/repo.html \
+      dgl==2.2.1
+
+# ---- Validation: Verify DGL imports (GraphBolt can vary by arch) ----
+RUN python - <<'PY'
+import dgl
+print("DGL version:", dgl.__version__)
+try:
+    import inspect, pathlib
+    gb_dir = pathlib.Path(inspect.getfile(dgl)).parent / "graphbolt"
+    if gb_dir.exists():
+        libs = sorted([p.name for p in gb_dir.glob("libgraphbolt_pytorch_*")])
+        print("GraphBolt artifacts:", libs)
+    else:
+        print("No graphbolt directory found (may be OK depending on wheel/arch).")
+except Exception as e:
+    print("GraphBolt check warning:", e)
+PY
+
+# ---- Application Requirements ----
+COPY docker/requirements-minimal.txt /tmp/requirements.txt
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    python -m pip install -r /tmp/requirements.txt
+
+# ---- Application Code ----
+USER root
+WORKDIR /app
+
+COPY --chown=ray:ray src/ ./src/
+COPY --chown=ray:ray scripts/ ./scripts/
+COPY --chown=ray:ray docker/ ./docker/
+COPY --chown=ray:ray entrypoints/ ./entrypoints/
+COPY --chown=ray:ray bootstraps/ ./bootstraps/
+COPY --chown=ray:ray config/ ./config/
+
+USER ray
+
+# ---- Runtime Environment ----
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app:/app/src \
+    PATH="/home/ray/.local/bin:${PATH}" \
+    RAY_USAGE_STATS_ENABLED=0 \
+    DGL_GRAPHBOLT_SKIP=1 \
+    RAY_NAMESPACE="seedcore-dev"
+
+# Ray Dashboard, Serve HTTP, Metrics
+EXPOSE 8265 8000 8002
+
+# ---- Optimized Healthcheck ----
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
+  CMD curl -f http://127.0.0.1:8000/health || exit 1

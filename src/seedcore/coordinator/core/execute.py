@@ -506,7 +506,10 @@ async def execute_task(
         # Normalize to canonical format (idempotent - safe even if already canonical)
         # organism_execute now returns canonical envelope, but normalization ensures
         # all required fields are present and task_id/path are set correctly
+        # Preserve decision_kind from routing decision
         final_result = normalize_envelope(result, task_id=ctx.task_id, path="coordinator_fast_path")
+        if final_result.get("decision_kind") is None:
+            final_result["decision_kind"] = DecisionKind.FAST_PATH.value
         
         # PHASE 2: RESULT CONSOLIDATION (Asynchronous)
         if final_result and execution_config.enable_consolidation and execution_config.coordinator:
@@ -524,7 +527,10 @@ async def execute_task(
             config=execution_config,
         )
         # Normalize to canonical format
+        # Preserve decision_kind from routing decision
         final_result = normalize_envelope(result, task_id=ctx.task_id, path="coordinator_cognitive_path")
+        if final_result.get("decision_kind") is None:
+            final_result["decision_kind"] = DecisionKind.COGNITIVE.value
         
         # PHASE 2: RESULT CONSOLIDATION (Asynchronous)
         if final_result and execution_config.enable_consolidation and execution_config.coordinator:

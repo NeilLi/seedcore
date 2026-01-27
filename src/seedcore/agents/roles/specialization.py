@@ -299,6 +299,51 @@ class RoleRegistry:
     def register(self, profile: RoleProfile) -> None:
         self._profiles[profile.name] = profile
 
+    def update(
+        self,
+        spec: Union[Specialization, DynamicSpecialization, str],
+        **updates: Any,
+    ) -> RoleProfile:
+        """
+        Update a role profile by creating a new instance with merged values.
+        Since RoleProfile is frozen, this creates a new instance.
+        
+        Args:
+            spec: Specialization to update
+            **updates: Fields to update (default_skills, allowed_tools, etc.)
+            
+        Returns:
+            Updated RoleProfile instance
+        """
+        existing = self.get(spec)
+        
+        # Merge updates with existing values
+        new_default_skills = {**existing.default_skills, **updates.get("default_skills", {})}
+        new_allowed_tools = existing.allowed_tools | updates.get("allowed_tools", set())
+        new_visibility_scopes = existing.visibility_scopes | updates.get("visibility_scopes", set())
+        new_routing_tags = existing.routing_tags | updates.get("routing_tags", set())
+        new_safety_policies = {**existing.safety_policies, **updates.get("safety_policies", {})}
+        new_default_behaviors = updates.get("default_behaviors", existing.default_behaviors)
+        new_behavior_config = {**existing.behavior_config, **updates.get("behavior_config", {})}
+        new_zone_affinity = updates.get("zone_affinity", existing.zone_affinity)
+        new_environment_constraints = {**existing.environment_constraints, **updates.get("environment_constraints", {})}
+        
+        updated = RoleProfile(
+            name=existing.name,
+            default_skills=new_default_skills,
+            allowed_tools=new_allowed_tools,
+            visibility_scopes=new_visibility_scopes,
+            routing_tags=new_routing_tags,
+            safety_policies=new_safety_policies,
+            default_behaviors=new_default_behaviors,
+            behavior_config=new_behavior_config,
+            zone_affinity=new_zone_affinity,
+            environment_constraints=new_environment_constraints,
+        )
+        
+        self.register(updated)
+        return updated
+
     def to_json(self, indent: Optional[int] = 2) -> str:
         payload = {
             p.name.value: {
