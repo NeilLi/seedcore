@@ -47,7 +47,7 @@ class TestOpaWasm:
     
     def test_opa_wasm_init_without_wasmtime(self):
         """Test OpaWasm initialization without wasmtime."""
-        with patch('seedcore.ops.pkg.evaluator._WASMTIME_AVAILABLE', False):
+        with patch('seedcore.ops.pkg.evaluator.is_wasmtime_available', return_value=False):
             engine = OpaWasm(b'wasm_bytes', checksum='abc123')
             
             assert engine._wasm_bytes == b'wasm_bytes'

@@ -348,6 +348,14 @@ def mock_get_neo4j_driver():
     """Mock get_neo4j_driver function."""
     return MockNeo4jDriver()
 
+def mock_get_redis_client():
+    """Mock get_redis_client function - returns None for tests."""
+    return None
+
+async def mock_get_async_redis_client():
+    """Mock get_async_redis_client function - returns None for tests."""
+    return None
+
 def mock_get_async_pg_session():
     """Mock get_async_pg_session function."""
     return MockAsyncSession()
@@ -545,6 +553,8 @@ mock_database_module.check_mysql_health = mock_check_mysql_health
 mock_database_module.check_neo4j_health = mock_check_neo4j_health
 mock_database_module.get_pg_pool_stats = mock_get_pg_pool_stats
 mock_database_module.get_mysql_pool_stats = mock_get_mysql_pool_stats
+mock_database_module.get_redis_client = mock_get_redis_client
+mock_database_module.get_async_redis_client = mock_get_async_redis_client
 
 # Mock asyncpg pool for TaskRepository
 class MockAsyncPGPool:
@@ -604,8 +614,13 @@ async def mock_get_asyncpg_pool(
     """Mock get_asyncpg_pool function."""
     return MockAsyncPGPool()
 
-# Mock PG_DSN constant
+# Mock constants
 PG_DSN = os.getenv("PG_DSN", "postgresql://postgres:postgres@localhost:5432/seedcore")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_BOLT_URL = os.getenv("NEO4J_BOLT_URL", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 
 # Mock the database metrics module as a proper module to avoid bound methods
 mock_database_metrics_module = types.ModuleType('seedcore.monitoring.database_metrics')
@@ -615,9 +630,14 @@ mock_database_metrics_module.monitor_health_check = mock_monitor_health_check
 mock_database_metrics_module.start_metrics_collection = mock_start_metrics_collection
 mock_database_metrics_module.stop_metrics_collection = mock_stop_metrics_collection
 
-# Add get_asyncpg_pool and PG_DSN to mock database module
+# Add get_asyncpg_pool and constants to mock database module
 mock_database_module.get_asyncpg_pool = mock_get_asyncpg_pool
 mock_database_module.PG_DSN = PG_DSN
+mock_database_module.REDIS_URL = REDIS_URL
+mock_database_module.NEO4J_URI = NEO4J_URI
+mock_database_module.NEO4J_BOLT_URL = NEO4J_BOLT_URL
+mock_database_module.NEO4J_USER = NEO4J_USER
+mock_database_module.NEO4J_PASSWORD = NEO4J_PASSWORD
 
 # Mock the modules in sys.modules before they're imported
 sys.modules['seedcore.database'] = mock_database_module

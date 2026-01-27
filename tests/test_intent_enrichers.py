@@ -73,7 +73,10 @@ def test_synthesize_baseline_from_domain_robot(ctx):
 
     intent = IntentEnricher.synthesize_baseline(ctx)
 
-    assert intent.specialization == Specialization.ROBOT_COORDINATOR.value
+    # Robot domain falls back to GENERALIST (no specific robot coordinator specialization)
+    # Robot execution is handled by CLEANING_ROBOT specialization, but coordination
+    # falls back to GENERALIST
+    assert intent.specialization == Specialization.GENERALIST.value
 
 
 def test_synthesize_baseline_from_task_type_chat(ctx):

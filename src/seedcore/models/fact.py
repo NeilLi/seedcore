@@ -30,9 +30,9 @@ class Fact(Base):
     text: Mapped[str] = mapped_column(String, nullable=False)
     tags: Mapped[List[str]] = mapped_column(ARRAY(String), nullable=True, default=list)
     meta_data: Mapped[dict] = mapped_column(JSON, nullable=True, default=dict)
-    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
     
     # PKG integration fields

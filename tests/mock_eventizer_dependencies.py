@@ -7,6 +7,7 @@ to allow tests to run without requiring a running Kubernetes pod or Ray cluster.
 """
 
 import sys
+import types
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 import asyncio
@@ -291,6 +292,29 @@ async def get_eventizer_client():
     return MockEventizerServiceClient()
 
 
+# Mock CompiledPack for load_pattern_pack
+def mock_load_pattern_pack(path: str):
+    """Mock load_pattern_pack function that returns a mock CompiledPack."""
+    from unittest.mock import MagicMock
+    
+    # Create a mock CompiledPack that satisfies test requirements
+    mock_pack = MagicMock()
+    mock_pack.pack_id = "fast-core"
+    mock_pack.pack_version = "1.0.0"
+    mock_pack.schema_version = "1"
+    mock_pack.fallback_event_type = MagicMock()
+    mock_pack.fallback_event_type.value = "routine"
+    mock_pack.checksum = "mock_checksum_12345"
+    mock_pack.patterns = [MagicMock()]  # At least one pattern for tests
+    mock_pack.max_chars = 1024
+    mock_pack.time_budget_ms = 2.0
+    mock_pack.pii_rules = tuple()
+    mock_pack.keyword_lexicon = set()
+    mock_pack.loc_res = tuple()
+    mock_pack.ts_res = tuple()
+    
+    return mock_pack
+
 # Install mocks in sys.modules
 sys.modules['seedcore.serve.eventizer_client'] = type('MockEventizerClientModule', (), {
     'EventizerServiceClient': MockEventizerServiceClient,
@@ -298,10 +322,30 @@ sys.modules['seedcore.serve.eventizer_client'] = type('MockEventizerClientModule
     'get_all_service_clients': lambda: {"eventizer": MockEventizerServiceClient()}
 })()
 
-sys.modules['seedcore.ops.eventizer.fast_eventizer'] = type('MockFastEventizerModule', (), {
-    'get_fast_eventizer': get_fast_eventizer,
-    'process_text_fast': process_text_fast
-})()
+# Import the real FastEventizer if the module path is set up correctly
+# This allows tests to use the real FastEventizer class
+try:
+    # Add src to path if not already there
+    import os
+    src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
+    if src_path not in sys.path:
+        sys.path.insert(0, src_path)
+    
+    # Try to import the real FastEventizer
+    from seedcore.ops.eventizer.fast_eventizer import FastEventizer as RealFastEventizer
+    from seedcore.ops.eventizer.fast_eventizer import load_pattern_pack as RealLoadPatternPack
+except (ImportError, ModuleNotFoundError):
+    # If import fails, use mocks
+    RealFastEventizer = MockFastEventizer
+    RealLoadPatternPack = mock_load_pattern_pack
+
+# Create mock module as a proper module type (not a class) to avoid method binding
+mock_fast_eventizer_module = types.ModuleType('seedcore.ops.eventizer.fast_eventizer')
+mock_fast_eventizer_module.get_fast_eventizer = get_fast_eventizer
+mock_fast_eventizer_module.process_text_fast = process_text_fast
+mock_fast_eventizer_module.load_pattern_pack = RealLoadPatternPack
+mock_fast_eventizer_module.FastEventizer = RealFastEventizer
+sys.modules['seedcore.ops.eventizer.fast_eventizer'] = mock_fast_eventizer_module
 
 # Mock the tasks router eventizer client getter
 sys.modules['seedcore.api.routers.tasks_router'] = type('MockTasksRouterModule', (), {

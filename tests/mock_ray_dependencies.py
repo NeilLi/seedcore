@@ -519,6 +519,8 @@ import types
 
 # Build a proper module-type mock for ray
 ray_mod = types.ModuleType('ray')
+# Make it behave like a package
+ray_mod.__path__ = []
 
 def _ray_init(*args, **kwargs):
     return True
@@ -678,6 +680,13 @@ sys.modules['ray.util.client.server'] = type('MockRayUtilClientServer', (), {})(
 sys.modules['ray.util.client.server.server'] = type('MockRayUtilClientServerServer', (), {})()
 sys.modules['ray.air'] = ray_air
 sys.modules['ray.air.config'] = ray_air.config
+
+# Stub ray.dag.* modules to prevent import errors during shutdown
+ray_dag = types.ModuleType('ray.dag')
+ray_dag_compiled_dag_node = types.ModuleType('ray.dag.compiled_dag_node')
+sys.modules['ray.dag'] = ray_dag
+sys.modules['ray.dag.compiled_dag_node'] = ray_dag_compiled_dag_node
+
 sys.modules['xgboost_ray'] = mock_xgboost_ray
 sys.modules['xgboost_ray.main'] = mock_xgboost_ray
 sys.modules['xgboost_ray.matrix'] = mock_xgboost_ray
@@ -716,49 +725,59 @@ mock_specs = type('MockSpecs', (), {
 })()
 sys.modules['seedcore.organs.tier0.specs'] = mock_specs
 
+# Mock async Redis client function
+async def mock_get_async_redis_client():
+    """Mock async Redis client that returns None."""
+    return None
+
 # Mock database module (only if not already provided by mock_database_dependencies)
-mock_database = type('MockDatabase', (), {
-    'get_async_pg_session_factory': lambda: lambda: type('MockSession', (), {
-        '__enter__': lambda self: self,
-        '__exit__': lambda self, *args: None,
-        'execute': lambda self, query, params=None: type('MockResult', (), {
-            'first': lambda: type('MockRow', (), {'__getitem__': lambda self, i: 'test_epoch' if i == 0 else None})()
-        })(),
-        'commit': lambda self: None
+# Use types.ModuleType to create a proper module object
+mock_database = types.ModuleType('seedcore.database')
+mock_database.get_async_pg_session_factory = lambda: lambda: type('MockSession', (), {
+    '__enter__': lambda self: self,
+    '__exit__': lambda self, *args: None,
+    'execute': lambda self, query, params=None: type('MockResult', (), {
+        'first': lambda: type('MockRow', (), {'__getitem__': lambda self, i: 'test_epoch' if i == 0 else None})()
     })(),
-    'get_async_pg_engine': lambda: type('MockEngine', (), {})(),
-    'get_sync_pg_engine': lambda: type('MockEngine', (), {})(),
-    'get_async_mysql_engine': lambda: type('MockEngine', (), {})(),
-    'get_sync_mysql_engine': lambda: type('MockEngine', (), {})(),
-    'get_neo4j_driver': lambda: type('MockDriver', (), {})(),
-    'get_db_session': lambda: iter([type('MockSession', (), {'close': lambda: None})()]),
-    'get_mysql_session': lambda: iter([type('MockSession', (), {'close': lambda: None})()]),
-    'check_pg_health': lambda: True,
-    'check_mysql_health': lambda: True,
-    'check_neo4j_health': lambda: True,
-    'PG_DSN': 'postgresql://test:test@localhost/test',
-    'MYSQL_DSN': 'mysql://test:test@localhost/test',
-    'NEO4J_URI': 'bolt://localhost:7687',
-    'NEO4J_USER': 'neo4j',
-    'NEO4J_PASSWORD': 'password',
-    'NEO4J_DATABASE': 'neo4j',
-    'NEO4J_POOL_SIZE': 10,
-    'NEO4J_CONNECTION_ACQUISITION_TIMEOUT': 30,
-    'NEO4J_MAX_CONNECTION_LIFETIME': 3600,
-    'NEO4J_MAX_TX_RETRY_TIME': 30,
-    'NEO4J_ENCRYPTED': True,
-    'NEO4J_KEEP_ALIVE': True,
-    'PG_POOL_SIZE': 10,
-    'PG_MAX_OVERFLOW': 20,
-    'PG_POOL_TIMEOUT': 30,
-    'PG_POOL_RECYCLE': 3600,
-    'PG_POOL_PRE_PING': True,
-    'MYSQL_POOL_SIZE': 10,
-    'MYSQL_MAX_OVERFLOW': 20,
-    'MYSQL_POOL_TIMEOUT': 30,
-    'MYSQL_POOL_RECYCLE': 3600,
-    'MYSQL_POOL_PRE_PING': True
+    'commit': lambda self: None
 })()
+mock_database.get_async_pg_engine = lambda: type('MockEngine', (), {})()
+mock_database.get_sync_pg_engine = lambda: type('MockEngine', (), {})()
+mock_database.get_async_mysql_engine = lambda: type('MockEngine', (), {})()
+mock_database.get_sync_mysql_engine = lambda: type('MockEngine', (), {})()
+mock_database.get_neo4j_driver = lambda: type('MockDriver', (), {})()
+mock_database.get_db_session = lambda: iter([type('MockSession', (), {'close': lambda: None})()])
+mock_database.get_mysql_session = lambda: iter([type('MockSession', (), {'close': lambda: None})()])
+mock_database.get_redis_client = lambda: None  # Mock Redis client (returns None for tests)
+mock_database.get_async_redis_client = mock_get_async_redis_client  # Mock async Redis client (returns None for tests)
+mock_database.check_pg_health = lambda: True
+mock_database.check_mysql_health = lambda: True
+mock_database.check_neo4j_health = lambda: True
+mock_database.REDIS_URL = 'redis://localhost:6379/0'
+mock_database.PG_DSN = 'postgresql://test:test@localhost/test'
+mock_database.MYSQL_DSN = 'mysql://test:test@localhost/test'
+mock_database.NEO4J_URI = 'bolt://localhost:7687'
+mock_database.NEO4J_BOLT_URL = 'bolt://localhost:7687'
+mock_database.NEO4J_USER = 'neo4j'
+mock_database.NEO4J_PASSWORD = 'password'
+mock_database.NEO4J_DATABASE = 'neo4j'
+mock_database.NEO4J_POOL_SIZE = 10
+mock_database.NEO4J_CONNECTION_ACQUISITION_TIMEOUT = 30
+mock_database.NEO4J_MAX_CONNECTION_LIFETIME = 3600
+mock_database.NEO4J_MAX_TX_RETRY_TIME = 30
+mock_database.NEO4J_ENCRYPTED = True
+mock_database.NEO4J_KEEP_ALIVE = True
+mock_database.PG_POOL_SIZE = 10
+mock_database.PG_MAX_OVERFLOW = 20
+mock_database.PG_POOL_TIMEOUT = 30
+mock_database.PG_POOL_RECYCLE = 3600
+mock_database.PG_POOL_PRE_PING = True
+mock_database.MYSQL_POOL_SIZE = 10
+mock_database.MYSQL_MAX_OVERFLOW = 20
+mock_database.MYSQL_POOL_TIMEOUT = 30
+mock_database.MYSQL_POOL_RECYCLE = 3600
+mock_database.MYSQL_POOL_PRE_PING = True
+
 if 'seedcore.database' not in sys.modules:
     sys.modules['seedcore.database'] = mock_database
 

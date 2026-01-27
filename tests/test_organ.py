@@ -44,13 +44,22 @@ def _mock_ray_remote(*args, **kwargs):
         return decorator
 
 # Create mock ray module
-_mock_ray_module = Mock()
+import types
+_mock_ray_module = types.ModuleType('ray')
+# Make it behave like a package
+_mock_ray_module.__path__ = []
 _mock_ray_module.is_initialized = Mock(return_value=True)
 _mock_ray_module.remote = _mock_ray_remote
 _mock_ray_module.actor = Mock()
 _mock_ray_module.actor.ActorHandle = Mock
 _mock_ray_module.get_actor = Mock(side_effect=ValueError("Actor not found"))
 _mock_ray_module.kill = Mock()
+
+# Stub ray.dag.* modules to prevent import errors during shutdown
+ray_dag = types.ModuleType('ray.dag')
+ray_dag_compiled_dag_node = types.ModuleType('ray.dag.compiled_dag_node')
+sys.modules['ray.dag'] = ray_dag
+sys.modules['ray.dag.compiled_dag_node'] = ray_dag_compiled_dag_node
 
 # Patch ray in sys.modules BEFORE importing anything that uses ray
 sys.modules['ray'] = _mock_ray_module

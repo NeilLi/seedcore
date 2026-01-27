@@ -1,9 +1,11 @@
 import uuid
+import json
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
-from sqlalchemy import text  # pyright: ignore[reportMissingImports]
+from sqlalchemy import text, bindparam, String, DateTime, Integer  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # pyright: ignore[reportMissingImports]
+from sqlalchemy.dialects.postgresql import ARRAY  # pyright: ignore[reportMissingImports]
 
 # Import your baseline database connector
 from seedcore.database import get_async_pg_session_factory
@@ -118,13 +120,14 @@ class FactCore:
         """
         async with self.session_factory() as session:
             # Insert using the schema from Migration 011 (all columns defined there)
-            # Use CAST for JSONB columns to ensure proper type handling
+            # Properly handle array and JSONB types for asyncpg compatibility
+            # Note: created_at and updated_at use server defaults (now()) from migration
             sql = text("""
                 INSERT INTO public.facts (
                     text, namespace, subject, predicate, object_data,
                     valid_from, valid_to, created_by,
                     snapshot_id, pkg_rule_id, pkg_provenance, validation_status,
-                    tags, meta_data
+                    tags, meta_data, created_at, updated_at
                 ) VALUES (
                     :txt, :ns, :sub, :pred, 
                     CASE WHEN :obj IS NULL THEN NULL ELSE CAST(:obj AS jsonb) END,
@@ -133,9 +136,22 @@ class FactCore:
                     CASE WHEN :prov IS NULL THEN NULL ELSE CAST(:prov AS jsonb) END,
                     :v_status,
                     :tags, 
-                    CASE WHEN :meta IS NULL THEN NULL ELSE CAST(:meta AS jsonb) END
+                    CAST(:meta AS jsonb),
+                    now(), now()
                 ) RETURNING id
-            """)
+            """).bindparams(
+                bindparam("sub", type_=String),
+                bindparam("pred", type_=String),
+                bindparam("obj", type_=String),  # Handle None properly with CASE
+                bindparam("v_from", type_=DateTime(timezone=True)),
+                bindparam("v_to", type_=DateTime(timezone=True)),
+                bindparam("snap", type_=Integer),
+                bindparam("rule", type_=String),
+                bindparam("prov", type_=String),  # Handle None properly with CASE
+                bindparam("v_status", type_=String),
+                bindparam("tags", type_=ARRAY(String)),
+                bindparam("meta", type_=String)   # Always provided (NOT NULL column)
+            )
 
             pkg = pkg_metadata or {}
             
@@ -146,13 +162,22 @@ class FactCore:
                 and (subject is not None or pkg.get("rule_id") is not None)
             )
             
+            # Ensure tags and meta_data are never None (use defaults from schema)
+            tags_list = tags if tags is not None else []
+            meta_dict = meta_data if meta_data is not None else {}
+            
+            # Serialize JSONB values to strings for proper None handling
+            # Note: meta_data is NOT NULL, so always serialize (even if empty dict)
+            obj_json = json.dumps(object_data) if object_data is not None else None
+            prov_json = json.dumps(pkg.get("provenance")) if pkg.get("provenance") is not None else None
+            meta_json = json.dumps(meta_dict)  # Always serialize - meta_data is NOT NULL
+            
             params = {
                 "txt": text_content,
                 "ns": namespace,
                 "sub": subject,
                 "pred": predicate,
-                # Pass dict directly - CAST in SQL will handle JSONB conversion
-                "obj": object_data,
+                "obj": obj_json,  # Serialized JSON string or None
                 "v_from": valid_from if valid_from is not None else (
                     datetime.now(timezone.utc) if should_set_valid_from else None
                 ),
@@ -160,11 +185,10 @@ class FactCore:
                 "by": created_by,
                 "snap": pkg.get("snapshot_id"),
                 "rule": pkg.get("rule_id"),
-                # Pass dict directly - CAST in SQL will handle JSONB conversion
-                "prov": pkg.get("provenance"),
+                "prov": prov_json,  # Serialized JSON string or None
                 "v_status": pkg.get("validation_status"),
-                "tags": tags or [],
-                "meta": meta_data,
+                "tags": tags_list,  # Pass list directly, asyncpg handles array conversion
+                "meta": meta_json,  # Serialized JSON string or None
             }
 
             result = await session.execute(sql, params)
@@ -191,7 +215,10 @@ class FactCore:
         This handles temporal filtering (valid_from/to) automatically.
         """
         async with self.session_factory() as session:
-            sql = text("SELECT * FROM get_facts_by_subject(:sub, :ns, false)")
+            sql = text("SELECT * FROM get_facts_by_subject(:sub, :ns, false)").bindparams(
+                bindparam("sub", type_=String),
+                bindparam("ns", type_=String)
+            )
             result = await session.execute(sql, {"sub": subject, "ns": namespace})
             return [dict(row._mapping) for row in result]
 
@@ -201,7 +228,9 @@ class FactCore:
         Returns a high-level summary of total, temporal, and expired facts.
         """
         async with self.session_factory() as session:
-            sql = text("SELECT * FROM get_fact_statistics(:ns)")
+            sql = text("SELECT * FROM get_fact_statistics(:ns)").bindparams(
+                bindparam("ns", type_=String)
+            )
             result = await session.execute(sql, {"ns": namespace})
             row = result.fetchone()
             return dict(row._mapping) if row else {}
@@ -215,7 +244,9 @@ class FactCore:
         Calls the 'cleanup_expired_facts' procedure from Migration 016.
         """
         async with self.session_factory() as session:
-            sql = text("SELECT cleanup_expired_facts(:ns, false)")
+            sql = text("SELECT cleanup_expired_facts(:ns, false)").bindparams(
+                bindparam("ns", type_=String)
+            )
             result = await session.execute(sql, {"ns": namespace})
             count = result.scalar()
             await session.commit()

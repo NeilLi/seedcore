@@ -14,7 +14,8 @@ Critical async database test requirements checklist:
 import pytest
 import uuid
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import text
+from sqlalchemy import text, bindparam, Integer
+from sqlalchemy.dialects.postgresql import UUID
 
 from seedcore.ops.fact.fact_core import FactCore
 from seedcore.database import get_async_pg_session_factory, get_async_pg_engine
@@ -44,13 +45,42 @@ def fact_core():
     return FactCore(session_factory=get_async_pg_session_factory())
 
 
+# 4) Helper to get or create a test snapshot_id (required by migration 017)
+async def get_or_create_test_snapshot_id(session) -> int:
+    """Get active snapshot_id or create a minimal test snapshot."""
+    # Try to get active snapshot
+    snapshot_result = await session.execute(
+        text("SELECT pkg_active_snapshot_id('prod')")
+    )
+    snapshot_id = snapshot_result.scalar_one_or_none()
+    
+    if snapshot_id is None:
+        # Create a minimal test snapshot if none exists
+        snapshot_result = await session.execute(
+            text("""
+                INSERT INTO pkg_snapshots (version, checksum, notes, is_active)
+                VALUES ('test@1.0.0', 'test_checksum_' || gen_random_uuid()::text, 'Test snapshot for unit tests', TRUE)
+                RETURNING id
+            """)
+        )
+        snapshot_id = snapshot_result.scalar_one()
+        await session.commit()
+    
+    return snapshot_id
+
+
 @pytest.mark.asyncio
 async def test_save_fact_and_lineage(fact_core, db_session):
+    # Get or create a snapshot_id for the task (required by migration 017)
+    snapshot_id = await get_or_create_test_snapshot_id(db_session)
+    
     # Create a parent task to satisfy FK constraints
     task_id = uuid.uuid4()
     await db_session.execute(
-        text("INSERT INTO tasks (id, type, status) VALUES (:tid, 'test_task', 'queued')"),
-        {"tid": task_id},
+        text("INSERT INTO tasks (id, type, status, snapshot_id) VALUES (:tid, 'test_task', 'queued', :snap_id)").bindparams(
+            bindparam("tid", type_=UUID(as_uuid=True), value=task_id),
+            bindparam("snap_id", type_=Integer, value=snapshot_id)
+        )
     )
     await db_session.commit()
 
@@ -71,21 +101,27 @@ async def test_save_fact_and_lineage(fact_core, db_session):
 async def test_temporal_validity_logic(fact_core):
     subject = f"user:guest_{uuid.uuid4().hex[:6]}"
     namespace = f"security_ops_{uuid.uuid4().hex[:6]}"
+    predicate = "hasAccess"
+    object_data = {"resource": "test_resource"}
 
-    # Expired fact
+    # Expired fact (must provide all triple fields: subject, predicate, object_data)
     await fact_core.save_fact(
         text_content="Expired",
         subject=subject,
+        predicate=predicate,
+        object_data=object_data,
         namespace=namespace,
         valid_from=datetime.now(timezone.utc) - timedelta(days=2),
         valid_to=datetime.now(timezone.utc) - timedelta(days=1),
         created_by="pytest_suite",
     )
 
-    # Active fact
+    # Active fact (must provide all triple fields: subject, predicate, object_data)
     await fact_core.save_fact(
         text_content="Active",
         subject=subject,
+        predicate=predicate,
+        object_data=object_data,
         namespace=namespace,
         valid_from=datetime.now(timezone.utc) - timedelta(hours=1),
         valid_to=datetime.now(timezone.utc) + timedelta(hours=1),
@@ -123,17 +159,23 @@ async def test_pkg_governance_storage(fact_core, db_session):
         "validation_status": "pkg_validated",
     }
 
+    # PKG-governed facts require all triple fields (subject, predicate, object_data)
+    # per constraint chk_facts_pkg_requires_triple
     fact_id = await fact_core.save_fact(
         text_content="PKG Test",
         namespace=f"pkg_test_{uuid.uuid4().hex[:6]}",
+        subject="test:subject",
+        predicate="test:predicate",
+        object_data={"test": "object"},
         pkg_metadata=pkg_meta,
         created_by="pytest_suite",
     )
 
     # Verify persisted columns (use a fresh session from fixture)
     row_res = await db_session.execute(
-        text("SELECT snapshot_id, validation_status FROM facts WHERE id = :fid"),
-        {"fid": fact_id},
+        text("SELECT snapshot_id, validation_status FROM facts WHERE id = :fid").bindparams(
+            bindparam("fid", type_=UUID(as_uuid=True), value=fact_id)
+        )
     )
     row = row_res.first()
     assert row is not None

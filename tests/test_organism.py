@@ -23,8 +23,79 @@ import sys
 from typing import Dict, Any
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock, MagicMock, patch, mock_open
+import types
 
 import pytest
+
+# CRITICAL: Patch ray in sys.modules BEFORE any imports to prevent @ray.remote from wrapping classes
+def _mock_ray_remote(*args, **kwargs):
+    """Mock ray.remote decorator - returns class unchanged for direct instantiation."""
+    if args and callable(args[0]):
+        # Called as @ray.remote decorator
+        cls = args[0]
+        # Add .remote() and .options() methods for compatibility
+        def remote_method(*r_args, **r_kwargs):
+            return cls(*r_args, **r_kwargs)
+        cls.remote = staticmethod(remote_method)
+        def options_method(**opts):
+            return cls
+        cls.options = staticmethod(options_method)
+        return cls
+    else:
+        # Called as @ray.remote(...) with kwargs or no args
+        def decorator(cls):
+            def remote_method(*r_args, **r_kwargs):
+                return cls(*r_args, **r_kwargs)
+            cls.remote = staticmethod(remote_method)
+            def options_method(**opts):
+                return cls
+            cls.options = staticmethod(options_method)
+            return cls
+        return decorator
+
+# Create mock ray module
+_mock_ray_module = types.ModuleType('ray')
+# Make it behave like a package
+_mock_ray_module.__path__ = []
+_mock_ray_module.is_initialized = Mock(return_value=True)
+_mock_ray_module.remote = _mock_ray_remote
+_mock_ray_module.actor = Mock()
+_mock_ray_module.actor.ActorHandle = Mock
+_mock_ray_module.get_actor = Mock(side_effect=ValueError("Actor not found"))
+_mock_ray_module.kill = Mock()
+_mock_ray_module.shutdown = Mock()
+
+# Add ray.get, ray.put, ray.wait methods used by organism_core
+def _mock_ray_get(obj, timeout=None):
+    """Mock ray.get() - returns the object as-is or the value if it's a MockObjectRef."""
+    if isinstance(obj, list):
+        return [item.value if hasattr(item, 'value') else item for item in obj]
+    elif hasattr(obj, 'value'):
+        return obj.value
+    return obj
+
+def _mock_ray_put(obj):
+    """Mock ray.put() - returns the object as-is."""
+    return obj
+
+def _mock_ray_wait(object_refs, timeout=None):
+    """Mock ray.wait() - returns ready and not_ready lists."""
+    if isinstance(object_refs, list):
+        return object_refs, []
+    return [object_refs], []
+
+_mock_ray_module.get = _mock_ray_get
+_mock_ray_module.put = _mock_ray_put
+_mock_ray_module.wait = _mock_ray_wait
+
+# Stub ray.dag.* modules to prevent import errors during shutdown
+ray_dag = types.ModuleType('ray.dag')
+ray_dag_compiled_dag_node = types.ModuleType('ray.dag.compiled_dag_node')
+sys.modules['ray.dag'] = ray_dag
+sys.modules['ray.dag.compiled_dag_node'] = ray_dag_compiled_dag_node
+
+# Patch ray in sys.modules BEFORE importing anything that uses ray
+sys.modules['ray'] = _mock_ray_module
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -34,9 +105,9 @@ from seedcore.agents.roles import Specialization, RoleProfile, RoleRegistry, DEF
 def teardown_module(module):
     """Ensure Ray is properly shut down after tests to prevent state contamination."""
     try:
-        import ray
-        if ray.is_initialized():
-            ray.shutdown()
+        # Use the mocked ray module
+        if _mock_ray_module.is_initialized():
+            _mock_ray_module.shutdown()
             print("✅ Ray shut down in teardown_module")
     except Exception as e:
         print(f"Ray teardown skipped: {e}")
@@ -234,15 +305,13 @@ def test_ray_cluster():
 # Unit Tests for OrganismCore Class
 # ============================================================================
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def mock_ray():
-    """Mock Ray for testing without actual Ray cluster."""
-    with patch("seedcore.organs.organism_core.ray") as mock_ray:
-        mock_ray.is_initialized.return_value = True
-        mock_ray.remote = lambda **kwargs: lambda cls: cls
-        mock_ray.actor.ActorHandle = Mock
-        mock_ray.get_actor = Mock(side_effect=ValueError("Actor not found"))
-        yield mock_ray
+    """Auto-use fixture to ensure ray is mocked for all tests."""
+    # Ensure ray stays mocked
+    sys.modules['ray'] = _mock_ray_module
+    with patch("seedcore.organs.organism_core.ray", _mock_ray_module):
+        yield _mock_ray_module
 
 
 @pytest.fixture
@@ -467,14 +536,29 @@ async def test_organism_core_execute_on_agent(mock_ray, mock_config_file):
     """Test executing a task on a specific agent."""
     core = OrganismCore(config_path=str(mock_config_file))
     
-    # Mock agent handle - need to support .remote() calls
+    # Mock agent handle - need to support .remote() calls and get_heartbeat
     async def mock_execute_task(*args, **kwargs):
         return {"success": True, "result": "test"}
     
+    # Create a mock object ref class that ray.get can handle
+    class MockObjectRef:
+        def __init__(self, value):
+            self.value = value
+    
     mock_agent_handle = Mock()
-    mock_execute_task_mock = AsyncMock(side_effect=mock_execute_task)
+    # execute_task.remote() should return a coroutine that resolves to the result
+    # The code does: ref = agent_handle.execute_task.remote(task_dict) then await asyncio.wait_for(ref, ...)
+    # So remote() should return something awaitable
+    execute_task_remote_mock = AsyncMock(side_effect=mock_execute_task)
     mock_agent_handle.execute_task = Mock()
-    mock_agent_handle.execute_task.remote = mock_execute_task_mock
+    mock_agent_handle.execute_task.remote = execute_task_remote_mock
+    
+    # Mock get_heartbeat for readiness check
+    def mock_get_heartbeat_remote():
+        # Return a mock object ref that ray.get can process
+        return MockObjectRef({"status": "ready"})
+    mock_agent_handle.get_heartbeat = Mock()
+    mock_agent_handle.get_heartbeat.remote = mock_get_heartbeat_remote
     
     # Mock organ - need to support .remote() calls
     async def mock_get_agent_handle(agent_id):
@@ -500,7 +584,8 @@ async def test_organism_core_execute_on_agent(mock_ray, mock_config_file):
     
     # Verify execution
     assert result["success"] is True
-    mock_execute_task_mock.assert_called_once()
+    # Verify execute_task.remote was called
+    execute_task_remote_mock.assert_called_once()
 
 
 @pytest.mark.asyncio

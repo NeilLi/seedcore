@@ -1673,7 +1673,12 @@ class Coordinator:
         try:
             async with self._session_factory() as session:
                 async with session.begin():
-                    await self.proto_plan_dao.upsert(session, str(tid), str(kind), plan)
+                    await self.proto_plan_dao.upsert(
+                        session,
+                        task_id=str(tid),
+                        route=str(kind),
+                        proto_plan=plan
+                    )
         except Exception as e:
             logger.warning(f"Proto-plan persist failed: {e}")
 

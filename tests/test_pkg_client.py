@@ -301,7 +301,8 @@ class TestPKGClient:
             namespace='default',
             subject='guest:Ben',
             predicate=None,
-            limit=100
+            limit=100,
+            governed_only=False
         )
     
     @pytest.mark.asyncio
@@ -332,7 +333,8 @@ class TestPKGClient:
             namespace='default',
             subject='guest:Ben',
             predicate='hasTemporaryAccess',
-            limit=100
+            limit=100,
+            governed_only=False
         )
     
     @pytest.mark.asyncio
