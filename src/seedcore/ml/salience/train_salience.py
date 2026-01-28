@@ -7,16 +7,15 @@ It can be run manually or as part of CI/CD pipeline.
 """
 
 import sys
-import os
 import logging
 from pathlib import Path
 
-# Add project root to path
-project_root = Path(__file__).parent.parent
+# Add project root to path (needed for other imports)
+project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.seedcore.ml.salience.scorer import SalienceScorer
-from src.seedcore.ml.salience.trainer import SalienceTrainer
+# Import after path modification
+from src.seedcore.ml.salience.scorer import SalienceScorer  # noqa
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,18 +30,26 @@ def main():
         models_dir = project_root / "src" / "seedcore" / "ml" / "models"
         models_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize trainer
-        trainer = SalienceTrainer()
+        # Initialize scorer
+        model_path = str(models_dir / "salience_model.pkl")
+        scorer = SalienceScorer(model_path=model_path)
         
-        # Train the model
+        # Generate training data (synthetic for now)
+        # In production, this would load from flashbulb memory
+        logger.info("📊 Generating training data...")
+        from src.seedcore.ml.salience.train_salience_model import generate_synthetic_training_data  # noqa: E402
+        training_data, salience_scores = generate_synthetic_training_data(1000)
+        
+        # Train the model (saves automatically)
         logger.info("📊 Training salience model...")
-        model = trainer.train_model()
+        results = scorer.train_model(training_data, salience_scores, save_path=model_path)
         
-        # Save the model
-        model_path = models_dir / "salience_model.pkl"
-        model.save_model(str(model_path))
+        if "error" in results:
+            logger.error(f"Training failed: {results['error']}")
+            return 1
         
         logger.info(f"✅ Model trained and saved to {model_path}")
+        logger.info(f"   MSE: {results['mse']:.4f}, R²: {results['r2']:.4f}")
         
         # Test the model
         logger.info("🧪 Testing trained model...")
@@ -61,7 +68,7 @@ def main():
             'agent_memory_util': 0.3
         }
         
-        score = model.score_features([test_features])[0]
+        score = scorer.score_features([test_features])[0]
         logger.info(f"✅ Test prediction: {score:.3f}")
         
         return 0

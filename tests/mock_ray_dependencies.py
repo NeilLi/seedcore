@@ -654,13 +654,75 @@ ray_mod.util = ray_util
 # Force replace the module completely to avoid any issues with already-imported modules
 sys.modules['ray'] = ray_mod  # Always ensure our mock is registered first
 
+# Mock ray.tune module
+mock_tune = types.ModuleType('ray.tune')
+mock_tune.Trainable = type('MockTrainable', (), {})
+mock_tune.run = lambda *args, **kwargs: {'best_config': {}, 'best_result': {}}
+mock_tune.ExperimentAnalysis = type('MockExperimentAnalysis', (), {
+    '__init__': lambda self, *args, **kwargs: None,
+    'get_best_config': lambda self, *args, **kwargs: {},
+    'get_best_result': lambda self, *args, **kwargs: {}
+})
+
+# Mock ray.tune search space functions
+def mock_loguniform(lower, upper):
+    """Mock loguniform search space function."""
+    return {"type": "loguniform", "lower": lower, "upper": upper}
+
+def mock_uniform(lower, upper):
+    """Mock uniform search space function."""
+    return {"type": "uniform", "lower": lower, "upper": upper}
+
+def mock_choice(choices):
+    """Mock choice search space function."""
+    return {"type": "choice", "choices": choices}
+
+def mock_randint(lower, upper):
+    """Mock randint search space function."""
+    return {"type": "randint", "lower": lower, "upper": upper}
+
+def mock_quniform(lower, upper, q):
+    """Mock quniform search space function."""
+    return {"type": "quniform", "lower": lower, "upper": upper, "q": q}
+
+def mock_qloguniform(lower, upper, q):
+    """Mock qloguniform search space function."""
+    return {"type": "qloguniform", "lower": lower, "upper": upper, "q": q}
+
+mock_tune.loguniform = mock_loguniform
+mock_tune.uniform = mock_uniform
+mock_tune.choice = mock_choice
+mock_tune.randint = mock_randint
+mock_tune.quniform = mock_quniform
+mock_tune.qloguniform = mock_qloguniform
+
+# Mock ray.tune.schedulers
+mock_tune_schedulers = types.ModuleType('ray.tune.schedulers')
+mock_tune_schedulers.ASHAScheduler = type('MockASHAScheduler', (), {
+    '__init__': lambda self, *args, **kwargs: None
+})
+
+# Mock ray.tune.search
+mock_tune_search = types.ModuleType('ray.tune.search')
+mock_tune_search_basic_variant = types.ModuleType('ray.tune.search.basic_variant')
+mock_tune_search_basic_variant.BasicVariantGenerator = type('MockBasicVariantGenerator', (), {
+    '__init__': lambda self, *args, **kwargs: None
+})
+
+# Attach tune to ray module
+ray_mod.tune = mock_tune
+sys.modules['ray.tune'] = mock_tune
+sys.modules['ray.tune.schedulers'] = mock_tune_schedulers
+sys.modules['ray.tune.search'] = mock_tune_search
+sys.modules['ray.tune.search.basic_variant'] = mock_tune_search_basic_variant
+
 # Also update any already-imported references if they exist
 if 'ray' in sys.modules:
     existing_ray = sys.modules['ray']
     # If it's not our mock module, update its attributes
     if existing_ray is not ray_mod:
         # Try to update attributes on the existing module object
-        for attr_name in ['is_initialized', 'init', 'shutdown', 'get_actor', 'get', 'put', 'remote']:
+        for attr_name in ['is_initialized', 'init', 'shutdown', 'get_actor', 'get', 'put', 'remote', 'tune']:
             if hasattr(ray_mod, attr_name):
                 try:
                     setattr(existing_ray, attr_name, getattr(ray_mod, attr_name))

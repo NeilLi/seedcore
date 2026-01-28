@@ -17,6 +17,10 @@ from . import memory_tools
 from . import training_tools
 from . import calculator_tool
 from . import query_tools
+from . import vla_discovery_tools
+from . import vla_analysis_tools
+from . import distillation_tools
+from . import vla_tools
 
 __all__ = [
     "Tool",
@@ -26,5 +30,9 @@ __all__ = [
     "training_tools",
     "calculator_tool",
     "query_tools",
+    "vla_discovery_tools",
+    "vla_analysis_tools",
+    "distillation_tools",
+    "vla_tools",
 ]
 

@@ -23,5 +23,107 @@
 #         routing_tags:
 #           - <tag1>
 
-# Empty by default - all specializations come from pkg_subtask_types via CapabilityMonitor
-dynamic_specializations: {}
+# SeedCore v2.5+ VLA Workflow Specializations
+dynamic_specializations:
+  # =============================================================
+  #  BRAIN-FOUNDRY ORGAN SPECIALIZATIONS
+  # =============================================================
+  
+  hf_scanner:
+    name: "HF Scanner (Discovery Agent)"
+    metadata:
+      category: "brain_foundry"
+      description: "Programmatic scanning of Hugging Face for VLA model discovery"
+      organ_kind: "BRAIN_FOUNDRY"
+    role_profile:
+      default_skills:
+        model_indexing: 1.0
+        metadata_parsing: 0.8
+      allowed_tools:
+        - hf_hub.list_models
+        - lerobot.registry.query
+      routing_tags:
+        - hf_scan
+        - vla_search
+        - brain_foundry
+        - discovery
+
+  distill_expert:
+    name: "Distill Expert (Teacher/Student Agent)"
+    metadata:
+      category: "brain_foundry"
+      description: "Manages Trace-Replay distillation for VLA models. Supports GPT-5 for frontier reasoning (2026 standard)."
+      organ_kind: "BRAIN_FOUNDRY"
+    role_profile:
+      default_skills:
+        synthetic_data_gen: 0.9
+        lora_tuning: 0.9
+      allowed_tools:
+        - finetune.run_lerobot
+        - teacher.escalate_gpt4
+        - teacher.escalate_gpt5  # 2026: GPT-5 for frontier reasoning
+      routing_tags:
+        - distillation
+        - brain_foundry
+        - vla
+        - trace_replay
+
+  # =============================================================
+  #  PHYSICAL-ACTUATION ORGAN SPECIALIZATIONS
+  # =============================================================
+  
+  safety_guard:
+    name: "Safety Guard Agent (Red-Teaming)"
+    metadata:
+      category: "physical_actuation"
+      description: "Dedicated safety guard agent for 2026 robotics best practices. Performs red-teaming and E-STOP coordination."
+      organ_kind: "PHYSICAL_ACTUATION"
+    role_profile:
+      default_skills:
+        safety_analysis: 0.95
+        risk_assessment: 0.9
+        joint_limit_validation: 0.9
+      allowed_tools:
+        - safety.validate
+        - safety.estop
+        - safety.red_team
+        - isaac.gym.validate_action
+      routing_tags:
+        - safety
+        - guardrail
+        - red_team
+        - estop
+
+  reachy_actuator:
+    name: "Reachy Actuator (Executive Agent)"
+    metadata:
+      category: "physical_actuation"
+      description: "Real-time motor and sensory control for Reachy Mini. Maps SeedCore commands to Reachy Mini daemon. Supports 3D geometric awareness and sim-to-real validation."
+      organ_kind: "PHYSICAL_ACTUATION"
+    role_profile:
+      default_skills:
+        spatial_reasoning: 0.9
+        dexterity: 0.7
+        spatial_grounding: 0.95
+        vla_inference: 0.85
+        "3d_geometric_awareness": 0.9  # 2026: Point cloud and depth data support
+      allowed_tools:
+        - reachy.motion.move
+        - reachy.motion.look_at
+        - reachy.motion.wave
+        - reachy.audio.say
+        - reachy.vision.stream
+        - reachy.gripper.grasp
+        - isaac.gym.validate_action  # 2026: NVIDIA GR00T sim-to-real validation
+      routing_tags:
+        - reachy_mini
+        - real_time
+        - vla
+        - physical_actuation
+        - sim_to_real  # 2026: Sim-to-real validation enabled
+      behavior_config:
+        background_loop:
+          interval_s: 0.2
+          method: "proprioception_sync"
+        # Note: For fluid 2026 motion (Kung Fu, dexterous manipulation),
+        # consider reducing interval_s to 0.02 (50Hz) if local PC throughput allows

@@ -1,6 +1,6 @@
-# Smart Habitat Organism Configuration (SeedCore v2)
-# ---------------------------------------------------
-# Defines the organs of the Habitat AI Organism.
+# SeedCore v2.5+ VLA (Vision-Language-Action) Configuration
+# -----------------------------------------------------------
+# Defines the organs for 2026's VLA workflows with Brain-Foundry and Physical-Actuation.
 # Each organ represents an autonomous subsystem composed of specialized agent clusters.
 
 seedcore:
@@ -12,7 +12,7 @@ seedcore:
 
     organs:
       # =============================================================
-      #  CORE ORGANS (Minimal Essential Configuration)
+      #  CORE GENERAL ORGANS
       # =============================================================
       # Note: Additional agents are dynamically spawned from pkg_subtask_types
       # via CapabilityMonitor. Static config here is for baseline initialization only.
@@ -30,90 +30,109 @@ seedcore:
                 auto_add_general_query: true
             count: 1
 
-      - id: "environment_intelligence_organ"
-        description: "World modeling and anomaly detection."
+      - id: "utility_organ"
+        description: "Utility and generalist agents."
         agents:
-          - specialization: "ENVIRONMENT"
+          - specialization: "GENERALIST"
             class: "BaseAgent"
-            behaviors: ["background_loop", "task_filter"]
+            behaviors: ["background_loop"]
             behavior_config:
               background_loop:
-                interval_s: 10.0
-                method: "sense_environment"
-                max_errors: 3
-              task_filter:
-                allowed_types: ["env.tick", "environment.tick"]
-            count: 1
-          - specialization: "ANOMALY_DETECTOR"
-            class: "BaseAgent"
-            behaviors: ["background_loop", "task_filter"]
-            behavior_config:
-              background_loop:
-                interval_s: 10.0
-                method: "sense_environment"
-                max_errors: 3
-              task_filter:
-                allowed_types: ["env.tick", "environment.tick"]
+                interval_s: 0.2
+                method: "proprioception_sync"
             count: 1
 
-      - id: "orchestration_organ"
-        description: "Device control and coordination."
+      # =============================================================
+      #  VLA WORKFLOW ORGANS (SeedCore v2.5+)
+      # =============================================================
+
+      - id: "brain_foundry_organ"
+        description: "Discovery & Distillation pipeline for VLA models. Manages 'mental' models without physical actuation."
         agents:
-          - specialization: "DEVICE_ORCHESTRATOR"
+          # Agent 1: Discovery Agent - Programmatic scanning of Hugging Face
+          - specialization: "hf_scanner"
             class: "BaseAgent"
-            behaviors: ["background_loop", "task_filter", "tool_registration", "dedup", "safety_check"]
+            behaviors: ["background_loop", "task_filter"]
             behavior_config:
               background_loop:
-                interval_s: 5.0
-                method: "control_tick"
+                interval_s: 30.0
+                method: "model_indexing_scan"
+                max_errors: 3
+              task_filter:
+                allowed_types: ["model_discovery", "hf_scan", "vla_search"]
+            # RoleProfile should define:
+            #   default_skills: {model_indexing: 1.0, metadata_parsing: 0.8}
+            #   allowed_tools: ["hf_hub.list_models", "lerobot.registry.query"]
+            #   routing_tags: ["hf_scan", "vla_search", "brain_foundry"]
+            count: 1
+
+          # Agent 2: Teacher/Student Agent - Trace-Replay distillation
+          - specialization: "distill_expert"
+            class: "BaseAgent"
+            behaviors: ["background_loop", "task_filter"]
+            behavior_config:
+              background_loop:
+                interval_s: 60.0
+                method: "distillation_monitor"
                 max_errors: 5
               task_filter:
-                allowed_types: ["orchestration.tick", "orchestration.enqueue_commands", "orchestration.device_command", "orchestration.robot_task", "orchestration.energy_optimize", "action"]
-              tool_registration:
-                tools: ["tuya.send_command", "robots.assign_task", "energy.optimize"]
-              dedup:
-                ttl_s: 60.0
-              safety_check:
-                enabled: true
+                allowed_types: ["distillation_replay", "synthetic_data_gen", "lora_tuning"]
+            # RoleProfile should define:
+            #   default_skills: {synthetic_data_gen: 0.9, lora_tuning: 0.9}
+            #   allowed_tools: ["finetune.run_lerobot", "teacher.escalate_gpt4"]
+            #   routing_tags: ["distillation", "brain_foundry", "vla"]
             count: 1
 
-      - id: "robot_execution_organ"
-        description: "Physical robot execution."
+      - id: "physical_actuation_organ"
+        description: "Physical-Actuation Organ (Reachy Core). Maps SeedCore commands to Reachy Mini daemon for real-time motor and sensory control. Includes 2026 safety guard and sim-to-real validation."
         agents:
-          - specialization: "CLEANING_ROBOT"
-            count: 1
-
-      - id: "verification_organ"
-        description: "Result verification and QA."
-        agents:
-          - specialization: "RESULT_VERIFIER"
-            count: 1
-
-      - id: "learning_organ"
-        description: "Continuous learning and adaptation."
-        agents:
-          - specialization: "CRITIC"
-            count: 1
-          - specialization: "ADAPTIVE_LEARNER"
-            count: 1
-
-      - id: "utility_organ"
-        description: "Utility and observation agents."
-        agents:
-          - specialization: "OBSERVER"
+          # Agent 3: Executive Agent - Real-time motor and sensory control
+          - specialization: "reachy_actuator"
             class: "BaseAgent"
-            behaviors: ["background_loop", "task_filter"]
+            behaviors: ["background_loop", "task_filter", "safety_check"]
             behavior_config:
               background_loop:
-                interval_s: 2.0
-                method: "_proactive_pass"
+                interval_s: 0.2
+                method: "proprioception_sync"
+                max_errors: 3
               task_filter:
-                allowed_types: ["observer.proactive_cache", "observer.observe"]
+                allowed_types: ["reachy.motion", "reachy.audio", "reachy.vision", "reachy.gripper", "action", "vla_execution", "isaac.gym"]
+              safety_check:
+                enabled: true
+                max_velocity: 0.5
+                collision_detection: true
+                # 2026 Safety Enhancements
+                guardrail_enabled: true
+                guardrail_model: "meta-llama/Llama-Guard-3-Robot"
+                risk_threshold: 0.8
+                escalate_to_remote: true
+                # E-STOP triggers for hallucinated motor coordinates
+                joint_limit_check: true
+                safety_level_estop: 0.95  # E-STOP if safety_level >= 0.95
+            # RoleProfile should define:
+            #   default_skills: {spatial_reasoning: 0.9, dexterity: 0.7, spatial_grounding: 0.95, vla_inference: 0.85, 3d_geometric_awareness: 0.9}
+            #   allowed_tools: ["reachy.motion.move", "reachy.motion.look_at", "reachy.motion.wave", "reachy.audio.say", "reachy.vision.stream", "reachy.gripper.grasp", "isaac.gym.validate_action"]
+            #   routing_tags: ["reachy_mini", "real_time", "vla", "physical_actuation", "sim_to_real"]
             count: 1
-          - specialization: "UTILITY"
-            class: "UtilityAgent"
-            count: 1
-          - specialization: "GENERALIST"
+
+          # Agent 4: Safety Guard Agent (2026 Best Practice)
+          - specialization: "safety_guard"
+            class: "BaseAgent"
+            behaviors: ["background_loop", "task_filter", "safety_check"]
+            behavior_config:
+              background_loop:
+                interval_s: 0.1  # High-frequency safety monitoring
+                method: "safety_monitor"
+                max_errors: 1  # Fail-safe: any error triggers alert
+              task_filter:
+                allowed_types: ["safety.validate", "safety.estop", "safety.red_team"]
+              safety_check:
+                enabled: true
+                guardrail_enabled: true
+                guardrail_model: "meta-llama/Llama-Guard-3-Robot"
+                risk_threshold: 0.7  # More conservative than actuator
+                joint_limit_check: true
+                safety_level_estop: 0.9  # E-STOP threshold
             count: 1
 
     # =============================================================
@@ -126,15 +145,29 @@ seedcore:
       
       # Cross-Organ Integration Bonds
       cross_organ_bonds:
-        - agents: ["USER_LIAISON", "DEVICE_ORCHESTRATOR"]
+        - agents: ["USER_LIAISON", "GENERALIST"]
           weight: 0.7
-          description: "User → device execution loop"
-
-      # Learning-driven bonds
-      learned_bonds:
-        - agents: ["CRITIC", "ADAPTIVE_LEARNER"]
-          weight: 0.65
-          description: "Reinforcement-learning policy update"
+          description: "User → generalist coordination loop"
+        - agents: ["GENERALIST", "reachy_actuator"]
+          weight: 0.8
+          description: "Generalist → physical actuation handoff"
+        - agents: ["hf_scanner", "distill_expert"]
+          weight: 0.75
+          description: "Discovery → distillation pipeline"
+        - agents: ["distill_expert", "reachy_actuator"]
+          weight: 0.7
+          description: "Distillation → execution bridge"
+        
+        # 2026 Safety & Sim-to-Real Bonds
+        - agents: ["reachy_actuator", "safety_guard"]
+          weight: 0.95
+          description: "Actuator → Safety Guard (Red-Teaming bond, 2026 best practice)"
+        - agents: ["reachy_actuator", "isaac.gym"]
+          weight: 0.85
+          description: "Actuator → Sim-to-Real Validation (NVIDIA GR00T 1.6 integration)"
+        - agents: ["safety_guard", "GENERALIST"]
+          weight: 0.75
+          description: "Safety Guard → Generalist (E-STOP coordination)"
 
       # Global defaults
       defaults:

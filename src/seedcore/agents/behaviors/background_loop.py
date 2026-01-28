@@ -147,10 +147,15 @@ class BackgroundLoopBehavior(AgentBehavior):
 
             # Wait for next interval
             elapsed = time.perf_counter() - t0
-            await asyncio.wait(
-                [self._stop_evt.wait()],
-                timeout=max(0.0, self._interval_s - elapsed),
-            )
+            remaining_time = max(0.0, self._interval_s - elapsed)
+            if remaining_time > 0:
+                try:
+                    await asyncio.wait_for(
+                        self._stop_evt.wait(),
+                        timeout=remaining_time
+                    )
+                except asyncio.TimeoutError:
+                    pass  # Timeout expired, continue loop
 
     async def shutdown(self) -> None:
         """Stop loop and cleanup on shutdown."""
