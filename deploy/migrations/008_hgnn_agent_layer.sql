@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS agent_registry (
   agent_id    TEXT PRIMARY KEY,
   display_name TEXT NULL,
   props       JSONB NULL,
+  status      VARCHAR(20) DEFAULT 'offline',
+  last_seen_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -23,9 +25,26 @@ CREATE TABLE IF NOT EXISTS organ_registry (
   agent_id    TEXT NULL REFERENCES agent_registry(agent_id) ON UPDATE CASCADE ON DELETE SET NULL,
   kind        TEXT NULL,
   props       JSONB NULL,
+  status      VARCHAR(20) DEFAULT 'inactive',
+  last_seen_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Add columns if they don't exist (for existing tables)
+ALTER TABLE agent_registry 
+ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'offline',
+ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE organ_registry 
+ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'inactive',
+ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+
+-- Index for efficient pruning queries
+CREATE INDEX IF NOT EXISTS idx_agent_last_seen ON agent_registry(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_agent_status ON agent_registry(status);
+CREATE INDEX IF NOT EXISTS idx_organ_last_seen ON organ_registry(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_organ_status ON organ_registry(status);
 
 -- Create triggers for agent_registry and organ_registry if they don't exist
 DROP TRIGGER IF EXISTS trg_agent_registry_updated_at ON agent_registry;

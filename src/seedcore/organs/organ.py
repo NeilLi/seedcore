@@ -475,6 +475,12 @@ class Organ:
             return False
 
     async def ping(self) -> bool:
+        """Lightweight ping for health checks. Also updates database heartbeat."""
+        # Update heartbeat asynchronously (non-blocking)
+        try:
+            asyncio.create_task(self.heartbeat_sync())
+        except Exception:
+            pass  # Ignore errors - heartbeat_sync handles its own errors
         return True
 
     async def create_agent(
@@ -773,7 +779,15 @@ class Organ:
 
         Actually pings agents to determine liveness, so OrganismCore's
         reconciliation loop can detect and respawn dead agents.
+        
+        Also updates database heartbeat to prove organ is alive.
         """
+        # Update heartbeat asynchronously (non-blocking)
+        try:
+            asyncio.create_task(self.heartbeat_sync())
+        except Exception:
+            pass  # Ignore errors - heartbeat_sync handles its own errors
+        
         agent_statuses = {}
 
         for agent_id, handle in self.agents.items():
@@ -814,6 +828,42 @@ class Organ:
     # ==========================================================
     # Lifecycle & Metadata (Runtime Updates)
     # ==========================================================
+
+    async def heartbeat_sync(self) -> None:
+        """
+        Update database heartbeat for this organ (status='active', last_seen_at=now).
+        
+        Called by ping() and get_status() to prove the organ is still alive.
+        This is a no-op if database access is not available (graceful degradation).
+        """
+        try:
+            from seedcore.database import get_async_pg_session_factory
+            from seedcore.graph.agent_repository import AgentGraphRepository
+            
+            session_factory = get_async_pg_session_factory()
+            if not session_factory:
+                logger.debug(f"[{self.organ_id}] No session factory available for heartbeat")
+                return
+            
+            repo = AgentGraphRepository()
+            async with session_factory() as session:
+                async with session.begin():
+                    await repo.update_organ_heartbeat(session, self.organ_id)
+            
+            # Log at INFO level occasionally (every 10th call) to avoid spam, DEBUG otherwise
+            if not hasattr(self, '_heartbeat_count'):
+                self._heartbeat_count = 0
+            self._heartbeat_count += 1
+            if self._heartbeat_count % 10 == 1:
+                logger.info(f"[{self.organ_id}] ✅ Organ heartbeat synced to database (count={self._heartbeat_count})")
+            else:
+                logger.debug(f"[{self.organ_id}] Organ heartbeat synced to database")
+        except Exception as e:
+            # Log at WARNING level so we can see if there are persistent issues
+            logger.warning(
+                f"[{self.organ_id}] Organ heartbeat sync failed (non-fatal): {e}",
+                exc_info=False  # Don't spam stack traces for expected failures
+            )
 
     async def heartbeat(self, agent_id: str, metrics: Dict[str, Any]) -> None:
         """

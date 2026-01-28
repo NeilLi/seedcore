@@ -987,6 +987,7 @@ class BaseAgent:
         Override if you have richer telemetry.
 
         **UPDATED**: Now includes 'learned_skills' for the StateService.
+        **ENHANCEMENT**: Automatically updates database heartbeat on every call.
         """
         await asyncio.sleep(0)
         perf = self.state.to_performance_metrics()
@@ -1001,13 +1002,74 @@ class BaseAgent:
         agent_skills = self.skills.deltas if self.skills else {}
         # -------------------------
 
+        self.last_heartbeat = time.time()
+        
+        # Update database heartbeat (non-blocking, fire-and-forget)
+        # This ensures all agents update their status, not just those with background_loop
+        try:
+            # Use create_task to avoid blocking heartbeat response
+            asyncio.create_task(self.heartbeat_sync())
+        except Exception:
+            pass  # Ignore errors - heartbeat_sync handles its own errors
+        
         return {
             "status": "healthy",
             "performance_metrics": perf,
             "private_memory": pm,
             "learned_skills": agent_skills,  # <-- ADDED
-            "timestamp": time.time(),
+            "timestamp": self.last_heartbeat,
         }
+
+    async def heartbeat_sync(self) -> None:
+        """
+        Called by background_loop (proprioception_sync method) or get_heartbeat() to update database heartbeat.
+        
+        This proves the agent is still alive by updating agent_registry.status='online' 
+        and last_seen_at=CURRENT_TIMESTAMP.
+        
+        This is a no-op if database access is not available (graceful degradation).
+        """
+        try:
+            from seedcore.database import get_async_pg_session_factory
+            from seedcore.graph.agent_repository import AgentGraphRepository
+            
+            session_factory = get_async_pg_session_factory()
+            if not session_factory:
+                logger.debug(f"[{self.agent_id}] No session factory available for heartbeat")
+                return
+            
+            repo = AgentGraphRepository()
+            async with session_factory() as session:
+                async with session.begin():
+                    await repo.update_agent_heartbeat(session, self.agent_id)
+            
+            # Log at INFO level occasionally (every 10th call) to avoid spam, DEBUG otherwise
+            if not hasattr(self, '_heartbeat_count'):
+                self._heartbeat_count = 0
+            self._heartbeat_count += 1
+            if self._heartbeat_count % 10 == 1:
+                logger.info(f"[{self.agent_id}] ✅ Heartbeat synced to database (count={self._heartbeat_count})")
+            else:
+                logger.debug(f"[{self.agent_id}] Heartbeat synced to database")
+        except Exception as e:
+            # Log at WARNING level so we can see if there are persistent issues
+            logger.warning(
+                f"[{self.agent_id}] Heartbeat sync failed (non-fatal): {e}",
+                exc_info=False  # Don't spam stack traces for expected failures
+            )
+
+    async def proprioception_sync(self) -> None:
+        """
+        Proprioception sync method called by background_loop behavior.
+        
+        This method:
+        1. Updates database heartbeat (proves agent is alive)
+        2. Can be extended with additional proprioception logic (state sync, etc.)
+        
+        Called automatically when background_loop is configured with method='proprioception_sync'.
+        """
+        await self.heartbeat_sync()
+        # Future: Add additional proprioception logic here (state sync, metrics collection, etc.)
 
     def _role_context(self) -> Dict[str, Any]:
         """

@@ -3470,14 +3470,92 @@ class OrganismCore:
         """
         self._reconcile_queue.append((organ_id, dead_agents))
 
+    async def _run_janitor(
+        self,
+        heartbeat_timeout_minutes: int = 5,
+        cleanup_timeout_hours: int = 1,
+    ) -> None:
+        """
+        Janitor/pruning logic: Marks stale agents/organs as offline and optionally deletes old ones.
+        
+        This solves the "State vs. Registry" discrepancy by:
+        1. Marking agents as 'offline' if no heartbeat for timeout period
+        2. Optionally deleting dynamic agents that have been offline for cleanup_timeout_hours
+        3. Marking organs as 'inactive' if no heartbeat
+        
+        Args:
+            heartbeat_timeout_minutes: Minutes without heartbeat before marking offline.
+            cleanup_timeout_hours: Hours offline before deletion (0 = never delete).
+        """
+        try:
+            from seedcore.database import get_async_pg_session_factory
+            from seedcore.graph.agent_repository import AgentGraphRepository
+            
+            session_factory = get_async_pg_session_factory()
+            if not session_factory:
+                logger.debug("[Janitor] No session factory available, skipping pruning")
+                return
+            
+            repo = AgentGraphRepository()
+            
+            # Get list of static agents to keep (from organs.yaml)
+            keep_static_agents = []
+            for cfg in self.organ_configs:
+                for agent_def in cfg.get("agents", []):
+                    spec_str = agent_def.get("specialization", "")
+                    count = int(agent_def.get("count", 1))
+                    for i in range(count):
+                        agent_id = f"{cfg['id']}_{spec_str.lower()}_{i}"
+                        keep_static_agents.append(agent_id)
+            
+            async with session_factory() as session:
+                async with session.begin():
+                    # Prune stale agents
+                    agent_stats = await repo.prune_stale_agents(
+                        session,
+                        heartbeat_timeout_minutes=heartbeat_timeout_minutes,
+                        cleanup_timeout_hours=cleanup_timeout_hours,
+                        keep_static_agents=keep_static_agents,
+                    )
+                    
+                    # Prune stale organs
+                    organs_marked = await repo.prune_stale_organs(
+                        session,
+                        heartbeat_timeout_minutes=heartbeat_timeout_minutes,
+                    )
+                    
+                    if agent_stats["marked_offline"] > 0 or agent_stats["deleted"] > 0 or organs_marked > 0:
+                        logger.info(
+                            f"🧹 [Janitor] Pruned: {agent_stats['marked_offline']} agents marked offline, "
+                            f"{agent_stats['deleted']} agents deleted, {organs_marked} organs marked inactive"
+                        )
+        except Exception as e:
+            logger.warning(f"[Janitor] Pruning failed (non-fatal): {e}", exc_info=True)
+
     async def _reconciliation_loop(self):
         """
         Rebuilds crashed organs or agents and updates internal routing maps.
+        Also runs janitor/pruning logic to clean up stale agents and organs.
         """
         logger.info("[OrganismCore] Reconciliation loop started")
+        
+        # Janitor configuration
+        janitor_interval_s = float(os.getenv("ORGANISM_JANITOR_INTERVAL_S", "300.0"))  # Default 5 minutes
+        heartbeat_timeout_minutes = int(os.getenv("ORGANISM_HEARTBEAT_TIMEOUT_MINUTES", "5"))
+        cleanup_timeout_hours = int(os.getenv("ORGANISM_CLEANUP_TIMEOUT_HOURS", "1"))
+        last_janitor_run = 0.0
 
         while not self._shutdown_event.is_set():
             try:
+                # Run janitor/pruning periodically
+                current_time = asyncio.get_running_loop().time()
+                if current_time - last_janitor_run >= janitor_interval_s:
+                    await self._run_janitor(
+                        heartbeat_timeout_minutes=heartbeat_timeout_minutes,
+                        cleanup_timeout_hours=cleanup_timeout_hours,
+                    )
+                    last_janitor_run = current_time
+
                 if self._reconcile_queue:
                     organ_id, dead_agents = self._reconcile_queue.pop(0)
                     logger.info(

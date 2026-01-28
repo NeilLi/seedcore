@@ -184,8 +184,8 @@ class AgentGraphRepository:
         
         await session.execute(
             text("""
-                INSERT INTO agent_registry (agent_id, display_name, props)
-                VALUES (:agent_id, :display_name, COALESCE(CAST(:props AS jsonb), '{}'::jsonb))
+                INSERT INTO agent_registry (agent_id, display_name, props, status)
+                VALUES (:agent_id, :display_name, COALESCE(CAST(:props AS jsonb), '{}'::jsonb), 'offline')
                 ON CONFLICT (agent_id) DO UPDATE
                 SET display_name = COALESCE(EXCLUDED.display_name, agent_registry.display_name),
                     props = COALESCE(EXCLUDED.props, agent_registry.props)
@@ -195,6 +195,142 @@ class AgentGraphRepository:
         await session.execute(
             text("SELECT ensure_agent_node(:agent_id)"), {"agent_id": agent_id}
         )
+
+    async def update_agent_heartbeat(
+        self,
+        session: AsyncSession,
+        agent_id: str,
+    ) -> None:
+        """Update agent heartbeat (status='online', last_seen_at=now).
+
+        Creates agent entry if it doesn't exist (upsert pattern).
+
+        Args:
+            session: The AsyncSession to use.
+            agent_id: Unique identifier for the agent.
+        """
+        await session.execute(
+            text("""
+                INSERT INTO agent_registry (agent_id, status, last_seen_at)
+                VALUES (:agent_id, 'online', CURRENT_TIMESTAMP)
+                ON CONFLICT (agent_id) DO UPDATE
+                SET status = 'online',
+                    last_seen_at = CURRENT_TIMESTAMP
+            """),
+            {"agent_id": agent_id},
+        )
+
+    async def update_organ_heartbeat(
+        self,
+        session: AsyncSession,
+        organ_id: str,
+    ) -> None:
+        """Update organ heartbeat (status='active', last_seen_at=now).
+
+        Creates organ entry if it doesn't exist (upsert pattern).
+
+        Args:
+            session: The AsyncSession to use.
+            organ_id: Unique identifier for the organ.
+        """
+        await session.execute(
+            text("""
+                INSERT INTO organ_registry (organ_id, status, last_seen_at)
+                VALUES (:organ_id, 'active', CURRENT_TIMESTAMP)
+                ON CONFLICT (organ_id) DO UPDATE
+                SET status = 'active',
+                    last_seen_at = CURRENT_TIMESTAMP
+            """),
+            {"organ_id": organ_id},
+        )
+
+    async def prune_stale_agents(
+        self,
+        session: AsyncSession,
+        *,
+        heartbeat_timeout_minutes: int = 5,
+        cleanup_timeout_hours: int = 1,
+        keep_static_agents: Optional[list[str]] = None,
+    ) -> Dict[str, int]:
+        """Prune stale agents (mark offline, optionally delete old ones).
+
+        Args:
+            session: The AsyncSession to use.
+            heartbeat_timeout_minutes: Minutes without heartbeat before marking offline.
+            cleanup_timeout_hours: Hours offline before deletion (0 = never delete).
+            keep_static_agents: List of agent IDs to never delete (e.g., core agents).
+
+        Returns:
+            Dict with counts: {'marked_offline': int, 'deleted': int}
+        """
+        keep_static_agents = keep_static_agents or []
+        
+        # Mark agents as offline if no heartbeat for timeout period
+        result_offline = await session.execute(
+            text("""
+                UPDATE agent_registry
+                SET status = 'offline'
+                WHERE status = 'online'
+                  AND last_seen_at < (CURRENT_TIMESTAMP - INTERVAL ':timeout minutes')
+                RETURNING agent_id
+            """),
+            {"timeout": heartbeat_timeout_minutes},
+        )
+        marked_offline = len(result_offline.fetchall())
+
+        deleted = 0
+        if cleanup_timeout_hours > 0:
+            # Build exclusion list for static agents
+            if keep_static_agents:
+                exclusion_clause = "AND agent_id != ALL(:keep_agents)"
+                params = {
+                    "timeout": cleanup_timeout_hours,
+                    "keep_agents": keep_static_agents,
+                }
+            else:
+                exclusion_clause = ""
+                params = {"timeout": cleanup_timeout_hours}
+
+            result_delete = await session.execute(
+                text(f"""
+                    DELETE FROM agent_registry
+                    WHERE status = 'offline'
+                      AND last_seen_at < (CURRENT_TIMESTAMP - INTERVAL ':timeout hours')
+                      {exclusion_clause}
+                    RETURNING agent_id
+                """),
+                params,
+            )
+            deleted = len(result_delete.fetchall())
+
+        return {"marked_offline": marked_offline, "deleted": deleted}
+
+    async def prune_stale_organs(
+        self,
+        session: AsyncSession,
+        *,
+        heartbeat_timeout_minutes: int = 5,
+    ) -> int:
+        """Mark stale organs as inactive.
+
+        Args:
+            session: The AsyncSession to use.
+            heartbeat_timeout_minutes: Minutes without heartbeat before marking inactive.
+
+        Returns:
+            Number of organs marked inactive.
+        """
+        result = await session.execute(
+            text("""
+                UPDATE organ_registry
+                SET status = 'inactive'
+                WHERE status = 'active'
+                  AND last_seen_at < (CURRENT_TIMESTAMP - INTERVAL ':timeout minutes')
+                RETURNING organ_id
+            """),
+            {"timeout": heartbeat_timeout_minutes},
+        )
+        return len(result.fetchall())
 
     async def link_agent_to_organ(
         self, session: AsyncSession, agent_id: str, organ_id: str
