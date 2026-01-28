@@ -266,12 +266,13 @@ class AgentGraphRepository:
         keep_static_agents = keep_static_agents or []
         
         # Mark agents as offline if no heartbeat for timeout period
+        # Use make_interval() function for parameterized intervals
         result_offline = await session.execute(
             text("""
                 UPDATE agent_registry
                 SET status = 'offline'
                 WHERE status = 'online'
-                  AND last_seen_at < (CURRENT_TIMESTAMP - INTERVAL ':timeout minutes')
+                  AND last_seen_at < (CURRENT_TIMESTAMP - make_interval(mins => :timeout))
                 RETURNING agent_id
             """),
             {"timeout": heartbeat_timeout_minutes},
@@ -295,7 +296,7 @@ class AgentGraphRepository:
                 text(f"""
                     DELETE FROM agent_registry
                     WHERE status = 'offline'
-                      AND last_seen_at < (CURRENT_TIMESTAMP - INTERVAL ':timeout hours')
+                      AND last_seen_at < (CURRENT_TIMESTAMP - make_interval(hours => :timeout))
                       {exclusion_clause}
                     RETURNING agent_id
                 """),
@@ -325,7 +326,7 @@ class AgentGraphRepository:
                 UPDATE organ_registry
                 SET status = 'inactive'
                 WHERE status = 'active'
-                  AND last_seen_at < (CURRENT_TIMESTAMP - INTERVAL ':timeout minutes')
+                  AND last_seen_at < (CURRENT_TIMESTAMP - make_interval(mins => :timeout))
                 RETURNING organ_id
             """),
             {"timeout": heartbeat_timeout_minutes},
