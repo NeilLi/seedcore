@@ -72,6 +72,10 @@ class OrganismService:
         self._init_error_trace: Optional[str] = None
         self._init_started_at: Optional[float] = None
         self._init_finished_at: Optional[float] = None
+        
+        # Capability change queue (for changes received before initialization)
+        self._pending_capability_changes: List[Dict[str, Any]] = []
+        self._capability_changes_lock = asyncio.Lock()
 
         # Auto-init is opt-in (disabled by default to allow bootstrap to complete first)
         AUTO_INIT = os.getenv("SEEDCORE_AUTO_INIT", "false").lower() == "true"
@@ -123,6 +127,9 @@ class OrganismService:
                 self._initialized = True
                 self._init_finished_at = time.time()
                 logger.info("✅ Organism and Router fully initialized")
+                
+                # Process any capability changes that were queued before initialization
+                await self._process_pending_capability_changes()
 
             except Exception as e:
                 self._init_error = f"{type(e).__name__}: {e}"
@@ -521,22 +528,66 @@ class OrganismService:
         This is a thin wrapper that delegates to OrganismCore.handle_capability_changes().
         The core logic lives in OrganismCore to maintain separation of concerns.
         
+        **ENHANCEMENT: Queues changes if service is not initialized, processes them after init.**
+        
         Args:
             changes: List of change dictionaries with:
                 - capability_name: str
                 - change_type: str ("added", "updated", "removed")
                 - specialization: Optional[str]
                 - snapshot_id: int (for version consistency validation)
+                - new_capability: Optional[Dict] - Full capability data
         
         Returns:
             Dict with success status and details
         """
         if not self._initialized:
-            logger.warning("OrganismService not initialized, ignoring capability changes")
-            return {"success": False, "error": "Service not initialized"}
+            # Queue changes for processing after initialization
+            async with self._capability_changes_lock:
+                self._pending_capability_changes.extend(changes)
+                logger.info(
+                    f"📦 Queued {len(changes)} capability changes (service not initialized yet). "
+                    f"Total queued: {len(self._pending_capability_changes)}"
+                )
+            return {
+                "success": True,
+                "queued": True,
+                "message": f"Queued {len(changes)} changes for processing after initialization",
+                "queued_count": len(self._pending_capability_changes)
+            }
 
         # Delegate to OrganismCore (core business logic)
         return await self.organism_core.handle_capability_changes(changes)
+    
+    async def _process_pending_capability_changes(self) -> None:
+        """
+        Process capability changes that were queued before initialization.
+        
+        This is called automatically after initialization completes.
+        """
+        async with self._capability_changes_lock:
+            if not self._pending_capability_changes:
+                return
+            
+            pending = self._pending_capability_changes.copy()
+            self._pending_capability_changes.clear()
+        
+        if pending:
+            logger.info(
+                f"🔄 Processing {len(pending)} queued capability changes after initialization"
+            )
+            try:
+                result = await self.organism_core.handle_capability_changes(pending)
+                logger.info(
+                    f"✅ Processed {len(pending)} queued capability changes: {result}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"❌ Failed to process queued capability changes: {e}",
+                    exc_info=True
+                )
+                # Re-queue failed changes for retry (optional - could also drop them)
+                # For now, we log the error but don't re-queue to avoid infinite loops
 
     @app.post("/capability-changes")
     async def notify_capability_changes(self, request: Dict[str, Any]):

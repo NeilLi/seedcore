@@ -537,12 +537,46 @@ class Coordinator:
             return None
 
     async def _start_capability_monitor(self) -> None:
-        """Start capability monitor in background."""
+        """
+        Start capability monitor in background.
+        
+        **ENHANCEMENT: Waits for OrganismService readiness before starting monitor.**
+        This ensures capability changes can be processed immediately instead of being queued.
+        """
         if self._capability_monitor_task is not None:
             return
 
         async def _init_and_start():
             try:
+                # Wait for OrganismService to be ready (with timeout)
+                # This ensures capability changes can be processed immediately
+                max_wait_s = float(os.getenv("CAPABILITY_MONITOR_WAIT_FOR_ORG_S", "60.0"))
+                wait_interval_s = 2.0
+                waited = 0.0
+                
+                while waited < max_wait_s:
+                    try:
+                        # Check if OrganismService is initialized
+                        health = await self.organism_client.health()
+                        if isinstance(health, dict) and health.get("organism_initialized"):
+                            logger.info(
+                                f"✅ OrganismService ready (waited {waited:.1f}s), starting CapabilityMonitor"
+                            )
+                            break
+                    except Exception as e:
+                        logger.debug(
+                            f"OrganismService not ready yet (waited {waited:.1f}s): {e}"
+                        )
+                    
+                    await asyncio.sleep(wait_interval_s)
+                    waited += wait_interval_s
+                
+                if waited >= max_wait_s:
+                    logger.warning(
+                        f"⚠️ OrganismService not ready after {max_wait_s}s, "
+                        "starting CapabilityMonitor anyway. Changes will be queued."
+                    )
+                
                 monitor = await self._ensure_capability_monitor()
                 if monitor:
                     logger.info("✅ CapabilityMonitor started successfully")

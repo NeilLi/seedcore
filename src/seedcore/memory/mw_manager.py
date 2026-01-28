@@ -155,6 +155,8 @@ class _HashRing:
         self._ns = [n for _, n in pairs]
 
     def node_for(self, key: str) -> str:
+        if not self._ns:
+            raise ValueError("HashRing has no nodes")
         h = int(hashlib.md5(key.encode()).hexdigest(), 16)
         i = bisect.bisect(self._hs, h) % len(self._ns)
         return self._ns[i]
@@ -216,20 +218,41 @@ def _get_mw_shard_handles(num_shards: Optional[int] = None, namespace: Optional[
     for nm in names:
         try:
             h = ray.get_actor(nm, namespace=namespace)
-        except Exception:
+            handles[nm] = h
+        except Exception as e:
             if CONFIG.auto_create and MwStoreShard is not None:
-                h = _remoteify(MwStoreShard).options(
-                    name=nm,
-                    lifetime="detached",
-                    namespace=namespace,
-                    num_cpus=0,
-                    max_concurrency=2000,
-                    get_if_exists=True,
-                ).remote()
+                try:
+                    h = _remoteify(MwStoreShard).options(
+                        name=nm,
+                        lifetime="detached",
+                        namespace=namespace,
+                        num_cpus=0,
+                        max_concurrency=2000,
+                        get_if_exists=True,
+                    ).remote()
+                    handles[nm] = h
+                except Exception as create_err:
+                    logger.warning(
+                        f"Failed to create MwStoreShard actor '{nm}': {create_err}",
+                        extra={"namespace": namespace, "actor_name": nm}
+                    )
+                    # Continue without this shard rather than failing completely
             else:
-                raise
-        handles[nm] = h
-    ring = _HashRing(names, vnodes=CONFIG.vnodes_per_shard)
+                logger.debug(
+                    f"MwStoreShard actor '{nm}' not found and AUTO_CREATE is disabled",
+                    extra={"namespace": namespace, "actor_name": nm, "error": str(e)}
+                )
+                # Continue without this shard rather than failing completely
+    
+    if not handles:
+        logger.warning(
+            "No MwStoreShard actors found or created",
+            extra={"namespace": namespace, "num_shards": num_shards, "auto_create": CONFIG.auto_create}
+        )
+        # Return empty ring and handles - callers should handle this gracefully
+        return _HashRing([], vnodes=CONFIG.vnodes_per_shard), {}
+    
+    ring = _HashRing(list(handles.keys()), vnodes=CONFIG.vnodes_per_shard)
     return ring, handles
 
 
@@ -238,8 +261,17 @@ def _mw_shard_for(key: str) -> Any:
     global _MW_RING, _MW_SHARDS
     if _MW_RING is None or not _MW_SHARDS:
         _MW_RING, _MW_SHARDS = _get_mw_shard_handles()
-    nm = _MW_RING.node_for(key)
-    return _MW_SHARDS[nm]
+    
+    # Handle case where no shards are available
+    if not _MW_SHARDS or not _MW_RING:
+        return None
+    
+    try:
+        nm = _MW_RING.node_for(key)
+        return _MW_SHARDS.get(nm)
+    except ValueError:
+        # HashRing has no nodes
+        return None
 
 
 def get_node_cache() -> Any:
@@ -559,6 +591,12 @@ class MwManager:
         """Increment miss count in the correct MwStoreShard based on hash ring."""
         try:
             shard = _mw_shard_for(item_id)
+            if shard is None:
+                logger.debug(
+                    "MwStoreShard not available, skipping miss tracking",
+                    extra={"organ": self.organ_id, "namespace": self.namespace, "item_id": item_id}
+                )
+                return
             # Fire-and-forget; best-effort
             shard.incr.remote(item_id, delta)
         except Exception as e:
@@ -572,6 +610,12 @@ class MwManager:
         try:
             # Ensure shards exist
             _, shards = _get_mw_shard_handles()
+            if not shards:
+                logger.warning(
+                    "No MwStoreShard actors available, returning empty hot items list",
+                    extra={"organ": self.organ_id, "namespace": self.namespace}
+                )
+                return []
             # Launch requests in parallel and await results
             refs = [h.topn.remote(top_n) for h in shards.values()]
             per_shard: List[List[Tuple[str, int]]] = await asyncio.gather(*[_await_ref(r) for r in refs])
