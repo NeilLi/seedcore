@@ -392,9 +392,10 @@ class ConversationAgent(BaseAgent):
         
         # Check for existing tools in multiple locations (handle both dict and TaskPayload)
         existing_tools = (
-            routing.get("tools") or 
-            task_data.get("tools") or 
-            (getattr(task_data, "tools", None) if hasattr(task_data, "tools") else None) or
+            routing.get("tools") or
+            params.get("tool_calls") or
+            task_data.get("tool_calls") or
+            (getattr(task_data, "tool_calls", None) if hasattr(task_data, "tool_calls") else None) or
             []
         )
         

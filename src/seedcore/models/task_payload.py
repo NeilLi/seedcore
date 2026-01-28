@@ -83,7 +83,12 @@ class TaskPayload(BaseModel):
     deadline_at: Optional[str] = None
     ttl_seconds: Optional[int] = None
     
-    tools: List[ToolCallPayload] = Field(default_factory=list)
+    # routing.tools: list of tool identifiers (RBAC/scoring)
+    routing_tools: List[str] = Field(default_factory=list)
+
+    # --- 2.5 TOOL CALLS (params.tool_calls) ---
+    # Execution-time tool call requests (separate from routing requirements)
+    tool_calls: List[ToolCallPayload] = Field(default_factory=list)
 
     # --- 3. COGNITIVE METADATA (params.cognitive) ---
     agent_id: Optional[str] = None        # The agent actually executing the task
@@ -175,6 +180,32 @@ class TaskPayload(BaseModel):
         
         return self
 
+    @field_validator("routing_tools", mode="before")
+    @classmethod
+    def normalize_routing_tools(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, list):
+            out: List[str] = []
+            for item in v:
+                if isinstance(item, str) and item.strip():
+                    out.append(item)
+                elif isinstance(item, dict):
+                    name = item.get("name")
+                    if isinstance(name, str) and name.strip():
+                        out.append(name)
+            return out
+        return []
+
+    @field_validator("tool_calls", mode="before")
+    @classmethod
+    def normalize_tool_calls(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return v
+        return []
+
     # ====================================================================
     #                       PACKING (Model -> DB)
     # ====================================================================
@@ -206,10 +237,7 @@ class TaskPayload(BaseModel):
             "required_specialization": self.required_specialization, # Hard
             "specialization": self.specialization,                   # Soft
             "skills": self.skills or {},
-            "tools": [
-                tc.model_dump() if hasattr(tc, 'model_dump') else tc
-                for tc in self.tools
-            ],
+            "tools": self.routing_tools or [],
             "hints": {
                 "priority": self.priority,
                 "deadline_at": self.deadline_at,
@@ -257,6 +285,16 @@ class TaskPayload(BaseModel):
             p["cognitive"] = cognitive_dict
         elif "cognitive" in p:
             p.pop("cognitive")
+
+        # 3.5 TOOL CALLS (execution requests)
+        tool_calls = self.tool_calls or []
+        if tool_calls:
+            p["tool_calls"] = [
+                tc.model_dump() if hasattr(tc, "model_dump") else tc
+                for tc in tool_calls
+            ]
+        elif "tool_calls" in p:
+            p.pop("tool_calls")
 
         # 4. CHAT
         chat_env = {
@@ -379,11 +417,22 @@ class TaskPayload(BaseModel):
         except ValueError:
             g_kind = GraphOperationKind.UNKNOWN
 
-        # Tools conversion
-        raw_tools = routing.get("tools") or []
+        # Routing tools (RBAC/scoring)
+        raw_routing_tools = routing.get("tools") or []
+        routing_tools = []
+        for item in raw_routing_tools:
+            if isinstance(item, str) and item.strip():
+                routing_tools.append(item)
+            elif isinstance(item, dict):
+                name = item.get("name")
+                if isinstance(name, str) and name.strip():
+                    routing_tools.append(name)
+
+        # Tool calls (execution requests)
+        raw_tool_calls = params.get("tool_calls") or []
         tools_objs = [
-            (t if isinstance(t, ToolCallPayload) else ToolCallPayload(**t)) 
-            for t in raw_tools if isinstance(t, dict)
+            (t if isinstance(t, ToolCallPayload) else ToolCallPayload(**t))
+            for t in raw_tool_calls if isinstance(t, dict)
         ]
 
         return cls(
@@ -408,7 +457,8 @@ class TaskPayload(BaseModel):
             priority=int(hints.get("priority") or 0),
             deadline_at=hints.get("deadline_at"),
             ttl_seconds=hints.get("ttl_seconds"),
-            tools=tools_objs,
+            routing_tools=routing_tools,
+            tool_calls=tools_objs,
 
             # Cognitive
             agent_id=cognitive.get("agent_id"),

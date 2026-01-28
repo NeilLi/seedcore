@@ -99,11 +99,12 @@ class ToolAutoInjectionBehavior(AgentBehavior):
         interaction = params.setdefault("interaction", {})
         chat = params.setdefault("chat", {})
 
-        # Check for existing tools
+        # Check for existing tools/tool calls
         existing_tools = (
             routing.get("tools")
-            or task_dict.get("tools")
-            or (getattr(task, "tools", None) if hasattr(task, "tools") else None)
+            or params.get("tool_calls")
+            or task_dict.get("tool_calls")
+            or (getattr(task, "tool_calls", None) if hasattr(task, "tool_calls") else None)
             or []
         )
 
@@ -151,8 +152,8 @@ class ToolAutoInjectionBehavior(AgentBehavior):
                         "task_data": sanitized_task_data,
                     },
                 }
-                routing["tools"] = [tool_call]
-                task_dict["tools"] = [tool_call]  # Also set top-level for compatibility
+                routing["tools"] = ["general_query"]
+                task_dict["tool_calls"] = [tool_call]
 
                 logger.debug(
                     f"[{self.agent.agent_id}] ✅ Auto-added general_query tool for {task_type} task"

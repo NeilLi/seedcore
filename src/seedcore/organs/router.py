@@ -585,8 +585,13 @@ class RoutingDirectory:
         skills = routing.get("skills") or routing.get("skills") or {}
 
         # 2. Tools (V2 Naming)
-        # Support V2 'tools' with fallback to legacy 'tool_calls'
-        tools_list = routing.get("tools") or routing.get("tool_calls") or []
+        # routing.tools = list of tool identifiers (RBAC/scoring)
+        tools_list = routing.get("tools") or []
+
+        normalized_tools: List[str] = []
+        for item in tools_list:
+            if isinstance(item, str) and item.strip():
+                normalized_tools.append(item)
 
         inferred_endpoint = None
         inferred_capability = None
@@ -628,7 +633,7 @@ class RoutingDirectory:
             "required_specialization": required_specialization,
             "specialization": specialization,
             "skills": skills,  # Renamed from skills
-            "tools": tools_list,  # Renamed from tool_calls
+            "tools": normalized_tools,
             "priority": priority,
             "deadline_at": deadline_at,
             "ttl_seconds": ttl_seconds,
@@ -949,6 +954,13 @@ class RoutingDirectory:
         params = task_dict.get("params", {})
         interaction = params.get("interaction", {})
         routing_in = params.get("routing", {})
+        risk = params.get("risk", {})
+
+        # Enforce write-lock on params._router (system-managed resolution only)
+        if isinstance(params, dict):
+            params.pop("_router", None)
+        if hasattr(payload, "params") and isinstance(payload.params, dict):
+            payload.params.pop("_router", None)
 
         # --- 2. Initial State & Fast Paths ---
         mode = interaction.get("mode", "coordinator_routed")
@@ -1039,7 +1051,7 @@ class RoutingDirectory:
         # PHASE 3: RESULT COMPOSITION
         # =========================================================
 
-        is_high_stakes = routing_in.get("is_high_stakes", False)
+        is_high_stakes = bool(risk.get("is_high_stakes", False))
 
         decision = RouterDecision(
             agent_id=agent_id,

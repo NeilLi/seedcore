@@ -87,7 +87,7 @@ OrganismManager
 
 ### Migration Overview
 
-The database schema has evolved through 13 comprehensive migrations, establishing a robust foundation for distributed task management, graph-based AI, and runtime coordination:
+The database schema has evolved through 19 comprehensive migrations, establishing a robust foundation for distributed task management, graph-based AI, runtime coordination, policy governance, and unified memory systems:
 
 | Migration | Purpose | Key Components |
 |-----------|---------|----------------|
@@ -95,7 +95,15 @@ The database schema has evolved through 13 comprehensive migrations, establishin
 | 007 | **Task Schema Enhancements** | JSONB conversion, check constraints, optimized indexing |
 | 008-009 | **HGNN Architecture** | Two-layer graph schema, node mapping, edge relationships |
 | 010-011 | **Facts System** | Text-based fact storage, task-fact integration |
-| 012-013 | **Runtime Registry** | Instance management, cluster coordination |
+| 012 | **Runtime Registry** | Instance management, cluster coordination |
+| 013 | **PKG Core** | Policy snapshots, subtask types, rules, conditions, emissions, artifacts |
+| 014 | **PKG Operations** | Canary deployments, validation, promotions, device coverage |
+| 015 | **PKG Views & Functions** | Helper views, integrity checks, promotion functions |
+| 016 | **Fact-PKG Integration** | Foreign keys, temporal modeling, structured triple conversion |
+| 017 | **PKG Snapshot Scoping** | Snapshot_id columns, reproducible runs, multi-world isolation |
+| 117 | **Unified Cortex Memory** | Unified memory view, embedding views, snapshot-aware semantic search |
+| 118 | **Task Outbox Hardening** | Availability scheduling, retry tracking, exponential backoff |
+| 119 | **Task Router Telemetry** | OCPS signals, surprise scores, routing decision tracking |
 
 ### 1. Task Management System (Migrations 001-006)
 
@@ -591,7 +599,7 @@ CREATE TABLE facts (
 - **Metadata Support**: JSONB for flexible fact properties
 - **Task Integration**: `task__reads__fact`, `task__produces__fact` relationships
 
-### 6. Runtime Registry System (Migrations 012-013)
+### 6. Runtime Registry System (Migration 012)
 
 #### Instance Management
 ```sql
@@ -626,7 +634,277 @@ CREATE TABLE cluster_metadata (
 - **Status Tracking**: `starting`, `alive`, `draining`, `dead`
 - **Advisory Locks**: Safe epoch rotation with `pg_try_advisory_lock()`
 
-### 7. Unified Graph View
+### 7. PKG Policy Governance System (Migrations 013-017)
+
+#### PKG Core (Migration 013)
+
+The Policy Knowledge Graph (PKG) system provides versioned policy snapshots with rule-based task emission:
+
+**Snapshots**:
+```sql
+CREATE TABLE pkg_snapshots (
+  id SERIAL PRIMARY KEY,
+  version TEXT NOT NULL UNIQUE,
+  env pkg_env NOT NULL DEFAULT 'prod',
+  entrypoint TEXT DEFAULT 'data.pkg',
+  checksum TEXT NOT NULL CHECK (length(checksum)=64),
+  is_active BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+**Subtask Types**:
+- Stores capability definitions with `default_params` JSONB
+- Links to snapshot for versioning
+- Defines executor specialization, behaviors, tools, routing tags
+
+**Policy Rules**:
+- Rule-based policy evaluation (Rego/WASM)
+- Conditions: TAG, SIGNAL, VALUE, FACT
+- Emissions: links rules to subtask types with relationship types (EMITS, ORDERS, GATE)
+
+**Artifacts**:
+- WASM/Rego bundles stored as BYTEA
+- SHA256 checksums for integrity verification
+
+#### PKG Operations (Migration 014)
+
+**Canary Deployments**:
+- Targeted deployments by router/edge class
+- Percentage-based rollout (0-100%)
+- Region-aware deployment lanes
+
+**Validation System**:
+- Fixtures for policy testing
+- Validation runs with success/failure tracking
+- JSONB reports for detailed results
+
+**Promotion Audit**:
+- Track snapshot promotions and rollbacks
+- Actor attribution and reason tracking
+- Metrics storage (p95 latency, validation summaries)
+
+**Device Version Tracking**:
+- Edge device heartbeat monitoring
+- Version compliance tracking
+- Region-based device grouping
+
+#### PKG Views & Functions (Migration 015)
+
+**Helper Views**:
+- `pkg_active_artifact`: Active artifact per environment
+- `pkg_rules_expanded`: Flattened rules with emissions
+- `pkg_deployment_coverage`: Device coverage analysis
+
+**Helper Functions**:
+- `pkg_active_snapshot_id(env)`: Get active snapshot ID
+- `pkg_promote_snapshot(snapshot_id, env, actor, reason)`: Promote snapshot
+- `pkg_check_integrity()`: Validate cross-snapshot integrity
+
+#### Fact-PKG Integration (Migration 016)
+
+**Foreign Key Constraints**:
+- Facts linked to PKG snapshots via `snapshot_id`
+- PKG-governed facts require snapshot reference
+
+**Temporal Modeling**:
+- `valid_from` defaulted to `created_at` for temporal queries
+- Enables "what was true yesterday?" queries
+- Expired fact cleanup functions
+
+**Structured Triple Conversion**:
+- Automatic conversion of text-only facts to structured triples
+- Pattern-based extraction (e.g., "X is a Y" → subject=X, predicate=hasType)
+- Preserves original text in `object_data` metadata
+
+**Helper Functions**:
+- `get_facts_by_subject(subject, namespace, include_expired)`: Subject-based queries
+- `get_facts_at_time(namespace, point_in_time)`: Temporal queries
+- `cleanup_expired_facts(namespace, dry_run)`: Expired fact management
+- `get_fact_statistics(namespace)`: Comprehensive fact statistics
+
+#### PKG Snapshot Scoping (Migration 017)
+
+**Snapshot Isolation**:
+- `snapshot_id` added to `tasks`, `graph_embeddings_1024`, `graph_node_map`
+- Enables reproducible runs, multi-world isolation, time travel debugging
+- Foreign key constraints to `pkg_snapshots` with `ON DELETE SET NULL`
+
+**Backfill Strategy**:
+- Phase 1: Add nullable columns (non-breaking)
+- Phase 2: Backfill with active snapshot
+- Phase 3: Add foreign key constraints
+- Phase 4: Add performance indexes
+- Phase 5: Enforce NOT NULL on tasks (after backfill)
+
+**Performance Indexes**:
+- `idx_tasks_snapshot_id`: Snapshot-scoped task queries
+- `idx_tasks_snapshot_status`: Composite index for status queries
+- `idx_graph_embeddings_1024_snapshot_id`: Snapshot-scoped embeddings
+- `idx_graph_node_map_snapshot_id`: Snapshot-scoped node queries
+
+**Critical Constraint**:
+- PKG-governed facts (`pkg_rule_id IS NOT NULL`) must have `snapshot_id`
+- Ensures policy traceability and governance
+
+### 8. Unified Cortex Memory (Migration 117)
+
+#### Three-Tier Memory Architecture
+
+The Unified Cortex Memory view (`v_unified_cortex_memory`) merges three memory tiers with snapshot-aware scoping:
+
+**TIER 1: Event Working Memory** (`event_working`):
+- Multimodal task events (voice, vision, sensor)
+- Direct FK to `tasks` table for fast "Living System" recall
+- Excludes tasks promoted to knowledge graph (TIER 2)
+- Snapshot-aware via `tasks.snapshot_id`
+
+**TIER 2: Knowledge Base** (`knowledge_base`):
+- Tasks linked through `graph_node_map` to `graph_embeddings_1024`
+- Structural knowledge and task relationships
+- Includes promoted tasks from TIER 1
+- Snapshot-aware via COALESCE from tasks/embeddings/node_map
+
+**TIER 3: World Memory** (`world_memory`):
+- General graph entities (agents, organs, artifacts, etc.)
+- Broader knowledge base context
+- Excludes `task.primary` labels to avoid TIER 2 duplication
+- Snapshot-aware via `graph_embeddings_1024.snapshot_id`
+
+#### Embedding Views
+
+**128d Embeddings** (Fast HGNN Routing):
+- `task_embeddings_primary_128`: Primary task embeddings
+- `tasks_missing_embeddings_128`: Tasks needing embeddings
+- `task_embeddings_stale_128`: Stale embedding detection via SHA256 hash
+
+**1024d Embeddings** (Deep Semantic Understanding):
+- `task_embeddings_primary_1024`: Primary task embeddings with memory tier/label
+- `tasks_missing_embeddings_1024`: Tasks needing embeddings
+- `task_embeddings_stale_1024`: Stale embedding detection
+- `tasks_missing_any_embedding_1024`: Tasks missing multimodal OR graph embeddings
+
+#### Semantic Search Function
+
+```sql
+unified_cortex_semantic_search(
+    query_vector vector(1024),
+    snapshot_id INTEGER,
+    similarity_threshold FLOAT DEFAULT 0.8,
+    limit_results INTEGER DEFAULT 10,
+    memory_tier_filter TEXT DEFAULT NULL
+)
+```
+
+- Snapshot-aware semantic search across unified memory
+- Enforces similarity threshold to prevent low-quality matches
+- Optional memory tier filtering (event_working, knowledge_base, world_memory)
+- Returns results ordered by similarity (highest first)
+
+#### Performance Optimizations
+
+**Partial GIN Index**:
+- `idx_tasks_multimodal_fast`: Only indexes tasks with `params.multimodal`
+- Dramatically reduces index size (500MB+ → 10-50MB at 1M+ rows)
+- Improves query times (200-500ms → 5-15ms)
+
+**Functional Index**:
+- `idx_tasks_content_hash_1024`: Pre-computes content hashes for stale detection
+- Uses IMMUTABLE function with `params::text` (compact JSON)
+- Note: Index hash differs from view hash (which uses `jsonb_pretty` for exact Python matching)
+
+#### Deduplication Strategy
+
+- TIER 1 excludes tasks with `graph_embeddings_1024` entries (`label='task.primary'`)
+- TIER 2 includes all tasks with `graph_embeddings_1024` entries (`label='task.primary'`)
+- TIER 3 excludes `label='task.primary'` to avoid duplication with TIER 2
+- Ensures each task appears in exactly one tier based on promotion status
+
+### 9. Task Outbox Hardening (Migration 118)
+
+#### Transactional Outbox Pattern
+
+Reliable event publishing with exactly-once semantics:
+
+```sql
+CREATE TABLE task_outbox (
+  id BIGSERIAL PRIMARY KEY,
+  task_id UUID NOT NULL,
+  event_type TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  dedupe_key TEXT UNIQUE,
+  available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+#### Key Features
+
+**Availability Scheduling**:
+- `available_at` column enables backoff and delayed processing
+- Exponential backoff via `available_at` updates
+- Dead-letter logic after max attempts
+
+**Retry Tracking**:
+- `attempts` counter for exponential backoff
+- Check constraint: `attempts >= 0`
+- Automatic `updated_at` trigger
+
+**Indexes**:
+- `idx_task_outbox_available`: Efficient `FOR UPDATE SKIP LOCKED` queries
+- `idx_task_outbox_event_type`: Event type routing
+- `idx_task_outbox_task_id`: Task lookup
+
+### 10. Task Router Telemetry (Migration 119)
+
+#### OCPS Signal Tracking
+
+Stores router telemetry snapshots for coordinator routing decisions:
+
+```sql
+CREATE TABLE task_router_telemetry (
+    id BIGSERIAL PRIMARY KEY,
+    task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    surprise_score DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    x_vector JSONB NOT NULL DEFAULT '[]'::jsonb,
+    weights JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ocps_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    chosen_route TEXT NOT NULL DEFAULT 'unknown',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+#### Key Components
+
+**Surprise Score** (`surprise_score`):
+- Cumulative surprise score (S_t) from OCPS
+- Higher values indicate more novel/unexpected events
+
+**Surprise Vector** (`x_vector`):
+- Six-component vector: cache_novelty, semantic_drift, multimodal_anomaly, graph_context_drift, logic_uncertainty, cost_risk
+
+**Feature Weights** (`weights`):
+- Array of floats corresponding to x_vector components
+- Used in routing decision scoring
+
+**OCPS Metadata** (`ocps_metadata`):
+- OCPS state: S_t (cumulative sum), h_threshold (valve threshold), drift_flag, etc.
+- GIN index for efficient JSONB queries
+
+**Chosen Route** (`chosen_route`):
+- Route decision: `fast` (deterministic), `planner` (deep analysis), `hgnn` (graph-based routing)
+
+#### Indexes
+
+- `idx_task_router_telemetry_task_id`: Fast task lookups
+- `idx_task_router_telemetry_chosen_route`: Route analysis
+- `idx_task_router_telemetry_created_at`: Time-series queries
+- `idx_task_router_telemetry_route_created`: Composite route + time analysis
+- `idx_task_router_telemetry_ocps_metadata`: GIN index for JSONB queries
+
+### 11. Unified Graph View
 
 The `hgnn_edges` view provides a flattened representation of all graph relationships for DGL export:
 
@@ -652,6 +930,239 @@ CREATE VIEW hgnn_edges AS
     -- ... (additional unions for all edge types)
 ;
 ```
+
+## 📦 TaskPayload v2.5+ Architecture
+
+### Overview
+
+TaskPayload v2.5+ introduces a **stable contract** for task instance routing and execution with **envelope isolation** and **future-proof evolution** without schema migrations. The design separates **type-level capabilities** (from `pkg_subtask_types.default_params`) from **instance-level routing signals** (from `tasks.params`).
+
+### Core Concepts
+
+#### Capability vs Task Instance
+
+**Capability Definition (Type-Level)**:
+- Stored in `pkg_subtask_types.default_params`
+- Declares what a *task type* requires/prefers: specialization, behaviors, tools, routing tags, default skills
+- Provides guardrails and defaults
+
+**TaskPayload (Instance-Level)**:
+- Stored in `tasks.params` (JSONB)
+- Declares what a *specific task instance* needs: routing constraints, cognitive flags, tool calls, multimodal metadata
+- Provides execution-time intent
+
+**Key Principle**: *Type-level defaults provide guardrails; instance-level payloads provide execution-time intent.*
+
+### End-to-End Runtime Flow
+
+```
+pkg_subtask_types (Database)
+    ↓
+CapabilityRegistry (loads + caches, builds canonical task definition)
+    ↓
+CapabilityMonitor (hash polling, detects changes)
+    ↓
+SpecializationManager (static enums + runtime dynamic specializations)
+    ↓
+RoleProfile (skills, behaviors, tools, routing_tags, behavior_config)
+    ↓
+BaseAgent (materializes skills, initializes behaviors, enforces RBAC)
+    ↓
+Router / Coordinator (selects best Organ/Agent using routing inbox)
+```
+
+### Envelope Isolation (Non-Negotiable)
+
+TaskPayload v2.5+ uses strict envelope isolation to prevent conflicts and enable independent evolution:
+
+- `params.routing` — **Router Inbox** (read-only input)
+- `params._router` — **Router Output** (system generated, write-only)
+- `params.cognitive` — cognitive execution controls
+- `params.chat` — chat message window/context
+- `params.risk` — upstream classification (audit + protocols)
+- `params.graph` — graph ops payload when applicable
+- `params.multimodal` — voice/vision metadata (v2.5)
+- `params.tool_calls` — executable tool invocations (structured)
+- `params.interaction` — interaction mode (e.g., `agent_tunnel`, `coordinator_routed`)
+
+### Router Inbox: `params.routing`
+
+#### Canonical Format
+
+```jsonc
+{
+  "routing": {
+    "required_specialization": "SecurityMonitoring",  // HARD constraint
+    "specialization": "SecurityMonitoring",           // SOFT preference
+    "skills": {"threat_assessment": 0.9},             // 0.0–1.0
+    "tools": ["alerts.raise", "sensors.read_all"],    // REQUIRED tool NAMES (strings)
+    "routing_tags": ["security", "monitoring"],
+    "hints": {
+      "priority": 7,
+      "deadline_at": "2025-11-25T14:35:00Z",
+      "ttl_seconds": 60
+    }
+  }
+}
+```
+
+#### Semantics
+
+- `required_specialization`: Must match (routing fails otherwise)
+- `specialization`: Prefer, but may fall back
+- `skills`: Used for scoring and selection within candidates (0.0–1.0)
+- `tools`: Required capabilities by name (RBAC + selection signals) - **strings only**
+- `routing_tags`: Tag matching / structured routing intent
+- `hints`: Scheduling metadata (priority/deadline/TTL)
+
+#### Tunnel Mode Bypass
+
+If `params.interaction.mode == "agent_tunnel"`, router is skipped and `params.routing` is ignored.
+
+### Router Output: `params._router`
+
+```jsonc
+{
+  "_router": {
+    "is_high_stakes": true,
+    "agent_id": "agent_security_001",
+    "organ_id": "organ_security",
+    "reason": "Matched required specialization and priority constraints"
+  }
+}
+```
+
+**Write-only rule**: Upstream components must never write `_router`.
+
+### Tool Calls: `params.tool_calls`
+
+Separates **tool permission requirements** (`routing.tools`) from **execution requests** (`tool_calls`):
+
+- `routing.tools` = list of **required tool names** (strings)
+- `tool_calls` = list of **tool invocation objects**
+
+```jsonc
+{
+  "tool_calls": [
+    {"name": "iot.control", "args": {"device": "lights", "location": "lobby", "action": "off"}}
+  ]
+}
+```
+
+### Cognitive Envelope: `params.cognitive`
+
+Controls inference style, memory I/O, and model routing:
+
+```jsonc
+{
+  "cognitive": {
+    "agent_id": "agent_security_001",
+    "cog_type": "task_planning",
+    "decision_kind": "planner",
+    "llm_provider_override": "openai",
+    "llm_model_override": "gpt-4o",
+    "skip_retrieval": false,
+    "disable_memory_write": false,
+    "force_rag": false,
+    "force_deep_reasoning": false
+  }
+}
+```
+
+**Key note**: `agent_id` is usually populated after routing, derived from `_router.agent_id`.
+
+### Multimodal Envelope: `params.multimodal`
+
+Stores metadata only. Media binaries live externally. Embeddings live in dedicated tables:
+
+```jsonc
+{
+  "multimodal": {
+    "source": "vision",
+    "media_uri": "s3://.../camera_101.mp4",
+    "scene_description": "Person detected near Room 101",
+    "confidence": 0.92,
+    "detected_objects": [{"class": "person", "bbox": [100,200,150,300]}],
+    "timestamp": "2025-11-25T14:30:22Z",
+    "camera_id": "camera_101",
+    "location_context": "room_101_corridor",
+    "is_real_time": true,
+    "ttl_seconds": 60,
+    "parent_stream_id": "stream_camera_101_20251125"
+  }
+}
+```
+
+**Embedding Storage Strategy**:
+- `task_multimodal_embeddings`: Direct FK to `tasks.id` (fast "Living System" recall)
+- `graph_embeddings_128/1024`: Indirect via `graph_node_map` (HGNN/structural memory)
+
+### Priority Order (Canonical)
+
+#### Behaviors (highest → lowest)
+1. Constructor `behaviors`
+2. `executor.behaviors` (type-level)
+3. Legacy `agent_behavior` (type-level)
+4. `RoleProfile.default_behaviors` (registries)
+
+#### Skills (highest → lowest)
+1. Learned deltas (SkillVector)
+2. `routing.skills` (type-level or instance-level routing inbox)
+3. `RoleProfile.default_skills` (registries)
+
+#### Tools
+1. `executor.tools + routing.tools` (union)
+2. Static registry `RoleProfile.allowed_tools`
+
+**Note**: Execution requests live in `params.tool_calls` and are not part of RBAC/scoring.
+
+### Precedence Rules: Task Instance vs Task Type
+
+When resolving routing inputs, apply:
+
+1. **Task instance** (`tasks.params.routing`) overrides all defaults
+2. Else **task type** (`pkg_subtask_types.default_params`) provides defaults
+3. Else **organ defaults / generalist fallback**
+
+**Operational recommendation**: `_router.reason` must state whether constraints came from instance vs type.
+
+### Result Provenance: `result.meta`
+
+Store routing decision snapshots, execution telemetry, and cognitive traces:
+
+```jsonc
+{
+  "routing_decision": {
+    "selected_agent_id": "agent_security_001",
+    "selected_organ_id": "organ_security",
+    "router_score": 0.95,
+    "routed_at": "2025-11-25T14:30:25Z"
+  },
+  "exec": {"latency_ms": 16000, "attempt": 1},
+  "cognitive_trace": {"chosen_model": "gpt-4o", "decision_path": "PLANNER_PATH"}
+}
+```
+
+### Operational Checklists
+
+#### New Task Type Checklist (`pkg_subtask_types`)
+- [ ] `executor.specialization`
+- [ ] `executor.behaviors`
+- [ ] `executor.behavior_config` (optional)
+- [ ] `routing.skills`
+- [ ] `executor.tools` and/or `routing.tools` (**strings**)
+- [ ] `routing.routing_tags`
+- [ ] Optional: `zone_affinity`, `environment_constraints`
+- [ ] Legacy: `agent_behavior` only if required during migration
+
+#### New Task Instance Checklist (`tasks.params`)
+- [ ] `interaction.mode` set correctly
+- [ ] `routing.*` (only when not tunneling)
+- [ ] `tool_calls` for execution requests (structured)
+- [ ] `cognitive` flags consistent with risk + urgency
+- [ ] `multimodal` metadata present when applicable
+- [ ] Do not write `_router`
+- [ ] Do not use legacy `params.tools`
 
 ## 🔄 Service Interactions
 
@@ -817,17 +1328,54 @@ All services use the `seedcore-dev` namespace for actor communication.
 
 ### Breaking Changes
 - None - all existing APIs maintained
+- TaskPayload v2.5+ introduces new envelope structure but maintains backward compatibility
+- PKG migrations (013-017) add new tables but don't break existing functionality
+- Snapshot scoping (017) adds nullable columns first, then enforces constraints after backfill
 
 ### Dependencies
+
+**Service Dependencies**:
 - State service depends on organism manager for Ray actor access
 - Energy service depends on state service for data
 - Telemetry endpoints depend on both services
 
+**Migration Dependencies**:
+- Migration 013 (PKG Core) must run before 014-017 (PKG Operations, Views, Fact Integration, Snapshot Scoping)
+- Migration 017 (Snapshot Scoping) requires 001 (tasks), 002 (graph_embeddings_1024), 007 (graph_node_map), 013 (pkg_snapshots)
+- Migration 117 (Unified Cortex) requires 001, 002, 003 (task_multimodal_embeddings), 007, 017
+- Migration 016 (Fact-PKG Integration) requires 011 (facts), 013 (pkg_snapshots)
+- Migration 119 (Router Telemetry) requires 001 (tasks)
+
 ### Deployment Order
+
+**Services**:
 1. Deploy state service first
 2. Deploy energy service second
 3. Deploy organism manager (updated)
 4. Deploy telemetry (updated)
+
+**Database Migrations**:
+1. Core migrations (001-012): Task management, HGNN, facts, runtime registry
+2. PKG migrations (013-017): Policy governance, snapshot scoping
+3. Unified Cortex (117): Memory views and semantic search
+4. Operational migrations (118-119): Outbox hardening, router telemetry
+
+### TaskPayload v2.5+ Migration Path
+
+**Phase 1: Envelope Isolation** (Current):
+- New tasks use `params.routing`, `params.cognitive`, `params.multimodal`, `params.tool_calls`
+- Legacy `params.tools` still supported but deprecated
+- Router writes `params._router` (write-only)
+
+**Phase 2: Type-Level Capabilities** (Current):
+- `pkg_subtask_types.default_params` provides executor and routing defaults
+- CapabilityRegistry loads and caches type-level definitions
+- Instance-level `params.routing` overrides type-level defaults
+
+**Phase 3: Full Migration** (Future):
+- All tasks migrated to TaskPayload v2.5+ format
+- Legacy `params.tools` removed
+- Schema validation enforced via linter
 
 ## ✅ Validation
 
@@ -849,7 +1397,12 @@ The implementation successfully achieves the recommended architecture:
 - ✅ **Graph Embeddings**: Vector-based similarity search with ANN indexing
 - ✅ **Facts System**: Full-text search and semantic fact storage
 - ✅ **Runtime Registry**: Epoch-based cluster coordination and instance management
-- ✅ **Performance Optimization**: Comprehensive indexing strategy for all query patterns
+- ✅ **PKG Policy Governance**: Versioned snapshots, rule-based emissions, canary deployments, validation system
+- ✅ **PKG Snapshot Scoping**: Snapshot isolation for reproducible runs, multi-world isolation, time travel debugging
+- ✅ **Unified Cortex Memory**: Three-tier memory architecture (event working, knowledge base, world memory) with snapshot-aware semantic search
+- ✅ **Task Outbox Hardening**: Transactional outbox pattern with availability scheduling and retry tracking
+- ✅ **Task Router Telemetry**: OCPS signal tracking, surprise scores, routing decision observability
+- ✅ **Performance Optimization**: Comprehensive indexing strategy for all query patterns including partial GIN indexes
 - ✅ **Data Integrity**: Foreign key constraints, check constraints, and referential integrity maintained
 
 ### Integration Points
@@ -857,6 +1410,19 @@ The implementation successfully achieves the recommended architecture:
 - ✅ **Facts-Task Integration**: Task-fact relationships for knowledge management
 - ✅ **Runtime-Task Integration**: Instance-aware task execution tracking
 - ✅ **Vector Search Integration**: Graph embeddings accessible through unified views
+- ✅ **PKG-Task Integration**: Policy-governed task emission via rule conditions and emissions
+- ✅ **PKG-Fact Integration**: PKG-governed facts with snapshot scoping and temporal modeling
+- ✅ **Unified Memory Integration**: Three-tier memory system with snapshot-aware semantic search
+- ✅ **Router-Telemetry Integration**: OCPS signals and routing decisions tracked for observability
+
+### TaskPayload v2.5+ Architecture
+- ✅ **Envelope Isolation**: Strict separation of routing, cognitive, multimodal, tool_calls, and router output envelopes
+- ✅ **Type-Level Capabilities**: `pkg_subtask_types.default_params` provides guardrails and defaults
+- ✅ **Instance-Level Routing**: `tasks.params.routing` provides execution-time intent
+- ✅ **Router Inbox/Output**: Clear separation of input (`params.routing`) and output (`params._router`)
+- ✅ **Tool Separation**: Tool permissions (`routing.tools`) separated from execution requests (`tool_calls`)
+- ✅ **Precedence Rules**: Instance-level overrides type-level defaults with clear fallback chain
+- ✅ **Result Provenance**: Routing decisions, execution telemetry, and cognitive traces stored in `result.meta`
 
 This architecture provides a solid foundation for future enhancements while maintaining system stability and performance. The database schema evolution enables advanced AI/ML capabilities while preserving the core service architecture benefits.
 

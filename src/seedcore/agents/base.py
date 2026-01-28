@@ -33,7 +33,6 @@ from seedcore.models import TaskPayload
 from seedcore.models.result_schema import make_envelope
 from .roles import (
     Specialization,
-    DynamicSpecialization,
     SpecializationProtocol,
     get_specialization,
     RoleProfile,
@@ -2162,16 +2161,15 @@ class BaseAgent:
             else (routing.get("skills") or {})
         )
 
-        # 8. Routing: Tools
-        # Pydantic field is 'tools', dict path is params.routing.tools
+        # 8. Tool calls (execution requests)
+        # Canonical path is params.tool_calls; legacy fallbacks supported.
         tv.tools = []
 
-        # Source 1: Pydantic 'tools'
-        raw_tools = getattr(payload, "tools", []) or []
-        # Source 2: Dict 'tools' (V2)
+        # Source 1: Pydantic tool_calls
+        raw_tools = getattr(payload, "tool_calls", []) or []
+        # Source 2: Dict tool_calls
         if not raw_tools:
-            raw_tools = routing.get("tools") or []
-
+            raw_tools = params.get("tool_calls") or []
         for item in raw_tools:
             # Handle Dict
             if isinstance(item, dict):
