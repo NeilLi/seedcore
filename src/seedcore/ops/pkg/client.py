@@ -165,6 +165,38 @@ class PKGClient:
         """
         return await self.snapshots.list_subtask_types(snapshot_id)
     
+    async def get_merged_capability(
+        self,
+        guest_id: Optional[str] = None,
+        persona_name: Optional[str] = None,
+        base_capability_name: Optional[str] = None,
+        snapshot_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get merged capability: guest overlay (if exists) merged with system base.
+        
+        This is the primary method used by Router/Coordinator to resolve capabilities.
+        Resolution order:
+        1. Check guest_capabilities for active guest overlay (if guest_id provided)
+        2. If found, merge custom_params with base_subtask_type_id defaults
+        3. If no guest overlay, fall back to system pkg_subtask_types
+        
+        Args:
+            guest_id: Optional guest UUID (if None, only checks system layer)
+            persona_name: Optional persona name filter
+            base_capability_name: Optional base capability name (e.g., "reachy_actuator")
+            snapshot_id: Optional snapshot ID (defaults to active snapshot)
+            
+        Returns:
+            Dict with merged capability params, or None if not found
+        """
+        return await self.snapshots.get_merged_capability(
+            guest_id=guest_id,
+            persona_name=persona_name,
+            base_capability_name=base_capability_name,
+            snapshot_id=snapshot_id,
+        )
+    
     async def get_active_artifact(self, env: str = "prod") -> Optional[Dict[str, Any]]:
         """Get active artifact information using the view."""
         return await self.snapshots.get_active_artifact(env)

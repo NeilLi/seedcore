@@ -140,6 +140,49 @@ class CapabilityRegistry:
             return None
         return self._by_name.get(capability_name)
 
+    async def get_with_guest_overlay(
+        self,
+        capability_name: str,
+        guest_id: Optional[str] = None,
+        persona_name: Optional[str] = None,
+    ) -> Optional[CapabilityDef]:
+        """
+        Get capability with guest overlay if available.
+        
+        Resolution order:
+        1. Check guest_capabilities for active guest overlay (if guest_id provided)
+        2. Merge guest custom_params with base system capability
+        3. Fall back to system layer only if no guest overlay
+        
+        Args:
+            capability_name: Base capability name (e.g., "reachy_actuator")
+            guest_id: Optional guest UUID for guest layer lookup
+            persona_name: Optional persona name filter
+            
+        Returns:
+            CapabilityDef with merged params, or system-only capability, or None
+        """
+        # 1. Try guest layer first (if guest_id provided)
+        if guest_id:
+            merged = await self._client.get_merged_capability(
+                guest_id=guest_id,
+                persona_name=persona_name,
+                base_capability_name=capability_name,
+                snapshot_id=self._active_snapshot_id,
+            )
+            
+            if merged and merged.get("source") in ("guest_overlay", "guest_only"):
+                # Return merged capability as CapabilityDef
+                return CapabilityDef(
+                    name=merged.get("base_capability_name") or capability_name,
+                    subtask_type_id=merged.get("base_capability_id"),
+                    snapshot_id=self._active_snapshot_id or 0,
+                    default_params=merged.get("default_params", {}),
+                )
+        
+        # 2. Fall back to system layer
+        return self.get(capability_name)
+
     def list_capabilities(self) -> List[CapabilityDef]:
         """List all registered capabilities for the active snapshot."""
         return list(self._by_name.values())

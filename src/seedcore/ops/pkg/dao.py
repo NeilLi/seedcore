@@ -334,6 +334,517 @@ class PKGSnapshotsDAO:
 
             return out
 
+    async def upsert_subtask_type(
+        self,
+        snapshot_id: int,
+        name: str,
+        default_params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Insert or update a subtask type definition (the "DNA registry" entry).
+        
+        Uses PostgreSQL's INSERT ... ON CONFLICT to handle upsert logic.
+        The unique constraint is on (snapshot_id, name).
+        
+        Args:
+            snapshot_id: Snapshot ID to associate this capability with
+            name: Unique capability name (e.g., "reachy_mimi_v1")
+            default_params: JSONB dict containing executor and routing configuration
+            
+        Returns:
+            Dict with:
+              - id: UUID (as string)
+              - snapshot_id: int
+              - name: str
+              - default_params: dict
+              - created_at: timestamptz/str
+              - updated: bool (True if updated existing, False if inserted new)
+        """
+        import json
+        from uuid import uuid4
+        
+        sql = text("""
+            INSERT INTO pkg_subtask_types (id, snapshot_id, name, default_params)
+            VALUES (:id, :snapshot_id, :name, CAST(:default_params AS JSONB))
+            ON CONFLICT (snapshot_id, name)
+            DO UPDATE SET
+                default_params = EXCLUDED.default_params
+            RETURNING
+                id,
+                snapshot_id,
+                name,
+                default_params,
+                created_at
+        """)
+        
+        capability_id = uuid4()
+        
+        async with self._sf() as session:
+            # Check if exists first to determine if this is an update
+            check_sql = text("""
+                SELECT id FROM pkg_subtask_types
+                WHERE snapshot_id = :snapshot_id AND name = :name
+            """)
+            check_res = await session.execute(check_sql, {"snapshot_id": snapshot_id, "name": name})
+            existing_row = await _maybe_await(check_res.first())
+            is_update = existing_row is not None
+            
+            # If updating, use existing ID; otherwise use new UUID
+            if is_update:
+                existing_mapping = await _row_mapping(existing_row)
+                if existing_mapping and existing_mapping.get("id"):
+                    capability_id = existing_mapping["id"]
+            
+            # Pass default_params as dict - SQLAlchemy/asyncpg will handle JSONB conversion
+            res = await session.execute(
+                sql,
+                {
+                    "id": capability_id,
+                    "snapshot_id": snapshot_id,
+                    "name": name,
+                    "default_params": json.dumps(default_params) if default_params else "{}",
+                }
+            )
+            await session.commit()
+            
+            row = await _maybe_await(res.first())
+            mapping = await _row_mapping(row)
+            
+            if not mapping:
+                raise RuntimeError("Failed to upsert subtask type")
+            
+            # Normalize UUID to string
+            if mapping.get("id") is not None:
+                mapping["id"] = str(mapping["id"])
+            
+            # Ensure default_params is a dict
+            dp = mapping.get("default_params")
+            if dp is None:
+                mapping["default_params"] = {}
+            elif not isinstance(dp, dict):
+                # If driver returns JSON as string, parse it
+                try:
+                    mapping["default_params"] = json.loads(dp) if isinstance(dp, str) else dp
+                except (json.JSONDecodeError, TypeError):
+                    mapping["default_params"] = dp
+            
+            mapping["updated"] = is_update
+            return mapping
+
+    # ========================================================================
+    # Guest Capabilities (Temporal Overlay Layer)
+    # ========================================================================
+
+    async def upsert_guest_capability(
+        self,
+        guest_id: str,
+        base_subtask_type_id: Optional[str],
+        persona_name: str,
+        custom_params: Dict[str, Any],
+        valid_to: datetime,
+        valid_from: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """
+        Insert or update a guest capability overlay.
+        
+        This creates a temporal persona overlay on top of system-level pkg_subtask_types.
+        The Router checks guest_capabilities first before falling back to system capabilities.
+        
+        Args:
+            guest_id: UUID string of the guest
+            base_subtask_type_id: Optional UUID reference to pkg_subtask_types (system base)
+            persona_name: Human-readable persona name (e.g., "Mimi", "Reachy Companion")
+            custom_params: JSONB dict with personality/behavior overrides
+            valid_from: When capability becomes active (default: now)
+            valid_to: When capability expires (typically guest checkout time)
+            
+        Returns:
+            Dict with guest capability details including id, guest_id, base_subtask_type_id,
+            persona_name, custom_params, valid_from, valid_to, created_at, updated (bool)
+        """
+        import json
+        from uuid import uuid4
+        from datetime import datetime, timezone
+        
+        if valid_from is None:
+            valid_from = datetime.now(timezone.utc)
+        
+        capability_id = uuid4()
+        
+        async with self._sf() as session:
+            # Check if exists first to determine if this is an update
+            # Note: We use (guest_id, persona_name, valid_from) as natural key
+            check_sql = text("""
+                SELECT id FROM guest_capabilities
+                WHERE guest_id = CAST(:guest_id AS UUID)
+                  AND persona_name = :persona_name
+                  AND valid_from = :valid_from
+            """)
+            check_res = await session.execute(
+                check_sql, 
+                {
+                    "guest_id": guest_id,
+                    "persona_name": persona_name,
+                    "valid_from": valid_from
+                }
+            )
+            existing_row = await _maybe_await(check_res.first())
+            is_update = existing_row is not None
+            
+            # If updating, use existing ID; otherwise use new UUID
+            if is_update:
+                existing_mapping = await _row_mapping(existing_row)
+                if existing_mapping and existing_mapping.get("id"):
+                    capability_id = existing_mapping["id"]
+            
+            # Serialize custom_params to JSON string for PostgreSQL
+            params_json = json.dumps(custom_params) if custom_params else "{}"
+            
+            # Check if unique constraint exists first to avoid transaction abort
+            # If constraint doesn't exist, use UPDATE/INSERT pattern directly
+            constraint_check_sql = text("""
+                SELECT 1 FROM pg_indexes 
+                WHERE tablename = 'guest_capabilities' 
+                  AND indexname = 'ux_guest_capabilities_guest_persona_time'
+                LIMIT 1
+            """)
+            constraint_check = await session.execute(constraint_check_sql)
+            constraint_exists = await _maybe_await(constraint_check.first()) is not None
+            
+            if constraint_exists:
+                # Use INSERT ... ON CONFLICT (constraint exists)
+                sql = text("""
+                    INSERT INTO guest_capabilities (
+                        id, guest_id, base_subtask_type_id, persona_name, 
+                        custom_params, valid_from, valid_to
+                    )
+                    VALUES (
+                        :id, CAST(:guest_id AS UUID), CAST(:base_subtask_type_id AS UUID), :persona_name,
+                        CAST(:custom_params AS JSONB), :valid_from, :valid_to
+                    )
+                    ON CONFLICT (guest_id, persona_name, valid_from)
+                    DO UPDATE SET
+                        base_subtask_type_id = EXCLUDED.base_subtask_type_id,
+                        custom_params = EXCLUDED.custom_params,
+                        valid_to = EXCLUDED.valid_to
+                    RETURNING
+                        id,
+                        guest_id,
+                        base_subtask_type_id,
+                        persona_name,
+                        custom_params,
+                        valid_from,
+                        valid_to,
+                        created_at
+                """)
+                res = await session.execute(
+                    sql,
+                    {
+                        "id": capability_id,
+                        "guest_id": guest_id,
+                        "base_subtask_type_id": base_subtask_type_id,
+                        "persona_name": persona_name,
+                        "custom_params": params_json,
+                        "valid_from": valid_from,
+                        "valid_to": valid_to,
+                    }
+                )
+            else:
+                # Fallback: use UPDATE/INSERT pattern (constraint doesn't exist)
+                logger.warning(
+                    "Unique constraint ux_guest_capabilities_guest_persona_time not found, "
+                    "using UPDATE/INSERT fallback for guest capability. "
+                    "Run migration 014_pkg_ops.sql to create the constraint for better performance."
+                )
+                if is_update:
+                    # Update existing
+                    update_sql = text("""
+                        UPDATE guest_capabilities
+                        SET base_subtask_type_id = CAST(:base_subtask_type_id AS UUID),
+                            custom_params = CAST(:custom_params AS JSONB),
+                            valid_to = :valid_to
+                        WHERE id = :id
+                        RETURNING
+                            id,
+                            guest_id,
+                            base_subtask_type_id,
+                            persona_name,
+                            custom_params,
+                            valid_from,
+                            valid_to,
+                            created_at
+                    """)
+                    res = await session.execute(
+                        update_sql,
+                        {
+                            "id": capability_id,
+                            "base_subtask_type_id": base_subtask_type_id,
+                            "custom_params": params_json,
+                            "valid_to": valid_to,
+                        }
+                    )
+                else:
+                    # Insert new
+                    insert_sql = text("""
+                        INSERT INTO guest_capabilities (
+                            id, guest_id, base_subtask_type_id, persona_name, 
+                            custom_params, valid_from, valid_to
+                        )
+                        VALUES (
+                            :id, CAST(:guest_id AS UUID), CAST(:base_subtask_type_id AS UUID), :persona_name,
+                            CAST(:custom_params AS JSONB), :valid_from, :valid_to
+                        )
+                        RETURNING
+                            id,
+                            guest_id,
+                            base_subtask_type_id,
+                            persona_name,
+                            custom_params,
+                            valid_from,
+                            valid_to,
+                            created_at
+                    """)
+                    res = await session.execute(
+                        insert_sql,
+                        {
+                            "id": capability_id,
+                            "guest_id": guest_id,
+                            "base_subtask_type_id": base_subtask_type_id,
+                            "persona_name": persona_name,
+                            "custom_params": params_json,
+                            "valid_from": valid_from,
+                            "valid_to": valid_to,
+                        }
+                    )
+            
+            await session.commit()
+            
+            row = await _maybe_await(res.first())
+            mapping = await _row_mapping(row)
+            
+            if not mapping:
+                raise RuntimeError("Failed to upsert guest capability")
+            
+            # Normalize UUIDs to strings
+            for uuid_field in ["id", "guest_id", "base_subtask_type_id"]:
+                if mapping.get(uuid_field) is not None:
+                    mapping[uuid_field] = str(mapping[uuid_field])
+            
+            # Ensure custom_params is a dict
+            cp = mapping.get("custom_params")
+            if cp is None:
+                mapping["custom_params"] = {}
+            elif not isinstance(cp, dict):
+                try:
+                    mapping["custom_params"] = json.loads(cp) if isinstance(cp, str) else cp
+                except (json.JSONDecodeError, TypeError):
+                    mapping["custom_params"] = cp
+            
+            mapping["updated"] = is_update
+            return mapping
+
+    async def get_active_guest_capability(
+        self,
+        guest_id: str,
+        persona_name: Optional[str] = None,
+        at_time: Optional[datetime] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get the active guest capability for a guest (and optionally persona).
+        
+        Checks temporal validity: valid_from <= at_time < valid_to.
+        If at_time is None, uses current time.
+        
+        Args:
+            guest_id: UUID string of the guest
+            persona_name: Optional persona name filter
+            at_time: Optional timestamp to check validity (default: now)
+            
+        Returns:
+            Dict with guest capability details, or None if not found/expired
+        """
+        import json
+        from datetime import datetime, timezone
+        
+        if at_time is None:
+            at_time = datetime.now(timezone.utc)
+        
+        sql = text("""
+            SELECT
+                id,
+                guest_id,
+                base_subtask_type_id,
+                persona_name,
+                custom_params,
+                valid_from,
+                valid_to,
+                created_at
+            FROM guest_capabilities
+            WHERE guest_id = CAST(:guest_id AS UUID)
+              AND valid_from <= :at_time
+              AND valid_to > :at_time
+              AND (:persona_name IS NULL OR persona_name = :persona_name)
+            ORDER BY valid_from DESC
+            LIMIT 1
+        """)
+        
+        async with self._sf() as session:
+            res = await session.execute(
+                sql,
+                {
+                    "guest_id": guest_id,
+                    "persona_name": persona_name,
+                    "at_time": at_time,
+                }
+            )
+            row = await _maybe_await(res.first())
+            mapping = await _row_mapping(row)
+            
+            if not mapping:
+                return None
+            
+            # Normalize UUIDs to strings
+            for uuid_field in ["id", "guest_id", "base_subtask_type_id"]:
+                if mapping.get(uuid_field) is not None:
+                    mapping[uuid_field] = str(mapping[uuid_field])
+            
+            # Ensure custom_params is a dict
+            cp = mapping.get("custom_params")
+            if cp is None:
+                mapping["custom_params"] = {}
+            elif not isinstance(cp, dict):
+                try:
+                    mapping["custom_params"] = json.loads(cp) if isinstance(cp, str) else cp
+                except (json.JSONDecodeError, TypeError):
+                    mapping["custom_params"] = cp
+            
+            return mapping
+
+    async def get_merged_capability(
+        self,
+        guest_id: Optional[str],
+        persona_name: Optional[str] = None,
+        base_capability_name: Optional[str] = None,
+        snapshot_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get merged capability: guest overlay (if exists) merged with system base.
+        
+        This is the primary method used by Router/Coordinator to resolve capabilities.
+        Resolution order:
+        1. Check guest_capabilities for active guest overlay
+        2. If found, merge custom_params with base_subtask_type_id defaults
+        3. If no guest overlay, fall back to system pkg_subtask_types
+        
+        Args:
+            guest_id: Optional guest UUID (if None, only checks system layer)
+            persona_name: Optional persona name filter
+            base_capability_name: Optional base capability name (e.g., "reachy_actuator")
+            snapshot_id: Optional snapshot ID (defaults to active snapshot)
+            
+        Returns:
+            Dict with merged capability params, or None if not found
+        """
+        from datetime import datetime, timezone
+        
+        # 1. Try guest layer first (if guest_id provided)
+        guest_cap = None
+        if guest_id:
+            guest_cap = await self.get_active_guest_capability(
+                guest_id=guest_id,
+                persona_name=persona_name,
+            )
+        
+        # 2. Get base system capability
+        base_cap = None
+        if guest_cap and guest_cap.get("base_subtask_type_id"):
+            # Use base_subtask_type_id from guest capability
+            base_subtask_type_id = guest_cap["base_subtask_type_id"]
+            sql = text("""
+                SELECT id, snapshot_id, name, default_params
+                FROM pkg_subtask_types
+                WHERE id = CAST(:id AS UUID)
+            """)
+            async with self._sf() as session:
+                res = await session.execute(sql, {"id": base_subtask_type_id})
+                row = await _maybe_await(res.first())
+                base_mapping = await _row_mapping(row)
+                if base_mapping:
+                    base_cap = {
+                        "id": str(base_mapping.get("id", "")),
+                        "snapshot_id": base_mapping.get("snapshot_id"),
+                        "name": base_mapping.get("name"),
+                        "default_params": base_mapping.get("default_params") or {},
+                    }
+        elif base_capability_name:
+            # Look up by name in active snapshot
+            if snapshot_id is None:
+                active_snap = await self.get_active_snapshot()
+                if not active_snap:
+                    return None
+                snapshot_id = active_snap.id
+            
+            subtask_types = await self.list_subtask_types(snapshot_id)
+            for st in subtask_types:
+                if st.get("name") == base_capability_name:
+                    base_cap = st
+                    break
+        
+        # 3. Merge guest overlay with base
+        if guest_cap and base_cap:
+            # Deep merge: guest custom_params override base default_params
+            merged_params = self._deep_merge_dicts(
+                base_cap.get("default_params", {}),
+                guest_cap.get("custom_params", {})
+            )
+            return {
+                "source": "guest_overlay",
+                "guest_id": guest_id,
+                "persona_name": guest_cap.get("persona_name"),
+                "base_capability_id": base_cap.get("id"),
+                "base_capability_name": base_cap.get("name"),
+                "default_params": merged_params,
+                "valid_from": guest_cap.get("valid_from"),
+                "valid_to": guest_cap.get("valid_to"),
+            }
+        elif guest_cap:
+            # Guest overlay without base (shouldn't happen, but handle gracefully)
+            return {
+                "source": "guest_only",
+                "guest_id": guest_id,
+                "persona_name": guest_cap.get("persona_name"),
+                "default_params": guest_cap.get("custom_params", {}),
+                "valid_from": guest_cap.get("valid_from"),
+                "valid_to": guest_cap.get("valid_to"),
+            }
+        elif base_cap:
+            # System layer only
+            return {
+                "source": "system",
+                "base_capability_id": base_cap.get("id"),
+                "base_capability_name": base_cap.get("name"),
+                "default_params": base_cap.get("default_params", {}),
+            }
+        
+        return None
+
+    def _deep_merge_dicts(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Deep merge two dictionaries: override values take precedence.
+        
+        For nested dicts, recursively merge. For lists, override replaces base.
+        For other types, override replaces base.
+        """
+        result = dict(base or {})
+        
+        for key, value in (override or {}).items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = self._deep_merge_dicts(result[key], value)
+            else:
+                result[key] = value
+        
+        return result
+
     async def _build_snapshot_data(
         self, snapshot_row: Dict[str, Any], session: AsyncSession
     ) -> PKGSnapshotData:
