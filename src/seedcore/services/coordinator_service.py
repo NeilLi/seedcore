@@ -1917,10 +1917,13 @@ class Coordinator:
             # when it finishes, or we can set it here if we just mean "started".
 
     async def _warmup_drift_detector(self):
-        """Warmup drift detector and embedder in background."""
-        import random
+        """Warmup drift detector and embedder in background.
         
-        # Warmup embedder in background (non-blocking)
+        CRITICAL: This must complete BEFORE tasks are processed to avoid cold-start
+        drift issues. The random delay was causing race conditions where tasks
+        arrived before warmup, leading to high/inconsistent drift scores.
+        """
+        # Warmup embedder first (non-blocking, but trigger initialization)
         try:
             from ..coordinator.core.execute import _get_global_embedder
             embedder = _get_global_embedder()
@@ -1935,12 +1938,25 @@ class Coordinator:
         except Exception as e:
             logger.warning(f"⚠️ Embedder warmup failed (non-fatal): {e}")
 
-        await asyncio.sleep(random.uniform(2.0, 5.0))
+        # CRITICAL FIX: Warmup drift detector IMMEDIATELY (no random delay)
+        # This ensures drift detector is ready before tasks arrive
+        # The random delay was causing cold-start issues where first tasks
+        # got high drift scores due to uninitialized models
         try:
             if await self.ml_client.is_healthy():
-                await self.ml_client.warmup_drift_detector(["warmup"])
-        except Exception:
-            pass
+                logger.info("🔥 Warming up drift detector (critical for accurate drift scores)...")
+                await self.ml_client.warmup_drift_detector([
+                    "Test task for warmup",
+                    "General query about system status",
+                    "hello",  # Include simple queries to calibrate for them
+                    "hi",
+                ])
+                logger.info("✅ Drift detector warmup completed")
+            else:
+                logger.warning("⚠️ ML service not healthy, skipping drift detector warmup")
+        except Exception as e:
+            logger.warning(f"⚠️ Drift detector warmup failed (non-fatal): {e}")
+            # Don't fail completely - system can still work, but drift scores may be less accurate
 
     async def health(self):
         return {"status": "healthy", "tier": "0"}

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 import threading
 import time
 import uuid
@@ -1219,6 +1220,140 @@ def _aggregate_execution_results(
 # ---------------------------------------------------------------------------
 
 
+def _is_extremely_simple_query_precheck(ctx: TaskContext) -> bool:
+    """
+    Fast pre-check to detect extremely simple queries BEFORE expensive operations.
+    
+    This is a lightweight check that can be used to skip:
+    - Drift calculation (~135ms)
+    - Signal enrichment (~50-60ms)
+    - PKG evaluation (~9ms)
+    
+    Returns:
+        True if query is extremely simple and can skip expensive operations
+    """
+    # Simple task types
+    SIMPLE_TASK_TYPES = {"query", "health_check", "maintenance"}
+    task_type = (ctx.task_type or "").lower()
+    if task_type not in SIMPLE_TASK_TYPES:
+        return False
+    
+    # Very short queries (1-3 chars) are always trivial
+    description = (ctx.description or "").strip().lower()
+    if len(description) <= 3:
+        return len(ctx.tags) <= 2  # Allow if minimal tags
+    
+    # Check against known simple patterns
+    EXTREMELY_SIMPLE_PATTERNS = {
+        "hello", "hi", "hey", "he", "ha", "ho", "test", "ping", "pong", 
+        "status", "health", "how are you", "how are u", "how r u",
+        "what", "who", "when", "where", "why", "ok", "okay", "yes", "no",
+        "thanks", "thank you", "ty", "bye", "goodbye"
+    }
+    
+    if description in EXTREMELY_SIMPLE_PATTERNS:
+        return len(ctx.tags) <= 2  # Allow if minimal tags
+    
+    return False
+
+
+def _is_extremely_simple_task(
+    ctx: TaskContext,
+    raw_drift: float,
+    drift_state: Any,
+) -> bool:
+    """
+    Detect extremely simple tasks that can skip PKG evaluation.
+    
+    Criteria for simple tasks:
+    1. Very low drift score (< 0.1) - indicates routine/non-novel task
+       OR extremely simple queries (e.g., "hello", "hi") regardless of drift
+    2. Simple task types (query, health_check) - no complex routing needed
+    3. No or very few tags - minimal eventizer complexity
+    4. All signals near zero - no anomalies or special conditions
+    5. Short description - simple queries don't need policy evaluation
+    
+    Returns:
+        True if task is simple enough to skip PKG evaluation
+    """
+    import os
+    
+    # Configurable threshold for drift-based skipping
+    SIMPLE_DRIFT_THRESHOLD = float(os.getenv("PKG_SKIP_DRIFT_THRESHOLD", "0.1"))
+    # Higher threshold for extremely simple queries (allows skipping even with moderate drift)
+    SIMPLE_QUERY_DRIFT_THRESHOLD = float(os.getenv("PKG_SKIP_SIMPLE_QUERY_DRIFT_THRESHOLD", "0.3"))
+    
+    # Simple task types that rarely need PKG routing hints
+    SIMPLE_TASK_TYPES = {"query", "health_check", "maintenance"}
+    
+    # Extremely simple query patterns (common greetings/simple interactions)
+    # These are so trivial that drift score may be unreliable
+    # Includes very short queries (1-2 chars) and common greetings
+    EXTREMELY_SIMPLE_PATTERNS = {
+        "hello", "hi", "hey", "he", "ha", "ho", "test", "ping", "pong", 
+        "status", "health", "how are you", "how are u", "how r u",
+        "what", "who", "when", "where", "why", "ok", "okay", "yes", "no",
+        "thanks", "thank you", "ty", "bye", "goodbye"
+    }
+    
+    # Check 2: Simple task type (must be first to enable pattern matching)
+    task_type = (ctx.task_type or "").lower()
+    if task_type not in SIMPLE_TASK_TYPES:
+        return False
+    
+    # Check 5: Short description (simple queries are typically brief)
+    description = (ctx.description or "").strip().lower()
+    if len(description) > 200:  # Long descriptions may need policy evaluation
+        return False
+    
+    # Check 0: Extremely simple queries can skip regardless of drift
+    # This handles cases where drift detector sees "hello" as novel
+    # but the query is so trivial that PKG adds no value
+    # Also handles very short queries (1-3 chars) which are always trivial
+    is_extremely_simple_pattern = description in EXTREMELY_SIMPLE_PATTERNS
+    is_very_short = len(description) <= 3  # Single/double char queries like "he", "hi"
+    
+    if is_extremely_simple_pattern or is_very_short:
+        # Still check other criteria (tags, signals, OCPS)
+        if len(ctx.tags) > 2:
+            return False
+        signals = ctx.signals or {}
+        signal_values = [
+            (k, v) for k, v in signals.items()
+            if isinstance(v, (int, float)) and abs(v) > 0.01
+        ]
+        if len(signal_values) > 0:
+            return False
+        if hasattr(drift_state, "is_breached") and drift_state.is_breached:
+            return False
+        # Allow skipping even with moderate drift for extremely simple queries
+        if raw_drift < SIMPLE_QUERY_DRIFT_THRESHOLD:
+            return True
+    
+    # Check 1: Very low drift score (standard path)
+    if raw_drift >= SIMPLE_DRIFT_THRESHOLD:
+        return False
+    
+    # Check 3: No or very few tags (simple tasks have minimal eventizer complexity)
+    if len(ctx.tags) > 2:  # More than 2 tags suggests complexity
+        return False
+    
+    # Check 4: All signals near zero (no anomalies or special conditions)
+    signals = ctx.signals or {}
+    signal_values = [
+        (k, v) for k, v in signals.items()
+        if isinstance(v, (int, float)) and abs(v) > 0.01
+    ]
+    if len(signal_values) > 0:  # Any non-zero signal suggests complexity
+        return False
+    
+    # Check 6: OCPS not breached (no drift escalation)
+    if hasattr(drift_state, "is_breached") and drift_state.is_breached:
+        return False
+    
+    return True
+
+
 async def _compute_routing_decision(
     *,
     task: TaskPayload,
@@ -1230,16 +1365,31 @@ async def _compute_routing_decision(
 ) -> Dict[str, Any]:
     t0 = time.perf_counter()
 
+    # OPTIMIZATION: Fast pre-check for extremely simple queries
+    # Skip expensive drift calculation (~135ms) for trivial queries
+    is_simple_precheck = _is_extremely_simple_query_precheck(ctx)
+    
     # 1) Drift + OCPS
     # Derive task_dict from task when needed (for drift score computation)
     task_dict = task.model_dump()
-    raw_drift = await _call_compute_drift_score(
-        exec_cfg.compute_drift_score,
-        task_dict=task_dict,
-        text_payload=ctx.eventizer_data or {"text": ctx.description or ""},
-        ml_client=exec_cfg.ml_client,
-        metrics=exec_cfg.metrics,
-    )
+    
+    if is_simple_precheck:
+        # Use fallback drift (0.0) for extremely simple queries to save ~135ms
+        # These queries don't need accurate drift - they're trivial regardless
+        raw_drift = 0.0
+        logger.debug(
+            f"[Coordinator] Using fallback drift=0.0 for simple query {ctx.task_id}: "
+            f"description='{ctx.description[:20]}...'"
+        )
+    else:
+        # Full drift calculation for non-trivial queries
+        raw_drift = await _call_compute_drift_score(
+            exec_cfg.compute_drift_score,
+            task_dict=task_dict,
+            text_payload=ctx.eventizer_data or {"text": ctx.description or ""},
+            ml_client=exec_cfg.ml_client,
+            metrics=exec_cfg.metrics,
+        )
 
     drift_state = route_cfg.ocps_valve.update(raw_drift)
     is_escalated = bool(getattr(drift_state, "is_breached", False))
@@ -1251,9 +1401,31 @@ async def _compute_routing_decision(
     # 2) PKG Evaluation (Primary Source of Routing Intent)
     # Architecture: PKG is the policy layer that decides WHAT and IN WHAT ORDER.
     # PKG should always be evaluated (not optional) to provide routing hints.
+    # OPTIMIZATION: Skip PKG for extremely simple tasks to reduce latency.
     proto_plan: Dict[str, Any] = {"metadata": {"evaluated": False}}
 
-    if route_cfg.evaluate_pkg_func:
+    # Check if task is simple enough to skip PKG evaluation
+    skip_pkg = _is_extremely_simple_task(ctx, raw_drift, drift_state)
+    
+    if skip_pkg:
+        logger.debug(
+            f"[Coordinator] Skipping PKG evaluation for simple task {ctx.task_id}: "
+            f"type={ctx.task_type}, drift={raw_drift:.3f}, tags={len(ctx.tags)}"
+        )
+        # Mark as skipped (not evaluated) so downstream knows to use baseline intent
+        proto_plan = {"metadata": {"evaluated": False, "pkg_skipped": True, "skip_reason": "simple_task"}}
+    elif route_cfg.evaluate_pkg_func:
+        # Log why PKG is NOT being skipped (for debugging/observability)
+        threshold = float(os.getenv("PKG_SKIP_DRIFT_THRESHOLD", "0.1"))
+        non_zero_signals = [
+            v for v in (ctx.signals or {}).values() 
+            if isinstance(v, (int, float)) and abs(v) > 0.01
+        ]
+        logger.debug(
+            f"[Coordinator] PKG evaluation required for task {ctx.task_id}: "
+            f"type={ctx.task_type}, drift={raw_drift:.3f} (threshold={threshold}), "
+            f"tags={len(ctx.tags)}, signals_count={len(non_zero_signals)}"
+        )
         # PKG evaluation should happen for both FAST_PATH and COGNITIVE paths
         # PKG provides routing hints even for simple tasks
         # ENHANCEMENT: Pass embedding for semantic context hydration
@@ -1286,12 +1458,23 @@ async def _compute_routing_decision(
                 intent = IntentEnricher.enrich(intent, ctx, semantic_context=semantic_context)
         
         # Validate intent (handles both None and extracted intent)
+        # OPTIMIZATION: Skip validation warning if PKG was intentionally skipped
+        # (this is expected behavior for simple queries)
+        pkg_skipped = proto_plan.get("metadata", {}).get("pkg_skipped", False)
         validation_errors = IntentValidator.validate(intent, ctx)
         if validation_errors:
-            logger.warning(
-                f"[Coordinator] Intent validation errors for task {ctx.task_id}: "
-                f"{'; '.join(validation_errors)}. Falling back to baseline intent."
-            )
+            # Only warn if PKG was NOT intentionally skipped
+            # When PKG is skipped, missing routing hints are expected and handled gracefully
+            if not pkg_skipped:
+                logger.warning(
+                    f"[Coordinator] Intent validation errors for task {ctx.task_id}: "
+                    f"{'; '.join(validation_errors)}. Falling back to baseline intent."
+                )
+            else:
+                logger.debug(
+                    f"[Coordinator] PKG skipped for simple task {ctx.task_id}, "
+                    "using baseline intent (expected behavior)"
+                )
             # Reset invalid intent to trigger baseline synthesis fallback
             intent = None
 
@@ -1473,13 +1656,13 @@ async def _try_run_pkg_evaluation(
             "x4_graph_context_drift": eventizer_signals.get("x4_graph_context_drift", 0.0),
             "x5_logic_uncertainty": eventizer_signals.get("x5_logic_uncertainty", 0.0),
             "x6_cost_risk": eventizer_signals.get("x6_cost_risk", 0.0),
-            # Embedding metadata for Unified Memory System
-            "embedding_id": eventizer_signals.get("embedding_id"),
-            "vector_dimension": eventizer_signals.get("vector_dimension", 1024),
-            "embedding_model": eventizer_signals.get("embedding_model"),
+            # Note: embedding_id, vector_dimension, embedding_model are metadata, not signals
+            # They should not be included in signals dict (PKG validation requires dict[str, float])
         }
 
-        if cfg.signal_enricher:
+        # OPTIMIZATION: Skip signal enricher for extremely simple queries
+        # Signal enricher calls energy metrics (~50-60ms) which isn't needed for trivial queries
+        if cfg.signal_enricher and not _is_extremely_simple_query_precheck(ctx):
             try:
                 # Signal enricher can use task context, not pre-computed intent
                 extra = await cfg.signal_enricher.compute_contextual_signals(
@@ -1489,6 +1672,25 @@ async def _try_run_pkg_evaluation(
                     pkg_signals.update(extra)
             except Exception:
                 logger.debug("[Coordinator] SignalEnricher warning", exc_info=True)
+        elif cfg.signal_enricher and _is_extremely_simple_query_precheck(ctx):
+            # Use default signals for simple queries (skip energy metrics call)
+            logger.debug(
+                f"[Coordinator] Skipping signal enricher for simple query {ctx.task_id}"
+            )
+        
+        # Sanitize signals: PKG validation requires dict[str, float]
+        # Filter out None values, convert booleans to floats, remove non-numeric values
+        sanitized_signals: Dict[str, float] = {}
+        for key, value in pkg_signals.items():
+            if value is None:
+                continue  # Skip None values
+            elif isinstance(value, bool):
+                sanitized_signals[key] = 1.0 if value else 0.0
+            elif isinstance(value, (int, float)):
+                sanitized_signals[key] = float(value)
+            # Skip string and other non-numeric types (e.g., embedding_id, embedding_model)
+        
+        pkg_signals = sanitized_signals
 
         # PKG evaluation: PKG receives task context and produces proto_plan
         # PKG is responsible for policy evaluation and routing hint generation
