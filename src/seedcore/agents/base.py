@@ -176,10 +176,47 @@ class BaseAgent:
                 # Use get_specialization() which handles both static and dynamic
                 specialization = get_specialization(specialization)
             except KeyError:
-                logger.warning(
-                    f"Unknown specialization string '{specialization}', defaulting to GENERALIST"
-                )
-                specialization = Specialization.GENERALIST
+                # **CRITICAL: If specialization not found, try to register it dynamically**
+                # This handles the case where a dynamic specialization was registered in OrganismCore
+                # but not yet available in this Ray actor process
+                from .roles.specialization import SpecializationManager
+                spec_manager = SpecializationManager.get_instance()
+                
+                # Check if it's in the role registry snapshot (might be registered there)
+                spec_lower = specialization.lower()
+                if role_registry_snapshot and spec_lower in role_registry_snapshot:
+                    try:
+                        # Register it dynamically from the snapshot data
+                        profile_data = role_registry_snapshot[spec_lower]
+                        metadata = profile_data.get("metadata", {
+                            "source": "agent_init_fallback",
+                            "restored_from": "role_registry_snapshot",
+                        })
+                        
+                        spec_manager.register_dynamic(
+                            value=spec_lower,
+                            name=specialization.replace("_", " ").title(),
+                            metadata=metadata,
+                        )
+                        logger.info(
+                            f"✅ Registered dynamic specialization '{specialization}' "
+                            f"in BaseAgent process (fallback registration)"
+                        )
+                        
+                        # Try to resolve again
+                        specialization = get_specialization(specialization)
+                    except Exception as reg_err:
+                        logger.warning(
+                            f"⚠️ Failed to register dynamic specialization '{specialization}': {reg_err}. "
+                            "Defaulting to GENERALIST"
+                        )
+                        specialization = Specialization.GENERALIST
+                else:
+                    logger.warning(
+                        f"Unknown specialization string '{specialization}' "
+                        f"(not in role_registry_snapshot), defaulting to GENERALIST"
+                    )
+                    specialization = Specialization.GENERALIST
 
         self.specialization = specialization
         self.role_profile = self._role_registry.get(self.specialization)
@@ -434,18 +471,56 @@ class BaseAgent:
         """
         Reconstructs a RoleRegistry from a snapshot dictionary.
         Keeps __init__ clean and handles import dependencies locally.
+        
+        **CRITICAL: Also registers dynamic specializations in SpecializationManager**
+        to ensure they're available in this Ray actor process.
         """
         from .roles import (
             RoleProfile,
             RoleRegistry,
         )  # Local import to avoid circular deps
-        from .roles.specialization import get_specialization  # Import here to avoid circular deps
+        from .roles.specialization import (
+            get_specialization,
+            SpecializationManager,
+        )  # Import here to avoid circular deps
 
         registry = RoleRegistry()
+        spec_manager = SpecializationManager.get_instance()
 
         for spec_name, profile_data in snapshot.items():
             try:
+                # **CRITICAL: Register dynamic specialization if not already registered**
+                # This ensures specializations are available in this Ray actor process
+                # even if they were registered in a different process (OrganismCore)
+                if not spec_manager.is_registered(spec_name):
+                    try:
+                        # Try to register as dynamic specialization
+                        # Extract metadata from profile_data if available
+                        metadata = profile_data.get("metadata", {})
+                        if not metadata:
+                            metadata = {
+                                "source": "role_registry_snapshot",
+                                "restored_from": "agent_init",
+                            }
+                        
+                        # Register the specialization dynamically
+                        spec_manager.register_dynamic(
+                            value=spec_name,
+                            name=spec_name.replace("_", " ").title(),
+                            metadata=metadata,
+                        )
+                        logger.debug(
+                            f"✅ Registered dynamic specialization '{spec_name}' "
+                            f"in BaseAgent process (from role_registry_snapshot)"
+                        )
+                    except Exception as reg_err:
+                        logger.warning(
+                            f"⚠️ Failed to register dynamic specialization '{spec_name}': {reg_err}. "
+                            "Will try to resolve anyway."
+                        )
+                
                 # Resolve specialization (supports both static and dynamic)
+                # This should now succeed because we registered it above
                 spec = get_specialization(spec_name)
                 profile = RoleProfile(
                     name=spec,

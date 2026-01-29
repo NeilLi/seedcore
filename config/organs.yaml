@@ -86,36 +86,11 @@ seedcore:
       - id: "physical_actuation_organ"
         description: "Physical-Actuation Organ (Reachy Core). Maps SeedCore commands to Reachy Mini daemon for real-time motor and sensory control. Includes 2026 safety guard and sim-to-real validation."
         agents:
-          # Agent 3: Executive Agent - Real-time motor and sensory control
-          - specialization: "reachy_actuator"
-            class: "BaseAgent"
-            behaviors: ["background_loop", "task_filter", "safety_check"]
-            behavior_config:
-              background_loop:
-                interval_s: 0.2
-                method: "proprioception_sync"
-                max_errors: 3
-              task_filter:
-                allowed_types: ["reachy.motion", "reachy.audio", "reachy.vision", "reachy.gripper", "action", "vla_execution", "isaac.gym"]
-              safety_check:
-                enabled: true
-                max_velocity: 0.5
-                collision_detection: true
-                # 2026 Safety Enhancements
-                guardrail_enabled: true
-                guardrail_model: "meta-llama/Llama-Guard-3-Robot"
-                risk_threshold: 0.8
-                escalate_to_remote: true
-                # E-STOP triggers for hallucinated motor coordinates
-                joint_limit_check: true
-                safety_level_estop: 0.95  # E-STOP if safety_level >= 0.95
-            # RoleProfile should define:
-            #   default_skills: {spatial_reasoning: 0.9, dexterity: 0.7, spatial_grounding: 0.95, vla_inference: 0.85, 3d_geometric_awareness: 0.9}
-            #   allowed_tools: ["reachy.motion.move", "reachy.motion.look_at", "reachy.motion.wave", "reachy.audio.say", "reachy.vision.stream", "reachy.gripper.grasp", "isaac.gym.validate_action"]
-            #   routing_tags: ["reachy_mini", "real_time", "vla", "physical_actuation", "sim_to_real"]
-            count: 1
-
-          # Agent 4: Safety Guard Agent (2026 Best Practice)
+          # NOTE: reachy_actuator agent is dynamically spawned from pkg_subtask_types via CapabilityMonitor.
+          # Do NOT pre-spawn here to avoid race condition where agent is created before specialization is registered.
+          # The agent will be JIT-spawned on-demand when the first task arrives, ensuring correct specialization.
+          
+          # Agent 4: Safety Guard Agent (2026 Best Practice) - Static spawn OK (not hardware-specific)
           - specialization: "safety_guard"
             class: "BaseAgent"
             behaviors: ["background_loop", "task_filter", "safety_check"]

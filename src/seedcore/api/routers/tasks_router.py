@@ -245,7 +245,7 @@ async def _stream_task_logs(
         yield f"data: {json.dumps({'type': 'connected', 'task_id': str(task_id), 'message': 'Streaming logs...'})}\n\n"
         
         while (perf_counter() - start_time) < max_duration:
-            async with session_factory()() as session:
+            async with session_factory() as session:
                 task = await session.get(Task, task_id)
                 
                 if not task:
@@ -370,7 +370,7 @@ async def stream_task_logs(
     from ...database import get_async_pg_session_factory
     session_factory = get_async_pg_session_factory()
     
-    async with session_factory()() as session:
+    async with session_factory() as session:
         uid = await _resolve_task_id(session, task_id)
         task = await session.get(Task, uid)
         

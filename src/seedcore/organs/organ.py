@@ -503,10 +503,24 @@ class Organ:
         - Support for both short class names and fully-qualified paths
         - Centralized per-class init kwargs registry
         - Automatic Ray actor wrapping for non-actor classes
+        
+        Args:
+            force_replace: If True, remove existing agent before creating (for specialization fixes)
         """
+        # Check if agent already exists
+        force_replace = agent_actor_options.get("force_replace", False)
         if agent_id in self.agents:
-            logger.warning(f"[{self.organ_id}] Agent {agent_id} already exists.")
-            return
+            if force_replace:
+                logger.info(f"[{self.organ_id}] Agent {agent_id} already exists, force replacing...")
+                await self.remove_agent(agent_id, force_kill_by_name=True)
+                # Wait a bit for cleanup
+                await asyncio.sleep(0.5)
+            else:
+                logger.warning(f"[{self.organ_id}] Agent {agent_id} already exists.")
+                return
+        
+        # Remove force_replace from options (not a Ray option)
+        agent_actor_options = {k: v for k, v in agent_actor_options.items() if k != "force_replace"}
 
         if self.organ_id != organ_id:
             raise ValueError(f"ID Mismatch: Organ {self.organ_id} != Req {organ_id}")
@@ -568,10 +582,13 @@ class Organ:
                 agent_params["behavior_config"] = behavior_config
 
             # 4. Spawn actor
+            # CRITICAL: If force_replace was True, we must NOT use get_if_exists=True
+            # because we want to create a NEW actor, not reuse the old one
+            # get_if_exists=True will cause Ray to reuse existing actors even after kill
             actor_opts = {
                 "name": agent_id,
                 "namespace": AGENT_NAMESPACE,  # Use the module-level constant
-                "get_if_exists": True,
+                "get_if_exists": not force_replace,  # Only reuse if NOT force replacing
                 **agent_actor_options,
             }
 
@@ -629,31 +646,53 @@ class Organ:
                 }
         return snapshot
 
-    async def remove_agent(self, agent_id: str) -> bool:
+    async def remove_agent(self, agent_id: str, force_kill_by_name: bool = False) -> bool:
         """
         Removes an agent from the registry and terminates it.
         This is called by OrganismCore's `evolve` (scale_down).
+        
+        Args:
+            agent_id: Agent ID to remove
+            force_kill_by_name: If True, also try to kill Ray actor by name (useful when handle is stale)
         """
         logger.info(f"[{self.organ_id}] Removing agent {agent_id}...")
         self.agent_info.pop(agent_id, None)
         agent_handle = self.agents.pop(agent_id, None)
 
+        killed = False
         if agent_handle:
             try:
                 # Asynchronously terminate the actor
                 ray.kill(agent_handle, no_restart=True)
-                logger.info(f"[{self.organ_id}] Terminated agent {agent_id}.")
-                return True
+                logger.info(f"[{self.organ_id}] Terminated agent {agent_id} via handle.")
+                killed = True
             except Exception as e:
-                logger.warning(f"Failed to kill agent {agent_id}: {e}")
-                # Still return True because it's gone from the registry
-                return True
-        return False  # Agent was not found in the registry
+                logger.warning(f"Failed to kill agent {agent_id} via handle: {e}")
+        
+        # **ENHANCEMENT: Also try to kill by name if handle kill failed or force_kill_by_name is True**
+        # This ensures we clean up even if the handle is stale
+        if force_kill_by_name or not killed:
+            try:
+                actor = ray.get_actor(agent_id, namespace=AGENT_NAMESPACE)
+                ray.kill(actor, no_restart=True)
+                logger.info(f"[{self.organ_id}] Force killed agent {agent_id} by name in namespace {AGENT_NAMESPACE}.")
+                killed = True
+            except ValueError:
+                # Actor doesn't exist, that's fine
+                logger.debug(f"Agent {agent_id} doesn't exist as Ray actor (already cleaned up)")
+            except Exception as e:
+                logger.warning(f"Failed to kill agent {agent_id} by name: {e}")
+        
+        return killed or agent_handle is not None  # Return True if we had a handle or successfully killed
 
     async def respawn_agent(self, agent_id: str) -> None:
         """
         Recreates a dead agent with its previous info.
         This is called by OrganismCore's `_reconciliation_loop`.
+        
+        **CRITICAL FIX: Derives correct specialization from agent ID if stored info is wrong.**
+        This ensures agents respawn with correct specialization even if they were initially
+        created before the specialization was registered.
         """
         info = self.agent_info.get(agent_id, {})
         if not info:
@@ -663,6 +702,34 @@ class Organ:
         spec_str = info.get("specialization") or info.get(
             "specialization_name", "user_liaison"
         )
+
+        # **CRITICAL FIX: Check agent ID pattern to derive correct specialization**
+        # Agent IDs often contain specialization name (e.g., "physical_actuation_organ_reachy_actuator_0")
+        # If stored specialization is GENERALIST but agent ID suggests a different specialization,
+        # try to derive from agent ID first
+        agent_id_lower = agent_id.lower()
+        if spec_str.lower() == "generalist":
+            # Try to find specialization in agent ID
+            # Common patterns: "{organ_id}_{specialization}_{index}" or "{organ_id}_{specialization}"
+            parts = agent_id_lower.split("_")
+            # Look for known specializations in the agent ID
+            from seedcore.agents.roles.specialization import SpecializationManager
+            spec_manager = SpecializationManager.get_instance()
+            registered_specs = spec_manager.list_all()  # Returns list of SpecializationProtocol objects
+            
+            # Extract specialization values (strings) for matching
+            spec_values = [str(spec.value).lower() if hasattr(spec, 'value') else str(spec).lower() for spec in registered_specs]
+            
+            for part in parts:
+                if part and part != "organ" and part not in ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]:
+                    # Check if this part matches a registered specialization value
+                    if part in spec_values:
+                        spec_str = part
+                        logger.info(
+                            f"[{self.organ_id}] Derived specialization '{spec_str}' from agent ID '{agent_id}' "
+                            f"(stored was 'generalist')"
+                        )
+                        break
 
         # Resolve specialization (supports both static and dynamic)
         try:
@@ -1183,8 +1250,13 @@ class Organ:
                 candidates.append(agent_id)
 
         if not candidates:
-            # Fallback if no specific agent matches the spec
-            return await self.pick_random_agent()
+            # No agent with the required specialization exists - return None to trigger JIT spawn
+            # This allows the router to generate a new agent ID and spawn it on-demand
+            logger.debug(
+                f"[{self.organ_id}] No agent found with specialization '{spec_name}'. "
+                f"Router will trigger JIT spawn for new agent."
+            )
+            return None, None
 
         # 2. If only one candidate, return it
         if len(candidates) == 1:

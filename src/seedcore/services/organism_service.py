@@ -600,6 +600,97 @@ class OrganismService:
         result = await self.rpc_notify_capability_changes(changes)
         return result
 
+    @app.post("/agents/{agent_id}/clean")
+    async def clean_agent(self, agent_id: str):
+        """
+        Force clean/respawn an agent with correct specialization.
+        
+        This endpoint:
+        1. Kills the existing Ray actor
+        2. Removes it from organ registry
+        3. Derives correct specialization from agent ID
+        4. Respawns with correct specialization
+        
+        Useful for fixing agents with mismatched specializations.
+        """
+        try:
+            if not self._initialized:
+                return {"success": False, "error": "Organism not initialized"}
+            
+            # Find which organ has this agent
+            organ_id = None
+            for oid, organ_handle in self.organism_core.organs.items():
+                try:
+                    agent_list_ref = organ_handle.list_agents.remote()
+                    agent_list = await asyncio.to_thread(ray.get, agent_list_ref)
+                    if agent_id in agent_list:
+                        organ_id = oid
+                        break
+                except Exception:
+                    continue
+            
+            if not organ_id:
+                return {"success": False, "error": f"Agent {agent_id} not found in any organ"}
+            
+            # Get organ handle
+            organ_handle = self.organism_core.organs.get(organ_id)
+            if not organ_handle:
+                return {"success": False, "error": f"Organ {organ_id} not found"}
+            
+            # Derive specialization from agent ID
+            agent_id_lower = agent_id.lower()
+            from seedcore.agents.roles.specialization import SpecializationManager, get_specialization
+            spec_manager = SpecializationManager.get_instance()
+            all_specs = spec_manager.list_all()
+            
+            derived_spec = None
+            for spec_protocol in all_specs:
+                spec_value = str(spec_protocol.value).lower() if hasattr(spec_protocol, 'value') else str(spec_protocol).lower()
+                if spec_value in agent_id_lower and len(spec_value) > 3:
+                    derived_spec = spec_value
+                    break
+            
+            if not derived_spec:
+                return {"success": False, "error": f"Could not derive specialization from agent ID '{agent_id}'"}
+            
+            # Get agent info before removal
+            agent_info_ref = organ_handle.get_agent_info.remote(agent_id)
+            agent_info = await asyncio.to_thread(ray.get, agent_info_ref)
+            agent_class = agent_info.get("class", "BaseAgent")
+            
+            # Remove agent (force kill)
+            remove_ref = organ_handle.remove_agent.remote(agent_id, force_kill_by_name=True)
+            await asyncio.to_thread(ray.get, remove_ref)
+            
+            # Wait for cleanup
+            await asyncio.sleep(1.0)
+            
+            # Respawn with correct specialization
+            spec = get_specialization(derived_spec)
+            agent_opts = self.organism_core._get_agent_actor_options(agent_id)
+            agent_opts_clean = {k: v for k, v in agent_opts.items() if k != "get_if_exists"}
+            
+            create_ref = organ_handle.create_agent.remote(
+                agent_id=agent_id,
+                specialization=spec,
+                organ_id=organ_id,
+                agent_class_name=agent_class,
+                force_replace=True,
+                **agent_opts_clean,
+            )
+            await asyncio.to_thread(ray.get, create_ref)
+            
+            return {
+                "success": True,
+                "message": f"Agent {agent_id} cleaned and respawned with specialization '{derived_spec}'",
+                "agent_id": agent_id,
+                "organ_id": organ_id,
+                "specialization": derived_spec,
+            }
+        except Exception as e:
+            logger.error(f"Failed to clean agent {agent_id}: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
     # ------------------------------------------------------------------
     #  HELPER METHODS
     # ------------------------------------------------------------------

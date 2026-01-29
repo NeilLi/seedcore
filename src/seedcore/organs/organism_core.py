@@ -1771,9 +1771,10 @@ class OrganismCore:
                     if hasattr(agent_handle, "get_heartbeat"):
                         heartbeat_ref = agent_handle.get_heartbeat.remote()
                         # Use a short timeout to avoid hanging
+                        # Use _ray_await helper which properly handles async ray.get
                         await asyncio.wait_for(
-                            asyncio.to_thread(ray.get, heartbeat_ref),
-                            timeout=2.0,
+                            self._ray_await(heartbeat_ref, timeout=2.0),
+                            timeout=2.5,  # Slightly longer than ray.get timeout
                         )
                         agent_ready = True
                         break
@@ -1810,6 +1811,174 @@ class OrganismCore:
                 self.logger.info(
                     f"[OrganismCore] Agent handle resolved and ready: {agent_id} in {organ_id}"
                 )
+                
+                # **CRITICAL FIX: Always check for specialization mismatch before execution**
+                # This catches agents that were spawned with wrong specialization and fixes them immediately
+                # We ALWAYS check agent ID pattern, even if routing params don't specify specialization
+                routing = params.get("routing", {}) if isinstance(params, dict) else {}
+                required_spec = routing.get("required_specialization") or routing.get("specialization")
+                
+                # **ENHANCEMENT: Always derive required specialization from agent ID as fallback**
+                # Agent IDs often contain specialization name (e.g., "physical_actuation_organ_reachy_actuator_0")
+                # This ensures we catch mismatches even when routing params don't specify specialization
+                if not required_spec:
+                    agent_id_lower = agent_id.lower()
+                    # Try to extract specialization from agent ID
+                    from seedcore.agents.roles.specialization import SpecializationManager
+                    spec_manager = SpecializationManager.get_instance()
+                    all_specs = spec_manager.list_all()  # Returns list of SpecializationProtocol objects
+                    
+                    # Extract specialization values (strings) for matching
+                    for spec_protocol in all_specs:
+                        spec_value = str(spec_protocol.value).lower() if hasattr(spec_protocol, 'value') else str(spec_protocol).lower()
+                        if spec_value in agent_id_lower and len(spec_value) > 3:  # Avoid matching short words
+                            required_spec = spec_value
+                            self.logger.debug(
+                                f"Derived required specialization '{required_spec}' from agent ID '{agent_id}'"
+                            )
+                            break
+                
+                # **ALWAYS check agent specialization - derive from agent ID if routing params don't specify**
+                # This ensures we catch mismatches even when routing params don't specify specialization
+                agent_id_lower_check = agent_id.lower()
+                
+                # Try to derive specialization from agent ID pattern if routing params don't have it
+                if not required_spec:
+                    from seedcore.agents.roles.specialization import SpecializationManager
+                    spec_manager_check = SpecializationManager.get_instance()
+                    all_specs_check = spec_manager_check.list_all()
+                    for spec_protocol in all_specs_check:
+                        spec_value = str(spec_protocol.value).lower() if hasattr(spec_protocol, 'value') else str(spec_protocol).lower()
+                        if spec_value in agent_id_lower_check and len(spec_value) > 3:
+                            required_spec = spec_value
+                            self.logger.debug(
+                                f"Using derived specialization '{required_spec}' from agent ID '{agent_id}' for mismatch check"
+                            )
+                            break
+                
+                # **CRITICAL: Always check agent specialization if we can derive it from agent ID**
+                # This catches agents with wrong specialization even when routing params don't specify it
+                if required_spec:
+                    # Check agent's actual specialization
+                    try:
+                        agent_info_ref = organ.get_agent_info.remote(agent_id)
+                        agent_info = await self._ray_await(agent_info_ref)
+                        current_spec = (
+                            agent_info.get("specialization", "")
+                            or agent_info.get("specialization_name", "")
+                            or ""
+                        ).lower()
+                        required_spec_lower = str(required_spec).strip().lower()
+                        
+                        if current_spec and current_spec != required_spec_lower:
+                            self.logger.warning(
+                                f"🔧 Agent {agent_id} has specialization mismatch: "
+                                f"current='{current_spec}' != required='{required_spec_lower}'. "
+                                f"Respawning with correct specialization..."
+                            )
+                            
+                            # Respawn agent with correct specialization
+                            try:
+                                from seedcore.agents.roles.specialization import get_specialization
+                                spec = get_specialization(required_spec_lower)
+                                
+                                # Get agent class from info
+                                agent_class = agent_info.get("class", "BaseAgent")
+                                
+                                # **CRITICAL: Force kill Ray actor before respawning**
+                                # get_if_exists=True will reuse existing actor, so we must kill it first
+                                # Note: ray is imported at module level, so we can use it directly
+                                try:
+                                    from seedcore.organs.organ import AGENT_NAMESPACE
+                                    
+                                    # Try to get actor by name and kill it
+                                    try:
+                                        old_actor = ray.get_actor(agent_id, namespace=AGENT_NAMESPACE)
+                                        ray.kill(old_actor, no_restart=True)
+                                        self.logger.info(f"🔪 Force killed Ray actor '{agent_id}' in namespace '{AGENT_NAMESPACE}'")
+                                        # Wait for Ray to clean up the actor
+                                        await asyncio.sleep(1.0)
+                                    except ValueError:
+                                        # Actor doesn't exist, that's fine
+                                        self.logger.debug(f"Ray actor '{agent_id}' doesn't exist, proceeding with respawn")
+                                    except Exception as kill_err:
+                                        self.logger.warning(f"Failed to kill Ray actor '{agent_id}': {kill_err}")
+                                except Exception as e:
+                                    self.logger.warning(f"Error during Ray actor cleanup: {e}")
+                                
+                                # Remove from organ registry (force kill by name to ensure clean removal)
+                                remove_ref = organ.remove_agent.remote(agent_id, force_kill_by_name=True)
+                                await self._ray_await(remove_ref)
+                                
+                                # Additional cleanup: ensure Ray actor is gone
+                                try:
+                                    from seedcore.organs.organ import AGENT_NAMESPACE
+                                    # Double-check and wait for actor to be fully removed
+                                    for _ in range(5):  # Check up to 5 times
+                                        try:
+                                            test_actor = ray.get_actor(agent_id, namespace=AGENT_NAMESPACE)
+                                            # Still exists, kill it again
+                                            ray.kill(test_actor, no_restart=True)
+                                            await asyncio.sleep(0.3)
+                                        except ValueError:
+                                            # Actor is gone, good
+                                            break
+                                except Exception as cleanup_err:
+                                    self.logger.debug(f"Cleanup check error (non-fatal): {cleanup_err}")
+                                
+                                # Respawn with correct specialization
+                                agent_opts = self._get_agent_actor_options(agent_id)
+                                # CRITICAL: Use force_replace=True to ensure clean respawn
+                                # Also remove get_if_exists to prevent Ray from reusing old actor
+                                agent_opts_clean = {k: v for k, v in agent_opts.items() if k != "get_if_exists"}
+                                create_ref = organ.create_agent.remote(
+                                    agent_id=agent_id,
+                                    specialization=spec,
+                                    organ_id=organ_id,
+                                    agent_class_name=agent_class,
+                                    force_replace=True,  # Force replace existing agent
+                                    **agent_opts_clean,
+                                )
+                                await self._ray_await(create_ref)
+                                
+                                # Update local mapping
+                                self.agent_to_organ_map[agent_id] = organ_id
+                                
+                                # Get new handle
+                                agent_handle = await self._ensure_agent_handle(
+                                    organ, organ_id, agent_id, params
+                                )
+                                
+                                if not agent_handle:
+                                    return make_envelope(
+                                        task_id=task_id,
+                                        success=False,
+                                        error=f"Agent '{agent_id}' respawn failed after specialization fix.",
+                                        error_type="agent_respawn_failed",
+                                        retry=True,
+                                        path="organism_core",
+                                    )
+                                
+                                self.logger.info(
+                                    f"✅ Successfully respawned agent {agent_id} with specialization '{required_spec_lower}'"
+                                )
+                            except Exception as e:
+                                self.logger.error(
+                                    f"❌ Failed to respawn agent {agent_id} with correct specialization: {e}",
+                                    exc_info=True
+                                )
+                                return make_envelope(
+                                    task_id=task_id,
+                                    success=False,
+                                    error=f"Agent specialization mismatch detected but respawn failed: {e}",
+                                    error_type="agent_specialization_mismatch",
+                                    retry=True,
+                                    path="organism_core",
+                                )
+                    except Exception as e:
+                        self.logger.debug(
+                            f"Could not check agent specialization (non-fatal): {e}"
+                        )
 
             # --- 3. Execution Logic ---
             # Priority: Trust the Router's decision envelope first
@@ -1939,15 +2108,19 @@ class OrganismCore:
         )
 
         # Determine Specialization for the new agent
+        # Priority: routing.required_specialization > routing.specialization > executor.specialization > GENERALIST
+        # **CRITICAL: executor.specialization must be checked as fallback to ensure agents use correct specialization**
         routing = params.get("routing", {})
+        executor = params.get("executor", {})
+        
         spec_str = (
             routing.get("required_specialization")
             or routing.get("specialization")
+            or (executor.get("specialization") if isinstance(executor, dict) else None)
             or "GENERALIST"
         )
 
         # Extract executor config from executor hints (Behavior Plugin System + agent class)
-        executor = params.get("executor", {})
         jit_behaviors = (
             executor.get("behaviors") if isinstance(executor, dict) else None
         )
@@ -2327,41 +2500,56 @@ class OrganismCore:
             }
 
             spec_manager = SpecializationManager.get_instance()
+            
+            # Track which specializations were registered so we can sync them all at once at the end
+            registered_specializations = []
+            
+            self.logger.info(
+                f"📋 Processing {len(changes)} capability changes: "
+                f"{sum(1 for c in changes if c.get('change_type') == 'added')} added, "
+                f"{sum(1 for c in changes if c.get('change_type') == 'updated')} updated, "
+                f"{sum(1 for c in changes if c.get('change_type') == 'removed')} removed"
+            )
 
-            for change in changes:
-                change_type = change.get("change_type")
-                spec_str = change.get("specialization")
-                snapshot_id = change.get("snapshot_id")
-                capability_name = change.get("capability_name", "unknown")
-                new_capability = change.get("new_capability")  # Full capability data
-
-                # Version consistency check (Snapshot Locking)
-                if snapshot_id is not None and snapshot_id != active_snapshot_id:
-                    self.logger.warning(
-                        f"⚠️ Rejecting capability change for '{capability_name}': "
-                        f"snapshot_id mismatch (change: {snapshot_id}, active: {active_snapshot_id}). "
-                        "This prevents logic drift from mixing DNA from different versions."
-                    )
-                    processed["rejected"] += 1
-                    continue
-
-                # If specialization not provided, try to derive from capability name
-                if not spec_str:
-                    # Derive specialization from capability name (e.g., "monitor_zone_safety" -> "monitor_zone_safety")
-                    spec_str = capability_name.lower()
-                    self.logger.debug(
-                        f"No specialization provided for '{capability_name}', "
-                        f"deriving from capability name: '{spec_str}'"
-                    )
-
-                spec_str = str(spec_str).strip().lower()
-                if not spec_str:
-                    self.logger.warning(
-                        f"Could not determine specialization for capability '{capability_name}', skipping"
-                    )
-                    continue
-
+            for idx, change in enumerate(changes):
                 try:
+                    change_type = change.get("change_type")
+                    spec_str = change.get("specialization")
+                    snapshot_id = change.get("snapshot_id")
+                    capability_name = change.get("capability_name", "unknown")
+                    new_capability = change.get("new_capability")  # Full capability data
+                    
+                    self.logger.debug(
+                        f"Processing capability change {idx+1}/{len(changes)}: {change_type} '{capability_name}' "
+                        f"(specialization: '{spec_str}', snapshot_id: {snapshot_id})"
+                    )
+
+                    # Version consistency check (Snapshot Locking)
+                    if snapshot_id is not None and snapshot_id != active_snapshot_id:
+                        self.logger.warning(
+                            f"⚠️ Rejecting capability change for '{capability_name}': "
+                            f"snapshot_id mismatch (change: {snapshot_id}, active: {active_snapshot_id}). "
+                            "This prevents logic drift from mixing DNA from different versions."
+                        )
+                        processed["rejected"] += 1
+                        continue
+
+                    # If specialization not provided, try to derive from capability name
+                    if not spec_str:
+                        # Derive specialization from capability name (e.g., "monitor_zone_safety" -> "monitor_zone_safety")
+                        spec_str = capability_name.lower()
+                        self.logger.debug(
+                            f"No specialization provided for '{capability_name}', "
+                            f"deriving from capability name: '{spec_str}'"
+                        )
+
+                    spec_str = str(spec_str).strip().lower()
+                    if not spec_str:
+                        self.logger.warning(
+                            f"Could not determine specialization for capability '{capability_name}', skipping"
+                        )
+                        processed["rejected"] += 1
+                        continue
                     if change_type == "added":
                         # New capability - register/update role profile from capability data
                         # This ensures dynamic pkg_subtask_types data overrides static YAML
@@ -2369,19 +2557,119 @@ class OrganismCore:
                             spec_str, capability_name, new_capability
                         )
 
+                        # **CRITICAL: Register the specialization FIRST before registering role profile**
+                        # This ensures get_specialization() can find it when agents are spawned
+                        # We MUST register even if role_profile is None, because agents need the specialization
+                        specialization_registered = False
+                        if spec_str and not spec_manager.is_registered(spec_str):
+                            try:
+                                # Extract metadata from capability if available
+                                metadata = {
+                                    "source": "pkg_subtask_types",
+                                    "capability_name": capability_name,
+                                    "snapshot_id": snapshot_id,
+                                }
+                                
+                                # Register the specialization dynamically (this adds it to _dynamic_specs)
+                                # Pass role_profile if available, otherwise None (will create minimal profile)
+                                spec_manager.register_dynamic(
+                                    value=spec_str,
+                                    name=capability_name.replace("_", " ").title(),
+                                    metadata=metadata,
+                                    role_profile=role_profile,  # Pass role_profile if available
+                                )
+                                specialization_registered = True
+                                self.logger.info(
+                                    f"✅ Registered dynamic specialization '{spec_str}' from capability '{capability_name}'"
+                                )
+                            except Exception as e:
+                                self.logger.error(
+                                    f"❌ Failed to register dynamic specialization '{spec_str}': {e}",
+                                    exc_info=True
+                                )
+                                processed["errors"].append(
+                                    f"Failed to register specialization '{spec_str}' for capability '{capability_name}': {e}"
+                                )
+                                # Don't continue - specialization registration is critical for agent spawning
+                                continue
+                        elif spec_str and spec_manager.is_registered(spec_str):
+                            # Already registered (maybe by CapabilityMonitor), but we still need to sync
+                            specialization_registered = True
+                            self.logger.info(
+                                f"✅ Specialization '{spec_str}' already registered (from capability '{capability_name}'), "
+                                f"ensuring role profile is synced"
+                            )
+                        
                         if role_profile:
-                            # Register/update role profile (overrides static YAML config)
+                            # Register/update role profile in SpecializationManager (overrides static YAML config)
+                            # This is safe to call even if specialization was already registered above
                             spec_manager.register_role_profile(role_profile)
+                            
+                            # **CRITICAL: Also register in RoleRegistry so it can be synced to organs**
+                            # RoleRegistry is what _sync_role_registry_to_organs uses
+                            self.role_registry.register(role_profile)
+                            
                             self.logger.info(
                                 f"✅ Registered role profile for '{spec_str}' from pkg_subtask_types "
                                 f"(overrides static YAML config if present)"
                             )
+                        
+                        # **CRITICAL: Always sync if specialization is registered (even if no role_profile)**
+                        # This ensures organs can find the specialization for agent spawning
+                        if specialization_registered or spec_manager.is_registered(spec_str):
+                            if not role_profile:
+                                # Even if no role_profile, ensure specialization is synced to organs
+                                # Get the registered specialization to create a minimal profile for RoleRegistry
+                                try:
+                                    registered_spec = spec_manager.get(spec_str)
+                                    # Create minimal role profile for RoleRegistry sync
+                                    from seedcore.agents.roles.specialization import RoleProfile
+                                    minimal_profile = RoleProfile(
+                                        name=registered_spec,
+                                        default_skills={},
+                                        allowed_tools=set(),
+                                        routing_tags=set(),
+                                    )
+                                    self.role_registry.register(minimal_profile)
+                                    self.logger.debug(
+                                        f"✅ Created minimal role profile for '{spec_str}' "
+                                        f"(no role profile data in capability)"
+                                    )
+                                except Exception as e:
+                                    self.logger.warning(
+                                        f"⚠️ Failed to create minimal profile for '{spec_str}': {e}"
+                                    )
+                            
+                            # NOTE: We skip per-capability sync here to avoid blocking the loop.
+                            # All specializations will be synced once at the end after processing all changes.
+                            # This ensures faster batch processing and avoids potential blocking issues.
 
+                        # **CRITICAL: Update organ_specs mapping for router lookup**
+                        # This ensures the router can find which organ handles this specialization
+                        # Inference is based on pkg_subtask_types name patterns, not hardcoded mappings
+                        if spec_str:
+                            organ_id = self._determine_organ_for_specialization(
+                                spec_str, capability_name, new_capability
+                            )
+                            if organ_id:
+                                self.organ_specs[spec_str] = organ_id
+                                self.logger.info(
+                                    f"📌 Mapped specialization '{spec_str}' -> organ '{organ_id}' "
+                                    f"for router lookup (inferred from capability name: '{capability_name}')"
+                                )
+                            else:
+                                self.logger.warning(
+                                    f"⚠️ Could not determine organ for specialization '{spec_str}' "
+                                    f"(capability: '{capability_name}'). Router will use fallback routing."
+                                )
+
+                        processed["added"] += 1
+                        registered_specializations.append(spec_str)
                         self.logger.info(
                             f"➕ Capability '{capability_name}' added "
-                            f"with specialization '{spec_str}'. Agents will spawn on-demand."
+                            f"with specialization '{spec_str}'. Agents will spawn on-demand. "
+                            f"(Processed {processed['added']}/{len([c for c in changes if c.get('change_type') == 'added'])} added capabilities)"
                         )
-                        processed["added"] += 1
 
                     elif change_type == "updated":
                         # Updated capability - rebuild role profile from capability data and override static config
@@ -2411,6 +2699,11 @@ class OrganismCore:
                             target_organs = await self.find_organs_with_specialization(
                                 spec_str
                             )
+
+                            # **CRITICAL FIX: Check for agents with mismatched specializations**
+                            # Agents may have been spawned before the specialization was registered,
+                            # causing them to default to GENERALIST. We need to respawn them.
+                            await self._fix_mismatched_agent_specializations(spec_str, capability_name)
 
                             if not target_organs:
                                 self.logger.debug(
@@ -2460,15 +2753,47 @@ class OrganismCore:
                         processed["removed"] += 1
 
                 except Exception as e:
-                    error_msg = f"Error processing change for '{capability_name}': {e}"
-                    self.logger.error(error_msg, exc_info=True)
+                    error_msg = f"Error processing change {idx+1}/{len(changes)} for '{capability_name}': {e}"
+                    self.logger.error(
+                        f"{error_msg} (continuing with remaining {len(changes) - idx - 1} changes)",
+                        exc_info=True
+                    )
                     processed["errors"].append(error_msg)
+                    # Continue processing remaining changes - don't let one failure stop the batch
+                    continue
+            
+            # Log summary of processing
+            self.logger.info(
+                f"📊 Capability processing summary: "
+                f"{processed['added']} added, {processed['updated']} updated, "
+                f"{processed['removed']} removed, {processed['rejected']} rejected, "
+                f"{len(processed['errors'])} errors, "
+                f"{len(registered_specializations)} specializations registered"
+            )
+            
+            # **CRITICAL: Final sync of all role profiles to all organs after processing all changes**
+            # This ensures all newly registered specializations are available to organs
+            # even if individual syncs failed or were skipped
+            if registered_specializations:
+                try:
+                    self.logger.info(
+                        f"🔄 Performing final sync of {len(registered_specializations)} "
+                        f"specialization(s) to all organs: {', '.join(registered_specializations)}"
+                    )
+                    await self._sync_role_registry_to_organs()
+                    self.logger.info("✅ Final role registry sync completed")
+                except Exception as e:
+                    self.logger.warning(
+                        f"⚠️ Final role registry sync failed: {e}",
+                        exc_info=True
+                    )
 
             return {
                 "success": True,
                 "processed": processed,
                 "total_changes": len(changes),
                 "active_snapshot_id": active_snapshot_id,
+                "registered_specializations": registered_specializations,
             }
 
         except Exception as e:
@@ -2476,6 +2801,120 @@ class OrganismCore:
                 f"Failed to process capability changes: {e}", exc_info=True
             )
             return {"success": False, "error": str(e)}
+
+    async def _fix_mismatched_agent_specializations(
+        self, spec_str: str, capability_name: str
+    ) -> None:
+        """
+        Fix agents that have mismatched specializations.
+        
+        This detects agents whose names suggest they should have a specific specialization
+        (e.g., agent_id contains the specialization name) but currently have a different
+        specialization (typically GENERALIST due to being spawned before the specialization
+        was registered).
+        
+        Args:
+            spec_str: Expected specialization (normalized, lowercase)
+            capability_name: Capability name for logging
+        """
+        try:
+            from seedcore.agents.roles.specialization import get_specialization, Specialization
+            
+            # Verify the specialization is now registered
+            try:
+                spec = get_specialization(spec_str)
+            except KeyError:
+                self.logger.debug(
+                    f"Specialization '{spec_str}' not yet registered, skipping mismatch check"
+                )
+                return
+            
+            # Check all organs for agents with mismatched specializations
+            # Look for agents whose IDs contain the specialization name but have wrong spec
+            spec_normalized = spec_str.lower()
+            mismatched_agents = []
+            
+            for organ_id, organ_handle in self.organs.items():
+                try:
+                    # List all agents in the organ
+                    agent_ids_ref = organ_handle.list_agents.remote()
+                    agent_ids = await self._ray_await(agent_ids_ref)
+                    
+                    for agent_id in agent_ids:
+                        # Check if agent ID suggests it should have this specialization
+                        # Pattern: agent IDs often contain specialization name (e.g., "physical_actuation_organ_reachy_actuator_0")
+                        agent_id_lower = agent_id.lower()
+                        if spec_normalized in agent_id_lower or capability_name.lower() in agent_id_lower:
+                            # Get agent info to check current specialization
+                            agent_info_ref = organ_handle.get_agent_info.remote(agent_id)
+                            agent_info = await self._ray_await(agent_info_ref)
+                            
+                            current_spec = (
+                                agent_info.get("specialization", "")
+                                or agent_info.get("specialization_name", "")
+                                or ""
+                            ).lower()
+                            
+                            # If agent has wrong specialization, mark for respawn
+                            if current_spec and current_spec != spec_normalized:
+                                mismatched_agents.append((organ_id, organ_handle, agent_id, current_spec))
+                                self.logger.warning(
+                                    f"🔧 Detected agent {agent_id} with mismatched specialization: "
+                                    f"current='{current_spec}' != expected='{spec_normalized}'. "
+                                    f"Will respawn with correct specialization."
+                                )
+                except Exception as e:
+                    self.logger.debug(
+                        f"Error checking organ {organ_id} for mismatched agents: {e}"
+                    )
+            
+            # Respawn agents with correct specialization
+            for organ_id, organ_handle, agent_id, old_spec in mismatched_agents:
+                try:
+                    self.logger.info(
+                        f"🔄 Respawning agent {agent_id} from '{old_spec}' to '{spec_normalized}' "
+                        f"in organ {organ_id}"
+                    )
+                    
+                    # Get agent info BEFORE removing (so we can preserve agent class, etc.)
+                    agent_info_ref = organ_handle.get_agent_info.remote(agent_id)
+                    agent_info = await self._ray_await(agent_info_ref)
+                    agent_class = agent_info.get("class", "BaseAgent")
+                    
+                    # Remove the old agent
+                    remove_ref = organ_handle.remove_agent.remote(agent_id)
+                    await self._ray_await(remove_ref)
+                    
+                    # Get agent actor options
+                    agent_opts = self._get_agent_actor_options(agent_id)
+                    
+                    # Create agent with correct specialization
+                    create_ref = organ_handle.create_agent.remote(
+                        agent_id=agent_id,
+                        specialization=spec,
+                        organ_id=organ_id,
+                        agent_class_name=agent_class,
+                        **agent_opts,
+                    )
+                    await self._ray_await(create_ref)
+                    
+                    # Update local mapping
+                    self.agent_to_organ_map[agent_id] = organ_id
+                    
+                    self.logger.info(
+                        f"✅ Successfully respawned agent {agent_id} with specialization '{spec_normalized}'"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"❌ Failed to respawn agent {agent_id} with correct specialization: {e}",
+                        exc_info=True
+                    )
+                    
+        except Exception as e:
+            self.logger.warning(
+                f"Error fixing mismatched agent specializations: {e}",
+                exc_info=True
+            )
 
     def _build_role_profile_from_capability(
         self,
@@ -2628,6 +3067,205 @@ class OrganismCore:
             )
             self.logger.debug("Build error details:", exc_info=True)
             return None
+
+    def _determine_organ_for_specialization(
+        self, spec_str: str, capability_name: Optional[str] = None, capability_data: Optional[Dict[str, Any]] = None
+    ) -> Optional[str]:
+        """
+        Determine which organ a specialization should belong to using federated mapping with explicit fallback.
+        
+        This follows a strict hierarchy of truth:
+        1. Level Zero: Explicit Database Override (preferred_organ from pkg_subtask_types.default_params.routing)
+        2. Level One: Capability-to-Organ Mapping (semantic keyword matching)
+        3. Level Two: Structural Inference (pattern matching)
+        4. Fallback: utility_organ (the generalist)
+        
+        Args:
+            spec_str: Specialization string (normalized, lowercase)
+            capability_name: Capability name from pkg_subtask_types (primary source for inference)
+            capability_data: Optional full capability data dict for additional context
+            
+        Returns:
+            organ_id if a match is found, None otherwise (will fallback to utility_organ in router)
+        """
+        if not self.organs:
+            return None
+        
+        # Check if already mapped
+        if spec_str in self.organ_specs:
+            organ_id = self.organ_specs[spec_str]
+            if organ_id in self.organs:
+                return organ_id
+        
+        # =====================================================================
+        # Level Zero: Explicit Database Override (Highest Priority)
+        # Check if pkg_subtask_types.default_params.routing.preferred_organ is set
+        # =====================================================================
+        if capability_data:
+            # Handle both direct dict and nested structures
+            # capability_data can be: {"default_params": {...}} or just {...}
+            default_params = None
+            if isinstance(capability_data, dict):
+                # Check if it's already the default_params structure
+                if "default_params" in capability_data:
+                    default_params = capability_data.get("default_params", {})
+                elif "routing" in capability_data or "executor" in capability_data:
+                    # It might be the default_params dict itself
+                    default_params = capability_data
+                else:
+                    # Try to get default_params if it exists
+                    default_params = capability_data.get("default_params", {})
+            
+            if isinstance(default_params, dict):
+                routing = default_params.get("routing", {})
+                if isinstance(routing, dict):
+                    preferred_organ = routing.get("preferred_organ")
+                    if preferred_organ and isinstance(preferred_organ, str):
+                        preferred_organ = preferred_organ.strip()
+                        if preferred_organ in self.organs:
+                            self.logger.debug(
+                                f"📌 Mapped specialization '{spec_str}' to organ '{preferred_organ}' "
+                                f"(explicit preferred_organ from pkg_subtask_types.default_params.routing for capability '{capability_name}')"
+                            )
+                            return preferred_organ
+                        else:
+                            self.logger.warning(
+                                f"⚠️ Capability '{capability_name}' specifies preferred_organ '{preferred_organ}' "
+                                f"but this organ does not exist (available organs: {list(self.organs.keys())}). "
+                                f"Falling back to inference."
+                            )
+                    elif preferred_organ:
+                        self.logger.debug(
+                            f"⚠️ Capability '{capability_name}' has preferred_organ but it's not a string: {type(preferred_organ)}"
+                        )
+        
+        # Primary inference source: capability_name from pkg_subtask_types
+        inference_source = capability_name or spec_str
+        inference_source_lower = inference_source.lower()
+        
+        # Extract organ base names from existing organs (e.g., "physical_actuation" from "physical_actuation_organ")
+        organ_bases = {}
+        for organ_id in self.organs.keys():
+            # Remove "_organ" suffix to get base name
+            base = organ_id.replace("_organ", "")
+            organ_bases[base] = organ_id
+        
+        # Pattern 1: Semantic keyword matching - map capability keywords to organ types
+        # This handles semantic relationships like "actuator" -> "actuation", "monitor" -> "intelligence", etc.
+        semantic_keywords = {
+            "actuator": ["actuation"],
+            "actuate": ["actuation"],
+            "monitor": ["intelligence", "monitoring"],
+            "control": ["orchestration", "execution"],
+            "adjust": ["intelligence", "orchestration"],
+            "optimize": ["intelligence"],
+            "route": ["orchestration", "execution"],
+            "generate": ["foundry", "intelligence"],
+            "notify": ["experience", "orchestration"],
+            "activate": ["execution", "orchestration"],
+        }
+        
+        inference_parts = inference_source_lower.split("_")
+        for inf_part in inference_parts:
+            if len(inf_part) > 3 and inf_part in semantic_keywords:
+                # Check if any organ matches the semantic keywords
+                for keyword in semantic_keywords[inf_part]:
+                    for organ_id in self.organs.keys():
+                        organ_base = organ_id.replace("_organ", "").lower()
+                        if keyword in organ_base:
+                            self.logger.debug(
+                                f"📌 Mapped specialization '{spec_str}' to organ '{organ_id}' "
+                                f"(inferred from capability name: '{capability_name}' keyword '{inf_part}' -> organ keyword '{keyword}')"
+                            )
+                            return organ_id
+        
+        # Pattern 1b: Direct part matching - check if capability name parts match organ parts exactly
+        # Try to match capability name parts against organ base names
+        for organ_id in self.organs.keys():
+            organ_base = organ_id.replace("_organ", "").lower()
+            organ_parts = organ_base.split("_")
+            
+            # Check if any significant part of capability matches organ parts
+            for inf_part in inference_parts:
+                if len(inf_part) > 3:  # Only consider substantial parts
+                    for org_part in organ_parts:
+                        if len(org_part) > 3 and (inf_part == org_part or inf_part in org_part or org_part in inf_part):
+                            self.logger.debug(
+                                f"📌 Mapped specialization '{spec_str}' to organ '{organ_id}' "
+                                f"(inferred from capability name: '{capability_name}' part '{inf_part}' matches organ part '{org_part}')"
+                            )
+                            return organ_id
+        
+        # Pattern 2: Check if capability name contains organ name keywords (inferred from naming convention)
+        
+        # Check if any organ base name appears in the capability name
+        for base, organ_id in organ_bases.items():
+            base_lower = base.lower()
+            # Check if organ base name is contained in capability name
+            # e.g., "physical_actuation" in "reachy_actuator" -> no match
+            # but "brain_foundry" in "brain_foundry_scanner" -> match
+            if base_lower in inference_source_lower or inference_source_lower in base_lower:
+                # Avoid false positives: ensure it's a meaningful match
+                # Check if the match is at word boundaries or is a significant substring
+                if len(base_lower) > 5:  # Only consider substantial matches
+                    self.logger.debug(
+                        f"📌 Mapped specialization '{spec_str}' to organ '{organ_id}' "
+                        f"(inferred from capability name: '{capability_name}' contains organ base '{base}')"
+                    )
+                    return organ_id
+        
+        # Pattern 3: Check routing tags or hints from capability data if available
+        if capability_data:
+            default_params = capability_data.get("default_params", {})
+            if isinstance(default_params, dict):
+                routing = default_params.get("routing", {})
+                if isinstance(routing, dict):
+                    routing_tags = routing.get("routing_tags", [])
+                    if isinstance(routing_tags, list):
+                        # Check if routing tags contain organ hints
+                        for tag in routing_tags:
+                            tag_lower = str(tag).lower()
+                            for base, organ_id in organ_bases.items():
+                                if base.lower() in tag_lower:
+                                    self.logger.debug(
+                                        f"📌 Mapped specialization '{spec_str}' to organ '{organ_id}' "
+                                        f"(inferred from routing tag: '{tag}')"
+                                    )
+                                    return organ_id
+        
+        # Pattern 5: Partial word matching - check if significant parts of capability name match organ parts
+        # This is a fallback for cases where exact or semantic matching didn't work
+        inference_parts = inference_source_lower.split("_")
+        for organ_id in self.organs.keys():
+            organ_base = organ_id.replace("_organ", "")
+            organ_parts = organ_base.split("_")
+            # Check if any significant part (length > 3) of capability matches organ parts
+            for inf_part in inference_parts:
+                if len(inf_part) > 3:
+                    for org_part in organ_parts:
+                        if len(org_part) > 3 and (inf_part in org_part or org_part in inf_part):
+                            self.logger.debug(
+                                f"📌 Mapped specialization '{spec_str}' to organ '{organ_id}' "
+                                f"(inferred from partial match: '{inf_part}' <-> '{org_part}')"
+                            )
+                            return organ_id
+        
+        # =====================================================================
+        # Final Fallback: utility_organ (The Generalist)
+        # If no explicit preference and no inference worked, use utility_organ
+        # =====================================================================
+        if "utility_organ" in self.organs:
+            self.logger.debug(
+                f"📌 Mapped specialization '{spec_str}' to organ 'utility_organ' "
+                f"(fallback: no explicit preference or inference match for capability '{capability_name}')"
+            )
+            return "utility_organ"
+        
+        self.logger.warning(
+            f"⚠️ Could not determine organ for specialization '{spec_str}' "
+            f"(capability: '{capability_name}') and utility_organ is not available. Router will use fallback routing."
+        )
+        return None
 
     async def find_organs_with_specialization(self, spec_str: str) -> List[str]:
         """

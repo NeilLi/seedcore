@@ -94,36 +94,10 @@ dynamic_specializations:
         - red_team
         - estop
 
-  reachy_actuator:
-    name: "Reachy Actuator (Executive Agent)"
-    metadata:
-      category: "physical_actuation"
-      description: "Real-time motor and sensory control for Reachy Mini. Maps SeedCore commands to Reachy Mini daemon. Supports 3D geometric awareness and sim-to-real validation."
-      organ_kind: "PHYSICAL_ACTUATION"
-    role_profile:
-      default_skills:
-        spatial_reasoning: 0.9
-        dexterity: 0.7
-        spatial_grounding: 0.95
-        vla_inference: 0.85
-        "3d_geometric_awareness": 0.9  # 2026: Point cloud and depth data support
-      allowed_tools:
-        - reachy.motion.move
-        - reachy.motion.look_at
-        - reachy.motion.wave
-        - reachy.audio.say
-        - reachy.vision.stream
-        - reachy.gripper.grasp
-        - isaac.gym.validate_action  # 2026: NVIDIA GR00T sim-to-real validation
-      routing_tags:
-        - reachy_mini
-        - real_time
-        - vla
-        - physical_actuation
-        - sim_to_real  # 2026: Sim-to-real validation enabled
-      behavior_config:
-        background_loop:
-          interval_s: 0.2
-          method: "proprioception_sync"
-        # Note: For fluid 2026 motion (Kung Fu, dexterous manipulation),
-        # consider reducing interval_s to 0.02 (50Hz) if local PC throughput allows
+  # NOTE: reachy_actuator specialization is dynamically managed via pkg_subtask_types in the database.
+  # Do NOT define it here in static YAML to avoid race conditions during startup.
+  # The CapabilityMonitor will register it from the database and agents will spawn on-demand via JIT.
+  # This ensures agents are created with the correct specialization from the start.
+  #
+  # If you need a baseline RoleProfile for reachy_actuator, it should be defined in pkg_subtask_types
+  # default_params.executor and default_params.routing, not in this static YAML file.
