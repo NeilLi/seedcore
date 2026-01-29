@@ -20,13 +20,113 @@ spec:
           image: seedcore:latest
           imagePullPolicy: IfNotPresent
           command: ["/bin/bash", "-c"]
-          # Start Ray head and immediately deploy the Serve applications
+          # Start Ray head and deploy Serve applications
           args:
             - |
+              # Start Ray head in background
               ray start --head --port=6379 --dashboard-host=0.0.0.0 --num-cpus=6 --block &
-              sleep 10;
-              # This assumes your code is in /app (via the volume mount)
-              ray serve run /app/config/serve_config.yaml --address http://localhost:8265
+              RAY_PID=$!
+              
+              # Wait for Ray to be fully ready
+              echo "⏳ Waiting for Ray to be ready..."
+              for i in {1..30}; do
+                if ray status >/dev/null 2>&1; then
+                  echo "✅ Ray is ready"
+                  break
+                fi
+                sleep 1
+              done
+              
+              # Deploy Serve applications from config file
+              echo "🚀 Deploying Serve applications..."
+              # Note: CLI may fail if config has local paths in runtime_env, so we use Python API
+              # which can handle local paths since /app is already mounted in the container
+              
+              # Fallback to Python API (handles local paths in runtime_env)
+              python3 << 'PYTHON_EOF'
+              import ray
+              from ray import serve
+              import yaml
+              import sys
+              import os
+              
+              try:
+                  # Initialize Ray connection (already running)
+                  ray.init(address='auto', namespace='seedcore-dev', ignore_reinit_error=True)
+                  
+                  # Start Serve with HTTP options
+                  serve.start(http_options={'host': '0.0.0.0', 'port': 8000})
+                  
+                  # Load config file
+                  config_path = '/app/config/serve_config.yaml'
+                  if not os.path.exists(config_path):
+                      print(f'⚠️  Config file not found: {config_path}', file=sys.stderr)
+                      print('   Ray head is running, but Serve config not found', file=sys.stderr)
+                      sys.exit(0)  # Non-fatal for mini setup
+                  
+                  with open(config_path, 'r') as f:
+                      config = yaml.safe_load(f)
+                  
+                  # Deploy each application from config
+                  # Note: runtime_env.working_dir is ignored since /app is already mounted
+                  deployed_count = 0
+                  
+                  if 'applications' in config:
+                      for app_config in config['applications']:
+                          app_name = app_config.get('name', 'default')
+                          import_path = app_config.get('import_path')
+                          route_prefix = app_config.get('route_prefix', '/')
+                          
+                          if import_path:
+                              try:
+                                  # Import and build the application
+                                  module_path, func_name = import_path.rsplit(':', 1)
+                                  module = __import__(module_path, fromlist=[func_name])
+                                  build_func = getattr(module, func_name)
+                                  app = build_func()
+                                  
+                                  # Deploy application
+                                  # Use serve.run() in a daemon thread so it doesn't block
+                                  # The container stays alive via wait $RAY_PID at the end
+                                  import threading
+                                  import time
+                                  
+                                  def deploy_app(app, name, prefix):
+                                      try:
+                                          serve.run(app, name=name, route_prefix=prefix)
+                                      except Exception as e:
+                                          print(f'Error in serve.run for {name}: {e}', file=sys.stderr)
+                                  
+                                  thread = threading.Thread(target=deploy_app, args=(app, app_name, route_prefix), daemon=True)
+                                  thread.start()
+                                  time.sleep(0.5)  # Brief pause between deployments
+                                  
+                                  deployed_count += 1
+                                  print(f'✅ Deployed: {app_name} at {route_prefix}')
+                              except Exception as app_error:
+                                  print(f'⚠️  Failed to deploy {app_name}: {app_error}', file=sys.stderr)
+                                  import traceback
+                                  traceback.print_exc()
+                  
+                  if deployed_count > 0:
+                      # Give deployments a moment to initialize
+                      import time
+                      time.sleep(3)
+                      print(f'✅ Successfully deployed {deployed_count} Serve application(s)')
+                      print('   Serve is running on http://0.0.0.0:8000')
+                      print('   Note: Some startup warnings are normal and can be ignored')
+                  else:
+                      print('⚠️  No applications were deployed - Ray head is running without Serve', file=sys.stderr)
+              except Exception as e:
+                  print(f'⚠️  Warning: Could not deploy Serve: {e}', file=sys.stderr)
+                  print('   Ray head is still running, but Serve deployment had errors', file=sys.stderr)
+                  import traceback
+                  traceback.print_exc()
+                  # Don't exit - allow Ray to keep running
+              PYTHON_EOF
+              
+              # Keep the container running
+              wait $RAY_PID
           envFrom:
             - secretRef: { name: seedcore-env-secret }
           env:

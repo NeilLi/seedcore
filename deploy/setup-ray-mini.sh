@@ -21,6 +21,10 @@ print_status() {
 NAMESPACE="${NAMESPACE:-seedcore-dev}"
 RAY_HEAD_FILE="${RAY_HEAD_FILE:-${SCRIPT_DIR}/k8s/seedcore-ray-head.yaml}"
 
+# .env → Secret
+ENV_FILE_PATH="${ENV_FILE_PATH:-${SCRIPT_DIR}/../docker/.env}"
+SECRET_NAME="${SECRET_NAME:-seedcore-env-secret}"
+
 # Optional CLI: setup-ray-mini.sh [namespace] [ray_head_file]
 if [[ $# -ge 1 ]]; then NAMESPACE="$1"; fi
 if [[ $# -ge 2 ]]; then RAY_HEAD_FILE="$2"; fi
@@ -40,6 +44,17 @@ print_status "OK" "kubectl context verified"
 print_status "INFO" "Creating namespace $NAMESPACE (if missing)..."
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 print_status "OK" "Namespace ready"
+
+# ---------- .env → Secret ----------
+if [ -f "$ENV_FILE_PATH" ]; then
+  print_status "INFO" "Creating/Updating Secret '${SECRET_NAME}' from ${ENV_FILE_PATH}..."
+  kubectl -n "${NAMESPACE}" create secret generic "${SECRET_NAME}" \
+    --from-env-file="${ENV_FILE_PATH}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  print_status "OK" "Secret ${SECRET_NAME} created/updated"
+else
+  print_status "WARN" "${ENV_FILE_PATH} not found. Skipping secret creation."
+fi
 
 # ---------- Deploy Ray Head ----------
 if [ ! -f "${RAY_HEAD_FILE}" ]; then
