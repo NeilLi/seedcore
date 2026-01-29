@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seedcore-hal-bridge
+  namespace: seedcore-dev
+  labels:
+    app: hal-bridge
+spec:
+  replicas: 1 # Singleton to prevent motor command conflicts
+  strategy:
+    type: Recreate # Kill the old pod before starting the new one (critical for singleton)
+  selector:
+    matchLabels:
+      app: hal-bridge
+  template:
+    metadata:
+      labels:
+        app: hal-bridge
+    spec:
+      hostNetwork: true # Allows direct discovery of Reachy on the local network
+      containers:
+        - name: hal-driver
+          image: seedcore-hal:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8001 # HAL Control Port
+          env:
+            - name: PYTHONPATH
+              value: "/app/src"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: ROBOT_HOST
+              value: "192.168.1.5" # Your Reachy Mini IP (override via ConfigMap if needed)
+            - name: HARDWARE_UUID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          # Command matches Dockerfile.hal CMD: python -m seedcore.hal.service.main
+          # Alternative: Use uvicorn directly for production (matches seedcore-api.yaml pattern)
+          # command: ["uvicorn", "seedcore.hal.service.main:app", "--host", "0.0.0.0", "--port", "8001"]
+          command: ["python", "-m", "seedcore.hal.service.main"]
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /status
+              port: 8001
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          securityContext:
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seedcore-hal-bridge
+  namespace: seedcore-dev
+spec:
+  type: NodePort
+  selector:
+    app: hal-bridge
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001
+      nodePort: 30001 # Explicit NodePort for HAL Bridge
+      # ⚠️ IMPORTANT: On Kind, ensure this port is mapped in kind-config.yaml at cluster creation:
+      #   extraPortMappings:
+      #     - containerPort: 30001
+      #       hostPort: 30001
+      #       protocol: TCP
+      #   If not mapped, use: kubectl port-forward svc/seedcore-hal-bridge 30001:8001 -n seedcore-dev

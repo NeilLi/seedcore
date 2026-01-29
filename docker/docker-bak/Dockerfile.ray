@@ -16,7 +16,7 @@ RUN useradd --create-home --shell /bin/bash ray
 WORKDIR /home/ray
 
 # Copy requirements and install Python packages
-COPY --chown=ray:ray docker/requirements-minimal.txt /tmp/requirements.txt
+COPY --chown=ray:ray docker/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && \
     pip install --no-cache-dir py-spy && \
     chown root:root /usr/local/bin/py-spy && chmod u+s /usr/local/bin/py-spy

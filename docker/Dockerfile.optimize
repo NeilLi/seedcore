@@ -120,7 +120,7 @@ except Exception as e:
 PY
 
 # ---- Application Requirements ----
-COPY docker/requirements-minimal.txt /tmp/requirements.txt
+COPY docker/requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
     python -m pip install -r /tmp/requirements.txt
 

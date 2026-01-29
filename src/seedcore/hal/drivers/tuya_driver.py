@@ -1,13 +1,17 @@
-#!/usr/bin/env python
-# seedcore/tools/tuya/tuya_client.py
-
 """
-Tuya OpenAPI Client for SeedCore.
+Tuya IoT Device Driver
+======================
 
-- Async, stateless, tool-friendly
-- HMAC-SHA256 signing
-- Token caching (required by Tuya OpenAPI)
-- Safe for Ray actors and concurrent tool execution
+HAL driver implementation for Tuya IoT devices using the Tuya OpenAPI.
+
+This driver provides low-level communication with Tuya devices, handling:
+- HMAC-SHA256 authentication
+- Token management and caching
+- Device status queries
+- Command sending
+
+The driver is stateless and safe for concurrent use in Ray actors and
+tool execution contexts.
 """
 
 from __future__ import annotations
@@ -16,25 +20,31 @@ import hashlib
 import hmac
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import httpx  # pyright: ignore[reportMissingImports]
 
+from ..interfaces import BaseIoTDeviceDriver
 from seedcore.config.tuya_config import TuyaConfig
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 
-setup_logging(app_name="seedcore.tools.tuya.tuya_client")
-logger = ensure_serve_logger("seedcore.tools.tuya.tuya_client", level="INFO")
+setup_logging(app_name="seedcore.hal.drivers.tuya")
+logger = ensure_serve_logger("seedcore.hal.drivers.tuya", level="INFO")
 
 
-class TuyaClient:
+class TuyaDriver(BaseIoTDeviceDriver):
     """
-    Minimal async Tuya OpenAPI client.
-
-    This client is intentionally:
+    Tuya OpenAPI driver for IoT device control.
+    
+    This driver implements the BaseIoTDeviceDriver interface, providing
+    a HAL-compliant way to interact with Tuya devices. It handles all
+    low-level API communication, authentication, and token management.
+    
+    The driver is:
     - Stateless (except cached token)
-    - Tool-safe (no globals)
+    - Thread-safe and Ray-actor-safe
     - Explicit about failures
+    - Compatible with async/await patterns
     """
 
     def __init__(
@@ -47,7 +57,7 @@ class TuyaClient:
         timeout_s: float = 10.0,
     ):
         """
-        Initialize Tuya client.
+        Initialize Tuya driver.
         
         Args:
             config: Optional TuyaConfig instance. If not provided, creates one.
@@ -56,6 +66,8 @@ class TuyaClient:
             base_url: Optional override for base_url (takes precedence over config)
             timeout_s: HTTP timeout in seconds
         """
+        super().__init__(config={})
+        
         # Use provided config or create a new one
         self._config = config or TuyaConfig()
         
@@ -84,9 +96,11 @@ class TuyaClient:
     # ---------------------------------------------------------------------
 
     def _now_ms(self) -> str:
+        """Get current timestamp in milliseconds as string."""
         return str(int(time.time() * 1000))
 
     def _hmac_sha256(self, message: str) -> str:
+        """Generate HMAC-SHA256 signature."""
         return hmac.new(
             self.access_secret.encode("utf-8"),
             message.encode("utf-8"),
@@ -140,6 +154,9 @@ class TuyaClient:
     async def _ensure_token(self) -> str:
         """
         Fetch or reuse access token.
+        
+        Returns:
+            Valid access token string
         """
         now = time.time()
         if self._token and now < self._token_expire_at:
@@ -163,33 +180,81 @@ class TuyaClient:
         return self._token
 
     # ---------------------------------------------------------------------
-    # Public API
+    # BaseIoTDeviceDriver implementation
     # ---------------------------------------------------------------------
 
     async def get_device_status(self, device_id: str) -> Dict[str, Any]:
         """
         Query current status of a Tuya device.
+        
+        Args:
+            device_id: Tuya device ID
+            
+        Returns:
+            Dictionary with device status. Format:
+            {
+                "device_id": str,
+                "status": dict  # Tuya API response
+            }
         """
+        if not device_id:
+            raise ValueError("device_id is required")
+        
         token = await self._ensure_token()
         path = f"/v1.0/devices/{device_id}/status"
         headers = await self._sign(method="GET", path=path, token=token)
 
         resp = await self._http.get(self.base_url + path, headers=headers)
         resp.raise_for_status()
-        return resp.json()
+        
+        result = resp.json()
+        
+        return {
+            "device_id": device_id,
+            "status": result,
+        }
 
     async def send_commands(
         self,
         device_id: str,
-        *,
-        commands: list[Dict[str, Any]],
+        commands: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """
         Send commands to a Tuya device.
 
-        Example command:
-            {"code": "switch_led", "value": True}
+        Args:
+            device_id: Tuya device ID
+            commands: List of command dictionaries. Each command must have:
+                - "code": str - DP code (e.g., "switch_led")
+                - "value": Any - Command value (e.g., True, 100, "red")
+                
+        Returns:
+            Dictionary with command response. Format:
+            {
+                "device_id": str,
+                "commands": List[dict],  # Echo of sent commands
+                "tuya_response": dict  # Tuya API response
+            }
+            
+        Example:
+            >>> driver = TuyaDriver()
+            >>> await driver.send_commands(
+            ...     "device123",
+            ...     [{"code": "switch_led", "value": True}]
+            ... )
         """
+        if not device_id:
+            raise ValueError("device_id is required")
+        
+        if not commands or not isinstance(commands, list):
+            raise ValueError("commands must be a non-empty list")
+        
+        for cmd in commands:
+            if not isinstance(cmd, dict):
+                raise ValueError("each command must be a dict")
+            if "code" not in cmd or "value" not in cmd:
+                raise ValueError("each command must include 'code' and 'value'")
+        
         token = await self._ensure_token()
         path = f"/v1.0/devices/{device_id}/commands"
         payload = {"commands": commands}
@@ -208,17 +273,27 @@ class TuyaClient:
             json=payload,
         )
         resp.raise_for_status()
-        return resp.json()
+        
+        result = resp.json()
+        
+        return {
+            "device_id": device_id,
+            "commands": commands,
+            "tuya_response": result,
+        }
 
     # ---------------------------------------------------------------------
     # Lifecycle helpers
     # ---------------------------------------------------------------------
 
     async def close(self) -> None:
+        """Close HTTP client and clean up resources."""
         await self._http.aclose()
 
-    async def __aenter__(self) -> "TuyaClient":
+    async def __aenter__(self) -> "TuyaDriver":
+        """Async context manager entry."""
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
+        """Async context manager exit."""
         await self.close()

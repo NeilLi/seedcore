@@ -8,7 +8,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python packages
-COPY docker/requirements-minimal.txt /tmp/requirements.txt
+COPY docker/requirements.txt /tmp/requirements.txt
 RUN python -m pip install --upgrade pip wheel && \
     pip install --no-cache-dir -r /tmp/requirements.txt
 

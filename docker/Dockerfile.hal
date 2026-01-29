@@ -1,0 +1,38 @@
+FROM python:3.11-slim
+
+# Build arguments for flexible path handling
+# These allow building from different contexts (project root, docker dir, etc.)
+ARG REQUIREMENTS_PATH=docker/requirements_hal.txt
+ARG HAL_SRC_PATH=src/seedcore/hal
+
+# Prevent Python from writing .pyc files and enable unbuffered logging
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
+
+WORKDIR /app
+
+# 1. Install critical GStreamer & Media dependencies for Reachy Mini SDK
+# These are required for 'default' and 'webrtc' media backends
+# Note: libgl1-mesa-glx was replaced with libgl1 in Debian Trixie+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgstreamer1.0-0 \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    libglib2.0-0 \
+    libgl1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 2. Install dependencies first (for better caching)
+# Uses ARG to support different build contexts
+COPY ${REQUIREMENTS_PATH} requirements_hal.txt
+RUN pip install --no-cache-dir -r requirements_hal.txt
+
+# 3. Copy the HAL module into its expected SeedCore structure
+# This fixes the 'ImportError: attempted relative import with no known parent package'
+# Uses ARG to support different build contexts
+COPY ${HAL_SRC_PATH} ./src/seedcore/hal
+
+# 4. Run the HAL Bridge using the full module path
+CMD ["python", "-m", "seedcore.hal.service.main"]

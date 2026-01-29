@@ -9,6 +9,10 @@ Each tool represents a single, explicit intent and is compatible with:
 - RBAC enforcement
 - ToolHandler discovery
 - LLM tool planning
+
+These tools use the HAL TuyaDriver for device communication, keeping
+the tool layer focused on SeedCore-specific concerns (validation, logging,
+result formatting) while delegating low-level communication to HAL.
 """
 
 from __future__ import annotations
@@ -17,8 +21,6 @@ from typing import Dict, Any, List
 
 from seedcore.tools.base import ToolBase
 from seedcore.logging_setup import ensure_serve_logger
-
-from .tuya_client import TuyaClient
 
 logger = ensure_serve_logger("seedcore.tools.tuya", level="INFO")
 
@@ -32,6 +34,8 @@ class TuyaGetStatusTool(ToolBase):
     Tool: tuya.get_status
 
     Fetch current status of a Tuya IoT device.
+    
+    Uses the HAL TuyaDriver for device communication.
     """
 
     name = "tuya.get_status"
@@ -43,13 +47,13 @@ class TuyaGetStatusTool(ToolBase):
 
         logger.info("Querying Tuya device status: %s", device_id)
 
-        async with TuyaClient() as client:
-            resp = await client.get_device_status(device_id)
+        # Use HAL driver instead of direct client
+        from seedcore.hal.drivers.tuya_driver import TuyaDriver
 
-        return {
-            "device_id": device_id,
-            "status": resp,
-        }
+        async with TuyaDriver() as driver:
+            result = await driver.get_device_status(device_id)
+
+        return result
 
     def schema(self) -> Dict[str, Any]:
         return {
@@ -73,6 +77,8 @@ class TuyaSendCommandTool(ToolBase):
     Tool: tuya.send_command
 
     Send one or more DP commands to a Tuya IoT device.
+    
+    Uses the HAL TuyaDriver for device communication.
     """
 
     name = "tuya.send_command"
@@ -102,17 +108,13 @@ class TuyaSendCommandTool(ToolBase):
             commands,
         )
 
-        async with TuyaClient() as client:
-            resp = await client.send_commands(
-                device_id,
-                commands=commands,
-            )
+        # Use HAL driver instead of direct client
+        from seedcore.hal.drivers.tuya_driver import TuyaDriver
 
-        return {
-            "device_id": device_id,
-            "commands": commands,
-            "tuya_response": resp,
-        }
+        async with TuyaDriver() as driver:
+            result = await driver.send_commands(device_id, commands=commands)
+
+        return result
 
     def schema(self) -> Dict[str, Any]:
         return {

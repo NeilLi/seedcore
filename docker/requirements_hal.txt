@@ -1,0 +1,25 @@
+# --- Core Framework & API ---
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+python-multipart==0.0.6
+
+# --- SeedCore Integration ---
+httpx==0.26.0               # For calling back to SeedCore Organism
+requests==2.31.0
+python-dotenv==1.0.0
+
+# --- Hardware & Robotics ---
+# Note: reachy-mini 1.2.0 requires numpy>=2.0.0 (numpy 2.x)
+# Install reachy-mini first to let it pull compatible numpy version
+reachy-mini==1.2.0          # Primary Robot SDK
+numpy>=2.0.0,<3.0.0         # Required by reachy-mini 1.2.0 (numpy 2.x)
+scipy>=1.11.4               # Required for audio resampling in SDK (compatible with numpy 2.x)
+
+# --- Multimodal & Media ---
+opencv-python-headless>=4.9.0  # For get_latest_frame() without X11 (compatible with numpy 2.x)
+PyYAML==6.0.1                     # For parsing robot config files
+
+# --- Production & Monitoring ---
+prometheus-fastapi-instrumentator==6.1.0
+loguru==0.7.2
