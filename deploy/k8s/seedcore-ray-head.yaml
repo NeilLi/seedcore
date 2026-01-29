@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seedcore-ray-head
+  namespace: seedcore-dev
+  labels:
+    component: ray-head
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: ray-head
+  template:
+    metadata:
+      labels:
+        component: ray-head
+    spec:
+      containers:
+        - name: ray-head
+          image: seedcore:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          # Start Ray head and immediately deploy the Serve applications
+          args:
+            - |
+              ray start --head --port=6379 --dashboard-host=0.0.0.0 --num-cpus=6 --block &
+              sleep 10;
+              # This assumes your code is in /app (via the volume mount)
+              ray serve run /app/config/serve_config.yaml --address http://localhost:8265
+          envFrom:
+            - secretRef: { name: seedcore-env-secret }
+          env:
+            - name: RAY_OVERRIDE_RESOURCES
+              value: '{"head_node": 1}'
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: gcs
+              containerPort: 6379
+            - name: dashboard
+              containerPort: 8265
+            - name: serve
+              containerPort: 8000
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "6"
+              memory: "8Gi"
+          volumeMounts:
+            - name: ml-model-storage
+              mountPath: /app/data
+            - name: project-src
+              mountPath: /app
+      volumes:
+        - name: ml-model-storage
+          persistentVolumeClaim:
+            claimName: xgb-pvc
+        - name: project-src
+          hostPath:
+            path: /project # UPDATE THIS to your actual Mac path
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seedcore-head-svc
+  namespace: seedcore-dev
+spec:
+  selector:
+    component: ray-head
+  ports:
+    - name: dashboard
+      protocol: TCP
+      port: 8265
+      targetPort: 8265
+    - name: serve
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

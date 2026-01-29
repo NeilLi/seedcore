@@ -1,0 +1,94 @@
+# SeedCore v2.5+ Serve Configuration
+# Optimized for Local Kind Development (Single Node)
+proxy_location: HeadOnly
+
+http_options:
+  host: 0.0.0.0
+  port: 8000
+
+applications:
+  # ----------------------------------------------------------------
+  # 1. ML Service (VLA Inference & Analysis)
+  # ----------------------------------------------------------------
+  - name: ml_service
+    import_path: entrypoints.ml_entrypoint:build_ml_service
+    route_prefix: /ml
+    runtime_env:
+      working_dir: "/app"
+    deployments:
+      - name: MLService
+        num_replicas: 1
+        max_concurrent_queries: 10
+        ray_actor_options:
+          num_cpus: 0.5
+          memory: 1073741824 # 1GB
+
+  # ----------------------------------------------------------------
+  # 2. Cognitive Service (LLM / Gemini Bridge)
+  # ----------------------------------------------------------------
+  - name: cognitive
+    import_path: entrypoints.cognitive_entrypoint:build_cognitive_app
+    route_prefix: /cognitive
+    deployments:
+      - name: CognitiveService
+        num_replicas: 1
+        max_concurrent_queries: 50
+        ray_actor_options:
+          num_cpus: 0.2
+          memory: 524288000 # 512MB
+
+  # ----------------------------------------------------------------
+  # 3. Coordinator (Task Lifecycle & Orchestration)
+  # ----------------------------------------------------------------
+  - name: coordinator
+    import_path: entrypoints.coordinator_entrypoint:build_coordinator
+    route_prefix: /pipeline
+    deployments:
+      - name: Coordinator
+        num_replicas: 1
+        max_concurrent_queries: 100
+        ray_actor_options:
+          num_cpus: 0.2
+
+  # ----------------------------------------------------------------
+  # 4. Organism (The Router & Capability Registry)
+  # ----------------------------------------------------------------
+  - name: organism
+    import_path: entrypoints.organism_entrypoint:build_organism_app
+    route_prefix: /organism
+    deployments:
+      - name: OrganismService
+        num_replicas: 1
+        max_concurrent_queries: 100
+        ray_actor_options:
+          num_cpus: 0.3
+
+  # ----------------------------------------------------------------
+  # 5. Ops & Shared Utilities (State, Facts, Energy)
+  # ----------------------------------------------------------------
+  - name: ops
+    import_path: entrypoints.ops_entrypoint:build_ops_app
+    route_prefix: /ops
+    deployments:
+      - name: OpsGateway
+        num_replicas: 1
+      - name: EventizerService
+        num_replicas: 1
+      - name: FactManagerService
+        num_replicas: 1
+      - name: StateService
+        num_replicas: 1
+      - name: EnergyService
+        num_replicas: 1
+        ray_actor_options:
+          num_cpus: 0.1
+
+  # ----------------------------------------------------------------
+  # 6. MCP Protocol (Communication Layer)
+  # ----------------------------------------------------------------
+  - name: mcp
+    import_path: entrypoints.mcp_entrypoint:build_mcp_app
+    route_prefix: /mcp
+    deployments:
+      - name: MCPService
+        num_replicas: 1
