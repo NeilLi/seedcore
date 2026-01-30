@@ -334,7 +334,11 @@ class AgentGraphRepository:
         return len(result.fetchall())
 
     async def link_agent_to_organ(
-        self, session: AsyncSession, agent_id: str, organ_id: str
+        self, 
+        session: AsyncSession, 
+        agent_id: str, 
+        organ_id: str,
+        specialization: Optional[str] = None
     ) -> None:
         """Link an agent to an organ in the agent_member_of_organ relationship.
 
@@ -342,7 +346,12 @@ class AgentGraphRepository:
             session: The AsyncSession to use.
             agent_id: Agent identifier.
             organ_id: Organ identifier.
+            specialization: Optional specialization string (normalized lowercase).
+                          Used for indexing and deduplication.
         """
+        # Normalize specialization to lowercase for consistency
+        spec_normalized = str(specialization).strip().lower() if specialization else None
+        
         # Ensure endpoints exist first (idempotent)
         await session.execute(
             text(
@@ -356,15 +365,97 @@ class AgentGraphRepository:
             ),
             {"organ_id": organ_id},
         )
-        # Create the relationship
+        # Create the relationship with specialization
         await session.execute(
             text("""
-                INSERT INTO agent_member_of_organ (agent_id, organ_id)
-                VALUES (:agent_id, :organ_id)
-                ON CONFLICT DO NOTHING
+                INSERT INTO agent_member_of_organ (agent_id, organ_id, specialization)
+                VALUES (:agent_id, :organ_id, :specialization)
+                ON CONFLICT (agent_id, organ_id) DO UPDATE
+                SET specialization = COALESCE(EXCLUDED.specialization, agent_member_of_organ.specialization)
             """),
-            {"agent_id": agent_id, "organ_id": organ_id},
+            {"agent_id": agent_id, "organ_id": organ_id, "specialization": spec_normalized},
         )
+
+    async def find_agents_by_specialization(
+        self, 
+        session: AsyncSession, 
+        specialization: str,
+        organ_id: Optional[str] = None
+    ) -> list[str]:
+        """Find agents with a given specialization, optionally filtered by organ.
+
+        Args:
+            session: The AsyncSession to use.
+            specialization: Specialization string (will be normalized to lowercase).
+            organ_id: Optional organ ID to filter results.
+
+        Returns:
+            List of agent IDs matching the specialization.
+        """
+        spec_normalized = str(specialization).strip().lower()
+        
+        if organ_id:
+            # Query within a specific organ
+            result = await session.execute(
+                text("""
+                    SELECT agent_id
+                    FROM agent_member_of_organ
+                    WHERE specialization = :specialization
+                      AND organ_id = :organ_id
+                    ORDER BY created_at ASC
+                """),
+                {"specialization": spec_normalized, "organ_id": organ_id},
+            )
+        else:
+            # Query across all organs
+            result = await session.execute(
+                text("""
+                    SELECT agent_id
+                    FROM agent_member_of_organ
+                    WHERE specialization = :specialization
+                    ORDER BY created_at ASC
+                """),
+                {"specialization": spec_normalized},
+            )
+        
+        rows = result.fetchall()
+        return [row[0] for row in rows]
+
+    async def check_agent_exists_by_specialization(
+        self,
+        session: AsyncSession,
+        organ_id: str,
+        specialization: str
+    ) -> Optional[str]:
+        """Check if an agent with the given specialization already exists in an organ.
+        
+        This method enables database-level deduplication checks before spawning new agents.
+        The unique constraint on (organ_id, specialization) prevents duplicates, but
+        this method allows proactive checking without triggering constraint violations.
+
+        Args:
+            session: The AsyncSession to use.
+            organ_id: Organ identifier.
+            specialization: Specialization string (will be normalized to lowercase).
+
+        Returns:
+            Agent ID if found, None otherwise.
+        """
+        spec_normalized = str(specialization).strip().lower()
+        
+        result = await session.execute(
+            text("""
+                SELECT agent_id
+                FROM agent_member_of_organ
+                WHERE organ_id = :organ_id
+                  AND specialization = :specialization
+                ORDER BY created_at ASC
+                LIMIT 1
+            """),
+            {"organ_id": organ_id, "specialization": spec_normalized},
+        )
+        
+        return result.scalar_one_or_none()
 
     async def find_organ_by_skill(
         self, session: AsyncSession, skill_name: str

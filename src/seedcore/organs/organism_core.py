@@ -174,6 +174,40 @@ async def register_tuya_tools(tool_manager: Any) -> bool:
         return False
 
 
+async def register_reachy_tools(tool_manager: Any) -> bool:
+    """
+    Register Reachy tools.
+
+    This function:
+    - Registers reachy.motion and reachy.get_state tools
+    - Handles both single ToolManager and ToolManagerShard instances
+    - Connects to HAL FastAPI service (default: http://localhost:8001)
+
+    Note: Reachy tools are designed for robot actuation (domain="physical").
+    They should only be used by agents with appropriate RBAC permissions.
+    The HAL service handles both physical hardware and simulation based on
+    HAL_DRIVER_MODE configuration.
+
+    Args:
+        tool_manager: ToolManager instance or ToolManagerShard handle
+
+    Returns:
+        True if tools were registered, False otherwise
+    """
+    try:
+        from seedcore.tools.reachy_tools import register_reachy_tools as _register_reachy_hal_tools
+        
+        # Get HAL base URL from environment or use default
+        hal_base_url = os.getenv("HAL_BASE_URL", "http://localhost:8001")
+        
+        result = await _register_reachy_hal_tools(tool_manager, hal_base_url=hal_base_url)
+        return result
+
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to register Reachy tools: {e}", exc_info=True)
+        return False
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     v = os.getenv(name)
     if v is None:
@@ -895,6 +929,9 @@ class OrganismCore:
 
             # Register Tuya tools if enabled
             await register_tuya_tools(self.tool_manager)
+            
+            # Register Reachy simulation tools
+            await register_reachy_tools(self.tool_manager)
         else:
             # Dynamic Sharding Calculation
             # Default: 1 shard per 1000 agents, min 4, max 16
@@ -933,6 +970,12 @@ class OrganismCore:
             registration_tasks = [
                 register_tuya_tools(shard) for shard in self.tool_shards
             ]
+            
+            # Register Reachy tools in all shards
+            reachy_tasks = [
+                register_reachy_tools(shard) for shard in self.tool_shards
+            ]
+            registration_tasks.extend(reachy_tasks)
             await asyncio.gather(*registration_tasks, return_exceptions=True)
 
     # ------------------------------------------------------------------
@@ -2102,9 +2145,41 @@ class OrganismCore:
         if handle:
             return handle
 
+        # 1.5. Check if an agent with the required specialization already exists
+        # This prevents spawning duplicate agents when a new unique ID is generated
+        # but an agent with the same specialization already exists
+        routing = params.get("routing", {})
+        executor = params.get("executor", {})
+        required_spec = (
+            routing.get("required_specialization")
+            or routing.get("specialization")
+            or (executor.get("specialization") if isinstance(executor, dict) else None)
+        )
+        
+        if required_spec:
+            # Check if any agent with this specialization already exists
+            try:
+                existing_agent_ref = organ.pick_agent_by_specialization.remote(
+                    required_spec, {}
+                )
+                existing_agent_result = await self._ray_await(existing_agent_ref, timeout=2.0)
+                if existing_agent_result and isinstance(existing_agent_result, tuple):
+                    existing_agent_id, existing_handle = existing_agent_result
+                    if existing_agent_id and existing_handle:
+                        self.logger.info(
+                            f"[{organ_id}] Found existing agent {existing_agent_id} with specialization '{required_spec}'. "
+                            f"Reusing instead of spawning new agent {agent_id}."
+                        )
+                        return existing_handle
+            except Exception as e:
+                self.logger.debug(
+                    f"[{organ_id}] Could not check for existing agents with specialization '{required_spec}': {e}. "
+                    f"Proceeding with JIT spawn."
+                )
+
         # 2. Not Found - Start JIT Sequence
         self.logger.info(
-            f"[{organ_id}] Agent {agent_id} missing. Initiating JIT spawn."
+            f"[{organ_id}] Agent {agent_id} missing. Initiating JIT spawn with specialization '{required_spec or 'GENERALIST'}'."
         )
 
         # Determine Specialization for the new agent
@@ -2687,6 +2762,24 @@ class OrganismCore:
                             role_profile = spec_manager.get_role_profile(spec_str)
 
                         if role_profile:
+                            # **CRITICAL: Check if permissions (allowed_tools) changed**
+                            # If tools changed, we need to evict live agents to force reload
+                            old_profile = spec_manager.get_role_profile(spec_str)
+                            tools_changed = False
+                            if old_profile:
+                                old_tools = old_profile.allowed_tools if hasattr(old_profile, 'allowed_tools') else set()
+                                new_tools = role_profile.allowed_tools if hasattr(role_profile, 'allowed_tools') else set()
+                                tools_changed = old_tools != new_tools
+                                
+                                if tools_changed:
+                                    self.logger.info(
+                                        f"🔧 Permissions changed for '{spec_str}': "
+                                        f"old_tools={sorted(old_tools)}, new_tools={sorted(new_tools)}. "
+                                        f"Evicting live agents to force reload."
+                                    )
+                                    # Evict agents with this specialization to force respawn with new permissions
+                                    await self.evict_agents_by_specialization(spec_str)
+                            
                             # **CRITICAL: Register the rebuilt profile to override static YAML config**
                             # This ensures pkg_subtask_types is the source of truth
                             spec_manager.register_role_profile(role_profile)
@@ -2981,16 +3074,34 @@ class OrganismCore:
             if isinstance(routing, dict):
                 skills = routing.get("skills", {}) or {}
 
-            # Extract tools (from both executor and routing)
+            # Extract tools (from top-level allowed_tools, executor.tools, and routing.tools)
+            # **CRITICAL: Check top-level allowed_tools first (database source of truth)**
             tools = set()
+            
+            # Priority 1: Top-level allowed_tools (direct from pkg_subtask_types)
+            if isinstance(default_params, dict):
+                top_level_tools = default_params.get("allowed_tools", [])
+                if isinstance(top_level_tools, list):
+                    tools.update(top_level_tools)
+                elif isinstance(top_level_tools, str):
+                    # Handle single string tool name
+                    tools.add(top_level_tools)
+            
+            # Priority 2: executor.tools (legacy/alternative format)
             if isinstance(executor, dict):
                 executor_tools = executor.get("tools", [])
                 if isinstance(executor_tools, list):
                     tools.update(executor_tools)
+                elif isinstance(executor_tools, str):
+                    tools.add(executor_tools)
+            
+            # Priority 3: routing.tools (routing hints)
             if isinstance(routing, dict):
                 routing_tools = routing.get("tools", [])
                 if isinstance(routing_tools, list):
                     tools.update(routing_tools)
+                elif isinstance(routing_tools, str):
+                    tools.add(routing_tools)
 
             # Extract routing tags
             tags = set()
@@ -3365,6 +3476,148 @@ class OrganismCore:
                 unique_organs.append(organ_id)
 
         return unique_organs
+
+    async def evict_agents_by_specialization(
+        self, 
+        spec_str: str,
+        wait_for_tasks: bool = False,
+        timeout_seconds: float = 30.0
+    ) -> Dict[str, Any]:
+        """
+        Evict (kill) all agents with a given specialization to force respawn with updated permissions.
+        
+        This is called when capabilities are updated (e.g., allowed_tools changed) to ensure
+        agents reload with the new permissions. Agents are killed and will be JIT-spawned
+        on the next task request with the updated role profile.
+        
+        Args:
+            spec_str: Specialization string (normalized, lowercase)
+            wait_for_tasks: If True, wait for current tasks to finish before killing (default: False)
+            timeout_seconds: Maximum time to wait for tasks if wait_for_tasks=True
+            
+        Returns:
+            Dict with eviction results: {
+                "evicted": [agent_ids],
+                "failed": [agent_ids],
+                "total": int
+            }
+        """
+        spec_normalized = str(spec_str).strip().lower()
+        self.logger.info(
+            f"🔪 Evicting agents with specialization '{spec_normalized}' "
+            f"(wait_for_tasks={wait_for_tasks}, timeout={timeout_seconds}s)"
+        )
+        
+        evicted = []
+        failed = []
+        
+        # Find all organs with agents matching this specialization
+        target_organs = await self.find_organs_with_specialization(spec_normalized)
+        
+        if not target_organs:
+            self.logger.debug(f"No organs found with specialization '{spec_normalized}', nothing to evict")
+            return {"evicted": [], "failed": [], "total": 0}
+        
+        # Collect all agent IDs with this specialization
+        agent_ids_to_evict = []
+        for organ_id in target_organs:
+            organ_handle = self.organs.get(organ_id)
+            if not organ_handle:
+                continue
+                
+            try:
+                # List all agents in the organ
+                agent_ids_ref = organ_handle.list_agents.remote()
+                agent_ids = await self._ray_await(agent_ids_ref)
+                
+                # Check each agent's specialization
+                for agent_id in agent_ids:
+                    try:
+                        agent_info_ref = organ_handle.get_agent_info.remote(agent_id)
+                        agent_info = await self._ray_await(agent_info_ref)
+                        
+                        agent_spec = (
+                            agent_info.get("specialization", "")
+                            or agent_info.get("specialization_name", "")
+                            or agent_info.get("specialization_value", "")
+                        ).lower()
+                        
+                        if agent_spec == spec_normalized:
+                            agent_ids_to_evict.append((agent_id, organ_id))
+                    except Exception as e:
+                        self.logger.debug(f"Error checking agent {agent_id}: {e}")
+                        continue
+            except Exception as e:
+                self.logger.warning(f"Error listing agents in organ {organ_id}: {e}")
+                continue
+        
+        if not agent_ids_to_evict:
+            self.logger.debug(f"No agents found with specialization '{spec_normalized}' to evict")
+            return {"evicted": [], "failed": [], "total": 0}
+        
+        self.logger.info(
+            f"Found {len(agent_ids_to_evict)} agent(s) with specialization '{spec_normalized}' to evict: "
+            f"{[aid for aid, _ in agent_ids_to_evict]}"
+        )
+        
+        # Evict each agent
+        for agent_id, organ_id in agent_ids_to_evict:
+            try:
+                organ_handle = self.organs.get(organ_id)
+                if not organ_handle:
+                    failed.append(agent_id)
+                    continue
+                
+                # If wait_for_tasks is True, try to gracefully shutdown
+                if wait_for_tasks:
+                    try:
+                        # Try to get agent handle and check if it has a shutdown method
+                        agent_handle_ref = organ_handle.get_agent_handle.remote(agent_id)
+                        agent_handle = await asyncio.wait_for(
+                            self._ray_await(agent_handle_ref),
+                            timeout=5.0
+                        )
+                        
+                        if agent_handle and hasattr(agent_handle, "shutdown"):
+                            self.logger.debug(f"Gracefully shutting down agent {agent_id}...")
+                            shutdown_ref = agent_handle.shutdown.remote()
+                            await asyncio.wait_for(
+                                self._ray_await(shutdown_ref),
+                                timeout=timeout_seconds
+                            )
+                    except (asyncio.TimeoutError, Exception) as e:
+                        self.logger.debug(f"Graceful shutdown failed for {agent_id}: {e}, forcing kill")
+                
+                # Remove agent from organ (this kills the Ray actor)
+                remove_ref = organ_handle.remove_agent.remote(agent_id, force_kill_by_name=True)
+                removed = await self._ray_await(remove_ref)
+                
+                if removed:
+                    evicted.append(agent_id)
+                    self.logger.info(f"✅ Evicted agent {agent_id} from {organ_id}")
+                else:
+                    failed.append(agent_id)
+                    self.logger.warning(f"⚠️ Failed to evict agent {agent_id} from {organ_id}")
+                    
+            except Exception as e:
+                self.logger.error(
+                    f"❌ Error evicting agent {agent_id}: {e}",
+                    exc_info=True
+                )
+                failed.append(agent_id)
+        
+        result = {
+            "evicted": evicted,
+            "failed": failed,
+            "total": len(agent_ids_to_evict)
+        }
+        
+        self.logger.info(
+            f"🔪 Eviction complete for '{spec_normalized}': "
+            f"{len(evicted)} evicted, {len(failed)} failed, {len(agent_ids_to_evict)} total"
+        )
+        
+        return result
 
     async def get_agent_info(self, agent_id: str) -> Dict[str, Any]:
         """

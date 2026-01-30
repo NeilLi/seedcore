@@ -339,20 +339,48 @@ class RoutingDirectory:
 
     def new_agent_id(self, logical_id: str, spec: Optional[Any] = None) -> str:
         """
-        Generate a new agent ID using AgentIDFactory if available.
+        Generate a new agent ID using AgentIDFactory for consistent format.
+        
+        This delegates to AgentIDFactory which uses the format:
+        agent_{organ_id}_{specialization}_{unique12}
 
         Args:
-            logical_id: Logical ID of the organ/agent
-            spec: Optional specialization (for AgentIDFactory.new())
+            logical_id: Logical ID of the organ
+            spec: Optional specialization (string or SpecializationProtocol)
 
         Returns:
-            Globally unique agent ID
+            Agent ID in format: agent_{organ_id}_{specialization}_{unique12}
         """
-        if self.agent_id_factory and spec:
-            # AgentIDFactory expects (organ_id, spec)
-            return self.agent_id_factory.new(logical_id, spec)
-        # Fallback to simple UUID-based ID
-        return f"{logical_id}-{uuid.uuid4().hex[:8]}"
+        if not spec:
+            # Fallback to simple UUID-based ID if no specialization
+            return f"agent_{logical_id}-{uuid.uuid4().hex[:8]}"
+        
+        # Convert string spec to SpecializationProtocol if needed for AgentIDFactory
+        if isinstance(spec, str):
+            # Try to resolve to SpecializationProtocol, but if it fails, create a simple wrapper
+            try:
+                from seedcore.agents.roles.specialization import get_specialization
+                spec_protocol = get_specialization(spec)
+            except (KeyError, ImportError):
+                # If specialization not found, create a simple wrapper for AgentIDFactory
+                # AgentIDFactory expects SpecializationProtocol with .value attribute
+                class SimpleSpec:
+                    def __init__(self, value: str):
+                        self.value = value
+                spec_protocol = SimpleSpec(spec)
+        else:
+            # Already a SpecializationProtocol
+            spec_protocol = spec
+        
+        # Use AgentIDFactory which generates consistent format: agent_{organ_id}_{specialization}_{unique12}
+        if self.agent_id_factory:
+            return self.agent_id_factory.new(logical_id, spec_protocol)
+        
+        # Fallback if factory not available (shouldn't happen, but be safe)
+        unique_id = uuid.uuid4().hex[:12]
+        spec_value = spec_protocol.value if hasattr(spec_protocol, 'value') else str(spec_protocol)
+        spec_safe = spec_value.lower().replace("/", "_").replace(".", "_").replace("-", "_")
+        return f"agent_{logical_id}_{spec_safe}_{unique_id}"
 
     # --- (E) Real-Time Metrics ---
 
@@ -1042,9 +1070,11 @@ class RoutingDirectory:
                 spec = routing_in.get("required_specialization") or routing_in.get(
                     "specialization"
                 )
+                # Use consistent naming format: {organ_id}_{specialization}_{index}
+                # This matches static agent naming (e.g., physical_actuation_organ_safety_guard_0)
                 agent_id = self.new_agent_id(organ_id, spec)
                 self.logger.debug(
-                    f"[Router] Generated new ID {agent_id} for {organ_id}"
+                    f"[Router] Generated new ID {agent_id} for {organ_id} with specialization {spec}"
                 )
 
         # =========================================================

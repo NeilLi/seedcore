@@ -6,9 +6,9 @@ metadata:
   labels:
     app: hal-bridge
 spec:
-  replicas: 1 # Singleton to prevent motor command conflicts
+  replicas: 1
   strategy:
-    type: Recreate # Kill the old pod before starting the new one (critical for singleton)
+    type: Recreate
   selector:
     matchLabels:
       app: hal-bridge
@@ -17,14 +17,25 @@ spec:
       labels:
         app: hal-bridge
     spec:
-      hostNetwork: true # Allows direct discovery of Reachy on the local network
+      # ✅ Prefer normal pod networking.
+      # If you truly need LAN discovery in physical mode, set hostNetwork: true
+      # and also set dnsPolicy: ClusterFirstWithHostNet.
+      hostNetwork: false
+
+      terminationGracePeriodSeconds: 10
+
       containers:
-        - name: hal-driver
+        - name: hal-bridge
           image: seedcore-hal:latest
           imagePullPolicy: IfNotPresent
+
           ports:
             - name: http
-              containerPort: 8001 # HAL Control Port
+              containerPort: 8001
+            - name: grpc-sim
+              containerPort: 50055
+              protocol: TCP
+
           env:
             - name: PYTHONPATH
               value: "/app/src"
@@ -32,30 +43,74 @@ spec:
               value: "1"
             - name: PYTHONUNBUFFERED
               value: "1"
+
+            # Mode switch
+            - name: HAL_DRIVER_MODE
+              value: "simulation"   # simulation | physical
+
+            # Physical robot (only used if HAL_DRIVER_MODE=physical)
             - name: ROBOT_HOST
-              value: "192.168.1.5" # Your Reachy Mini IP (override via ConfigMap if needed)
+              value: "192.168.1.5"
+
+            # Simulation endpoint (used if HAL_DRIVER_MODE=simulation)
+            - name: REACHY_SIM_ADDRESS
+              value: "127.0.0.1:50055"
+
             - name: HARDWARE_UUID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.uid
-          # Command matches Dockerfile.hal CMD: python -m seedcore.hal.service.main
-          # Alternative: Use uvicorn directly for production (matches seedcore-api.yaml pattern)
-          # command: ["uvicorn", "seedcore.hal.service.main:app", "--host", "0.0.0.0", "--port", "8001"]
-          command: ["python", "-m", "seedcore.hal.service.main"]
+
+          # ✅ Single entrypoint: optionally start sim server, then start HAL
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+
+              if [ "${HAL_DRIVER_MODE}" = "simulation" ]; then
+                echo "🧪 Starting RobotSim gRPC server on :50055 ..."
+                # Run sim server in background
+                python /app/apps/mini/robot_sim_server.py &
+                SIM_PID=$!
+
+                echo "⏳ Waiting for RobotSim gRPC port 50055 ..."
+                for i in $(seq 1 60); do
+                  if python3 -c "import socket; s=socket.socket(); s.settimeout(0.5); result=s.connect_ex(('127.0.0.1', 50055)); s.close(); exit(0 if result == 0 else 1)" 2>/dev/null; then
+                    echo "✅ RobotSim is ready"
+                    break
+                  fi
+                  if [ $i -eq 60 ]; then
+                    echo "❌ RobotSim did not become ready"
+                    kill ${SIM_PID} 2>/dev/null || true
+                    exit 1
+                  fi
+                  sleep 1
+                done
+              else
+                echo "🤖 Physical mode: skipping RobotSim startup"
+              fi
+
+              echo "🚀 Starting SeedCore HAL service on :8001 ..."
+              exec python -m seedcore.hal.service.main
+
           readinessProbe:
             httpGet:
               path: /status
               port: 8001
-            initialDelaySeconds: 10
+            initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+
           startupProbe:
             httpGet:
               path: /status
               port: 8001
+            # Give Python app time to boot
             failureThreshold: 30
             periodSeconds: 2
+            timeoutSeconds: 3
+
           livenessProbe:
             httpGet:
               path: /status
@@ -64,6 +119,7 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+
           resources:
             requests:
               cpu: "100m"
@@ -71,12 +127,22 @@ spec:
             limits:
               cpu: "1"
               memory: "1Gi"
+
+          volumeMounts:
+            - name: project-src
+              mountPath: /app
+
           securityContext:
             runAsNonRoot: false
             allowPrivilegeEscalation: false
             capabilities:
-              drop:
-                - ALL
+              drop: ["ALL"]
+
+      volumes:
+        - name: project-src
+          hostPath:
+            path: /project
+            type: Directory
 ---
 apiVersion: v1
 kind: Service
@@ -84,17 +150,11 @@ metadata:
   name: seedcore-hal-bridge
   namespace: seedcore-dev
 spec:
-  type: NodePort
+  # ✅ Default to ClusterIP to avoid node port conflicts
+  type: ClusterIP
   selector:
     app: hal-bridge
   ports:
     - name: http
       port: 8001
       targetPort: 8001
-      nodePort: 30001 # Explicit NodePort for HAL Bridge
-      # ⚠️ IMPORTANT: On Kind, ensure this port is mapped in kind-config.yaml at cluster creation:
-      #   extraPortMappings:
-      #     - containerPort: 30001
-      #       hostPort: 30001
-      #       protocol: TCP
-      #   If not mapped, use: kubectl port-forward svc/seedcore-hal-bridge 30001:8001 -n seedcore-dev

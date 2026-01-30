@@ -219,7 +219,61 @@ class BaseAgent:
                     specialization = Specialization.GENERALIST
 
         self.specialization = specialization
-        self.role_profile = self._role_registry.get(self.specialization)
+        # **CRITICAL: Get role profile from RoleRegistry, but also check SpecializationManager for latest**
+        # This ensures agents get the most up-to-date role profile even if snapshot is stale
+        try:
+            self.role_profile = self._role_registry.get(self.specialization)
+            
+            # **ENHANCEMENT: Check SpecializationManager for a newer role profile**
+            # This handles the case where capabilities were updated after the snapshot was created
+            from .roles.specialization import SpecializationManager
+            spec_manager = SpecializationManager.get_instance()
+            spec_value = specialization.value if hasattr(specialization, 'value') else str(specialization)
+            latest_profile = spec_manager.get_role_profile(spec_value)
+            
+            if latest_profile:
+                # Compare allowed_tools to detect if permissions changed
+                snapshot_tools = set(self.role_profile.allowed_tools) if hasattr(self.role_profile, 'allowed_tools') else set()
+                latest_tools = set(latest_profile.allowed_tools) if hasattr(latest_profile, 'allowed_tools') else set()
+                
+                if latest_tools != snapshot_tools:
+                    logger.info(
+                        f"[{self.agent_id}] 🔄 Detected newer role profile for '{spec_value}': "
+                        f"snapshot_tools={sorted(snapshot_tools)}, latest_tools={sorted(latest_tools)}. "
+                        f"Using latest profile from SpecializationManager."
+                    )
+                    self.role_profile = latest_profile
+                    # Also update the local registry so future lookups use the latest
+                    self._role_registry.register(latest_profile)
+        except KeyError:
+            # Fallback: Try to get from SpecializationManager
+            try:
+                from .roles.specialization import SpecializationManager
+                spec_manager = SpecializationManager.get_instance()
+                spec_value = specialization.value if hasattr(specialization, 'value') else str(specialization)
+                latest_profile = spec_manager.get_role_profile(spec_value)
+                if latest_profile:
+                    logger.info(
+                        f"[{self.agent_id}] ✅ Using role profile from SpecializationManager for '{spec_value}' "
+                        f"(not found in RoleRegistry snapshot)"
+                    )
+                    self.role_profile = latest_profile
+                    self._role_registry.register(latest_profile)
+                else:
+                    # Final fallback: Use default GENERALIST profile
+                    logger.warning(
+                        f"[{self.agent_id}] ⚠️ Role profile not found for '{spec_value}', using GENERALIST"
+                    )
+                    from .roles import DEFAULT_ROLE_REGISTRY
+                    self.role_profile = DEFAULT_ROLE_REGISTRY.get(Specialization.GENERALIST)
+            except Exception as fallback_err:
+                logger.error(
+                    f"[{self.agent_id}] ❌ Failed to get role profile: {fallback_err}",
+                    exc_info=True
+                )
+                # Final fallback: Use default GENERALIST profile
+                from .roles import DEFAULT_ROLE_REGISTRY
+                self.role_profile = DEFAULT_ROLE_REGISTRY.get(Specialization.GENERALIST)
 
         # 3.5. Behavior Plugin System Initialization
         # Merge behaviors from: RoleProfile defaults + constructor args + role_profile behavior_config
@@ -533,6 +587,20 @@ class BaseAgent:
                     behavior_config=dict(profile_data.get("behavior_config", {})),
                 )
                 registry.register(profile)
+                
+                # **CRITICAL: Also register role profile in SpecializationManager**
+                # This ensures the profile is available for lookup even if snapshot is stale
+                # and allows agents to get the latest profile during initialization
+                try:
+                    spec_manager.register_role_profile(profile)
+                    logger.debug(
+                        f"✅ Registered role profile for '{spec_name}' in SpecializationManager "
+                        f"(from role_registry_snapshot)"
+                    )
+                except Exception as reg_err:
+                    logger.debug(
+                        f"⚠️ Failed to register role profile in SpecializationManager for '{spec_name}': {reg_err}"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to restore role profile for {spec_name}: {e}")
 
@@ -741,6 +809,15 @@ class BaseAgent:
                 mcp_client=self._get_mcp_client(),
             )
             logger.debug(f"✅ [{self.agent_id}] ToolManager created locally")
+            
+            # Register Reachy tools in local ToolManager (if HAL is available)
+            # This ensures agents have access to Reachy tools even when using local fallback
+            try:
+                from seedcore.organs.organism_core import register_reachy_tools
+                await register_reachy_tools(self.tool_handler)
+            except Exception as e:
+                # Reachy tools are optional - log but don't fail if HAL is unavailable
+                logger.debug(f"[{self.agent_id}] Could not register Reachy tools in local ToolManager: {e}")
 
     def _get_mcp_client(self) -> Optional["MCPServiceClient"]:
         """Lazily create MCPServiceClient from config to avoid serialization issues."""
@@ -882,6 +959,36 @@ class BaseAgent:
             load=self.load,
             timestamp=time.time(),
         )
+
+    def _refresh_role_profile_if_needed(self) -> None:
+        """
+        Refresh role profile from SpecializationManager if a newer version exists.
+        
+        This ensures agents always use the latest allowed_tools even if capabilities
+        were updated after agent initialization. Called before RBAC checks.
+        """
+        try:
+            from .roles.specialization import SpecializationManager
+            spec_manager = SpecializationManager.get_instance()
+            spec_value = self.specialization.value if hasattr(self.specialization, 'value') else str(self.specialization)
+            latest_profile = spec_manager.get_role_profile(spec_value)
+            
+            if latest_profile:
+                # Compare allowed_tools to detect if permissions changed
+                current_tools = set(self.role_profile.allowed_tools) if hasattr(self.role_profile, 'allowed_tools') else set()
+                latest_tools = set(latest_profile.allowed_tools) if hasattr(latest_profile, 'allowed_tools') else set()
+                
+                if latest_tools != current_tools:
+                    logger.info(
+                        f"[{self.agent_id}] 🔄 Refreshing role profile for '{spec_value}': "
+                        f"current_tools={sorted(current_tools)}, latest_tools={sorted(latest_tools)}"
+                    )
+                    self.role_profile = latest_profile
+                    # Also update the local registry so future lookups use the latest
+                    self._role_registry.register(latest_profile)
+        except Exception as e:
+            # Don't fail RBAC check if refresh fails - use current profile
+            logger.debug(f"[{self.agent_id}] Could not refresh role profile: {e}")
 
     async def update_role_profile(self, profile: RoleProfile) -> None:
         """
@@ -1652,6 +1759,19 @@ class BaseAgent:
 
             # (a) RBAC Check
             try:
+                # **CRITICAL: Refresh role profile from SpecializationManager before RBAC check**
+                # This ensures we have the latest allowed_tools even if capabilities were updated
+                # after agent initialization
+                self._refresh_role_profile_if_needed()
+                
+                # **DEBUG: Log role profile state before RBAC check**
+                allowed_tools = set(self.role_profile.allowed_tools) if hasattr(self.role_profile, 'allowed_tools') else set()
+                logger.debug(
+                    f"[{self.agent_id}] 🔍 RBAC check for tool '{tool_name}': "
+                    f"allowed_tools={sorted(allowed_tools)}, "
+                    f"specialization={getattr(self.specialization, 'value', self.specialization)}"
+                )
+                
                 decision = self.authorize_tool(
                     tool_name,
                     cost_usd=0.0,
@@ -1666,7 +1786,8 @@ class BaseAgent:
                         }
                     )
                     logger.warning(
-                        f"[{self.agent_id}] ❌ RBAC denied for tool '{tool_name}': {decision.reason or 'policy_block'}"
+                        f"[{self.agent_id}] ❌ RBAC denied for tool '{tool_name}': {decision.reason or 'policy_block'}. "
+                        f"Role profile allowed_tools: {sorted(allowed_tools)}"
                     )
                     continue
             except Exception as exc:

@@ -259,11 +259,11 @@ logger = logging.getLogger(__name__)
 class RouterConfig:
     """Configuration for router implementations."""
 
-    timeout: float = 30.0
+    timeout: float = 90.0  # Increased from 30s to 90s for long-running tasks
     max_retries: int = 3
     retry_delay: float = 1.0
     circuit_breaker_failures: int = 5
-    circuit_breaker_timeout: float = 30.0
+    circuit_breaker_timeout: float = 90.0  # Increased from 30s to 90s to match timeout
 
 
 class Router(ABC):
@@ -673,14 +673,14 @@ class RouterFactory:
 
         if config is None:
             config = RouterConfig(
-                timeout=float(os.getenv("DISPATCHER_ROUTER_TIMEOUT", "30.0")),
+                timeout=float(os.getenv("DISPATCHER_ROUTER_TIMEOUT", "90.0")),  # Increased from 30s to 90s for long-running tasks
                 max_retries=int(os.getenv("DISPATCHER_ROUTER_MAX_RETRIES", "3")),
                 retry_delay=float(os.getenv("DISPATCHER_ROUTER_RETRY_DELAY", "1.0")),
                 circuit_breaker_failures=int(
                     os.getenv("DISPATCHER_ROUTER_CB_FAILURES", "5")
                 ),
                 circuit_breaker_timeout=float(
-                    os.getenv("DISPATCHER_ROUTER_CB_TIMEOUT", "30.0")
+                    os.getenv("DISPATCHER_ROUTER_CB_TIMEOUT", "90.0")  # Increased from 30s to 90s
                 ),
             )
 

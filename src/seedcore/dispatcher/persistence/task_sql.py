@@ -10,6 +10,7 @@ WITH c AS (
   WHERE status IN ('queued','retry')
     AND (run_after IS NULL OR run_after <= NOW())
     AND NOT (type = ANY($3::text[]))
+    AND attempts < $5  -- CRITICAL: Don't claim tasks that have exceeded max attempts
   ORDER BY created_at
   FOR UPDATE SKIP LOCKED
   LIMIT $1

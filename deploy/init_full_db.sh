@@ -31,13 +31,14 @@ MIGRATION_017="${SCRIPT_DIR}/migrations/017_pkg_tasks_snapshot_scoping.sql"
 MIGRATION_117="${SCRIPT_DIR}/migrations/117_unified_cortex.sql"
 MIGRATION_118="${SCRIPT_DIR}/migrations/118_task_outbox_hardening.sql"
 MIGRATION_119="${SCRIPT_DIR}/migrations/119_task_router_telemetry.sql"
+MIGRATION_120="${SCRIPT_DIR}/migrations/120_organ_specialization_indexing.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_007" \
   "$MIGRATION_008" "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" \
   "$MIGRATION_012" "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" \
-  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119"
+  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119" "$MIGRATION_120"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -65,6 +66,7 @@ echo "   - 017: PKG tasks snapshot scoping (add snapshot_id to tasks, graph_embe
 echo "   - 117: Task embedding support (views/functions/backfill for separate 128d/1024d tables)"
 echo "   - 118: Task outbox hardening (available_at, attempts, index)"
 echo "   - 119: Task router telemetry (OCPS signals, surprise scores, routing decisions)"
+echo "   - 120: Agent/organ specialization indexing (specialization column, unique constraints, indexes)"
 
 find_pg_pod() {
   local sel pod
@@ -215,6 +217,11 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 echo "⚙️  Running migration 119: Task router telemetry (OCPS signals, surprise scores, routing decisions)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_119" "$POSTGRES_POD:/tmp/119_task_router_telemetry.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/119_task_router_telemetry.sql"
+
+# Migration 120 (Agent/Organ Specialization Indexing)
+echo "⚙️  Running migration 120: Agent/organ specialization indexing (specialization column, unique constraints, indexes)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_120" "$POSTGRES_POD:/tmp/120_organ_specialization_indexing.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/120_organ_specialization_indexing.sql"
 
 # 6) Verify schema
 echo "✅ Verifying schema..."

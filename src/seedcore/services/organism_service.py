@@ -464,6 +464,20 @@ class OrganismService:
                 canonical_result["meta"] = {}
             canonical_result["meta"]["task_type"] = task_type
 
+            # Log completion status for debugging duplicate execution issues
+            success = canonical_result.get("success", False)
+            if success:
+                logger.info(
+                    f"[route-and-execute] ✅ Task {task_id} completed successfully"
+                )
+            else:
+                error = canonical_result.get("error", "unknown_error")
+                retry = canonical_result.get("retry", False)
+                logger.warning(
+                    f"[route-and-execute] ❌ Task {task_id} failed: {error} "
+                    f"(retry={'enabled' if retry else 'disabled'})"
+                )
+
             return canonical_result
 
         except Exception as e:

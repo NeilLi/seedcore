@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package robotsim;
+
+service RobotSim {
+  rpc GetState (Empty) returns (RobotState);
+  rpc Goto (MotionCommand) returns (Ack);
+}
+
+message Empty {}
+
+message Ack {
+  bool ok = 1;
+}
+
+message RobotState {
+  map<string, float> head = 1;
+  repeated float antennas = 2;
+  float body_yaw = 3;
+}
+
+message MotionCommand {
+  map<string, float> head = 1;
+  repeated float antennas = 2;
+  float body_yaw = 3;
+  float duration = 4;
+}

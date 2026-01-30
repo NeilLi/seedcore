@@ -94,14 +94,16 @@ class TaskRepository:
             batch_size: Number of tasks to claim
             exclusions: List of task types to exclude
         """
-        # Pass RUN_LEASE_S as a parameter ($4)
+        # Pass RUN_LEASE_S as parameter ($4) and MAX_ATTEMPTS as parameter ($5)
         # Ensure exclusion list is a list, not tuple, for asyncpg
+        from seedcore.dispatcher.config import MAX_ATTEMPTS
         rows = await con.fetch(
             CLAIM_BATCH_SQL,
             batch_size,
             self.dispatcher_name,
             list(exclusions),
             str(RUN_LEASE_S),
+            MAX_ATTEMPTS,  # Pass max attempts to prevent claiming exhausted tasks
         )
 
         batch = []

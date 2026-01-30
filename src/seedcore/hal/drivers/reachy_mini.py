@@ -5,6 +5,7 @@ SDK-specific implementation for the Reachy Mini robot.
 Maps SeedCore behavior_config (Energy/Warmth) to physical actuation.
 """
 
+import os
 import logging
 import time
 from typing import Dict, Any, Optional, List
@@ -46,7 +47,8 @@ class ReachyMiniDriver(BaseRobotDriver):
         """
         super().__init__(config)
         self._robot: Optional[ReachyMini] = None
-        self._host = self.config.get("host", "localhost")
+        # Read from config, then environment variable, then default
+        self._host = self.config.get("host") or os.getenv("ROBOT_HOST", "localhost")
         self._last_frame: Optional[np.ndarray] = None
 
     def _initialize_capabilities(self) -> RobotCapabilities:

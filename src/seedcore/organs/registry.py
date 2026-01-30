@@ -164,8 +164,8 @@ class OrganRegistry:
             # Use provided session
             await self.repo.ensure_agent(session, agent_id, display_name=display_name, props=props)
             await self.repo.ensure_organ(session, organ_id)
-            await self.repo.link_agent_to_organ(session, agent_id, organ_id)
-            logger.debug(f"[OrganismRegistry] Agent {agent_id} persisted to DB")
+            await self.repo.link_agent_to_organ(session, agent_id, organ_id, specialization=spec_normalized)
+            logger.debug(f"[OrganismRegistry] Agent {agent_id} persisted to DB with specialization '{spec_normalized}'")
         else:
             # Try to create a session (either from factory or on-demand)
             session_factory = self._session_factory
@@ -185,8 +185,8 @@ class OrganRegistry:
                         async with db_session.begin():
                             await self.repo.ensure_agent(db_session, agent_id, display_name=display_name, props=props)
                             await self.repo.ensure_organ(db_session, organ_id)
-                            await self.repo.link_agent_to_organ(db_session, agent_id, organ_id)
-                        logger.debug(f"[OrganismRegistry] Agent {agent_id} persisted to DB")
+                            await self.repo.link_agent_to_organ(db_session, agent_id, organ_id, specialization=spec_normalized)
+                        logger.debug(f"[OrganismRegistry] Agent {agent_id} persisted to DB with specialization '{spec_normalized}'")
                 except Exception as e:
                     logger.warning(f"[OrganismRegistry] Failed to persist agent {agent_id} to DB: {e}")
                     logger.debug(f"[OrganismRegistry] Agent {agent_id} registered in-memory only")

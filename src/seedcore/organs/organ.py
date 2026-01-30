@@ -179,11 +179,15 @@ class AgentIDFactory:
     only as part of the creation context, but agent_id does NOT imply current organ
     residence after migration. Agents can be transferred between organs via
     register_agent() without changing their ID.
+    
+    Format: agent_{organ_id}_{specialization}_{unique12}
+    This ensures uniqueness and scalability while maintaining readability.
+    The unique12 component (12-character hex) provides collision resistance.
     """
 
     def new(self, organ_id: str, spec: SpecializationProtocol) -> str:
         """
-        Generate a stable, unique agent ID.
+        Generate a stable, unique agent ID using consistent format.
 
         NOTE: agent_id is a permanent identity. It includes organ_id only
         as part of the creation context, but agent_id does NOT imply
@@ -194,7 +198,10 @@ class AgentIDFactory:
             spec: Agent specialization (static or dynamic)
 
         Returns:
-            Generated agent ID string (format: agent_{organ_id}_{spec_safe}_{unique12})
+            Generated agent ID string (format: agent_{organ_id}_{specialization}_{unique12})
+            Uses a 12-character hex UUID for uniqueness, providing collision resistance
+            while maintaining readability. This format ensures scalability and avoids
+            conflicts when multiple agents with the same specialization exist.
         """
         # Use short UUID hex (12 chars) for readability, similar to ULID length
         # Collision probability: 16^12 ≈ 2^48 space → extremely safe even at millions of agents
@@ -204,9 +211,13 @@ class AgentIDFactory:
         # Normalize specialization value to be safe in Ray actor names
         # Replace potentially unsafe characters: / . - → _
         spec_value = spec.value if hasattr(spec, 'value') else str(spec)
-        spec_safe = spec_value.replace("/", "_").replace(".", "_").replace("-", "_")
+        spec_safe = spec_value.lower().replace("/", "_").replace(".", "_").replace("-", "_")
 
-        return f"agent_{organ_id}_{spec_safe}_{unique_id}"
+        # Use format: agent_{organ_id}_{specialization}_{unique12}
+        # This provides uniqueness guarantees and scalability
+        agent_id = f"agent_{organ_id}_{spec_safe}_{unique_id}"
+        
+        return agent_id
 
 
 @ray.remote
@@ -1160,10 +1171,11 @@ class Organ:
         """
         if self.agent_id_factory:
             return self.agent_id_factory.new(self.organ_id, specialization)
-        # Fallback: simple ID generation if factory not available
+        # Fallback: simple ID generation if factory not available (consistent format)
         unique_id = uuid.uuid4().hex[:12]
         spec_value = specialization.value if hasattr(specialization, 'value') else str(specialization)
-        return f"agent_{self.organ_id}_{spec_value}_{unique_id}"
+        spec_safe = spec_value.lower().replace("/", "_").replace(".", "_").replace("-", "_")
+        return f"agent_{self.organ_id}_{spec_safe}_{unique_id}"
 
     # ==========================================================
     # Routing (Called by OrganismCore/Router)

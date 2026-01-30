@@ -495,16 +495,34 @@ class CapabilityMonitor:
                     if isinstance(routing, dict):
                         skills = routing.get("skills", {})
                     
-                    # Extract tools
+                    # Extract tools (from top-level allowed_tools, executor.tools, and routing.tools)
+                    # **CRITICAL: Check top-level allowed_tools first (database source of truth)**
                     tools = set()
+                    
+                    # Priority 1: Top-level allowed_tools (direct from pkg_subtask_types)
+                    if isinstance(default_params, dict):
+                        top_level_tools = default_params.get("allowed_tools", [])
+                        if isinstance(top_level_tools, list):
+                            tools.update(top_level_tools)
+                        elif isinstance(top_level_tools, str):
+                            # Handle single string tool name
+                            tools.add(top_level_tools)
+                    
+                    # Priority 2: executor.tools (legacy/alternative format)
                     if isinstance(executor, dict):
                         executor_tools = executor.get("tools", [])
                         if isinstance(executor_tools, list):
                             tools.update(executor_tools)
+                        elif isinstance(executor_tools, str):
+                            tools.add(executor_tools)
+                    
+                    # Priority 3: routing.tools (routing hints)
                     if isinstance(routing, dict):
                         routing_tools = routing.get("tools", [])
                         if isinstance(routing_tools, list):
                             tools.update(routing_tools)
+                        elif isinstance(routing_tools, str):
+                            tools.add(routing_tools)
 
                     # Extract routing tags
                     tags = set()
@@ -611,6 +629,7 @@ class CapabilityMonitor:
             change.capability_name,
             executor,
             routing,
+            default_params=default_params,
         )
 
         if updated_profile:
@@ -657,6 +676,7 @@ class CapabilityMonitor:
         capability_name: str,
         executor: Dict[str, Any],
         routing: Dict[str, Any],
+        default_params: Optional[Dict[str, Any]] = None,
     ) -> Optional[RoleProfile]:
         """Build RoleProfile from capability definition."""
         if not HAS_ROLES:
@@ -664,15 +684,35 @@ class CapabilityMonitor:
 
         # Extract components
         skills = routing.get("skills", {}) if isinstance(routing, dict) else {}
+        
+        # Extract tools (from top-level allowed_tools, executor.tools, and routing.tools)
+        # **CRITICAL: Check top-level allowed_tools first (database source of truth)**
         tools = set()
+        
+        # Priority 1: Top-level allowed_tools (direct from pkg_subtask_types)
+        if isinstance(default_params, dict):
+            top_level_tools = default_params.get("allowed_tools", [])
+            if isinstance(top_level_tools, list):
+                tools.update(top_level_tools)
+            elif isinstance(top_level_tools, str):
+                # Handle single string tool name
+                tools.add(top_level_tools)
+        
+        # Priority 2: executor.tools (legacy/alternative format)
         if isinstance(executor, dict):
             executor_tools = executor.get("tools", [])
             if isinstance(executor_tools, list):
                 tools.update(executor_tools)
+            elif isinstance(executor_tools, str):
+                tools.add(executor_tools)
+        
+        # Priority 3: routing.tools (routing hints)
         if isinstance(routing, dict):
             routing_tools = routing.get("tools", [])
             if isinstance(routing_tools, list):
                 tools.update(routing_tools)
+            elif isinstance(routing_tools, str):
+                tools.add(routing_tools)
 
         tags = set()
         if isinstance(routing, dict):

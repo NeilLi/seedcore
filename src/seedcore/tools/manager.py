@@ -175,8 +175,50 @@ class ToolManager:
             return False
 
     async def has(self, name: str) -> bool:
+        """
+        Check if a tool is available.
+        
+        Checks in order:
+        1. Internal registered tools
+        2. Memory tools (memory.mw.*, memory.ltm.*, memory.holon.*)
+        3. Cognitive service tools (cog.*, reason.*)
+        4. HAL tools (reachy.*)
+        5. MCP tools (if mcp_client is available)
+        """
         async with self._lock:
-            return name in self._tools
+            # 1. Check internal tools
+            if name in self._tools:
+                return True
+        
+        # 2. Check memory tools
+        if name.startswith("memory.mw.") or name.startswith("memory.ltm.") or name.startswith("memory.holon."):
+            return True
+        
+        # 3. Check cognitive service tools
+        if name.startswith("cog.") or name.startswith("reason."):
+            return True
+        
+        # 4. Check HAL tools (reachy.*)
+        # These are registered as internal tools, but we check here for early validation
+        if name.startswith("reachy."):
+            # Check if it's registered as an internal tool
+            async with self._lock:
+                if name in self._tools:
+                    return True
+            # If not registered yet, return False (don't fall through to MCP)
+            return False
+        
+        # 5. Check MCP tools (if client is available)
+        # Note: We don't actually query MCP here for performance reasons.
+        # If mcp_client exists, we assume the tool might be available via MCP.
+        # The actual availability will be checked during execution.
+        if self._mcp_client:
+            # For MCP tools, we can't know for sure without querying, but we'll allow
+            # the execution to proceed and let execute() handle the actual check.
+            # Common MCP tool patterns: internet.*, fs.*, etc.
+            return True
+        
+        return False
 
     # ============================================================
     # Capability Management

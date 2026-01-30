@@ -232,6 +232,40 @@ class ToolManagerShard:
             logger.warning(f"Failed to register Tuya tools in shard: {e}")
             return False
 
+    async def register_reachy_tools(self, hal_base_url: Optional[str] = None):
+        """
+        Register Reachy tools. Called internally after manager creation.
+        
+        Note: Reachy tools are designed for robot actuation (domain="physical").
+        They should only be used by agents with appropriate RBAC permissions.
+        
+        Args:
+            hal_base_url: Optional HAL service base URL (default: http://localhost:8001)
+        """
+        try:
+            import os
+            manager = await self._ensure_manager()
+            
+            # Import and create tools inside the actor (avoids serialization issues)
+            from seedcore.tools.reachy_tools import ReachyMotionTool, ReachyGetStateTool
+            
+            # Use provided URL or default from environment
+            base_url = hal_base_url or os.getenv("HAL_BASE_URL", "http://localhost:8001")
+            
+            motion_tool = ReachyMotionTool(hal_base_url=base_url)
+            get_state_tool = ReachyGetStateTool(hal_base_url=base_url)
+            
+            await manager.register_internal(motion_tool)
+            await manager.register_internal(get_state_tool)
+            
+            return True
+        except Exception as e:
+            # Log but don't fail - Reachy tools are optional
+            import logging
+            logger = logging.getLogger("seedcore.tools.manager_actor")
+            logger.warning(f"Failed to register Reachy tools in shard: {e}")
+            return False
+
     async def list_tools(self):
         manager = await self._ensure_manager()
         return await manager.list_tools()
