@@ -53,8 +53,12 @@ class SynopsisEmbedder:
             or os.getenv("GOOGLE_API_KEY")
             or os.getenv("SYNOPSIS_EMBEDDING_API_KEY")
         )
-        self.model = model or os.getenv("SYNOPSIS_EMBEDDING_MODEL")
-        self.dim = int(dim or os.getenv("SYNOPSIS_EMBEDDING_DIM", "768"))
+        # Model resolution: explicit > SYNOPSIS_EMBEDDING_MODEL > TASK_EMBED_MODEL > default
+        self.model = (
+            model
+            or os.getenv("SYNOPSIS_EMBEDDING_MODEL")
+            or os.getenv("TASK_EMBED_MODEL")
+        )
         self.base_url = base_url or os.getenv("SYNOPSIS_EMBEDDING_BASE_URL")
         self.timeout_s = float(
             timeout_s or os.getenv("SYNOPSIS_EMBEDDING_TIMEOUT", "10")
@@ -66,6 +70,27 @@ class SynopsisEmbedder:
                 self.model = "models/text-embedding-004"
             else:
                 self.model = "sentence-transformers/all-mpnet-base-v2"
+        
+        # Normalize model name for Gemini (add "models/" prefix if missing)
+        if self.backend == "gemini" and self.model and not self.model.startswith("models/"):
+            # Handle both "text-embedding-004" and "models/text-embedding-004"
+            if "text-embedding-004" in self.model:
+                self.model = "models/text-embedding-004"
+        
+        # Dimension resolution: explicit > SYNOPSIS_EMBEDDING_DIM > auto-detect from model > default
+        if dim:
+            self.dim = int(dim)
+        elif os.getenv("SYNOPSIS_EMBEDDING_DIM"):
+            self.dim = int(os.getenv("SYNOPSIS_EMBEDDING_DIM"))
+        else:
+            # Auto-detect dimension based on model
+            model_name = self.model.lower() if self.model else ""
+            if "text-embedding-004" in model_name:
+                self.dim = 1024  # text-embedding-004 supports 1024 dimensions
+            elif "text-embedding-003" in model_name:
+                self.dim = 768  # text-embedding-003 uses 768 dimensions
+            else:
+                self.dim = 768  # Default fallback
 
         self._embedder: Optional[Any] = None
         self._failed = False

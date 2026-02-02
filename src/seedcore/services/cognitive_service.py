@@ -425,9 +425,22 @@ def _first_non_empty(*vals: Optional[str]) -> Optional[str]:
     return None
 
 
+def _normalize_provider(provider: str) -> str:
+    """
+    Normalize provider names to match PROVIDER_CONFIG keys.
+    Maps common aliases to canonical provider names.
+    """
+    provider = provider.strip().lower()
+    # Map "gemini" to "google" since PROVIDER_CONFIG uses "google"
+    if provider == "gemini":
+        return "google"
+    return provider
+
+
 def get_active_providers() -> List[str]:
     """Resolve the ordered list of active providers from env config."""
-    return _normalize_list(os.getenv("LLM_PROVIDERS", ""))
+    providers = _normalize_list(os.getenv("LLM_PROVIDERS", ""))
+    return [_normalize_provider(p) for p in providers]
 
 
 def _default_provider_deep() -> str:
@@ -437,11 +450,11 @@ def _default_provider_deep() -> str:
     """
     explicit = os.getenv("LLM_PROVIDER_DEEP")
     if explicit and explicit.strip():
-        return explicit.strip().lower()
+        return _normalize_provider(explicit)
 
     general = os.getenv("LLM_PROVIDER")
     if general and general.strip():
-        return general.strip().lower()
+        return _normalize_provider(general)
 
     providers = get_active_providers()
     if providers:
@@ -457,11 +470,11 @@ def _default_provider_fast() -> str:
     """
     explicit = os.getenv("LLM_PROVIDER_FAST")
     if explicit and explicit.strip():
-        return explicit.strip().lower()
+        return _normalize_provider(explicit)
 
     general = os.getenv("LLM_PROVIDER")
     if general and general.strip():
-        return general.strip().lower()
+        return _normalize_provider(general)
 
     providers = get_active_providers()
     if providers:
@@ -470,14 +483,34 @@ def _default_provider_fast() -> str:
     return "openai"
 
 def _model_for(provider: str, profile: LLMProfile) -> str:
+    """
+    Resolve model name for a given provider and profile.
+    Priority:
+    1. Provider-specific env var (e.g., GOOGLE_LLM_FAST)
+    2. LLM_MODEL env var (global fallback)
+    3. Provider default for profile
+    4. Hardcoded fallback
+    """
+    # Normalize provider name first
+    provider = _normalize_provider(provider)
+    
     config = PROVIDER_CONFIG.get(provider)
-    if not config: return "gpt-4o"  # noqa: E701
+    if not config:
+        # If provider not found, check LLM_MODEL as fallback before defaulting to gpt-4o
+        llm_model = os.getenv("LLM_MODEL")
+        if llm_model and llm_model.strip():
+            return llm_model.strip()
+        return "gpt-4o"  # noqa: E701
     
     pf_key = profile.value
     env_var = config["env"].get(pf_key)
     default_model = config["defaults"].get(pf_key)
     
-    return _first_non_empty(os.getenv(env_var) if env_var else None, default_model, "gpt-3.5-turbo")
+    # Check provider-specific env var, then LLM_MODEL, then default
+    provider_specific = os.getenv(env_var) if env_var else None
+    llm_model = os.getenv("LLM_MODEL")
+    
+    return _first_non_empty(provider_specific, llm_model, default_model, "gpt-3.5-turbo")
 
 class CognitiveOrchestrator:
     """

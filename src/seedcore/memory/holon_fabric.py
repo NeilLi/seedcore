@@ -11,7 +11,7 @@ from .backends.neo4j_graph import Neo4jGraph
 logger = logging.getLogger(__name__)
 
 # --- Constants ---
-EMBED_DIM = int(os.getenv("HOLON_EMBED_DIM", "768"))  # Configurable embedding dimension
+EMBED_DIM = int(os.getenv("HOLON_EMBED_DIM", "1024"))  # Configurable embedding dimension (default: 1024 for text-embedding-004)
 
 # Optional embedder if you want text->vec inside Fabric (can be None if you pass vectors)
 class Embedder(Protocol):

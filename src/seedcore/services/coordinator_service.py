@@ -480,6 +480,37 @@ class Coordinator:
                 if not changes:
                     return
                 
+                # Check if OrganismService is ready before attempting notification
+                # This prevents timeout errors during initialization
+                try:
+                    # Use a short timeout for health check to fail fast during initialization
+                    health = await self.organism_client.get("/health", timeout=3.0)
+                    if not isinstance(health, dict) or not health.get("organism_initialized"):
+                        # Organism not ready yet - changes will be queued when it initializes
+                        # Don't log this as an error since it's expected during startup
+                        logger.debug(
+                            f"OrganismService not ready yet, skipping notification of {len(changes)} capability changes. "
+                            "Changes will be processed after initialization."
+                        )
+                        return
+                except Exception as health_check_error:
+                    # If health check fails, organism is likely not ready
+                    # This is expected during initialization, so don't log as warning
+                    # Suppress timeout errors specifically - they're expected during startup
+                    error_str = str(health_check_error)
+                    is_timeout = "Timeout" in type(health_check_error).__name__ or "timeout" in error_str.lower()
+                    if is_timeout:
+                        logger.debug(
+                            f"OrganismService health check timed out (still initializing), "
+                            f"skipping notification of {len(changes)} capability changes"
+                        )
+                    else:
+                        logger.debug(
+                            f"OrganismService health check failed (likely still initializing), "
+                            f"skipping notification of {len(changes)} capability changes: {health_check_error}"
+                        )
+                    return
+                
                 logger.info(
                     f"📢 Notifying OrganismService of {len(changes)} capability changes"
                 )
@@ -504,15 +535,29 @@ class Coordinator:
                         )
                     else:
                         # Fallback to HTTP POST if RPC not available
+                        # Use a shorter timeout for this call to fail fast if organism isn't ready
                         await self.organism_client.post(
                             "/capability-changes",
-                            json={"changes": changes_dict}
+                            json={"changes": changes_dict},
+                            timeout=10.0  # Shorter timeout to fail fast
                         )
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to notify OrganismService of capability changes: {e}",
-                        exc_info=True
-                    )
+                    # Check if this is a timeout/connection error (expected during initialization)
+                    error_type = type(e).__name__
+                    is_timeout = "Timeout" in error_type or "ReadTimeout" in str(e) or "ConnectError" in error_type
+                    
+                    if is_timeout:
+                        # Timeout errors during initialization are expected - log at debug level
+                        logger.debug(
+                            f"OrganismService not ready for capability changes notification (timeout). "
+                            f"Changes will be processed after initialization. Error: {error_type}"
+                        )
+                    else:
+                        # Other errors should be logged as warnings
+                        logger.warning(
+                            f"Failed to notify OrganismService of capability changes: {e}",
+                            exc_info=True
+                        )
 
             # Create monitor (without organism_core - we notify via RPC instead)
             monitor = CapabilityMonitor(

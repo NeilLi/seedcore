@@ -29,7 +29,7 @@ class Holon(BaseModel):
     summary: str = Field(..., description="Natural language summary for LLM embedding")
     
     # The Index (Neural)
-    embedding: List[float] = Field(default_factory=list, description="768-dim vector")
+    embedding: List[float] = Field(default_factory=list, description="1024-dim vector")
     
     # The Web (Graph)
     # Adjacency list: [{'rel': 'CAUSED_BY', 'target_id': '...'}]

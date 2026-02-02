@@ -257,17 +257,20 @@ class CognitiveCore(dspy.Module):
             "trust_score": 0.4,
         }
         # Initialize SynopsisEmbedder via composition (replaces internal embedder handling)
-        self._synopsis_embedding_dim = int(os.getenv("SYNOPSIS_EMBEDDING_DIM", "768"))
+        # Let SynopsisEmbedder determine dimension (it will auto-detect from TASK_EMBED_MODEL if set)
         if SynopsisEmbedder is not None:
             self.synopsis_embedder = SynopsisEmbedder(
-                dim=self._synopsis_embedding_dim,
-                # Backend, model, base_url, api_key, timeout_s are read from env vars by SynopsisEmbedder
+                # dim, backend, model, base_url, api_key, timeout_s are read from env vars by SynopsisEmbedder
+                # SynopsisEmbedder will auto-detect dimension from TASK_EMBED_MODEL (e.g., text-embedding-004 -> 1024)
             )
+            # Get the actual dimension from the embedder after initialization
+            self._synopsis_embedding_dim = self.synopsis_embedder.dim
             logger.debug(
-                f"SynopsisEmbedder initialized (dim={self._synopsis_embedding_dim})"
+                f"SynopsisEmbedder initialized (model={self.synopsis_embedder.model}, dim={self._synopsis_embedding_dim})"
             )
         else:
             self.synopsis_embedder = None
+            self._synopsis_embedding_dim = int(os.getenv("SYNOPSIS_EMBEDDING_DIM", "768"))
             logger.warning(
                 "SynopsisEmbedder module not available; synopsis embedding will be disabled"
             )
