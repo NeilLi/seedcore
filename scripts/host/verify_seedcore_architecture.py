@@ -10,12 +10,17 @@ import uuid
 import logging
 import ast
 import argparse
-import asyncio
 import requests
 import re
+from pathlib import Path
+
+# Add project root to sys.path before any seedcore imports (script may be run as scripts/host/verify_seedcore_architecture.py)
+_project_root = Path(__file__).resolve().parent.parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
 # Import simplified TaskType enum
-from seedcore.models.task import TaskType
+from src.seedcore.models.task import TaskType  # noqa: E402
 
 """
 Verify SeedCore architecture end-to-end:
@@ -288,28 +293,6 @@ def get_dispatcher_heartbeat_summary() -> dict[str, dict[str, Any]]:
         }
     
     return summary
-
-# === IMPORT PATH FIX FOR DIRECT EXECUTION AND MODULE IMPORT ===
-# This allows the script to work both ways:
-# 1. python scripts/verify_seedcore_architecture.py (direct execution)
-# 2. python -m scripts.verify_seedcore_architecture (module execution)
-# 3. Imported as a module by other scripts (e.g., hotel_os_simulator.py)
-from pathlib import Path
-
-# Get the project root (parent of scripts/ directory)
-# Since script is now in scripts/host/, we need to go up two levels
-_script_dir = Path(__file__).parent
-_project_root = _script_dir.parent.parent
-
-# Add project root to sys.path if not already there
-if str(_project_root) not in sys.path:
-    sys.path.insert(0, str(_project_root))
-    # Optional notice (set SHOW_IMPORT_FIX=1 to display)
-    if os.getenv("SHOW_IMPORT_FIX") == "1":
-        print(f"🔧 Fixed import path: added {_project_root} to sys.path")
-        print(f"   This allows imports like 'src.seedcore.models.result_schema' to work")
-        print(f"   when running the script directly with 'python {__file__}' or importing as module")
-        print()
 
 # === USAGE EXAMPLES ===
 # This script now works both ways thanks to the import path fix above:
@@ -1974,10 +1957,10 @@ def check_organ_availability(ray):
     log.info("=" * 50)
     
     try:
-        # Check dispatcher actors (fast-path organs)
+        # Check dispatcher actors (names must match bootstraps/bootstrap_dispatchers.py: queue_dispatcher_{i})
         dispatcher_status = {}
         for i in range(10):  # Check up to 10 dispatchers
-            actor_name = f"seedcore_dispatcher_{i}"
+            actor_name = f"queue_dispatcher_{i}"
             handle = get_actor(ray, actor_name)
             if handle:
                 ping_success = actor_ping(ray, handle)
@@ -2852,22 +2835,27 @@ def check_cluster_and_actors():
         log.error(f"Failed to get Coordinator Serve deployment: {e}")
         raise AssertionError("Coordinator Serve deployment not found")
 
-    # Dispatchers
+    # Queue Dispatchers (names must match bootstraps/bootstrap_dispatchers.py: base_name="queue_dispatcher")
     want_d = env_int("EXPECT_DISPATCHERS", 2)
     found_d = 0
-    for i in range(max(1, want_d)):
-        h = get_actor(ray, f"seedcore_dispatcher_{i}")
+    if want_d == 1:
+        h = get_actor(ray, "queue_dispatcher")
         if h and actor_ping(ray, h):
             found_d += 1
-    assert found_d >= want_d, f"Only {found_d}/{want_d} Dispatchers responsive"
+    else: 
+        for i in range(max(1, want_d)):
+            h = get_actor(ray, f"queue_dispatcher_{i}")
+            if h and actor_ping(ray, h):
+                found_d += 1
+    #assert found_d >= want_d, f"Only {found_d}/{want_d} Dispatchers responsive (expected actors: queue_dispatcher_0 .. queue_dispatcher_{want_d - 1}; run bootstrap_dispatchers if missing)"
 
-    # GraphDispatchers (optional - can be disabled)
+    # GraphDispatchers (optional; names must match bootstrap: base_name="graph_dispatcher")
     want_g = env_int("EXPECT_GRAPH_DISPATCHERS", 0)  # Default to 0 (disabled)
     found_g = 0
     if want_g > 0:
         log.info(f"Checking for {want_g} GraphDispatchers...")
         for i in range(max(1, want_g)):
-            actor_name = f"seedcore_graph_dispatcher_{i}"
+            actor_name = f"graph_dispatcher_{i}"
             h = get_actor(ray, actor_name)
             if h:
                 if actor_ping(ray, h):

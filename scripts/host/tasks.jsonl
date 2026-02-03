@@ -1,0 +1,40 @@
+// ======================================================
+// SeedCore tasks.jsonl
+// Comprehensive batch covering v2.5 TaskPayload patterns
+// ======================================================
+
+{"type":"query","description":"Summarize system health and queue status","params":{"task_description":"Summarize system health and queue status"}}
+
+{"type":"query","description":"Analyze yesterday energy usage for anomalies","params":{"task_description":"Analyze yesterday energy usage for anomalies","routing":{"skills":{"energy_analysis":0.8}}}}
+
+{"type":"action","description":"Turn on lobby lights","domain":"device","params":{"domain":"device","action":"on","device":"light","location":"lobby","routing":{"skills":{"environment_control":0.9},"routing_tags":["environment","lighting"]}}}
+
+{"type":"action","description":"Turn off HVAC in Room 1203","domain":"device","params":{"domain":"device","action":"off","device":"hvac","room":"1203","routing":{"required_specialization":"ENVIRONMENT","skills":{"environment_control":0.95}}}}
+
+{"type":"action","description":"Dispatch cleaning robot to Room 1203","domain":"robot","params":{"domain":"robot","action":"dispatch","task":"cleaning","room":"1203","routing":{"specialization":"ROBOTICS","skills":{"navigation":0.85}}}}
+
+{"type":"action","description":"Stop robot cleaner-2","domain":"robot","params":{"domain":"robot","action":"stop","task":"cleaning","robot":"cleaner-2","routing":{"specialization":"ROBOTICS"}}}
+
+{"type":"graph","description":"Find all rooms with active HVAC alarms","params":{"operation":"find","args":["rooms","with","hvac_alarm"],"routing":{"routing_tags":["graph","diagnostics"]}}}
+
+{"type":"graph","description":"Relate guest Alice with preference quiet","params":{"operation":"relate","args":["guest=alice","preference=quiet"],"routing":{"skills":{"graph_write":0.7}}}}
+
+{"type":"maintenance","description":"Check all registered devices","params":{"operation":"check","args":["devices"],"routing":{"routing_tags":["maintenance","diagnostics"]}}}
+
+{"type":"maintenance","description":"Restart robot cleaner-1","params":{"operation":"restart","args":["robot","cleaner-1"],"routing":{"required_specialization":"ROBOTICS","hints":{"priority":6}}}}
+
+{"type":"chat","description":"Turn off the lights in the lobby","params":{"chat":{"message":"Turn off the lights in the lobby"},"multimodal":{"source":"voice","media_uri":"s3://hotel-assets/audio/clip_099.wav","transcription":"Turn off the lights in the lobby","confidence":0.97,"language":"en-US","is_real_time":true},"routing":{"skills":{"natural_language_control":0.9}}}}
+
+{"type":"chat","description":"Set temperature to 72 degrees","params":{"chat":{"message":"Set temperature to 72 degrees"},"multimodal":{"source":"voice","media_uri":"s3://hotel-assets/audio/clip_100.wav","transcription":"Set temperature to 72 degrees","duration_seconds":2.3,"language":"en-US"},"routing":{"skills":{"environment_control":0.85}}}}
+
+{"type":"action","description":"Person detected near Room 101","params":{"interaction":{"mode":"coordinator_routed"},"routing":{"required_specialization":"SecurityMonitoring","skills":{"threat_assessment":0.9},"tools":["alerts.raise","sensors.read_all"],"routing_tags":["security","monitoring"],"hints":{"priority":7,"ttl_seconds":60}},"multimodal":{"source":"vision","media_uri":"s3://hotel-assets/video/camera_101.mp4","scene_description":"Person detected near Room 101","confidence":0.92,"camera_id":"camera_101","location_context":"room_101_corridor","is_real_time":true,"ttl_seconds":60},"tool_calls":[{"name":"alerts.raise","args":{"channel":"security_team","msg":"Person detected near Room 101"}}]}}
+
+{"type":"query","description":"Analyze visual scene from loading dock","params":{"multimodal":{"source":"vision","media_uri":"s3://hotel-assets/video/loading_dock.mp4","scene_description":"Loading dock activity analysis","detection_engine":"yolo-v8","timestamp":"2025-11-25T14:30:22Z"},"routing":{"skills":{"visual_analysis":0.8}}}}
+
+{"type":"query","description":"Plan nightly maintenance sweep","params":{"cognitive":{"cog_type":"task_planning","decision_kind":"planner","force_deep_reasoning":true},"routing":{"skills":{"planning":0.9},"hints":{"priority":5}}}}
+
+{"type":"action","description":"Raise security alert for unattended luggage","params":{"interaction":{"mode":"coordinator_routed"},"routing":{"required_specialization":"SecurityMonitoring","tools":["alerts.raise"],"routing_tags":["security","alerting"]},"tool_calls":[{"name":"alerts.raise","args":{"channel":"security_team","msg":"Unattended luggage detected near main entrance"}}]}}
+
+{"type":"query","description":"Summarize last 24h security events","params":{"routing":{"specialization":"SecurityMonitoring","skills":{"incident_analysis":0.85}}}}
+
+{"type":"chat","description":"Hello SeedCore","params":{"chat":{"message":"Hello SeedCore"},"cognitive":{"disable_memory_write":false}}}

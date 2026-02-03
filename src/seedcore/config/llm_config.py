@@ -150,7 +150,7 @@ class LLMConfig:
         )
     
     @classmethod
-    def google(cls, model: str = "gemini-1.5-pro", **kwargs) -> 'LLMConfig':
+    def google(cls, model: str = "gemini-3.0-flash", **kwargs) -> 'LLMConfig':
         """Create configuration for Google Gemini."""
         return cls(
             provider=LLMProvider.GOOGLE,
@@ -307,7 +307,7 @@ def configure_llm_anthropic(
 
 def configure_llm_google(
     api_key: str,
-    model: str = "gemini-1.5-pro",
+    model: str = "gemini-3.0-flash",
     max_tokens: int = 1024,
     temperature: float = 0.7,
     **kwargs

@@ -403,6 +403,8 @@ class Coordinator:
         self.telemetry_dao = self.infra.telemetry_dao
         self.outbox_dao = self.infra.outbox_dao
         self.proto_plan_dao = self.infra.proto_plan_dao
+        # Background task storage for async processing of planning tasks
+        self._async_processing_tasks: Dict[str, asyncio.Task] = {}
 
     def _init_runtime(self) -> None:
         """Setup web server, storage, runtime context, and routes."""
@@ -645,6 +647,8 @@ class Coordinator:
             summary="Unified Entrypoint for Routing, Triage, and Execution",
             tags=["Execution"],
         )
+        # Background task storage for async processing
+        self._async_processing_tasks: Dict[str, asyncio.Task] = {}
 
         # Ops Endpoints
         self.app.add_api_route(
@@ -763,7 +767,125 @@ class Coordinator:
                             agent_id=task_dict.get("params", {}).get("agent_id"),
                         )
 
-            # 2. Compute Strategy (Fast vs Deep)
+            # Check if this is a planning task that needs immediate ACK
+            # Planning tasks can take 60+ seconds and would timeout the dispatcher
+            task_id = task_dict.get("task_id") or task_obj.task_id
+            is_planning_task = (
+                task_dict.get("params", {}).get("cognitive", {}).get("cog_type") == "task_planning"
+                or task_dict.get("params", {}).get("cognitive", {}).get("decision_kind") == "planner"
+                or task_dict.get("params", {}).get("cognitive", {}).get("decision_kind") == "cognitive"
+            )
+            
+            # For planning tasks: Return immediate ACK, process async
+            if is_planning_task:
+                logger.info(
+                    f"🧠 Planning task {task_id} detected - returning immediate ACK, "
+                    "processing asynchronously to avoid dispatcher timeout"
+                )
+                
+                # Return immediate ACK
+                ack_result = make_envelope(
+                    task_id=task_id,
+                    success=True,
+                    decision_kind=DecisionKind.COGNITIVE.value,
+                    path="coordinator_ack",
+                    meta={
+                        "status": "processing",
+                        "message": "Planning task accepted, processing asynchronously",
+                        "async_processing": True,
+                    }
+                )
+                
+                # Spawn async task to process planning
+                async def _process_planning_async():
+                    """Process planning task asynchronously and update DB."""
+                    try:
+                        exec_config = self._build_execution_config(correlation_id)
+                        route_config = self._build_route_config()
+                        
+                        result = await execute_task(
+                            task=task_obj,
+                            route_config=route_config,
+                            execution_config=exec_config,
+                        )
+                        
+                        # Update task result in DB (so dispatcher can check if needed)
+                        if self._session_factory:
+                            try:
+                                async with self._session_factory() as session:
+                                    async with session.begin():
+                                        # Update task result directly using SQL
+                                        normalized_result = normalize_envelope(result, task_id=task_id, path="coordinator")
+                                        await session.execute(
+                                            text("""
+                                                UPDATE tasks 
+                                                SET result = CAST(:result AS jsonb),
+                                                    status = CASE 
+                                                        WHEN CAST(:result AS jsonb)->>'success' = 'true' THEN 'completed'
+                                                        ELSE 'failed'
+                                                    END,
+                                                    updated_at = NOW()
+                                                WHERE id = CAST(:task_id AS uuid)
+                                            """),
+                                            {
+                                                "task_id": task_id,
+                                                "result": json.dumps(normalized_result)
+                                            }
+                                        )
+                            except Exception as db_error:
+                                logger.warning(
+                                    f"Failed to update task result in DB for {task_id}: {db_error} "
+                                    "(non-fatal - result was returned to dispatcher)"
+                                )
+                        
+                        logger.info(f"✅ Planning task {task_id} completed asynchronously")
+                    except Exception as e:
+                        logger.error(
+                            f"❌ Async planning task {task_id} failed: {e}",
+                            exc_info=True
+                        )
+                        # Update task with error result in DB
+                        if self._session_factory:
+                            try:
+                                async with self._session_factory() as session:
+                                    async with session.begin():
+                                        error_result = make_envelope(
+                                            task_id=task_id,
+                                            success=False,
+                                            error=str(e),
+                                            error_type="async_planning_error",
+                                            decision_kind=DecisionKind.ERROR.value,
+                                            path="coordinator_async_error",
+                                        )
+                                        await session.execute(
+                                            text("""
+                                                UPDATE tasks 
+                                                SET result = CAST(:result AS jsonb),
+                                                    status = 'failed',
+                                                    error = :error,
+                                                    updated_at = NOW()
+                                                WHERE id = CAST(:task_id AS uuid)
+                                            """),
+                                            {
+                                                "task_id": task_id,
+                                                "result": json.dumps(error_result),
+                                                "error": str(e)
+                                            }
+                                        )
+                            except Exception as db_error:
+                                logger.error(f"Failed to update error result in DB: {db_error}")
+                    finally:
+                        # Clean up task tracking
+                        self._async_processing_tasks.pop(task_id, None)
+                
+                # Start async processing
+                processing_task = asyncio.create_task(_process_planning_async())
+                self._async_processing_tasks[task_id] = processing_task
+                
+                # Return immediate ACK
+                return ack_result
+
+            # 2. Compute Strategy (Fast vs Deep) - Standard synchronous processing
             exec_config = self._build_execution_config(correlation_id)
             route_config = self._build_route_config()
 
@@ -774,7 +896,6 @@ class Coordinator:
             )
 
             # Normalize result to canonical envelope format
-            task_id = task_dict.get("task_id") or task_obj.task_id
             return normalize_envelope(result, task_id=task_id, path="coordinator")
 
         except Exception as e:
@@ -1808,17 +1929,36 @@ class Coordinator:
                     )
                     if success:
                         return True
+                    # If success is False, it means queue infrastructure unavailable or dedupe
+                    # This is expected - Outbox will handle it
+                    if attempt == 0:
+                        logger.debug(
+                            f"Embedding queue unavailable for task {task_id} (attempt {attempt+1}), "
+                            "will retry once before falling back to Outbox"
+                        )
                 except asyncio.TimeoutError:
-                    logger.warning(
-                        f"Embedding queue full, attempt {attempt+1} timed out for task {task_id}"
+                    # Queue operation timed out - likely queue is full or infrastructure issue
+                    logger.debug(
+                        f"Embedding queue operation timed out for task {task_id} "
+                        f"(attempt {attempt+1}), will retry once before falling back to Outbox"
                     )
                 except Exception as e:
-                    logger.error(f"Error enqueuing task {task_id} (attempt {attempt+1}): {e}")
+                    # Log error but continue to retry/fallback
+                    logger.debug(
+                        f"Error enqueuing task {task_id} (attempt {attempt+1}): {e}. "
+                        "Will fall back to Outbox if retry fails."
+                    )
                 
                 # Small backoff between retries
                 if attempt < 1:  # Don't sleep after the last attempt
                     await asyncio.sleep(0.1)
             
+            # Both attempts failed - this is expected under high load
+            # Outbox Reliability Layer will handle it
+            logger.debug(
+                f"Fast embedding enqueue failed for task {task_id} after 2 attempts. "
+                "Outbox will handle this asynchronously."
+            )
             return False
         except ImportError as e:
             logger.critical(

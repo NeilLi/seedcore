@@ -18,3 +18,89 @@ seedcore:
     # General Service Settings
     timeouts:
       serve_call_s: 20
+
+    # Task Enrichment (Bootstrap Intent Normalization)
+    enrichment:
+      # Semantic Authority Levels:
+      # HIGH: LLM / PKG / Eventizer / Holon (authoritative)
+      # MEDIUM: Hybrid consensus
+      # LOW: Regex / heuristics / bootstrap (advisory only)
+      bootstrap_intent_pack:
+        authority: LOW  # Bootstrap fallback authority level
+        domains:
+          temperature:
+            keywords: ["temperature", "temp", "thermostat", "heating", "cooling", "ac", "hvac"]
+            actions: ["set", "change", "adjust", "turn", "switch"]
+            specialization_hint: "environment"
+          lighting:
+            keywords: ["light", "lighting", "brightness", "dim", "illuminate"]
+            actions: ["set", "change", "adjust", "turn", "switch", "enable", "disable"]
+            specialization_hint: "environment"
+          environment:
+            keywords: ["room", "bedroom", "living room", "suite"]
+            actions: ["set", "change", "adjust"]
+            specialization_hint: "environment"
+          security:
+            keywords: ["lock", "unlock", "secure", "alarm"]
+            actions: ["lock", "unlock", "enable", "disable", "activate", "deactivate"]
+            specialization_hint: "security"
+          booking:
+            keywords: ["book", "reserve", "schedule", "appointment"]
+            actions: ["book", "reserve", "schedule", "cancel"]
+            specialization_hint: "user_liaison"
+          notification:
+            keywords: ["notify", "alert", "warn", "send", "deliver"]
+            actions: ["send", "deliver", "notify", "alert", "warn"]
+            specialization_hint: "user_liaison"
+        
+        # Action patterns (imperative commands)
+        action_patterns:
+          - pattern: '\b(set|change|adjust|turn|switch|enable|disable|activate|deactivate)\b'
+          - pattern: '\b(open|close|lock|unlock|start|stop)\b'
+          - pattern: '\b(increase|decrease|raise|lower|up|down)\b'
+          - pattern: '\b(schedule|book|reserve|cancel)\b'
+          - pattern: '\b(send|deliver|notify|alert|warn)\b'
+          - pattern: '\b(create|delete|update|modify|edit)\b'
+        
+        # Numeric value extraction
+        numeric_pattern: '(\d+(?:\.\d+)?)'
+        
+        # Location context patterns
+        location_patterns:
+          - pattern: '\b(room|bedroom|suite|apartment|unit)\s+(\d+)\b'
+          - pattern: '\b(room|bedroom|suite|apartment|unit)\s+([A-Z]\d+)\b'
+          - pattern: '\b(\d+)\s*(?:st|nd|rd|th)?\s*(?:floor|level)\b'
+        
+        # Unit detection patterns
+        unit_patterns:
+          celsius:
+            - pattern: 'celsius'
+            - pattern: '\b(\d+)\s*c\b'  # "72 c" or "72c"
+            - pattern: '\b(\d+)\s*°\s*c\b'  # "72°c"
+          fahrenheit:
+            - pattern: 'fahrenheit'
+            - pattern: '\b(\d+)\s*f\b'  # "72 f" or "72f"
+            - pattern: '\b(\d+)\s*°\s*f\b'  # "72°f"
+      
+      # Policy: Authority-aware routing decisions
+      policy:
+        # LOW authority intent restrictions (advisory only)
+        low_authority:
+          # May promote CHAT -> ACTION
+          allow_task_promotion: true
+          # May add soft specialization hints
+          allow_specialization_hint: true
+          # May suggest FAST path
+          allow_fast_path_suggestion: true
+          # Must NEVER set required_specialization (hard constraint)
+          allow_required_specialization: false
+          # Must NEVER inject tools unless user explicitly requested
+          allow_tool_injection: false
+          # Must NEVER override PKG constraints
+          allow_pkg_override: false
+        
+        # HIGH authority intent permissions (authoritative)
+        high_authority:
+          allow_required_specialization: true
+          allow_tool_injection: true
+          allow_pkg_override: false  # PKG is still authoritative for policy

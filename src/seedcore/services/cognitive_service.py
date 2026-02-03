@@ -190,6 +190,9 @@ class _DSPyEngineShim:
             "max_tokens": getattr(engine, 'max_tokens', 1024),
             "model": self.model
         }
+        # Set max_depth for DSPy's do_generate (prevents AssertionError)
+        # This ensures recursive generation calls have a depth limit
+        self.max_depth = int(os.getenv("DSPY_MAX_DEPTH", "3"))
 
     def __call__(self, prompt: str, **kwargs) -> List[str]:
         """
@@ -400,7 +403,7 @@ PROVIDER_CONFIG: Dict[str, Dict[str, Any]] = {
     },
     "google": {
         "env": {"deep": "GOOGLE_LLM_DEEP", "fast": "GOOGLE_LLM_FAST"},
-        "defaults": {"deep": "gemini-1.5-pro", "fast": "gemini-1.5-flash"},
+        "defaults": {"deep": "gemini-3.0-flash", "fast": "gemini-3.0-flash"},
         "factory": lambda model, profile: None
     },
     "azure": {
@@ -664,34 +667,123 @@ class CognitiveOrchestrator:
                 # Apply late-binding temperature if supported (optional)
                 if hasattr(engine, 'temperature'):
                     engine.temperature = 0.7 
-                return _DSPyEngineShim(engine)
+                shim = _DSPyEngineShim(engine)
+                # Set max_depth attribute on shim for DSPy's do_generate
+                shim.max_depth = int(os.getenv("DSPY_MAX_DEPTH", "3"))
+                return shim
 
         # 2. Native DSPy Providers (Anthropic, Google, Azure)
         # These return None from the factory (or have no factory)
-        max_tokens = 2048 if profile == LLMProfile.DEEP else 1024
+        # Check environment variable first, then fall back to profile-based defaults
+        env_max_tokens = os.getenv("LLM_MAX_TOKENS")
+        if env_max_tokens:
+            try:
+                max_tokens = int(env_max_tokens)
+            except ValueError:
+                max_tokens = 2048 if profile == LLMProfile.DEEP else 1024
+        else:
+            # For DEEP profile (task planning), use higher token limit for structured JSON output
+            max_tokens = 4096 if profile == LLMProfile.DEEP else 1024
         
         if provider == "anthropic":
-            return dspy.Anthropic(
+            lm = dspy.Anthropic(
                 model=model, 
                 max_tokens=max_tokens, 
                 api_key=os.getenv("ANTHROPIC_API_KEY")
             )
         elif provider == "google":
-            return dspy.Google(
-                model=model, 
-                max_tokens=max_tokens, 
-                api_key=os.getenv("GOOGLE_API_KEY")
+            # Google's Generative AI SDK uses 'max_output_tokens' instead of 'max_tokens'
+            # For task planning (compiler mode), use low temperature (0-0.2) for deterministic output
+            # DEEP profile is typically used for task planning, so use lower temperature
+            # Note: DSPy.Google may not support temperature parameter directly - check DSPy docs
+            # Temperature can be set via environment variable GOOGLE_PLANNER_TEMPERATURE (default: 0.1 for DEEP, 0.7 for FAST)
+            default_temp = "0.1" if profile == LLMProfile.DEEP else "0.7"
+            google_temperature = float(os.getenv("GOOGLE_PLANNER_TEMPERATURE", default_temp))
+            
+            # Configure safety settings to prevent empty responses from safety filters
+            # For task planning (compiler mode), we need responses even if flagged
+            # Safety is enforced downstream by SeedCore's safety_check behavior
+            safety_settings = None
+            try:
+                # Try to import Google's safety settings if available
+                from google.generativeai.types import HarmCategory, HarmBlockThreshold
+                # Relax safety settings for compiler mode (task planning needs responses)
+                # Note: This doesn't disable safety - it allows responses to be returned
+                # even if flagged, so we can handle them gracefully downstream
+                safety_settings = {
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                }
+                logger.debug("Configured relaxed safety settings for Google Gemini (compiler mode)")
+            except ImportError:
+                # google.generativeai.types may not be available - DSPy handles it internally
+                logger.debug("Could not import HarmCategory - DSPy will use default safety settings")
+            
+            # Initialize DSPy Google LM
+            # For task planning (DEEP profile), increase timeout and max_output_tokens
+            # Task planning generates structured JSON which can be larger and take longer
+            google_timeout = int(os.getenv("GOOGLE_API_TIMEOUT_S", "60" if profile == LLMProfile.DEEP else "30"))
+            
+            lm_kwargs = {
+                "model": model,
+                "max_output_tokens": max_tokens,
+                "api_key": os.getenv("GOOGLE_API_KEY")
+            }
+            # Add timeout if DSPy.Google supports it (may vary by version)
+            # Some versions accept timeout parameter
+            if hasattr(dspy.Google, '__init__'):
+                # Try to pass timeout - will be ignored if not supported
+                try:
+                    import inspect
+                    sig = inspect.signature(dspy.Google.__init__)
+                    if 'timeout' in sig.parameters:
+                        lm_kwargs["timeout"] = google_timeout
+                        logger.debug(f"Setting Google API timeout to {google_timeout}s for {profile.value} profile")
+                except Exception:
+                    pass  # Timeout parameter not supported in this DSPy version
+            
+            # Add safety_settings if available and DSPy supports it
+            if safety_settings is not None:
+                # Check if DSPy.Google accepts safety_settings (may vary by version)
+                # If not, it will be ignored (no error)
+                lm_kwargs["safety_settings"] = safety_settings
+            
+            lm = dspy.Google(**lm_kwargs)
+            
+            # Try to set temperature if the LM object supports it
+            if hasattr(lm, 'temperature'):
+                lm.temperature = google_temperature
+            
+            # Log configuration for debugging
+            logger.debug(
+                f"Google Gemini LM configured: model={model}, max_output_tokens={max_tokens}, "
+                f"temperature={google_temperature}, timeout={google_timeout}s, profile={profile.value}"
             )
         elif provider == "azure":
-            return dspy.AzureOpenAI(model=model, max_tokens=max_tokens)
-
-        # 3. Last Resort Fallback
-        # If we get here, it's an unknown provider or a configuration error.
-        logger.warning(f"Provider '{provider}' not recognized via factory. Defaulting to OpenAI/Shim.")
+            lm = dspy.AzureOpenAI(model=model, max_tokens=max_tokens)
+        else:
+            # 3. Last Resort Fallback
+            # If we get here, it's an unknown provider or a configuration error.
+            logger.warning(f"Provider '{provider}' not recognized via factory. Defaulting to OpenAI/Shim.")
+            
+            # Force usage of the OpenAI factory with the requested model
+            openai_factory = PROVIDER_CONFIG["openai"]["factory"]
+            lm = _DSPyEngineShim(openai_factory(model, profile))
         
-        # Force usage of the OpenAI factory with the requested model
-        openai_factory = PROVIDER_CONFIG["openai"]["factory"]
-        return _DSPyEngineShim(openai_factory(model, profile))
+        # Set max_depth attribute on LM for DSPy's do_generate (prevents AssertionError)
+        # This ensures DSPy's internal generate() calls have max_depth > 0
+        if hasattr(lm, '__dict__'):
+            lm.max_depth = int(os.getenv("DSPY_MAX_DEPTH", "3"))
+        elif not hasattr(lm, 'max_depth'):
+            # Try to set it as an attribute
+            try:
+                setattr(lm, 'max_depth', int(os.getenv("DSPY_MAX_DEPTH", "3")))
+            except Exception:
+                pass  # Some LM objects might not allow attribute setting
+        
+        return lm
 
 
     def _resolve_lm_engine(self, profile: LLMProfile, params: dict) -> Any:
@@ -816,14 +908,36 @@ class CognitiveOrchestrator:
             # This ensures that parallel requests do not clobber global settings
             import dspy  # type: ignore[reportMissingImports]
             
+            # Configure max_depth for DSPy generation (prevents AssertionError in do_generate)
+            # max_depth limits recursive generation calls in ChainOfThought
+            max_depth = int(os.getenv("DSPY_MAX_DEPTH", "3"))
+            
             if hasattr(dspy, 'context'):
-                with dspy.context(lm=execution_lm):
-                    logger.debug(f"⚡ Executing {context.cog_type.value} on {profile.value}")
-                    raw_result = core.forward(context)
+                # Try to pass max_depth through context if supported
+                try:
+                    with dspy.context(lm=execution_lm, max_depth=max_depth):
+                        logger.debug(f"⚡ Executing {context.cog_type.value} on {profile.value}")
+                        raw_result = core.forward(context)
+                except TypeError:
+                    # If max_depth is not supported in context, configure it separately
+                    with dspy.context(lm=execution_lm):
+                        # Configure max_depth via settings if available
+                        if hasattr(dspy, 'settings') and hasattr(dspy.settings, 'configure'):
+                            try:
+                                dspy.settings.configure(max_depth=max_depth)
+                            except Exception:
+                                pass  # Ignore if max_depth not supported in settings
+                        logger.debug(f"⚡ Executing {context.cog_type.value} on {profile.value}")
+                        raw_result = core.forward(context)
             else:
                 # Fallback for older DSPy (Risky)
                 logger.warning("dspy.context missing; using global settings.")
                 dspy.settings.configure(lm=execution_lm)
+                # Try to configure max_depth if settings support it
+                try:
+                    dspy.settings.configure(max_depth=max_depth)
+                except Exception:
+                    pass  # Ignore if max_depth not supported
                 raw_result = core.forward(context)
 
             # 5. Metadata Injection

@@ -288,7 +288,15 @@ class Dispatcher:
             conversation_id = payload.conversation_id
             mode = payload.interaction_mode
             
-            # B. Route and Execute
+            # B. Check if this is a long-running planning task that needs immediate ACK
+            # Planning tasks can take 60+ seconds and would timeout the dispatcher
+            is_planning_task = (
+                payload.params.get("cognitive", {}).get("cog_type") == "task_planning"
+                or payload.params.get("cognitive", {}).get("decision_kind") == "planner"
+                or payload.params.get("cognitive", {}).get("decision_kind") == "cognitive"
+            )
+            
+            # C. Route and Execute
             # Use OrganismRouter for tasks with conversation_id (sticky sessions)
             # Otherwise use CoordinatorHttpRouter (standard routing)
             try:
@@ -298,6 +306,16 @@ class Dispatcher:
                         self._organism_router = OrganismRouter()
                     raw_result = await self._organism_router.route_and_execute(payload)
                 else:
+                    # For planning tasks, use longer timeout or immediate ACK pattern
+                    if is_planning_task:
+                        logger.info(
+                            f"[{self.name}] 🧠 Planning task {task_id} detected - "
+                            "using extended timeout for cognitive processing"
+                        )
+                        # Planning tasks get extended timeout via router config
+                        # Router timeout is already 90s, which should be sufficient
+                        # If still timing out, we can implement async ACK pattern here
+                    
                     # Standard routing through Coordinator
                     raw_result = await self._router.route_and_execute(payload)
                 

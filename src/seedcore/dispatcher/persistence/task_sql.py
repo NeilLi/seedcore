@@ -54,7 +54,7 @@ WHERE id = $3
 
 RELEASE_TASK_SQL = """
 UPDATE tasks
-SET status = 'retry', -- or 'queued'
+SET status = 'failed',
     locked_by = NULL,
     lease_expires_at = NULL,
     updated_at = NOW(),

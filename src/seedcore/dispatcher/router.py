@@ -563,6 +563,8 @@ class CoordinatorHttpRouter(Router):
     ) -> Dict[str, Any]:
         """
         Route task through Coordinator HTTP API with Client-Side Optimization (Tunnel).
+        
+        For planning tasks, uses extended timeout to avoid dispatcher timeouts.
         """
         started_at = datetime.now(timezone.utc)
 
@@ -570,6 +572,21 @@ class CoordinatorHttpRouter(Router):
             # 1. Prepare Payload
             task_payload = _coerce_task_payload(payload)
             task_id = task_payload.task_id
+            
+            # Check if this is a planning task (needs extended timeout)
+            is_planning_task = (
+                task_payload.params.get("cognitive", {}).get("cog_type") == "task_planning"
+                or task_payload.params.get("cognitive", {}).get("decision_kind") == "planner"
+                or task_payload.params.get("cognitive", {}).get("decision_kind") == "cognitive"
+            )
+            
+            # Use extended timeout for planning tasks
+            request_timeout = self.config.planning_timeout if is_planning_task else self.config.timeout
+            if is_planning_task:
+                logger.debug(
+                    f"[Router] 🧠 Planning task {task_id} detected - "
+                    f"using extended timeout: {request_timeout}s"
+                )
             
             # Serialize to dict with JSON-compatible types
             # Use mode='json' if available (Pydantic v2) to handle Enums, datetime, etc.
@@ -584,7 +601,13 @@ class CoordinatorHttpRouter(Router):
             logger.debug(f"[Router] 📡 Routing via Coordinator HTTP: {task_id}")
 
             # We assume self.client handles network errors and returns Dict
-            raw_result = await self.client.post("/route-and-execute", json=task_data)
+            # For planning tasks, pass extended timeout (BaseServiceClient supports per-request timeout)
+            post_kwargs = {}
+            if is_planning_task:
+                # BaseServiceClient.post() accepts timeout as float and converts to httpx.Timeout
+                post_kwargs["timeout"] = request_timeout
+            
+            raw_result = await self.client.post("/route-and-execute", json=task_data, **post_kwargs)
 
             # Normalize to canonical envelope format
             result = normalize_envelope(raw_result, task_id=task_id, path="coordinator_service")
@@ -674,6 +697,7 @@ class RouterFactory:
         if config is None:
             config = RouterConfig(
                 timeout=float(os.getenv("DISPATCHER_ROUTER_TIMEOUT", "90.0")),  # Increased from 30s to 90s for long-running tasks
+                planning_timeout=float(os.getenv("DISPATCHER_ROUTER_PLANNING_TIMEOUT", "180.0")),  # 3 minutes for planning tasks
                 max_retries=int(os.getenv("DISPATCHER_ROUTER_MAX_RETRIES", "3")),
                 retry_delay=float(os.getenv("DISPATCHER_ROUTER_RETRY_DELAY", "1.0")),
                 circuit_breaker_failures=int(

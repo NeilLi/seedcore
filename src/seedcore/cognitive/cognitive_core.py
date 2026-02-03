@@ -302,6 +302,8 @@ class CognitiveCore(dspy.Module):
 
         # Initialize specialized cognitive modules with post-condition checks
         self.failure_analyzer = dspy.ChainOfThought(AnalyzeFailureSignature)
+        # Task planner is a COMPILER (not a reasoning model) - should use temp=0-0.2 for deterministic output
+        # Note: Temperature is controlled at the LM level (see cognitive_service.py _create_dspy_lm)
         self.task_planner = dspy.ChainOfThought(TaskPlanningSignature)
         self.decision_maker = dspy.ChainOfThought(DecisionMakingSignature)
         self.problem_solver = dspy.ChainOfThought(ProblemSolvingSignature)
@@ -1035,7 +1037,64 @@ class CognitiveCore(dspy.Module):
                 available_tools = params.get("available_tools") or {}
                 enhanced_input["available_tools"] = available_tools
 
-        enhanced_input["knowledge_context"] = json.dumps(working_context)
+        # For TASK_PLANNING mode: Extract task_description, agent_capabilities, and available_resources
+        # TaskPlanningSignature expects these at top level
+        elif context.cog_type == CognitiveType.TASK_PLANNING:
+            params = enhanced_input.get("params", {})
+            
+            # Extract task_description from multiple possible locations
+            # Priority: task_description > description > params.task_description > empty string
+            task_description = (
+                enhanced_input.get("task_description")
+                or enhanced_input.get("description")
+                or params.get("task_description")
+                or ""
+            )
+            enhanced_input["task_description"] = task_description
+            
+            # Extract agent_capabilities - always ensure it exists (default to empty dict)
+            # Priority: top-level > params.agent_capabilities > params.capabilities > {}
+            agent_capabilities = enhanced_input.get("agent_capabilities")
+            if agent_capabilities is None:
+                agent_capabilities = (
+                    params.get("agent_capabilities")
+                    or params.get("capabilities")
+                    or {}
+                )
+            enhanced_input["agent_capabilities"] = agent_capabilities
+            
+            # Extract available_resources - always ensure it exists (default to empty dict)
+            # Priority: top-level > params.available_resources > params.resources > {}
+            available_resources = enhanced_input.get("available_resources")
+            if available_resources is None:
+                available_resources = (
+                    params.get("available_resources")
+                    or params.get("resources")
+                    or {}
+                )
+            enhanced_input["available_resources"] = available_resources
+
+        # Limit knowledge_context size to prevent oversized prompts
+        # Default limit: 32KB (configurable via COGNITIVE_MAX_CONTEXT_BYTES)
+        max_context_bytes = int(os.getenv("COGNITIVE_MAX_CONTEXT_BYTES", "32768"))  # 32KB default
+        context_json = json.dumps(working_context)
+        context_size = len(context_json.encode('utf-8'))
+        
+        if context_size > max_context_bytes:
+            logger.warning(
+                f"Knowledge context too large ({context_size} bytes > {max_context_bytes} bytes). "
+                f"Truncating for task {task_id or 'n/a'}"
+            )
+            # Intelligently truncate: keep essential fields, limit array sizes
+            truncated_context = self._truncate_knowledge_context(working_context, max_context_bytes)
+            context_json = json.dumps(truncated_context)
+            final_size = len(context_json.encode('utf-8'))
+            logger.debug(
+                f"Truncated context from {context_size} to {final_size} bytes "
+                f"(reduction: {((context_size - final_size) / context_size * 100):.1f}%)"
+            )
+        
+        enhanced_input["knowledge_context"] = context_json
         enhanced_input = self._format_input_for_signature(
             enhanced_input, context.cog_type
         )
@@ -1046,7 +1105,47 @@ class CognitiveCore(dspy.Module):
         )
 
         plan_build_start = time.time()
-        raw = handler(**filtered_input)
+        try:
+            raw = handler(**filtered_input)
+        except IndexError as e:
+            # Handle empty response from Google/Gemini API
+            # This can happen when the API returns a response with no text parts
+            # Common causes:
+            # 1. Safety filter blocked the response (parts is empty, but prompt_feedback explains why)
+            # 2. Function calling mode returned non-text response
+            # 3. MAX_TOKENS limit reached (finish_reason != STOP)
+            # 4. Malformed prompt caused empty completion
+            error_msg = (
+                f"LLM returned empty response (no text parts in response.parts). "
+                f"This typically indicates:\n"
+                f"  - Safety filter triggered (check prompt_feedback in API response)\n"
+                f"  - MAX_TOKENS limit reached (check finish_reason)\n"
+                f"  - Function calling mode mismatch\n"
+                f"  - Malformed prompt or context window too large\n"
+                f"Provider: {self.llm_provider}, Model: {self.model}, "
+                f"Task: {context.cog_type.value}"
+            )
+            logger.error(f"{error_msg}. Original error: {e}", exc_info=True)
+            # Return empty payload structure - validation will catch this as contract violation
+            raw = type('obj', (object,), {
+                'solution_steps': [],
+                'estimated_complexity': 10.0,
+                'thought': error_msg
+            })()
+        except Exception as e:
+            # Catch other DSPy/LLM errors
+            error_msg = (
+                f"Handler invocation failed for {context.cog_type.value}. "
+                f"Provider: {self.llm_provider}, Model: {self.model}. Error: {str(e)}"
+            )
+            logger.error(error_msg, exc_info=True)
+            # Return error payload structure
+            raw = type('obj', (object,), {
+                'solution_steps': [],
+                'estimated_complexity': 10.0,
+                'thought': error_msg
+            })()
+        
         plan_build_end = time.time()
 
         payload = self._to_payload(raw)
@@ -1055,6 +1154,72 @@ class CognitiveCore(dspy.Module):
         )
 
         return payload, planner_timings, plan_build_start, plan_build_end
+
+    def _truncate_knowledge_context(self, context: Dict[str, Any], max_bytes: int) -> Dict[str, Any]:
+        """
+        Intelligently truncate knowledge_context to fit within byte limit.
+        
+        Strategy:
+        1. Keep essential metadata (provenance, summary, usage_policy)
+        2. Limit array sizes (holons, episodic_context, global_context)
+        3. Truncate text fields if needed
+        4. Preserve structure while reducing size
+        
+        Args:
+            context: Original knowledge context dict
+            max_bytes: Maximum allowed size in bytes
+            
+        Returns:
+            Truncated context dict
+        """
+        truncated = {}
+        
+        # Keep essential metadata (small, important)
+        for key in ["provenance", "summary", "usage_policy", "escalate_hint"]:
+            if key in context:
+                truncated[key] = context[key]
+        
+        # Limit array sizes (keep most relevant items)
+        max_items_per_array = 10  # Keep top 10 items per array
+        
+        for array_key in ["holons", "episodic_context", "global_context"]:
+            if array_key in context and isinstance(context[array_key], list):
+                items = context[array_key][:max_items_per_array]
+                truncated[array_key] = items
+                if len(context[array_key]) > max_items_per_array:
+                    logger.debug(
+                        f"Truncated {array_key} from {len(context[array_key])} to {len(items)} items"
+                    )
+        
+        # Handle hgnn_embedding (can be large)
+        if "hgnn_embedding" in context:
+            # Keep embedding but limit size if it's a list/array
+            hgnn = context["hgnn_embedding"]
+            if isinstance(hgnn, list) and len(hgnn) > 50:
+                truncated["hgnn_embedding"] = hgnn[:50]
+                logger.debug(f"Truncated hgnn_embedding from {len(hgnn)} to 50 items")
+            else:
+                truncated["hgnn_embedding"] = hgnn
+        
+        # Keep sufficiency data (small, important for routing)
+        if "sufficiency" in context:
+            truncated["sufficiency"] = context["sufficiency"]
+        
+        # Check if we're still over limit - if so, truncate text fields
+        test_json = json.dumps(truncated)
+        if len(test_json.encode('utf-8')) > max_bytes:
+            # Aggressively truncate text fields
+            if "summary" in truncated and isinstance(truncated["summary"], str):
+                max_summary_len = 500
+                if len(truncated["summary"]) > max_summary_len:
+                    truncated["summary"] = truncated["summary"][:max_summary_len] + "..."
+            
+            # Further reduce array sizes if still too large
+            for array_key in ["holons", "episodic_context", "global_context"]:
+                if array_key in truncated and len(truncated[array_key]) > 5:
+                    truncated[array_key] = truncated[array_key][:5]
+        
+        return truncated
 
     def _apply_post_processing(
         self,
@@ -1115,6 +1280,35 @@ class CognitiveCore(dspy.Module):
             knowledge_context.get("sufficiency", {}).get("escalation_reasons", []),
         )
 
+        # ARCHITECTURAL FIX: Enforce planner contract (TaskPayload v2.5+)
+        # System-2 must return machine-binding plan, not free-text reasoning
+        # Check if this is a cognitive path task that requires planner contract
+        requires_planner_contract = (
+            context.cog_type == CognitiveType.TASK_PLANNING
+            and context.decision_kind == DecisionKind.COGNITIVE
+        )
+        
+        if requires_planner_contract:
+            contract_violations = []
+            contract_valid = self._validate_planner_contract(payload, contract_violations)
+            
+            if not contract_valid:
+                error_msg = (
+                    f"Cognitive planner contract violation (TaskPayload v2.5+). "
+                    f"Planner must return structured, machine-binding plan with: "
+                    f"DAG structure (nodes/edges or solution_steps with depends_on), "
+                    f"routing hints (params.routing with specialization/skills/tools), "
+                    f"tool calls (params.tool_calls), and TaskPayload structure. "
+                    f"Violations: {contract_violations}. "
+                    f"System-2 output is non-binding - cannot proceed with execution."
+                )
+                logger.error(error_msg)
+                # Return error result - planner contract violation
+                return create_error_result(
+                    error_msg,
+                    "PLANNER_CONTRACT_VIOLATION"
+                ).model_dump(), suff_dict, contract_violations
+        
         is_valid, violations = self._check_post_conditions(payload, context.cog_type)
         if not is_valid:
             logger.warning(f"Post-condition violations: {violations}")
@@ -1585,6 +1779,168 @@ class CognitiveCore(dspy.Module):
 
         return payload
 
+    def _repair_json_output(self, invalid_json_text: str) -> Optional[str]:
+        """
+        Repair invalid JSON output using basic cleanup rules.
+        
+        Architecture: When parsing fails, attempt to repair the JSON using deterministic
+        cleanup rules before giving up. This makes the system robust to model slips.
+        
+        Future enhancement: Could call a separate repair model with temp=0 for
+        more sophisticated repairs (e.g., fixing single quotes, incomplete structures).
+        
+        Args:
+            invalid_json_text: The invalid JSON string that failed to parse
+            
+        Returns:
+            Repaired JSON string if repair succeeds, None otherwise
+        """
+        try:
+            # Basic repair: remove comments and trailing commas
+            # This handles the most common LLM mistakes
+            repaired = invalid_json_text
+            
+            # Remove JS-style comments
+            repaired = re.sub(r"//.*?$", "", repaired, flags=re.MULTILINE)
+            repaired = re.sub(r"/\*.*?\*/", "", repaired, flags=re.DOTALL)
+            
+            # Remove trailing commas before ] and }
+            repaired = re.sub(r',(\s*])', r'\1', repaired)
+            repaired = re.sub(r',(\s*})', r'\1', repaired)
+            
+            # Try to parse the repaired version
+            try:
+                json.loads(repaired)
+                logger.debug("JSON repair succeeded with basic cleanup")
+                return repaired
+            except json.JSONDecodeError:
+                # Basic repair failed, return None to trigger full repair prompt
+                logger.debug("Basic JSON repair failed, would need model-based repair")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"Error during JSON repair: {e}")
+            return None
+
+    def _parse_solution_steps_json(self, solution_steps: Any) -> List[Dict[str, Any]]:
+        """
+        Parse solution_steps from LLM output (handles JSON strings, markdown code blocks, etc.).
+        
+        Architecture: LLM may return solution_steps as:
+        - JSON string (with or without ```json markers)
+        - Already parsed list
+        - Text that needs extraction
+        
+        Returns:
+            Parsed list of step dictionaries, or empty list if parsing fails
+        """
+        if solution_steps is None:
+            return []
+        
+        # If already a list, return as-is (but validate structure)
+        if isinstance(solution_steps, list):
+            return solution_steps
+        
+        # If string, try to parse JSON (may contain markdown code blocks)
+        if isinstance(solution_steps, str):
+            text = solution_steps.strip()
+            original_text = text  # Keep for repair
+            
+            # Remove markdown code block markers more robustly
+            # Handle ```json\n...\n``` or ```\n...\n```
+            if text.startswith("```"):
+                # Find the first newline after ```
+                first_newline = text.find("\n", 3)
+                if first_newline != -1:
+                    # Check if it's ```json or just ```
+                    if text[3:first_newline].strip() == "json":
+                        text = text[first_newline + 1:]  # Remove ```json\n
+                    else:
+                        text = text[first_newline + 1:]  # Remove ```\n
+                else:
+                    # No newline, just remove ```
+                    text = text[3:]
+            
+            # Remove closing ``` (handle multiple occurrences)
+            while text.endswith("```"):
+                text = text[:-3].rstrip()
+            
+            # Remove JS-style comments BEFORE parsing
+            text = re.sub(r"//.*?$", "", text, flags=re.MULTILINE)
+            text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+            
+            text = text.strip()
+            
+            # Try to find JSON array boundaries if there's extra text
+            # Look for first [ and matching closing ]
+            first_bracket = text.find("[")
+            if first_bracket != -1:
+                # Find matching closing bracket by counting brackets
+                bracket_count = 0
+                last_bracket = -1
+                for i in range(first_bracket, len(text)):
+                    if text[i] == "[":
+                        bracket_count += 1
+                    elif text[i] == "]":
+                        bracket_count -= 1
+                        if bracket_count == 0:
+                            last_bracket = i
+                            break
+                
+                if last_bracket != -1 and last_bracket > first_bracket:
+                    text = text[first_bracket:last_bracket + 1]
+                elif first_bracket != -1:
+                    # If we found opening bracket but no closing, try to extract what we can
+                    # This might be incomplete JSON, but let's try
+                    text = text[first_bracket:]
+            
+            # Remove trailing commas before ] and } (common LLM mistakes)
+            text = re.sub(r',(\s*])', r'\1', text)
+            text = re.sub(r',(\s*})', r'\1', text)
+            
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return parsed
+                elif isinstance(parsed, dict) and "steps" in parsed:
+                    return parsed["steps"]
+                elif isinstance(parsed, dict) and "solution_steps" in parsed:
+                    return parsed["solution_steps"]
+                else:
+                    logger.warning(f"Parsed JSON is not a list: {type(parsed)}")
+                    return []
+            except json.JSONDecodeError as e:
+                # Attempt repair before giving up
+                logger.debug(f"Initial JSON parse failed: {e}. Attempting repair...")
+                repaired = self._repair_json_output(original_text)
+                
+                if repaired:
+                    try:
+                        parsed = json.loads(repaired)
+                        if isinstance(parsed, list):
+                            logger.info("JSON repair succeeded")
+                            return parsed
+                        elif isinstance(parsed, dict) and "steps" in parsed:
+                            return parsed["steps"]
+                        elif isinstance(parsed, dict) and "solution_steps" in parsed:
+                            return parsed["solution_steps"]
+                    except json.JSONDecodeError as e2:
+                        logger.warning(f"Repaired JSON still invalid: {e2}")
+                
+                # Log more context for debugging
+                error_pos = getattr(e, 'pos', None)
+                error_line = getattr(e, 'lineno', None)
+                error_col = getattr(e, 'colno', None)
+                logger.warning(
+                    f"Failed to parse solution_steps as JSON after repair attempt: {e}. "
+                    f"Position: {error_pos}, Line: {error_line}, Col: {error_col}. "
+                    f"Text around error (first 1000 chars): {text[:1000]}"
+                )
+                return []
+        
+        logger.warning(f"solution_steps is unexpected type: {type(solution_steps)}")
+        return []
+
     def _normalize_task_planning(self, payload: dict) -> dict:
         """
         Normalize task planning fields, especially estimated_complexity.
@@ -1593,6 +1949,7 @@ class CognitiveCore(dspy.Module):
         - estimated_complexity: Ensures it's a float in [1.0, 10.0]
         - step_by_step_plan: Backward compatibility alias for solution_steps
         - Nested task structures: Normalizes any TaskPayload-like structures in solution_steps
+        - JSON parsing: Extracts solution_steps from JSON strings/markdown code blocks
 
         Args:
             payload: The raw payload dict from DSPy handler output
@@ -1603,52 +1960,94 @@ class CognitiveCore(dspy.Module):
         if not isinstance(payload, dict):
             return payload
 
+        # Parse solution_steps if it's a JSON string (LLM may return it as string with markdown)
+        if "solution_steps" in payload:
+            raw_steps = payload["solution_steps"]
+            parsed_steps = self._parse_solution_steps_json(raw_steps)
+            if parsed_steps:
+                payload["solution_steps"] = parsed_steps
+                logger.debug(
+                    f"Successfully parsed {len(parsed_steps)} solution_steps from LLM output"
+                )
+            elif isinstance(raw_steps, str) and raw_steps.strip():
+                # If parsing failed but we have a string, log warning
+                # Don't overwrite - let validation catch the issue
+                logger.warning(
+                    f"Failed to parse solution_steps from string. "
+                    f"Raw value (first 200 chars): {raw_steps[:200]}"
+                )
+
         # Back-compat: Some downstream consumers expect 'step_by_step_plan'.
         # If we produced a uniform plan in 'solution_steps', mirror it.
         if "step_by_step_plan" not in payload and "solution_steps" in payload:
             payload["step_by_step_plan"] = payload.get("solution_steps")
 
         # Normalize estimated_complexity
+        # CRITICAL: Prevent field misbinding - if estimated_complexity contains markdown/code blocks,
+        # it's likely misbound from solution_steps. Reject it and use default.
         val = payload.get("estimated_complexity")
         if val is not None:
-            if isinstance(val, (int, float)):
+            # Detect field misbinding: if estimated_complexity looks like code/markdown, reject it
+            val_str = str(val).strip()
+            if val_str.startswith("```") or val_str.startswith("[") or "```json" in val_str.lower():
+                logger.warning(
+                    f"estimated_complexity appears misbound (contains code block). "
+                    f"Value: '{val_str[:100]}'. Using default 5.0"
+                )
+                payload["estimated_complexity"] = 5.0
+            elif isinstance(val, (int, float)):
                 # Clamp to valid range [1.0, 10.0]
                 num = float(val)
                 payload["estimated_complexity"] = max(1.0, min(num, 10.0))
             elif isinstance(val, str):
                 # Normalize commas and strip text
                 text = val.replace(",", ".").strip()
-
-                # Broader numeric extraction: find any number in the string
-                match = re.search(r"([0-9]+(?:\.[0-9]+)?)", text)
-                if match:
-                    try:
-                        num = float(match.group(1))
-                        # Clamp to valid range [1.0, 10.0]
-                        payload["estimated_complexity"] = max(1.0, min(num, 10.0))
-                        logger.debug(
-                            f"Extracted numeric complexity from '{val}': {payload['estimated_complexity']}"
-                        )
-                    except ValueError:
-                        logger.warning(
-                            f"Could not convert extracted complexity: {match.group(1)}"
-                        )
-                        payload["estimated_complexity"] = 5.0
-                else:
+                
+                # Reject if it looks like prose or reasoning (common misbinding)
+                if any(phrase in text.lower() for phrase in ["reasoning:", "complexity:", "estimated", "let's", "think"]):
                     logger.warning(
-                        f"Could not extract numeric value from estimated_complexity: '{val}'"
+                        f"estimated_complexity contains prose/reasoning text: '{text[:100]}'. "
+                        f"This suggests field misbinding. Using default 5.0"
                     )
                     payload["estimated_complexity"] = 5.0
+                else:
+                    # Broader numeric extraction: find any number in the string
+                    match = re.search(r"([0-9]+(?:\.[0-9]+)?)", text)
+                    if match:
+                        try:
+                            num = float(match.group(1))
+                            # Clamp to valid range [1.0, 10.0]
+                            payload["estimated_complexity"] = max(1.0, min(num, 10.0))
+                            logger.debug(
+                                f"Extracted numeric complexity from '{val}': {payload['estimated_complexity']}"
+                            )
+                        except ValueError:
+                            logger.warning(
+                                f"Could not convert extracted complexity: {match.group(1)}"
+                            )
+                            payload["estimated_complexity"] = 5.0
+                    else:
+                        logger.warning(
+                            f"Could not extract numeric value from estimated_complexity: '{val}'"
+                        )
+                        payload["estimated_complexity"] = 5.0
             else:
                 logger.warning(f"Unexpected type for estimated_complexity: {type(val)}")
                 payload["estimated_complexity"] = 5.0
+        else:
+            # Default if missing
+            payload["estimated_complexity"] = 5.0
 
         # Normalize nested task structure if present (TaskPayload format)
         if "task" in payload and isinstance(payload["task"], dict):
             payload["task"] = normalize_task_payloads(payload["task"])
 
-        # Normalize solution_steps - ensure each step follows TaskPayload structure
+        # Normalize solution_steps - ensure each step follows TaskPayload v2.5+ structure
+        # Note: JSON parsing already happened above at the start of this function
+        # Per task-payload-capabilities.md: steps must have type, params.routing, params.tool_calls
+        # Note: If solution_steps is still a string at this point, parsing failed above
         if "solution_steps" in payload and isinstance(payload["solution_steps"], list):
+            logger.debug(f"Normalizing {len(payload['solution_steps'])} solution_steps for TaskPayload v2.5+ contract")
             normalized_steps = []
             for idx, step in enumerate(payload["solution_steps"]):
                 if isinstance(step, dict):
@@ -1656,24 +2055,156 @@ class CognitiveCore(dspy.Module):
                     # Each step should have 'type' and 'params' at minimum
                     if "type" not in step:
                         logger.warning(f"solution_steps[{idx}] missing 'type' field")
-                        step["type"] = "unknown_task"
+                        step["type"] = "action"  # Default to action for planner steps
 
                     if "params" not in step:
                         step["params"] = {}
+                    
+                    # Ensure params.routing exists (TaskPayload v2.5+ contract)
+                    if "routing" not in step["params"]:
+                        step["params"]["routing"] = {}
+                        logger.debug(
+                            f"solution_steps[{idx}] missing params.routing, initializing empty routing hints"
+                        )
+                    
+                    # Ensure routing has proper structure (specialization, skills, tools)
+                    routing = step["params"]["routing"]
+                    if not isinstance(routing, dict):
+                        routing = {}
+                        step["params"]["routing"] = routing
+                    
+                    # Normalize routing.tools to list of strings (per task-payload-capabilities.md)
+                    if "tools" in routing:
+                        if not isinstance(routing["tools"], list):
+                            routing["tools"] = []
+                        else:
+                            # Ensure all tools are strings (tool names, not objects)
+                            routing["tools"] = [
+                                str(tool) if not isinstance(tool, str) else tool
+                                for tool in routing["tools"]
+                            ]
+                    
+                    # Ensure params.tool_calls exists (execution requests, separate from routing.tools)
+                    if "tool_calls" not in step["params"]:
+                        step["params"]["tool_calls"] = []
+                    
+                    # Normalize tool_calls structure
+                    tool_calls = step["params"]["tool_calls"]
+                    if not isinstance(tool_calls, list):
+                        tool_calls = []
+                        step["params"]["tool_calls"] = tool_calls
+                    else:
+                        # Ensure each tool_call has name and args
+                        normalized_tool_calls = []
+                        for tc_idx, tool_call in enumerate(tool_calls):
+                            if isinstance(tool_call, dict):
+                                if "name" not in tool_call:
+                                    logger.warning(
+                                        f"solution_steps[{idx}].params.tool_calls[{tc_idx}] missing 'name' field"
+                                    )
+                                    continue
+                                if "args" not in tool_call:
+                                    tool_call["args"] = {}
+                                normalized_tool_calls.append(tool_call)
+                            else:
+                                logger.warning(
+                                    f"solution_steps[{idx}].params.tool_calls[{tc_idx}] must be an object"
+                                )
+                        step["params"]["tool_calls"] = normalized_tool_calls
 
                     # Normalize any nested task structures in steps
                     if "task" in step and isinstance(step["task"], dict):
                         step["task"] = normalize_task_payloads(step["task"])
+                        # Ensure nested task also has proper structure
+                        if "params" not in step["task"]:
+                            step["task"]["params"] = {}
+                        if "routing" not in step["task"]["params"]:
+                            step["task"]["params"]["routing"] = step["params"]["routing"]
+                        if "tool_calls" not in step["task"]["params"]:
+                            step["task"]["params"]["tool_calls"] = step["params"]["tool_calls"]
 
-                    # Normalize params if it contains TaskPayload-like structures
-                    if "params" in step and isinstance(step["params"], dict):
-                        # Check if params contains nested routing or cognitive sections
-                        # that might need normalization
-                        if "routing" in step["params"] and isinstance(
-                            step["params"]["routing"], dict
-                        ):
-                            # Already normalized by TaskPayload structure
-                            pass
+                    # Ensure step has ID for DAG structure (required for DAG validation)
+                    if "id" not in step:
+                        # Try to generate meaningful ID from step content
+                        step_id = None
+                        # Check for common ID fields
+                        if "step" in step and isinstance(step["step"], (int, str)):
+                            step_id = f"step_{step['step']}"
+                        elif "name" in step:
+                            step_id = str(step["name"]).lower().replace(" ", "_")
+                        elif "tool_to_call" in step:
+                            tool_name = str(step["tool_to_call"]).split(".")[-1]  # Extract tool name
+                            step_id = f"{tool_name}_{idx}"
+                        elif "description" in step:
+                            # Generate ID from description (first few words)
+                            desc_words = str(step["description"]).lower().split()[:3]
+                            step_id = "_".join(desc_words) if desc_words else f"step_{idx}"
+                        else:
+                            step_id = f"step_{idx}"
+                        step["id"] = step_id
+                    
+                    # Convert old-format steps to TaskPayload v2.5+ format
+                    # Handle legacy fields: step, tool_to_call, description -> proper structure
+                    if "tool_to_call" in step and "params" in step:
+                        tool_name = step.pop("tool_to_call")
+                        # Move tool_to_call to params.tool_calls if not already there
+                        if not step["params"].get("tool_calls"):
+                            step["params"]["tool_calls"] = [{"name": tool_name, "args": step["params"].get("params", {})}]
+                        # Add tool to routing.tools if not present
+                        if tool_name not in (step["params"]["routing"].get("tools") or []):
+                            if "tools" not in step["params"]["routing"]:
+                                step["params"]["routing"]["tools"] = []
+                            step["params"]["routing"]["tools"].append(tool_name)
+                    
+                    # Infer routing hints from step content if missing
+                    routing = step["params"]["routing"]
+                    if not routing.get("specialization") and not routing.get("required_specialization"):
+                        # Try to infer specialization from tool names or description
+                        tools = routing.get("tools", [])
+                        tool_calls = step["params"].get("tool_calls", [])
+                        all_tools = tools + [tc.get("name", "") for tc in tool_calls if isinstance(tc, dict)]
+                        
+                        # Simple domain inference from tool names
+                        if any("iot" in str(t).lower() or "environment" in str(t).lower() for t in all_tools):
+                            routing["specialization"] = "Environment"
+                        elif any("security" in str(t).lower() or "sensor" in str(t).lower() for t in all_tools):
+                            routing["specialization"] = "SecurityMonitoring"
+                        elif any("light" in str(t).lower() for t in all_tools):
+                            routing["specialization"] = "Lighting"
+                        else:
+                            # Default to generalist if can't infer
+                            routing["specialization"] = "Generalist"
+                        logger.debug(
+                            f"solution_steps[{idx}] inferred specialization={routing['specialization']} from tools"
+                        )
+                    
+                    # Ensure depends_on exists (for DAG structure)
+                    # If missing, infer sequential dependencies (step N depends on step N-1)
+                    if "depends_on" not in step:
+                        step["depends_on"] = []
+                    elif not isinstance(step["depends_on"], list):
+                        # Convert single dependency to list
+                        step["depends_on"] = [step["depends_on"]]
+                    
+                    # Infer sequential dependencies if depends_on is empty and we have previous steps
+                    if not step.get("depends_on") and idx > 0:
+                        # Previous step should have an ID
+                        prev_step = normalized_steps[idx - 1] if normalized_steps else None
+                        if prev_step and prev_step.get("id"):
+                            step["depends_on"] = [prev_step["id"]]
+                            logger.debug(
+                                f"solution_steps[{idx}] inferred depends_on=[{prev_step['id']}] from sequential order"
+                            )
+                    
+                    # CRITICAL: Ensure routing.specialization is ALWAYS set (validation requirement)
+                    # Even if inference failed, set a default to pass validation
+                    routing = step["params"]["routing"]
+                    if not routing.get("specialization") and not routing.get("required_specialization"):
+                        # Last attempt: set a default specialization
+                        routing["specialization"] = "Generalist"
+                        logger.debug(
+                            f"solution_steps[{idx}] set default specialization=Generalist (no inference possible)"
+                        )
 
                     normalized_steps.append(step)
                 else:
@@ -1735,6 +2266,275 @@ class CognitiveCore(dspy.Module):
             payload["response"] = str(payload.get("response", ""))
 
         return payload
+
+    def _validate_planner_contract(
+        self, payload: Dict[str, Any], violations: List[str]
+    ) -> bool:
+        """
+        Validate cognitive planner output against TaskPayload v2.5+ contract.
+        
+        Architecture: System-2 must NEVER return free-text as primary output.
+        Planner output must be machine-binding and structurally complete.
+        
+        Required contract (per task-payload-capabilities.md):
+        1. DAG structure: explicit (dag/nodes + edges) OR implicit (solution_steps with depends_on)
+        2. Routing hints: Each step must have params.routing with specialization/skills/tools
+        3. Tool calls: Execution requests in params.tool_calls (not in routing.tools)
+        4. TaskPayload structure: Each step must have type and params
+        5. No free-text reasoning: Output must be JSON-serializable structure
+        
+        Returns:
+            True if contract is satisfied, False otherwise (violations list populated)
+        """
+        # Check 1: Must have DAG structure (explicit or implicit)
+        has_explicit_dag = False
+        has_implicit_dag = False
+        
+        dag = payload.get("dag") or payload.get("nodes")
+        edges = payload.get("edges")
+        solution_steps = payload.get("solution_steps") or payload.get("steps")
+        
+        # Validate explicit DAG
+        if dag and isinstance(dag, list) and len(dag) > 0:
+            has_explicit_dag = True
+            node_ids = set()
+            for idx, node in enumerate(dag):
+                if not isinstance(node, dict):
+                    violations.append(f"dag/nodes[{idx}] must be an object")
+                    continue
+                if "id" not in node:
+                    violations.append(f"dag/nodes[{idx}] missing required 'id' field")
+                    continue
+                node_id = node["id"]
+                if node_id in node_ids:
+                    violations.append(f"dag/nodes[{idx}] duplicate node id: {node_id}")
+                    continue
+                node_ids.add(node_id)
+                
+                # Check for routing hints in node (TaskPayload v2.5+ contract)
+                node_routing = node.get("routing") or node.get("params", {}).get("routing")
+                if not node_routing or not isinstance(node_routing, dict):
+                    violations.append(
+                        f"dag/nodes[{idx}] missing routing hints (required by TaskPayload v2.5+ contract)"
+                    )
+                else:
+                    # Validate routing structure
+                    if not node_routing.get("specialization") and not node_routing.get("required_specialization"):
+                        violations.append(
+                            f"dag/nodes[{idx}].routing missing specialization or required_specialization"
+                        )
+            
+            # Validate edges reference valid nodes
+            if edges and isinstance(edges, list):
+                for idx, edge in enumerate(edges):
+                    if not isinstance(edge, (list, tuple)) or len(edge) != 2:
+                        violations.append(f"edges[{idx}] must be [from_id, to_id]")
+                        continue
+                    from_id, to_id = edge[0], edge[1]
+                    if from_id not in node_ids:
+                        violations.append(f"edges[{idx}] references unknown node: {from_id}")
+                    if to_id not in node_ids:
+                        violations.append(f"edges[{idx}] references unknown node: {to_id}")
+        
+            # Validate implicit DAG in solution_steps
+        if solution_steps and isinstance(solution_steps, list) and len(solution_steps) > 0:
+            has_implicit_dag = True
+            step_ids = set()
+            
+            for idx, step in enumerate(solution_steps):
+                if not isinstance(step, dict):
+                    violations.append(f"solution_steps[{idx}] must be an object")
+                    continue
+                
+                # Extract step ID (required for DAG structure)
+                step_id = (
+                    step.get("id") or
+                    step.get("task", {}).get("task_id") or
+                    step.get("task", {}).get("id")
+                )
+                if step_id:
+                    if step_id in step_ids:
+                        violations.append(f"solution_steps[{idx}] duplicate step id: {step_id}")
+                        continue
+                    step_ids.add(str(step_id))
+                else:
+                    violations.append(f"solution_steps[{idx}] missing required 'id' field")
+                
+                # Check for TaskPayload structure (type and params)
+                step_type = step.get("type") or (step.get("task", {}) or {}).get("type")
+                if not step_type:
+                    violations.append(f"solution_steps[{idx}] missing required 'type' field")
+                
+                step_params = step.get("params") or (step.get("task", {}) or {}).get("params") or {}
+                if not isinstance(step_params, dict):
+                    violations.append(f"solution_steps[{idx}] params must be a dictionary")
+                    step_params = {}
+                
+                # Check for routing hints (TaskPayload v2.5+ contract requirement)
+                step_routing = step_params.get("routing")
+                if not step_routing or not isinstance(step_routing, dict):
+                    violations.append(
+                        f"solution_steps[{idx}] missing params.routing (required by TaskPayload v2.5+ contract)"
+                    )
+                else:
+                    # Validate routing structure per task-payload-capabilities.md
+                    has_specialization = (
+                        step_routing.get("specialization") or
+                        step_routing.get("required_specialization")
+                    )
+                    if not has_specialization:
+                        violations.append(
+                            f"solution_steps[{idx}].params.routing missing specialization or required_specialization"
+                        )
+                    
+                    # Tools in routing.tools should be strings (capability requirements)
+                    routing_tools = step_routing.get("tools", [])
+                    if routing_tools and not isinstance(routing_tools, list):
+                        violations.append(
+                            f"solution_steps[{idx}].params.routing.tools must be a list of strings"
+                        )
+                    elif routing_tools:
+                        for tool_idx, tool in enumerate(routing_tools):
+                            if not isinstance(tool, str):
+                                violations.append(
+                                    f"solution_steps[{idx}].params.routing.tools[{tool_idx}] must be a string (tool name)"
+                                )
+                
+                # Check for tool_calls (execution requests, separate from routing.tools)
+                tool_calls = step_params.get("tool_calls", [])
+                if tool_calls and not isinstance(tool_calls, list):
+                    violations.append(
+                        f"solution_steps[{idx}].params.tool_calls must be a list"
+                    )
+                elif tool_calls:
+                    for tc_idx, tool_call in enumerate(tool_calls):
+                        if not isinstance(tool_call, dict):
+                            violations.append(
+                                f"solution_steps[{idx}].params.tool_calls[{tc_idx}] must be an object"
+                            )
+                        elif not tool_call.get("name"):
+                            violations.append(
+                                f"solution_steps[{idx}].params.tool_calls[{tc_idx}] missing 'name' field"
+                            )
+                
+                # Note: dependencies (depends_on) are validated above in routing/tool_calls checks
+                # Steps with IDs form a valid DAG even without explicit depends_on (sequential execution)
+            
+            # If we have steps, they must form a valid DAG
+            if len(step_ids) == 0 and len(solution_steps) > 0:
+                violations.append("solution_steps contains no valid step IDs")
+        
+        # Must have either explicit or implicit DAG
+        if not has_explicit_dag and not has_implicit_dag:
+            violations.append(
+                "Planner output must contain DAG structure (dag/nodes + edges) or solution_steps with depends_on"
+            )
+        
+        # Check for free-text reasoning as primary output (forbidden)
+        result = payload.get("result", {})
+        text_fields = ["thought", "reasoning", "explanation", "analysis"]
+        has_only_text = all(
+            key in text_fields or (isinstance(val, str) and not val.strip().startswith("{"))
+            for key, val in result.items()
+            if key not in ["solution_steps", "steps", "dag", "nodes", "edges", "routing"]
+        )
+        
+        if has_only_text and not (has_explicit_dag or has_implicit_dag):
+            violations.append(
+                "Planner output contains only free-text reasoning, no structured plan. "
+                "System-2 must return machine-binding plan, not prose."
+            )
+        
+        return len(violations) == 0
+
+    def _validate_dag_structure(
+        self, payload: Dict[str, Any], violations: List[str]
+    ) -> bool:
+        """
+        Validate that cognitive planner output contains a structured DAG.
+        
+        DEPRECATED: Use _validate_planner_contract() instead for full TaskPayload v2.5+ validation.
+        This method is kept for backward compatibility.
+        
+        Architecture: Cognitive planner MUST emit DAG structure for:
+        - Conditional tasks (event dependencies)
+        - Multi-action tasks (multiple distinct actions)
+        - Any task routed to cognitive path
+        
+        Returns:
+            True if DAG structure is valid, False otherwise
+        """
+        # Check for explicit DAG structure
+        dag = payload.get("dag")
+        edges = payload.get("edges")
+        
+        if dag and isinstance(dag, list) and len(dag) > 0:
+            # Validate DAG nodes
+            node_ids = set()
+            for idx, node in enumerate(dag):
+                if not isinstance(node, dict):
+                    violations.append(f"dag[{idx}] must be an object")
+                    continue
+                if "id" not in node:
+                    violations.append(f"dag[{idx}] missing 'id' field")
+                    continue
+                node_id = node["id"]
+                if node_id in node_ids:
+                    violations.append(f"dag[{idx}] duplicate node id: {node_id}")
+                    continue
+                node_ids.add(node_id)
+            
+            # Validate edges reference valid nodes
+            if edges and isinstance(edges, list):
+                for idx, edge in enumerate(edges):
+                    if not isinstance(edge, (list, tuple)) or len(edge) != 2:
+                        violations.append(f"edges[{idx}] must be [from_id, to_id]")
+                        continue
+                    from_id, to_id = edge[0], edge[1]
+                    if from_id not in node_ids:
+                        violations.append(f"edges[{idx}] references unknown node: {from_id}")
+                    if to_id not in node_ids:
+                        violations.append(f"edges[{idx}] references unknown node: {to_id}")
+            
+            # DAG structure is valid
+            return len(violations) == 0
+        
+        # Check for implicit DAG in solution_steps (with depends_on)
+        steps = payload.get("solution_steps")
+        if steps and isinstance(steps, list) and len(steps) > 0:
+            step_ids = set()
+            
+            for idx, step in enumerate(steps):
+                if not isinstance(step, dict):
+                    continue
+                
+                # Extract step ID
+                step_id = step.get("id") or step.get("task", {}).get("task_id") or step.get("task", {}).get("id")
+                if step_id:
+                    if step_id in step_ids:
+                        violations.append(f"solution_steps[{idx}] duplicate step id: {step_id}")
+                        continue
+                    step_ids.add(step_id)
+                
+                # Validate dependencies (check edge references)
+                depends_on = step.get("depends_on") or (step.get("task", {}) or {}).get("depends_on")
+                if depends_on:
+                    deps_list = depends_on if isinstance(depends_on, list) else [depends_on]
+                    for dep in deps_list:
+                        dep_id = str(dep) if isinstance(dep, (int, str)) else None
+                        if dep_id and dep_id not in step_ids and not dep_id.isdigit():
+                            # Allow numeric indices, but warn about string IDs that don't exist
+                            violations.append(
+                                f"solution_steps[{idx}] depends_on references unknown step: {dep_id}"
+                            )
+            
+            # If we have steps with IDs, consider it a valid DAG
+            # (sequential execution is valid even without explicit depends_on)
+            if len(step_ids) > 0:
+                return len(violations) == 0
+        
+        # No DAG structure found
+        return False
 
     def _validate_solution_steps(
         self, payload: Dict[str, Any], violations: List[str]

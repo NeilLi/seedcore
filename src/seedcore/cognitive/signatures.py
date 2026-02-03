@@ -72,7 +72,15 @@ class AnalyzeFailureSignature(WithKnowledgeMixin, dspy.Signature):
 
 class TaskPlanningSignature(WithKnowledgeMixin, dspy.Signature):
     """
-    Decompose a high-level task into a structured multi-step execution plan.
+    Task Compiler: Synthesize a machine-binding execution plan from natural language.
+    
+    Architecture: System-2 is a COMPILER, not a reasoning model.
+    - Input: Natural language task description
+    - Output: Executable program (DAG of steps with routing hints)
+    - Contract: TaskPayload v2.5+ (DAG structure + routing + tool_calls)
+    
+    This is NOT a chat model. Output must be machine-executable structure.
+    Any prose or non-binding output will cause execution to fail.
     """
 
     task_description = dspy.InputField(
@@ -88,16 +96,51 @@ class TaskPlanningSignature(WithKnowledgeMixin, dspy.Signature):
     )
 
     thought = dspy.OutputField(
-        desc="Chain-of-thought. Interpret task, constraints, capabilities, and knowledge_context to build the plan."
+        desc="OPTIONAL: Brief internal reasoning (for debugging only). Keep under 50 tokens. Primary output is solution_steps."
     )
 
     solution_steps = dspy.OutputField(
-        desc="A structured step plan. [{'step': int, 'tool_to_call': str, 'params': dict, 'description': str}]",
-        prefix="```json\n"
+        desc=(
+            "REQUIRED: Machine-binding execution plan (JSON array).\n"
+            "\n"
+            "COMPILER OUTPUT RULES (NON-NEGOTIABLE):\n"
+            "1. Return ONLY a valid JSON array (no markdown, no ```json, no prose)\n"
+            "2. All keys MUST use double-quotes (no single quotes)\n"
+            "3. NO trailing commas (neither ,] nor ,})\n"
+            "4. NO comments (no // or /* */)\n"
+            "5. NO explanations outside the JSON structure\n"
+            "\n"
+            "SCHEMA (every step MUST include all fields):\n"
+            "{\n"
+            "  \"id\": \"string (unique identifier, e.g., 'detect_noise')\",\n"
+            "  \"type\": \"string (one of: 'action', 'query', 'event')\",\n"
+            "  \"depends_on\": [\"string (step IDs this depends on, empty [] for roots)\"],\n"
+            "  \"params\": {\n"
+            "    \"routing\": {\n"
+            "      \"specialization\": \"string (required: domain like 'SecurityMonitoring', 'Environment')\",\n"
+            "      \"tools\": [\"string (tool names, e.g., 'sensors.read_audio')\"]\n"
+            "    },\n"
+            "    \"tool_calls\": [\n"
+            "      {\"name\": \"string (tool name)\", \"args\": {}}\n"
+            "    ]\n"
+            "  }\n"
+            "}\n"
+            "\n"
+            "VALID EXAMPLE (copy structure, replace values):\n"
+            "[{\"id\":\"detect_noise\",\"type\":\"query\",\"depends_on\":[],\"params\":{\"routing\":{\"specialization\":\"SecurityMonitoring\",\"tools\":[\"sensors.read_audio\"]},\"tool_calls\":[{\"name\":\"sensors.read_audio\",\"args\":{\"location\":\"door\"}}]}},{\"id\":\"set_temperature\",\"type\":\"action\",\"depends_on\":[\"detect_noise\"],\"params\":{\"routing\":{\"specialization\":\"Environment\",\"tools\":[\"iot.write.environment\"]},\"tool_calls\":[{\"name\":\"iot.write.environment\",\"args\":{\"parameter\":\"temperature\",\"value\":36,\"unit\":\"C\"}}]}}]\n"
+            "\n"
+            "CRITICAL: If you cannot produce valid JSON with all required fields, return an empty array [] and set estimated_complexity to 10 (indicating failure)."
+        )
     )
 
     estimated_complexity = dspy.OutputField(
-        desc="Complexity estimate from 1 to 10."
+        desc=(
+            "Numeric complexity estimate (1-10).\n"
+            "MUST be a number only (integer or float), NOT a string.\n"
+            "Valid: 5, 7.5, 3.0\n"
+            "Invalid: '5', 'Reasoning: 5', 'Complexity: 5'\n"
+            "If compilation fails, return 10."
+        )
     )
 
 

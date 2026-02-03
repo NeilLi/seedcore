@@ -23,9 +23,12 @@ Service Integration:
 import os
 import re
 import json
+import sys
+import time
 import argparse
 import difflib
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import requests
 
@@ -99,6 +102,132 @@ def _print_soft_disable():
     if not PSYCOPG_OK:
         print("ℹ️ psycopg2 not installed. Run: pip install psycopg2-binary")
         print("   This enables graph operations like 'graph stats', 'graph link', etc.")
+
+def _parse_main_args(argv: list[str]):
+    """
+    Top-level CLI:
+      - no args -> interactive shell (existing behavior)
+      - one positional *.jsonl -> batch task submit mode
+    """
+    p = argparse.ArgumentParser(prog="seedcore", add_help=True)
+    p.add_argument(
+        "taskfile",
+        nargs="?",
+        help="Optional .jsonl file of task payloads. If provided, runs in batch mode.",
+    )
+    p.add_argument("--dry-run", action="store_true", help="Print tasks without submitting.")
+    p.add_argument("--stop-on-error", action="store_true", help="Stop at first submission error.")
+    p.add_argument("--sleep-ms", type=int, default=0, help="Sleep N ms between submissions.")
+    p.add_argument(
+        "--no-default-run",
+        action="store_true",
+        help="If a JSONL line omits run_immediately, default to False instead of True.",
+    )
+    return p.parse_args(argv)
+
+
+def _normalize_jsonl_task(line_obj: dict, default_run_immediately: bool = True) -> dict:
+    """
+    Accepts either:
+      A) 'raw payload' lines: already shaped like API create payload (has 'type' + 'description')
+      B) 'friendly' lines: same fields but we also allow small aliases
+
+    Returns a dict suitable for POST /api/v1/tasks
+    """
+    if not isinstance(line_obj, dict):
+        raise ValueError("Each JSONL line must be a JSON object.")
+
+    # Allow aliases
+    obj = dict(line_obj)
+
+    # Support 'task_type' alias
+    if "type" not in obj and "task_type" in obj:
+        obj["type"] = obj.pop("task_type")
+
+    # Support 'desc' alias
+    if "description" not in obj and "desc" in obj:
+        obj["description"] = obj.pop("desc")
+
+    if "type" not in obj or "description" not in obj:
+        raise ValueError("Task line missing required fields: 'type' and/or 'description'.")
+
+    # Default params
+    if "params" not in obj or obj["params"] is None:
+        obj["params"] = {}
+
+    # Default run_immediately if missing
+    if "run_immediately" not in obj:
+        obj["run_immediately"] = default_run_immediately
+
+    # Keep only fields the API is expected to accept (safe allowlist)
+    allowed = {"type", "description", "params", "domain", "run_immediately", "snapshot_id"}
+    normalized = {k: v for k, v in obj.items() if k in allowed}
+
+    return normalized
+
+
+def _submit_task_payload(payload: dict, dry_run: bool = False) -> dict | None:
+    """Submit a single task create payload; returns created task JSON, or None in dry-run."""
+    if dry_run:
+        print("🧪 DRY RUN payload:")
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return None
+
+    r = requests.post(f"{API_V1_BASE}/tasks", json=payload)
+    r.raise_for_status()
+    return r.json()
+
+
+def run_jsonl_batch(taskfile: str, *, dry_run: bool, stop_on_error: bool, sleep_ms: int, default_run_immediately: bool):
+    path = Path(taskfile)
+    if not path.exists():
+        raise FileNotFoundError(f"Task file not found: {taskfile}")
+    if path.suffix.lower() != ".jsonl":
+        print(f"⚠️ Warning: file does not end with .jsonl: {taskfile}")
+
+    total = 0
+    ok = 0
+    failed = 0
+
+    print(f"📦 Batch mode: reading {path}")
+    print(f"   API: {API_V1_BASE}")
+    if dry_run:
+        print("   Mode: DRY RUN (no submissions)")
+    print("=" * 70)
+
+    with path.open("r", encoding="utf-8") as f:
+        for lineno, raw in enumerate(f, start=1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            # Allow comment lines
+            if raw.startswith("#") or raw.startswith("//"):
+                continue
+
+            total += 1
+            try:
+                obj = json.loads(raw)
+                payload = _normalize_jsonl_task(obj, default_run_immediately=default_run_immediately)
+                created = _submit_task_payload(payload, dry_run=dry_run)
+
+                if created:
+                    print(f"✅ Line {lineno}: created {created['id'][:8]} [{created.get('type')}] status={created.get('status')}")
+                else:
+                    print(f"🧪 Line {lineno}: would submit type={payload['type']} desc={payload['description'][:60]!r}")
+
+                ok += 1
+
+            except Exception as e:
+                failed += 1
+                print(f"❌ Line {lineno}: {e}")
+                if stop_on_error:
+                    break
+
+            if sleep_ms and sleep_ms > 0:
+                time.sleep(sleep_ms / 1000.0)
+
+    print("=" * 70)
+    print(f"📊 Batch summary: total={total}, ok={ok}, failed={failed}")
 
 
 # ───────────────────────────── HTTP: tasks/facts/health ─────────────────────────────
@@ -394,6 +523,17 @@ def api_fact_del(fid: str):
     else:
         r.raise_for_status(); print("🗑️ Deleted")
 
+def create_task(task_type: str, description: str, params: dict | None = None, domain: str | None = None, run_immediately: bool = True):
+    payload = {
+        "type": task_type,
+        "description": description,
+        "params": params or {},
+        "run_immediately": run_immediately,
+    }
+    if domain:
+        payload["domain"] = domain
+    return _http_post(f"{API_V1_BASE}/tasks", payload)
+
 
 # ───────────────────────────── DB: HGNN graph ops ─────────────────────────────
 
@@ -687,5 +827,18 @@ def main():
     parser.print_help()
 
 if __name__ == "__main__":
-    main()
+    args = _parse_main_args(sys.argv[1:])
+
+    # If a taskfile is provided -> batch mode. Otherwise -> interactive mode (existing).
+    if args.taskfile:
+        default_run = not args.no_default_run
+        run_jsonl_batch(
+            args.taskfile,
+            dry_run=args.dry_run,
+            stop_on_error=args.stop_on_error,
+            sleep_ms=args.sleep_ms,
+            default_run_immediately=default_run,
+        )
+    else:
+        main()
 
