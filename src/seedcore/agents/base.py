@@ -264,16 +264,16 @@ class BaseAgent:
                     logger.warning(
                         f"[{self.agent_id}] ⚠️ Role profile not found for '{spec_value}', using GENERALIST"
                     )
-                    from .roles import DEFAULT_ROLE_REGISTRY
-                    self.role_profile = DEFAULT_ROLE_REGISTRY.get(Specialization.GENERALIST)
+                    from .roles import DEFAULT_ROLE_REGISTRY as _fallback_registry
+                    self.role_profile = _fallback_registry.get(Specialization.GENERALIST)
             except Exception as fallback_err:
                 logger.error(
                     f"[{self.agent_id}] ❌ Failed to get role profile: {fallback_err}",
                     exc_info=True
                 )
                 # Final fallback: Use default GENERALIST profile
-                from .roles import DEFAULT_ROLE_REGISTRY
-                self.role_profile = DEFAULT_ROLE_REGISTRY.get(Specialization.GENERALIST)
+                from .roles import DEFAULT_ROLE_REGISTRY as _fallback_registry
+                self.role_profile = _fallback_registry.get(Specialization.GENERALIST)
 
         # 3.5. Behavior Plugin System Initialization
         # Merge behaviors from: RoleProfile defaults + constructor args + role_profile behavior_config
