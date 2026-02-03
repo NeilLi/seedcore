@@ -158,6 +158,15 @@ Usage:
   python verify_seedcore_architecture.py --debug   # Run only routing debugging
   python verify_seedcore_architecture.py --strict  # Exit on validation failures
   python verify_seedcore_architecture.py --help    # Show this help
+
+TASK PAYLOAD (TaskPayload v2.5):
+  Task params follow the canonical envelope structure from:
+  - docs/references/task-payload-capabilities.md (capabilities, routing, tool_calls)
+  - docs/references/task_payload_router.md (params.interaction, params.routing, params._router, etc.)
+  Envelopes: params.interaction (mode), params.routing (Router Inbox), params.cognitive,
+  params.chat, params.tool_calls (execution requests), params.risk, params.multimodal.
+  Do not write params._router (system-generated). Use params.routing.tools for required
+  tool names; use params.tool_calls for executable invocations {name, args}.
 """
 
 # === METRICS / TIMEOUTS / GLOBALS ===
@@ -1000,6 +1009,122 @@ def pg_insert_generic_task(conn, ttype: str, description: str, params: dict[str,
             (str(tid), ttype, description, json.dumps(params), drift),
         )
     return tid
+
+
+def build_task_params_v25(
+    *,
+    interaction_mode: str = "coordinator_routed",
+    conversation_id: Optional[str] = None,
+    assigned_agent_id: Optional[str] = None,
+    required_specialization: Optional[str] = None,
+    specialization: Optional[str] = None,
+    skills: Optional[Dict[str, float]] = None,
+    tools: Optional[List[str]] = None,
+    routing_tags: Optional[List[str]] = None,
+    hints: Optional[Dict[str, Any]] = None,
+    cog_type: Optional[str] = None,
+    decision_kind: Optional[str] = None,
+    cognitive_profile: Optional[str] = None,
+    skip_retrieval: Optional[bool] = None,
+    disable_memory_write: Optional[bool] = None,
+    force_rag: Optional[bool] = None,
+    force_deep_reasoning: Optional[bool] = None,
+    chat_message: Optional[str] = None,
+    chat_history: Optional[List[Dict[str, Any]]] = None,
+    tool_calls: Optional[List[Dict[str, Any]]] = None,
+    risk: Optional[Dict[str, Any]] = None,
+    multimodal: Optional[Dict[str, Any]] = None,
+    graph: Optional[Dict[str, Any]] = None,
+    legacy_flat: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Build TaskPayload v2.5–aligned params (docs/references/task-payload-capabilities.md,
+    docs/references/task_payload_router.md). Envelopes: interaction, routing, cognitive,
+    chat, tool_calls, risk, multimodal, graph. Never writes _router.
+    """
+    params: Dict[str, Any] = {}
+    # Interaction envelope
+    params["interaction"] = {
+        "mode": interaction_mode,
+        "conversation_id": conversation_id,
+        "assigned_agent_id": assigned_agent_id,
+    }
+    # Router Inbox (read-only input)
+    routing_inbox: Dict[str, Any] = {}
+    if required_specialization is not None:
+        routing_inbox["required_specialization"] = required_specialization
+    if specialization is not None:
+        routing_inbox["specialization"] = specialization
+    if skills:
+        routing_inbox["skills"] = skills
+    if tools is not None:
+        routing_inbox["tools"] = list(tools)
+    if routing_tags:
+        routing_inbox["routing_tags"] = list(routing_tags)
+    if hints:
+        routing_inbox["hints"] = hints
+    if routing_inbox:
+        params["routing"] = routing_inbox
+    # Cognitive envelope
+    cognitive: Dict[str, Any] = {}
+    if cog_type is not None:
+        cognitive["cog_type"] = cog_type
+    if decision_kind is not None:
+        cognitive["decision_kind"] = decision_kind
+    if cognitive_profile is not None:
+        cognitive["cognitive_profile"] = cognitive_profile
+    if skip_retrieval is not None:
+        cognitive["skip_retrieval"] = skip_retrieval
+    if disable_memory_write is not None:
+        cognitive["disable_memory_write"] = disable_memory_write
+    if force_rag is not None:
+        cognitive["force_rag"] = force_rag
+    if force_deep_reasoning is not None:
+        cognitive["force_deep_reasoning"] = force_deep_reasoning
+    if cognitive:
+        params["cognitive"] = cognitive
+    if chat_message is not None or chat_history is not None:
+        params["chat"] = {"message": chat_message or "", "history": chat_history or []}
+    if tool_calls:
+        params["tool_calls"] = list(tool_calls)
+    if risk is not None:
+        params["risk"] = risk
+    if multimodal is not None:
+        params["multimodal"] = multimodal
+    if graph is not None:
+        params["graph"] = graph
+    if legacy_flat:
+        for k, v in legacy_flat.items():
+            if k not in ("_router",):
+                params[k] = v
+    return params
+
+
+def validate_task_params_v25(params: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    """
+    Validate params against TaskPayload v2.5 rules (task-payload-capabilities.md,
+    task_payload_router.md). Returns (ok, list of warning/error messages).
+    """
+    issues: List[str] = []
+    if not isinstance(params, dict):
+        return False, ["params must be a dict"]
+    if "_router" in params:
+        issues.append("params must not contain _router (system-generated only)")
+    routing = params.get("routing")
+    if isinstance(routing, dict) and "tools" in routing:
+        tools = routing["tools"]
+        if not isinstance(tools, list):
+            issues.append("params.routing.tools must be a list of tool name strings")
+        else:
+            for t in tools:
+                if not isinstance(t, str):
+                    issues.append("params.routing.tools must be tool names (strings), not invocation objects")
+                    break
+    tool_calls = params.get("tool_calls")
+    if tool_calls is not None and not isinstance(tool_calls, list):
+        issues.append("params.tool_calls must be a list of {name, args} objects")
+    return (len(issues) == 0, issues)
+
 
 def pg_create_graph_rag_task(conn, node_ids: list[int], hops: int, topk: int, description: str) -> Optional[uuid.UUID]:
     # Requires migrations that define create_graph_rag_task(...)
@@ -2136,23 +2261,32 @@ def test_coordinator_connectivity():
         else:
             log.warning(f"⚠️ Task endpoint {path} returned HTTP {code}: {txt[:100]}")
     
-    # Test with actual task types that the system expects
+    # Test with actual task types that the system expects (TaskPayload v2.5 params)
     log.info("🔍 TESTING WITH ACTUAL TASK TYPES")
     test_tasks = [
         {
             "type": "ping",
             "description": "Test connectivity with real task type",
-            "params": {"priority": "low"},
+            "params": build_task_params_v25(
+                interaction_mode="coordinator_routed",
+                hints={"priority": 3},
+                legacy_flat={"priority": "low"},
+            ),
             "drift_score": 0.1,
-            "run_immediately": True
+            "run_immediately": True,
         },
         {
-            "type": "general_query", 
+            "type": "general_query",
             "description": "Test escalation task type",
-            "params": {"force_decomposition": True},
+            "params": build_task_params_v25(
+                interaction_mode="coordinator_routed",
+                decision_kind="planner",
+                cog_type="task_planning",
+                legacy_flat={"force_decomposition": True},
+            ),
             "drift_score": 0.8,
-            "run_immediately": True
-        }
+            "run_immediately": True,
+        },
     ]
     
     for i, test_task in enumerate(test_tasks):
@@ -2883,13 +3017,13 @@ def verify_eventizer_domain_tagging(conn):
     for test_case in test_cases:
         log.info(f"\n📋 Testing {test_case['label']}: {test_case['description'][:50]}...")
         
-        # Create a test task
+        # Create a test task (TaskPayload v2.5: interaction + routing envelopes)
         payload = {
             "type": "general_query",
             "description": test_case["description"],
-            "params": {},
+            "params": build_task_params_v25(interaction_mode="coordinator_routed"),
             "drift_score": 0.5,
-            "run_immediately": False  # Don't actually execute
+            "run_immediately": False,  # Don't actually execute
         }
         
         # Submit via API to trigger eventizer
@@ -2962,11 +3096,16 @@ def verify_eventizer_domain_tagging(conn):
     return all_passed
 
 def scenario_fast_path(conn) -> uuid.UUID:
-    """Low drift → fast routing to organ."""
+    """Low drift → fast routing to organ. Uses TaskPayload v2.5 params envelopes."""
+    params = build_task_params_v25(
+        interaction_mode="coordinator_routed",
+        hints={"priority": 3},
+        legacy_flat={"priority": "low"},
+    )
     payload = {
         "type": "general_query",
         "description": "what time is it in UTC?",
-        "params": {"priority": "low"},
+        "params": params,
         "drift_score": min(0.1, env_float("OCPS_DRIFT_THRESHOLD", 0.5) / 2.0),
         "run_immediately": True,
     }
@@ -3025,11 +3164,18 @@ def scenario_escalation(conn) -> uuid.UUID:
     This should route via "planner" routing decision, which internally
     delegates to CognitiveCore for planning. The planner may use FAST or
     DEEP profile internally, but the routing decision is always "planner".
+    Uses TaskPayload v2.5 params (routing + cognitive envelopes).
     """
+    params = build_task_params_v25(
+        interaction_mode="coordinator_routed",
+        decision_kind="planner",
+        cog_type="task_planning",
+        legacy_flat={"force_decomposition": True},
+    )
     payload = {
         "type": "general_query",
         "description": "Plan a multi-step analysis over graph + retrieval + synthesis",
-        "params": {"force_decomposition": True},
+        "params": params,
         "drift_score": max(env_float("OCPS_DRIFT_THRESHOLD", 0.5) + 0.2, 0.9),
         "run_immediately": True,
     }
@@ -3053,15 +3199,21 @@ def scenario_cognitive_fast(conn) -> uuid.UUID:
     Trigger cognitive service (FAST profile) with a non-builtin query.
     
     Note: Since all tasks route through coordinator first, this task will be routed
-    via "planner" path. However, by explicitly setting cognitive_profile="fast" in params,
-    the router should respect this and use fast profile instead of defaulting to deep.
-    
-    The router checks params.cognitive_profile before defaulting to "deep" for planner routes.
+    via "planner" path. However, by explicitly setting cognitive_profile="fast" in
+    params.cognitive (TaskPayload v2.5), the router should respect this and use fast
+    profile instead of defaulting to deep.
     """
+    params = build_task_params_v25(
+        interaction_mode="coordinator_routed",
+        decision_kind="fast",
+        cog_type="chat",
+        cognitive_profile="fast",
+        legacy_flat={"force_decomposition": True},
+    )
     payload = {
         "type": "general_query",
         "description": "Summarize implications of Moore's Law on energy usage trends in datacenters.",
-        "params": {"force_decomposition": True, "cognitive_profile": "fast"},
+        "params": params,
         "drift_score": max(env_float("OCPS_DRIFT_THRESHOLD", 0.5) + 0.2, 0.8),
         "run_immediately": True,
     }
@@ -3086,14 +3238,21 @@ def scenario_cognitive_deep(conn) -> uuid.UUID:
     Trigger cognitive service via planner route with DEEP profile flag.
     
     Note: This should route via "planner" (not "deep" as a route decision).
-    The cognitive_profile="deep" parameter is a profile flag that the planner
-    uses internally to select LLMProfile.DEEP, but the routing decision
-    remains "planner".
+    params.cognitive (TaskPayload v2.5) carries cognitive_profile="deep" and
+    force_deep_reasoning; the planner uses these for LLMProfile.DEEP.
     """
+    params = build_task_params_v25(
+        interaction_mode="coordinator_routed",
+        decision_kind="planner",
+        cog_type="task_planning",
+        cognitive_profile="deep",
+        force_deep_reasoning=True,
+        legacy_flat={"force_decomposition": True},
+    )
     payload = {
         "type": "general_query",
         "description": "Design a multi-step plan integrating graph retrieval with LLM reasoning for anomaly triage.",
-        "params": {"force_decomposition": True, "cognitive_profile": "deep"},
+        "params": params,
         "drift_score": max(env_float("OCPS_DRIFT_THRESHOLD", 0.5) + 0.25, 0.9),
         "run_immediately": True,
     }
@@ -3125,36 +3284,40 @@ def scenario_hgnn_forced(conn) -> uuid.UUID:
     Option 1: Use force_hgnn flag (simplest)
     Option 2: Provide OCPS data that pushes x2 high
     """
-    # Option 1: Direct flag (recommended for testing)
+    # Option 1: Direct flag (recommended for testing). TaskPayload v2.5: routing + legacy_flat.
+    params_flag = build_task_params_v25(
+        interaction_mode="coordinator_routed",
+        hints={"priority": 7},
+        legacy_flat={"force_hgnn": True, "priority": "high"},
+    )
     payload_with_flag = {
         "type": "general_query",
         "description": "Complex analysis requiring full HGNN decomposition with hypergraph planning",
-        "params": {
-            "force_hgnn": True,  # Direct flag to bypass thresholds
-            "priority": "high"
-        },
+        "params": params_flag,
         "drift_score": 0.8,
         "run_immediately": True,
     }
     
-    # Option 2: OCPS data that pushes S > 0.6
+    # Option 2: OCPS data that pushes S > 0.6. TaskPayload v2.5: routing.hints + legacy_flat.
     # With x2 = 1.0 (weight 0.20) and others at 0.7:
     # S = 0.25*0.7 + 0.20*1.0 + 0.15*0.7 + 0.20*0.7 + 0.10*0.7 + 0.10*0.7
     # S = 0.175 + 0.20 + 0.105 + 0.14 + 0.07 + 0.07 = 0.76 > 0.6
+    params_ocps = build_task_params_v25(
+        interaction_mode="coordinator_routed",
+        hints={"priority": 7},
+        legacy_flat={
+            "ocps": {
+                "S_t": 1.0, "h": 1.0, "h_clr": 0.5, "flag_on": True,
+            },
+            "kappa": 0.7,
+            "criticality": 0.7,
+            "priority": "high",
+        },
+    )
     payload_with_ocps = {
         "type": "general_query",
         "description": "Complex analysis requiring full HGNN decomposition with hypergraph planning",
-        "params": {
-            "ocps": {
-                "S_t": 1.0,      # High CUSUM value
-                "h": 1.0,         # Threshold
-                "h_clr": 0.5,     # Clear threshold
-                "flag_on": True   # Flag is on
-            },
-            "kappa": 0.7,         # High kappa for x6
-            "criticality": 0.7,   # High criticality for x6
-            "priority": "high"
-        },
+        "params": params_ocps,
         "drift_score": 0.8,
         "run_immediately": True,
     }
@@ -3285,11 +3448,11 @@ def scenario_nim_task_embed(conn) -> Optional[uuid.UUID]:
         
         log.info(f"📋 Found {len(task_ids)} tasks for nim_task_embed test: {task_ids[:5]}")
         
-        # Create nim_task_embed task using simplified TaskType
-        # Use type="graph" with _legacy_type in params for backward compatibility
+        # Create nim_task_embed task using simplified TaskType (TaskPayload v2.5: graph ops
+        # can use params.graph or legacy params; _legacy_type for GraphDispatcher)
         params = {
             "start_task_ids": task_ids,
-            "_legacy_type": "nim_task_embed"  # Allow GraphDispatcher to infer graph_op
+            "_legacy_type": "nim_task_embed",  # Allow GraphDispatcher to infer graph_op
         }
         
         task_id = pg_insert_generic_task(
