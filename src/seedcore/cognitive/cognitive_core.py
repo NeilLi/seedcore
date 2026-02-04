@@ -304,7 +304,7 @@ class CognitiveCore(dspy.Module):
         self.failure_analyzer = dspy.ChainOfThought(AnalyzeFailureSignature)
         # Task planner is a COMPILER (not a reasoning model) - should use temp=0-0.2 for deterministic output
         # Note: Temperature is controlled at the LM level (see cognitive_service.py _create_dspy_lm)
-        self.task_planner = dspy.ChainOfThought(TaskPlanningSignature)
+        self.task_planner = dspy.Predict(TaskPlanningSignature)
         self.decision_maker = dspy.ChainOfThought(DecisionMakingSignature)
         self.problem_solver = dspy.ChainOfThought(ProblemSolvingSignature)
         # OPTIMIZATION: Use Predict (Direct) for Chat to ensure low latency
@@ -1148,6 +1148,24 @@ class CognitiveCore(dspy.Module):
         
         plan_build_end = time.time()
 
+        # Debug raw handler output (truncated) for planner misbinding diagnosis
+        try:
+            raw_preview = raw
+            if hasattr(raw, "toDict") and callable(raw.toDict):
+                raw_preview = raw.toDict()
+            elif hasattr(raw, "__dict__"):
+                raw_preview = {k: v for k, v in vars(raw).items() if not k.startswith("_")}
+            raw_text = str(raw_preview)
+            if len(raw_text) > 2000:
+                raw_text = raw_text[:2000] + "...(truncated)"
+            logger.debug(
+                f"Raw handler output for {context.cog_type.value} task_id={task_id or 'n/a'}: {raw_text}"
+            )
+        except Exception as e:
+            logger.debug(
+                f"Failed to serialize raw handler output for {context.cog_type.value} task_id={task_id or 'n/a'}: {e}"
+            )
+
         payload = self._to_payload(raw)
         logger.debug(
             f"Handler completed for {context.cog_type.value} task_id={task_id or 'n/a'} payload_keys={list(payload.keys())}"
@@ -1872,71 +1890,68 @@ class CognitiveCore(dspy.Module):
             text = text.strip()
             
             # Try to find JSON array boundaries if there's extra text
-            # Look for first [ and matching closing ]
-            first_bracket = text.find("[")
-            if first_bracket != -1:
-                # Find matching closing bracket by counting brackets
-                bracket_count = 0
-                last_bracket = -1
-                for i in range(first_bracket, len(text)):
-                    if text[i] == "[":
-                        bracket_count += 1
-                    elif text[i] == "]":
-                        bracket_count -= 1
-                        if bracket_count == 0:
-                            last_bracket = i
-                            break
-                
-                if last_bracket != -1 and last_bracket > first_bracket:
-                    text = text[first_bracket:last_bracket + 1]
-                elif first_bracket != -1:
-                    # If we found opening bracket but no closing, try to extract what we can
-                    # This might be incomplete JSON, but let's try
-                    text = text[first_bracket:]
+            # Collect all balanced JSON array candidates and try the longest first
+            array_candidates = []
+            bracket_count = 0
+            start_idx = None
+            for i, ch in enumerate(text):
+                if ch == "[":
+                    if bracket_count == 0:
+                        start_idx = i
+                    bracket_count += 1
+                elif ch == "]" and bracket_count > 0:
+                    bracket_count -= 1
+                    if bracket_count == 0 and start_idx is not None:
+                        array_candidates.append(text[start_idx : i + 1])
+                        start_idx = None
+            if array_candidates:
+                # Prefer the longest candidate (often the most complete array)
+                array_candidates.sort(key=len, reverse=True)
+            else:
+                # Fallback: if we found an opening bracket but no closing, try from first [
+                first_bracket = text.find("[")
+                if first_bracket != -1:
+                    array_candidates = [text[first_bracket:]]
             
-            # Remove trailing commas before ] and } (common LLM mistakes)
-            text = re.sub(r',(\s*])', r'\1', text)
-            text = re.sub(r',(\s*})', r'\1', text)
-            
-            try:
-                parsed = json.loads(text)
-                if isinstance(parsed, list):
-                    return parsed
-                elif isinstance(parsed, dict) and "steps" in parsed:
-                    return parsed["steps"]
-                elif isinstance(parsed, dict) and "solution_steps" in parsed:
-                    return parsed["solution_steps"]
-                else:
-                    logger.warning(f"Parsed JSON is not a list: {type(parsed)}")
-                    return []
-            except json.JSONDecodeError as e:
-                # Attempt repair before giving up
-                logger.debug(f"Initial JSON parse failed: {e}. Attempting repair...")
-                repaired = self._repair_json_output(original_text)
-                
-                if repaired:
-                    try:
-                        parsed = json.loads(repaired)
-                        if isinstance(parsed, list):
-                            logger.info("JSON repair succeeded")
-                            return parsed
-                        elif isinstance(parsed, dict) and "steps" in parsed:
-                            return parsed["steps"]
-                        elif isinstance(parsed, dict) and "solution_steps" in parsed:
-                            return parsed["solution_steps"]
-                    except json.JSONDecodeError as e2:
-                        logger.warning(f"Repaired JSON still invalid: {e2}")
-                
-                # Log more context for debugging
-                error_pos = getattr(e, 'pos', None)
-                error_line = getattr(e, 'lineno', None)
-                error_col = getattr(e, 'colno', None)
-                logger.warning(
-                    f"Failed to parse solution_steps as JSON after repair attempt: {e}. "
-                    f"Position: {error_pos}, Line: {error_line}, Col: {error_col}. "
-                    f"Text around error (first 1000 chars): {text[:1000]}"
-                )
-                return []
+            # Attempt parsing candidates
+            for candidate in array_candidates or [text]:
+                candidate = re.sub(r',(\s*])', r'\1', candidate)
+                candidate = re.sub(r',(\s*})', r'\1', candidate)
+                try:
+                    parsed = json.loads(candidate)
+                    if isinstance(parsed, list):
+                        return parsed
+                    elif isinstance(parsed, dict) and "steps" in parsed:
+                        return parsed["steps"]
+                    elif isinstance(parsed, dict) and "solution_steps" in parsed:
+                        return parsed["solution_steps"]
+                    else:
+                        logger.warning(f"Parsed JSON is not a list: {type(parsed)}")
+                        return []
+                except json.JSONDecodeError:
+                    continue
+
+            # Attempt repair before giving up
+            logger.debug("Initial JSON parse failed: Attempting repair...")
+            repaired = self._repair_json_output(original_text)
+            if repaired:
+                try:
+                    parsed = json.loads(repaired)
+                    if isinstance(parsed, list):
+                        logger.info("JSON repair succeeded")
+                        return parsed
+                    elif isinstance(parsed, dict) and "steps" in parsed:
+                        return parsed["steps"]
+                    elif isinstance(parsed, dict) and "solution_steps" in parsed:
+                        return parsed["solution_steps"]
+                except json.JSONDecodeError as e2:
+                    logger.warning(f"Repaired JSON still invalid: {e2}")
+
+            logger.warning(
+                f"Failed to parse solution_steps as JSON after repair attempt. "
+                f"Text around error (first 1000 chars): {text[:1000]}"
+            )
+            return []
         
         logger.warning(f"solution_steps is unexpected type: {type(solution_steps)}")
         return []
@@ -1976,6 +1991,47 @@ class CognitiveCore(dspy.Module):
                     f"Failed to parse solution_steps from string. "
                     f"Raw value (first 200 chars): {raw_steps[:200]}"
                 )
+                # Repair attempt: concatenate partial solution_steps with estimated_complexity
+                est_val = payload.get("estimated_complexity")
+                if isinstance(est_val, str) and est_val.strip():
+                    combined = f"{raw_steps}\n{est_val}"
+                    combined_steps = self._parse_solution_steps_json(combined)
+                    if combined_steps:
+                        payload["solution_steps"] = combined_steps
+                        payload["estimated_complexity"] = 5.0
+                        logger.warning(
+                            "Recovered solution_steps by concatenating solution_steps + estimated_complexity. "
+                            "Reset estimated_complexity to default 5.0"
+                        )
+                # Recovery attempt: some models misbind full JSON plan into estimated_complexity
+                est_val = payload.get("estimated_complexity")
+                if isinstance(est_val, (str, list)) and est_val:
+                    est_text = est_val if isinstance(est_val, str) else json.dumps(est_val)
+                    est_text = est_text.strip()
+                    if est_text.startswith("[") or est_text.startswith("```"):
+                        recovered_steps = self._parse_solution_steps_json(est_val)
+                        if recovered_steps:
+                            payload["solution_steps"] = recovered_steps
+                            payload["estimated_complexity"] = 5.0
+                            logger.warning(
+                                "Recovered solution_steps from misbound estimated_complexity after parse failure. "
+                                "Reset estimated_complexity to default 5.0"
+                            )
+            else:
+                # Handle field misbinding: some models place JSON plan in estimated_complexity
+                est_val = payload.get("estimated_complexity")
+                if isinstance(est_val, (str, list)) and est_val:
+                    est_text = est_val if isinstance(est_val, str) else json.dumps(est_val)
+                    est_text = est_text.strip()
+                    if est_text.startswith("[") or est_text.startswith("```"):
+                        recovered_steps = self._parse_solution_steps_json(est_val)
+                        if recovered_steps:
+                            payload["solution_steps"] = recovered_steps
+                            payload["estimated_complexity"] = 5.0
+                            logger.warning(
+                                "Recovered solution_steps from misbound estimated_complexity payload. "
+                                "Reset estimated_complexity to default 5.0"
+                            )
 
         # Back-compat: Some downstream consumers expect 'step_by_step_plan'.
         # If we produced a uniform plan in 'solution_steps', mirror it.

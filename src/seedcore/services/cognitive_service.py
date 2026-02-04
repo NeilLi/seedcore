@@ -684,6 +684,15 @@ class CognitiveOrchestrator:
         else:
             # For DEEP profile (task planning), use higher token limit for structured JSON output
             max_tokens = 4096 if profile == LLMProfile.DEEP else 1024
+
+        # Ensure DEEP profile has a sane minimum to avoid JSON truncation
+        if profile == LLMProfile.DEEP:
+            try:
+                min_tokens = int(os.getenv("COGNITIVE_DEEP_MIN_TOKENS", "2048"))
+                if max_tokens < min_tokens:
+                    max_tokens = min_tokens
+            except ValueError:
+                pass
         
         if provider == "anthropic":
             lm = dspy.Anthropic(
@@ -749,6 +758,16 @@ class CognitiveOrchestrator:
                 # Check if DSPy.Google accepts safety_settings (may vary by version)
                 # If not, it will be ignored (no error)
                 lm_kwargs["safety_settings"] = safety_settings
+
+            # Try to request JSON-only responses if DSPy.Google supports it
+            try:
+                import inspect
+                sig = inspect.signature(dspy.Google.__init__)
+                if "response_mime_type" in sig.parameters:
+                    lm_kwargs["response_mime_type"] = "application/json"
+                    logger.debug("Enabled Google Gemini JSON response mode")
+            except Exception:
+                pass
             
             lm = dspy.Google(**lm_kwargs)
             

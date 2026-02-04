@@ -95,10 +95,6 @@ class TaskPlanningSignature(WithKnowledgeMixin, dspy.Signature):
         desc="Resource dict. {'memory_cells': [...], 'available_gpus': int}."
     )
 
-    thought = dspy.OutputField(
-        desc="OPTIONAL: Brief internal reasoning (for debugging only). Keep under 50 tokens. Primary output is solution_steps."
-    )
-
     solution_steps = dspy.OutputField(
         desc=(
             "REQUIRED: Machine-binding execution plan (JSON array).\n"
@@ -118,6 +114,8 @@ class TaskPlanningSignature(WithKnowledgeMixin, dspy.Signature):
             "  \"params\": {\n"
             "    \"routing\": {\n"
             "      \"specialization\": \"string (required: domain like 'SecurityMonitoring', 'Environment')\",\n"
+            "      \"required_specialization\": \"string (optional hard constraint)\",\n"
+            "      \"skills\": {\"skill_name\": 0.0},\n"
             "      \"tools\": [\"string (tool names, e.g., 'sensors.read_audio')\"]\n"
             "    },\n"
             "    \"tool_calls\": [\n"
@@ -125,6 +123,11 @@ class TaskPlanningSignature(WithKnowledgeMixin, dspy.Signature):
             "    ]\n"
             "  }\n"
             "}\n"
+            "\n"
+            "TASKPAYLOAD v2.5 REMINDERS:\n"
+            "- routing.tools = REQUIRED tool NAMES (strings), not objects\n"
+            "- params.tool_calls = executable tool invocations (objects with name + args)\n"
+            "- Do NOT output prose, markdown, bullets, or commentary\n"
             "\n"
             "VALID EXAMPLE (copy structure, replace values):\n"
             "[{\"id\":\"detect_noise\",\"type\":\"query\",\"depends_on\":[],\"params\":{\"routing\":{\"specialization\":\"SecurityMonitoring\",\"tools\":[\"sensors.read_audio\"]},\"tool_calls\":[{\"name\":\"sensors.read_audio\",\"args\":{\"location\":\"door\"}}]}},{\"id\":\"set_temperature\",\"type\":\"action\",\"depends_on\":[\"detect_noise\"],\"params\":{\"routing\":{\"specialization\":\"Environment\",\"tools\":[\"iot.write.environment\"]},\"tool_calls\":[{\"name\":\"iot.write.environment\",\"args\":{\"parameter\":\"temperature\",\"value\":36,\"unit\":\"C\"}}]}}]\n"
