@@ -1860,6 +1860,7 @@ class OrganismCore:
                 # We ALWAYS check agent ID pattern, even if routing params don't specify specialization
                 routing = params.get("routing", {}) if isinstance(params, dict) else {}
                 required_spec = routing.get("required_specialization") or routing.get("specialization")
+                is_hard_required = bool(routing.get("required_specialization"))
                 
                 # **ENHANCEMENT: Always derive required specialization from agent ID as fallback**
                 # Agent IDs often contain specialization name (e.g., "physical_actuation_organ_reachy_actuator_0")
@@ -1912,6 +1913,22 @@ class OrganismCore:
                             or ""
                         ).lower()
                         required_spec_lower = str(required_spec).strip().lower()
+                        # Attempt to resolve unknown/aliased specializations to a registered spec
+                        resolved_spec = self._resolve_registered_specialization(
+                            required_spec_lower, params
+                        )
+                        if resolved_spec and resolved_spec != required_spec_lower:
+                            self.logger.info(
+                                f"[OrganismCore] Resolved specialization alias '{required_spec_lower}' -> '{resolved_spec}'"
+                            )
+                            required_spec_lower = resolved_spec
+                        elif not resolved_spec and not is_hard_required:
+                            # Soft hint is unregistered; proceed without respawn
+                            self.logger.info(
+                                f"[OrganismCore] Soft specialization hint '{required_spec_lower}' not registered. "
+                                "Skipping respawn and executing with current agent."
+                            )
+                            required_spec_lower = current_spec or required_spec_lower
                         
                         if current_spec and current_spec != required_spec_lower:
                             self.logger.warning(
@@ -3245,6 +3262,7 @@ class OrganismCore:
                                 f"but this organ does not exist (available organs: {list(self.organs.keys())}). "
                                 f"Falling back to inference."
                             )
+
                     elif preferred_organ:
                         self.logger.debug(
                             f"⚠️ Capability '{capability_name}' has preferred_organ but it's not a string: {type(preferred_organ)}"
@@ -3376,6 +3394,83 @@ class OrganismCore:
             f"⚠️ Could not determine organ for specialization '{spec_str}' "
             f"(capability: '{capability_name}') and utility_organ is not available. Router will use fallback routing."
         )
+        return None
+
+    def _resolve_registered_specialization(
+        self, spec_str: str, params: Optional[Dict[str, Any]] = None
+    ) -> Optional[str]:
+        """
+        Resolve a specialization string to a registered specialization.
+
+        This handles aliasing and normalization for inputs like:
+        - "Manufacturing.Design" -> "manufacturing_design"
+        - "Design" -> best matching dynamic specialization (via routing_tags)
+        - Capability-backed specs (params.capability / params.executor.specialization)
+        """
+        if not spec_str:
+            return None
+
+        from seedcore.agents.roles.specialization import SpecializationManager
+
+        spec_manager = SpecializationManager.get_instance()
+        normalized = str(spec_str).strip().lower()
+
+        # 1) Direct or normalized variants
+        variants = [
+            normalized,
+            normalized.replace(".", "_"),
+            normalized.replace("-", "_"),
+            normalized.replace("/", "_"),
+        ]
+        for v in variants:
+            if spec_manager.is_registered(v):
+                return v
+
+        # 2) Capability-based fallback (if present)
+        params = params or {}
+        capability = params.get("capability")
+        if capability and spec_manager.is_registered(str(capability).strip().lower()):
+            return str(capability).strip().lower()
+
+        executor_spec = (
+            params.get("executor", {}).get("specialization")
+            if isinstance(params.get("executor"), dict)
+            else None
+        )
+        if executor_spec and spec_manager.is_registered(
+            str(executor_spec).strip().lower()
+        ):
+            return str(executor_spec).strip().lower()
+
+        # 3) Routing-tags based fallback (if unambiguous)
+        profiles = getattr(self.role_registry, "_profiles", {})
+        if isinstance(profiles, dict) and profiles:
+            token = normalized.replace(".", " ").replace("_", " ").replace("-", " ")
+            tokens = [t for t in token.split() if len(t) > 2]
+            routing_tags = []
+            routing = params.get("routing") if isinstance(params, dict) else None
+            if isinstance(routing, dict):
+                rt = routing.get("routing_tags")
+                if isinstance(rt, (list, tuple, set)):
+                    routing_tags = [str(t).lower() for t in rt]
+            matches: list[str] = []
+            for spec_obj, profile in profiles.items():
+                tags = getattr(profile, "routing_tags", set()) or set()
+                tags = {str(t).lower() for t in tags}
+                if (
+                    normalized in tags
+                    or any(t in tags for t in tokens)
+                    or any(t in tags for t in routing_tags)
+                ):
+                    spec_val = (
+                        spec_obj.value
+                        if hasattr(spec_obj, "value")
+                        else str(spec_obj)
+                    )
+                    matches.append(str(spec_val).lower())
+            if len(matches) == 1:
+                return matches[0]
+
         return None
 
     async def find_organs_with_specialization(self, spec_str: str) -> List[str]:

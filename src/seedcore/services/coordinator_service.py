@@ -437,6 +437,10 @@ class Coordinator:
         # Capability Monitor (initialized lazily on startup)
         self._capability_monitor: Optional[CapabilityMonitor] = None
         self._capability_monitor_task: Optional[asyncio.Task] = None
+        # Pending capability changes (Organism not ready / notify failed)
+        self._pending_capability_changes: list[dict[str, Any]] = []
+        self._capability_changes_lock = asyncio.Lock()
+        self._capability_retry_task: Optional[asyncio.Task] = None
 
         self._register_routes()
         
@@ -481,85 +485,60 @@ class Coordinator:
                 """Callback when capability changes are detected."""
                 if not changes:
                     return
-                
+
+                # Convert CapabilityChange objects to dicts for serialization
+                # Include snapshot_id for version consistency validation
+                # Include new_capability data so OrganismCore can rebuild role profiles
+                # **PRIORITY: This ensures pkg_subtask_types data overrides static YAML configs**
+                changes_dict = [{
+                    "capability_name": c.capability_name,
+                    "change_type": c.change_type,
+                    "specialization": c.specialization,
+                    "snapshot_id": c.snapshot_id,
+                    "new_capability": c.new_capability,  # Include full capability data for role profile rebuild
+                } for c in changes]
+
                 # Check if OrganismService is ready before attempting notification
-                # This prevents timeout errors during initialization
+                # If not ready, queue changes locally for retry
                 try:
                     # Use a short timeout for health check to fail fast during initialization
                     health = await self.organism_client.get("/health", timeout=3.0)
                     if not isinstance(health, dict) or not health.get("organism_initialized"):
-                        # Organism not ready yet - changes will be queued when it initializes
-                        # Don't log this as an error since it's expected during startup
-                        logger.debug(
-                            f"OrganismService not ready yet, skipping notification of {len(changes)} capability changes. "
-                            "Changes will be processed after initialization."
+                        await self._queue_capability_changes(
+                            changes_dict,
+                            reason="organism_not_ready",
                         )
                         return
                 except Exception as health_check_error:
                     # If health check fails, organism is likely not ready
-                    # This is expected during initialization, so don't log as warning
-                    # Suppress timeout errors specifically - they're expected during startup
-                    error_str = str(health_check_error)
-                    is_timeout = "Timeout" in type(health_check_error).__name__ or "timeout" in error_str.lower()
-                    if is_timeout:
-                        logger.debug(
-                            f"OrganismService health check timed out (still initializing), "
-                            f"skipping notification of {len(changes)} capability changes"
-                        )
-                    else:
-                        logger.debug(
-                            f"OrganismService health check failed (likely still initializing), "
-                            f"skipping notification of {len(changes)} capability changes: {health_check_error}"
-                        )
+                    await self._queue_capability_changes(
+                        changes_dict,
+                        reason=f"health_check_failed:{type(health_check_error).__name__}",
+                    )
                     return
-                
+
+                # Flush any pending changes before sending new ones
+                await self._flush_pending_capability_changes()
+
                 logger.info(
-                    f"📢 Notifying OrganismService of {len(changes)} capability changes"
+                    f"📢 Notifying OrganismService of {len(changes_dict)} capability changes"
                 )
                 try:
-                    # Notify OrganismService via RPC
-                    # Convert CapabilityChange objects to dicts for serialization
-                    # Include snapshot_id for version consistency validation
-                    # Include new_capability data so OrganismCore can rebuild role profiles
-                    # **PRIORITY: This ensures pkg_subtask_types data overrides static YAML configs**
-                    changes_dict = [{
-                        "capability_name": c.capability_name,
-                        "change_type": c.change_type,
-                        "specialization": c.specialization,
-                        "snapshot_id": c.snapshot_id,
-                        "new_capability": c.new_capability,  # Include full capability data for role profile rebuild
-                    } for c in changes]
-                    
-                    # Use Ray remote call if available, otherwise HTTP
-                    if hasattr(self.organism_client, "rpc_notify_capability_changes"):
-                        await self.organism_client.rpc_notify_capability_changes.remote(
-                            changes=changes_dict
-                        )
-                    else:
-                        # Fallback to HTTP POST if RPC not available
-                        # Use a shorter timeout for this call to fail fast if organism isn't ready
-                        await self.organism_client.post(
-                            "/capability-changes",
-                            json={"changes": changes_dict},
-                            timeout=10.0  # Shorter timeout to fail fast
+                    ok = await self._notify_organism_capability_changes(changes_dict)
+                    if not ok:
+                        await self._queue_capability_changes(
+                            changes_dict,
+                            reason="notify_failed",
                         )
                 except Exception as e:
-                    # Check if this is a timeout/connection error (expected during initialization)
-                    error_type = type(e).__name__
-                    is_timeout = "Timeout" in error_type or "ReadTimeout" in str(e) or "ConnectError" in error_type
-                    
-                    if is_timeout:
-                        # Timeout errors during initialization are expected - log at debug level
-                        logger.debug(
-                            f"OrganismService not ready for capability changes notification (timeout). "
-                            f"Changes will be processed after initialization. Error: {error_type}"
-                        )
-                    else:
-                        # Other errors should be logged as warnings
-                        logger.warning(
-                            f"Failed to notify OrganismService of capability changes: {e}",
-                            exc_info=True
-                        )
+                    logger.debug(
+                        f"Failed to notify OrganismService of capability changes: {e}",
+                        exc_info=True,
+                    )
+                    await self._queue_capability_changes(
+                        changes_dict,
+                        reason=f"notify_exception:{type(e).__name__}",
+                    )
 
             # Create monitor (without organism_core - we notify via RPC instead)
             monitor = CapabilityMonitor(
@@ -609,6 +588,7 @@ class Coordinator:
                             logger.info(
                                 f"✅ OrganismService ready (waited {waited:.1f}s), starting CapabilityMonitor"
                             )
+                            await self._flush_pending_capability_changes()
                             break
                     except Exception as e:
                         logger.debug(
@@ -636,6 +616,90 @@ class Coordinator:
         except RuntimeError:
             loop = asyncio.get_event_loop()
         self._capability_monitor_task = loop.create_task(_init_and_start())
+
+    async def _queue_capability_changes(
+        self, changes: list[dict[str, Any]], *, reason: str
+    ) -> None:
+        async with self._capability_changes_lock:
+            self._pending_capability_changes.extend(changes)
+            total = len(self._pending_capability_changes)
+        logger.info(
+            f"📦 Queued {len(changes)} capability changes (reason={reason}). Total queued: {total}"
+        )
+        # Kick a retry loop if not already running
+        if self._capability_retry_task is None or self._capability_retry_task.done():
+            try:
+                loop = asyncio.get_running_loop()
+                self._capability_retry_task = loop.create_task(
+                    self._retry_flush_capability_changes()
+                )
+            except RuntimeError:
+                # No running loop; retry will happen on next capability change
+                self._capability_retry_task = None
+
+    async def _flush_pending_capability_changes(self) -> None:
+        async with self._capability_changes_lock:
+            if not self._pending_capability_changes:
+                return
+            pending = list(self._pending_capability_changes)
+            self._pending_capability_changes.clear()
+
+        logger.info(
+            f"🔄 Flushing {len(pending)} queued capability changes to OrganismService"
+        )
+        ok = await self._notify_organism_capability_changes(pending)
+        if not ok:
+            # Re-queue on failure
+            await self._queue_capability_changes(pending, reason="flush_failed")
+
+    async def _retry_flush_capability_changes(self) -> None:
+        """Retry flushing pending capability changes with exponential backoff."""
+        backoff_s = 2.0
+        max_backoff_s = 30.0
+        while True:
+            await asyncio.sleep(backoff_s)
+            await self._flush_pending_capability_changes()
+            async with self._capability_changes_lock:
+                if not self._pending_capability_changes:
+                    return
+            backoff_s = min(backoff_s * 2.0, max_backoff_s)
+
+    async def _notify_organism_capability_changes(
+        self, changes: list[dict[str, Any]]
+    ) -> bool:
+        try:
+            # Use Ray remote call if available, otherwise HTTP
+            if hasattr(self.organism_client, "rpc_notify_capability_changes"):
+                await self.organism_client.rpc_notify_capability_changes.remote(
+                    changes=changes
+                )
+            else:
+                # Fallback to HTTP POST if RPC not available
+                await self.organism_client.post(
+                    "/capability-changes",
+                    json={"changes": changes},
+                    timeout=10.0,
+                )
+            return True
+        except Exception as e:
+            # Check if this is a timeout/connection error (expected during initialization)
+            error_type = type(e).__name__
+            is_timeout = (
+                "Timeout" in error_type
+                or "ReadTimeout" in str(e)
+                or "ConnectError" in error_type
+            )
+            if is_timeout:
+                logger.debug(
+                    f"OrganismService not ready for capability changes notification (timeout). "
+                    f"Changes will be retried. Error: {error_type}"
+                )
+            else:
+                logger.warning(
+                    f"Failed to notify OrganismService of capability changes: {e}",
+                    exc_info=True,
+                )
+            return False
 
     def _register_routes(self) -> None:
         """Unified Route Registration."""

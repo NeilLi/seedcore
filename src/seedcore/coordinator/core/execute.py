@@ -1056,6 +1056,13 @@ def _validate_planner_output(plan_res: Any, task: TaskPayload) -> Tuple[bool, Li
     
     # Extract plan structure
     result = plan_res.get("result", {})
+
+    # Detect CognitiveCore error envelope wrapped inside result
+    if isinstance(result, dict) and result.get("kind") == DecisionKind.ERROR.value:
+        payload = result.get("payload", {}) if isinstance(result.get("payload"), dict) else {}
+        err_msg = payload.get("error") or "Cognitive Core returned error"
+        errors.append(err_msg)
+        return False, errors
     dag = plan_res.get("dag") or result.get("dag")
     edges = plan_res.get("edges") or result.get("edges")
     nodes = plan_res.get("nodes") or result.get("nodes")
