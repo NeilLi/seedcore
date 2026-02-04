@@ -55,19 +55,26 @@ class TestExecuteTask:
     
     async def test_execute_task_fast_path(self):
         """Test execute_task for fast path decision."""
-        # Create task payload
+        # Create task payload with HIGH authority so coordinator can choose fast path
+        # (LOW authority cannot force FAST - see _determine_decision_kind)
         task = TaskPayload(
             task_id="task-123",
             type="test",
             description="test task",
+            params={
+                "cognitive": {
+                    "metadata": {"intent_class": {"authority": "HIGH"}},
+                },
+            },
         )
         
-        # Mock surprise computer
+        # Mock surprise computer (decision_kind used by _evaluate_surprise_signals)
         surprise_computer = FakeSurpriseComputer(return_value={
             "S": 0.2,  # Low surprise -> fast path
             "x": [0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
             "weights": [0.25, 0.20, 0.15, 0.20, 0.10, 0.10],
             "decision": "fast",
+            "decision_kind": "fast",
             "ocps": {"S_t": 0.1, "h": 0.5, "flag_on": False},
         })
 
@@ -79,12 +86,15 @@ class TestExecuteTask:
             sigma=0.15,
         )
 
+        # PKG must return non-empty result so we don't escalate to cognitive (empty PKG -> is_pkg_escalated)
         route_config = RouteConfig(
             surprise_computer=surprise_computer,
             ocps_valve=ocps_valve,
             tau_fast_exit=0.38,
             tau_plan_exit=0.57,
-            evaluate_pkg_func=AsyncMock(return_value={"tasks": [], "edges": []}),
+            evaluate_pkg_func=AsyncMock(return_value={
+                "steps": [{"task": {"type": "test", "id": "step-1"}}],
+            }),
             ood_to01=lambda x: x,
             pkg_timeout_s=2,
         )
@@ -224,12 +234,20 @@ class TestExecuteTask:
             pkg_timeout_s=2,
         )
 
-        # Mock cognitive client for escalated path
+        # Mock cognitive client for escalated path - must return valid planner output
+        # (_validate_planner_output requires DAG or solution_steps with routing hints)
         cognitive_client = Mock()
         cognitive_client.execute_async = AsyncMock(return_value={
             "success": True,
             "result": {
-                "solution_steps": [],
+                "solution_steps": [
+                    {
+                        "id": "step-1",
+                        "type": "action",
+                        "params": {"routing": {"specialization": "Generalist"}},
+                        "depends_on": [],
+                    }
+                ],
                 "proto_plan": {},
             },
         })
