@@ -74,6 +74,26 @@ class IntentEnricher:
         if not semantic_context:
             return intent
 
+        # HARD CONSTRAINT: If caller provided required_specialization in TaskPayload routing inbox,
+        # memory must NEVER override it. (docs/references/task-payload-capabilities.md §5.2)
+        try:
+            hard_required_spec = (
+                getattr(ctx, "params", {}) or {}
+            ).get("routing", {}).get("required_specialization")
+        except Exception:
+            hard_required_spec = None
+        if hard_required_spec:
+            # We allow confidence boosts when memory matches, but never specialization changes.
+            top_memory = semantic_context[0] if semantic_context else None
+            historical_spec = (
+                top_memory.get("metadata", {}).get("intended_specialization")
+                if isinstance(top_memory, dict)
+                else None
+            )
+            if historical_spec and historical_spec == hard_required_spec:
+                return replace(intent, confidence=IntentConfidence.HIGH)
+            return intent
+
         # 1. Check for 'Specialization Drift' in memory
         # If history shows a high similarity hit with a different specialization,
         # we suggest an override or adjust confidence.

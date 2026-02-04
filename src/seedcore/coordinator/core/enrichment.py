@@ -341,11 +341,42 @@ class RoutingPolicy:
         - PKG policy mandates it
         - User explicitly sets it
         
+        CRITICAL: Never override existing required_specialization (hard constraint per capabilities doc).
+        Tasks with required_specialization already have accurate routing and should be preserved.
+        
         This enricher respects authority levels and policy restrictions.
         """
         enrichments = {}
         domain = intent_class.get("domain")
         authority = intent_class.get("authority", AuthorityLevel.LOW.value)
+        
+        # CRITICAL: Preserve existing required_specialization (hard constraint)
+        # Per task-payload-capabilities.md: required_specialization is a HARD constraint
+        # that must be preserved and never overridden by enrichment
+        if existing_routing.get("required_specialization"):
+            logger.debug(
+                f"[Enrichment] Preserving existing required_specialization={existing_routing.get('required_specialization')} "
+                f"(hard constraint, not enriching routing)"
+            )
+            # Don't enrich routing if required_specialization already exists
+            # Only add routing tags if needed
+            routing_tags = []
+            if domain:
+                routing_tags.append(domain)
+            if intent_class.get("action"):
+                routing_tags.append(intent_class["action"])
+            if domain == "temperature":
+                routing_tags.extend(["temperature", "iot"])
+            elif domain == "lighting":
+                routing_tags.extend(["lighting", "iot"])
+            
+            if routing_tags:
+                existing_tags = existing_routing.get("routing_tags", [])
+                merged_tags = list(set(existing_tags + routing_tags))
+                if merged_tags != existing_tags:
+                    enrichments["routing_tags"] = merged_tags
+            
+            return enrichments
         
         if not domain:
             return enrichments
@@ -451,6 +482,9 @@ class CognitivePolicy:
         Rule: Single action + high confidence + clear routing -> FAST path.
         Respects authority levels: LOW authority can only suggest, not mandate.
         
+        CRITICAL: Tasks with required_specialization are treated as HIGH authority
+        because they have explicit routing constraints (per task-payload-capabilities.md).
+        
         Args:
             task_type: Current task type
             intent_class: Intent classification result (with authority)
@@ -458,6 +492,20 @@ class CognitivePolicy:
         """
         enrichments = {}
         authority = intent_class.get("authority", AuthorityLevel.LOW.value)
+        
+        # CRITICAL: Tasks with required_specialization have HIGH authority
+        # because they have explicit routing constraints (hard constraint per capabilities doc)
+        has_required_specialization = bool(effective_routing.get("required_specialization"))
+        if has_required_specialization:
+            # Override authority to HIGH for tasks with required_specialization
+            # This ensures they get FAST path routing regardless of intent provider authority
+            effective_authority = AuthorityLevel.HIGH.value
+            logger.debug(
+                f"[Enrichment] Task has required_specialization={effective_routing.get('required_specialization')}, "
+                f"treating as HIGH authority for cognitive decisions"
+            )
+        else:
+            effective_authority = authority
         
         # If task is ACTION with high confidence intent, use FAST path
         if task_type == TaskType.ACTION.value:
@@ -469,14 +517,19 @@ class CognitivePolicy:
                 effective_routing.get("required_specialization")
             )
             
-            # LOW authority can only suggest FAST path (advisory only)
-            # HIGH/MEDIUM authority can mandate it
-            if confidence >= 0.85 and has_specialization:
+            # For action tasks with required_specialization: always FAST path (HIGH authority)
+            # For other action tasks: require confidence >= 0.85 and appropriate authority
+            if has_required_specialization or (confidence >= 0.85 and has_specialization):
                 enrichments["cog_type"] = CognitiveType.CHAT.value
-                if authority in (AuthorityLevel.HIGH.value, AuthorityLevel.MEDIUM.value):
-                    # MEDIUM+ authority can set FAST path
+                if effective_authority in (AuthorityLevel.HIGH.value, AuthorityLevel.MEDIUM.value):
+                    # MEDIUM+ authority (or required_specialization) can set FAST path
                     enrichments["decision_kind"] = DecisionKind.FAST_PATH.value
                     enrichments["skip_retrieval"] = True
+                    if has_required_specialization:
+                        logger.info(
+                            f"[Enrichment] Action task with required_specialization={effective_routing.get('required_specialization')} "
+                            f"-> FAST path (hard constraint per capabilities doc)"
+                        )
                 elif self.policy.low_authority.get("allow_fast_path_suggestion", False):
                     # LOW authority: suggest but don't mandate (advisory only)
                     # The routing logic in execute.py will override this if PKG is empty

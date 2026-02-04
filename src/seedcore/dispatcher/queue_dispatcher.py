@@ -290,10 +290,20 @@ class Dispatcher:
             
             # B. Check if this is a long-running planning task that needs immediate ACK
             # Planning tasks can take 60+ seconds and would timeout the dispatcher
+            # EXCEPTION: Action tasks with required_specialization should use fast path, not planning
+            routing = payload.params.get("routing", {}) if payload.params else {}
+            has_required_specialization = bool(routing.get("required_specialization"))
+            is_action_with_fast_path = (
+                payload.type == "action" and has_required_specialization
+            )
+            
             is_planning_task = (
-                payload.params.get("cognitive", {}).get("cog_type") == "task_planning"
-                or payload.params.get("cognitive", {}).get("decision_kind") == "planner"
-                or payload.params.get("cognitive", {}).get("decision_kind") == "cognitive"
+                not is_action_with_fast_path  # Fast-path action tasks are NOT planning tasks
+                and (
+                    payload.params.get("cognitive", {}).get("cog_type") == "task_planning"
+                    or payload.params.get("cognitive", {}).get("decision_kind") == "planner"
+                    or payload.params.get("cognitive", {}).get("decision_kind") == "cognitive"
+                )
             )
             
             # C. Route and Execute
@@ -315,6 +325,12 @@ class Dispatcher:
                         # Planning tasks get extended timeout via router config
                         # Router timeout is already 90s, which should be sufficient
                         # If still timing out, we can implement async ACK pattern here
+                    elif is_action_with_fast_path:
+                        logger.info(
+                            f"[{self.name}] ⚡ Fast-path action task {task_id} detected (type=action, "
+                            f"required_specialization={routing.get('required_specialization')}) - "
+                            "routing directly to fast path"
+                        )
                     
                     # Standard routing through Coordinator
                     raw_result = await self._router.route_and_execute(payload)

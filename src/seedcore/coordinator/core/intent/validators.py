@@ -54,7 +54,7 @@ class IntentValidator:
             return errors
         
         # Check if intent has specialization (required for explicit PKG routing)
-        if intent.is_explicit() and not intent.has_specialization():
+        if intent.is_explicit() and not intent.specialization:
             errors.append(
                 "PKG routing intent is explicit but missing specialization. "
                 "PKG should always provide required_specialization or specialization."

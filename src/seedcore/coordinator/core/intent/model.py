@@ -6,6 +6,7 @@ from typing import Dict, Optional, Any, List
 class IntentSource(str, Enum):
     """Provenance of intent extraction."""
 
+    TASK_PAYLOAD_ROUTING = "task_payload.routing"  # TaskPayload params.routing (instance-level hard constraint)
     PKG_TOP_LEVEL = "pkg.top_level"
     PKG_STEP_EMBEDDED = "pkg.step[0]"
     PKG_AGGREGATED = "pkg.aggregated"
@@ -42,6 +43,7 @@ class RoutingIntent:
 
     def is_explicit(self) -> bool:
         return self.source in (
+            IntentSource.TASK_PAYLOAD_ROUTING,
             IntentSource.PKG_TOP_LEVEL,
             IntentSource.PKG_STEP_EMBEDDED,
             IntentSource.PKG_AGGREGATED,

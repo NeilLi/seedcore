@@ -260,6 +260,7 @@ class RouterConfig:
     """Configuration for router implementations."""
 
     timeout: float = 90.0  # Increased from 30s to 90s for long-running tasks
+    planning_timeout: float = 300.0  # default to 5 minutes for planning tasks
     max_retries: int = 3
     retry_delay: float = 1.0
     circuit_breaker_failures: int = 5
@@ -574,10 +575,20 @@ class CoordinatorHttpRouter(Router):
             task_id = task_payload.task_id
             
             # Check if this is a planning task (needs extended timeout)
+            # EXCEPTION: Action tasks with required_specialization should use fast path, not planning
+            routing = task_payload.params.get("routing", {}) if task_payload.params else {}
+            has_required_specialization = bool(routing.get("required_specialization"))
+            is_action_with_fast_path = (
+                task_payload.type == "action" and has_required_specialization
+            )
+            
             is_planning_task = (
-                task_payload.params.get("cognitive", {}).get("cog_type") == "task_planning"
-                or task_payload.params.get("cognitive", {}).get("decision_kind") == "planner"
-                or task_payload.params.get("cognitive", {}).get("decision_kind") == "cognitive"
+                not is_action_with_fast_path  # Fast-path action tasks are NOT planning tasks
+                and (
+                    task_payload.params.get("cognitive", {}).get("cog_type") == "task_planning"
+                    or task_payload.params.get("cognitive", {}).get("decision_kind") == "planner"
+                    or task_payload.params.get("cognitive", {}).get("decision_kind") == "cognitive"
+                )
             )
             
             # Use extended timeout for planning tasks
@@ -586,6 +597,12 @@ class CoordinatorHttpRouter(Router):
                 logger.debug(
                     f"[Router] 🧠 Planning task {task_id} detected - "
                     f"using extended timeout: {request_timeout}s"
+                )
+            elif is_action_with_fast_path:
+                logger.debug(
+                    f"[Router] ⚡ Fast-path action task {task_id} detected (type=action, "
+                    f"required_specialization={routing.get('required_specialization')}) - "
+                    "using standard timeout, routing to fast path"
                 )
             
             # Serialize to dict with JSON-compatible types

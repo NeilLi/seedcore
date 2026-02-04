@@ -769,11 +769,24 @@ class Coordinator:
 
             # Check if this is a planning task that needs immediate ACK
             # Planning tasks can take 60+ seconds and would timeout the dispatcher
+            # EXCEPTION: Action tasks with required_specialization should use fast path, not planning
             task_id = task_dict.get("task_id") or task_obj.task_id
+            task_type = task_dict.get("type") or task_obj.type
+            routing = task_dict.get("params", {}).get("routing", {}) if task_dict.get("params") else {}
+            has_required_specialization = bool(routing.get("required_specialization"))
+            
+            # Action tasks with required_specialization bypass planning (hard constraint for fast path)
+            is_action_with_fast_path = (
+                task_type == "action" and has_required_specialization
+            )
+            
             is_planning_task = (
-                task_dict.get("params", {}).get("cognitive", {}).get("cog_type") == "task_planning"
-                or task_dict.get("params", {}).get("cognitive", {}).get("decision_kind") == "planner"
-                or task_dict.get("params", {}).get("cognitive", {}).get("decision_kind") == "cognitive"
+                not is_action_with_fast_path  # Fast-path action tasks are NOT planning tasks
+                and (
+                    task_dict.get("params", {}).get("cognitive", {}).get("cog_type") == "task_planning"
+                    or task_dict.get("params", {}).get("cognitive", {}).get("decision_kind") == "planner"
+                    or task_dict.get("params", {}).get("cognitive", {}).get("decision_kind") == "cognitive"
+                )
             )
             
             # For planning tasks: Return immediate ACK, process async
@@ -781,6 +794,12 @@ class Coordinator:
                 logger.info(
                     f"🧠 Planning task {task_id} detected - returning immediate ACK, "
                     "processing asynchronously to avoid dispatcher timeout"
+                )
+            elif is_action_with_fast_path:
+                logger.info(
+                    f"⚡ Fast-path action task {task_id} detected (type=action, "
+                    f"required_specialization={routing.get('required_specialization')}) - "
+                    "routing directly to fast path, bypassing planning"
                 )
                 
                 # Return immediate ACK

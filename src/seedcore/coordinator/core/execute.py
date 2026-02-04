@@ -418,8 +418,43 @@ async def execute_task(
     #   Cognitive executes intent
     # Enrichment happens after Eventizer processing but before PKG evaluation,
     # ensuring tasks have complete operational intent before routing decisions.
+    #
+    # Operator control: deterministic task enrichment can be disabled via env.
+    # This is useful if you want Coordinator to rely solely on PKG + routing inbox
+    # + intent enrichers, without bootstrap heuristics.
+    #
+    # EXCEPTION: Even when enrichment is enabled, skip enrichment for action tasks
+    # with required_specialization. These tasks already have accurate routing
+    # information (hard constraint) and should not be mutated by heuristics.
     task_dict = task.model_dump()
-    enriched_task_dict = enrich_task_payload(task_dict, ctx)
+    routing = task_dict.get("params", {}).get("routing", {}) if task_dict.get("params") else {}
+    has_required_specialization = bool(routing.get("required_specialization"))
+    is_action_task = task_dict.get("type") == "action"
+
+    enrichment_enabled = os.getenv("COORDINATOR_TASK_ENRICHMENT_ENABLED", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    
+    if not enrichment_enabled:
+        logger.info(
+            f"[Coordinator] Skipping deterministic task enrichment for {ctx.task_id} "
+            "(COORDINATOR_TASK_ENRICHMENT_ENABLED=0)"
+        )
+        enriched_task_dict = task_dict
+    elif is_action_task and has_required_specialization:
+        logger.info(
+            f"[Coordinator] ⚡ Skipping enrichment for action task {ctx.task_id} "
+            f"with required_specialization={routing.get('required_specialization')} - "
+            "task already has accurate routing, routing directly to fast path"
+        )
+        # Skip enrichment - task already has accurate routing information
+        enriched_task_dict = task_dict
+    else:
+        enriched_task_dict = enrich_task_payload(task_dict, ctx)
+    
     # Update task object with enriched data (for downstream use)
     task = TaskPayload.model_validate(enriched_task_dict)
 
@@ -2175,7 +2210,36 @@ def _determine_decision_kind(
     
     CRITICAL: Conditional OR multi-action tasks are HARD cognitive gates.
     Enrichment (System-1) cannot override System-2 requirements.
+    
+    CRITICAL: Action tasks with required_specialization are HARD fast-path gates.
+    These tasks have explicit routing requirements and must route to fast path
+    (unless blocked by conditional triggers or multiple actions).
     """
+    # ARCHITECTURAL FIX: Hard fast-path gate for action tasks with required_specialization
+    # These tasks have explicit routing requirements and should bypass enrichment/escalation
+    # EXCEPT: Still respect hard cognitive gates (conditional triggers, multiple actions)
+    routing = task.params.get("routing", {}) if task.params else {}
+    has_required_specialization = bool(routing.get("required_specialization"))
+    is_action_task = task.type == "action"
+    
+    if is_action_task and has_required_specialization:
+        # Still respect hard cognitive gates
+        if has_conditions or has_multiple_actions:
+            logger.info(
+                f"[Coordinator] Hard cognitive gate overrides fast-path for task {task_id}: "
+                f"has_conditions={has_conditions}, has_multiple_actions={has_multiple_actions}. "
+                f"Required_specialization cannot override System-2 requirement."
+            )
+            return DecisionKind.COGNITIVE.value
+        
+        # Action task with required_specialization -> fast path (hard constraint)
+        logger.info(
+            f"[Coordinator] Hard fast-path gate enforced for task {task_id}: "
+            f"type=action, required_specialization={routing.get('required_specialization')}. "
+            f"Routing directly to fast path, bypassing escalation signals."
+        )
+        return DecisionKind.FAST_PATH.value
+    
     # ARCHITECTURAL FIX: Hard cognitive gate - non-negotiable
     # Conditional triggers or multiple actions MUST route to cognitive path
     # This cannot be overridden by enrichment, regardless of authority level
@@ -2190,6 +2254,21 @@ def _determine_decision_kind(
     # Check enrichment decision (only if not blocked by hard gate)
     existing_cognitive = task.params.get("cognitive", {}) if task.params else {}
     enrichment_decision_kind = existing_cognitive.get("decision_kind")
+
+    # Respect explicit caller cognitive intent (TaskPayload v2.5+ cognitive envelope).
+    # If the caller requests planning (task_planning / planner), we must take the
+    # cognitive path unless a hard fast-path gate already returned above.
+    caller_requests_planning = (
+        existing_cognitive.get("cog_type") == "task_planning"
+        or existing_cognitive.get("decision_kind") in ("planner", "cognitive")
+    )
+    if caller_requests_planning:
+        logger.info(
+            f"[Coordinator] Caller requested planning for task {task_id} via params.cognitive "
+            f"(cog_type={existing_cognitive.get('cog_type')}, "
+            f"decision_kind={existing_cognitive.get('decision_kind')}) - routing to cognitive path"
+        )
+        return DecisionKind.COGNITIVE.value
     
     # If enrichment set FAST path, check if we can preserve it
     if enrichment_decision_kind == DecisionKind.FAST_PATH.value:
@@ -2271,6 +2350,26 @@ def _resolve_routing_intent(
     Priority: proto_plan > enrichment routing (FAST only) > config resolver > minimal fallback (FAST only)
     """
     intent: Optional[RoutingIntent] = None
+
+    # 0) HARD PRIORITY: Task instance routing inbox (TaskPayload v2.5+)
+    # Per docs/references/task-payload-capabilities.md:
+    # - params.routing.required_specialization is a HARD constraint and must be honored.
+    # - Instance-level routing overrides all defaults (type-level, PKG suggestions, memory).
+    existing_routing = task.params.get("routing", {}) if task.params else {}
+    required_spec = existing_routing.get("required_specialization")
+    if required_spec:
+        intent = RoutingIntent(
+            specialization=str(required_spec),
+            skills=existing_routing.get("skills", {}) or {},
+            source=IntentSource.TASK_PAYLOAD_ROUTING,  # hard constraint from caller
+            confidence=IntentConfidence.HIGH,
+            metadata={"hard_constraint": "required_specialization"},
+        )
+        logger.info(
+            f"[Coordinator] Using TaskPayload routing hard constraint for task {ctx.task_id}: "
+            f"required_specialization={required_spec} (source={intent.source.value})"
+        )
+        return intent
     
     # First: Extract from PKG proto_plan (authoritative)
     if proto_plan:
