@@ -69,6 +69,7 @@ from seedcore.serve.energy_client import EnergyServiceClient
 from seedcore.models import TaskPayload
 from seedcore.models.holon import Holon, HolonType, HolonScope
 from seedcore.models.result_schema import make_envelope, normalize_envelope
+from seedcore.models.cognitive import DecisionKind
 
 from seedcore.organs.organ import Organ  # ← NEW ORGAN CLASS
 from seedcore.organs.tunnel_policy import TunnelActivationPolicy
@@ -360,6 +361,8 @@ class OrganismCore:
         self._recon_interval = int(os.getenv("RECONCILE_INTERVAL_S", "20"))
         self._shutdown_event = asyncio.Event()
         self._reconcile_queue: List[tuple] = []
+        # Cache for fallback generalist agents (per organ)
+        self._generalist_fallback_agents: Dict[str, str] = {}
         # Track agent creation times to avoid false positives during initialization
         self._agent_creation_times: Dict[
             str, float
@@ -1784,15 +1787,66 @@ class OrganismCore:
             payload.model_dump() if hasattr(payload, "model_dump") else payload
         ) or {}
         params = task_dict.get("params", {})
+        router_meta = params.get("_router", {}) if isinstance(params, dict) else {}
+        if not isinstance(router_meta, dict):
+            router_meta = {}
+
+        # --- 1.2. RBAC soft-fallback: convert to cognitive guidance instead of respawn ---
+        # If router explicitly fell back due to RBAC/tool restrictions, avoid respawning
+        # agents and provide a user-facing guidance response via cognitive service.
+        router_reason = str(router_meta.get("reason") or "")
+        if router_reason.startswith("rbac_soft_fallback"):
+            routing = params.get("routing", {}) if isinstance(params, dict) else {}
+            tools_list = routing.get("tools") if isinstance(routing, dict) else None
+            spec_hint = None
+            if isinstance(routing, dict):
+                spec_hint = (
+                    routing.get("required_specialization")
+                    or routing.get("specialization")
+                )
+            return await self._cognitive_fallback_for_rbac_denied(
+                organ_id=organ_id,
+                organ_handle=organ,
+                agent_id=agent_id,
+                task_id=task_id,
+                spec_hint=str(spec_hint) if spec_hint else None,
+                tools=tools_list,
+                task_dict=task_dict,
+            )
 
         try:
+            # --- 1.5. Specialization sanity guard + GENERALIST cognitive fallback ---
+            routing = params.get("routing", {}) if isinstance(params, dict) else {}
+            required_spec = (
+                routing.get("required_specialization") or routing.get("specialization")
+            )
+            is_hard_required = bool(routing.get("required_specialization"))
+            if required_spec and is_hard_required:
+                resolved = self._resolve_registered_specialization(
+                    str(required_spec).strip().lower(), params
+                )
+                if not resolved:
+                    fallback = await self._cognitive_fallback_for_unregistered_spec(
+                        organ_id=organ_id,
+                        organ_handle=organ,
+                        agent_id=agent_id,
+                        task_id=task_id,
+                        required_spec=str(required_spec),
+                        task_dict=task_dict,
+                    )
+                    return fallback
+
             # --- 2. Agent Resolution (JIT Handling) ---
             # We abstract the "Try Get -> Fail -> Spawn -> Retry" loop here
-            agent_handle = await self._ensure_agent_handle(
+            requested_agent_id = agent_id
+            requested_organ_id = organ_id
+            resolved_agent_id = agent_id
+            resolved_organ_id = organ_id
+            agent_resolution = await self._ensure_agent_handle(
                 organ, organ_id, agent_id, params
             )
 
-            if not agent_handle:
+            if not agent_resolution:
                 return make_envelope(
                     task_id=task_id,
                     success=False,
@@ -1801,6 +1855,12 @@ class OrganismCore:
                     retry=True,  # Allow retry after respawn completes
                     path="organism_core",
                 )
+            resolved_agent_id, agent_handle, resolved_organ_id = agent_resolution
+            resolved_organ = self.organs.get(resolved_organ_id, organ)
+            used_fallback = (
+                resolved_agent_id != requested_agent_id
+                or resolved_organ_id != requested_organ_id
+            )
 
             # --- 2.5. Agent Readiness Check (prevent execution on respawning agents) ---
             # Check if agent is ready by attempting a lightweight ping
@@ -1828,14 +1888,14 @@ class OrganismCore:
                 except (asyncio.TimeoutError, Exception) as e:
                     if attempt < max_readiness_checks - 1:
                         self.logger.info(
-                            f"[{agent_id}] Agent not ready (attempt {attempt + 1}/{max_readiness_checks}): {e}. "
+                            f"[{resolved_agent_id}] Agent not ready (attempt {attempt + 1}/{max_readiness_checks}): {e}. "
                             f"Waiting {readiness_check_delay}s before retry..."
                         )
                         await asyncio.sleep(readiness_check_delay)
                         readiness_check_delay *= 2  # Exponential backoff
                     else:
                         self.logger.warning(
-                            f"[{agent_id}] Agent handle exists but not responding after {max_readiness_checks} attempts. "
+                            f"[{resolved_agent_id}] Agent handle exists but not responding after {max_readiness_checks} attempts. "
                             f"Agent may be respawning. Error: {e}"
                         )
 
@@ -1843,16 +1903,22 @@ class OrganismCore:
                 return make_envelope(
                     task_id=task_id,
                     success=False,
-                    error=f"Agent '{agent_id}' is not ready (may be respawning). Please retry.",
+                    error=f"Agent '{resolved_agent_id}' is not ready (may be respawning). Please retry.",
                     error_type="agent_not_ready",
                     retry=True,  # Allow retry after agent becomes ready
-                    meta={"agent_status": "respawning_or_unavailable"},
+                    meta={
+                        "agent_status": "respawning_or_unavailable",
+                        "requested_agent_id": requested_agent_id,
+                        "resolved_agent_id": resolved_agent_id,
+                        "requested_organ_id": requested_organ_id,
+                        "resolved_organ_id": resolved_organ_id,
+                    },
                     path="organism_core",
                 )
 
             if agent_handle:
                 self.logger.info(
-                    f"[OrganismCore] Agent handle resolved and ready: {agent_id} in {organ_id}"
+                    f"[OrganismCore] Agent handle resolved and ready: {resolved_agent_id} in {resolved_organ_id}"
                 )
                 
                 # **CRITICAL FIX: Always check for specialization mismatch before execution**
@@ -1861,12 +1927,13 @@ class OrganismCore:
                 routing = params.get("routing", {}) if isinstance(params, dict) else {}
                 required_spec = routing.get("required_specialization") or routing.get("specialization")
                 is_hard_required = bool(routing.get("required_specialization"))
+                router_reason = str(router_meta.get("reason") or "")
                 
                 # **ENHANCEMENT: Always derive required specialization from agent ID as fallback**
                 # Agent IDs often contain specialization name (e.g., "physical_actuation_organ_reachy_actuator_0")
                 # This ensures we catch mismatches even when routing params don't specify specialization
                 if not required_spec:
-                    agent_id_lower = agent_id.lower()
+                    agent_id_lower = resolved_agent_id.lower()
                     # Try to extract specialization from agent ID
                     from seedcore.agents.roles.specialization import SpecializationManager
                     spec_manager = SpecializationManager.get_instance()
@@ -1884,7 +1951,7 @@ class OrganismCore:
                 
                 # **ALWAYS check agent specialization - derive from agent ID if routing params don't specify**
                 # This ensures we catch mismatches even when routing params don't specify specialization
-                agent_id_lower_check = agent_id.lower()
+                agent_id_lower_check = resolved_agent_id.lower()
                 
                 # Try to derive specialization from agent ID pattern if routing params don't have it
                 if not required_spec:
@@ -1902,10 +1969,13 @@ class OrganismCore:
                 
                 # **CRITICAL: Always check agent specialization if we can derive it from agent ID**
                 # This catches agents with wrong specialization even when routing params don't specify it
-                if required_spec:
+                # Skip specialization respawn if router explicitly fell back due to RBAC
+                if required_spec and not used_fallback and not router_reason.startswith("rbac_soft_fallback"):
                     # Check agent's actual specialization
                     try:
-                        agent_info_ref = organ.get_agent_info.remote(agent_id)
+                        agent_info_ref = resolved_organ.get_agent_info.remote(
+                            resolved_agent_id
+                        )
                         agent_info = await self._ray_await(agent_info_ref)
                         current_spec = (
                             agent_info.get("specialization", "")
@@ -1932,7 +2002,7 @@ class OrganismCore:
                         
                         if current_spec and current_spec != required_spec_lower:
                             self.logger.warning(
-                                f"🔧 Agent {agent_id} has specialization mismatch: "
+                                f"🔧 Agent {resolved_agent_id} has specialization mismatch: "
                                 f"current='{current_spec}' != required='{required_spec_lower}'. "
                                 f"Respawning with correct specialization..."
                             )
@@ -1953,21 +2023,23 @@ class OrganismCore:
                                     
                                     # Try to get actor by name and kill it
                                     try:
-                                        old_actor = ray.get_actor(agent_id, namespace=AGENT_NAMESPACE)
+                                        old_actor = ray.get_actor(resolved_agent_id, namespace=AGENT_NAMESPACE)
                                         ray.kill(old_actor, no_restart=True)
-                                        self.logger.info(f"🔪 Force killed Ray actor '{agent_id}' in namespace '{AGENT_NAMESPACE}'")
+                                        self.logger.info(f"🔪 Force killed Ray actor '{resolved_agent_id}' in namespace '{AGENT_NAMESPACE}'")
                                         # Wait for Ray to clean up the actor
                                         await asyncio.sleep(1.0)
                                     except ValueError:
                                         # Actor doesn't exist, that's fine
-                                        self.logger.debug(f"Ray actor '{agent_id}' doesn't exist, proceeding with respawn")
+                                        self.logger.debug(f"Ray actor '{resolved_agent_id}' doesn't exist, proceeding with respawn")
                                     except Exception as kill_err:
-                                        self.logger.warning(f"Failed to kill Ray actor '{agent_id}': {kill_err}")
+                                        self.logger.warning(f"Failed to kill Ray actor '{resolved_agent_id}': {kill_err}")
                                 except Exception as e:
                                     self.logger.warning(f"Error during Ray actor cleanup: {e}")
                                 
                                 # Remove from organ registry (force kill by name to ensure clean removal)
-                                remove_ref = organ.remove_agent.remote(agent_id, force_kill_by_name=True)
+                                remove_ref = resolved_organ.remove_agent.remote(
+                                    resolved_agent_id, force_kill_by_name=True
+                                )
                                 await self._ray_await(remove_ref)
                                 
                                 # Additional cleanup: ensure Ray actor is gone
@@ -1976,7 +2048,7 @@ class OrganismCore:
                                     # Double-check and wait for actor to be fully removed
                                     for _ in range(5):  # Check up to 5 times
                                         try:
-                                            test_actor = ray.get_actor(agent_id, namespace=AGENT_NAMESPACE)
+                                            test_actor = ray.get_actor(resolved_agent_id, namespace=AGENT_NAMESPACE)
                                             # Still exists, kill it again
                                             ray.kill(test_actor, no_restart=True)
                                             await asyncio.sleep(0.3)
@@ -1987,14 +2059,14 @@ class OrganismCore:
                                     self.logger.debug(f"Cleanup check error (non-fatal): {cleanup_err}")
                                 
                                 # Respawn with correct specialization
-                                agent_opts = self._get_agent_actor_options(agent_id)
+                                agent_opts = self._get_agent_actor_options(resolved_agent_id)
                                 # CRITICAL: Use force_replace=True to ensure clean respawn
                                 # Also remove get_if_exists to prevent Ray from reusing old actor
                                 agent_opts_clean = {k: v for k, v in agent_opts.items() if k != "get_if_exists"}
-                                create_ref = organ.create_agent.remote(
-                                    agent_id=agent_id,
+                                create_ref = resolved_organ.create_agent.remote(
+                                    agent_id=resolved_agent_id,
                                     specialization=spec,
-                                    organ_id=organ_id,
+                                    organ_id=resolved_organ_id,
                                     agent_class_name=agent_class,
                                     force_replace=True,  # Force replace existing agent
                                     **agent_opts_clean,
@@ -2002,29 +2074,35 @@ class OrganismCore:
                                 await self._ray_await(create_ref)
                                 
                                 # Update local mapping
-                                self.agent_to_organ_map[agent_id] = organ_id
+                                self.agent_to_organ_map[resolved_agent_id] = resolved_organ_id
                                 
                                 # Get new handle
-                                agent_handle = await self._ensure_agent_handle(
-                                    organ, organ_id, agent_id, params
+                                respawn_resolution = await self._ensure_agent_handle(
+                                    resolved_organ,
+                                    resolved_organ_id,
+                                    resolved_agent_id,
+                                    params,
+                                )
+                                agent_handle = (
+                                    respawn_resolution[1] if respawn_resolution else None
                                 )
                                 
                                 if not agent_handle:
                                     return make_envelope(
                                         task_id=task_id,
                                         success=False,
-                                        error=f"Agent '{agent_id}' respawn failed after specialization fix.",
+                                        error=f"Agent '{resolved_agent_id}' respawn failed after specialization fix.",
                                         error_type="agent_respawn_failed",
                                         retry=True,
                                         path="organism_core",
                                     )
                                 
                                 self.logger.info(
-                                    f"✅ Successfully respawned agent {agent_id} with specialization '{required_spec_lower}'"
+                                    f"✅ Successfully respawned agent {resolved_agent_id} with specialization '{required_spec_lower}'"
                                 )
                             except Exception as e:
                                 self.logger.error(
-                                    f"❌ Failed to respawn agent {agent_id} with correct specialization: {e}",
+                                    f"❌ Failed to respawn agent {resolved_agent_id} with correct specialization: {e}",
                                     exc_info=True
                                 )
                                 return make_envelope(
@@ -2060,7 +2138,7 @@ class OrganismCore:
             else:
                 if is_high_stakes:
                     self.logger.warning(
-                        f"[{agent_id}] High-stakes requested but handler missing. Downgrading."
+                        f"[{resolved_agent_id}] High-stakes requested but handler missing. Downgrading."
                     )
                 ref = agent_handle.execute_task.remote(task_dict)
 
@@ -2071,13 +2149,25 @@ class OrganismCore:
             except asyncio.CancelledError:
                 # If cancelled, check if agent is still alive
                 self.logger.warning(
-                    f"[{agent_id}] Task execution was cancelled. Agent may be respawning."
+                    f"[{resolved_agent_id}] Task execution was cancelled. Agent may be respawning."
                 )
                 raise  # Re-raise to propagate cancellation
 
             # --- 4. Tunnel Lifecycle (Side Effect) ---
             # Manage sticky sessions based on the result
-            await self._manage_tunnel_lifecycle(task_dict, result, agent_id)
+            await self._manage_tunnel_lifecycle(task_dict, result, resolved_agent_id)
+
+            # --- 4.5. RBAC -> Cognitive Fallback for Unregistered Specialization ---
+            fallback = await self._maybe_cognitive_fallback_on_rbac(
+                organ_id=organ_id,
+                organ_handle=organ,
+                agent_id=agent_id,
+                task_id=task_id,
+                task_dict=task_dict,
+                result=result,
+            )
+            if fallback:
+                return fallback
 
             # --- 5. Return Standardized Response ---
             # Normalize agent result to canonical envelope if needed
@@ -2089,40 +2179,55 @@ class OrganismCore:
                 # Merge organism-specific metadata
                 normalized["meta"] = {
                     **normalized.get("meta", {}),
-                    "organ_id": organ_id,
-                    "agent_id": agent_id,
+                    "organ_id": resolved_organ_id,
+                    "agent_id": resolved_agent_id,
+                    "requested_agent_id": requested_agent_id,
+                    "requested_organ_id": requested_organ_id,
                 }
-                return normalized
+                return self._post_process_agent_result(
+                    normalized, resolved_organ_id, resolved_agent_id
+                )
             else:
                 # Agent returned legacy format, wrap in canonical envelope
-                return make_envelope(
+                wrapped = make_envelope(
                     task_id=task_id,
                     success=True,
                     payload=result,
                     meta={
-                        "organ_id": organ_id,
-                        "agent_id": agent_id,
+                        "organ_id": resolved_organ_id,
+                        "agent_id": resolved_agent_id,
+                        "requested_agent_id": requested_agent_id,
+                        "requested_organ_id": requested_organ_id,
                     },
                     path="organism_core",
+                )
+                return self._post_process_agent_result(
+                    wrapped, resolved_organ_id, resolved_agent_id
                 )
 
         except asyncio.CancelledError:
             # Task was cancelled - likely due to agent respawning or upstream cancellation
             self.logger.warning(
-                f"[Execute] Task execution cancelled for {agent_id}. "
+                f"[Execute] Task execution cancelled for {requested_agent_id}. "
                 f"Agent may be respawning or request was cancelled upstream."
             )
             return make_envelope(
                 task_id=task_id,
                 success=False,
-                error=f"Task execution was cancelled. Agent '{agent_id}' may be respawning.",
+                error=f"Task execution was cancelled. Agent '{requested_agent_id}' may be respawning.",
                 error_type="cancelled",
                 retry=True,  # Allow retry after agent becomes ready
-                meta={"agent_status": "cancelled_or_respawning"},
+                meta={
+                    "agent_status": "cancelled_or_respawning",
+                    "requested_agent_id": requested_agent_id,
+                    "resolved_agent_id": resolved_agent_id,
+                    "requested_organ_id": requested_organ_id,
+                    "resolved_organ_id": resolved_organ_id,
+                },
                 path="organism_core",
             )
         except asyncio.TimeoutError:
-            self.logger.error(f"[Execute] Timeout on {agent_id} after {timeout}s")
+            self.logger.error(f"[Execute] Timeout on {requested_agent_id} after {timeout}s")
             return make_envelope(
                 task_id=task_id,
                 success=False,
@@ -2134,7 +2239,7 @@ class OrganismCore:
 
         except Exception as e:
             self.logger.error(
-                f"[Execute] Critical failure on {agent_id}: {e}", exc_info=True
+                f"[Execute] Critical failure on {requested_agent_id}: {e}", exc_info=True
             )
             return make_envelope(
                 task_id=task_id,
@@ -2145,12 +2250,444 @@ class OrganismCore:
                 path="organism_core",
             )
 
+    async def _ensure_generalist_fallback_agent(
+        self, organ_id: str, organ_handle: Any
+    ) -> Optional[str]:
+        """
+        Ensure a GENERALIST fallback agent exists for the organ.
+        Returns agent_id if created or found, otherwise None.
+        """
+        try:
+            existing = self._generalist_fallback_agents.get(organ_id)
+            if existing:
+                try:
+                    handle_ref = organ_handle.get_agent_handle.remote(existing)
+                    handle = await self._ray_await(handle_ref, timeout=2.0)
+                    if handle:
+                        return existing
+                except Exception:
+                    pass
+
+            fallback_id = f"{organ_id}_generalist_fallback"
+            # Avoid duplicate creation if already exists in Ray
+            try:
+                ray.get_actor(fallback_id, namespace=RAY_NAMESPACE)
+                self._generalist_fallback_agents[organ_id] = fallback_id
+                return fallback_id
+            except ValueError:
+                pass
+
+            spec = Specialization.GENERALIST
+            agent_opts = self._get_agent_actor_options(fallback_id)
+            await organ_handle.create_agent.remote(
+                agent_id=fallback_id,
+                specialization=spec,
+                organ_id=organ_id,
+                agent_class_name="BaseAgent",
+                **agent_opts,
+            )
+            self.agent_to_organ_map[fallback_id] = organ_id
+            self._agent_creation_times[fallback_id] = asyncio.get_running_loop().time()
+            self._generalist_fallback_agents[organ_id] = fallback_id
+            return fallback_id
+        except Exception as e:
+            self.logger.warning(
+                f"[{organ_id}] Failed to ensure GENERALIST fallback agent: {e}"
+            )
+            return None
+
+    async def _find_existing_fallback_handle(self) -> Optional[tuple[str, Any, str]]:
+        """
+        Try to reuse an existing GENERALIST or USER_LIAISON agent handle.
+        Preference order:
+        1) utility_organ (generalist)
+        2) user_experience_organ (user_liaison)
+        3) any organ with a GENERALIST or USER_LIAISON
+        """
+        preferred_organs = []
+        if "utility_organ" in self.organs:
+            preferred_organs.append("utility_organ")
+        if "user_experience_organ" in self.organs:
+            preferred_organs.append("user_experience_organ")
+
+        # Build ordered organ list
+        seen = set(preferred_organs)
+        ordered_organs = list(preferred_organs) + [
+            oid for oid in self.organs.keys() if oid not in seen
+        ]
+
+        # Try GENERALIST first, then USER_LIAISON
+        candidates = [
+            Specialization.GENERALIST.value,
+            Specialization.USER_LIAISON.value,
+        ]
+
+        for organ_id in ordered_organs:
+            organ_handle = self.organs.get(organ_id)
+            if not organ_handle:
+                continue
+            for spec_val in candidates:
+                try:
+                    ref = organ_handle.pick_agent_by_specialization.remote(
+                        spec_val, {}
+                    )
+                    res = await self._ray_await(ref, timeout=2.0)
+                    if isinstance(res, tuple) and len(res) == 2:
+                        agent_id, handle = res
+                        if handle:
+                            self.logger.info(
+                                f"[OrganismCore] Reusing existing fallback agent for '{spec_val}' in '{organ_id}'"
+                            )
+                            return agent_id, handle, organ_id
+                except Exception:
+                    continue
+
+        return None
+
+    async def _cognitive_fallback_for_unregistered_spec(
+        self,
+        *,
+        organ_id: str,
+        organ_handle: Any,
+        agent_id: str,
+        task_id: str,
+        required_spec: str,
+        task_dict: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Use a GENERALIST fallback agent to call cognitive service and craft
+        a user-facing guidance message when specialization is unregistered.
+        """
+        fallback_agent_id = await self._ensure_generalist_fallback_agent(
+            organ_id, organ_handle
+        )
+        if not self.cognitive_client:
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                error=(
+                    f"Specialization '{required_spec}' is not registered and cognitive "
+                    "fallback is unavailable."
+                ),
+                error_type="specialization_unregistered",
+                retry=False,
+                meta={
+                    "organ_id": organ_id,
+                    "agent_id": agent_id,
+                    "required_specialization": required_spec,
+                },
+                path="organism_core",
+            )
+
+        try:
+            cog_task = dict(task_dict or {})
+            cog_params = cog_task.get("params", {}) or {}
+            cog_params.setdefault("cognitive", {})
+            cog_params["cognitive"].update(
+                {
+                    "decision_kind": DecisionKind.COGNITIVE.value,
+                    "note": "fallback_for_unregistered_specialization",
+                }
+            )
+            cog_task["params"] = cog_params
+            cog_task.setdefault(
+                "description",
+                f"Provide guidance: specialization '{required_spec}' is not registered. "
+                "Suggest next steps or alternatives.",
+            )
+
+            response = await self.cognitive_client.execute_async(
+                agent_id=fallback_agent_id or agent_id,
+                cog_type="problem_solving",
+                decision_kind=DecisionKind.COGNITIVE,
+                task=cog_task,
+            )
+
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                payload={
+                    "owner_message": response,
+                    "reason": "specialization_unregistered",
+                    "required_specialization": required_spec,
+                },
+                error=(
+                    f"Specialization '{required_spec}' is not registered. "
+                    "Provided guidance via cognitive fallback."
+                ),
+                error_type="specialization_unregistered",
+                retry=False,
+                meta={
+                    "organ_id": organ_id,
+                    "agent_id": agent_id,
+                    "fallback_agent_id": fallback_agent_id,
+                    "required_specialization": required_spec,
+                },
+                path="organism_core",
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"[{organ_id}] Cognitive fallback failed for '{required_spec}': {e}",
+                exc_info=True,
+            )
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                error=(
+                    f"Specialization '{required_spec}' is not registered and cognitive "
+                    f"fallback failed: {e}"
+                ),
+                error_type="specialization_unregistered",
+                retry=False,
+                meta={
+                    "organ_id": organ_id,
+                    "agent_id": agent_id,
+                    "required_specialization": required_spec,
+                },
+                path="organism_core",
+            )
+
+    async def _cognitive_fallback_for_rbac_denied(
+        self,
+        *,
+        organ_id: str,
+        organ_handle: Any,
+        agent_id: str,
+        task_id: str,
+        spec_hint: Optional[str],
+        tools: Optional[List[str]],
+        task_dict: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Provide user-facing guidance when RBAC/tool access blocks execution.
+        This avoids respawning agents and returns a cognitive suggestion message.
+        """
+        tools = tools or []
+        if not self.cognitive_client:
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                error=(
+                    "Tool access denied for this specialization and cognitive fallback is unavailable. "
+                    "Please update allowed_tools or route to a qualified agent."
+                ),
+                error_type="rbac_denied",
+                retry=False,
+                meta={
+                    "organ_id": organ_id,
+                    "agent_id": agent_id,
+                    "specialization": spec_hint,
+                    "tools": tools,
+                },
+                path="organism_core",
+            )
+
+        try:
+            fallback_agent_id = None
+            existing_fallback = await self._find_existing_fallback_handle()
+            if existing_fallback:
+                fallback_agent_id = existing_fallback[0]
+            if not fallback_agent_id:
+                fallback_agent_id = await self._ensure_generalist_fallback_agent(
+                    organ_id, organ_handle
+                )
+
+            cog_task = dict(task_dict or {})
+            cog_params = cog_task.get("params", {}) or {}
+            cog_params.setdefault("cognitive", {})
+            cog_params["cognitive"].update(
+                {
+                    "decision_kind": DecisionKind.COGNITIVE.value,
+                    "note": "fallback_for_rbac_denied",
+                }
+            )
+            cog_task["params"] = cog_params
+            cog_task.setdefault(
+                "description",
+                "Provide guidance: requested tools are not permitted for the current specialization. "
+                "Suggest next steps or alternatives (e.g., update allowed_tools or route to a qualified agent).",
+            )
+
+            response = await self.cognitive_client.execute_async(
+                agent_id=fallback_agent_id or agent_id,
+                cog_type="problem_solving",
+                decision_kind=DecisionKind.COGNITIVE,
+                task=cog_task,
+            )
+
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                payload={
+                    "owner_message": response,
+                    "reason": "rbac_denied",
+                    "specialization": spec_hint,
+                    "tools": tools,
+                },
+                error=(
+                    "Tool access denied for this specialization. "
+                    "Provided guidance via cognitive fallback."
+                ),
+                error_type="rbac_denied",
+                retry=False,
+                meta={
+                    "organ_id": organ_id,
+                    "agent_id": agent_id,
+                    "fallback_agent_id": fallback_agent_id,
+                    "specialization": spec_hint,
+                    "tools": tools,
+                },
+                path="organism_core",
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"[{organ_id}] Cognitive fallback failed for RBAC denial: {e}",
+                exc_info=True,
+            )
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                error=(
+                    "Tool access denied for this specialization and cognitive fallback failed. "
+                    f"Reason: {e}"
+                ),
+                error_type="rbac_denied",
+                retry=False,
+                meta={
+                    "organ_id": organ_id,
+                    "agent_id": agent_id,
+                    "specialization": spec_hint,
+                    "tools": tools,
+                },
+                path="organism_core",
+            )
+
+    async def _maybe_cognitive_fallback_on_rbac(
+        self,
+        *,
+        organ_id: str,
+        organ_handle: Any,
+        agent_id: str,
+        task_id: str,
+        task_dict: Dict[str, Any],
+        result: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        If RBAC denied AND the specialization is unregistered, call cognitive fallback
+        to provide advice/next steps. Returns an envelope or None.
+        """
+        try:
+            if not isinstance(result, dict):
+                return None
+
+            payload = result.get("payload") or {}
+            errors = payload.get("errors") or []
+            if not isinstance(errors, list) or not errors:
+                return None
+
+            def _is_rbac_error(err: Dict[str, Any]) -> bool:
+                if not isinstance(err, dict):
+                    return False
+                msg = str(err.get("error") or "").lower()
+                return "rbac_denied" in msg or "permission" in msg
+
+            if not any(_is_rbac_error(e) for e in errors):
+                return None
+
+            params = task_dict.get("params", {}) if isinstance(task_dict, dict) else {}
+            if not isinstance(params, dict):
+                params = {}
+
+            # Avoid infinite fallback loops
+            cognitive_note = (
+                params.get("cognitive", {}).get("note")
+                if isinstance(params.get("cognitive"), dict)
+                else None
+            )
+            if cognitive_note == "fallback_for_unregistered_specialization":
+                return None
+
+            routing = params.get("routing", {}) if isinstance(params, dict) else {}
+            if not isinstance(routing, dict):
+                routing = {}
+
+            required_spec = (
+                routing.get("required_specialization") or routing.get("specialization")
+            )
+            if not required_spec:
+                return None
+
+            resolved = self._resolve_registered_specialization(
+                str(required_spec).strip().lower(), params
+            )
+            if resolved:
+                return None
+
+            return await self._cognitive_fallback_for_unregistered_spec(
+                organ_id=organ_id,
+                organ_handle=organ_handle,
+                agent_id=agent_id,
+                task_id=task_id,
+                required_spec=str(required_spec),
+                task_dict=task_dict,
+            )
+        except Exception as e:
+            self.logger.debug(
+                f"[{organ_id}] RBAC cognitive fallback check failed (non-fatal): {e}"
+            )
+            return None
+
+    def _post_process_agent_result(
+        self, envelope: Dict[str, Any], organ_id: str, agent_id: str
+    ) -> Dict[str, Any]:
+        """
+        Gracefully handle RBAC/tool-denial outcomes to avoid noisy retries.
+        This keeps routing explicit but prevents repeated failures when tools/skills
+        are missing for the current specialization.
+        """
+        try:
+            if not isinstance(envelope, dict):
+                return envelope
+
+            payload = envelope.get("payload") or {}
+            errors = payload.get("errors") or []
+            if not isinstance(errors, list):
+                return envelope
+
+            # Detect RBAC/tool denial patterns
+            def _is_rbac_error(err: Dict[str, Any]) -> bool:
+                if not isinstance(err, dict):
+                    return False
+                msg = str(err.get("error") or "").lower()
+                return "rbac_denied" in msg or "permission" in msg
+
+            has_rbac = any(_is_rbac_error(e) for e in errors)
+            if not has_rbac:
+                return envelope
+
+            # Graceful, non-retryable completion
+            envelope["success"] = False
+            envelope["retry"] = False
+            envelope["error_type"] = "rbac_denied"
+            envelope["error"] = (
+                "Tool access denied for this specialization. "
+                "Please update allowed_tools or route to a qualified agent."
+            )
+            meta = envelope.get("meta", {}) or {}
+            meta.setdefault("organ_id", organ_id)
+            meta.setdefault("agent_id", agent_id)
+            meta["policy_hint"] = "update_role_profile_allowed_tools_or_reroute"
+            envelope["meta"] = meta
+            return envelope
+        except Exception:
+            return envelope
+
     # =========================================================
     # 🔧 HELPER: JIT PROVISIONING
     # =========================================================
     async def _ensure_agent_handle(
         self, organ: Any, organ_id: str, agent_id: str, params: dict
-    ) -> Optional[Any]:
+    ) -> Optional[tuple[str, Any, str]]:
         """
         Tries to fetch an agent handle. If missing, attempts JIT spawn.
 
@@ -2160,7 +2697,7 @@ class OrganismCore:
         # 1. Optimistic Fetch (Fast Path)
         handle = await organ.get_agent_handle.remote(agent_id)
         if handle:
-            return handle
+            return agent_id, handle, organ_id
 
         # 1.5. Check if an agent with the required specialization already exists
         # This prevents spawning duplicate agents when a new unique ID is generated
@@ -2174,6 +2711,20 @@ class OrganismCore:
         )
         
         if required_spec:
+            # If specialization is unregistered, reuse an existing fallback agent
+            resolved_spec = self._resolve_registered_specialization(
+                str(required_spec).strip().lower(), params
+            )
+            if not resolved_spec:
+                fallback_handle = await self._find_existing_fallback_handle()
+                if fallback_handle:
+                    fallback_agent_id, fallback_handle_obj, fallback_organ_id = fallback_handle
+                    self.logger.info(
+                        f"[{organ_id}] Specialization '{required_spec}' unregistered. "
+                        "Reusing existing fallback agent handle (no JIT spawn)."
+                    )
+                    return fallback_agent_id, fallback_handle_obj, fallback_organ_id
+
             # Check if any agent with this specialization already exists
             try:
                 existing_agent_ref = organ.pick_agent_by_specialization.remote(
@@ -2187,7 +2738,7 @@ class OrganismCore:
                             f"[{organ_id}] Found existing agent {existing_agent_id} with specialization '{required_spec}'. "
                             f"Reusing instead of spawning new agent {agent_id}."
                         )
-                        return existing_handle
+                        return existing_agent_id, existing_handle, organ_id
             except Exception as e:
                 self.logger.debug(
                     f"[{organ_id}] Could not check for existing agents with specialization '{required_spec}': {e}. "
@@ -2236,7 +2787,9 @@ class OrganismCore:
 
         if spawn_success:
             # 3. Retry Fetch
-            return await organ.get_agent_handle.remote(agent_id)
+            new_handle = await organ.get_agent_handle.remote(agent_id)
+            if new_handle:
+                return agent_id, new_handle, organ_id
 
         return None
 
@@ -3403,7 +3956,7 @@ class OrganismCore:
         Resolve a specialization string to a registered specialization.
 
         This handles aliasing and normalization for inputs like:
-        - "Manufacturing.Design" -> "manufacturing_design"
+        - "Some.Spec" -> "some_spec"
         - "Design" -> best matching dynamic specialization (via routing_tags)
         - Capability-backed specs (params.capability / params.executor.specialization)
         """

@@ -1778,18 +1778,86 @@ class BaseAgent:
                     context={"task_id": tv.task_id, "agent_id": self.agent_id},
                 )
                 if not decision.allowed:
-                    error_msg = f"rbac_denied:{decision.reason or 'policy_block'}"
-                    tool_errors.append(
-                        {
-                            "tool": tool_name,
-                            "error": error_msg,
+                    # Optional strict override: allow only if router explicitly whitelisted this tool
+                    params_for_policy = (
+                        task_dict.get("params", {})
+                        if isinstance(task_dict, dict)
+                        else {}
+                    )
+                    tool_policy = (
+                        params_for_policy.get("tool_policy", {})
+                        if isinstance(params_for_policy, dict)
+                        else {}
+                    )
+                    executor_policy = (
+                        params_for_policy.get("executor", {})
+                        if isinstance(params_for_policy, dict)
+                        else {}
+                    )
+                    allowlist = tool_policy.get("allow")
+                    if allowlist is None and isinstance(executor_policy, dict):
+                        allowlist = executor_policy.get("allowed_tools")
+
+                    if isinstance(allowlist, str):
+                        allowlist = [allowlist]
+                    if not isinstance(allowlist, list):
+                        allowlist = []
+
+                    my_spec = str(
+                        getattr(self.specialization, "value", self.specialization)
+                    ).lower()
+                    required_spec = (
+                        str(tv.required_specialization).lower()
+                        if tv.required_specialization
+                        else None
+                    )
+                    soft_spec = (
+                        str(tv.specialization).lower() if tv.specialization else None
+                    )
+                    spec_matches = (
+                        (required_spec == my_spec)
+                        or (required_spec is None and soft_spec == my_spec)
+                    )
+
+                    if spec_matches and tool_name in allowlist:
+                        logger.warning(
+                            f"[{self.agent_id}] 🛂 RBAC override via task allowlist for tool '{tool_name}'. "
+                            f"spec={my_spec}, allowlist={sorted(set(allowlist))}"
+                        )
+                    else:
+                        error_msg = f"rbac_denied:{decision.reason or 'policy_block'}"
+                        error_entry = {"tool": tool_name, "error": error_msg}
+
+                        # Enrich with actionable suggestion
+                        error_entry["suggested_policy_update"] = {
+                            "specialization": my_spec,
+                            "add_allowed_tool": tool_name,
                         }
-                    )
-                    logger.warning(
-                        f"[{self.agent_id}] ❌ RBAC denied for tool '{tool_name}': {decision.reason or 'policy_block'}. "
-                        f"Role profile allowed_tools: {sorted(allowed_tools)}"
-                    )
-                    continue
+
+                        # Best-effort schema lookup (local ToolManager only)
+                        try:
+                            if self.tool_handler is not None and not isinstance(
+                                self.tool_handler, list
+                            ):
+                                if hasattr(self.tool_handler, "get_tool_schema"):
+                                    schema = await self.tool_handler.get_tool_schema(
+                                        tool_name
+                                    )
+                                    if isinstance(schema, dict):
+                                        error_entry["tool_schema"] = {
+                                            "name": schema.get("name"),
+                                            "description": schema.get("description"),
+                                        }
+                        except Exception:
+                            # Do not block on schema introspection
+                            pass
+
+                        tool_errors.append(error_entry)
+                        logger.warning(
+                            f"[{self.agent_id}] ❌ RBAC denied for tool '{tool_name}': {decision.reason or 'policy_block'}. "
+                            f"Role profile allowed_tools: {sorted(allowed_tools)}"
+                        )
+                        continue
             except Exception as exc:
                 error_msg = f"rbac_error:{exc}"
                 tool_errors.append({"tool": tool_name, "error": error_msg})

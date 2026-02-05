@@ -6,6 +6,7 @@ import asyncio
 import time
 from datetime import datetime, timezone
 import os
+import json
 from typing import Dict, Any, Optional, List
 
 import ray  # pyright: ignore[reportMissingImports]
@@ -248,6 +249,14 @@ class Dispatcher:
                     await asyncio.sleep(self.main_interval)
                     continue
 
+                # Print entire raw task rows from tasks table
+                for row in batch:
+                    print(f"\n{'='*80}")
+                    print(f"RAW TASK ROW (ID: {row.get('id')}):")
+                    print(f"{'='*80}")
+                    print(json.dumps(row, indent=2, default=str))
+                    print(f"{'='*80}\n")
+
                 # 2. Ensure snapshot_id for claimed tasks (server-side enforcement)
                 await self._ensure_snapshot_id_for_batch(batch)
 
@@ -290,11 +299,14 @@ class Dispatcher:
             
             # B. Check if this is a long-running planning task that needs immediate ACK
             # Planning tasks can take 60+ seconds and would timeout the dispatcher
-            # EXCEPTION: Action tasks with required_specialization should use fast path, not planning
+            # EXCEPTION: Action tasks with required_specialization or specialization should use fast path, not planning
+            # Both are treated as hard constraints for routing priority
             routing = payload.params.get("routing", {}) if payload.params else {}
             has_required_specialization = bool(routing.get("required_specialization"))
+            has_specialization = bool(routing.get("specialization"))
+            has_specialization_constraint = has_required_specialization or has_specialization
             is_action_with_fast_path = (
-                payload.type == "action" and has_required_specialization
+                payload.type == "action" and has_specialization_constraint
             )
             
             is_planning_task = (
@@ -326,9 +338,10 @@ class Dispatcher:
                         # Router timeout is already 90s, which should be sufficient
                         # If still timing out, we can implement async ACK pattern here
                     elif is_action_with_fast_path:
+                        spec_value = routing.get("required_specialization") or routing.get("specialization")
                         logger.info(
                             f"[{self.name}] ⚡ Fast-path action task {task_id} detected (type=action, "
-                            f"required_specialization={routing.get('required_specialization')}) - "
+                            f"specialization={spec_value}) - "
                             "routing directly to fast path"
                         )
                     

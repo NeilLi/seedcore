@@ -350,15 +350,17 @@ class RoutingPolicy:
         domain = intent_class.get("domain")
         authority = intent_class.get("authority", AuthorityLevel.LOW.value)
         
-        # CRITICAL: Preserve existing required_specialization (hard constraint)
+        # CRITICAL: Preserve existing required_specialization or specialization (hard constraints)
         # Per task-payload-capabilities.md: required_specialization is a HARD constraint
-        # that must be preserved and never overridden by enrichment
-        if existing_routing.get("required_specialization"):
+        # specialization is also treated as a HARD constraint (same priority)
+        # Both must be preserved and never overridden by enrichment
+        if existing_routing.get("required_specialization") or existing_routing.get("specialization"):
+            spec_value = existing_routing.get("required_specialization") or existing_routing.get("specialization")
             logger.debug(
-                f"[Enrichment] Preserving existing required_specialization={existing_routing.get('required_specialization')} "
+                f"[Enrichment] Preserving existing specialization={spec_value} "
                 f"(hard constraint, not enriching routing)"
             )
-            # Don't enrich routing if required_specialization already exists
+            # Don't enrich routing if specialization constraint already exists
             # Only add routing tags if needed
             routing_tags = []
             if domain:

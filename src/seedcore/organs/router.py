@@ -902,26 +902,36 @@ class RoutingDirectory:
             if override_id:
                 return override_id, "high-stakes"
 
-        # --- Stage 1 — Preferred Organ (Explicit Hint) ---
-        # Logic: Coordinator or Caller explicitly asked for this Organ ID.
-        if preferred_id:
-            # Simple existence check (optional, but good for safety)
-            if preferred_id in self.organ_handles:
-                return preferred_id, "preferred"
-
-        # --- Stage 2 — Required Specialization (HARD V2 Constraint) ---
+        # --- Stage 1 — Required Specialization (HARD V2 Constraint) ---
         # Logic: TaskPayload said "Must be done by X agent."
+        # CRITICAL: This is a HARD constraint from the task payload and takes priority
+        # over preferred organ hints, matching coordinator behavior in execute.py.
+        # Per task-payload-capabilities.md: required_specialization is a HARD constraint
+        # that must be honored and overrides all defaults (type-level, PKG suggestions, memory).
         required_spec = input_meta.get("required_specialization")
         if required_spec:
             # Use the direct specialization map (organ_specs)
             lid = self._find_organ_by_spec(required_spec.lower())
             if lid:
+                logger.debug(
+                    f"[Router] Required specialization '{required_spec}' matched to organ '{lid}' "
+                    "(hard constraint, highest priority)"
+                )
                 return lid, "required-specialization"
             else:
                 # Note: We warn and fall through, allowing softer rules to match.
                 logger.warning(
                     f"[Router] Required spec '{required_spec}' not found in any local organ."
                 )
+
+        # --- Stage 2 — Preferred Organ (Explicit Hint) ---
+        # Logic: Coordinator or Caller explicitly asked for this Organ ID.
+        # Note: This comes AFTER required_specialization since required_specialization
+        # is a HARD constraint from the task payload.
+        if preferred_id:
+            # Simple existence check (optional, but good for safety)
+            if preferred_id in self.organ_handles:
+                return preferred_id, "preferred"
 
         # --- Stage 3 — Domain Rule (task_type + domain) ---
         # Logic: "All hospitality.guest tasks go to GuestCareOrgan" (Highly specific config).
@@ -932,6 +942,7 @@ class RoutingDirectory:
 
         # --- Stage 4 — Specialization Hint (SOFT V2 Hint) ---
         # Logic: "Preferably done by Generalist, but okay if not."
+        # Note: This is checked AFTER required_specialization (Stage 1) since it's a soft hint.
         soft_spec = input_meta.get("specialization")
         if soft_spec:
             lid = self._find_organ_by_spec(soft_spec.lower())
@@ -984,6 +995,16 @@ class RoutingDirectory:
         routing_in = params.get("routing", {})
         risk = params.get("risk", {})
 
+        # Normalize registered specialization variants if possible
+        if isinstance(routing_in, dict) and isinstance(params, dict):
+            for key in ("required_specialization", "specialization"):
+                raw_val = routing_in.get(key)
+                resolved_val = self._resolve_registered_specialization(raw_val)
+                if resolved_val and resolved_val != raw_val:
+                    routing_in[key] = resolved_val
+                    params.setdefault("routing", {})
+                    params["routing"][key] = resolved_val
+
         # Enforce write-lock on params._router (system-managed resolution only)
         if isinstance(params, dict):
             params.pop("_router", None)
@@ -1013,14 +1034,29 @@ class RoutingDirectory:
         # Path B: Coordinator Directive (Trust Upstream)
         elif mode == "coordinator_routed":
             # 1. Spec-based mapping (if provided)
-            target_spec = routing_in.get("required_specialization") or routing_in.get(
-                "specialization"
-            )
-
-            if target_spec:
-                organ_id = self._find_organ_by_spec(target_spec)
+            # CRITICAL: Prioritize required_specialization (HARD constraint) over specialization (soft hint)
+            # This matches the coordinator behavior in execute.py where required_specialization
+            # is checked first as a HARD PRIORITY before any other routing logic.
+            required_spec = routing_in.get("required_specialization")
+            soft_spec = routing_in.get("specialization")
+            
+            # Check required_specialization first (hard constraint)
+            if required_spec:
+                organ_id = self._find_organ_by_spec(required_spec)
                 if organ_id:
-                    resolved_from = "coordinator_hint"
+                    resolved_from = "coordinator_required_specialization"
+                    logger.debug(
+                        f"[Router] Using required_specialization '{required_spec}' for organ routing "
+                        "(hard constraint from task payload)"
+                    )
+            # Fall back to soft specialization hint only if required_specialization not found
+            elif soft_spec:
+                organ_id = self._find_organ_by_spec(soft_spec)
+                if organ_id:
+                    resolved_from = "coordinator_specialization_hint"
+                    logger.debug(
+                        f"[Router] Using specialization hint '{soft_spec}' for organ routing"
+                    )
 
             # 2. If no spec provided, check task_type rules (e.g., "query" -> "user_experience_organ")
             if not organ_id:
@@ -1052,6 +1088,44 @@ class RoutingDirectory:
         # PHASE 2: AGENT SELECTION (The "Who")
         # =========================================================
 
+        # 0. Soft RBAC-aware fallback: if tools requested but spec disallows them,
+        # prefer a generalist/user_liaison organ instead of spawning a specialized agent.
+        if not agent_id:
+            required_spec = routing_in.get("required_specialization")
+            soft_spec = routing_in.get("specialization")
+            tools_list = routing_in.get("tools") or []
+            # Only apply for soft hints (do NOT override hard required specialization).
+            if soft_spec and not required_spec and tools_list:
+                if not self._tools_allowed_for_spec(soft_spec, tools_list):
+                    self.logger.info(
+                        f"[Router] Tools {tools_list} not allowed for specialization '{soft_spec}'. "
+                        "Routing to fallback agent."
+                    )
+                    if "user_experience_organ" in self.organ_handles:
+                        organ_id = "user_experience_organ"
+                        if isinstance(params, dict):
+                            params.setdefault("routing", {})
+                            params["routing"]["required_specialization"] = "user_liaison"
+                            params["routing"]["specialization"] = "user_liaison"
+                        routing_in = {
+                            **routing_in,
+                            "required_specialization": "user_liaison",
+                            "specialization": "user_liaison",
+                        }
+                        resolved_from = "rbac_soft_fallback_user_liaison"
+                    elif "utility_organ" in self.organ_handles:
+                        organ_id = "utility_organ"
+                        if isinstance(params, dict):
+                            params.setdefault("routing", {})
+                            params["routing"]["required_specialization"] = "generalist"
+                            params["routing"]["specialization"] = "generalist"
+                        routing_in = {
+                            **routing_in,
+                            "required_specialization": "generalist",
+                            "specialization": "generalist",
+                        }
+                        resolved_from = "rbac_soft_fallback_generalist"
+
         # 1. Sticky Session Check (Tunnel Mode)
         if not agent_id and mode == "agent_tunnel" and conv_id:
             agent_id = await self.tunnel_manager.get_assigned_agent(conv_id)
@@ -1070,12 +1144,61 @@ class RoutingDirectory:
                 spec = routing_in.get("required_specialization") or routing_in.get(
                     "specialization"
                 )
+                # Guard: If specialization is unregistered, do NOT generate a new ID for it.
+                # Instead, try to reuse existing GENERALIST/USER_LIAISON agents.
+                if spec and not self._is_registered_specialization(spec):
+                    self.logger.info(
+                        f"[Router] Specialization '{spec}' is unregistered. "
+                        "Skipping ID generation and attempting fallback reuse."
+                    )
+                    fallback_agent_id = None
+                    fallback_organ_id = None
+
+                    # Prefer generalist in utility_organ
+                    if "utility_organ" in self.organ_handles:
+                        fallback_organ_id = "utility_organ"
+                        fallback_agent_id = await self._select_agent_from_organ(
+                            organ_id=fallback_organ_id,
+                            routing_in={
+                                "required_specialization": "generalist",
+                            },
+                        )
+
+                    # Then try user_liaison in user_experience_organ
+                    if (
+                        not fallback_agent_id
+                        and "user_experience_organ" in self.organ_handles
+                    ):
+                        fallback_organ_id = "user_experience_organ"
+                        fallback_agent_id = await self._select_agent_from_organ(
+                            organ_id=fallback_organ_id,
+                            routing_in={
+                                "required_specialization": "user_liaison",
+                            },
+                        )
+
+                    if fallback_agent_id:
+                        agent_id = fallback_agent_id
+                        organ_id = fallback_organ_id or organ_id
+                        resolved_from = "unregistered_spec_fallback"
+                    else:
+                        # No fallback agents found; retarget to GENERALIST in utility_organ.
+                        # This still avoids generating an ID for the unregistered specialization.
+                        if "utility_organ" in self.organ_handles:
+                            organ_id = "utility_organ"
+                        spec = "generalist"
+                        routing_in = {
+                            **routing_in,
+                            "required_specialization": spec,
+                        }
+                        resolved_from = "unregistered_spec_retargeted"
                 # Use consistent naming format: {organ_id}_{specialization}_{index}
                 # This matches static agent naming (e.g., physical_actuation_organ_safety_guard_0)
-                agent_id = self.new_agent_id(organ_id, spec)
-                self.logger.debug(
-                    f"[Router] Generated new ID {agent_id} for {organ_id} with specialization {spec}"
-                )
+                if not agent_id:
+                    agent_id = self.new_agent_id(organ_id, spec)
+                    self.logger.debug(
+                        f"[Router] Generated new ID {agent_id} for {organ_id} with specialization {spec}"
+                    )
 
         # =========================================================
         # PHASE 3: RESULT COMPOSITION
@@ -1154,6 +1277,81 @@ class RoutingDirectory:
             # it should just trigger the "Factory Generation" fallback in the main method.
             self.logger.warning(f"[Router] Ray dispatch failed for {organ_id}: {e}")
             return None
+
+    def _is_registered_specialization(self, spec_str: str) -> bool:
+        """
+        Check if a specialization string is registered (supports alias normalization).
+        """
+        if not spec_str:
+            return False
+        try:
+            from seedcore.agents.roles.specialization import SpecializationManager
+
+            spec_manager = SpecializationManager.get_instance()
+            normalized = str(spec_str).strip().lower()
+            variants = [
+                normalized,
+                normalized.replace(".", "_"),
+                normalized.replace("-", "_"),
+                normalized.replace("/", "_"),
+            ]
+            for v in variants:
+                if spec_manager.is_registered(v):
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def _resolve_registered_specialization(self, spec_str: Optional[str]) -> Optional[str]:
+        """
+        Resolve a specialization string to a registered variant (normalized).
+        Returns the registered value or None if not registered.
+        """
+        if not spec_str:
+            return None
+        try:
+            from seedcore.agents.roles.specialization import SpecializationManager
+
+            spec_manager = SpecializationManager.get_instance()
+            normalized = str(spec_str).strip().lower()
+            variants = [
+                normalized,
+                normalized.replace(".", "_"),
+                normalized.replace("-", "_"),
+                normalized.replace("/", "_"),
+            ]
+            for v in variants:
+                if spec_manager.is_registered(v):
+                    return v
+        except Exception:
+            return None
+        return None
+
+    def _tools_allowed_for_spec(self, spec_str: str, tools: List[str]) -> bool:
+        """
+        Check if all requested tools are allowed for the given specialization.
+        Returns True if unknown (non-blocking).
+        """
+        if not spec_str or not tools:
+            return True
+        try:
+            from seedcore.agents.roles.specialization import SpecializationManager
+
+            spec_manager = SpecializationManager.get_instance()
+            spec_obj = spec_manager.get(str(spec_str).strip().lower())
+            if not spec_obj or not self.organism:
+                return True
+            role_registry = getattr(self.organism, "role_registry", None)
+            if not role_registry:
+                return True
+            profile = role_registry.get_safe(spec_obj)
+            if not profile:
+                return True
+            allowed = set(getattr(profile, "allowed_tools", []) or [])
+            # If allowed_tools is empty, treat as "no tools allowed".
+            return all(t in allowed for t in tools)
+        except Exception:
+            return True
 
     def _current_timestamp(self):
         import time

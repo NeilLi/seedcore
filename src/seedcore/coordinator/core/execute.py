@@ -424,11 +424,14 @@ async def execute_task(
     # + intent enrichers, without bootstrap heuristics.
     #
     # EXCEPTION: Even when enrichment is enabled, skip enrichment for action tasks
-    # with required_specialization. These tasks already have accurate routing
+    # with required_specialization or specialization. These tasks already have accurate routing
     # information (hard constraint) and should not be mutated by heuristics.
+    # Both required_specialization and specialization are treated as hard constraints.
     task_dict = task.model_dump()
     routing = task_dict.get("params", {}).get("routing", {}) if task_dict.get("params") else {}
     has_required_specialization = bool(routing.get("required_specialization"))
+    has_specialization = bool(routing.get("specialization"))
+    has_specialization_constraint = has_required_specialization or has_specialization
     is_action_task = task_dict.get("type") == "action"
 
     enrichment_enabled = os.getenv("COORDINATOR_TASK_ENRICHMENT_ENABLED", "1").strip().lower() not in (
@@ -444,10 +447,11 @@ async def execute_task(
             "(COORDINATOR_TASK_ENRICHMENT_ENABLED=0)"
         )
         enriched_task_dict = task_dict
-    elif is_action_task and has_required_specialization:
+    elif is_action_task and has_specialization_constraint:
+        spec_value = routing.get("required_specialization") or routing.get("specialization")
         logger.info(
             f"[Coordinator] ⚡ Skipping enrichment for action task {ctx.task_id} "
-            f"with required_specialization={routing.get('required_specialization')} - "
+            f"with specialization={spec_value} - "
             "task already has accurate routing, routing directly to fast path"
         )
         # Skip enrichment - task already has accurate routing information
@@ -2218,31 +2222,36 @@ def _determine_decision_kind(
     CRITICAL: Conditional OR multi-action tasks are HARD cognitive gates.
     Enrichment (System-1) cannot override System-2 requirements.
     
-    CRITICAL: Action tasks with required_specialization are HARD fast-path gates.
+    CRITICAL: Action tasks with required_specialization or specialization are HARD fast-path gates.
     These tasks have explicit routing requirements and must route to fast path
     (unless blocked by conditional triggers or multiple actions).
+    Both required_specialization and specialization are treated as hard constraints.
     """
-    # ARCHITECTURAL FIX: Hard fast-path gate for action tasks with required_specialization
+    # ARCHITECTURAL FIX: Hard fast-path gate for action tasks with required_specialization or specialization
     # These tasks have explicit routing requirements and should bypass enrichment/escalation
     # EXCEPT: Still respect hard cognitive gates (conditional triggers, multiple actions)
     routing = task.params.get("routing", {}) if task.params else {}
     has_required_specialization = bool(routing.get("required_specialization"))
+    has_specialization = bool(routing.get("specialization"))
+    has_specialization_constraint = has_required_specialization or has_specialization
     is_action_task = task.type == "action"
     
-    if is_action_task and has_required_specialization:
+    if is_action_task and has_specialization_constraint:
         # Still respect hard cognitive gates
         if has_conditions or has_multiple_actions:
+            spec_value = routing.get("required_specialization") or routing.get("specialization")
             logger.info(
                 f"[Coordinator] Hard cognitive gate overrides fast-path for task {task_id}: "
                 f"has_conditions={has_conditions}, has_multiple_actions={has_multiple_actions}. "
-                f"Required_specialization cannot override System-2 requirement."
+                f"Specialization ({spec_value}) cannot override System-2 requirement."
             )
             return DecisionKind.COGNITIVE.value
         
-        # Action task with required_specialization -> fast path (hard constraint)
+        # Action task with specialization constraint -> fast path (hard constraint)
+        spec_value = routing.get("required_specialization") or routing.get("specialization")
         logger.info(
             f"[Coordinator] Hard fast-path gate enforced for task {task_id}: "
-            f"type=action, required_specialization={routing.get('required_specialization')}. "
+            f"type=action, specialization={spec_value}. "
             f"Routing directly to fast path, bypassing escalation signals."
         )
         return DecisionKind.FAST_PATH.value
@@ -2361,6 +2370,7 @@ def _resolve_routing_intent(
     # 0) HARD PRIORITY: Task instance routing inbox (TaskPayload v2.5+)
     # Per docs/references/task-payload-capabilities.md:
     # - params.routing.required_specialization is a HARD constraint and must be honored.
+    # - params.routing.specialization is also treated as a HARD constraint (same priority).
     # - Instance-level routing overrides all defaults (type-level, PKG suggestions, memory).
     existing_routing = task.params.get("routing", {}) if task.params else {}
     required_spec = existing_routing.get("required_specialization")
@@ -2375,6 +2385,22 @@ def _resolve_routing_intent(
         logger.info(
             f"[Coordinator] Using TaskPayload routing hard constraint for task {ctx.task_id}: "
             f"required_specialization={required_spec} (source={intent.source.value})"
+        )
+        return intent
+    
+    # Also check specialization as a hard constraint (same priority as required_specialization)
+    specialization = existing_routing.get("specialization")
+    if specialization:
+        intent = RoutingIntent(
+            specialization=str(specialization),
+            skills=existing_routing.get("skills", {}) or {},
+            source=IntentSource.TASK_PAYLOAD_ROUTING,  # hard constraint from caller
+            confidence=IntentConfidence.HIGH,
+            metadata={"hard_constraint": "specialization"},
+        )
+        logger.info(
+            f"[Coordinator] Using TaskPayload routing hard constraint for task {ctx.task_id}: "
+            f"specialization={specialization} (source={intent.source.value})"
         )
         return intent
     
