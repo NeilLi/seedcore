@@ -198,6 +198,70 @@ class TestExecuteTask:
         
         assert result["decision_kind"] == DecisionKind.COGNITIVE.value
     
+    async def test_pkg_mandatory_never_routes_when_pkg_invalid(self):
+        """PKG-mandatory action tasks should fail fast if PKG output is invalid."""
+        task = TaskPayload(
+            task_id="task-pkg-mandatory",
+            type="action",
+            description="manufacture t-shirt",
+            params={
+                "design": {"style": "minimal"},
+                "intent": "manufacture",
+            },
+        )
+
+        surprise_computer = FakeSurpriseComputer(return_value={
+            "S": 0.1,
+            "x": [0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+            "weights": [0.25, 0.20, 0.15, 0.20, 0.10, 0.10],
+            "decision": "fast",
+            "decision_kind": "fast",
+            "ocps": {"S_t": 0.1, "h": 0.5, "flag_on": False},
+        })
+
+        ocps_valve = NeuralCUSUMValve(
+            expected_baseline=0.1,
+            min_detectable_change=0.2,
+            threshold=2.5,
+            sigma=0.15,
+        )
+
+        # Invalid PKG result: empty plan (evaluated=True but empty -> pkg_incomplete)
+        route_config = RouteConfig(
+            surprise_computer=surprise_computer,
+            ocps_valve=ocps_valve,
+            tau_fast_exit=0.38,
+            tau_plan_exit=0.57,
+            evaluate_pkg_func=AsyncMock(return_value={}),
+            ood_to01=lambda x: x,
+            pkg_timeout_s=2,
+        )
+
+        organism_execute = AsyncMock(return_value={
+            "success": True,
+            "result": {"output": "should-not-run"},
+        })
+
+        execution_config = ExecutionConfig(
+            compute_drift_score=AsyncMock(return_value=0.1),
+            organism_execute=organism_execute,
+            graph_task_repo=Mock(),
+            ml_client=Mock(),
+            metrics=Mock(),
+            cid="test-cid",
+            normalize_domain=lambda x: x.lower() if x else None,
+        )
+
+        result = await execute_task(
+            task=task,
+            route_config=route_config,
+            execution_config=execution_config,
+        )
+
+        assert result["decision_kind"] == DecisionKind.ERROR.value
+        assert result["path"] == "coordinator_pkg_gate"
+        organism_execute.assert_not_called()
+    
     async def test_execute_task_handles_escalated_path(self):
         """Test execute_task handles escalated path when OCPS is breached."""
         task = TaskPayload(
@@ -235,7 +299,7 @@ class TestExecuteTask:
         )
 
         # Mock cognitive client for escalated path - must return valid planner output
-        # (_validate_planner_output requires DAG or solution_steps with routing hints)
+        # (_validate_planner_output requires DAG or solution_steps; routing/tool emission is forbidden)
         cognitive_client = Mock()
         cognitive_client.execute_async = AsyncMock(return_value={
             "success": True,
@@ -244,7 +308,6 @@ class TestExecuteTask:
                     {
                         "id": "step-1",
                         "type": "action",
-                        "params": {"routing": {"specialization": "Generalist"}},
                         "depends_on": [],
                     }
                 ],
@@ -271,3 +334,192 @@ class TestExecuteTask:
         
         # When OCPS is breached, should route to cognitive path
         assert result["decision_kind"] == DecisionKind.COGNITIVE.value
+
+    async def test_pkg_mandatory_action_fails_when_routing_is_noncanonical(self):
+        """PKG-mandatory action tasks must fail when PKG output lacks canonical routing hints."""
+        task = TaskPayload(
+            task_id="task-pkg-fast",
+            type="action",
+            description="manufacture a t-shirt",
+            params={
+                "design": {"style": "minimal"},
+                "intent": "manufacture",
+            },
+        )
+
+        surprise_computer = FakeSurpriseComputer(return_value={
+            "S": 0.2,
+            "x": [0.1] * 6,
+            "weights": [0.2] * 6,
+            "decision": "fast",
+            "decision_kind": "fast",
+            "ocps": {"S_t": 0.1, "h": 0.5, "flag_on": False},
+        })
+
+        ocps_valve = NeuralCUSUMValve(
+            expected_baseline=0.1,
+            min_detectable_change=0.2,
+            threshold=2.5,
+            sigma=0.15,
+        )
+
+        route_config = RouteConfig(
+            surprise_computer=surprise_computer,
+            ocps_valve=ocps_valve,
+            tau_fast_exit=0.38,
+            tau_plan_exit=0.57,
+            evaluate_pkg_func=AsyncMock(return_value={
+                "steps": [
+                    {
+                        "task": {
+                            "type": "action",
+                            "id": "step-1",
+                            "params": {},
+                        }
+                    }
+                ],
+                "metadata": {"evaluated": True},
+            }),
+            ood_to01=lambda x: x,
+            pkg_timeout_s=2,
+        )
+
+        organism_execute = AsyncMock(return_value={"success": True})
+
+        execution_config = ExecutionConfig(
+            compute_drift_score=AsyncMock(return_value=0.1),
+            organism_execute=organism_execute,
+            graph_task_repo=Mock(),
+            ml_client=Mock(),
+            metrics=Mock(),
+            cid="test-cid",
+            normalize_domain=lambda x: x.lower() if x else None,
+        )
+
+        result = await execute_task(
+            task=task,
+            route_config=route_config,
+            execution_config=execution_config,
+        )
+
+        assert result["decision_kind"] == DecisionKind.ERROR.value
+        assert result.get("error_type") == "pkg_incomplete"
+
+    async def test_pkg_mandatory_action_fails_when_pkg_empty(self):
+        """PKG-mandatory action tasks must fail fast if PKG returns no plan."""
+        task = TaskPayload(
+            task_id="task-pkg-empty",
+            type="action",
+            description="manufacture a t-shirt",
+            params={
+                "design": {"style": "minimal"},
+                "intent": "manufacture",
+            },
+        )
+
+        surprise_computer = FakeSurpriseComputer(return_value={
+            "S": 0.2,
+            "x": [0.1] * 6,
+            "weights": [0.2] * 6,
+            "decision": "fast",
+            "decision_kind": "fast",
+            "ocps": {"S_t": 0.1, "h": 0.5, "flag_on": False},
+        })
+
+        ocps_valve = NeuralCUSUMValve(
+            expected_baseline=0.1,
+            min_detectable_change=0.2,
+            threshold=2.5,
+            sigma=0.15,
+        )
+
+        route_config = RouteConfig(
+            surprise_computer=surprise_computer,
+            ocps_valve=ocps_valve,
+            tau_fast_exit=0.38,
+            tau_plan_exit=0.57,
+            evaluate_pkg_func=AsyncMock(return_value={
+                "metadata": {"evaluated": True},
+            }),
+            ood_to01=lambda x: x,
+            pkg_timeout_s=2,
+        )
+
+        execution_config = ExecutionConfig(
+            compute_drift_score=AsyncMock(return_value=0.1),
+            organism_execute=AsyncMock(return_value={"success": True}),
+            graph_task_repo=Mock(),
+            ml_client=Mock(),
+            metrics=Mock(),
+            cid="test-cid",
+            normalize_domain=lambda x: x.lower() if x else None,
+        )
+
+        result = await execute_task(
+            task=task,
+            route_config=route_config,
+            execution_config=execution_config,
+        )
+
+        assert result["success"] is False
+        assert result.get("error_type") == "pkg_incomplete"
+
+    async def test_pkg_mandatory_action_fails_when_no_routing_hints(self):
+        """PKG-mandatory action tasks must fail if PKG omits routing hints."""
+        task = TaskPayload(
+            task_id="task-pkg-no-routing",
+            type="action",
+            description="manufacture a t-shirt",
+            params={
+                "design": {"style": "minimal"},
+                "intent": "manufacture",
+            },
+        )
+
+        surprise_computer = FakeSurpriseComputer(return_value={
+            "S": 0.2,
+            "x": [0.1] * 6,
+            "weights": [0.2] * 6,
+            "decision": "fast",
+            "decision_kind": "fast",
+            "ocps": {"S_t": 0.1, "h": 0.5, "flag_on": False},
+        })
+
+        ocps_valve = NeuralCUSUMValve(
+            expected_baseline=0.1,
+            min_detectable_change=0.2,
+            threshold=2.5,
+            sigma=0.15,
+        )
+
+        route_config = RouteConfig(
+            surprise_computer=surprise_computer,
+            ocps_valve=ocps_valve,
+            tau_fast_exit=0.38,
+            tau_plan_exit=0.57,
+            evaluate_pkg_func=AsyncMock(return_value={
+                "metadata": {"evaluated": True},
+                "steps": [{"task": {"type": "action", "id": "step-1", "params": {}}}],
+            }),
+            ood_to01=lambda x: x,
+            pkg_timeout_s=2,
+        )
+
+        execution_config = ExecutionConfig(
+            compute_drift_score=AsyncMock(return_value=0.1),
+            organism_execute=AsyncMock(return_value={"success": True}),
+            graph_task_repo=Mock(),
+            ml_client=Mock(),
+            metrics=Mock(),
+            cid="test-cid",
+            normalize_domain=lambda x: x.lower() if x else None,
+        )
+
+        result = await execute_task(
+            task=task,
+            route_config=route_config,
+            execution_config=execution_config,
+        )
+
+        assert result["success"] is False
+        assert result.get("error_type") == "pkg_incomplete"

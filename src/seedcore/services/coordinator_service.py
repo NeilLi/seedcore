@@ -838,6 +838,7 @@ class Coordinator:
             task_type = task_dict.get("type") or task_obj.type
             routing = task_dict.get("params", {}).get("routing", {}) if task_dict.get("params") else {}
             has_required_specialization = bool(routing.get("required_specialization"))
+            pkg_mandatory = self._is_pkg_mandatory_action_task(task_dict)
             
             # Action tasks with required_specialization bypass planning (hard constraint for fast path)
             is_action_with_fast_path = (
@@ -846,12 +847,19 @@ class Coordinator:
             
             is_planning_task = (
                 not is_action_with_fast_path  # Fast-path action tasks are NOT planning tasks
+                and not pkg_mandatory  # PKG-mandatory action tasks skip cognitive planning
                 and (
                     task_dict.get("params", {}).get("cognitive", {}).get("cog_type") == "task_planning"
                     or task_dict.get("params", {}).get("cognitive", {}).get("decision_kind") == "planner"
                     or task_dict.get("params", {}).get("cognitive", {}).get("decision_kind") == "cognitive"
                 )
             )
+
+            if pkg_mandatory and task_dict.get("params", {}).get("cognitive"):
+                logger.info(
+                    f"[Coordinator] PKG-mandatory gate active for task {task_id} "
+                    "— ignoring cognitive planning request."
+                )
             
             # For planning tasks: Return immediate ACK, process async
             if is_planning_task:
@@ -1003,6 +1011,77 @@ class Coordinator:
     # ------------------------------------------------------------------
     # 2. Adapters & Config Builders
     # ------------------------------------------------------------------
+
+    def _has_rich_domain_facts(self, params: Dict[str, Any]) -> bool:
+        """Structural detector for rich domain facts (non-semantic)."""
+        if not isinstance(params, dict) or not params:
+            return False
+
+        rich_keys = {
+            "design",
+            "intent",
+            "fabricType",
+            "fabric_type",
+            "material",
+            "pattern",
+            "dimensions",
+            "specs",
+            "specifications",
+            "quantity",
+            "color",
+            "size",
+            "style",
+            "blueprint",
+            "assembly",
+            "recipe",
+        }
+        if any(params.get(k) not in (None, "", [], {}) for k in rich_keys):
+            return True
+
+        meta_keys = {
+            "routing",
+            "interaction",
+            "cognitive",
+            "risk",
+            "_router",
+            "_emission",
+            "skills",
+            "tools",
+            "hints",
+            "policy",
+            "debug",
+            "trace",
+            "telemetry",
+            "metadata",
+        }
+
+        non_empty_fields = 0
+        for key, value in params.items():
+            if key in meta_keys or key.startswith("_"):
+                continue
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            if isinstance(value, (list, dict)) and len(value) == 0:
+                continue
+            non_empty_fields += 1
+            if non_empty_fields >= 2:
+                return True
+
+        return False
+
+    def _is_pkg_mandatory_action_task(self, task_dict: Dict[str, Any]) -> bool:
+        """PKG-mandatory gate: action tasks with rich facts and no executor identity."""
+        if not isinstance(task_dict, dict) or task_dict.get("type") != "action":
+            return False
+        params = task_dict.get("params") or {}
+        routing = params.get("routing", {}) if isinstance(params, dict) else {}
+        has_specialization = bool(
+            routing.get("required_specialization") or routing.get("specialization")
+        )
+        has_emission = "_emission" in params and params.get("_emission") is not None
+        return (not has_specialization) and (not has_emission) and self._has_rich_domain_facts(params)
 
     async def _run_eventizer(self, task_dict: Dict[str, Any]) -> Dict[str, Any]:
         """

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
 import threading
 import time
@@ -388,9 +389,37 @@ def _extract_proto_plan(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             ("result", "proto_plan"),
             ("proto_plan",),
             ("metadata", "proto_plan"),
+            ("payload", "metadata", "proto_plan"),
         ],
         value_type=dict,
     )
+
+
+def _proto_plan_has_routing_hints(proto_plan: Dict[str, Any]) -> bool:
+    """Check whether PKG proto_plan includes routing hints anywhere."""
+    if not isinstance(proto_plan, dict):
+        return False
+
+    routing = proto_plan.get("routing")
+    if isinstance(routing, dict) and (
+        routing.get("required_specialization")
+        or routing.get("specialization")
+        or routing.get("tools")
+    ):
+        return True
+
+    steps = proto_plan.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            task_obj = step.get("task") if isinstance(step.get("task"), dict) else {}
+            params = task_obj.get("params") if isinstance(task_obj.get("params"), dict) else {}
+            step_routing = params.get("routing") if isinstance(params.get("routing"), dict) else {}
+            if step_routing.get("required_specialization") or step_routing.get("specialization") or step_routing.get("tools"):
+                return True
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -424,14 +453,11 @@ async def execute_task(
     # + intent enrichers, without bootstrap heuristics.
     #
     # EXCEPTION: Even when enrichment is enabled, skip enrichment for action tasks
-    # with required_specialization or specialization. These tasks already have accurate routing
+    # with required_specialization. These tasks already have accurate routing
     # information (hard constraint) and should not be mutated by heuristics.
-    # Both required_specialization and specialization are treated as hard constraints.
     task_dict = task.model_dump()
     routing = task_dict.get("params", {}).get("routing", {}) if task_dict.get("params") else {}
     has_required_specialization = bool(routing.get("required_specialization"))
-    has_specialization = bool(routing.get("specialization"))
-    has_specialization_constraint = has_required_specialization or has_specialization
     is_action_task = task_dict.get("type") == "action"
 
     enrichment_enabled = os.getenv("COORDINATOR_TASK_ENRICHMENT_ENABLED", "1").strip().lower() not in (
@@ -447,11 +473,10 @@ async def execute_task(
             "(COORDINATOR_TASK_ENRICHMENT_ENABLED=0)"
         )
         enriched_task_dict = task_dict
-    elif is_action_task and has_specialization_constraint:
-        spec_value = routing.get("required_specialization") or routing.get("specialization")
+    elif is_action_task and has_required_specialization:
         logger.info(
             f"[Coordinator] ⚡ Skipping enrichment for action task {ctx.task_id} "
-            f"with specialization={spec_value} - "
+            f"with required_specialization={routing.get('required_specialization')} - "
             "task already has accurate routing, routing directly to fast path"
         )
         # Skip enrichment - task already has accurate routing information
@@ -461,6 +486,7 @@ async def execute_task(
     
     # Update task object with enriched data (for downstream use)
     task = TaskPayload.model_validate(enriched_task_dict)
+    pkg_mandatory = _is_pkg_mandatory_action(task)
 
     # 2. PHASE 1: INTENT EMBEDDING (Reliability Optimized)
     # We try a synchronous persist for the Semantic Cache.
@@ -519,6 +545,89 @@ async def execute_task(
     # Extract decision_kind from TaskResult.kind and payload from TaskResult
     decision_kind = routing_dec.get("kind") or routing_dec.get("decision_kind")
     router_result_payload = routing_dec
+
+    # PKG-mandatory gate: forbid cognitive planning and require PKG output
+    if pkg_mandatory:
+        proto_plan = _extract_proto_plan(router_result_payload)
+        if proto_plan is None and isinstance(router_result_payload, dict):
+            payload_meta = (router_result_payload.get("payload") or {}).get("metadata") or {}
+            proto_plan = payload_meta.get("proto_plan") or router_result_payload.get("proto_plan")
+        if isinstance(proto_plan, str):
+            try:
+                proto_plan = json.loads(proto_plan)
+            except Exception:
+                proto_plan = None
+        proto_plan = proto_plan or {}
+        if isinstance(router_result_payload, dict):
+            logger.debug(
+                "[Coordinator] PKG-mandatory debug task_id=%s decision_kind=%s "
+                "router_keys=%s payload_keys=%s payload_meta_keys=%s proto_plan_type=%s",
+                ctx.task_id,
+                decision_kind,
+                list(router_result_payload.keys()),
+                list((router_result_payload.get("payload") or {}).keys()),
+                list(((router_result_payload.get("payload") or {}).get("metadata") or {}).keys()),
+                type(proto_plan).__name__,
+            )
+        logger.debug(
+            "[Coordinator] PKG-mandatory proto_plan summary task_id=%s evaluated=%s steps=%s routing=%s",
+            ctx.task_id,
+            (proto_plan.get("metadata") or {}).get("evaluated"),
+            len(proto_plan.get("steps") or []),
+            bool(proto_plan.get("routing")),
+        )
+        pkg_meta = proto_plan.get("metadata", {}) if isinstance(proto_plan, dict) else {}
+        pkg_evaluated = bool(pkg_meta.get("evaluated", False))
+        pkg_skipped = bool(pkg_meta.get("pkg_skipped", False))
+        pkg_empty = _is_pkg_result_empty(proto_plan) if isinstance(proto_plan, dict) else True
+        pkg_has_routing = _proto_plan_has_routing_hints(proto_plan) if isinstance(proto_plan, dict) else False
+
+        if decision_kind == DecisionKind.COGNITIVE.value:
+            error_msg = (
+                "Execution planning without PKG is forbidden for action tasks. "
+                "PKG-mandatory gate blocked cognitive planning."
+            )
+            logger.error("[Coordinator] %s task_id=%s", error_msg, ctx.task_id)
+            return make_envelope(
+                task_id=ctx.task_id,
+                success=False,
+                error=error_msg,
+                error_type="pkg_mandatory_violation",
+                decision_kind=DecisionKind.ERROR.value,
+                path="coordinator_pkg_gate",
+                meta={"pkg_mandatory": True, "decision_kind": decision_kind},
+            )
+
+        if not pkg_evaluated or pkg_skipped or pkg_empty or not pkg_has_routing:
+            error_msg = (
+                "PKG evaluation required for action task but PKG returned no usable plan."
+            )
+            logger.error(
+                "[Coordinator] %s task_id=%s evaluated=%s skipped=%s empty=%s has_routing=%s",
+                error_msg,
+                ctx.task_id,
+                pkg_evaluated,
+                pkg_skipped,
+                pkg_empty,
+                pkg_has_routing,
+            )
+            return make_envelope(
+                task_id=ctx.task_id,
+                success=False,
+                error=error_msg,
+                error_type="pkg_incomplete",
+                decision_kind=DecisionKind.ERROR.value,
+                path="coordinator_pkg_gate",
+                meta={
+                    "pkg_mandatory": True,
+                    "evaluated": pkg_evaluated,
+                    "pkg_skipped": pkg_skipped,
+                    "pkg_empty": pkg_empty,
+                    "has_routing": pkg_has_routing,
+                },
+            )
+        # PKG is valid for mandatory action tasks -> finalize fast path decision now.
+        decision_kind = DecisionKind.FAST_PATH.value
 
     if decision_kind == DecisionKind.FAST_PATH.value:
         # Extract routing information from FastPathResult
@@ -730,13 +839,13 @@ async def _handle_cognitive_path(
         solution_steps = _extract_solution_steps(plan_res)
         
         # ARCHITECTURAL FIX: Enforce planner contract - System-2 must return machine-binding plan
-        # Cognitive planner MUST emit structured DAG with routing hints, not free-text reasoning
+        # Cognitive planner MUST emit structured DAG (no routing/tool emission)
         planner_valid, planner_errors = _validate_planner_output(plan_res, task)
         
         if not planner_valid:
             error_msg = (
                 f"Cognitive planner contract violation for task {task.task_id}. "
-                f"Planner must return structured plan with nodes/edges and routing hints. "
+                f"Planner must return a structured plan with nodes/edges (no routing/tool emission). "
                 f"Validation errors: {', '.join(planner_errors)}. "
                 f"System-2 output is non-binding - cannot proceed with execution."
             )
@@ -750,7 +859,7 @@ async def _handle_cognitive_path(
                 path="coordinator_cognitive_path",
                 meta={
                     "planner_errors": planner_errors,
-                    "retry_recommended": True,
+                    "retry_recommended": False,
                     "escalate": True,
                 }
             )
@@ -1029,6 +1138,90 @@ def _extract_solution_steps(plan_res: Any) -> List[Dict[str, Any]]:
     )
 
 
+def _has_rich_domain_facts(params: Dict[str, Any]) -> bool:
+    """
+    Heuristic detector for rich domain facts in action tasks.
+
+    We avoid semantic inference and only look for structural signals:
+    - Known domain keys (design, intent, fabricType, etc.)
+    - Multiple non-empty non-meta fields
+    """
+    if not isinstance(params, dict) or not params:
+        return False
+
+    rich_keys = {
+        "design",
+        "intent",
+        "fabricType",
+        "fabric_type",
+        "material",
+        "pattern",
+        "dimensions",
+        "specs",
+        "specifications",
+        "quantity",
+        "color",
+        "size",
+        "style",
+        "blueprint",
+        "assembly",
+        "recipe",
+    }
+    if any(params.get(k) not in (None, "", [], {}) for k in rich_keys):
+        return True
+
+    meta_keys = {
+        "routing",
+        "interaction",
+        "cognitive",
+        "risk",
+        "_router",
+        "_emission",
+        "skills",
+        "tools",
+        "hints",
+        "policy",
+        "debug",
+        "trace",
+        "telemetry",
+        "metadata",
+    }
+
+    non_empty_fields = 0
+    for key, value in params.items():
+        if key in meta_keys or key.startswith("_"):
+            continue
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, (list, dict)) and len(value) == 0:
+            continue
+        non_empty_fields += 1
+        if non_empty_fields >= 2:
+            return True
+
+    return False
+
+
+def _is_pkg_mandatory_action(task: TaskPayload) -> bool:
+    """
+    Structural gate: ACTION tasks with rich domain facts and no executor identity
+    must be decomposed by PKG (Cognitive may not plan execution).
+    """
+    if not task or task.type != TaskType.ACTION.value:
+        return False
+
+    params = task.params or {}
+    routing = params.get("routing", {}) if isinstance(params, dict) else {}
+    has_specialization = bool(
+        routing.get("required_specialization") or routing.get("specialization")
+    )
+    has_emission = "_emission" in params and params.get("_emission") is not None
+
+    return (not has_specialization) and (not has_emission) and _has_rich_domain_facts(params)
+
+
 def _validate_planner_output(plan_res: Any, task: TaskPayload) -> Tuple[bool, List[str]]:
     """
     Validate that cognitive planner output is machine-binding and structurally complete.
@@ -1038,9 +1231,11 @@ def _validate_planner_output(plan_res: Any, task: TaskPayload) -> Tuple[bool, Li
     
     Required structure:
     - Must contain nodes (explicit DAG) OR solution_steps with depends_on (implicit DAG)
-    - Must contain routing hints (specialization, domain, or tool hints)
     - Must contain ≥1 action node
     - Must be JSON-serializable (not free-text)
+
+    Forbidden in Cognitive output:
+    - routing / specialization / tools (execution identity belongs to PKG + Coordinator)
     
     Returns:
         Tuple of (is_valid, list_of_errors)
@@ -1079,48 +1274,24 @@ def _validate_planner_output(plan_res: Any, task: TaskPayload) -> Tuple[bool, Li
                 # Ensure step has ID
                 if "id" not in step:
                     step["id"] = step.get("name") or f"step_{idx}"
-                
-                # Ensure step has params.routing with specialization
-                if "params" not in step:
-                    step["params"] = {}
-                if "routing" not in step["params"]:
-                    step["params"]["routing"] = {}
-                routing = step["params"]["routing"]
-                if not routing.get("specialization") and not routing.get("required_specialization"):
-                    # Try to infer from tools or set default
-                    tools = routing.get("tools", []) or step.get("params", {}).get("tool_calls", [])
-                    if tools and isinstance(tools, list):
-                        tool_names = [t.get("name") if isinstance(t, dict) else str(t) for t in tools]
-                        if any("iot" in str(t).lower() or "environment" in str(t).lower() for t in tool_names):
-                            routing["specialization"] = "Environment"
-                        elif any("security" in str(t).lower() or "sensor" in str(t).lower() for t in tool_names):
-                            routing["specialization"] = "SecurityMonitoring"
-                        elif any("light" in str(t).lower() for t in tool_names):
-                            routing["specialization"] = "Lighting"
-                        else:
-                            routing["specialization"] = "Generalist"
-                    else:
-                        routing["specialization"] = "Generalist"
-                
+
                 # Ensure depends_on exists (for DAG structure)
                 if "depends_on" not in step:
                     step["depends_on"] = []
                 elif not isinstance(step["depends_on"], list):
                     step["depends_on"] = [step["depends_on"]]
-                
+
                 # Infer sequential dependencies if missing
                 if not step.get("depends_on") and idx > 0:
                     prev_step = solution_steps[idx - 1] if solution_steps else None
                     if prev_step and prev_step.get("id"):
                         step["depends_on"] = [prev_step["id"]]
-    
+
     # Write normalized solution_steps back to plan_res for validation
-    # This ensures validation sees the normalized structure
     if solution_steps and isinstance(solution_steps, list):
         if "result" not in plan_res:
             plan_res["result"] = {}
         plan_res["result"]["solution_steps"] = solution_steps
-        # Also set at top level for compatibility
         plan_res["solution_steps"] = solution_steps
     
     # Check for explicit DAG structure
@@ -1199,32 +1370,32 @@ def _validate_planner_output(plan_res: Any, task: TaskPayload) -> Tuple[bool, Li
     if not has_explicit_dag and not has_implicit_dag:
         errors.append("Planner output must contain DAG structure (dag/nodes) or solution_steps with depends_on")
     
-    # Check for routing hints (required for execution)
-    routing = (
-        plan_res.get("routing") or
-        result.get("routing") or
-        plan_res.get("metadata", {}).get("routing")
-    )
-    has_routing = bool(routing and isinstance(routing, dict))
-    
-    # Check for routing hints in steps
-    # CRITICAL: Normalization sets routing at step["params"]["routing"] (TaskPayload v2.5+ format)
-    if not has_routing and solution_steps:
-        for step in solution_steps:
-            if isinstance(step, dict):
-                step_routing = (
-                    step.get("params", {}).get("routing") or  # TaskPayload v2.5+ format (normalized)
-                    step.get("routing") or  # Legacy top-level routing
-                    (step.get("task", {}) or {}).get("params", {}).get("routing")  # Nested task routing
-                )
-                if step_routing and isinstance(step_routing, dict):
-                    # Also check if routing has meaningful hints (specialization, tools, etc.)
-                    if step_routing.get("specialization") or step_routing.get("required_specialization") or step_routing.get("tools"):
-                        has_routing = True
-                        break
-    
-    if not has_routing:
-        errors.append("Planner output must contain routing hints (specialization, domain, or tool hints)")
+    # Forbidden: routing/specialization/tools in Cognitive output (execution identity)
+    forbidden_keys = {"routing", "specialization", "required_specialization", "tools", "tool_calls"}
+    def _has_forbidden_in_step(step_obj: Any) -> bool:
+        if not isinstance(step_obj, dict):
+            return False
+        if any(k in step_obj for k in forbidden_keys):
+            return True
+        task_obj = step_obj.get("task") if isinstance(step_obj.get("task"), dict) else {}
+        params_obj = step_obj.get("params") if isinstance(step_obj.get("params"), dict) else {}
+        task_params = task_obj.get("params") if isinstance(task_obj.get("params"), dict) else {}
+        for obj in (task_obj, params_obj, task_params):
+            if any(k in obj for k in forbidden_keys):
+                return True
+            if "routing" in obj and isinstance(obj.get("routing"), dict):
+                return True
+        return False
+
+    # Top-level routing/tool emission is forbidden
+    if any(k in plan_res for k in forbidden_keys) or any(k in result for k in forbidden_keys):
+        errors.append("Cognitive planner output must not include routing, specialization, or tool selection")
+
+    if solution_steps:
+        for idx, step in enumerate(solution_steps):
+            if _has_forbidden_in_step(step):
+                errors.append(f"solution_steps[{idx}] contains routing/specialization/tools (forbidden)")
+                break
     
     # Check for free-text reasoning (should not be primary output)
     # If result contains only text fields without structure, it's invalid
@@ -2168,6 +2339,8 @@ async def _evaluate_policy_layer(
     embedding: Optional[List[float]],
     is_simple: bool,
     requires_planning: bool,
+    *,
+    pkg_mandatory: bool = False,
 ) -> Tuple[Dict[str, Any], bool]:
     """
     Evaluate PKG policy layer to produce proto_plan.
@@ -2175,7 +2348,7 @@ async def _evaluate_policy_layer(
     Returns:
         Tuple of (proto_plan, is_pkg_escalated)
     """
-    if is_simple or _is_extremely_simple_task(ctx, raw_drift, drift_state):
+    if (is_simple or _is_extremely_simple_task(ctx, raw_drift, drift_state)) and not pkg_mandatory:
         return {"metadata": {"evaluated": False, "pkg_skipped": True}}, False
     
     try:
@@ -2212,6 +2385,8 @@ def _determine_decision_kind(
     is_escalated_ocps: bool,
     is_escalated_surprise: bool,
     is_pkg_escalated: bool,
+    *,
+    pkg_mandatory: bool = False,
 ) -> str:
     """
     Determine the final routing decision kind based on all escalation signals.
@@ -2222,36 +2397,44 @@ def _determine_decision_kind(
     CRITICAL: Conditional OR multi-action tasks are HARD cognitive gates.
     Enrichment (System-1) cannot override System-2 requirements.
     
-    CRITICAL: Action tasks with required_specialization or specialization are HARD fast-path gates.
+    CRITICAL: Action tasks with required_specialization are HARD fast-path gates.
     These tasks have explicit routing requirements and must route to fast path
     (unless blocked by conditional triggers or multiple actions).
-    Both required_specialization and specialization are treated as hard constraints.
     """
-    # ARCHITECTURAL FIX: Hard fast-path gate for action tasks with required_specialization or specialization
+    # ARCHITECTURAL FIX: PKG-mandatory gate (no cognitive planning)
+    # Action tasks with rich domain facts and no executor identity must be handled by PKG.
+    # Decision is finalized only after PKG validation in execute_task.
+    if pkg_mandatory:
+        logger.info(
+            f"[Coordinator] PKG-mandatory gate enforced for task {task_id}: "
+            "action task with rich domain facts and no routing specialization. "
+            "Deferring fast-path decision until PKG validation completes."
+        )
+        return "PKG_PENDING"
+
+    # ARCHITECTURAL FIX: Hard fast-path gate for action tasks with required_specialization
     # These tasks have explicit routing requirements and should bypass enrichment/escalation
     # EXCEPT: Still respect hard cognitive gates (conditional triggers, multiple actions)
     routing = task.params.get("routing", {}) if task.params else {}
-    has_required_specialization = bool(routing.get("required_specialization"))
-    has_specialization = bool(routing.get("specialization"))
-    has_specialization_constraint = has_required_specialization or has_specialization
+    has_required_specialization = bool(
+        routing.get("required_specialization") or routing.get("specialization")
+    )
     is_action_task = task.type == "action"
     
-    if is_action_task and has_specialization_constraint:
+    if is_action_task and has_required_specialization:
         # Still respect hard cognitive gates
         if has_conditions or has_multiple_actions:
-            spec_value = routing.get("required_specialization") or routing.get("specialization")
             logger.info(
                 f"[Coordinator] Hard cognitive gate overrides fast-path for task {task_id}: "
                 f"has_conditions={has_conditions}, has_multiple_actions={has_multiple_actions}. "
-                f"Specialization ({spec_value}) cannot override System-2 requirement."
+                f"Required_specialization cannot override System-2 requirement."
             )
             return DecisionKind.COGNITIVE.value
         
-        # Action task with specialization constraint -> fast path (hard constraint)
-        spec_value = routing.get("required_specialization") or routing.get("specialization")
+        # Action task with required_specialization -> fast path (hard constraint)
         logger.info(
             f"[Coordinator] Hard fast-path gate enforced for task {task_id}: "
-            f"type=action, specialization={spec_value}. "
+            f"type=action, required_specialization={routing.get('required_specialization')}. "
             f"Routing directly to fast path, bypassing escalation signals."
         )
         return DecisionKind.FAST_PATH.value
@@ -2370,7 +2553,6 @@ def _resolve_routing_intent(
     # 0) HARD PRIORITY: Task instance routing inbox (TaskPayload v2.5+)
     # Per docs/references/task-payload-capabilities.md:
     # - params.routing.required_specialization is a HARD constraint and must be honored.
-    # - params.routing.specialization is also treated as a HARD constraint (same priority).
     # - Instance-level routing overrides all defaults (type-level, PKG suggestions, memory).
     existing_routing = task.params.get("routing", {}) if task.params else {}
     required_spec = existing_routing.get("required_specialization")
@@ -2385,22 +2567,6 @@ def _resolve_routing_intent(
         logger.info(
             f"[Coordinator] Using TaskPayload routing hard constraint for task {ctx.task_id}: "
             f"required_specialization={required_spec} (source={intent.source.value})"
-        )
-        return intent
-    
-    # Also check specialization as a hard constraint (same priority as required_specialization)
-    specialization = existing_routing.get("specialization")
-    if specialization:
-        intent = RoutingIntent(
-            specialization=str(specialization),
-            skills=existing_routing.get("skills", {}) or {},
-            source=IntentSource.TASK_PAYLOAD_ROUTING,  # hard constraint from caller
-            confidence=IntentConfidence.HIGH,
-            metadata={"hard_constraint": "specialization"},
-        )
-        logger.info(
-            f"[Coordinator] Using TaskPayload routing hard constraint for task {ctx.task_id}: "
-            f"specialization={specialization} (source={intent.source.value})"
         )
         return intent
     
@@ -2495,8 +2661,8 @@ def _resolve_routing_intent(
     # ARCHITECTURAL FIX: After System-2, if no intent found, this is a contract violation
     if not intent and is_cognitive_path:
         error_msg = (
-            f"[Coordinator] System-2 planner failed to provide routing hints for task {ctx.task_id}. "
-            f"This should have been caught by planner validation - execution cannot proceed."
+            f"[Coordinator] Routing hints missing after cognitive planning for task {ctx.task_id}. "
+            f"PKG routing intent is required for execution; cannot proceed."
         )
         logger.error(error_msg)
         # Return minimal intent - execution will fail gracefully
@@ -2653,6 +2819,12 @@ async def _compute_routing_decision(
     # 1. Preliminary Assessment
     is_simple = _is_extremely_simple_query_precheck(ctx)
     requires_planning = _requires_planning(ctx.description, task.params)
+    pkg_mandatory = _is_pkg_mandatory_action(task)
+    if pkg_mandatory:
+        logger.info(
+            f"[Coordinator] PKG-mandatory action detected for task {ctx.task_id}: "
+            "rich domain facts with no routing specialization or emission."
+        )
     
     # ARCHITECTURAL FIX: Hard cognitive gate for conditional OR multi-action tasks
     # Enrichment (System-1) cannot override System-2 requirements
@@ -2685,7 +2857,15 @@ async def _compute_routing_decision(
 
     # 4. Policy Layer (PKG) Evaluation
     proto_plan, is_pkg_escalated = await _evaluate_policy_layer(
-        ctx, task, route_cfg, raw_drift, drift_state, embedding, is_simple, requires_planning
+        ctx,
+        task,
+        route_cfg,
+        raw_drift,
+        drift_state,
+        embedding,
+        is_simple,
+        requires_planning,
+        pkg_mandatory=pkg_mandatory,
     )
     
     # Handle PKG empty signal updates (boost uncertainty signals)
@@ -2705,7 +2885,8 @@ async def _compute_routing_decision(
     decision_kind = _determine_decision_kind(
         task, ctx.task_id, enrichment_auth, requires_planning,
         has_conditions, has_multiple_actions,
-        is_escalated_ocps, is_escalated_surprise, is_pkg_escalated
+        is_escalated_ocps, is_escalated_surprise, is_pkg_escalated,
+        pkg_mandatory=pkg_mandatory,
     )
     
     # Log routing decision reason for observability
@@ -2713,7 +2894,12 @@ async def _compute_routing_decision(
         DecisionKind.COGNITIVE.value,
         DecisionKind.ESCALATED.value,
     )
-    if is_escalated:
+    if decision_kind == "PKG_PENDING":
+        logger.info(
+            f"[Coordinator] PKG-mandatory decision pending for task {ctx.task_id}. "
+            "Awaiting PKG validation before final routing decision."
+        )
+    elif is_escalated:
         escalation_reasons = []
         if is_escalated_ocps:
             escalation_reasons.append(f"OCPS_breached(drift={raw_drift:.3f})")
@@ -2769,14 +2955,23 @@ async def _compute_routing_decision(
     if exec_cfg.record_router_telemetry_func:
         await _record_telemetry(exec_cfg, ctx.task_id, task_result.model_dump())
 
-    return task_result.model_dump()
+    result_dict = task_result.model_dump()
+    # Ensure proto_plan is accessible at top-level for downstream guards.
+    if "proto_plan" not in result_dict:
+        result_dict["proto_plan"] = proto_plan
+    payload = result_dict.get("payload")
+    if isinstance(payload, dict):
+        meta = payload.setdefault("metadata", {})
+        if isinstance(meta, dict) and "proto_plan" not in meta:
+            meta["proto_plan"] = proto_plan
+    return result_dict
 
 
 async def _try_run_pkg_evaluation(
     *,
     ctx: TaskContext,
     cfg: RouteConfig,
-    intent: Optional[RoutingIntent],  # Optional - PKG doesn't need pre-computed intent
+    intent: Optional[RoutingIntent] = None,  # Optional - PKG doesn't need pre-computed intent
     raw_drift: float,
     drift_state: Any,
     embedding: Optional[List[float]] = None,
@@ -2795,6 +2990,13 @@ async def _try_run_pkg_evaluation(
     proto_plan: Dict[str, Any] = {"metadata": {"evaluated": False}}
 
     try:
+        if cfg.evaluate_pkg_func is None:
+            logger.warning(
+                "[Coordinator] PKG evaluation skipped: evaluate_pkg_func is None (task_id=%s)",
+                ctx.task_id,
+            )
+            return proto_plan
+
         # Extract Eventizer signals (x1..x6) from TaskContext
         # These signals come from the Eventizer's "System 1" perception:
         # - x1_cache_novelty: Pattern matching cache hit/miss
@@ -2865,17 +3067,41 @@ async def _try_run_pkg_evaluation(
                 "type": ctx.task_type,
                 "task_id": ctx.task_id,
                 "description": ctx.description,
+                # Preserve original params for PKG policies (e.g., params.pkg contract)
+                "params": ctx.params or {},
+                # Provide a minimal raw task payload for adapters/fallbacks
+                "raw_task": {
+                    "task_id": ctx.task_id,
+                    "type": ctx.task_type,
+                    "description": ctx.description,
+                    "domain": ctx.domain,
+                    "params": ctx.params or {},
+                },
                 # Note: We don't pass intent.specialization - PKG decides this
             },
             timeout_s=int(cfg.pkg_timeout_s or DEFAULT_PKG_TIMEOUT_S),
             embedding=embedding,  # Pass embedding for Unified Memory hydration
         )
 
-        proto_plan = pkg_res or {}
+        if not isinstance(pkg_res, dict):
+            logger.warning(
+                "[Coordinator] PKG evaluation returned non-dict result (task_id=%s, type=%s)",
+                ctx.task_id,
+                type(pkg_res).__name__,
+            )
+            proto_plan = {"metadata": {"evaluated": False}}
+        else:
+            proto_plan = pkg_res or {}
         # Embed evaluation metadata directly in proto_plan
         if not proto_plan.get("metadata"):
             proto_plan["metadata"] = {}
         proto_plan["metadata"]["evaluated"] = True
+        logger.debug(
+            "[Coordinator] PKG evaluation result (task_id=%s) keys=%s evaluated=%s",
+            ctx.task_id,
+            list(proto_plan.keys()),
+            proto_plan.get("metadata", {}).get("evaluated"),
+        )
         # version is already at top level of proto_plan, accessible via proto_plan.get("version")
 
     except Exception as e:

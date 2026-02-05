@@ -14,6 +14,7 @@ import pytest
 
 # Adjust this import path if your repository structure differs:
 import seedcore.services.coordinator_service as cs
+from seedcore.models.cognitive import DecisionKind
 
 
 class StubAsyncTransaction:
@@ -393,6 +394,51 @@ async def test_router_telemetry_outbox_failure_rolls_back(monkeypatch):
             # Note: The new implementation may handle telemetry/outbox differently
             # These assertions may need adjustment based on actual implementation
             assert session.begin_calls >= 1
+
+
+@pytest.mark.asyncio
+async def test_pkg_mandatory_action_skips_cognitive_planning():
+    """PKG-mandatory action tasks should ignore cognitive planning requests."""
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    coordinator._ensure_background_tasks_started = AsyncMock()
+    coordinator._async_processing_tasks = {}
+
+    repo = SimpleNamespace()
+    repo.create_task = AsyncMock(return_value=uuid.uuid4())
+
+    session = StubAsyncSession()
+    session_factory = make_session_factory(session)
+
+    coordinator.graph_task_repo = repo
+    coordinator._session_factory = session_factory
+    coordinator._build_execution_config = MagicMock(return_value=SimpleNamespace())
+    coordinator._build_route_config = MagicMock(return_value=SimpleNamespace())
+
+    payload = {
+        "type": "action",
+        "description": "manufacture t-shirt",
+        "task_id": "task-pkg-mandatory",
+        "params": {
+            "design": {"style": "minimal"},
+            "intent": "manufacture",
+            "cognitive": {"decision_kind": "planner"},
+        },
+    }
+
+    with patch('seedcore.services.coordinator_service.get_async_pg_session_factory', return_value=session_factory):
+        with patch('seedcore.services.coordinator_service.execute_task', new_callable=AsyncMock) as mock_execute:
+            mock_execute.return_value = {
+                "success": True,
+                "decision_kind": DecisionKind.FAST_PATH.value,
+            }
+
+            result = await coordinator.route_and_execute(payload)
+
+            assert mock_execute.await_count == 1
+            assert result["success"] is True
+            assert coordinator._async_processing_tasks == {}
 
 
 @pytest.mark.asyncio
