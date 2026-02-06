@@ -30,4 +30,4 @@ jobs:
         env:
           PYTHONWARNINGS: "ignore::DeprecationWarning"
         run: |
-          pytest -q
+          pytest -q tests
