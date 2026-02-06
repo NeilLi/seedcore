@@ -1298,7 +1298,7 @@ class CognitiveCore(dspy.Module):
             knowledge_context.get("sufficiency", {}).get("escalation_reasons", []),
         )
 
-        # ARCHITECTURAL FIX: Enforce planner contract (TaskPayload v2.5+)
+        # ARCHITECTURAL FIX: Enforce strict DAG-only planner contract
         # System-2 must return machine-binding plan, not free-text reasoning
         # Check if this is a cognitive path task that requires planner contract
         requires_planner_contract = (
@@ -1312,11 +1312,10 @@ class CognitiveCore(dspy.Module):
             
             if not contract_valid:
                 error_msg = (
-                    f"Cognitive planner contract violation (TaskPayload v2.5+). "
+                    f"Cognitive planner contract violation (strict DAG-only). "
                     f"Planner must return structured, machine-binding plan with: "
-                    f"DAG structure (nodes/edges or solution_steps with depends_on), "
-                    f"routing hints (params.routing with specialization/skills/tools), "
-                    f"tool calls (params.tool_calls), and TaskPayload structure. "
+                    f"either explicit DAG (nodes + edges) OR implicit DAG (solution_steps with depends_on). "
+                    f"No routing, tools, specialization, params, or extra fields are allowed. "
                     f"Violations: {contract_violations}. "
                     f"System-2 output is non-binding - cannot proceed with execution."
                 )
@@ -1840,7 +1839,7 @@ class CognitiveCore(dspy.Module):
             logger.warning(f"Error during JSON repair: {e}")
             return None
 
-    def _parse_solution_steps_json(self, solution_steps: Any) -> List[Dict[str, Any]]:
+    def _parse_solution_steps_json(self, solution_steps: Any) -> Any:
         """
         Parse solution_steps from LLM output (handles JSON strings, markdown code blocks, etc.).
         
@@ -1921,10 +1920,13 @@ class CognitiveCore(dspy.Module):
                     parsed = json.loads(candidate)
                     if isinstance(parsed, list):
                         return parsed
-                    elif isinstance(parsed, dict) and "steps" in parsed:
-                        return parsed["steps"]
-                    elif isinstance(parsed, dict) and "solution_steps" in parsed:
-                        return parsed["solution_steps"]
+                    if isinstance(parsed, dict):
+                        if "steps" in parsed:
+                            return parsed["steps"]
+                        if "solution_steps" in parsed:
+                            return parsed["solution_steps"]
+                        if "nodes" in parsed or "edges" in parsed:
+                            return parsed
                     else:
                         logger.warning(f"Parsed JSON is not a list: {type(parsed)}")
                         return []
@@ -1940,10 +1942,13 @@ class CognitiveCore(dspy.Module):
                     if isinstance(parsed, list):
                         logger.info("JSON repair succeeded")
                         return parsed
-                    elif isinstance(parsed, dict) and "steps" in parsed:
-                        return parsed["steps"]
-                    elif isinstance(parsed, dict) and "solution_steps" in parsed:
-                        return parsed["solution_steps"]
+                    if isinstance(parsed, dict):
+                        if "steps" in parsed:
+                            return parsed["steps"]
+                        if "solution_steps" in parsed:
+                            return parsed["solution_steps"]
+                        if "nodes" in parsed or "edges" in parsed:
+                            return parsed
                 except json.JSONDecodeError as e2:
                     logger.warning(f"Repaired JSON still invalid: {e2}")
 
@@ -1962,9 +1967,8 @@ class CognitiveCore(dspy.Module):
 
         Handles:
         - estimated_complexity: Ensures it's a float in [1.0, 10.0]
-        - step_by_step_plan: Backward compatibility alias for solution_steps
-        - Nested task structures: Normalizes any TaskPayload-like structures in solution_steps
         - JSON parsing: Extracts solution_steps from JSON strings/markdown code blocks
+        - Explicit DAG parsing: Detects {"nodes": [...], "edges": [...]} and lifts to top-level
 
         Args:
             payload: The raw payload dict from DSPy handler output
@@ -1980,10 +1984,20 @@ class CognitiveCore(dspy.Module):
             raw_steps = payload["solution_steps"]
             parsed_steps = self._parse_solution_steps_json(raw_steps)
             if parsed_steps:
-                payload["solution_steps"] = parsed_steps
-                logger.debug(
-                    f"Successfully parsed {len(parsed_steps)} solution_steps from LLM output"
-                )
+                if isinstance(parsed_steps, dict) and (
+                    "nodes" in parsed_steps or "edges" in parsed_steps
+                ):
+                    payload["nodes"] = parsed_steps.get("nodes") or []
+                    payload["edges"] = parsed_steps.get("edges") or []
+                    payload.pop("solution_steps", None)
+                    logger.debug(
+                        f"Successfully parsed explicit DAG with {len(payload['nodes'])} nodes"
+                    )
+                else:
+                    payload["solution_steps"] = parsed_steps
+                    logger.debug(
+                        f"Successfully parsed {len(parsed_steps)} solution_steps from LLM output"
+                    )
             elif isinstance(raw_steps, str) and raw_steps.strip():
                 # If parsing failed but we have a string, log warning
                 # Don't overwrite - let validation catch the issue
@@ -2032,11 +2046,6 @@ class CognitiveCore(dspy.Module):
                                 "Recovered solution_steps from misbound estimated_complexity payload. "
                                 "Reset estimated_complexity to default 5.0"
                             )
-
-        # Back-compat: Some downstream consumers expect 'step_by_step_plan'.
-        # If we produced a uniform plan in 'solution_steps', mirror it.
-        if "step_by_step_plan" not in payload and "solution_steps" in payload:
-            payload["step_by_step_plan"] = payload.get("solution_steps")
 
         # Normalize estimated_complexity
         # CRITICAL: Prevent field misbinding - if estimated_complexity contains markdown/code blocks,
@@ -2098,182 +2107,6 @@ class CognitiveCore(dspy.Module):
         if "task" in payload and isinstance(payload["task"], dict):
             payload["task"] = normalize_task_payloads(payload["task"])
 
-        # Normalize solution_steps - ensure each step follows TaskPayload v2.5+ structure
-        # Note: JSON parsing already happened above at the start of this function
-        # Per task-payload-capabilities.md: steps must have type, params.routing, params.tool_calls
-        # Note: If solution_steps is still a string at this point, parsing failed above
-        if "solution_steps" in payload and isinstance(payload["solution_steps"], list):
-            logger.debug(f"Normalizing {len(payload['solution_steps'])} solution_steps for TaskPayload v2.5+ contract")
-            normalized_steps = []
-            for idx, step in enumerate(payload["solution_steps"]):
-                if isinstance(step, dict):
-                    # Ensure step has required TaskPayload-like structure
-                    # Each step should have 'type' and 'params' at minimum
-                    if "type" not in step:
-                        logger.warning(f"solution_steps[{idx}] missing 'type' field")
-                        step["type"] = "action"  # Default to action for planner steps
-
-                    if "params" not in step:
-                        step["params"] = {}
-                    
-                    # Ensure params.routing exists (TaskPayload v2.5+ contract)
-                    if "routing" not in step["params"]:
-                        step["params"]["routing"] = {}
-                        logger.debug(
-                            f"solution_steps[{idx}] missing params.routing, initializing empty routing hints"
-                        )
-                    
-                    # Ensure routing has proper structure (specialization, skills, tools)
-                    routing = step["params"]["routing"]
-                    if not isinstance(routing, dict):
-                        routing = {}
-                        step["params"]["routing"] = routing
-                    
-                    # Normalize routing.tools to list of strings (per task-payload-capabilities.md)
-                    if "tools" in routing:
-                        if not isinstance(routing["tools"], list):
-                            routing["tools"] = []
-                        else:
-                            # Ensure all tools are strings (tool names, not objects)
-                            routing["tools"] = [
-                                str(tool) if not isinstance(tool, str) else tool
-                                for tool in routing["tools"]
-                            ]
-                    
-                    # Ensure params.tool_calls exists (execution requests, separate from routing.tools)
-                    if "tool_calls" not in step["params"]:
-                        step["params"]["tool_calls"] = []
-                    
-                    # Normalize tool_calls structure
-                    tool_calls = step["params"]["tool_calls"]
-                    if not isinstance(tool_calls, list):
-                        tool_calls = []
-                        step["params"]["tool_calls"] = tool_calls
-                    else:
-                        # Ensure each tool_call has name and args
-                        normalized_tool_calls = []
-                        for tc_idx, tool_call in enumerate(tool_calls):
-                            if isinstance(tool_call, dict):
-                                if "name" not in tool_call:
-                                    logger.warning(
-                                        f"solution_steps[{idx}].params.tool_calls[{tc_idx}] missing 'name' field"
-                                    )
-                                    continue
-                                if "args" not in tool_call:
-                                    tool_call["args"] = {}
-                                normalized_tool_calls.append(tool_call)
-                            else:
-                                logger.warning(
-                                    f"solution_steps[{idx}].params.tool_calls[{tc_idx}] must be an object"
-                                )
-                        step["params"]["tool_calls"] = normalized_tool_calls
-
-                    # Normalize any nested task structures in steps
-                    if "task" in step and isinstance(step["task"], dict):
-                        step["task"] = normalize_task_payloads(step["task"])
-                        # Ensure nested task also has proper structure
-                        if "params" not in step["task"]:
-                            step["task"]["params"] = {}
-                        if "routing" not in step["task"]["params"]:
-                            step["task"]["params"]["routing"] = step["params"]["routing"]
-                        if "tool_calls" not in step["task"]["params"]:
-                            step["task"]["params"]["tool_calls"] = step["params"]["tool_calls"]
-
-                    # Ensure step has ID for DAG structure (required for DAG validation)
-                    if "id" not in step:
-                        # Try to generate meaningful ID from step content
-                        step_id = None
-                        # Check for common ID fields
-                        if "step" in step and isinstance(step["step"], (int, str)):
-                            step_id = f"step_{step['step']}"
-                        elif "name" in step:
-                            step_id = str(step["name"]).lower().replace(" ", "_")
-                        elif "tool_to_call" in step:
-                            tool_name = str(step["tool_to_call"]).split(".")[-1]  # Extract tool name
-                            step_id = f"{tool_name}_{idx}"
-                        elif "description" in step:
-                            # Generate ID from description (first few words)
-                            desc_words = str(step["description"]).lower().split()[:3]
-                            step_id = "_".join(desc_words) if desc_words else f"step_{idx}"
-                        else:
-                            step_id = f"step_{idx}"
-                        step["id"] = step_id
-                    
-                    # Convert old-format steps to TaskPayload v2.5+ format
-                    # Handle legacy fields: step, tool_to_call, description -> proper structure
-                    if "tool_to_call" in step and "params" in step:
-                        tool_name = step.pop("tool_to_call")
-                        # Move tool_to_call to params.tool_calls if not already there
-                        if not step["params"].get("tool_calls"):
-                            step["params"]["tool_calls"] = [{"name": tool_name, "args": step["params"].get("params", {})}]
-                        # Add tool to routing.tools if not present
-                        if tool_name not in (step["params"]["routing"].get("tools") or []):
-                            if "tools" not in step["params"]["routing"]:
-                                step["params"]["routing"]["tools"] = []
-                            step["params"]["routing"]["tools"].append(tool_name)
-                    
-                    # Infer routing hints from step content if missing
-                    routing = step["params"]["routing"]
-                    if not routing.get("specialization") and not routing.get("required_specialization"):
-                        # Try to infer specialization from tool names or description
-                        tools = routing.get("tools", [])
-                        tool_calls = step["params"].get("tool_calls", [])
-                        all_tools = tools + [tc.get("name", "") for tc in tool_calls if isinstance(tc, dict)]
-                        
-                        # Simple domain inference from tool names
-                        if any("iot" in str(t).lower() or "environment" in str(t).lower() for t in all_tools):
-                            routing["specialization"] = "Environment"
-                        elif any("security" in str(t).lower() or "sensor" in str(t).lower() for t in all_tools):
-                            routing["specialization"] = "SecurityMonitoring"
-                        elif any("light" in str(t).lower() for t in all_tools):
-                            routing["specialization"] = "Lighting"
-                        else:
-                            # Default to generalist if can't infer
-                            routing["specialization"] = "Generalist"
-                        logger.debug(
-                            f"solution_steps[{idx}] inferred specialization={routing['specialization']} from tools"
-                        )
-                    
-                    # Ensure depends_on exists (for DAG structure)
-                    # If missing, infer sequential dependencies (step N depends on step N-1)
-                    if "depends_on" not in step:
-                        step["depends_on"] = []
-                    elif not isinstance(step["depends_on"], list):
-                        # Convert single dependency to list
-                        step["depends_on"] = [step["depends_on"]]
-                    
-                    # Infer sequential dependencies if depends_on is empty and we have previous steps
-                    if not step.get("depends_on") and idx > 0:
-                        # Previous step should have an ID
-                        prev_step = normalized_steps[idx - 1] if normalized_steps else None
-                        if prev_step and prev_step.get("id"):
-                            step["depends_on"] = [prev_step["id"]]
-                            logger.debug(
-                                f"solution_steps[{idx}] inferred depends_on=[{prev_step['id']}] from sequential order"
-                            )
-                    
-                    # CRITICAL: Ensure routing.specialization is ALWAYS set (validation requirement)
-                    # Even if inference failed, set a default to pass validation
-                    routing = step["params"]["routing"]
-                    if not routing.get("specialization") and not routing.get("required_specialization"):
-                        # Last attempt: set a default specialization
-                        routing["specialization"] = "Generalist"
-                        logger.debug(
-                            f"solution_steps[{idx}] set default specialization=Generalist (no inference possible)"
-                        )
-
-                    normalized_steps.append(step)
-                else:
-                    logger.warning(
-                        f"solution_steps[{idx}] is not a dict, skipping normalization"
-                    )
-                    normalized_steps.append(step)
-            payload["solution_steps"] = normalized_steps
-
-            # Update step_by_step_plan if it was set earlier
-            if "step_by_step_plan" in payload:
-                payload["step_by_step_plan"] = normalized_steps
-
         return payload
 
     def _normalize_chat(self, payload: dict) -> dict:
@@ -2327,17 +2160,16 @@ class CognitiveCore(dspy.Module):
         self, payload: Dict[str, Any], violations: List[str]
     ) -> bool:
         """
-        Validate cognitive planner output against TaskPayload v2.5+ contract.
+        Validate cognitive planner output against the strict DAG-only contract.
         
         Architecture: System-2 must NEVER return free-text as primary output.
         Planner output must be machine-binding and structurally complete.
         
-        Required contract (per task-payload-capabilities.md):
-        1. DAG structure: explicit (dag/nodes + edges) OR implicit (solution_steps with depends_on)
-        2. Routing hints: Each step must have params.routing with specialization/skills/tools
-        3. Tool calls: Execution requests in params.tool_calls (not in routing.tools)
-        4. TaskPayload structure: Each step must have type and params
-        5. No free-text reasoning: Output must be JSON-serializable structure
+        Required contract (strict):
+        1. DAG structure: explicit (nodes + edges) OR implicit (solution_steps with depends_on)
+        2. No routing, tools, specialization, or params fields anywhere
+        3. Steps/nodes must only contain allowed keys for the chosen shape
+        4. No free-text reasoning: Output must be JSON-serializable structure
         
         Returns:
             True if contract is satisfied, False otherwise (violations list populated)
@@ -2350,7 +2182,7 @@ class CognitiveCore(dspy.Module):
         edges = payload.get("edges")
         solution_steps = payload.get("solution_steps") or payload.get("steps")
         
-        # Validate explicit DAG
+        # Validate explicit DAG (Option A)
         if dag and isinstance(dag, list) and len(dag) > 0:
             has_explicit_dag = True
             node_ids = set()
@@ -2361,27 +2193,27 @@ class CognitiveCore(dspy.Module):
                 if "id" not in node:
                     violations.append(f"dag/nodes[{idx}] missing required 'id' field")
                     continue
+                if "type" not in node:
+                    violations.append(f"dag/nodes[{idx}] missing required 'type' field")
+                    continue
                 node_id = node["id"]
                 if node_id in node_ids:
                     violations.append(f"dag/nodes[{idx}] duplicate node id: {node_id}")
                     continue
                 node_ids.add(node_id)
-                
-                # Check for routing hints in node (TaskPayload v2.5+ contract)
-                node_routing = node.get("routing") or node.get("params", {}).get("routing")
-                if not node_routing or not isinstance(node_routing, dict):
+
+                # Enforce strict node shape: only id + type allowed
+                allowed_node_keys = {"id", "type"}
+                extra_node_keys = set(node.keys()) - allowed_node_keys
+                if extra_node_keys:
                     violations.append(
-                        f"dag/nodes[{idx}] missing routing hints (required by TaskPayload v2.5+ contract)"
+                        f"dag/nodes[{idx}] contains forbidden keys: {sorted(extra_node_keys)}"
                     )
-                else:
-                    # Validate routing structure
-                    if not node_routing.get("specialization") and not node_routing.get("required_specialization"):
-                        violations.append(
-                            f"dag/nodes[{idx}].routing missing specialization or required_specialization"
-                        )
             
-            # Validate edges reference valid nodes
-            if edges and isinstance(edges, list):
+            # Validate edges (required) and reference valid nodes
+            if not isinstance(edges, list):
+                violations.append("edges must be a list for explicit DAG output")
+            else:
                 for idx, edge in enumerate(edges):
                     if not isinstance(edge, (list, tuple)) or len(edge) != 2:
                         violations.append(f"edges[{idx}] must be [from_id, to_id]")
@@ -2392,7 +2224,7 @@ class CognitiveCore(dspy.Module):
                     if to_id not in node_ids:
                         violations.append(f"edges[{idx}] references unknown node: {to_id}")
         
-            # Validate implicit DAG in solution_steps
+        # Validate implicit DAG in solution_steps (Option B)
         if solution_steps and isinstance(solution_steps, list) and len(solution_steps) > 0:
             has_implicit_dag = True
             step_ids = set()
@@ -2416,74 +2248,42 @@ class CognitiveCore(dspy.Module):
                 else:
                     violations.append(f"solution_steps[{idx}] missing required 'id' field")
                 
-                # Check for TaskPayload structure (type and params)
+                # Check for required type
                 step_type = step.get("type") or (step.get("task", {}) or {}).get("type")
                 if not step_type:
                     violations.append(f"solution_steps[{idx}] missing required 'type' field")
                 
-                step_params = step.get("params") or (step.get("task", {}) or {}).get("params") or {}
-                if not isinstance(step_params, dict):
-                    violations.append(f"solution_steps[{idx}] params must be a dictionary")
-                    step_params = {}
-                
-                # Check for routing hints (TaskPayload v2.5+ contract requirement)
-                step_routing = step_params.get("routing")
-                if not step_routing or not isinstance(step_routing, dict):
+                # Ensure depends_on is present and is a list
+                depends_on = step.get("depends_on")
+                if depends_on is None:
                     violations.append(
-                        f"solution_steps[{idx}] missing params.routing (required by TaskPayload v2.5+ contract)"
+                        f"solution_steps[{idx}] missing required 'depends_on' field"
                     )
-                else:
-                    # Validate routing structure per task-payload-capabilities.md
-                    has_specialization = (
-                        step_routing.get("specialization") or
-                        step_routing.get("required_specialization")
-                    )
-                    if not has_specialization:
-                        violations.append(
-                            f"solution_steps[{idx}].params.routing missing specialization or required_specialization"
-                        )
-                    
-                    # Tools in routing.tools should be strings (capability requirements)
-                    routing_tools = step_routing.get("tools", [])
-                    if routing_tools and not isinstance(routing_tools, list):
-                        violations.append(
-                            f"solution_steps[{idx}].params.routing.tools must be a list of strings"
-                        )
-                    elif routing_tools:
-                        for tool_idx, tool in enumerate(routing_tools):
-                            if not isinstance(tool, str):
-                                violations.append(
-                                    f"solution_steps[{idx}].params.routing.tools[{tool_idx}] must be a string (tool name)"
-                                )
-                
-                # Check for tool_calls (execution requests, separate from routing.tools)
-                tool_calls = step_params.get("tool_calls", [])
-                if tool_calls and not isinstance(tool_calls, list):
+                elif not isinstance(depends_on, list):
                     violations.append(
-                        f"solution_steps[{idx}].params.tool_calls must be a list"
+                        f"solution_steps[{idx}].depends_on must be a list"
                     )
-                elif tool_calls:
-                    for tc_idx, tool_call in enumerate(tool_calls):
-                        if not isinstance(tool_call, dict):
-                            violations.append(
-                                f"solution_steps[{idx}].params.tool_calls[{tc_idx}] must be an object"
-                            )
-                        elif not tool_call.get("name"):
-                            violations.append(
-                                f"solution_steps[{idx}].params.tool_calls[{tc_idx}] missing 'name' field"
-                            )
-                
-                # Note: dependencies (depends_on) are validated above in routing/tool_calls checks
-                # Steps with IDs form a valid DAG even without explicit depends_on (sequential execution)
+
+                # Enforce strict step shape: only id, type, depends_on allowed
+                allowed_step_keys = {"id", "type", "depends_on"}
+                extra_step_keys = set(step.keys()) - allowed_step_keys
+                if extra_step_keys:
+                    violations.append(
+                        f"solution_steps[{idx}] contains forbidden keys: {sorted(extra_step_keys)}"
+                    )
             
             # If we have steps, they must form a valid DAG
             if len(step_ids) == 0 and len(solution_steps) > 0:
                 violations.append("solution_steps contains no valid step IDs")
         
-        # Must have either explicit or implicit DAG
+        # Must have either explicit or implicit DAG (not both)
         if not has_explicit_dag and not has_implicit_dag:
             violations.append(
                 "Planner output must contain DAG structure (dag/nodes + edges) or solution_steps with depends_on"
+            )
+        if has_explicit_dag and has_implicit_dag:
+            violations.append(
+                "Planner output must choose exactly one shape: explicit DAG or implicit solution_steps"
             )
         
         # Check for free-text reasoning as primary output (forbidden)
@@ -2501,6 +2301,21 @@ class CognitiveCore(dspy.Module):
                 "System-2 must return machine-binding plan, not prose."
             )
         
+        # Enforce top-level shape: only DAG fields + estimated_complexity + meta allowed
+        allowed_top_level = {"nodes", "edges", "dag", "solution_steps", "steps", "estimated_complexity", "meta"}
+        extra_top_level = set(payload.keys()) - allowed_top_level
+        if extra_top_level:
+            violations.append(
+                f"Planner output contains forbidden top-level keys: {sorted(extra_top_level)}"
+            )
+
+        # Explicitly forbid routing/tools/specialization anywhere in payload
+        forbidden_markers = ["routing", "tool_calls", "tools", "specialization", "required_specialization", "skills", "params"]
+        payload_text = json.dumps(payload)
+        for marker in forbidden_markers:
+            if f"\"{marker}\"" in payload_text:
+                violations.append(f"Planner output contains forbidden field '{marker}'")
+
         return len(violations) == 0
 
     def _validate_dag_structure(
@@ -2663,7 +2478,8 @@ class CognitiveCore(dspy.Module):
             except (ValueError, TypeError):
                 violations.append("Invalid complexity score format")
 
-        self._validate_solution_steps(result, violations)
+        if cog_type != CognitiveType.TASK_PLANNING:
+            self._validate_solution_steps(result, violations)
 
         return len(violations) == 0, violations
 

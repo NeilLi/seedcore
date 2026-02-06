@@ -66,6 +66,7 @@ from ..utils import extract_from_nested
 from .policies import SurpriseComputer
 from .signals import SignalEnricher
 from .plan import persist_and_register_dependencies
+from .plan_executor import PlanExecutor
 
 setup_logging(app_name="seedcore.coordinator.core.execute.driver")
 logger = ensure_serve_logger("seedcore.coordinator.core.execute", level="DEBUG")
@@ -640,6 +641,35 @@ async def execute_task(
                 meta={"pkg_mandatory": True, "decision_kind": decision_kind},
             )
 
+        # PKG evaluated but returned a policy-cleared no-op (valid empty result)
+        if pkg_evaluated and not pkg_skipped and pkg_empty and not pkg_has_routing:
+            logger.info(
+                "[Coordinator] PKG validated no-op for task %s: policy-cleared, no execution required",
+                ctx.task_id,
+            )
+            return make_envelope(
+                task_id=ctx.task_id,
+                success=True,
+                payload={
+                    "status": "policy_noop",
+                    "reason": "PKG validated task but no governed actions were required",
+                    "proto_plan": proto_plan,
+                },
+                error=None,
+                error_type=None,
+                retry=False,
+                decision_kind=DecisionKind.FAST_PATH.value,
+                path="coordinator_pkg_gate",
+                meta={
+                    "pkg_mandatory": True,
+                    "policy_noop": True,
+                    "evaluated": pkg_evaluated,
+                    "pkg_skipped": pkg_skipped,
+                    "pkg_empty": pkg_empty,
+                    "has_routing": pkg_has_routing,
+                },
+            )
+
         if not pkg_evaluated or pkg_skipped or pkg_empty or not pkg_has_routing:
             error_msg = (
                 "PKG evaluation required for action task but PKG returned no usable plan."
@@ -966,8 +996,33 @@ async def _handle_cognitive_path(
                 )
                 # Non-blocking: execution continues even if graph persistence fails
 
-        # 3) Handle direct response (no steps)
-        if not solution_steps:
+        # 3) Build plan input for execution (implicit or explicit DAG)
+        result_payload = plan_res.get("result", {}) if isinstance(plan_res, dict) else {}
+        nodes = (
+            plan_res.get("nodes")
+            or result_payload.get("nodes")
+            or plan_res.get("dag")
+            or result_payload.get("dag")
+        )
+        edges = plan_res.get("edges") or result_payload.get("edges") or []
+
+        plan_input: Dict[str, Any] | List[Dict[str, Any]] | None = None
+        if solution_steps:
+            plan_input = solution_steps
+        elif nodes:
+            plan_input = {"nodes": nodes, "edges": edges}
+
+        logger.info(
+            "[Coordinator] Plan input built for task %s: kind=%s steps=%s nodes=%s edges=%s",
+            task.task_id,
+            "steps" if isinstance(plan_input, list) else "dag" if isinstance(plan_input, dict) else "none",
+            len(plan_input) if isinstance(plan_input, list) else 0,
+            len(plan_input.get("nodes") or []) if isinstance(plan_input, dict) else 0,
+            len(plan_input.get("edges") or []) if isinstance(plan_input, dict) else 0,
+        )
+
+        # 3a) Handle direct response (no plan)
+        if not plan_input:
             # Cognitive agent returned direct response (no steps)
             # Normalize to canonical format
             direct_result = (
@@ -977,11 +1032,11 @@ async def _handle_cognitive_path(
             )
             return normalize_envelope(direct_result, task_id=task.task_id, path="coordinator_cognitive_path")
 
-        # 4) Execute steps (dependency-aware)
+        # 4) Execute steps (dependency-aware) via PlanExecutor
 
         logger.info(
             "[Coordinator] System 2 executing %d steps for task %s.",
-            len(solution_steps),
+            len(solution_steps) if solution_steps else len(nodes or []),
             task.task_id,
         )
 
@@ -993,22 +1048,109 @@ async def _handle_cognitive_path(
             # PKGPlanIntentExtractor.extract() only uses proto_plan, not ctx
             routing_intent = PKGPlanIntentExtractor.extract(proto_plan_from_router)
 
-        step_results = await _execute_steps_dependency_aware(
-            parent_task=task,
-            steps=solution_steps,
+        # Build routing/tool maps from PKG proto_plan (if available)
+        step_routing_map: Dict[str, Dict[str, Any]] = {}
+        step_tool_calls_map: Dict[str, List[Dict[str, Any]]] = {}
+        if proto_plan_from_router and isinstance(proto_plan_from_router, dict):
+            pkg_steps = (
+                proto_plan_from_router.get("steps")
+                or proto_plan_from_router.get("solution_steps")
+                or []
+            )
+            if isinstance(pkg_steps, list):
+                for pkg_step in pkg_steps:
+                    if not isinstance(pkg_step, dict):
+                        continue
+                    task_obj = pkg_step.get("task", pkg_step)
+                    if not isinstance(task_obj, dict):
+                        continue
+                    step_id = (
+                        task_obj.get("id")
+                        or task_obj.get("task_id")
+                        or pkg_step.get("id")
+                    )
+                    if not step_id:
+                        continue
+                    params = task_obj.get("params", {}) if isinstance(task_obj.get("params"), dict) else {}
+                    routing = params.get("routing") if isinstance(params.get("routing"), dict) else {}
+                    tool_calls = params.get("tool_calls") if isinstance(params.get("tool_calls"), list) else []
+                    if routing:
+                        step_routing_map[str(step_id)] = dict(routing)
+                    if tool_calls:
+                        step_tool_calls_map[str(step_id)] = [tc for tc in tool_calls if isinstance(tc, dict)]
+
+        def _routing_resolver(
+            step: Any,
+            parent: TaskPayload,
+            base_intent: Optional[RoutingIntent],
+        ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[str]]:
+            # Start with PKG-derived intent if available
+            routing: Dict[str, Any] = (
+                base_intent.to_routing_params() if base_intent else {}
+            )
+
+            # Merge per-step routing from PKG proto_plan (highest priority)
+            step_id = getattr(step, "id", None) or (step.raw.get("id") if hasattr(step, "raw") else None)
+            if step_id and str(step_id) in step_routing_map:
+                routing.update(step_routing_map[str(step_id)])
+
+            # Merge parent routing last to preserve instance-level constraints
+            parent_routing = (parent.params or {}).get("routing") or {}
+            if isinstance(parent_routing, dict):
+                routing.update(parent_routing)
+
+            # Tool calls: prefer per-step PKG tool_calls, fallback to parent tool_calls for single-step actions
+            tool_calls: List[Dict[str, Any]] = []
+            if step_id and str(step_id) in step_tool_calls_map:
+                tool_calls = list(step_tool_calls_map[str(step_id)])
+            else:
+                parent_tool_calls = (parent.params or {}).get("tool_calls") or []
+                if isinstance(parent_tool_calls, list) and len(parent_tool_calls) == 1:
+                    tool_calls = [tc for tc in parent_tool_calls if isinstance(tc, dict)]
+
+            organ_hint = None
+            if isinstance(routing, dict):
+                organ_hint = routing.get("target_organ_hint")
+
+            return routing, tool_calls, organ_hint
+
+        plan_executor = PlanExecutor(
             organism_execute=config.organism_execute,
+            build_step_payload=_prepare_step_task_payload,
+            routing_resolver=_routing_resolver,
+            logger_override=logger,
+        )
+
+        logger.info(
+            "[Coordinator] Invoking PlanExecutor for task %s (plan_input=%s)",
+            task.task_id,
+            "steps" if isinstance(plan_input, list) else "dag",
+        )
+
+        step_results, normalized_steps, plan_status = await plan_executor.execute_plan(
+            plan=plan_input,
+            parent_task=task,
             timeout_s=timeout,
             cid=config.cid,
             routing_intent=routing_intent,
         )
 
+        logger.info(
+            "[Coordinator] PlanExecutor completed for task %s: steps=%d results=%d status=%s",
+            task.task_id,
+            len(normalized_steps or []),
+            len(step_results or []),
+            getattr(plan_status, "value", plan_status),
+        )
+
         # 5) Aggregate
         return _aggregate_execution_results(
             parent_task_id=task.task_id,
-            solution_steps=solution_steps,
+            solution_steps=normalized_steps or solution_steps,
             step_results=step_results,
             decision_kind=decision_kind.value,
             original_meta={"ocps": ocps_payload},
+            plan_status=plan_status,
         )
 
     except Exception as e:
@@ -1770,13 +1912,22 @@ def _aggregate_execution_results(
     step_results: List[Dict[str, Any]],
     decision_kind: str,
     original_meta: Dict | None = None,
+    plan_status: Any | None = None,
 ) -> Dict[str, Any]:
     all_succeeded = all(
         r.get("success", False) for r in step_results if r.get("step") is not None
     )
+    status_value = getattr(plan_status, "value", plan_status)
+    is_waiting = status_value == "waiting"
+    is_failed = status_value == "failed"
+    is_completed = status_value == "completed"
+    is_partial = status_value == "partial"
+
+    success = bool(all_succeeded) if is_completed else (not is_failed)
+    error = None if success else "plan_failed"
     aggregated = {
-        "success": bool(all_succeeded),
-        "error": None if all_succeeded else "plan_failed",
+        "success": success,
+        "error": error,
         "result": {
             "plan": {
                 "parent_task_id": parent_task_id,
@@ -1790,6 +1941,12 @@ def _aggregate_execution_results(
         "metadata": {
             "decomposition": True,
             "decision_kind": decision_kind,
+            "plan_status": status_value or ("completed" if all_succeeded else "failed"),
+            "retryable": False if is_waiting else True,
+            # Safety fallback: never fail hard on architectural gaps
+            "fallback_specialization": Specialization.GENERALIST.value
+            if is_waiting or is_partial
+            else None,
         },
         "path": "coordinator_execute",
         "kind": "plan_execution",
@@ -2630,16 +2787,12 @@ def _resolve_routing_intent(
         validation_errors = IntentValidator.validate(intent, ctx)
         if validation_errors:
             if is_cognitive_path:
-                # ARCHITECTURAL FIX: After System-2 planning, enrichment fallback is FORBIDDEN
-                # If planner output is invalid, execution must fail - no fallback to System-1
-                error_msg = (
-                    f"[Coordinator] System-2 planner output invalid for task {ctx.task_id}: "
-                    f"{'; '.join(validation_errors)}. "
-                    f"Enrichment fallback forbidden after cognitive planning - planner contract violation."
+                # System-2 plan is routing-free by contract; missing routing hints are expected here.
+                # Defer routing resolution to PlanExecutor (or Organism fallback) without erroring.
+                logger.info(
+                    f"[Coordinator] System-2 routing hints missing for task {ctx.task_id}; "
+                    "deferring routing resolution to PlanExecutor."
                 )
-                logger.error(error_msg)
-                # Return minimal intent that will cause execution to fail gracefully
-                # The actual error should have been caught in _validate_planner_output
                 intent = RoutingIntent(
                     specialization=Specialization.GENERALIST.value,
                     skills={},
@@ -2979,7 +3132,11 @@ async def _compute_routing_decision(
     intent = _resolve_routing_intent(ctx, proto_plan, task, route_cfg, is_cognitive_path=is_cognitive)
     
     # Log routing decision for observability
-    if intent.specialization and not intent.organ_hint:
+    if (
+        intent.specialization
+        and not intent.organ_hint
+        and decision_kind == DecisionKind.FAST_PATH.value
+    ):
         logger.debug(
             f"[Coordinator] Routing task {ctx.task_id} to 'organism' with "
             f"specialization={intent.specialization} (organ_hint not set, "

@@ -873,108 +873,15 @@ class Coordinator:
                     f"required_specialization={routing.get('required_specialization')}) - "
                     "routing directly to fast path, bypassing planning"
                 )
-                
-                # Return immediate ACK
-                ack_result = make_envelope(
-                    task_id=task_id,
-                    success=True,
-                    decision_kind=DecisionKind.COGNITIVE.value,
-                    path="coordinator_ack",
-                    meta={
-                        "status": "processing",
-                        "message": "Planning task accepted, processing asynchronously",
-                        "async_processing": True,
-                    }
+                # Execute immediately (fast path should be synchronous)
+                exec_config = self._build_execution_config(correlation_id)
+                route_config = self._build_route_config()
+                result = await execute_task(
+                    task=task_obj,
+                    route_config=route_config,
+                    execution_config=exec_config,
                 )
-                
-                # Spawn async task to process planning
-                async def _process_planning_async():
-                    """Process planning task asynchronously and update DB."""
-                    try:
-                        exec_config = self._build_execution_config(correlation_id)
-                        route_config = self._build_route_config()
-                        
-                        result = await execute_task(
-                            task=task_obj,
-                            route_config=route_config,
-                            execution_config=exec_config,
-                        )
-                        
-                        # Update task result in DB (so dispatcher can check if needed)
-                        if self._session_factory:
-                            try:
-                                async with self._session_factory() as session:
-                                    async with session.begin():
-                                        # Update task result directly using SQL
-                                        normalized_result = normalize_envelope(result, task_id=task_id, path="coordinator")
-                                        await session.execute(
-                                            text("""
-                                                UPDATE tasks 
-                                                SET result = CAST(:result AS jsonb),
-                                                    status = CASE 
-                                                        WHEN CAST(:result AS jsonb)->>'success' = 'true' THEN 'completed'
-                                                        ELSE 'failed'
-                                                    END,
-                                                    updated_at = NOW()
-                                                WHERE id = CAST(:task_id AS uuid)
-                                            """),
-                                            {
-                                                "task_id": task_id,
-                                                "result": json.dumps(normalized_result)
-                                            }
-                                        )
-                            except Exception as db_error:
-                                logger.warning(
-                                    f"Failed to update task result in DB for {task_id}: {db_error} "
-                                    "(non-fatal - result was returned to dispatcher)"
-                                )
-                        
-                        logger.info(f"✅ Planning task {task_id} completed asynchronously")
-                    except Exception as e:
-                        logger.error(
-                            f"❌ Async planning task {task_id} failed: {e}",
-                            exc_info=True
-                        )
-                        # Update task with error result in DB
-                        if self._session_factory:
-                            try:
-                                async with self._session_factory() as session:
-                                    async with session.begin():
-                                        error_result = make_envelope(
-                                            task_id=task_id,
-                                            success=False,
-                                            error=str(e),
-                                            error_type="async_planning_error",
-                                            decision_kind=DecisionKind.ERROR.value,
-                                            path="coordinator_async_error",
-                                        )
-                                        await session.execute(
-                                            text("""
-                                                UPDATE tasks 
-                                                SET result = CAST(:result AS jsonb),
-                                                    status = 'failed',
-                                                    error = :error,
-                                                    updated_at = NOW()
-                                                WHERE id = CAST(:task_id AS uuid)
-                                            """),
-                                            {
-                                                "task_id": task_id,
-                                                "result": json.dumps(error_result),
-                                                "error": str(e)
-                                            }
-                                        )
-                            except Exception as db_error:
-                                logger.error(f"Failed to update error result in DB: {db_error}")
-                    finally:
-                        # Clean up task tracking
-                        self._async_processing_tasks.pop(task_id, None)
-                
-                # Start async processing
-                processing_task = asyncio.create_task(_process_planning_async())
-                self._async_processing_tasks[task_id] = processing_task
-                
-                # Return immediate ACK
-                return ack_result
+                return result
 
             # 2. Compute Strategy (Fast vs Deep) - Standard synchronous processing
             exec_config = self._build_execution_config(correlation_id)

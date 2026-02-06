@@ -76,8 +76,8 @@ class TaskPlanningSignature(WithKnowledgeMixin, dspy.Signature):
     
     Architecture: System-2 is a COMPILER, not a reasoning model.
     - Input: Natural language task description
-    - Output: Executable program (DAG of steps with routing hints)
-    - Contract: TaskPayload v2.5+ (DAG structure + routing + tool_calls)
+    - Output: Executable program (DAG of steps, no routing/tools/specialization)
+    - Contract: Strict DAG-only planner output (Option A or B)
     
     This is NOT a chat model. Output must be machine-executable structure.
     Any prose or non-binding output will cause execution to fail.
@@ -97,40 +97,41 @@ class TaskPlanningSignature(WithKnowledgeMixin, dspy.Signature):
 
     solution_steps = dspy.OutputField(
         desc=(
-            "REQUIRED: Machine-binding execution plan (JSON array).\n"
+            "REQUIRED: Machine-binding execution plan (JSON only).\n"
             "\n"
             "COMPILER OUTPUT RULES (NON-NEGOTIABLE):\n"
-            "1. Return ONLY a valid JSON array (no markdown, no ```json, no prose)\n"
+            "1. Return ONLY valid JSON (no markdown, no ```json, no prose)\n"
             "2. All keys MUST use double-quotes (no single quotes)\n"
             "3. NO trailing commas (neither ,] nor ,})\n"
             "4. NO comments (no // or /* */)\n"
             "5. NO explanations outside the JSON structure\n"
             "\n"
-            "SCHEMA (every step MUST include all fields):\n"
+            "VALID SHAPES (pick exactly ONE of these):\n"
+            "\n"
+            "Option A: Explicit DAG object\n"
             "{\n"
-            "  \"id\": \"string (unique identifier, e.g., 'detect_noise')\",\n"
-            "  \"type\": \"string (one of: 'action', 'query', 'event')\",\n"
-            "  \"depends_on\": [\"string (step IDs this depends on, empty [] for roots)\"],\n"
-            "  \"params\": {\n"
-            "    \"routing\": {\n"
-            "      \"specialization\": \"string (required: domain like 'SecurityMonitoring', 'Environment')\",\n"
-            "      \"required_specialization\": \"string (optional hard constraint)\",\n"
-            "      \"skills\": {\"skill_name\": 0.0},\n"
-            "      \"tools\": [\"string (tool names, e.g., 'sensors.read_audio')\"]\n"
-            "    },\n"
-            "    \"tool_calls\": [\n"
-            "      {\"name\": \"string (tool name)\", \"args\": {}}\n"
-            "    ]\n"
-            "  }\n"
+            "  \"nodes\": [\n"
+            "    {\"id\": \"string\", \"type\": \"string\"}\n"
+            "  ],\n"
+            "  \"edges\": [[\"from_id\", \"to_id\"]]\n"
             "}\n"
             "\n"
-            "TASKPAYLOAD v2.5 REMINDERS:\n"
-            "- routing.tools = REQUIRED tool NAMES (strings), not objects\n"
-            "- params.tool_calls = executable tool invocations (objects with name + args)\n"
-            "- Do NOT output prose, markdown, bullets, or commentary\n"
+            "Option B: Implicit DAG array\n"
+            "[\n"
+            "  {\"id\": \"string\", \"type\": \"string\", \"depends_on\": [\"string\"]}\n"
+            "]\n"
+            "\n"
+            "FORBIDDEN (DO NOT INCLUDE):\n"
+            "- routing\n"
+            "- tools\n"
+            "- tool_calls\n"
+            "- specialization / required_specialization\n"
+            "- params\n"
+            "- skills\n"
+            "- any extra keys beyond the allowed shapes\n"
             "\n"
             "VALID EXAMPLE (copy structure, replace values):\n"
-            "[{\"id\":\"detect_noise\",\"type\":\"query\",\"depends_on\":[],\"params\":{\"routing\":{\"specialization\":\"SecurityMonitoring\",\"tools\":[\"sensors.read_audio\"]},\"tool_calls\":[{\"name\":\"sensors.read_audio\",\"args\":{\"location\":\"door\"}}]}},{\"id\":\"set_temperature\",\"type\":\"action\",\"depends_on\":[\"detect_noise\"],\"params\":{\"routing\":{\"specialization\":\"Environment\",\"tools\":[\"iot.write.environment\"]},\"tool_calls\":[{\"name\":\"iot.write.environment\",\"args\":{\"parameter\":\"temperature\",\"value\":36,\"unit\":\"C\"}}]}}]\n"
+            "[{\"id\":\"wait_noise\",\"type\":\"condition\",\"depends_on\":[]},{\"id\":\"set_temp\",\"type\":\"action\",\"depends_on\":[\"wait_noise\"]},{\"id\":\"lights_off\",\"type\":\"action\",\"depends_on\":[\"wait_noise\"]}]\n"
             "\n"
             "CRITICAL: If you cannot produce valid JSON with all required fields, return an empty array [] and set estimated_complexity to 10 (indicating failure)."
         )
