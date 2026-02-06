@@ -199,7 +199,7 @@ class TestExecuteTask:
         assert result["decision_kind"] == DecisionKind.COGNITIVE.value
     
     async def test_pkg_mandatory_never_routes_when_pkg_invalid(self):
-        """PKG-mandatory action tasks should fail fast if PKG output is invalid."""
+        """PKG-mandatory action tasks should complete as policy_noop if PKG returns valid empty."""
         task = TaskPayload(
             task_id="task-pkg-mandatory",
             type="action",
@@ -226,7 +226,7 @@ class TestExecuteTask:
             sigma=0.15,
         )
 
-        # Invalid PKG result: empty plan (evaluated=True but empty -> pkg_incomplete)
+        # PKG result: empty plan (evaluated=True but empty -> policy_noop)
         route_config = RouteConfig(
             surprise_computer=surprise_computer,
             ocps_valve=ocps_valve,
@@ -258,8 +258,10 @@ class TestExecuteTask:
             execution_config=execution_config,
         )
 
-        assert result["decision_kind"] == DecisionKind.ERROR.value
+        assert result["success"] is True
         assert result["path"] == "coordinator_pkg_gate"
+        assert result["payload"]["status"] == "policy_noop"
+        assert result["retry"] is False
         organism_execute.assert_not_called()
     
     async def test_execute_task_handles_escalated_path(self):
@@ -406,7 +408,7 @@ class TestExecuteTask:
         assert result.get("error_type") == "pkg_incomplete"
 
     async def test_pkg_mandatory_action_fails_when_pkg_empty(self):
-        """PKG-mandatory action tasks must fail fast if PKG returns no plan."""
+        """PKG-mandatory action tasks should complete as policy_noop if PKG returns no plan."""
         task = TaskPayload(
             task_id="task-pkg-empty",
             type="action",
@@ -461,8 +463,9 @@ class TestExecuteTask:
             execution_config=execution_config,
         )
 
-        assert result["success"] is False
-        assert result.get("error_type") == "pkg_incomplete"
+        assert result["success"] is True
+        assert result["payload"]["status"] == "policy_noop"
+        assert result["retry"] is False
 
     async def test_pkg_mandatory_action_fails_when_no_routing_hints(self):
         """PKG-mandatory action tasks must fail if PKG omits routing hints."""

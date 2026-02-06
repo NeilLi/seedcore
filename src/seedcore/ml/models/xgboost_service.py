@@ -10,7 +10,7 @@ import time
 import json
 import os
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, TYPE_CHECKING
 import pandas as pd  # pyright: ignore[reportMissingImports]
 import numpy as np
 
@@ -26,6 +26,11 @@ from sklearn.model_selection import train_test_split  # pyright: ignore[reportMi
 import tempfile  # noqa: F401
 
 from ...utils.ray_utils import ensure_ray_initialized
+
+if TYPE_CHECKING:
+    from ray.data import Dataset as RayDataset  # pyright: ignore[reportMissingImports]
+else:
+    RayDataset = Any
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -136,7 +141,7 @@ class XGBoostService:
 
     def create_sample_dataset(
         self, n_samples: int = 10000, n_features: int = 20
-    ) -> ray.data.Dataset:
+    ) -> RayDataset:
         """
         Create a sample dataset for testing and demonstration.
 
@@ -174,7 +179,7 @@ class XGBoostService:
 
     def load_dataset_from_source(
         self, source_path: str, format: str = "auto"
-    ) -> ray.data.Dataset:
+    ) -> RayDataset:
         """
         Load dataset from various sources (CSV, Parquet, etc.).
 
@@ -213,7 +218,7 @@ class XGBoostService:
 
     def train_model(
         self,
-        dataset: ray.data.Dataset,
+        dataset: RayDataset,
         label_column: str = "target",
         feature_columns: Optional[List[str]] = None,
         xgb_config: Optional[XGBoostConfig] = None,
@@ -655,8 +660,8 @@ class XGBoostService:
             raise
 
     def batch_predict(
-        self, dataset: ray.data.Dataset, feature_columns: List[str]
-    ) -> ray.data.Dataset:
+        self, dataset: RayDataset, feature_columns: List[str]
+    ) -> RayDataset:
         """
         Make batch predictions on a Ray Dataset.
 

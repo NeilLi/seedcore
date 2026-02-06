@@ -625,7 +625,9 @@ async def test_organism_core_ensure_agent_handle_jit_spawn(mock_ray, mock_config
         }
     }
     
-    handle = await core._ensure_agent_handle(mock_organ, "test_organ_1", "jit_agent", params)
+    agent_id, handle, organ_id = await core._ensure_agent_handle(
+        mock_organ, "test_organ_1", "jit_agent", params
+    )
     
     # Verify JIT spawn was called with behaviors from executor hints
     core._jit_spawn_agent.assert_called_once()
@@ -635,6 +637,8 @@ async def test_organism_core_ensure_agent_handle_jit_spawn(mock_ray, mock_config
     
     # Verify handle was returned
     assert handle == mock_agent_handle
+    assert agent_id == "jit_agent"
+    assert organ_id == "test_organ_1"
 
 
 @pytest.mark.asyncio
