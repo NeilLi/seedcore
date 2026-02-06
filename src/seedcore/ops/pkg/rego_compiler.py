@@ -203,7 +203,7 @@ class RegoCompiler:
                 })
             elif relationship_type == "GATE":
                 # Gate dependency (conditional)
-                gate_source = rule.get("metadata", {}).get("gate_source")
+                gate_source = (rule.get("metadata") or {}).get("gate_source")
                 if gate_source:
                     dag_edges.append({
                         "from": gate_source,

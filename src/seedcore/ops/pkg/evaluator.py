@@ -1516,7 +1516,7 @@ class NativeRuleEngine:
                     # Conditional dependency: wait for condition
                     # For now, we'll use rule priority to determine gates
                     # In full implementation, you'd check pkg_rule_conditions for gate conditions
-                    gate_source = rule.get("metadata", {}).get("gate_source")
+                    gate_source = (rule.get("metadata") or {}).get("gate_source")
                     if gate_source and gate_source in subtask_map:
                         dag.append({
                             "from": gate_source,
