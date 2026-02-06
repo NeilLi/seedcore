@@ -1,5 +1,7 @@
 # SeedCore
 
+[![Unit Tests](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml)
+
 ### Reasoning Infrastructure for the Physical World
 
 SeedCore is an **AI-native orchestration and execution system** that allows large reasoning models (such as **Gemini 3**) to safely plan, execute, and adapt actions in **real-world environments**.
@@ -310,6 +312,19 @@ The release pipeline runs a dedicated unit-test workflow on every pull request a
 ```bash
 pytest -q
 ```
+
+---
+
+## 🔗 Related Projects & Reference Implementations
+
+SeedCore is the core reasoning-and-execution infrastructure. The following repositories are optional companion projects used for demonstration, testing, and policy development:
+
+- **Hotel Simulator** — [github.com/NeilLi/hotel-simulator](https://github.com/NeilLi/hotel-simulator)  
+  A physical-world environment simulator used to demonstrate closed-loop reasoning, telemetry feedback, and replanning with SeedCore.
+- **PKG Simulator** — [github.com/NeilLi/pkg-simulator](https://github.com/NeilLi/pkg-simulator)  
+  A standalone Policy Knowledge Graph (PKG) simulator used to author and test execution policies enforced by SeedCore.
+
+These projects are not required to run SeedCore, but they illustrate how SeedCore integrates with real domains and policy systems.
 
 ---
 
