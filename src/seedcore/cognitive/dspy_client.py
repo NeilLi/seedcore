@@ -13,7 +13,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
 import ray
-from ray import serve
+try:
+    from ray import serve as _serve
+except Exception:
+    _serve = None
 from ray.exceptions import RayActorError
 from seedcore.utils.ray_utils import ensure_ray_initialized
 
@@ -115,11 +118,14 @@ class DSpyCognitiveClient:
     def _get_handle(self, *, force_refetch: bool = False) -> Any:
         self._logger.debug("Getting handle for app: %s (force_refetch: %s)", self.app_name, force_refetch)
         self._connect_if_needed()
+        if _serve is None:
+            self._logger.warning("Ray Serve is unavailable; cannot fetch app handle")
+            return None
         
         if self._handle is None or force_refetch:
             try:
                 self._logger.info("Fetching app handle for: %s", self.app_name)
-                self._handle = serve.get_app_handle(self.app_name)
+                self._handle = _serve.get_app_handle(self.app_name)
                 self._logger.info("Successfully got app handle")
             except (RuntimeError, ValueError) as e:
                 self._logger.warning("Failed to get app handle for '%s': %s", self.app_name, e)
@@ -134,8 +140,9 @@ class DSpyCognitiveClient:
             self._logger.debug("Getting Serve status...")
             # Ensure we're connected to the remote cluster before calling serve.status()
             self._connect_if_needed()
-            
-            st = serve.status()
+            if _serve is None:
+                return None
+            st = _serve.status()
             app_status = st.applications.get(self.app_name)
             if app_status:
                 self._logger.info("App status: %s", app_status.status)
