@@ -1201,6 +1201,38 @@ class RoutingDirectory:
                     )
 
         # =========================================================
+        # PHASE 2.5: CHAT TUNNEL INITIALIZATION (First Contact)
+        # =========================================================
+        # For chat tasks, ensure the first routed agent is bound to a tunnel so
+        # subsequent messages can use agent_tunnel for low latency.
+        task_type = task_dict.get("type")
+        if task_type == "chat" and conv_id and agent_id:
+            try:
+                existing_agent = await self.tunnel_manager.get_assigned_agent(conv_id)
+                if not existing_agent:
+                    await self.tunnel_manager.assign(conv_id, agent_id)
+
+                    # Patch interaction envelope so downstream sees the tunnel binding
+                    if isinstance(params, dict):
+                        interaction_env = params.get("interaction") or {}
+                        if isinstance(interaction_env, dict):
+                            interaction_env.setdefault("mode", "agent_tunnel")
+                            interaction_env.setdefault("assigned_agent_id", agent_id)
+                            params["interaction"] = interaction_env
+                    if hasattr(payload, "params") and isinstance(payload.params, dict):
+                        interaction_env = payload.params.get("interaction") or {}
+                        if isinstance(interaction_env, dict):
+                            interaction_env.setdefault("mode", "agent_tunnel")
+                            interaction_env.setdefault("assigned_agent_id", agent_id)
+                            payload.params["interaction"] = interaction_env
+
+                    resolved_from = f"{resolved_from}|tunnel_init"
+            except Exception as e:
+                self.logger.debug(
+                    f"[Router] Chat tunnel init failed for {conv_id}: {e}"
+                )
+
+        # =========================================================
         # PHASE 3: RESULT COMPOSITION
         # =========================================================
 

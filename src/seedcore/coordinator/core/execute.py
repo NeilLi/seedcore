@@ -486,6 +486,48 @@ async def execute_task(
     
     # Update task object with enriched data (for downstream use)
     task = TaskPayload.model_validate(enriched_task_dict)
+    
+    # 1.75. CHAT FAST-PATH OPTIMIZATION
+    # Chat tasks should be routed directly to the fast organism path with a
+    # hard specialization constraint for USER_LIAISON.
+    if task.type == TaskType.CHAT.value:
+        task_params = task.params or {}
+        routing_env = task_params.get("routing") or {}
+        if not isinstance(routing_env, dict):
+            routing_env = {}
+        routing_env["required_specialization"] = Specialization.USER_LIAISON.name
+        task_params["routing"] = routing_env
+        task.params = task_params
+        # Keep mirror fields in sync for downstream convenience
+        task.required_specialization = Specialization.USER_LIAISON.name
+
+        interaction_env = task_params.get("interaction") or {}
+        interaction_mode = (
+            interaction_env.get("mode")
+            if isinstance(interaction_env, dict)
+            else None
+        ) or "coordinator_routed"
+
+        logger.info(
+            f"[Coordinator] Chat task {ctx.task_id} detected. "
+            "Forcing FAST path with required_specialization=USER_LIAISON."
+        )
+
+        result = await _handle_fast_path(
+            task=task,
+            routing_params={"required_specialization": Specialization.USER_LIAISON.name},
+            interaction_mode=interaction_mode,
+            target_organ_id="organism",
+            config=execution_config,
+        )
+
+        final_result = normalize_envelope(
+            result, task_id=ctx.task_id, path="coordinator_fast_path"
+        )
+        if final_result.get("decision_kind") is None:
+            final_result["decision_kind"] = DecisionKind.FAST_PATH.value
+        return final_result
+
     pkg_mandatory = _is_pkg_mandatory_action(task)
 
     # 2. PHASE 1: INTENT EMBEDDING (Reliability Optimized)
