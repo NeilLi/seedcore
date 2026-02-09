@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/src')
 
-from seedcore.services.coordinator_service import coordinator_deployment
+from seedcore.services.coordinator_service import Coordinator
 
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 
@@ -25,8 +25,9 @@ logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
 
-def build_coordinator(args: dict = None):
+def build_coordinator(args: dict | None = None):
     """Builder for the Coordinator Serve app."""
+    args = args or {}
     # Collect env vars from the *controller* process to inject into replicas
     # Note: OCPS_DRIFT_THRESHOLD, FAST_PATH_LATENCY_SLO_MS, MAX_PLAN_STEPS,
     # COGNITIVE_MAX_INFLIGHT, and REDIS_URL are set in rayservice.yaml and env.example
@@ -61,11 +62,11 @@ def build_coordinator(args: dict = None):
     
     logger.info(f"Building Coordinator with environment variables: {list(env_vars.keys())}")
     
-    # Return the bound deployment from the coordinator service
-    return coordinator_deployment
+    num_cpus = float(args.get("num_cpus", os.getenv("COORDINATOR_NUM_CPUS", "0.3")))
+    return Coordinator.options(ray_actor_options={"num_cpus": num_cpus}).bind()
 
 if __name__ == "__main__":
     # This allows the entrypoint to be run directly for testing
-    from src.seedcore.services.coordinator_service import app
+    from seedcore.services.coordinator_service import app
     import uvicorn  # type: ignore[reportMissingImports]
     uvicorn.run(app, host="0.0.0.0", port=8000)

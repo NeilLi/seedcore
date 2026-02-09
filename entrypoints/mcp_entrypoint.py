@@ -16,7 +16,9 @@ RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
 
 
 def build_mcp_app(args=None):
-    return MCPService.bind()
+    args = args or {}
+    num_cpus = float(args.get("num_cpus", 0.2))
+    return MCPService.options(ray_actor_options={"num_cpus": num_cpus}).bind()
 
 def main():
     logger = ensure_serve_logger("seedcore.mcp_service.driver", level="DEBUG")

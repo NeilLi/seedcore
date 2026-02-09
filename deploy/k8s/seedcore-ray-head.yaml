@@ -24,7 +24,7 @@ spec:
           args:
             - |
               # Start Ray head in background
-              ray start --head --port=6379 --dashboard-host=0.0.0.0 --num-cpus=6 --block &
+              ray start --head --port=6379 --dashboard-host=0.0.0.0 --dashboard-port=8265 --ray-client-server-port=10001 --num-cpus=6 --block &
               RAY_PID=$!
               
               # Wait for Ray to be fully ready
@@ -76,6 +76,7 @@ spec:
                           app_name = app_config.get('name', 'default')
                           import_path = app_config.get('import_path')
                           route_prefix = app_config.get('route_prefix', '/')
+                          app_args = app_config.get('args') or {}
                           
                           if import_path:
                               try:
@@ -83,23 +84,14 @@ spec:
                                   module_path, func_name = import_path.rsplit(':', 1)
                                   module = __import__(module_path, fromlist=[func_name])
                                   build_func = getattr(module, func_name)
-                                  app = build_func()
+                                  try:
+                                      app = build_func(app_args)
+                                  except TypeError:
+                                      app = build_func()
                                   
-                                  # Deploy application
-                                  # Use serve.run() in a daemon thread so it doesn't block
-                                  # The container stays alive via wait $RAY_PID at the end
-                                  import threading
-                                  import time
-                                  
-                                  def deploy_app(app, name, prefix):
-                                      try:
-                                          serve.run(app, name=name, route_prefix=prefix)
-                                      except Exception as e:
-                                          print(f'Error in serve.run for {name}: {e}', file=sys.stderr)
-                                  
-                                  thread = threading.Thread(target=deploy_app, args=(app, app_name, route_prefix), daemon=True)
-                                  thread.start()
-                                  time.sleep(0.5)  # Brief pause between deployments
+                                  # Deploy application synchronously so we don't lose
+                                  # slower deployments when the bootstrap script exits.
+                                  serve.run(app, name=app_name, route_prefix=route_prefix)
                                   
                                   deployed_count += 1
                                   print(f'✅ Deployed: {app_name} at {route_prefix}')
@@ -130,19 +122,31 @@ spec:
           envFrom:
             - secretRef: { name: seedcore-env-secret }
           env:
-            - name: RAY_OVERRIDE_RESOURCES
-              value: '{"head_node": 1}'
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: SERVE_SERVICE
+              value: "stable"
+            - name: ENABLE_ML_SERVICE
+              value: "true"
+            - name: DGL_GRAPHBOLT_SKIP
+              value: "1"
+            - name: RAY_OVERRIDE_RESOURCES
+              value: '{"head_node": 1}'
+            - name: XGB_STORAGE_PATH
+              value: "/app/data/models"
           ports:
             - name: gcs
               containerPort: 6379
             - name: dashboard
               containerPort: 8265
+            - name: client
+              containerPort: 10001
             - name: serve
               containerPort: 8000
+            - name: metrics
+              containerPort: 8080
           resources:
             requests:
               cpu: "500m"
@@ -155,6 +159,8 @@ spec:
               mountPath: /app/data
             - name: project-src
               mountPath: /app
+            - name: dshm
+              mountPath: /dev/shm
       volumes:
         - name: ml-model-storage
           persistentVolumeClaim:
@@ -163,6 +169,10 @@ spec:
           hostPath:
             path: /project # UPDATE THIS to your actual Mac path
             type: Directory
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "2Gi"
 ---
 apiVersion: v1
 kind: Service
@@ -181,4 +191,8 @@ spec:
       protocol: TCP
       port: 8000
       targetPort: 8000
+    - name: client
+      protocol: TCP
+      port: 10001
+      targetPort: 10001
   type: ClusterIP

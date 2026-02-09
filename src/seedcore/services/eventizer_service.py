@@ -722,7 +722,7 @@ class EventizerServiceImpl:
             return {"error": str(e), "success": False}
 
 
-@serve.deployment(route_prefix=None)  # No direct public route; called via handle
+@serve.deployment  # No direct public route; called via handle
 class EventizerService:
     """Ray Serve wrapper for EventizerService."""
 

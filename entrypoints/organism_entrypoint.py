@@ -36,6 +36,10 @@ def build_organism_app(args: Dict[str, Any] | None = None):
         "log_level": args.get("log_level", "INFO")
     }
 
+    num_cpus = float(args.get("num_cpus", 0.3))
+
     # Dynamic Binding
     # This creates a NEW instance of the deployment structure every time Serve reloads
-    return OrganismService.bind(config=service_config)
+    return OrganismService.options(
+        ray_actor_options={"num_cpus": num_cpus}
+    ).bind(config=service_config)

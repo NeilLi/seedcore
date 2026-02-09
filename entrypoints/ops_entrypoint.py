@@ -7,7 +7,6 @@ from typing import Any, Dict
 # Explicitly import FastAPI Response to avoid collision with your data models
 from fastapi import FastAPI, HTTPException, Response as StarletteResponse  # pyright: ignore[reportMissingImports]
 from ray import serve  # pyright: ignore[reportMissingImports]
-from ray.serve.handle import DeploymentHandle  # pyright: ignore[reportMissingImports]
 
 # Add the project root to Python path
 sys.path.insert(0, "/app")
@@ -46,18 +45,14 @@ class OpsGateway:
     so they are visible during FastAPI startup and OpenAPI schema generation.
     """
 
-    def __init__(
-        self,
-        eventizer_handle: DeploymentHandle,
-        fact_handle: DeploymentHandle,
-        state_handle: DeploymentHandle,
-        energy_handle: DeploymentHandle,
-    ) -> None:
-        # Store handles for use in route methods
-        self.eventizer = eventizer_handle
-        self.fact = fact_handle
-        self.state = state_handle
-        self.energy = energy_handle
+    def __init__(self) -> None:
+        # Keep a single ingress deployment in this Serve application.
+        # Instantiate backend service classes directly to avoid multiple
+        # @serve.ingress deployments in one app graph (Ray 2.53+ restriction).
+        self.eventizer = EventizerService()
+        self.fact = FactManagerService()
+        self.state = StateService()
+        self.energy = EnergyService()
 
     # ========================================================================
     # Eventizer Routes
@@ -67,7 +62,7 @@ class OpsGateway:
     async def process_eventizer(self, payload: Dict[str, Any]):
         """Process eventizer request."""
         try:
-            result = await self.eventizer.process.remote(payload)
+            result = await self.eventizer.process(payload)
             return result
         except Exception as e:
             logger.error(f"Eventizer error: {e}")
@@ -77,7 +72,7 @@ class OpsGateway:
     async def eventizer_health(self):
         """Eventizer health check."""
         try:
-            return await self.eventizer.health.remote()
+            return await self.eventizer.health()
         except Exception as e:
             logger.error(f"Eventizer health error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -90,7 +85,7 @@ class OpsGateway:
     async def fact_create(self, payload: Dict[str, Any]):
         """Create a fact."""
         try:
-            return await self.fact.create_fact.remote(payload)
+            return await self.fact.create_fact(payload)
         except Exception as e:
             logger.error(f"Fact error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -99,7 +94,7 @@ class OpsGateway:
     async def fact_query(self, payload: Dict[str, Any]):
         """Query facts."""
         try:
-            return await self.fact.query_fact.remote(payload)
+            return await self.fact.query_fact(payload)
         except Exception as e:
             logger.error(f"Fact query error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -107,7 +102,7 @@ class OpsGateway:
     @ops_app.get("/fact/health")
     async def fact_health(self):
         """Fact service health check."""
-        return await self.fact.health_check.remote()
+        return await self.fact.health_check()
 
     # ========================================================================
     # State Service Routes
@@ -117,7 +112,7 @@ class OpsGateway:
     async def state_system_metrics(self, response: StarletteResponse):
         """Refined Jet Fuel — precomputed aggregates."""
         try:
-            data = await self.state.rpc_system_metrics.remote()
+            data = await self.state.rpc_system_metrics()
 
             if isinstance(data, dict):
                 meta = data.get("meta", {})
@@ -137,7 +132,7 @@ class OpsGateway:
     async def state_agent_snapshots(self):
         """Raw Crude Oil — snapshots."""
         try:
-            return await self.state.rpc_agent_snapshots.remote()
+            return await self.state.rpc_agent_snapshots()
         except Exception as e:
             logger.error(f"State snapshots error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -146,7 +141,7 @@ class OpsGateway:
     async def state_update_w_mode(self, payload: Dict[str, Any]):
         """Update state config w_mode."""
         try:
-            return await self.state.rpc_update_w_mode.remote(payload)
+            return await self.state.rpc_update_w_mode()
         except Exception as e:
             logger.error(f"State config error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -154,7 +149,7 @@ class OpsGateway:
     @ops_app.get("/state/health")
     async def state_health(self):
         """State service health check."""
-        return await self.state.rpc_health.remote()
+        return await self.state.rpc_health()
 
     # ========================================================================
     # Energy Service Routes
@@ -163,35 +158,35 @@ class OpsGateway:
     @ops_app.get("/energy/metrics")
     async def energy_metrics(self):
         """Get energy metrics."""
-        return await self.energy.rpc_get_metrics.remote()
+        return await self.energy.rpc_get_metrics()
 
     @ops_app.get("/energy/compute-from-state")
     async def energy_compute_from_state(self):
         """Compute energy from state."""
-        return await self.energy.rpc_compute_from_state.remote()
+        return await self.energy.rpc_compute_from_state()
 
     @ops_app.post("/energy/compute")
     async def energy_compute(self, payload: Dict[str, Any]):
         """Compute energy."""
         req = EnergyRequest(**payload)
-        return await self.energy.rpc_compute_energy.remote(req)
+        return await self.energy.rpc_compute_energy(req)
 
     @ops_app.post("/energy/optimize")
     async def energy_optimize(self, payload: Dict[str, Any]):
         """Optimize energy."""
         req = OptimizationRequest(**payload)
-        return await self.energy.rpc_optimize_agents.remote(req)
+        return await self.energy.rpc_optimize_agents(req)
 
     @ops_app.post("/flywheel/result")
     async def flywheel_result(self, payload: Dict[str, Any]):
         """Flywheel result."""
         req = FlywheelResultRequest(**payload)
-        return await self.energy.rpc_flywheel_result.remote(req)
+        return await self.energy.rpc_flywheel_result(req)
 
     @ops_app.get("/energy/health")
     async def energy_health(self):
         """Energy service health check."""
-        return await self.energy.rpc_health.remote()
+        return await self.energy.rpc_health()
 
     # ========================================================================
     # Overall Health
@@ -203,10 +198,10 @@ class OpsGateway:
         start_time = time.time()
         try:
             results = await asyncio.gather(
-                self.eventizer.health.remote(),
-                self.fact.health_check.remote(),
-                self.state.rpc_health.remote(),
-                self.energy.rpc_health.remote(),
+                self.eventizer.health(),
+                self.fact.health_check(),
+                self.state.rpc_health(),
+                self.energy.rpc_health(),
                 return_exceptions=True,
             )
 
@@ -232,20 +227,15 @@ class OpsGateway:
             return {"status": "unhealthy", "error": str(e)}
 
 
-def build_ops_app(args: dict = None) -> serve.Deployment:
+def build_ops_app(args: dict | None = None) -> Any:
     logger.info("Building ops application...")
+    args = args or {}
 
-    eventizer_app = EventizerService.bind()
-    fact_app = FactManagerService.bind()
-    state_app = StateService.bind()
-    energy_app = EnergyService.bind()
+    gateway_cpus = float(args.get("gateway_num_cpus", 0.2))
 
-    gateway = OpsGateway.bind(
-        eventizer_handle=eventizer_app,
-        fact_handle=fact_app,
-        state_handle=state_app,
-        energy_handle=energy_app,
-    )
+    gateway = OpsGateway.options(
+        ray_actor_options={"num_cpus": gateway_cpus}
+    ).bind()
     return gateway
 
 

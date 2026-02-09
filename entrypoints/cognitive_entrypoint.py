@@ -36,7 +36,9 @@ cognitive_app = CognitiveService.bind()
 
 def build_cognitive_app(args: dict | None = None):
     """Builder function for Ray Serve YAML configuration."""
-    return CognitiveService.bind()
+    args = args or {}
+    num_cpus = float(args.get("num_cpus", 0.3))
+    return CognitiveService.options(ray_actor_options={"num_cpus": num_cpus}).bind()
 
 def main():
     logger.info("🚀 Starting deployment driver for Cognitive Service...")

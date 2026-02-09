@@ -181,10 +181,13 @@ else
 fi
 
 # ---- Create/Update env sources when needed
+env_sources_updated=0
+
 if [[ "$use_shared_cm" == "true" ]] && [[ -f "$ENV_FILE" ]]; then
   log INFO "Updating shared ConfigMap seedcore-env from $ENV_FILE ..."
   kubectl -n "$NAMESPACE" create configmap seedcore-env --from-env-file="$ENV_FILE" -o yaml --dry-run=client | kubectl apply -f -
   log OK "ConfigMap seedcore-env updated"
+  env_sources_updated=1
 fi
 
 if [[ "$use_file_cm" == "true" ]]; then
@@ -192,8 +195,20 @@ if [[ "$use_file_cm" == "true" ]]; then
     log INFO "Creating/Updating ${SERVICE_NAME}-config from $ENV_FILE ..."
     kubectl -n "$NAMESPACE" create configmap "${SERVICE_NAME}-config" --from-env-file="$ENV_FILE" -o yaml --dry-run=client | kubectl apply -f -
     log OK "ConfigMap ${SERVICE_NAME}-config updated"
+    env_sources_updated=1
   else
     log WARN "Env file '$ENV_FILE' not found; continuing without fallback config."
+  fi
+fi
+
+if [[ "$use_secret" == "true" ]]; then
+  if [[ -f "$ENV_FILE" ]]; then
+    log INFO "Creating/Updating Secret seedcore-env-secret from $ENV_FILE ..."
+    kubectl -n "$NAMESPACE" create secret generic seedcore-env-secret --from-env-file="$ENV_FILE" -o yaml --dry-run=client | kubectl apply -f -
+    log OK "Secret seedcore-env-secret updated"
+    env_sources_updated=1
+  else
+    log WARN "Env file '$ENV_FILE' not found; continuing with existing seedcore-env-secret."
   fi
 fi
 
@@ -207,6 +222,12 @@ log INFO "Applying ${YAML_PATH} ..."
 tmpfile="$(mktemp)"; envsubst < "${YAML_PATH}" > "$tmpfile"
 kubectl apply -f "$tmpfile"
 rm -f "$tmpfile"
+
+# EnvFrom changes in ConfigMap/Secret don't hot-reload in existing pods.
+if [[ "$env_sources_updated" -eq 1 ]]; then
+  log INFO "Env sources updated; restarting Deployment to load latest env ..."
+  kubectl -n "$NAMESPACE" rollout restart deploy/"$DEPLOY_NAME"
+fi
 
 # ---- Rollout + info
 log INFO "Waiting for Deployment rollout ..."
@@ -232,4 +253,3 @@ if [[ "$PORT_FORWARD" -eq 1 ]]; then
   log INFO "Starting port-forward on localhost:${LOCAL_PORT} (Ctrl+C to stop)..."
   kubectl -n "$NAMESPACE" port-forward svc/${SERVICE_NAME} ${LOCAL_PORT}:8002
 fi
-
