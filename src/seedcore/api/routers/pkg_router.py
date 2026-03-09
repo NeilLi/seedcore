@@ -8,7 +8,14 @@ from fastapi import APIRouter, HTTPException  # pyright: ignore[reportMissingImp
 from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
 
 from ...database import get_async_pg_session_factory, get_async_redis_client
-from ...ops.pkg import PKGClient, get_global_pkg_manager, initialize_global_pkg_manager
+from ...ops.pkg import (
+    PKGClient,
+    PKGSnapshotCompareService,
+    PolicyGateBlockedError,
+    get_global_pkg_manager,
+    initialize_global_pkg_manager,
+    normalize_policy_result,
+)
 from ...ops.pkg.manager import PKGMode
 
 logger = logging.getLogger(__name__)
@@ -203,6 +210,27 @@ class PKGEvaluateAsyncRequest(BaseModel):
     )
 
 
+class PKGSnapshotCompareRequest(BaseModel):
+    baseline_snapshot_id: int = Field(..., description="Baseline snapshot ID.")
+    candidate_snapshot_id: int = Field(..., description="Candidate snapshot ID.")
+    task_facts: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Closed-world task_facts payload. Provide exactly one of task_facts or fixture_id.",
+    )
+    fixture_id: Optional[int] = Field(
+        default=None,
+        description="Validation fixture ID. Provide exactly one of task_facts or fixture_id.",
+    )
+    embedding: Optional[List[float]] = Field(
+        default=None,
+        description="Optional embedding used for shared semantic hydration.",
+    )
+    mode: PKGMode = Field(
+        default=PKGMode.ADVISORY,
+        description="CONTROL blocks semantic hydration; ADVISORY enables it.",
+    )
+
+
 @router.post("/pkg/evaluate_async", response_model=Dict[str, Any])
 async def pkg_evaluate_async(payload: PKGEvaluateAsyncRequest) -> Dict[str, Any]:
     """
@@ -324,88 +352,62 @@ async def pkg_evaluate_async(payload: PKGEvaluateAsyncRequest) -> Dict[str, Any]
             },
         )
 
-    # Convert SeedCore result to a stable "policy decision + emissions + provenance" bundle.
-    subtasks = result.get("subtasks", []) or []
-    rules = result.get("rules") or []
-    dag = result.get("dag", []) or []
-    
-    # Check for GATE emissions that block the request (Enhanced Rejection Logic)
-    # GATE emissions indicate conditional blocking - if present and no subtasks emitted, return 403
-    # Check both DAG edges and rule emissions for GATE relationships
-    gate_emissions_in_dag = [edge for edge in dag if isinstance(edge, dict) and edge.get("type") == "gate"]
-    
-    # Also check rules for GATE emissions (in case gate blocked before DAG construction)
-    gate_rules = []
-    for rule in rules:
-        emissions = rule.get("emissions", [])
-        if emissions:
-            for emission in emissions:
-                if isinstance(emission, dict) and emission.get("relationship_type") == "GATE":
-                    gate_rules.append(rule)
-                    break
-    
-    # If GATE emissions present and no subtasks emitted, request was blocked
-    has_gate_emissions = len(gate_emissions_in_dag) > 0 or len(gate_rules) > 0
-    if has_gate_emissions and len(subtasks) == 0:
-        # Find the rule that triggered the GATE
-        gate_rule_id = None
-        gate_rule_name = None
-        
-        # Prefer rule from gate_rules list, fallback to DAG edge rule name
-        if gate_rules:
-            gate_rule = gate_rules[0]
-            gate_rule_id = gate_rule.get("rule_id") or gate_rule.get("rule_name")
-            gate_rule_name = gate_rule.get("rule_name")
-        elif gate_emissions_in_dag:
-            gate_rule_name = gate_emissions_in_dag[0].get("rule")
-            # Try to find the rule ID from the rules list
-            for rule in rules:
-                if rule.get("rule_name") == gate_rule_name:
-                    gate_rule_id = rule.get("rule_id") or rule.get("rule_name")
-                    break
-        
-        # Return 403 Forbidden with specific rule ID for improved UX in Simulator Sandbox
+    try:
+        return normalize_policy_result(result, raise_on_gate_block=True)
+    except PolicyGateBlockedError as exc:
         raise HTTPException(
             status_code=403,
             detail={
                 "error": "Request blocked by policy gate",
-                "rule_id": gate_rule_id or gate_rule_name or "unknown_gate",
-                "rule_name": gate_rule_name,
-                "reason": f"Policy gate blocked request: {gate_rule_name or 'unknown'}",
+                "rule_id": exc.rule_id or exc.rule_name or "unknown_gate",
+                "rule_name": exc.rule_name,
+                "reason": exc.reason,
             },
+        ) from exc
+
+
+@router.post("/pkg/snapshots/compare", response_model=Dict[str, Any])
+async def compare_snapshots(payload: PKGSnapshotCompareRequest) -> Dict[str, Any]:
+    """Compare one simulator input across a baseline and candidate snapshot."""
+    try:
+        session_factory = get_async_pg_session_factory()
+        pkg_client = PKGClient(session_factory)
+        compare_service = PKGSnapshotCompareService(pkg_client)
+        return await compare_service.compare_snapshots(
+            baseline_snapshot_id=payload.baseline_snapshot_id,
+            candidate_snapshot_id=payload.candidate_snapshot_id,
+            task_facts=payload.task_facts,
+            fixture_id=payload.fixture_id,
+            embedding=payload.embedding,
+            mode=payload.mode,
         )
-    
-    reason: str
-    if rules:
-        reason = rules[0].get("rule_name") or rules[0].get("rule_id") or "matched_rule"
-    else:
-        reason = "blocked_by_default" if len(subtasks) == 0 else "no_policy_emissions"
-
-    provenance: Dict[str, Any] = {
-        "rules": rules,
-        "snapshot": result.get("snapshot"),
-    }
-    # Provide audit visibility into hydrated temporal facts / memory bundles if present.
-    # (These are added during the async hydration steps.)
-    hydrated = result.get("_hydrated") if isinstance(result.get("_hydrated"), dict) else {}
-    if hydrated.get("governed_facts") is not None:
-        provenance["governed_facts"] = hydrated.get("governed_facts")
-    if hydrated.get("semantic_context") is not None:
-        provenance["semantic_context"] = hydrated.get("semantic_context")
-
-    return {
-        "decision": {
-            # For hotel-simulator semantics we define Allowed as "emits at least one subtask".
-            "allowed": len(subtasks) > 0,
-            "reason": reason,
-        },
-        "emissions": {
-            "subtasks": subtasks,
-            "dag": dag,
-        },
-        "provenance": provenance,
-        "meta": result.get("meta", {}),
-    }
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid snapshot compare request",
+                "message": str(exc),
+            },
+        ) from exc
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "Snapshot compare resource not found",
+                "message": str(exc),
+            },
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Snapshot comparison failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Snapshot comparison failed",
+                "message": str(exc),
+            },
+        ) from exc
 
 
 class CompileRulesRequest(BaseModel):
@@ -547,4 +549,3 @@ async def compile_rules(
                 "snapshot_id": snapshot_id
             }
         )
-

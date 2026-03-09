@@ -156,6 +156,10 @@ class PKGClient:
         """Get a specific snapshot by its version string."""
         return await self.snapshots.get_snapshot_by_version(version)
 
+    async def get_snapshot_by_id(self, snapshot_id: int) -> Optional[PKGSnapshotData]:
+        """Get a specific snapshot by its numeric ID."""
+        return await self.snapshots.get_snapshot_by_id(snapshot_id)
+
     async def get_subtask_types(self, snapshot_id: int) -> List[Dict[str, Any]]:
         """
         Return the "DNA registry" of subtask types for a given snapshot.
@@ -238,6 +242,13 @@ class PKGClient:
     ) -> List[Dict[str, Any]]:
         """Get validation fixtures for a snapshot."""
         return await self.validation.get_validation_fixtures(snapshot_id)
+
+    async def get_validation_fixture_by_id(
+        self,
+        fixture_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Get a single validation fixture by ID."""
+        return await self.validation.get_validation_fixture_by_id(fixture_id)
     
     async def create_validation_run(
         self,

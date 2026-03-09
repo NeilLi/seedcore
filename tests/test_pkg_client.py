@@ -72,6 +72,25 @@ class TestPKGClient:
         
         assert snapshot == mock_snapshot
         client.snapshots.get_snapshot_by_version.assert_called_once_with('rules@1.4.0')
+
+    @pytest.mark.asyncio
+    async def test_get_snapshot_by_id(self, client):
+        """Test getting snapshot by numeric ID."""
+        mock_snapshot = PKGSnapshotData(
+            id=7,
+            version='rules@2.0.0',
+            engine='native',
+            wasm_artifact=None,
+            checksum='def456',
+            rules=[{'rule_name': 'test'}]
+        )
+
+        client.snapshots.get_snapshot_by_id = AsyncMock(return_value=mock_snapshot)
+
+        snapshot = await client.get_snapshot_by_id(7)
+
+        assert snapshot == mock_snapshot
+        client.snapshots.get_snapshot_by_id.assert_called_once_with(7)
     
     @pytest.mark.asyncio
     async def test_get_deployments(self, client):
@@ -127,6 +146,24 @@ class TestPKGClient:
         
         assert fixtures == mock_fixtures
         client.validation.get_validation_fixtures.assert_called_once_with(1)
+
+    @pytest.mark.asyncio
+    async def test_get_validation_fixture_by_id(self, client):
+        """Test getting one validation fixture by ID."""
+        mock_fixture = {
+            'id': 11,
+            'snapshot_id': 1,
+            'name': 'vip_flow',
+            'input': {'tags': ['vip'], 'signals': {}, 'context': {}},
+            'expect': {}
+        }
+
+        client.validation.get_validation_fixture_by_id = AsyncMock(return_value=mock_fixture)
+
+        fixture = await client.get_validation_fixture_by_id(11)
+
+        assert fixture == mock_fixture
+        client.validation.get_validation_fixture_by_id.assert_called_once_with(11)
     
     @pytest.mark.asyncio
     async def test_create_validation_run(self, client):
@@ -374,4 +411,3 @@ class TestPKGClient:
             
             assert result['ok'] is True
             mock_check.assert_called_once()
-

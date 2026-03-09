@@ -257,6 +257,47 @@ class TestPKGDeploymentsDAO:
     def dao(self, mock_session_factory):
         """Create a PKGDeploymentsDAO instance."""
         return PKGDeploymentsDAO(session_factory=mock_session_factory)
+
+
+class TestPKGValidationDAO:
+    """Tests for PKGValidationDAO."""
+
+    @pytest.fixture
+    def mock_session_factory(self):
+        def _create_session():
+            session = AsyncMock()
+            session.__aenter__.return_value = session
+            session.__aexit__.return_value = None
+            return session
+        return _create_session
+
+    @pytest.fixture
+    def dao(self, mock_session_factory):
+        return PKGValidationDAO(session_factory=mock_session_factory)
+
+    @pytest.mark.asyncio
+    async def test_get_validation_fixture_by_id(self, dao, mock_session_factory):
+        session = mock_session_factory()
+        dao._sf = lambda: session
+
+        result = AsyncMock()
+        row = Mock()
+        row._mapping = {
+            "id": 9,
+            "snapshot_id": 1,
+            "name": "fixture-1",
+            "input": {"tags": ["vip"], "signals": {}, "context": {}},
+            "expect": {},
+            "created_at": datetime.utcnow(),
+        }
+        result.first.return_value = row
+        session.execute.side_effect = [result]
+
+        fixture = await dao.get_validation_fixture_by_id(9)
+
+        assert fixture is not None
+        assert fixture["id"] == 9
+        assert fixture["snapshot_id"] == 1
     
     @pytest.mark.asyncio
     async def test_get_deployments(self, dao, mock_session_factory):
@@ -813,4 +854,3 @@ class TestPKGCortexDAO:
         
         assert len(facts) == 0
         session.execute.assert_called_once()
-

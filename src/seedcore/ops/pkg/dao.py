@@ -1208,6 +1208,32 @@ class PKGValidationDAO:
             res = await session.execute(sql, {"snapshot_id": snapshot_id})
             return [dict(r._mapping) for r in res]
 
+    async def get_validation_fixture_by_id(
+        self,
+        fixture_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get a single validation fixture by primary key.
+
+        Args:
+            fixture_id: Fixture ID
+
+        Returns:
+            Fixture dictionary or None if not found
+        """
+        sql = text("""
+            SELECT id, snapshot_id, name, input, expect, created_at
+            FROM pkg_validation_fixtures
+            WHERE id = :fixture_id
+            LIMIT 1
+        """)
+
+        async with self._sf() as session:
+            res = await session.execute(sql, {"fixture_id": fixture_id})
+            row = await _maybe_await(res.first())
+            mapping = await _row_mapping(row)
+            return mapping if mapping is not None else None
+
     async def create_validation_run(
         self, snapshot_id: int, started_at: Optional[datetime] = None
     ) -> int:

@@ -56,6 +56,13 @@ from .dao import (
 from .evaluator import (
     PKGEvaluator,
 )
+from .compare_service import (
+    PKGSnapshotCompareService,
+)
+from .result_utils import (
+    PolicyGateBlockedError,
+    normalize_policy_result,
+)
 
 __all__ = [
     # Manager (main entry point)
@@ -80,5 +87,8 @@ __all__ = [
     "PKGDevicesDAO",
     # Evaluator (policy evaluation)
     "PKGEvaluator",
+    # Comparison / result helpers
+    "PKGSnapshotCompareService",
+    "PolicyGateBlockedError",
+    "normalize_policy_result",
 ]
-
