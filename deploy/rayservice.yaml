@@ -111,35 +111,6 @@ spec:
               num_cpus: 0.1
               resources: {"head_node": 0.001} # Pin ingress-like services
 
-          - name: EventizerService
-            autoscaling_config:
-              min_replicas: 1
-              max_replicas: 5
-              target_num_ongoing_requests_per_replica: 50
-            max_concurrent_queries: 100
-            ray_actor_options:
-              num_cpus: 0.1
-              memory: 524288000
-
-          # --- Singletons (Stateful) ---
-          - name: FactManagerService
-            num_replicas: 1
-            ray_actor_options:
-              num_cpus: 0.1
-              memory: 524288000
-
-          - name: StateService
-            num_replicas: 1
-            ray_actor_options:
-              num_cpus: 0.2
-              memory: 524288000
-
-          - name: EnergyService
-            num_replicas: 1
-            ray_actor_options:
-              num_cpus: 0.1
-              memory: 524288000
-
       # ----------------------------------------------------------------
       # 6. MCP Protocol
       # ----------------------------------------------------------------

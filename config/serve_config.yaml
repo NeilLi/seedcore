@@ -78,23 +78,9 @@ applications:
     route_prefix: /ops
     args:
       gateway_num_cpus: 0.2
-      eventizer_num_cpus: 0.2
-      fact_num_cpus: 0.1
-      state_num_cpus: 0.2
-      energy_num_cpus: 0.1
     deployments:
       - name: OpsGateway
         num_replicas: 1
-      - name: EventizerService
-        num_replicas: 1
-      - name: FactManagerService
-        num_replicas: 1
-      - name: StateService
-        num_replicas: 1
-      - name: EnergyService
-        num_replicas: 1
-        ray_actor_options:
-          num_cpus: 0.1
 
   # ----------------------------------------------------------------
   # 6. MCP Protocol (Communication Layer)

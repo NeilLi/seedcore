@@ -34,6 +34,22 @@ ops_app = FastAPI(
     docs_url="/docs",
 )
 
+def _instantiate_deployment_backend(deployment_obj: Any, *args, **kwargs) -> Any:
+    """
+    Instantiate the class wrapped by @serve.deployment.
+
+    Ray 2.53+ disallows constructing Deployment objects directly
+    (e.g., `EventizerService()`), but OpsGateway needs in-process backends.
+    """
+    target_cls = getattr(deployment_obj, "func_or_class", None) or getattr(
+        deployment_obj, "_func_or_class", None
+    )
+    if target_cls is None:
+        raise RuntimeError(
+            f"Could not resolve backend class from deployment object: {deployment_obj!r}"
+        )
+    return target_cls(*args, **kwargs)
+
 
 @serve.deployment
 @serve.ingress(ops_app)
@@ -47,12 +63,12 @@ class OpsGateway:
 
     def __init__(self) -> None:
         # Keep a single ingress deployment in this Serve application.
-        # Instantiate backend service classes directly to avoid multiple
-        # @serve.ingress deployments in one app graph (Ray 2.53+ restriction).
-        self.eventizer = EventizerService()
-        self.fact = FactManagerService()
-        self.state = StateService()
-        self.energy = EnergyService()
+        # Instantiate wrapped backend classes (not deployment objects) to avoid
+        # multiple ingress deployments in one app graph on Ray 2.53+.
+        self.eventizer = _instantiate_deployment_backend(EventizerService)
+        self.fact = _instantiate_deployment_backend(FactManagerService)
+        self.state = _instantiate_deployment_backend(StateService)
+        self.energy = _instantiate_deployment_backend(EnergyService)
 
     # ========================================================================
     # Eventizer Routes
