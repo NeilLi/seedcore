@@ -64,7 +64,7 @@ class RPCTimeoutError(CognitiveClientError):
 class ClientConfig:
     app_base_name: str = "cognitive"
     # Use RAY_HOST and RAY_PORT environment variables that are set in the API pod
-    ray_address: str = os.getenv("RAY_ADDRESS") or f"ray://{os.getenv('RAY_HOST', 'seedcore-svc-head-svc')}:{os.getenv('RAY_PORT', '10001')}"
+    ray_address: str = os.getenv("RAY_ADDRESS") or f"ray://{os.getenv('RAY_HOST', 'seedcore-svc-stable-svc')}:{os.getenv('RAY_PORT', '10001')}"
     default_rpc_timeout_s: float = float(os.getenv("DSPY_CLIENT_RPC_TIMEOUT_S", "30"))
     max_retries: int = int(os.getenv("DSPY_CLIENT_MAX_RETRIES", "2"))
     backoff_base_s: float = 0.25

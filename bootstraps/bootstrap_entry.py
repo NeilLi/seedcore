@@ -36,7 +36,7 @@ log = logging.getLogger("bootstrap_entry")
 
 
 def _init_env():
-    os.environ.setdefault("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
+    os.environ.setdefault("RAY_ADDRESS", "ray://seedcore-svc-stable-svc:10001")
     os.environ.setdefault("RAY_NAMESPACE", os.getenv("SEEDCORE_NS", "seedcore-dev"))
 
 

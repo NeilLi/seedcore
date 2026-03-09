@@ -1091,7 +1091,7 @@ def reset_cognitive_service():
 # =============================================================================
 
 # --- Configuration for info endpoints ---
-RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
+RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-stable-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
 
 # --- Request/Response Models ---

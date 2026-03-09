@@ -15,7 +15,7 @@ import logging
 import os
 import re
 import socket
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
 
 _log = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ _log = logging.getLogger(__name__)
 # -------------------------------
 
 DEFAULT_SERVE_PORT  = 8000
+DEFAULT_RAY_PORT    = 10001
 DEFAULT_API_NS_ENV  = "SEEDCORE_NS"      # optional global namespace hint
 
 ENV_SERVE_GATEWAY   = "SERVE_GATEWAY"    # explicit override
@@ -85,6 +86,21 @@ def _host_from_ray_address(ra: str) -> str:
     u = urlparse(ra if "://" in ra else f"tcp://{ra}")
     return (u.hostname or "").strip() or "127.0.0.1"
 
+def _host_port_from_ray_address(ra: str, default_port: int = DEFAULT_RAY_PORT) -> Tuple[str, int]:
+    """Extract host/port from Ray address-like inputs."""
+    s = (ra or "").strip()
+    if not s:
+        return "127.0.0.1", default_port
+    if s.startswith("ray://"):
+        s = s[len("ray://"):]
+    u = urlparse(s if "://" in s else f"tcp://{s}")
+    host = (u.hostname or "").strip() or "127.0.0.1"
+    port = int(u.port or default_port)
+    return host, port
+
+def _to_ray_address(host: str, port: int = DEFAULT_RAY_PORT) -> str:
+    return f"ray://{host}:{port}"
+
 def _in_k8s_namespace() -> Optional[str]:
     """Best-effort namespace detection (env first, then serviceaccount file)."""
     ns = os.getenv(ENV_POD_NAMESPACE) or os.getenv(DEFAULT_API_NS_ENV)
@@ -106,7 +122,7 @@ def _strip_runid_head_to_target(host: str, prefer: str = "stable") -> str:
     """
     Convert:
       seedcore-svc-cklbk-head-svc(.fqdn) -> seedcore-svc-stable-svc(.fqdn)
-      seedcore-svc-head-svc(.fqdn)       -> seedcore-svc-serve/stable-svc(.fqdn)
+      seedcore-svc-stable-svc(.fqdn)       -> seedcore-svc-serve/stable-svc(.fqdn)
     Preserves namespace/FQDN suffix. If not a head-svc, returns original host.
     """
     m = HEAD_RE.match(host)
@@ -116,6 +132,41 @@ def _strip_runid_head_to_target(host: str, prefer: str = "stable") -> str:
     fqdn = m.group("fqdn") or ""
     suffix = "-stable-svc" if prefer == "stable" else "-serve-svc"
     return f"{base}{suffix}{fqdn}"
+
+def _ray_address_candidates(ray_address: Optional[str], namespace: Optional[str]) -> List[str]:
+    """
+    Build prioritized Ray Client address candidates.
+
+    If a legacy/non-stable `*-head-svc` address is provided, include a stable
+    service fallback that survives RayService hash-based cluster names.
+    """
+    addr = (ray_address or os.getenv(ENV_RAY_ADDRESS) or "").strip()
+    if not addr:
+        stable = _compose_service_fqdn("seedcore-svc-stable-svc", namespace)
+        return [_to_ray_address(stable, DEFAULT_RAY_PORT)]
+
+    candidates: List[str] = [addr]
+    host, port = _host_port_from_ray_address(addr)
+    stable_host = _strip_runid_head_to_target(host, prefer="stable")
+
+    if stable_host != host:
+        candidates.append(_to_ray_address(_compose_service_fqdn(stable_host, namespace), port))
+        if "." not in stable_host:
+            candidates.append(_to_ray_address(stable_host, port))
+
+    if stable_host != host:
+        stable_default = _compose_service_fqdn("seedcore-svc-stable-svc", namespace)
+        candidates.append(_to_ray_address(stable_default, DEFAULT_RAY_PORT))
+        candidates.append(_to_ray_address("seedcore-svc-stable-svc", DEFAULT_RAY_PORT))
+
+    out: List[str] = []
+    seen = set()
+    for c in candidates:
+        key = c.strip()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
 
 def _resolve_ok(host: str, timeout_s: float = 0.4) -> bool:
     """Fast DNS existence check using system resolver (CoreDNS in cluster)."""
@@ -364,28 +415,29 @@ def ensure_ray_initialized(
         if not force_reinit:
             return True
 
-    addr = (ray_address or os.getenv(ENV_RAY_ADDRESS) or "").strip()
     ns = (ray_namespace or os.getenv(DEFAULT_API_NS_ENV) or "").strip() or None
+    candidate_addrs = _ray_address_candidates(ray_address, _in_k8s_namespace() or ns)
+    addr = candidate_addrs[0] if candidate_addrs else ""
 
     if not addr:
         _log.warning("RAY_ADDRESS not set; skipping ray.init()")
         return False
 
-    attempts = (
-        dict(address=addr, namespace=ns),
-        dict(address=addr, namespace=None),
-        dict(address=addr, namespace=ns, allow_multiple=True),
-    )
-
-    for attempt in attempts:
-        try:
-            ray.init(ignore_reinit_error=True, logging_level=logging.INFO, **attempt, **init_kwargs)
-            # Sanity check: ensure usable connection
-            ray.cluster_resources()
-            _log.info("✅ Connected to Ray (attempt=%s)", attempt)
-            return True
-        except Exception as e:
-            _log.warning("Ray connect attempt failed (%s): %s", attempt, e)
+    for candidate in candidate_addrs:
+        attempts = (
+            dict(address=candidate, namespace=ns),
+            dict(address=candidate, namespace=None),
+            dict(address=candidate, namespace=ns, allow_multiple=True),
+        )
+        for attempt in attempts:
+            try:
+                ray.init(ignore_reinit_error=True, logging_level=logging.INFO, **attempt, **init_kwargs)
+                # Sanity check: ensure usable connection
+                ray.cluster_resources()
+                _log.info("✅ Connected to Ray (attempt=%s)", attempt)
+                return True
+            except Exception as e:
+                _log.warning("Ray connect attempt failed (%s): %s", attempt, e)
 
     _log.error("❌ All Ray connect attempts failed")
     return False

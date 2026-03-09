@@ -164,7 +164,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: seedcore-svc-head-svc
+                name: seedcore-svc-stable-svc
                 port:
                   number: 8265
           

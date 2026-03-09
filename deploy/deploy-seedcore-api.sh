@@ -41,7 +41,7 @@ case "${PORT_FORWARD}" in
 esac
 
 # Ray + misc
-RAY_HEAD_SVC="${RAY_HEAD_SVC:-seedcore-svc-head-svc}"
+RAY_HEAD_SVC="${RAY_HEAD_SVC:-seedcore-svc-stable-svc}"
 RAY_HEAD_PORT="${RAY_HEAD_PORT:-10001}"
 SEEDCORE_NS="${SEEDCORE_NS:-seedcore-dev}"
 HOSTPATH_PROJECT="${HOSTPATH_PROJECT:-/project}"

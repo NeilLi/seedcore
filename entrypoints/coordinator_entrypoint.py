@@ -22,7 +22,7 @@ setup_logging(app_name="seedcore.coordinator_service.driver")
 logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
 
 # --- Configuration ---
-RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
+RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-stable-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
 
 def build_coordinator(args: dict | None = None):

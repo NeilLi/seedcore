@@ -11,7 +11,7 @@ from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
 from seedcore.services.mcp_service import MCPService
 
-RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
+RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-stable-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
 APP_NAME = "mcp"
 ROUTE_PREFIX = "/mcp"

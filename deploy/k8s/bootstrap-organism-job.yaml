@@ -41,7 +41,7 @@ spec:
 
             # Ray connectivity
             - name: RAY_ADDRESS
-              value: "ray://seedcore-svc-head-svc:10001"
+              value: "ray://seedcore-svc-stable-svc:10001"
             - name: RAY_NAMESPACE
               value: "seedcore-dev"
             - name: SEEDCORE_NS

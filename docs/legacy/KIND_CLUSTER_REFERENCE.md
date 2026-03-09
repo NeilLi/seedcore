@@ -12,7 +12,7 @@ This document provides a comprehensive reference for working with the Seedcore K
 ## Services and Ports
 
 **Current Running Services (as of latest deployment):**
-- `seedcore-svc-head-svc` (ClusterIP: None) - ports: 10001, 8265, 6379, 8080, 8000
+- `seedcore-svc-stable-svc` (ClusterIP: None) - ports: 10001, 8265, 6379, 8080, 8000
 - `seedcore-svc-serve-svc` (ClusterIP: 10.96.171.126) - port: 8000
 - `seedcore-api` (ClusterIP) - port: 8002 (when deployed via deploy-seedcore-api.sh)
 
@@ -62,7 +62,7 @@ This document provides a comprehensive reference for working with the Seedcore K
 ### Seedcore Services
 
 #### Ray Head Service
-- **Service**: `seedcore-svc-head-svc`
+- **Service**: `seedcore-svc-stable-svc`
 - **Type**: Headless (ClusterIP: None)
 - **Ports**: `10001` (Ray), `8265` (Dashboard), `6379`, `8080`, `8000`
 - **Pod**: `seedcore-svc-k68dc-head-vpg4j` (current running pod)
@@ -95,14 +95,14 @@ This document provides a comprehensive reference for working with the Seedcore K
 **Short answer: they're not duplicates or a bug. RayService intentionally gives you two head Services:**
 
 1. **A per-cluster head Service** for the *actual* RayCluster it spins up (name has a random suffix, e.g. `seedcore-svc-2jd2t-head-svc`).
-2. **A stable head Service** that **RayService** manages (no suffix, e.g. `seedcore-svc-head-svc`) whose selector is switched to the current active cluster during upgrades/failover, so you always have a consistent DNS name.
+2. **A stable head Service** that **RayService** manages (no suffix, e.g. `seedcore-svc-stable-svc`) whose selector is switched to the current active cluster during upgrades/failover, so you always have a consistent DNS name.
 
 Because RayService does zero-downtime upgrades by creating a new RayCluster and then **retargeting the stable Service's selector** once the new cluster is ready, you'll typically see *both* Services at the same time. That's by design.
 
 ### What each Service is for
 
 * `seedcore-svc-2jd2t-head-svc` (suffix): auto-created with the underlying **RayCluster**; exposes the head pod ports directly for that one cluster instance.
-* `seedcore-svc-head-svc` (no suffix): **RayService-managed stable head Service**; its selector is moved to whichever RayCluster is active. Use this for things like dashboard (8265) and Ray Client (10001) so your integrations don't break during upgrades.
+* `seedcore-svc-stable-svc` (no suffix): **RayService-managed stable head Service**; its selector is moved to whichever RayCluster is active. Use this for things like dashboard (8265) and Ray Client (10001) so your integrations don't break during upgrades.
 
 You should also see a third Service once Serve is healthy: `seedcore-svc-serve-svc` (stable Serve frontdoor for HTTP 8000). With your `proxy_location: HeadOnly`, that Service will route to the head node's proxy. If it hasn't appeared yet, it usually means the Serve app isn't "healthy and ready" yet.
 
@@ -113,7 +113,7 @@ You should also see a third Service once Serve is healthy: `seedcore-svc-serve-s
 kubectl get svc -n seedcore-dev | grep 'seedcore-svc-.*-svc'
 
 # Inspect selectors to observe retargeting during updates
-kubectl describe svc -n seedcore-dev seedcore-svc-head-svc
+kubectl describe svc -n seedcore-dev seedcore-svc-stable-svc
 kubectl describe svc -n seedcore-dev seedcore-svc-serve-svc
 
 # List the RayClusters RayService created (one will have a suffix)
@@ -128,7 +128,7 @@ Docs note that RayService switches the **stable** head Service's selector to the
 
 ### TL;DR guidance for your manifest
 
-* Keep using **`seedcore-svc-head-svc`** for dashboard (8265) and Ray Client (10001).
+* Keep using **`seedcore-svc-stable-svc`** for dashboard (8265) and Ray Client (10001).
 * Send HTTP traffic to **`seedcore-svc-serve-svc`** once your Serve app is ready.
 * Ignore the suffixed `*-head-svc` in app integrations; it's for the current RayCluster instance and will be replaced on upgrades.
 
@@ -146,8 +146,8 @@ The `deploy/port-forward.sh` script sets up the following port forwards:
 
 ```bash
 # Management/Dashboard/Client/Metrics
-kubectl -n seedcore-dev port-forward svc/seedcore-svc-head-svc 8265:8265
-kubectl -n seedcore-dev port-forward svc/seedcore-svc-head-svc 10001:10001
+kubectl -n seedcore-dev port-forward svc/seedcore-svc-stable-svc 8265:8265
+kubectl -n seedcore-dev port-forward svc/seedcore-svc-stable-svc 10001:10001
 
 # Serve HTTP
 kubectl -n seedcore-dev port-forward svc/seedcore-svc-serve-svc 8000:8000
@@ -158,18 +158,18 @@ kubectl -n seedcore-dev port-forward svc/seedcore-api 8002:8002
 
 ### Recommended Port Forwarding (from setup-ray.sh)
 ```bash
-# Dashboard: kubectl -n seedcore-dev port-forward svc/seedcore-svc-head-svc 8265:8265
-# Ray Client: kubectl -n seedcore-dev port-forward svc/seedcore-svc-head-svc 10001:10001
+# Dashboard: kubectl -n seedcore-dev port-forward svc/seedcore-svc-stable-svc 8265:8265
+# Ray Client: kubectl -n seedcore-dev port-forward svc/seedcore-svc-stable-svc 10001:10001
 # Serve HTTP: kubectl -n seedcore-dev port-forward svc/seedcore-svc-serve-svc 8001:8000
 ```
 
 ### Manual Port Forwarding Commands
 ```bash
 # Ray Dashboard
-kubectl -n seedcore-dev port-forward svc/seedcore-svc-head-svc 8265:8265
+kubectl -n seedcore-dev port-forward svc/seedcore-svc-stable-svc 8265:8265
 
 # Ray Client
-kubectl -n seedcore-dev port-forward svc/seedcore-svc-head-svc 10001:10001
+kubectl -n seedcore-dev port-forward svc/seedcore-svc-stable-svc 10001:10001
 
 # HTTP API (Serve)
 kubectl -n seedcore-dev port-forward svc/seedcore-svc-serve-svc 8000:8000
@@ -194,7 +194,7 @@ SEEDCORE_NS=seedcore-dev
 SEEDCORE_STAGE=dev
 COG_APP_NAME=seedcore-dev-dev-cognitive_core
 COG_MIN_READY=1
-RAY_ADDRESS=ray://seedcore-svc-head-svc:10001
+RAY_ADDRESS=ray://seedcore-svc-stable-svc:10001
 RAY_NAMESPACE=seedcore-dev
 SEEDCORE_API_ADDRESS=seedcore-api-dev:80
 ```
@@ -319,7 +319,7 @@ kubectl exec -it redis-master-0 -n seedcore-dev -- redis-cli
 kubectl exec -it seedcore-svc-k68dc-head-vpg4j -n seedcore-dev -- ray status
 
 # Access Ray dashboard
-kubectl port-forward svc/seedcore-svc-head-svc 8265:8265 -n seedcore-dev
+kubectl port-forward svc/seedcore-svc-stable-svc 8265:8265 -n seedcore-dev
 # Then access http://localhost:8265
 
 # Submit Ray job (use current pod name)

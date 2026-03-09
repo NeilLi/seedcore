@@ -98,7 +98,7 @@ Run inside a pod with cluster network access (or locally with port-forward).
 Prereqs: pip install requests psycopg2-binary (if DB checks enabled)
 
 Env:
-  RAY_ADDRESS=ray://seedcore-svc-head-svc:10001
+  RAY_ADDRESS=ray://seedcore-svc-stable-svc:10001
   RAY_NAMESPACE=seedcore-dev
   SEEDCORE_PG_DSN=postgresql://postgres:postgres@postgresql:5432/seedcore
 
@@ -1606,7 +1606,7 @@ def ray_connect():
     max_queue = env("RAY_SERVE_MAX_QUEUE_LENGTH", "2000")
     log.info(f"🔧 Ray Serve config: QUEUE_DEADLINE={queue_deadline}s, MAX_QUEUE={max_queue}")
     
-    addr = env("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
+    addr = env("RAY_ADDRESS", "ray://seedcore-svc-stable-svc:10001")
     ns = env("RAY_NAMESPACE", env("SEEDCORE_NS", "seedcore-dev"))
     log.info(f"Connecting to Ray: {addr} ns={ns}")
     

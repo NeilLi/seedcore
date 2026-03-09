@@ -31,7 +31,7 @@ from seedcore.models.result_schema import make_envelope, normalize_envelope
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 
 # --- Configuration ---
-RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
+RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-stable-svc:10001")
 RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
 # Configure logging

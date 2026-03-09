@@ -30,7 +30,7 @@ async def run_scenario():
     try:
         # Initialize Ray
         # Get Ray connection parameters from environment
-        ray_host = os.getenv("RAY_HOST", "seedcore-svc-head-svc")
+        ray_host = os.getenv("RAY_HOST", "seedcore-svc-stable-svc")
         ray_port = os.getenv("RAY_PORT", "10001")
         ray_address = f"ray://{ray_host}:{ray_port}"
         

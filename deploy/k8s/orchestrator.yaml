@@ -24,7 +24,7 @@ spec:
               containerPort: 8000
           env:
             - name: RAY_ADDRESS
-              value: "ray://seedcore-svc-head-svc:10001"
+              value: "ray://seedcore-svc-stable-svc:10001"
             - name: RAY_NAMESPACE
               value: "${SEEDCORE_NS}"
             - name: SEEDCORE_API_ADDRESS

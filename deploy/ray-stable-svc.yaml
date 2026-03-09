@@ -11,6 +11,14 @@ spec:
     ray.io/is-ray-node: "yes"
     ray.io/node-type: head
   ports:
+    - name: ray-client
+      protocol: TCP
+      port: 10001
+      targetPort: 10001
+    - name: dashboard
+      protocol: TCP
+      port: 8265
+      targetPort: 8265
     - name: serve
       protocol: TCP
       port: 8000

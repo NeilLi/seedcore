@@ -264,7 +264,7 @@ For deep technical details see:
 
 ```env
 SEEDCORE_STAGE=dev
-RAY_ADDRESS=ray://seedcore-svc-head-svc:10001
+RAY_ADDRESS=ray://seedcore-svc-stable-svc:10001
 POSTGRES_HOST=postgresql
 REDIS_HOST=redis-master
 NEO4J_HOST=neo4j

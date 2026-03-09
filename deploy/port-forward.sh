@@ -32,7 +32,7 @@ start_forward() {
 
 # Define all port-forwards
 start_forward "seedcore-api" "8002:8002"
-start_forward "seedcore-svc-head-svc" "8265:8265 10001:10001"
+start_forward "seedcore-svc-stable-svc" "8265:8265 10001:10001"
 start_forward "seedcore-svc-serve-svc" "8000:8000"
 start_forward "postgresql" "5432:5432"
 start_forward "mysql" "3306:3306"
