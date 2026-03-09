@@ -1,6 +1,6 @@
 # SeedCore
 
-[![Unit Tests](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml)
+Unit-test workflow is currently set to manual runs only.
 
 ### Reasoning Infrastructure for the Physical World
 
@@ -304,7 +304,7 @@ kubectl logs -l app=seedcore-api -n seedcore-dev -f
 
 ## ✅ Unit Tests (CI)
 
-The release pipeline runs a dedicated unit-test workflow on every pull request and main-branch push.
+The unit-test workflow is configured for manual runs only (no automatic push/PR triggers).
 
 - Workflow file: `.github/workflows/unit-tests.yml`
 - Local run:
