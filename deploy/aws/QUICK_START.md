@@ -159,7 +159,7 @@ NAMESPACE=seedcore  # or your preferred namespace
 ECR_REGISTRY=<your-ecr-registry>
 ECR_REPO=seedcore
 SEEDCORE_IMAGE_TAG=latest
-RAY_VERSION=2.33.0
+RAY_VERSION=2.53.0
 ```
 
 ---
@@ -187,4 +187,3 @@ seedcore-svc   1         1           Healthy  5m
 - Your cluster: `agentic-ai-cluster` in `us-east-1`
 - KubeRay docs: https://ray.io
 - EKS docs: https://docs.aws.amazon.com/eks/
-

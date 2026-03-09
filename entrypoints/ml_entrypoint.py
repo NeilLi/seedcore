@@ -41,6 +41,8 @@ logger = ensure_serve_logger("seedcore.ml_service", level="DEBUG")
 # When deployed via rayservice.yaml, env vars are set at container level
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
+APP_NAME = "ml_service"
+ROUTE_PREFIX = "/ml"
 
 # --- No-op deployment for when ML service is disabled ---
 _noop_app = FastAPI()
@@ -100,8 +102,10 @@ def main():
         # Deploy the ML service
         serve.run(
             build_ml_service(),
-            name="ml_service",
-            route_prefix="/ml"
+            # NOTE: Ray 2.5x+ expects route prefixes at serve.run() or app config,
+            # not on @serve.deployment.
+            name=APP_NAME,
+            route_prefix=ROUTE_PREFIX
         )
         logger.info("✅ ML Service is running.")
         

@@ -21,7 +21,7 @@ print_status() {
 # ---------- Config (overridable via env or CLI) ----------
 CLUSTER_NAME="${CLUSTER_NAME:-seedcore-dev}"
 NAMESPACE="${NAMESPACE:-seedcore-dev}"
-RAY_VERSION="${RAY_VERSION:-2.33.0}"
+RAY_VERSION="${RAY_VERSION:-2.53.0}"
 RAY_IMAGE="${RAY_IMAGE:-seedcore:latest}"   # your image (already built locally)
 WORKER_REPLICAS="${WORKER_REPLICAS:-1}"
 

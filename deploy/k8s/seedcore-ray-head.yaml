@@ -75,6 +75,8 @@ spec:
                       for app_config in config['applications']:
                           app_name = app_config.get('name', 'default')
                           import_path = app_config.get('import_path')
+                          # NOTE: Ray 2.5x+ keeps route_prefix at serve.run() or
+                          # Serve app config, not on @serve.deployment.
                           route_prefix = app_config.get('route_prefix', '/')
                           app_args = app_config.get('args') or {}
                           

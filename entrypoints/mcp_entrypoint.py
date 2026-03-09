@@ -13,6 +13,8 @@ from seedcore.services.mcp_service import MCPService
 
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
+APP_NAME = "mcp"
+ROUTE_PREFIX = "/mcp"
 
 
 def build_mcp_app(args=None):
@@ -29,8 +31,10 @@ def main():
 
     serve.run(
         MCPService.bind(),
-        name="mcp",
-        route_prefix="/mcp"
+        # NOTE: Ray 2.5x+ expects route prefixes at serve.run() or app config,
+        # not on @serve.deployment.
+        name=APP_NAME,
+        route_prefix=ROUTE_PREFIX
     )
 
     logger.info("MCP Service is running.")

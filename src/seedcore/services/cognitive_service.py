@@ -1124,6 +1124,8 @@ class CognitiveService:
         health_status = self.cognitive_service.health_check()
         health_status.update({
             "service": "cognitive-warm-replica",
+            # Informational only. The actual ingress route is owned by serve.run()
+            # or the Serve application config on Ray 2.5x+.
             "route_prefix": "/cognitive",
             "ray_namespace": RAY_NS,
             "ray_address": RAY_ADDR,

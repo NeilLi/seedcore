@@ -9,7 +9,7 @@ spec:
   serviceUnhealthySecondThreshold: 300 
   deploymentUnhealthySecondThreshold: 300
   # ===================================================================
-  #  Serve Configuration (Optimized for Ray 2.33 + Py3.11)
+  #  Serve Configuration (Optimized for Ray 2.53 + Py3.11)
   # ===================================================================
   serveConfigV2: |
     http_options:
@@ -18,6 +18,8 @@ spec:
       location: HeadOnly  # Proxy stays on head (Ingress Controller target)
 
     applications:
+      # NOTE: Ray 2.5x+ keeps HTTP routing at the application layer.
+      # Define route_prefix here (or in serve.run()), not on @serve.deployment.
       # ----------------------------------------------------------------
       # 1. ML Service (Compute Heavy)
       # ----------------------------------------------------------------
@@ -156,7 +158,7 @@ spec:
   #  Ray Cluster Configuration
   # ===================================================================
   rayClusterConfig:
-    rayVersion: "2.33.0"
+    rayVersion: "2.53.0"
     # -------------------------------------------------------------------
     #  Head Node Specification
     # -------------------------------------------------------------------

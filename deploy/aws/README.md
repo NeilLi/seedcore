@@ -217,7 +217,7 @@ The cluster is configured with:
 - **Head Node**: 4 CPU, 16Gi memory
 - **Worker Nodes**: 4 CPU, 16Gi memory each
 - **GPU Workers**: 1 GPU per node
-- **Ray Version**: 2.33.0
+- **Ray Version**: 2.53.0
 
 #### NIM Services
 - **Retrieval Service**: 2 replicas, 4 CPU, 8Gi memory

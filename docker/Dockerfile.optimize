@@ -10,7 +10,7 @@ ARG BUILD_DATE
 ARG VCS_REF
 LABEL org.opencontainers.image.title="seedcore-serve" \
       org.opencontainers.image.description="SeedCore Serve on Ray (Py3.11, native arm64/amd64)" \
-      org.opencontainers.image.version="2.33.0-py311" \
+      org.opencontainers.image.version="2.53.0-py311" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.source="seedcore"
@@ -50,7 +50,7 @@ RUN arch="$(uname -m)" && \
 # Upgrade pip first, then install Ray system-wide
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --upgrade pip wheel setuptools && \
-    python -m pip install "ray[default]"
+    python -m pip install "ray[default]==2.53.0"
 
 # ---- Python Environment Setup ----
 USER ray

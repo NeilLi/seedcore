@@ -1,6 +1,6 @@
 # docker/Dockerfile
 # 1. UPGRADE to Python 3.11 as requested
-FROM rayproject/ray:2.33.0-py311
+FROM rayproject/ray:2.53.0-py311
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
@@ -8,7 +8,7 @@ ARG BUILD_DATE
 ARG VCS_REF
 LABEL org.opencontainers.image.title="seedcore-serve" \
       org.opencontainers.image.description="SeedCore Serve on Ray (Py3.11)" \
-      org.opencontainers.image.version="2.33.0-py311" \
+      org.opencontainers.image.version="2.53.0-py311" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.source="seedcore"

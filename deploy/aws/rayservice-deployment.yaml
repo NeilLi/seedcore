@@ -17,6 +17,8 @@ spec:
       location: HeadOnly
 
     applications:
+      # NOTE: Ray 2.5x+ keeps HTTP routing at the application layer.
+      # Define route_prefix here (or in serve.run()), not on @serve.deployment.
       - name: ml_service
         import_path: entrypoints.ml_entrypoint:build_ml_service
         route_prefix: /ml
@@ -102,7 +104,7 @@ spec:
   #  Ray Cluster Configuration
   # ===================================================================
   rayClusterConfig:
-    rayVersion: "2.33.0"
+    rayVersion: "2.53.0"
     
     # -------------------------------------------------------------------
     #  Head Node Specification
@@ -375,5 +377,4 @@ spec:
             runAsNonRoot: true
             runAsUser: 1000
             fsGroup: 1000
-
 

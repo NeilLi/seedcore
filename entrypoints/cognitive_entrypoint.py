@@ -27,6 +27,8 @@ logger = ensure_serve_logger("seedcore.cognitive_service", level="DEBUG")
 # --- Configuration ---
 RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-head-svc:10001")
 RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
+APP_NAME = "cognitive"
+ROUTE_PREFIX = "/cognitive"
 
 # Import the Serve deployment definition (FastAPI + Serve class)
 from seedcore.services.cognitive_service import CognitiveService  # noqa: E402
@@ -49,8 +51,10 @@ def main():
 
         serve.run(
             cognitive_app,
-            name="cognitive",
-            route_prefix="/cognitive",
+            # NOTE: Ray 2.5x+ expects route prefixes at serve.run() or app config,
+            # not on @serve.deployment.
+            name=APP_NAME,
+            route_prefix=ROUTE_PREFIX,
         )
         logger.info("✅ Cognitive service is running.")
         while True:

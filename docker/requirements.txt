@@ -48,6 +48,10 @@ pyarrow==16.1.0
 datasets==2.14.7
 fsspec==2023.10.0
 
+# --- Core ML / DL side deps ---
+# Keep the pip dependency pin aligned with the Ray base image / deployment manifests.
+ray==2.53.0
+
 # --- AI & NLP (Torch installed in Dockerfile) ---
 dspy-ai==2.4.9
 scikit-learn==1.4.2
